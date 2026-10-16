@@ -3847,6 +3847,7 @@ internal static partial class IrMarkupRenderer
                     .Select(c => int.TryParse((string?)c.Attribute(W.id), out var v) ? v : -1)
                     .DefaultIfEmpty(-1).Max() + 1;
                 int nextParaId = MaxParaId(commentsRoot) + 1;
+                var freshParaIds = new Dictionary<string, string>(StringComparer.Ordinal);
                 foreach (var oldId in duplicated)
                 {
                     var newId = (nextId++).ToString();
@@ -3857,19 +3858,18 @@ internal static partial class IrMarkupRenderer
                     {
                         var copy = new XElement(def);
                         copy.SetAttributeValue(W.id, newId);
-                        // Give the clone its OWN w14:paraId(s) so it never duplicates a threading key — and carry
-                        // its commentsExtended/commentsIds entry under the fresh paraId so the REJECT-side clone
-                        // (a threaded reply, say) keeps its parent link, exactly as the accept-side original does.
+                        // Give the clone its OWN w14:paraId(s) so it never duplicates a threading key; its
+                        // threading entries are cloned below, once every clone's fresh paraId is known.
                         foreach (var pAttr in copy.Descendants().Attributes(W14ns + "paraId").ToList())
                         {
-                            var oldPara = (string)pAttr;
                             var freshPara = (nextParaId++).ToString("X8");
+                            freshParaIds[(string)pAttr] = freshPara;
                             pAttr.Value = freshPara;
-                            CloneThreadingEntryForParaId(main, oldPara, freshPara);
                         }
                         commentsRoot.Add(copy);
                     }
                 }
+                CloneThreadingEntries(main, freshParaIds);
                 commentsPart!.PutXDocument();
                 changed = true;
             }
@@ -4009,17 +4009,20 @@ internal static partial class IrMarkupRenderer
 
     /// <summary>True iff the comment marker sits at the paragraph/body run level (its ancestors up to the
     /// enclosing <c>w:p</c>/<c>w:body</c>/<c>w:tc</c> are only run-level wrappers — including the <c>w:r</c> that
-    /// hosts a <c>w:commentReference</c> — or the content of a <c>w:sdt</c>/<c>w:customXml</c> wrapper). A marker
-    /// reached through opaque content (math, drawing, textbox) is part of that element's content hash and must NOT
-    /// be reconciled.</summary>
+    /// hosts a <c>w:commentReference</c> — or the content of a <c>w:sdt</c> or a block-level <c>w:customXml</c>
+    /// wrapper). A marker reached through opaque content (math, drawing, textbox) is part of that element's content
+    /// hash and must NOT be reconciled; neither is one inside an inline <c>w:customXml</c>, which the fine path
+    /// emits whole inside a single <c>w:ins</c>/<c>w:del</c> so its markers already toggle with that copy and
+    /// cannot be lifted out of it.</summary>
     private static bool IsRunLevelCommentMarker(XElement marker)
     {
+        static bool IsBlockCustomXml(XElement e) => e.Name == W.customXml && !e.Ancestors(W.p).Any();
         for (var a = marker.Parent; a != null; a = a.Parent)
         {
             if (a.Name == W.p || a.Name == W.body || a.Name == W.tc)
                 return true;
             if (a.Name != W.r && a.Name != W.ins && a.Name != W.del && a.Name != W.hyperlink &&
-                a.Name != W.sdt && a.Name != W.sdtContent && a.Name != W.customXml && a.Name != W.smartTag &&
+                a.Name != W.sdt && a.Name != W.sdtContent && !IsBlockCustomXml(a) && a.Name != W.smartTag &&
                 a.Name != W.fldSimple)
                 return false;
         }
@@ -4086,26 +4089,55 @@ internal static partial class IrMarkupRenderer
         return max;
     }
 
-    /// <summary>Carry a comment's threading metadata onto a freshly-paraId'd dedup clone: clone the
-    /// <c>commentsExtended</c> (<c>w15:commentEx</c>) and <c>commentsIds</c> (<c>w16cid:commentId</c>) entries that
-    /// keyed off <paramref name="oldParaId"/> under <paramref name="freshParaId"/>, preserving each entry's
-    /// <c>paraIdParent</c>/<c>durableId</c>. So the reject-side clone of a threaded reply still links to its
-    /// parent. No-op when the part/entry is absent.</summary>
-    private static void CloneThreadingEntryForParaId(MainDocumentPart main, string oldParaId, string freshParaId)
+    /// <summary>Carry the dedup clones' threading metadata: for each original paraId in
+    /// <paramref name="freshParaIds"/>, clone its <c>commentsExtended</c> (<c>w15:commentEx</c>) and
+    /// <c>commentsIds</c> (<c>w16cid:commentId</c>) entries under the clone's fresh paraId. A cloned reply's
+    /// <c>paraIdParent</c> is re-pointed at its parent's clone when the parent was cloned too, so the reject-side
+    /// thread links reject-side comments only; a parent that was not cloned is shared by both views and stays
+    /// the link. Each cloned <c>commentId</c> gets a fresh <c>durableId</c>, never the original's. No-op for an
+    /// absent part or entry.</summary>
+    private static void CloneThreadingEntries(MainDocumentPart main, IReadOnlyDictionary<string, string> freshParaIds)
     {
-        void Clone(OpenXmlPart? part, XName entryName, XName paraIdAttr)
+        if (freshParaIds.Count == 0)
+            return;
+        var exRoot = main.WordprocessingCommentsExPart?.GetXDocument().Root;
+        if (exRoot != null)
         {
-            var root = part?.GetXDocument().Root;
-            var src = root?.Elements(entryName).FirstOrDefault(e => (string?)e.Attribute(paraIdAttr) == oldParaId);
-            if (root == null || src == null)
-                return;
-            var copy = new XElement(src);
-            copy.SetAttributeValue(paraIdAttr, freshParaId);
-            root.Add(copy);
-            part!.PutXDocument();
+            bool changed = false;
+            foreach (var src in exRoot.Elements(W15ns + "commentEx").ToList())
+            {
+                if ((string?)src.Attribute(W15ns + "paraId") is not { } oldPara
+                    || !freshParaIds.TryGetValue(oldPara, out var freshPara))
+                    continue;
+                var copy = new XElement(src);
+                copy.SetAttributeValue(W15ns + "paraId", freshPara);
+                if ((string?)src.Attribute(W15ns + "paraIdParent") is { } parent
+                    && freshParaIds.TryGetValue(parent, out var freshParent))
+                    copy.SetAttributeValue(W15ns + "paraIdParent", freshParent);
+                exRoot.Add(copy);
+                changed = true;
+            }
+            if (changed)
+                main.WordprocessingCommentsExPart!.PutXDocument();
         }
-        Clone(main.WordprocessingCommentsExPart, W15ns + "commentEx", W15ns + "paraId");
-        Clone(main.WordprocessingCommentsIdsPart, W16cidNs + "commentId", W16cidNs + "paraId");
+        var idsRoot = main.WordprocessingCommentsIdsPart?.GetXDocument().Root;
+        if (idsRoot != null)
+        {
+            bool changed = false;
+            foreach (var src in idsRoot.Elements(W16cidNs + "commentId").ToList())
+            {
+                if ((string?)src.Attribute(W16cidNs + "paraId") is not { } oldPara
+                    || !freshParaIds.TryGetValue(oldPara, out var freshPara))
+                    continue;
+                var copy = new XElement(src);
+                copy.SetAttributeValue(W16cidNs + "paraId", freshPara);
+                copy.SetAttributeValue(W16cidNs + "durableId", Internal.CommentOps.NextDurableId(idsRoot));
+                idsRoot.Add(copy);
+                changed = true;
+            }
+            if (changed)
+                main.WordprocessingCommentsIdsPart!.PutXDocument();
+        }
     }
 
     /// <summary>Wrap a BARE comment or bookmark marker in a <c>w:ins</c>/<c>w:del</c> so it toggles with its

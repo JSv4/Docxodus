@@ -305,6 +305,148 @@ public class BlockWrapperNestedDiffTests
                     Assert.Same(wrapper, WrapperOf(marker));
             }
         }
+        var referenced = references.Select(r => (string?)r.Attribute(W.id)).ToHashSet();
+        Assert.All(body.Descendants().Where(e => e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd),
+            m => Assert.Contains((string?)m.Attribute(W.id), referenced));
+    }
+
+    /// <summary>A comment range inside an INLINE <c>w:customXml</c> whose text is edited: the fine path emits a
+    /// deleted and an inserted copy of the inline element, each with its own range, and the reference after it
+    /// stays shared. Each view keeps one complete range around its own copy's text.</summary>
+    [Fact]
+    public void Compare_CommentRangeInsideAnEditedInlineCustomXml_EachViewKeepsAWholeRange()
+    {
+        static WmlDocument Document(string term) => IrTestDocuments.WithComment("Ann", "A", "2026-01-01T00:00:00Z", CommentText,
+            "<w:p><w:r><w:t xml:space=\"preserve\">Lead words here </w:t></w:r>"
+            + "<w:customXml w:uri=\"urn:example\" w:element=\"term\"><w:commentRangeStart w:id=\"0\"/>"
+            + $"<w:r><w:t xml:space=\"preserve\">{term}</w:t></w:r><w:commentRangeEnd w:id=\"0\"/></w:customXml>"
+            + "<w:r><w:commentReference w:id=\"0\"/></w:r><w:r><w:t xml:space=\"preserve\"> trailing text.</w:t></w:r></w:p>"
+            + P(Tail));
+        var left = Document("the defined term");
+        var right = Document("the amended term");
+
+        var redline = DocxDiff.Compare(left, right);
+
+        // Not a full AssertRoundTrip: the differ places the shared reference run before the inline element rather
+        // than after it, in both views (a separate, pre-existing placement issue). This test is about the ranges.
+        foreach (var (view, term) in new[]
+                 {
+                     (Body(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray)), "the amended term"),
+                     (Body(DocxDiffOps.RejectRevisions(redline.DocumentByteArray)), "the defined term"),
+                 })
+        {
+            var start = Assert.Single(view.Descendants(W.commentRangeStart));
+            Assert.Single(view.Descendants(W.commentRangeEnd));
+            var reference = Assert.Single(view.Descendants(W.commentReference));
+            Assert.Equal((string?)start.Attribute(W.id), (string?)reference.Attribute(W.id));
+            Assert.Equal(term, MarkedText(view, e => e == start, W.commentRangeEnd));
+        }
+    }
+
+    private const string W14Ns = "http://schemas.microsoft.com/office/word/2010/wordml";
+    private static readonly XNamespace W15Ns = "http://schemas.microsoft.com/office/word/2012/wordml";
+    private static readonly XNamespace W16CidNs = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
+
+    /// <summary>A document whose comments part holds a parent comment and a reply to it, threaded through
+    /// <c>commentsExtended</c> and given durable ids in <c>commentsIds</c>.</summary>
+    private static WmlDocument ThreadedDocument(string bodyXml)
+    {
+        static void Write(OpenXmlPart part, string xml)
+        {
+            using var stream = part.GetStream(FileMode.Create, FileAccess.Write);
+            using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+            writer.Write(xml);
+        }
+        static string Comment(string id, string text, string paraId) =>
+            $"<w:comment w:id=\"{id}\" w:author=\"Ann\" w:initials=\"A\" w:date=\"2026-01-01T00:00:00Z\">"
+            + $"<w:p w14:paraId=\"{paraId}\"><w:r><w:t>{text}</w:t></w:r></w:p></w:comment>";
+        using var ms = new MemoryStream();
+        using (var document = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = document.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new DocumentFormat.OpenXml.Wordprocessing.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new DocumentFormat.OpenXml.Wordprocessing.Settings();
+            Write(main.AddNewPart<WordprocessingCommentsPart>(),
+                $"<w:comments xmlns:w=\"{W.w.NamespaceName}\" xmlns:w14=\"{W14Ns}\">"
+                + Comment("0", "Parent question.", "00000001") + Comment("1", "Child reply.", "00000002") + "</w:comments>");
+            Write(main.AddNewPart<WordprocessingCommentsExPart>(),
+                $"<w15:commentsEx xmlns:w15=\"{W15Ns.NamespaceName}\">"
+                + "<w15:commentEx w15:paraId=\"00000001\" w15:done=\"0\"/>"
+                + "<w15:commentEx w15:paraId=\"00000002\" w15:paraIdParent=\"00000001\" w15:done=\"0\"/></w15:commentsEx>");
+            Write(main.AddNewPart<WordprocessingCommentsIdsPart>(),
+                $"<w16cid:commentsIds xmlns:w16cid=\"{W16CidNs.NamespaceName}\">"
+                + "<w16cid:commentId w16cid:paraId=\"00000001\" w16cid:durableId=\"11111111\"/>"
+                + "<w16cid:commentId w16cid:paraId=\"00000002\" w16cid:durableId=\"22222222\"/></w16cid:commentsIds>");
+            Write(main, $"<w:document xmlns:w=\"{W.w.NamespaceName}\"><w:body>{bodyXml}</w:body></w:document>");
+        }
+        return new WmlDocument("threaded.docx", ms.ToArray());
+    }
+
+    /// <summary>A parent comment and its reply both range over the blocks of a wrapper that is replaced whole. Each
+    /// copy of the wrapper gets its own thread: the deleted copy's reply answers the deleted copy's parent, never
+    /// the inserted copy's, and the clones take fresh paraIds and durable ids. So each view shows one intact
+    /// thread whose reply's parent is the other comment referenced in that view.</summary>
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Compare_ThreadBetweenTheWrappersBlocks_EachViewKeepsItsOwnThread(Wrapper kind)
+    {
+        WmlDocument Document(string bravo) => ThreadedDocument(Wrap(kind,
+            "<w:commentRangeStart w:id=\"0\"/><w:commentRangeStart w:id=\"1\"/>" + P(Alpha) + P(bravo)
+            + "<w:commentRangeEnd w:id=\"0\"/><w:commentRangeEnd w:id=\"1\"/>"
+            + "<w:p><w:r><w:commentReference w:id=\"0\"/></w:r><w:r><w:commentReference w:id=\"1\"/></w:r></w:p>") + P(Tail));
+        var left = Document(Bravo);
+        var right = Document(BravoEdited);
+
+        var redline = DocxDiff.Compare(left, right);
+
+        AssertRoundTrip(left, right, redline);
+        AssertThreadingIdsUnique(redline.DocumentByteArray);
+        AssertEachReferencedReplyAnswersAReferencedParent(redline.DocumentByteArray, threads: 2);
+        AssertEachReferencedReplyAnswersAReferencedParent(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray), threads: 1);
+        AssertEachReferencedReplyAnswersAReferencedParent(DocxDiffOps.RejectRevisions(redline.DocumentByteArray), threads: 1);
+    }
+
+    /// <summary>Comment ids, definition paraIds and durable ids are each unique in the package.</summary>
+    private static void AssertThreadingIdsUnique(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var main = document.MainDocumentPart!;
+        static void Unique(IEnumerable<string?> values, string what)
+        {
+            var list = values.ToList();
+            Assert.True(list.Count == list.Distinct().Count(), $"duplicate {what}: {string.Join(", ", list)}");
+        }
+        Unique(main.WordprocessingCommentsPart!.GetXDocument().Root!.Elements(W.comment).Select(c => (string?)c.Attribute(W.id)), "comment ids");
+        Unique(main.WordprocessingCommentsExPart!.GetXDocument().Root!.Elements(W15Ns + "commentEx")
+            .Select(e => (string?)e.Attribute(W15Ns + "paraId")), "commentsExtended paraIds");
+        var ids = main.WordprocessingCommentsIdsPart!.GetXDocument().Root!.Elements(W16CidNs + "commentId").ToList();
+        Unique(ids.Select(e => (string?)e.Attribute(W16CidNs + "paraId")), "commentsIds paraIds");
+        Unique(ids.Select(e => (string?)e.Attribute(W16CidNs + "durableId")), "durable ids");
+    }
+
+    /// <summary>The body references <paramref name="threads"/> parent comments and as many replies; each referenced
+    /// reply's <c>paraIdParent</c> names a parent whose reference sits in the same paragraph.</summary>
+    private static void AssertEachReferencedReplyAnswersAReferencedParent(byte[] bytes, int threads)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var main = document.MainDocumentPart!;
+        var paraIdOf = main.WordprocessingCommentsPart!.GetXDocument().Root!.Elements(W.comment).ToDictionary(
+            c => (string)c.Attribute(W.id)!, c => (string?)c.Elements(W.p).Last().Attribute(XName.Get("paraId", W14Ns)));
+        var parentOf = main.WordprocessingCommentsExPart!.GetXDocument().Root!.Elements(W15Ns + "commentEx")
+            .ToDictionary(e => (string)e.Attribute(W15Ns + "paraId")!, e => (string?)e.Attribute(W15Ns + "paraIdParent"));
+        var references = main.GetXDocument().Root!.Element(W.body)!.Descendants(W.commentReference).ToList();
+        Assert.Equal(2 * threads, references.Count);
+        var replies = references.Where(r => parentOf[paraIdOf[(string)r.Attribute(W.id)!]!] != null).ToList();
+        Assert.Equal(threads, replies.Count);
+        foreach (var reply in replies)
+        {
+            var parentPara = parentOf[paraIdOf[(string)reply.Attribute(W.id)!]!];
+            var parent = Assert.Single(references, r => paraIdOf[(string)r.Attribute(W.id)!] == parentPara);
+            Assert.Same(reply.Ancestors(W.p).First(), parent.Ancestors(W.p).First());
+        }
     }
 
     [Theory]

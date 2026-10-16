@@ -343,7 +343,8 @@ internal static class CommentOps
         return values;
     }
 
-    private static string NextDurableId(XElement idsRoot) =>
+    /// <summary>A <c>w16cid:durableId</c> no entry of <paramref name="idsRoot"/> uses yet.</summary>
+    internal static string NextDurableId(XElement idsRoot) =>
         NextEightHex(idsRoot.Elements(W16Cid + "commentId")
             .Select(e => (string?)e.Attribute(W16Cid + "durableId"))
             .Where(v => !string.IsNullOrEmpty(v)).Select(v => v!));

@@ -43,10 +43,18 @@ All notable changes to this project will be documented in this file.
   It now reads a marker inside a whole deleted or inserted wrapper as belonging to that copy's view
   only, so each copy keeps a complete comment: the deleted copy gets a fresh id and a cloned
   definition, as a wholly rewritten comment already did. Accepting yields the revised comment inside
-  the wrapper and rejecting the original. Range markers directly inside a `w:customXml` wrapper are
-  now reconciled too; they were skipped before and could leave two range ends with the same id. A
-  comment that opens before the replaced wrapper and closes inside it still loses its reference's
-  place on accept, as before: its one shared start cannot belong to both copies.
+  the wrapper and rejecting the original. When the comment is a threaded reply, the deleted copy's
+  reply now answers the deleted copy's parent rather than the original, and the cloned comments get
+  fresh durable ids instead of repeating the originals'. Range markers directly inside a block-level
+  `w:customXml` wrapper are now reconciled too; they were skipped before and could leave two range
+  ends with the same id (markers inside an inline `w:customXml` are still left as they are).
+  Two shapes remain broken (issue #1167), because one of the comment's markers lies outside the
+  replaced wrapper and so cannot belong to both copies: a comment that opens before the wrapper
+  (in a paragraph or in an earlier, unchanged wrapper) and closes inside it puts the reference
+  before the wrapper on accept, and a range wholly inside the wrapper whose reference sits in a
+  paragraph after it keeps only half a range in each view. For `w:sdt` both behave as before; for
+  `w:customXml` they used to keep each copy's markers in full under one duplicated id, so the
+  redline is now well formed but these two shapes lose the range or the reference's place instead.
 - Right-to-left bordered paragraphs (`w:bidi`) now draw their left and right borders outside the
   indented text, mirroring left-to-right paragraphs (issue #1129). The border wrapper put the
   paragraph's leading (start) indent on its left side, although a right-to-left paragraph's start is
