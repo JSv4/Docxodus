@@ -129,6 +129,15 @@ All notable changes to this project will be documented in this file.
   continuation pages that follow it, are budgeted from the space the body actually leaves, up to
   95% of the body band (the limit LibreOffice applies; see `docs/ooxml_corner_cases.md`), so a
   ninety-line note uses three pages instead of five.
+- Text that an exact-height table row (`w:hRule="exact"`) clips now stays whole in the exported
+  PDF's text layer (issue #1140). Chromium's PDF writer kept only the letters of a clipped line
+  that reached into the row, so search, copy and screen readers met word fragments such as
+  `fl h l`; the hidden line is now extracted once, whole and in reading order, as LibreOffice
+  writes it, while the row still shows only what fits. The trade-off: the hidden letters are now
+  drawn (outside the clip), and a PDF rasterizer can tint the one pixel row the clip edge crosses
+  where their tops touch it. In the cases measured that row differs by up to 134/255 at 150 dpi,
+  at most 7/255 at 300 dpi and not at all at 600 dpi; the PDF's clip and text positions are
+  unchanged. See `docs/architecture/standalone_paginated_export.md`.
 
 ## [13.0.0] - 2026-10-12
 
