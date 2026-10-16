@@ -770,6 +770,7 @@ internal static class IrReader
         var contentBuilder = new IrContentHashBuilder();
         contentBuilder.AppendStructure(IrContentHashBuilder.StructureSdt);
         contentBuilder.AppendHash(envelopeDigest);
+        var (blockLevelMarkers, paragraphSpanningField) = ScanWrapperContent(content);
 
         return new IrSdtBlock
         {
@@ -777,16 +778,68 @@ internal static class IrReader
             Blocks = IrNodeList.From(children),
             EnvelopeDigest = envelopeDigest,
             IsCustomXml = isCustomXml,
-            ShellDigest = isCustomXml
-                ? IrHasher.CanonicalHash(new XElement(sdt.Name, sdt.Attributes(), sdt.Elements(W + "customXmlPr")),
-                    ctx.RelResolver)
-                : default,
+            ShellDigest = IrHasher.CanonicalHash(
+                new XElement(sdt.Name, sdt.Attributes(), isCustomXml
+                    ? sdt.Elements(W + "customXmlPr")
+                    : sdt.Elements().Where(e => e.Name == W + "sdtPr" || e.Name == W + "sdtEndPr")),
+                ctx.RelResolver),
+            HasBlockLevelMarkers = blockLevelMarkers,
+            HasParagraphSpanningField = paragraphSpanningField,
             ContentHash = contentBuilder.Build(),
             // Phase 1 deliberately treats every envelope change as structural content, never a
             // format-only update: there is no safe pPr-like native marker for arbitrary sdt metadata.
             FormatFingerprint = EmptyUnmodeledDigest,
             Source = ctx.Provenance(sdt),
         };
+    }
+
+    /// <summary>One pass over a wrapper's <paramref name="content"/> for what an in-place diff of its blocks
+    /// could not carry: a marker <see cref="IsDroppedParagraphChild"/> drops at block level
+    /// (<see cref="IrSdtBlock.HasBlockLevelMarkers"/>) and a paragraph that opens or closes more fields than
+    /// it closes or opens (<see cref="IrSdtBlock.HasParagraphSpanningField"/>). Tables are scanned through to
+    /// their cells. A nested wrapper around blocks is not entered: it is one child of this wrapper, with
+    /// flags of its own, and is kept or replaced as a whole. A wrapper around table rows or cells is read
+    /// through, as the table reader reads it.</summary>
+    private static (bool BlockLevelMarkers, bool ParagraphSpanningField) ScanWrapperContent(IEnumerable<XElement> content)
+    {
+        var markers = false;
+        var spanningField = false;
+        void Scan(IEnumerable<XElement> elements, bool inTable)
+        {
+            foreach (var child in elements)
+            {
+                if (markers && spanningField)
+                    return;
+                if (child.Name == W + "p")
+                    spanningField |= FieldNesting(child) != 0;
+                else if (IsDroppedParagraphChild(child.Name))
+                    markers = true;
+                else if (child.Name == W + "tbl" || child.Name == W + "tr")
+                    Scan(child.Elements(), inTable: true);
+                else if (child.Name == W + "tc")
+                    Scan(child.Elements(), inTable: false);
+                else if (inTable && (child.Name == W + "sdt" || child.Name == W + "sdtContent" || child.Name == W + "customXml"))
+                    Scan(child.Elements(), inTable: true);
+            }
+        }
+        Scan(content, inTable: false);
+        return (markers, spanningField);
+    }
+
+    /// <summary>Field begin characters minus field end characters anywhere in <paramref name="paragraph"/>:
+    /// non-zero when a complex field spans into or out of it.</summary>
+    private static int FieldNesting(XElement paragraph)
+    {
+        var nesting = 0;
+        foreach (var fldChar in paragraph.Descendants(W + "fldChar"))
+        {
+            var type = (string?)fldChar.Attribute(W + "fldCharType");
+            if (type == "begin")
+                nesting++;
+            else if (type == "end")
+                nesting--;
+        }
+        return nesting;
     }
 
     private static string Unid(XElement el) => (string?)el.Attribute(PtOpenXml.Unid) ?? "";

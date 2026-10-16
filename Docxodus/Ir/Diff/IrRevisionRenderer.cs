@@ -81,6 +81,7 @@ internal static class IrRevisionRenderer
                         MapSources(cell.BlockOps ?? Enumerable.Empty<IrEditOp>());
                 foreach (var box in op.TextboxDiffs ?? Enumerable.Empty<IrTextboxDiff>())
                     MapSources(box.Ops);
+                MapSources(op.WrapperOps ?? Enumerable.Empty<IrEditOp>());
             }
         }
         MapSources(script.Operations);
@@ -645,10 +646,18 @@ internal static class IrRevisionRenderer
             return;
         }
 
-        // Block-level SDTs are deliberately atomic: metadata, wrapper topology and nested controls belong to
-        // the envelope, not to an independently token-diffable paragraph. Surface an explicit old/new pair
-        // (even for a metadata-only change whose visible text happens to be identical) so GetRevisions agrees
-        // with the markup renderer's whole-control replacement.
+        // A block wrapper whose own markup is unchanged diffs inside one copy of itself (issue #1143): its
+        // children's ops report through the same block-op machinery as the body's, as a table cell's do.
+        if (op.WrapperOps is { } wrapperOps)
+        {
+            RenderBlockOpList(wrapperOps, ctx, sink);
+            return;
+        }
+
+        // A changed block wrapper (content control or custom XML) is atomic: metadata, wrapper topology and
+        // nested wrappers belong to the envelope, not to an independently token-diffable paragraph. Surface an
+        // explicit old/new pair (even for a metadata-only change whose visible text happens to be identical) so
+        // GetRevisions agrees with the markup renderer's whole-wrapper replacement.
         if ((op.LeftAnchor is { } sdtLeftAnchor && ctx.Left.AnchorIndex.TryGetValue(sdtLeftAnchor, out var leftBlock) && leftBlock is IrSdtBlock) ||
             (op.RightAnchor is { } sdtRightAnchor && ctx.Right.AnchorIndex.TryGetValue(sdtRightAnchor, out var rightBlock) && rightBlock is IrSdtBlock))
         {

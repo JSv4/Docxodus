@@ -678,6 +678,16 @@ internal static class SemanticDiffEngine
                                 Digest(lsdt.ShellDigest, "docxodus-ir-custom-xml-shell-v1"),
                                 Digest(rsdt.ShellDigest, "docxodus-ir-custom-xml-shell-v1"));
                     }
+                    else if (!lsdt.IsCustomXml && !rsdt.IsCustomXml)
+                    {
+                        // Likewise for a content control: its sdtPr/sdtEndPr, not the content it carries.
+                        if (lsdt.ShellDigest != rsdt.ShellDigest)
+                            Add(SemanticChangeOperation.Modify, SemanticChangeFamily.ContentControl, part,
+                                "content_control.envelope", lsdt.Anchor.ToString(), rsdt.Anchor.ToString(),
+                                lsdt.Anchor.Scope, rsdt.Anchor.Scope, null,
+                                Digest(lsdt.ShellDigest, "docxodus-ir-sdt-shell-v1"),
+                                Digest(rsdt.ShellDigest, "docxodus-ir-sdt-shell-v1"));
+                    }
                     else if (lsdt.EnvelopeDigest != rsdt.EnvelopeDigest)
                     {
                         Add(SemanticChangeOperation.Modify, WrapperFamily(lsdt), part,
@@ -686,9 +696,11 @@ internal static class SemanticDiffEngine
                             Digest(lsdt.EnvelopeDigest, "docxodus-ir-sdt-envelope-v1"),
                             Digest(rsdt.EnvelopeDigest, "docxodus-ir-sdt-envelope-v1"));
                     }
-                    var sdtAlignment = IrBlockAligner.AlignBlocks(lsdt.Blocks, rsdt.Blocks, _settings);
+                    // The edit script already aligned an unchanged wrapper's children (issue #1143); a changed
+                    // wrapper is replaced whole there, so align its children here to report what changed inside.
                     ProjectOps(
-                        IrEditScriptBuilder.ProjectAlignment(lsdt.Blocks, sdtAlignment, _settings),
+                        (IReadOnlyList<IrEditOp>?)op.WrapperOps ?? IrEditScriptBuilder.ProjectAlignment(
+                            lsdt.Blocks, IrBlockAligner.AlignBlocks(lsdt.Blocks, rsdt.Blocks, _settings), _settings),
                         part,
                         lsdt.Anchor.Scope,
                         rsdt.Anchor.Scope);

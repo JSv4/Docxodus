@@ -1509,6 +1509,8 @@ internal static partial class IrMarkupRenderer
                 return;
 
             case IrEditOpKind.ModifyBlock:
+                if (op.WrapperOps is { } childOps && EmitModifiedWrapper(op, childOps, state, sink))
+                    return;
                 EmitWholeSdt(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
                 EmitWholeSdt(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
                 return;
@@ -1532,6 +1534,52 @@ internal static partial class IrMarkupRenderer
                     EmitWholeSdt(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
                 return;
         }
+    }
+
+    /// <summary>
+    /// Render a wrapper pair whose own markup is unchanged (issue #1143): ONE copy of the right wrapper's shell
+    /// (its attributes and <c>w:sdtPr</c>/<c>w:sdtEndPr</c>, or <c>w:customXmlPr</c>) around its children's
+    /// ops, rendered with the dispatch a table cell's blocks use. The shell is identical on both sides, so it
+    /// needs no revision mark; accept and reject resolve only the children. Returns false, rendering nothing,
+    /// when either side's source element is unavailable, so the caller falls back to whole-wrapper replacement.
+    /// </summary>
+    private static bool EmitModifiedWrapper(
+        IrEditOp op, IrNodeList<IrEditOp> childOps, RenderState state, List<XElement> sink)
+    {
+        var right = SourceElement(op.RightAnchor, state.RightSource);
+        if (right is null || BlockWrapperContent(right) is not { } rightContent ||
+            SourceElement(op.LeftAnchor, state.Left) is not { } left || BlockWrapperContent(left) is null)
+            return false;
+
+        var children = new List<XElement>();
+        RenderBlockOpsWordShaped(childOps, state, children);
+
+        XElement ShellClone(XElement part)
+        {
+            var clone = StripUnids(new XElement(part));
+            state.RegisterMediaReferences(clone);
+            return clone;
+        }
+
+        var shell = new XElement(right.Name,
+            right.Attributes().Where(a => a.Name.Namespace != PtOpenXml.pt && a.Name != PtOpenXml.Unid));
+        if (right.Name == W.customXml)
+        {
+            foreach (var pr in right.Elements(W.customXmlPr))
+                shell.Add(ShellClone(pr));
+            shell.Add(children);
+        }
+        else
+        {
+            foreach (var part in right.Elements())
+                shell.Add(part == rightContent
+                    ? new XElement(W.sdtContent,
+                        rightContent.Attributes().Where(a => a.Name.Namespace != PtOpenXml.pt && a.Name != PtOpenXml.Unid),
+                        children)
+                    : ShellClone(part));
+        }
+        sink.Add(shell);
+        return true;
     }
 
     // ----------------------------------------------------------------- split / merge markup (M2.6)
@@ -8224,13 +8272,15 @@ internal static partial class IrMarkupRenderer
             }
         }
         // Inserted content nests: a wholly inserted block, an inserted ROW of a paired table, or an
-        // inserted block inside a paired CELL all bring their paragraphs' styles into the output.
+        // inserted block inside a paired CELL or block wrapper all bring their paragraphs' styles into the output.
         void Walk(IEnumerable<IrEditOp> ops)
         {
             foreach (var op in ops)
             {
                 if (op.Kind == IrEditOpKind.InsertBlock)
                     AddFrom(SourceElement(op.RightAnchor, state.RightSource));
+                if (op.WrapperOps is { } wrapperOps)
+                    Walk(wrapperOps);
                 if (op.TableDiff is not { } tableDiff)
                     continue;
                 foreach (var row in tableDiff.RowOps)
@@ -8468,6 +8518,8 @@ internal static partial class IrMarkupRenderer
                         if (op.TextboxDiffs is { } textboxDiffs)
                             foreach (var textboxDiff in textboxDiffs)
                                 WalkOps(textboxDiff.Ops);
+                        if (op.WrapperOps is { } wrapperOps)
+                            WalkOps(wrapperOps);
                         break;
                     case IrEditOpKind.MoveBlock:
                     case IrEditOpKind.MoveModifyBlock:

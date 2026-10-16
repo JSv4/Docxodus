@@ -86,7 +86,7 @@ internal static class IrCompositeMerger
         //    per-block dispatch runs over each note; reviewer-inserted notes pass through authored. Also
         //    collect every reviewer's note-id correspondence for the renderer's reference rewrite.
         var (noteOps, noteIdMaps) = MergeNoteScopes(
-            baseIr, reviewers, rawScripts, policy, settings, conflicts, ref nextConflictId);
+            baseIr, reviewers, scripts, policy, settings, conflicts, ref nextConflictId);
 
         // 5. TRAILING SECTION (B2): the document-final w:sectPr is not a body block op (Word compares it at the
         //    document level), so compose it directly — base vs each reviewer's trailing IrSectionBreak.Format
@@ -116,12 +116,14 @@ internal static class IrCompositeMerger
     /// </list>
     /// Every reviewer note diff also yields an <see cref="IrReviewerNoteIdMap"/> entry so the renderer can
     /// rewrite reviewer-sourced body references into the base-anchored output id space.
+    /// <paramref name="plannedScripts"/> are the reviewers' scripts after <see cref="ApplyMovePlan"/>, so a
+    /// move inside a note already carries its global move-group id.
     /// </summary>
     private static (IrNodeList<IrCompositeNoteDiff>? NoteOps, IrNodeList<IrReviewerNoteIdMap>? NoteIdMaps)
         MergeNoteScopes(
             IrDocument baseIr,
             IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
-            IReadOnlyList<IrEditScript> rawScripts,
+            IReadOnlyList<IrEditScript> plannedScripts,
             Docxodus.ConflictResolution policy,
             IrDiffSettings settings,
             List<IrConflict> conflicts,
@@ -136,9 +138,9 @@ internal static class IrCompositeMerger
 
             var byBaseNote = new Dictionary<string, List<(int Reviewer, IrNoteDiff Diff)>>();
             var insertedNotes = new List<(int Reviewer, IrNoteDiff Diff)>();
-            for (int r = 0; r < rawScripts.Count; r++)
+            for (int r = 0; r < plannedScripts.Count; r++)
             {
-                if (rawScripts[r].NoteOps is not { } nds)
+                if (plannedScripts[r].NoteOps is not { } nds)
                     continue;
                 foreach (var nd in nds)
                 {
@@ -327,8 +329,10 @@ internal static class IrCompositeMerger
     /// (<c>w:moveFrom</c>/<c>w:moveTo</c>, authored to the mover) or is LOWERED to del/ins, plus the GLOBAL
     /// move-group id assigned to a native group. Keyed by <c>(reviewer index, the reviewer's LOCAL
     /// <see cref="IrEditOp.MoveGroupId"/>)</c> — both halves of a move share the local gid, so both resolve to
-    /// the same verdict and global gid. <see cref="GlobalGidByGroup"/> contains an entry ONLY for native groups
-    /// (a group absent from the map is lowered).
+    /// the same verdict and global gid. <see cref="GlobalGidByGroup"/> contains an entry for every native
+    /// body-level group (a body-level group absent from the map is lowered) and for every move nested in a
+    /// table row or cell, textbox, block wrapper or note, which always renders with the op that carries it and
+    /// needs only the global id.
     /// </summary>
     internal sealed record MovePlan(IReadOnlyDictionary<(int Reviewer, int LocalGid), int> GlobalGidByGroup);
 
@@ -425,6 +429,26 @@ internal static class IrCompositeMerger
             }
         }
 
+        // Moves in NESTED scopes (table rows and cells, textboxes, block wrapper children, notes) render with
+        // the op that carries them. Their ids are unique only within one reviewer's script (the builder's
+        // UniqueMoveGroupIds), so give them global ids too, or two reviewers' nested moves would share one
+        // w:name (issue #1143).
+        for (int reviewer = 0; reviewer < rawScripts.Count; reviewer++)
+        {
+            var nestedLocalGids = new SortedSet<int>();
+            int Collect(int gid)
+            {
+                nestedLocalGids.Add(gid);
+                return gid;
+            }
+            foreach (var op in rawScripts[reviewer].Operations)
+                RewriteNestedMoveIds(op, Collect);
+            foreach (var note in rawScripts[reviewer].NoteOps ?? Enumerable.Empty<IrNoteDiff>())
+                RewriteMoveIds(note.Ops, Collect);
+            foreach (var localGid in nestedLocalGids)
+                globalGid[(reviewer, localGid)] = nextGlobal++;
+        }
+
         return new MovePlan(globalGid);
     }
 
@@ -438,9 +462,11 @@ internal static class IrCompositeMerger
     /// </summary>
     internal static IrEditScript ApplyMovePlan(IrEditScript script, int reviewer, MovePlan plan)
     {
+        int Global(int gid) => plan.GlobalGidByGroup.TryGetValue((reviewer, gid), out var global) ? global : gid;
         var result = new List<IrEditOp>(script.Operations.Count);
-        foreach (var op in script.Operations)
+        foreach (var raw in script.Operations)
         {
+            var op = RewriteNestedMoveIds(raw, Global);
             if (op.Kind is IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock
                 && op.MoveGroupId is { } localGid
                 && plan.GlobalGidByGroup.TryGetValue((reviewer, localGid), out var global))
@@ -466,7 +492,76 @@ internal static class IrCompositeMerger
                 || (o.MoveGroupId is { } g && plan.GlobalGidByGroup.Values.Contains(g))),
             "ApplyMovePlan must leave no LOWERED-candidate move op; surviving moves must be native (global gid).");
 
-        return new IrEditScript(IrNodeList.From(result), script.NoteOps);
+        var noteOps = script.NoteOps is { } notes
+            ? IrNodeList.From(notes.Select(n => n with { Ops = RewriteMoveIds(n.Ops, Global) }).ToList())
+            : null;
+        return new IrEditScript(IrNodeList.From(result), noteOps);
+    }
+
+    /// <summary>
+    /// <paramref name="op"/> with <paramref name="rewrite"/> applied to every move group id in the scopes nested
+    /// inside it — its table's rows and cells, its textboxes and a block wrapper's children, at any depth — but
+    /// not to the op's own id. Nothing is copied unless an id actually changes, so a rewrite that returns its
+    /// argument doubles as an allocation-free walk that only collects ids.
+    /// </summary>
+    internal static IrEditOp RewriteNestedMoveIds(IrEditOp op, Func<int, int> rewrite)
+    {
+        var table = op.TableDiff is { } diff ? RewriteTable(diff, rewrite) : null;
+        var textboxes = op.TextboxDiffs is { } boxes
+            ? RewriteEach(boxes, b => RewriteMoveIds(b.Ops, rewrite) is var ops && !ReferenceEquals(ops, b.Ops) ? b with { Ops = ops } : b)
+            : null;
+        var wrapperOps = op.WrapperOps is { } children ? RewriteMoveIds(children, rewrite) : null;
+        return ReferenceEquals(table, op.TableDiff) && ReferenceEquals(textboxes, op.TextboxDiffs)
+            && ReferenceEquals(wrapperOps, op.WrapperOps)
+            ? op
+            : op with { TableDiff = table, TextboxDiffs = textboxes, WrapperOps = wrapperOps };
+    }
+
+    /// <summary><see cref="RewriteNestedMoveIds"/> over a whole op list, including each op's own id.</summary>
+    private static IrNodeList<IrEditOp> RewriteMoveIds(IrNodeList<IrEditOp> ops, Func<int, int> rewrite) =>
+        RewriteEach(ops, op =>
+        {
+            var nested = RewriteNestedMoveIds(op, rewrite);
+            return op.MoveGroupId is { } gid && rewrite(gid) is var fresh && fresh != gid
+                ? nested with { MoveGroupId = fresh }
+                : nested;
+        });
+
+    private static IrTableDiff RewriteTable(IrTableDiff table, Func<int, int> rewrite)
+    {
+        var rows = RewriteEach(table.RowOps, row =>
+        {
+            var cells = row.CellOps is { } cellOps
+                ? RewriteEach(cellOps, c => c.BlockOps is { } ops && RewriteMoveIds(ops, rewrite) is var fresh
+                    && !ReferenceEquals(fresh, ops) ? c with { BlockOps = fresh } : c)
+                : null;
+            int? gid = row.MoveGroupId is { } id ? rewrite(id) : null;
+            return gid == row.MoveGroupId && ReferenceEquals(cells, row.CellOps)
+                ? row
+                : row with { MoveGroupId = gid, CellOps = cells };
+        });
+        return ReferenceEquals(rows, table.RowOps) ? table : new IrTableDiff(rows);
+    }
+
+    /// <summary><paramref name="items"/> mapped through <paramref name="map"/>; the same list when every item
+    /// maps to itself.</summary>
+    private static IrNodeList<T> RewriteEach<T>(IrNodeList<T> items, Func<T, T> map)
+        where T : class
+    {
+        List<T>? copy = null;
+        for (int i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            var mapped = map(item);
+            if (copy is null && !ReferenceEquals(mapped, item))
+            {
+                copy = new List<T>(items.Count);
+                for (int k = 0; k < i; k++)
+                    copy.Add(items[k]);
+            }
+            copy?.Add(mapped);
+        }
+        return copy is null ? items : IrNodeList.From(copy);
     }
 
     /// <summary>
@@ -557,7 +652,7 @@ internal static class IrCompositeMerger
 
         // Note scopes (footnotes/endnotes) are not part of body grouping, so they pass through this body-op
         // lowering unchanged; cross-reviewer note composition happens later in MergeNoteScopes, which reads
-        // these passed-through NoteOps off each reviewer's raw script.
+        // these passed-through NoteOps off each reviewer's script.
         return new IrEditScript(IrNodeList.From(lowered), script.NoteOps);
     }
 
@@ -1595,20 +1690,7 @@ internal static class IrCompositeMerger
         if (!reviewerIr.AnchorIndex.TryGetValue(ra, out var block))
             return "";
         var sb = new System.Text.StringBuilder();
-        switch (block)
-        {
-            case IrParagraph p:
-                foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
-                    sb.Append(t.Text);
-                break;
-            case IrTable tbl:
-                // Serialize the table's cell text so a table conflict's competitor ResultText is meaningful
-                // (rather than ""): concatenate each cell's paragraph text, cells separated by '␟' (unit
-                // separator) and rows by '␞' (record separator) so two differently-edited tables produce
-                // distinguishable strings. v1 does not compose table cells; this text is for conflict reporting.
-                AppendTableText(tbl, sb, settings);
-                break;
-        }
+        AppendBlockText(block, sb, settings);
         return sb.ToString();
     }
 
@@ -1627,6 +1709,16 @@ internal static class IrCompositeMerger
         if (op.LeftAnchor is not { } la || !baseIr.AnchorIndex.TryGetValue(la, out var block))
             return "";
         var sb = new System.Text.StringBuilder();
+        AppendBlockText(block, sb, settings);
+        return sb.ToString();
+    }
+
+    /// <summary>Append a block's text to <paramref name="sb"/> for conflict-competitor reporting, so a
+    /// competitor's ResultText is meaningful rather than "": a paragraph's tokens (tokenized with the diff
+    /// tokenizer so the text matches what the diff sees), a table's cell text (<see cref="AppendTableText"/>),
+    /// and a block wrapper's children in turn (issue #1143). Any other block contributes nothing.</summary>
+    private static void AppendBlockText(IrBlock block, System.Text.StringBuilder sb, IrDiffSettings settings)
+    {
         switch (block)
         {
             case IrParagraph p:
@@ -1636,13 +1728,17 @@ internal static class IrCompositeMerger
             case IrTable tbl:
                 AppendTableText(tbl, sb, settings);
                 break;
+            case IrSdtBlock wrapper:
+                foreach (var child in wrapper.Blocks)
+                    AppendBlockText(child, sb, settings);
+                break;
         }
-        return sb.ToString();
     }
 
-    /// <summary>Append <paramref name="tbl"/>'s cell text (row/cell-delimited) to <paramref name="sb"/> for
-    /// conflict-competitor reporting. Nested paragraphs in a cell are tokenized with the diff tokenizer so the
-    /// text matches what the diff sees; nested tables recurse.</summary>
+    /// <summary>Append <paramref name="tbl"/>'s cell text to <paramref name="sb"/>: each cell's blocks
+    /// (<see cref="AppendBlockText"/>), cells separated by '␟' (unit separator) and rows by '␞' (record
+    /// separator), so two differently-edited tables produce distinguishable strings. v1 does not compose table
+    /// cells; this text is for conflict reporting.</summary>
     private static void AppendTableText(IrTable tbl, System.Text.StringBuilder sb, IrDiffSettings settings)
     {
         bool firstRow = true;
@@ -1656,13 +1752,7 @@ internal static class IrCompositeMerger
                 if (!firstCell) sb.Append('␟');
                 firstCell = false;
                 foreach (var b in cell.Blocks)
-                {
-                    if (b is IrParagraph cp)
-                        foreach (var t in IrDiffTokenizer.Tokenize(cp, settings))
-                            sb.Append(t.Text);
-                    else if (b is IrTable nested)
-                        AppendTableText(nested, sb, settings);
-                }
+                    AppendBlockText(b, sb, settings);
             }
         }
     }

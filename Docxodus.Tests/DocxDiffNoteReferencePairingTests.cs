@@ -103,6 +103,24 @@ public class DocxDiffNoteReferencePairingTests
         AssertReferencesReadTheirNotes("footnote", left, right);
     }
 
+    /// <summary>The same inside a block wrapper whose own markup is unchanged, which the diff aligns in place
+    /// like a table cell (issue #1143).</summary>
+    [Theory]
+    [InlineData("<w:customXml w:uri=\"urn:example\" w:element=\"article\">", "</w:customXml>")]
+    [InlineData("<w:sdt><w:sdtPr><w:tag w:val=\"article\"/></w:sdtPr><w:sdtContent>", "</w:sdtContent></w:sdt>")]
+    public void RewrittenParagraphsInsideAnUnchangedWrapper_KeptReferences_ReadTheirOwnNotesBothWays(string open, string close)
+    {
+        var left = Doc("footnote",
+            open + Paragraph("Apple one words", Reference("footnote", 1)) + Paragraph("Banana two words", Reference("footnote", 2)) + close,
+            "Apple note", "Banana note");
+        var right = Doc("footnote",
+            open + Paragraph("Cherry fresh words entirely", Reference("footnote", 1)) +
+                Paragraph("Date more words entirely", Reference("footnote", 2)) + close,
+            "Banana note", "Cherry note");
+
+        AssertReferencesReadTheirNotes("footnote", left, right);
+    }
+
     [Fact]
     public void UnchangedParagraphs_KeptReferences_ReadTheirOwnNotesBothWays()
     {

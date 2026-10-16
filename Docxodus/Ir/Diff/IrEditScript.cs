@@ -33,7 +33,8 @@ internal enum IrEditOpKind
     /// <see cref="IrAlignmentKind.Modified"/> entry). Both anchors set. For a PARAGRAPH pair
     /// <see cref="IrEditOp.TokenDiff"/> carries the intra-block token diff; for a TABLE pair
     /// <see cref="IrEditOp.TableDiff"/> carries the nested row/cell diff (M2.2 Task 4); for any other
-    /// non-paragraph pair (opaque / section break) both are null (no sub-block model).
+    /// non-paragraph pair (opaque / section break) both are null (no sub-block model). A pair of block
+    /// wrappers with unchanged own markup carries its child block ops in <see cref="IrEditOp.WrapperOps"/>.
     /// </summary>
     ModifyBlock,
 
@@ -149,6 +150,12 @@ internal enum IrEditOpKind
 /// <see cref="IrEditOpKind.InsertBlock"/> paragraph in DIFFERENT block lists (the body and a table cell, or
 /// two cells) that are one relocation (issue #887). The ops keep their kind and apply semantics; renderers
 /// draw the pair as a move when move reporting is on. Ids continue above every <see cref="MoveGroupId"/>.</item>
+/// <item><see cref="WrapperOps"/>: set only on a <see cref="IrEditOpKind.ModifyBlock"/> pairing two block
+/// wrappers (<see cref="IrSdtBlock"/>: a <c>w:sdt</c> content control or a <c>w:customXml</c> element) of the
+/// same kind whose own markup is unchanged (<see cref="IrSdtBlock.ShellDigest"/>). It carries the block ops of
+/// the wrappers' aligned child blocks, exactly like a table cell's <see cref="IrCellOp.BlockOps"/>, so the
+/// renderers draw the changes inside ONE copy of the wrapper (issue #1143). Null when the wrapper itself changed:
+/// the pair is then replaced whole.</item>
 /// <item><see cref="RequiresWholeParagraphReplace"/>: set only on a paired paragraph operation whose
 /// non-tokenizable structural carrier differs (an inline <c>w:sdt</c>/<c>w:smartTag</c> envelope or a
 /// non-hyperlink field code/state carrier). Its token diff remains available for apply/diagnostics, but renderers
@@ -169,7 +176,8 @@ internal sealed record IrEditOp(
     int? BodyFullRewriteGroupId = null,
     bool RequiresWholeParagraphReplace = false,
     IrNodeList<IrCrossParagraphCell>? CrossParagraphCells = null,
-    int? RelocationGroupId = null);
+    int? RelocationGroupId = null,
+    IrNodeList<IrEditOp>? WrapperOps = null);
 
 /// <summary>
 /// One output-paragraph "cell" of a <see cref="IrEditOpKind.CrossParagraphRunBlock"/> — the factoring of
