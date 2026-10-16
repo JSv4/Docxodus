@@ -443,4 +443,23 @@ public class BlockLevelMarkerDiffTests
         Assert.Equal("P:Lead BS:Added P:Alpha P:Bravo weekly BE:Added P:Tail", Layout(Accept(consolidated)));
         Assert.Equal(Layout(original), Layout(Reject(consolidated)));
     }
+
+    [Fact]
+    public void Consolidate_BodyBookmark_RemovedByOneReviewer_AcceptDropsItAndRejectKeepsIt()
+    {
+        var original = Doc(P("Lead") + Start("Removed") + P("Alpha") + P("Bravo monthly") + End() + P("Tail"));
+        var first = Doc(P("Lead") + P("Alpha") + P("Bravo monthly") + P("Tail"));
+        var second = Doc(P("Lead") + Start("Removed") + P("Alpha") + P("Bravo weekly") + End() + P("Tail"));
+
+        var consolidated = DocxDiff.Consolidate(original, new[]
+        {
+            new DocxDiffReviewer { Author = "First", Document = first },
+            new DocxDiffReviewer { Author = "Second", Document = second },
+        });
+
+        Assert.Equal("P:Lead P:Alpha P:Bravo weekly P:Tail", Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+        Assert.Equal("First", (string?)Body(consolidated).Elements(W + "del")
+            .Single(d => d.Element(W + "bookmarkStart") is not null).Attribute(W + "author"));
+    }
 }

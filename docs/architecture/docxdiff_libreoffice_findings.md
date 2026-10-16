@@ -223,7 +223,9 @@ got wrapped. Fix: a new `WrapContainerChild` descends through `w:sdtContent`
 oracle flattens the sdt instead; ours keeps the content control AND tracks the
 insertion. Test `DocxDiffTests.Compare_InsertedContentControl_RejectStripsTheInsertedText`.
 
-### bookmark-range-edit — body-level `w:bookmarkEnd` drop is DELIBERATE (not a defect)
+### bookmark-range-edit — body-level `w:bookmarkEnd` drop was deliberate (superseded by issue #1149)
+
+> **Superseded.** Since issue #1149 the renderer places body-level and cell-level markers from the source documents (see *Block-level markers* in `ir_diff_engine.md`), so they survive `Compare` and both resolutions. The text below records the original decision.
 
 The sweep flagged that 6 body-level `w:bookmarkEnd` markers (siblings of `w:p`,
 outside any paragraph) are dropped from `Compare` output (192 starts / 186 ends),
