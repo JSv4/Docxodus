@@ -4,6 +4,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System;
+using System.Linq;
 using System.Xml.Linq;
 
 namespace Docxodus.Internal;
@@ -52,6 +53,26 @@ internal static class StructuredRevisionOps
         contentContainer.Add(closingStart);
         var after = new XElement(endName, new XAttribute(W.id, afterId));
         return (before, after);
+    }
+
+    /// <summary>
+    /// The revision side of a wrapper whose existence <see cref="AddCrossBoundaryMarkers"/> tracked, read back
+    /// from the opening range's end marker it placed first in <paramref name="contentContainer"/> (after any
+    /// <c>w:customXmlPr</c>): true for a deleted wrapper, false for an inserted one, and null when the wrapper is
+    /// not tracked. Everything inside such a wrapper — including block-level markers that carry no
+    /// <c>w:ins</c>/<c>w:del</c> of their own — exists in only that one revision view.
+    /// </summary>
+    internal static bool? TrackedWrapperIsDeleted(XElement contentContainer)
+    {
+        ArgumentNullException.ThrowIfNull(contentContainer);
+        var first = contentContainer.Elements().FirstOrDefault(e => e.Name != W.customXmlPr);
+        if (first == null)
+            return null;
+        if (first.Name == W.customXmlDelRangeEnd)
+            return true;
+        if (first.Name == W.customXmlInsRangeEnd)
+            return false;
+        return null;
     }
 
     private static string RequiredRangeId(XElement start) =>

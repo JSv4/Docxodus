@@ -33,6 +33,28 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Accepting a comparison that replaces a content control (`w:sdt`) or `w:customXml` wrapper whole no
+  longer moves a comment's reference out of the wrapper (issue #1157). When a comment range sits
+  between the wrapper's blocks, the redline holds a deleted and an inserted copy of the wrapper, each
+  with its own copy of the comment. The comment clean-up treated the range markers between blocks as
+  belonging to both views because they carry no `w:del`/`w:ins` of their own, so it kept a single
+  marker of each kind: the range start and the reference from the deleted copy, the range end from
+  the inserted one. Accepting then left the reference in a paragraph of its own before the wrapper.
+  It now reads a marker inside a whole deleted or inserted wrapper as belonging to that copy's view
+  only, so each copy keeps a complete comment: the deleted copy gets a fresh id and a cloned
+  definition, as a wholly rewritten comment already did. Accepting yields the revised comment inside
+  the wrapper and rejecting the original. When the comment is a threaded reply, the deleted copy's
+  reply now answers the deleted copy's parent rather than the original, and the cloned comments get
+  fresh durable ids instead of repeating the originals'. Range markers directly inside a block-level
+  `w:customXml` wrapper are now reconciled too; they were skipped before and could leave two range
+  ends with the same id (markers inside an inline `w:customXml` are still left as they are).
+  Two shapes remain broken (issue #1167), because one of the comment's markers lies outside the
+  replaced wrapper and so cannot belong to both copies: a comment that opens before the wrapper
+  (in a paragraph or in an earlier, unchanged wrapper) and closes inside it puts the reference
+  before the wrapper on accept, and a range wholly inside the wrapper whose reference sits in a
+  paragraph after it keeps only half a range in each view. For `w:sdt` both behave as before; for
+  `w:customXml` they used to keep each copy's markers in full under one duplicated id, so the
+  redline is now well formed but these two shapes lose the range or the reference's place instead.
 - Right-to-left bordered paragraphs (`w:bidi`) now draw their left and right borders outside the
   indented text, mirroring left-to-right paragraphs (issue #1129). The border wrapper put the
   paragraph's leading (start) indent on its left side, although a right-to-left paragraph's start is
