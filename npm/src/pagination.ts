@@ -6,7 +6,7 @@
  */
 
 import { formatPageNumber } from "./page-number-format.js";
-import { alignExactLineBaselines, applyUnroundedNormalLineHeights, insetClipBounds, preserveExactLineInk } from "./line-metrics.js";
+import { alignBaselinesToWord, alignExactLineBaselines, applyUnroundedNormalLineHeights, insetClipBounds, preserveExactLineInk } from "./line-metrics.js";
 import {
   DEFAULT_MARGIN,
   DEFAULT_PAGE_HEIGHT,
@@ -317,6 +317,14 @@ export interface PaginationOptions {
    * entry points opt in explicitly.
    */
   fragmentParagraphs?: boolean;
+  /**
+   * Put each line's glyphs on Word's baseline once the pages are laid out (issue #942), moving
+   * them with relative positioning so no line box changes. Defaults to false for direct
+   * PaginationEngine callers; the read-only viewer entry points opt in. An editable surface
+   * keeps it off (typed text would land in unmoved boxes), and the standalone export runs the
+   * same pass itself after its clipping check.
+   */
+  alignBaselinesToWord?: boolean;
   /** Cooperative checkpoint for bounded non-yielding browser layout work. */
   checkCancellation?: () => void;
   /**
@@ -665,6 +673,7 @@ export class PaginationEngine {
   private showPageNumbers: boolean;
   private pageGap: number;
   private fragmentParagraphs: boolean;
+  private alignBaselines: boolean;
   private deferFragmentIdentities: boolean;
   private bodyBudgetReductionsPt: Readonly<Record<number, number>>;
   private cancellationCheckpoint?: () => void;
@@ -732,6 +741,7 @@ export class PaginationEngine {
     this.showPageNumbers = options.showPageNumbers ?? true;
     this.pageGap = options.pageGap ?? 20;
     this.fragmentParagraphs = options.fragmentParagraphs ?? false;
+    this.alignBaselines = options.alignBaselinesToWord ?? false;
     this.deferFragmentIdentities = options.deferFragmentIdentities ?? false;
     this.bodyBudgetReductionsPt = options.bodyBudgetReductionsPt ?? {};
     this.cancellationCheckpoint = options.checkCancellation;
@@ -990,6 +1000,8 @@ export class PaginationEngine {
     this.qualifyPageFragments(pages);
     this.transferVisibleFragmentTargets();
     if (!this.deferFragmentIdentities) this.normalizeVisiblePageFragments(pages);
+    // Glyph placement only: run once every page and running story is final.
+    if (this.alignBaselines) alignBaselinesToWord(this.containerElement);
     this.lastPages = pages;
 
       const result = {
@@ -5217,6 +5229,7 @@ export function paginateHtml(
   const engine = new PaginationEngine(staging, pageContainer, {
     ...options,
     fragmentParagraphs: options.fragmentParagraphs ?? true,
+    alignBaselinesToWord: options.alignBaselinesToWord ?? true,
   });
   return engine.paginate();
 }

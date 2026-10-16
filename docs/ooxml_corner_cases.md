@@ -2180,6 +2180,12 @@ values are measured in the DOM with Chromium placing baselines on whole CSS pixe
   | 12 pt Arial / Liberation Sans | 83.28 | 82.50 | 83.25 |
 
   `alignBaselinesToWord` (`npm/src/line-metrics.ts`) runs in the export once the page tree is final.
+  Since issue #1151 the read-only paginated view (`paginateHtml`, the React viewer) runs it too, at
+  the end of pagination (`PaginationOptions.alignBaselinesToWord`); the paginated editor does not,
+  since text typed into a moved box would not move with it. Once the view's lines took the font's
+  unrounded height (#1151), Chromium's whole-pixel baseline rounding fell differently and moved
+  some first lines a pixel; on the seven corpus cases with a Word reference, the aligned view's ink
+  extents match Word's or come within one pixel of them.
   For each paragraph whose line height is its font's natural height it computes Word's offset, *L* − *D*
   (*D* read from the canvas at 1000 px), measures Chromium's in a probe shaped like the paragraph's first
   line, and moves each direct inline child by the difference with relative positioning, so no line box

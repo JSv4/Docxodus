@@ -57,3 +57,52 @@ test('paginated single-spaced lines advance by the font\'s unrounded natural hei
   // 300pt of body holds 25 lines of 11.64pt; at the rounded 11.25pt it held 26.
   expect(firstPage.lines).toBe(Math.floor(300 / naturalPt));
 });
+
+test('the read-only paginated view puts glyphs on Word\'s baseline without moving any line', async ({ page }) => {
+  // Word sets a single-spaced line's baseline its natural height less the font's descent below the
+  // line's top; Chromium rounds ascent and descent and lands up to a pixel off (issue #942). The
+  // export has corrected glyph placement since #942; the read-only paginated view now does too.
+  // An editable surface (the paginated editor, direct engine callers by default) keeps it off.
+  const paragraphs = Array.from({ length: 3 }, (_, index) => `<p class="pitch">line ${index + 1}</p>`).join('');
+  const html = `
+    <style>
+      @font-face { font-family: 'Pitch Test'; src: url(data:font/woff2;base64,${fontBase64}) format('woff2'); }
+      .pitch { font-family: 'Pitch Test'; font-size: ${FONT_SIZE_PT}pt; margin: 0; padding: 0; }
+    </style>
+    <div id="root"><div id="pagination-staging">
+      <div data-section-index="0"
+           data-page-width="400" data-page-height="320"
+           data-content-width="380" data-content-height="300"
+           data-margin-top="10" data-margin-right="10"
+           data-margin-bottom="10" data-margin-left="10">${paragraphs.replace(/<p class="pitch">([^<]*)<\/p>/g, '<p class="pitch"><span>$1</span></p>')}</div>
+    </div><div id="pagination-container"></div></div>`;
+  await page.setContent('<div id="host"></div>');
+  await page.evaluate(async (fontCss) => {
+    const style = document.createElement('style'); style.textContent = fontCss; document.head.appendChild(style);
+    await document.fonts.load(`10pt 'Pitch Test'`);
+  }, `@font-face { font-family: 'Pitch Test'; src: url(data:font/woff2;base64,${fontBase64}) format('woff2'); }`);
+  await page.addScriptTag({ path: join(__dirname, '../dist/pagination.bundle.js') });
+
+  const layout = await page.evaluate((markup) => {
+    const { paginateHtml, PaginationEngine } = (window as any).DocxodusPagination;
+    const measure = (container: HTMLElement) => {
+      const paragraph = container.querySelector<HTMLElement>('.page-content p')!;
+      const span = paragraph.querySelector<HTMLElement>('span')!;
+      return { paragraphTop: paragraph.getBoundingClientRect().top - container.getBoundingClientRect().top,
+        position: getComputedStyle(span).position, top: getComputedStyle(span).top };
+    };
+    const host = document.getElementById('host')!;
+    paginateHtml(markup, host, { scale: 1, showPageNumbers: false });
+    const viewer = measure(host);
+    host.innerHTML = markup;
+    new PaginationEngine(host.querySelector('#pagination-staging'), host.querySelector('#pagination-container'),
+      { scale: 1, showPageNumbers: false }).paginate();
+    const engine = measure(host);
+    return { viewer, engine };
+  }, html);
+
+  expect(layout.viewer.position).toBe('relative');
+  expect(Number.parseFloat(layout.viewer.top)).not.toBe(0);
+  expect(layout.engine.position).toBe('static');
+  expect(layout.viewer.paragraphTop).toBeCloseTo(layout.engine.paragraphTop, 2);
+});

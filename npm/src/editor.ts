@@ -2717,6 +2717,8 @@ export class DocxEditor {
       scale: this.options.scale,
       cssPrefix: "page-",
       fragmentParagraphs: false,
+      // Moved glyph boxes would part from text typed into them.
+      alignBaselinesToWord: false,
     });
     // pagination.ts measures the hidden #pagination-staging subtree ONCE, then flows CLONES of its
     // blocks into the visible page boxes. Leaving staging in the live DOM is a trap: every

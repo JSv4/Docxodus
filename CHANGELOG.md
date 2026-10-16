@@ -185,7 +185,8 @@ All notable changes to this project will be documented in this file.
 
   The paginated view and editor also lay single-spaced lines out at the font's exact height, as the
   PDF export already did. Chromium rounds them to a whole pixel, so 11pt Times New Roman advanced
-  12.75pt a line instead of 12.65pt.
+  12.75pt a line instead of 12.65pt. The read-only paginated view now also places glyphs on Word's
+  baseline, as the export does (issue #942); the editor does not.
 - Table row heights keep twip precision (issue #1121). The converter wrote `w:trHeight` as CSS inches
   rounded to 0.01in, so a 55pt row became 54.72pt and the error accumulated down the table, and
   25.075pt and 25.1pt rows both became 25.2pt. Heights are now written in points from the exact twip
