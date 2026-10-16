@@ -47,9 +47,11 @@ const FOOTER_TAB_STOP_PX = 312;
  * had dropped that spacing on the 92 single-paragraph notes here. The spacing after the band's
  * last paragraph is not reserved, as in LibreOffice, where that line sits on the bottom margin.
  *
- * #1151 (restored list spacing) is measured together with the value above in a later commit.
+ * 54 since #1151, measured: among other changes, consecutive numbered paragraphs keep their 12pt
+ * spacing after, as in LibreOffice. The paginated view, which splits paragraphs, takes 49 pages
+ * against LibreOffice's 48.
  */
-const PAGES = 53;
+const PAGES = 54;
 const FOOTNOTE_CITATIONS = 94;
 const SECTIONS = 4;
 /** Body-scope blocks the editor makes addressable. Header, footer and note blocks are not these. */

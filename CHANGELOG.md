@@ -164,9 +164,8 @@ All notable changes to this project will be documented in this file.
   substitutes each page's number. As for complex fields, the substituted result takes the field's
   formatting rather than the cached result run's (see `docs/ooxml_corner_cases.md`).
 - Paginated documents with many long footnotes now take as many pages as in LibreOffice (issue #1151).
-  The NVCA model charter took 50 pages in the paginated view against LibreOffice's 48; it now takes 48.
-  The paginated editor, which never splits a paragraph, takes 52 (was 51) because of the restored
-  spacing below.
+  The NVCA model charter took 51 pages in the paginated view against LibreOffice's 48; it now takes
+  49. The paginated editor, which never splits a paragraph, takes 54 (was 53).
   Three causes, each fixed where it arises:
   - A note that did not fit beside its citation used to start on the next page while the citing
     line stayed behind. Deferred notes piled up into pages holding nothing but notes. The citing

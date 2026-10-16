@@ -3077,7 +3077,7 @@ value is treated as Word behaviour.
 
 ## Footnotes: a note begins on the page that cites it (issue #1151)
 
-**Status:** Docxodus matches LibreOffice on the NVCA model charter; Word not yet captured (October 2026)
+**Status:** Docxodus is within one page of LibreOffice on the NVCA model charter; Word not yet captured (October 2026)
 
 A footnote whose citation sits near the bottom of a page may not fit in what is left of it. A renderer
 can move the citing line to the next page, so that the note begins beside it, or keep the line and
@@ -3086,10 +3086,16 @@ many of them longer than a third of a page, on 11pt Times New Roman body text.
 
 | | LibreOffice 25.8.7.3 | Docxodus before #1151 | Docxodus after |
 |---|---|---|---|
-| Notes that begin on a later page than their citation | 1 of 94 | 24 | 0 |
-| Pages holding notes and no body text | 0 | 3 (pages 6, 7, 41) | 0 |
-| Paginated view, total pages | 48 | 50 | 48 |
-| Paginated editor (never splits a paragraph), total pages | — | 51 | 52 |
+| Notes that begin on a later page than their citation | 1 of 94 | 23 | 0 |
+| Pages holding notes and no body text | 0 | 2 (pages 6, 7) | 0 |
+| Paginated view, total pages | 48 | 51 | 49 |
+| Paginated editor (never splits a paragraph), total pages | — | 53 | 54 |
+
+Measured with #1130's 6pt spacing between notes in place. Without it these changes gave 48 pages,
+LibreOffice's count. LibreOffice lays out the same 6pt gaps, so they do not account for the
+remaining page by themselves. The pages first part around pages 18–21: Docxodus carries a few lines
+of a note onto the next page where LibreOffice has finished it, and from there trails it by up to a
+page. That drift is not yet located.
 
 LibreOffice's one exception is note 4. The first line of the "Fourth" paragraph cites it at the foot
 of page 4, the notes already there fill the page, and LibreOffice keeps the line on page 4 and begins
@@ -3122,7 +3128,7 @@ and deferred more, until a page held nothing but notes. Two limits made this com
   a paragraph that a keep-with-next block before it keeps with (moving it would strand that block
   at the foot of the page), and in the paginated editor, which splits no paragraph: moving each
   citing paragraph whole there would leave more of every page empty than Word's split does. The
-  editor's count rises by one page, from the spacing restored in the next section.
+  editor's count rises by one page, from 53 to 54.
 - `canFragmentParagraph` admits paragraphs written as `h1`–`h6` and paragraphs that cite notes; a
   head's notes are placed with the head.
 - `leadingAtomicBoxes` lets a paragraph that opens with a list number, a note number or an empty
@@ -3168,7 +3174,8 @@ FIRST → SECOND → THIRD, "General" → "Voting", and the space after the "A. 
 
 **Fix.** `ApplyContextualSpacing` (formerly `GroupAndVerticallySpaceNumberedParagraphs`) in
 `Docxodus/WmlToHtmlConverter.cs` groups paragraphs only by `w:contextualSpacing` and style. Numbering
-no longer suppresses spacing. Restoring the spacing adds two pages to the charter's paginated view,
+no longer suppresses spacing. Restoring the spacing added two pages to the charter's paginated view
+(measured before #1130),
 height LibreOffice also lays out.
 
 **Remaining gap.** LibreOffice also tightens list items whose spacing is `w:beforeAutospacing` /
