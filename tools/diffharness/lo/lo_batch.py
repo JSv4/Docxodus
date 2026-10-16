@@ -15,11 +15,11 @@ Isolated profile + socket so it never collides with a user's open soffice.
 """
 import json
 import os
-import subprocess
 import sys
 import time
 from typing import Any
 
+import lo_soffice
 import uno
 from com.sun.star.beans import PropertyValue
 
@@ -60,12 +60,7 @@ def main() -> None:
     profile = "file:///tmp/lo_profile_batch_%s" % port
     manifest = json.load(open(os.path.join(corpus, "manifest.json")))
 
-    sof = subprocess.Popen([
-        "soffice", "--headless", "--invisible", "--norestore", "--nologo",
-        "--nofirststartwizard", "--nodefault",
-        "--accept=socket,host=localhost,port=%s;urp;StarOffice.ComponentContext" % port,
-        "-env:UserInstallation=" + profile,
-    ])
+    sof = lo_soffice.start_listener(port, profile)
     summary = []
     try:
         local = uno.getComponentContext()
@@ -132,11 +127,7 @@ def main() -> None:
         except Exception:  # noqa: BLE001
             pass
         time.sleep(1)
-        sof.terminate()
-        try:
-            sof.wait(timeout=10)
-        except Exception:  # noqa: BLE001
-            sof.kill()
+        lo_soffice.stop_listener(sof)
 
 
 def _types(lst: list[dict[str, Any]]) -> dict[Any, int]:

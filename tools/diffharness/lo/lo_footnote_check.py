@@ -18,11 +18,11 @@ or, on failure to load:
     FILE=<path> LOAD=FAILED ERR=<message>
 """
 import os
-import subprocess
 import sys
 import time
 from typing import Any
 
+import lo_soffice
 import uno
 from com.sun.star.beans import PropertyValue
 
@@ -64,12 +64,7 @@ def main() -> None:
             args.append(a)
     profile = "file:///tmp/lo_profile_fn_%s" % port
 
-    soffice = subprocess.Popen([
-        "soffice", "--headless", "--invisible", "--norestore", "--nologo",
-        "--nofirststartwizard", "--nodefault",
-        "--accept=socket,host=localhost,port=%s;urp;StarOffice.ComponentContext" % port,
-        "-env:UserInstallation=" + profile,
-    ])
+    soffice = lo_soffice.start_listener(port, profile)
     rc = 0
     try:
         local = uno.getComponentContext()
@@ -113,11 +108,7 @@ def main() -> None:
         except Exception:  # noqa: BLE001
             pass
         time.sleep(1)
-        soffice.terminate()
-        try:
-            soffice.wait(timeout=10)
-        except Exception:  # noqa: BLE001
-            soffice.kill()
+        lo_soffice.stop_listener(soffice)
     sys.exit(rc)
 
 

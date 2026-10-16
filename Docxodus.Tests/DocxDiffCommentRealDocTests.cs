@@ -148,16 +148,9 @@ public class DocxDiffCommentRealDocTests
         string stdout;
         try
         {
-            var psi = new ProcessStartInfo("python3", $"\"{script}\" \"{docxPath}\"")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
-            using var proc = Process.Start(psi);
-            if (proc == null) { _out.WriteLine("[lo-skip] could not start python3"); return; }
-            stdout = proc.StandardOutput.ReadToEnd() + proc.StandardError.ReadToEnd();
-            if (!proc.WaitForExit(120_000)) { try { proc.Kill(true); } catch { } _out.WriteLine("[lo-skip] timed out"); return; }
+            var run = TestProcess.Run(new ProcessStartInfo("python3", $"\"{script}\" \"{docxPath}\""), TimeSpan.FromSeconds(120));
+            stdout = run.Output;
+            if (run.TimedOut) { _out.WriteLine("[lo-skip] timed out"); return; }
         }
         catch (Exception e)
         {

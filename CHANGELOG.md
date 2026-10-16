@@ -50,6 +50,15 @@ All notable changes to this project will be documented in this file.
   they now assert the shape the design guarantees (no unchanged chunk is rebuilt, and the rebuilt
   chunks are one contiguous run covering the edited block), and new tests force a split, a merge
   and an exact merge past the cap.
+- The LibreOffice-backed comparison tests can no longer hang the whole test run (issue #1158);
+  test and tooling only, no library change. The header/footer, comment and block-format oracles read
+  their script's output to the end before waiting on it, and the scripts started `soffice` with
+  that same output. A `soffice.bin` left running after a shutdown call timed out kept the pipe open,
+  so the read never ended and the two-minute timeout never ran: one run sat idle for 80 minutes. The
+  tests now run the scripts through a shared helper (`TestProcess`) that reads on background tasks,
+  kills the process tree at the deadline and stops waiting on a pipe a leftover process still holds,
+  and every script under `tools/diffharness/lo/` starts and stops `soffice` through `lo_soffice.py`,
+  which gives it no inherited output and its own process group, and ends the whole group.
 
 - A consolidated redline no longer gives two reviewers' moves the same move name when the moves are
   inside table cells (issue #1143). Each reviewer's comparison numbers its moves from 1, and consolidate
