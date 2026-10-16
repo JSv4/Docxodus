@@ -253,9 +253,9 @@ public class PaginatedHeaderFooterContentTests
     private static decimal TabSegmentWidthInches(string html)
     {
         var match = System.Text.RegularExpressions.Regex.Match(
-            html, @"display:\s*inline-flex[^""]*?width:\s*([0-9.]+)in");
+            html, @"display:\s*inline-flex[^""]*?width:\s*([0-9.]+)pt");
         Assert.True(match.Success, "paginated HTML has no inline-flex tab segment:\n" + html);
-        return decimal.Parse(match.Groups[1].Value, NumberFormatInfo.InvariantInfo);
+        return decimal.Parse(match.Groups[1].Value, NumberFormatInfo.InvariantInfo) / 72m;
     }
 
     /// <summary>

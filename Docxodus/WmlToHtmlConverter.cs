@@ -2844,11 +2844,7 @@ namespace Docxodus
             sb.AppendLine("/* Page CSS for print */");
             sb.AppendLine("@page {");
 
-            // Convert points to inches for CSS (72pt = 1in)
-            double widthIn = dims.PageWidthPt / 72.0;
-            double heightIn = dims.PageHeightPt / 72.0;
-            sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
-                "    size: {0:0.00}in {1:0.00}in;", widthIn, heightIn));
+            sb.AppendLine($"    size: {PageLengthCss(dims.PageWidthPt)} {PageLengthCss(dims.PageHeightPt)};");
 
             if (settings.RenderPagination == PaginationMode.Paginated)
             {
@@ -2861,13 +2857,8 @@ namespace Docxodus
             {
                 // Generate margin (top right bottom left) for continuous HTML, where the
                 // browser's physical page margin is the only representation of section margins.
-                double marginTopIn = dims.MarginTopPt / 72.0;
-                double marginRightIn = dims.MarginRightPt / 72.0;
-                double marginBottomIn = dims.MarginBottomPt / 72.0;
-                double marginLeftIn = dims.MarginLeftPt / 72.0;
-                sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
-                    "    margin: {0:0.00}in {1:0.00}in {2:0.00}in {3:0.00}in;",
-                    marginTopIn, marginRightIn, marginBottomIn, marginLeftIn));
+                sb.AppendLine($"    margin: {PageLengthCss(dims.MarginTopPt)} {PageLengthCss(dims.MarginRightPt)} " +
+                    $"{PageLengthCss(dims.MarginBottomPt)} {PageLengthCss(dims.MarginLeftPt)};");
             }
 
             sb.AppendLine("}");
@@ -2896,9 +2887,7 @@ namespace Docxodus
             {
                 var dims = sectionDimensions[sectionIndex];
                 sb.AppendLine($"@page docxodus-section-{sectionIndex} {{");
-                sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
-                    "    size: {0:0.00}in {1:0.00}in;",
-                    dims.PageWidthPt / 72.0, dims.PageHeightPt / 72.0));
+                sb.AppendLine($"    size: {PageLengthCss(dims.PageWidthPt)} {PageLengthCss(dims.PageHeightPt)};");
                 // Section margins are already represented inside each fixed page box.
                 sb.AppendLine("    margin: 0;");
                 sb.AppendLine("}");
@@ -5660,7 +5649,7 @@ namespace Docxodus
                 style.Add("display", "inline-block");
                 style.Add("margin", "0 0 0 0");
                 style.Add("padding", "0 0 0 0");
-                style.Add("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", tabWidth));
+                style.Add("width", InchesCss(tabWidth));
                 style.Add("border-bottom", leader switch
                 {
                     "hyphen" => "1px dashed currentColor",
@@ -5690,7 +5679,7 @@ namespace Docxodus
 #endif
                 style.Add("display", "inline-block");
                 style.Add("padding", "0 0 0 0");
-                style.Add("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", tabWidth));
+                style.Add("width", InchesCss(tabWidth));
             }
             // Empty inline boxes have browser-dependent synthesized baselines. Keep the tab's
             // content box heightless so it advances horizontally without changing the line box;
@@ -5747,7 +5736,7 @@ namespace Docxodus
                 span = new XElement(Xhtml.span);
                 span.AddAnnotation(new Dictionary<string, string>
                 {
-                    { "margin", string.Format(NumberFormatInfo.InvariantInfo, "0 0 0 {0:0.00}in", tabWidth) },
+                    { "margin", "0 0 0 " + InchesCss(tabWidth.Value) },
                     { "padding", "0 0 0 0" }
                 });
             }
@@ -7386,7 +7375,7 @@ namespace Docxodus
                     { "align-items", "baseline" },
                     { "display", "inline-flex" },
                     { "text-indent", "0" },
-                    { "width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
+                    { "width", InchesCss(totalWidth) }
                 };
                 span.AddAnnotation(spanStyle);
                 return new List<object?> { span };
@@ -7402,7 +7391,7 @@ namespace Docxodus
                         spanStyle.AddIfMissing("display", "inline-block");
                         spanStyle.AddIfMissing("text-indent", "0");
                         // Use min-width instead of width to allow content to expand naturally
-                        spanStyle.AddIfMissing("min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth));
+                        spanStyle.AddIfMissing("min-width", InchesCss(totalWidth));
                     }
                 }
                 // If we have a tab span with leaders, add it after the element
@@ -7413,7 +7402,7 @@ namespace Docxodus
                     {
                         { "display", "inline-block" },
                         { "text-indent", "0" },
-                        { "min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
+                        { "min-width", InchesCss(totalWidth) }
                     };
                     wrapperSpan.AddAnnotation(wrapperStyle);
                     return new List<object?> { wrapperSpan };
@@ -7427,7 +7416,7 @@ namespace Docxodus
                 {
                     { "display", "inline-block" },
                     { "text-indent", "0" },
-                    { "min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
+                    { "min-width", InchesCss(totalWidth) }
                 };
                 wrapperSpan.AddAnnotation(wrapperStyle);
                 return new List<object?> { wrapperSpan };
@@ -9121,8 +9110,7 @@ namespace Docxodus
                     twipCounter = leftInTwips;
 
                     currentElement.Add(new XAttribute(PtOpenXml.TabWidth,
-                        string.Format(NumberFormatInfo.InvariantInfo,
-                            "{0:0.000}", (decimal)firstInTwips / 1440m)));
+                        TabWidthValue(firstInTwips)));
 
                     currentElementIdx++;
                     if (currentElementIdx >= contentToMeasure.Length)
@@ -9155,7 +9143,7 @@ namespace Docxodus
                         // something has gone wrong, so put 1/2 inch in
                         if (currentElement.Attribute(PtOpenXml.TabWidth) == null)
                             currentElement.Add(
-                                new XAttribute(PtOpenXml.TabWidth, 720m));
+                                new XAttribute(PtOpenXml.TabWidth, TabWidthValue(720m)));
                         break;
                     }
 
@@ -9189,7 +9177,7 @@ namespace Docxodus
                             delta2 = 0;
                         currentElement.Add(
                             new XAttribute(PtOpenXml.TabWidth,
-                                string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
+                                TabWidthValue(delta2)),
                             new XAttribute(PtOpenXml.TabAlignment, "right"),
                             GetLeader(tabAfterText));
                         twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!), twipCounter + widthOfTextAfterTab);
@@ -9237,7 +9225,7 @@ namespace Docxodus
                                 delta2 = 0;
                             currentElement.Add(
                                 new XAttribute(PtOpenXml.TabWidth,
-                                    string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
+                                    TabWidthValue(delta2)),
                                 new XAttribute(PtOpenXml.TabAlignment, "decimal"),
                                 GetLeader(tabAfterText));
 
@@ -9273,7 +9261,7 @@ namespace Docxodus
                                 delta2 = 0;
                             currentElement.Add(
                                 new XAttribute(PtOpenXml.TabWidth,
-                                    string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
+                                    TabWidthValue(delta2)),
                                 new XAttribute(PtOpenXml.TabAlignment, "decimal"),
                                 GetLeader(tabAfterText));
                             twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!), twipCounter + widthOfTextAfterTab);
@@ -9318,7 +9306,7 @@ namespace Docxodus
                             delta2 = 0;
                         currentElement.Add(
                             new XAttribute(PtOpenXml.TabWidth,
-                                string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
+                                TabWidthValue(delta2)),
                             new XAttribute(PtOpenXml.TabAlignment, "center"),
                             GetLeader(tabAfterText));
                         twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) + widthOfText / 2, twipCounter + widthOfText);
@@ -9338,7 +9326,7 @@ namespace Docxodus
                         var delta = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) - twipCounter;
                         currentElement.Add(
                             new XAttribute(PtOpenXml.TabWidth,
-                                string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta / 1440m)),
+                                TabWidthValue(delta)),
                             new XAttribute(PtOpenXml.TabAlignment, "left"),
                             GetLeader(tabAfterText));
                         twipCounter = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!);
@@ -9371,7 +9359,7 @@ namespace Docxodus
                         isListMarker: runContainingTabToReplace.Attribute(PtOpenXml.ListItemRun) != null);
 
                     currentElement.Add(new XAttribute(PtOpenXml.TabWidth,
-                        string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal) widthOfText/1440m)));
+                        TabWidthValue(widthOfText)));
                     twipCounter += widthOfText;
 
                     currentElementIdx++;
@@ -10203,6 +10191,23 @@ namespace Docxodus
             var rounded = Math.Round(points, 4);
             return rounded == 0m ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", rounded);
         }
+
+        /// <summary>A length in inches (how the converter carries tab advances) as CSS points. Tab advances
+        /// are whole twips carried at six decimals of an inch, so the value is rounded back to its twip:
+        /// summing two of them could otherwise leave 70.8499pt for 70.85pt.</summary>
+        private static string InchesCss(decimal inches) => PointsCss(Math.Round(inches * 1440m) / 20m);
+
+        /// <summary>A page dimension or margin, measured in points, as CSS points. Page geometry keeps twip
+        /// precision: hundredths of an inch made A4 about a quarter point short (issue #1153).</summary>
+        private static string PageLengthCss(double points) => PointsCss((decimal)points);
+
+        /// <summary>
+        /// The <c>pt:TabWidth</c> value for an advance of <paramref name="twips"/>, in inches. Six decimals keep
+        /// the advance twip-exact once it is written as points; three made a 1417-twip stop 0.002pt short
+        /// (issue #1153).
+        /// </summary>
+        private static string TabWidthValue(decimal twips) =>
+            string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000000}", twips / 1440m);
 
         /// <summary>
         /// How far a paragraph's visible border on <paramref name="sideXName"/> extends beyond its

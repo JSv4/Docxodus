@@ -52,10 +52,10 @@ namespace Docxodus.Tests
 
                     Assert.Contains("@page", htmlString);
                     Assert.Contains("size:", htmlString);
-                    Assert.Contains("8.50in", htmlString);
-                    Assert.Contains("11.00in", htmlString);
+                    Assert.Contains("612pt", htmlString);
+                    Assert.Contains("792pt", htmlString);
                     Assert.Contains("margin:", htmlString);
-                    Assert.Contains("1.00in", htmlString);
+                    Assert.Contains("72pt", htmlString);
                 }
             }
         }
@@ -727,7 +727,7 @@ namespace Docxodus.Tests
 
                     // 1. @page CSS
                     if (!htmlString.Contains("@page")) failures.Add("FAIL: No @page CSS rule");
-                    if (!htmlString.Contains("8.50in")) failures.Add("FAIL: No 8.50in page width");
+                    if (!htmlString.Contains("612pt")) failures.Add("FAIL: No 612pt page width");
 
                     // 2. Document language
                     var htmlElement = html;

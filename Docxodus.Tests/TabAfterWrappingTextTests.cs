@@ -79,7 +79,7 @@ public class TabAfterWrappingTextTests
 
         var segment = Assert.Single(html.Descendants(Xhtml("span")),
             e => Style(e).GetValueOrDefault("display") == "inline-flex");
-        Assert.Equal("0.500in", Style(segment)["width"]);
+        Assert.Equal("36pt", Style(segment)["width"]);
     }
 
     private static void AssertNoBoxWiderThan(XElement html, decimal inches)
