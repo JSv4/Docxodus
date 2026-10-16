@@ -618,8 +618,10 @@ public sealed partial class DocxSession
                     deletion = CreateRevisionEnvelope(W.del, stamp);
                     node.AddBeforeSelf(deletion);
                 }
-                node.Remove();
+                // Rename while the run is still in the paragraph. Remove() drops the
+                // w:txbxContent ancestor, and a w:delText inside that box makes Word recover.
                 ConvertTextToDeletedText(node);
+                node.Remove();
                 deletion.Add(node);
             }
             else

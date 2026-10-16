@@ -613,8 +613,65 @@ public static class DeliveryBundleDirectoryPublisher
             if (!includeLeaf && index == segments.Length - 1)
                 break;
             if (PathEntryExists(current) && IsSymlink(current))
+            {
+                // macOS mounts /var, /tmp, and /etc as symlinks to /private/*. Path.GetTempPath()
+                // therefore always contains a symlink, and rejecting it makes every temp-directory
+                // publication fail. A direct child of the volume root may be that kind of alias.
+                // The walk continues at the real directory, so a symlink anywhere deeper — the
+                // target's own parent, or a link planted inside the stage — is still rejected.
+                if (stopAt is null
+                    && IsDirectChildOfVolumeRoot(current)
+                    && TryResolveVolumeRootDirectoryLink(current, out var resolved))
+                {
+                    current = resolved;
+                    continue;
+                }
+
                 throw new IOException($"Symbolic-link path components are not allowed: '{current}'.");
+            }
         }
+    }
+
+    private static bool IsDirectChildOfVolumeRoot(string path)
+    {
+        var trimmed = Path.TrimEndingDirectorySeparator(path);
+        var parent = Path.GetDirectoryName(trimmed);
+        var root = Path.GetPathRoot(trimmed);
+        return !string.IsNullOrEmpty(parent)
+            && !string.IsNullOrEmpty(root)
+            && string.Equals(parent, root, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Follow one volume-root directory symlink, such as <c>/var</c> → <c>private/var</c>.
+    /// A link whose target is itself a symlink is not followed.
+    /// </summary>
+    private static bool TryResolveVolumeRootDirectoryLink(string path, out string resolved)
+    {
+        resolved = string.Empty;
+        string? target;
+        try
+        {
+            target = new DirectoryInfo(path).LinkTarget;
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrEmpty(target))
+            return false;
+
+        var absolute = Path.IsPathRooted(target)
+            ? Path.GetFullPath(target)
+            : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!, target));
+        if (!Directory.Exists(absolute) || IsSymlink(absolute))
+            return false;
+
+        resolved = Path.TrimEndingDirectorySeparator(absolute);
+        return true;
     }
 
     private static bool PathEntryExists(string path)
