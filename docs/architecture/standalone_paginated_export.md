@@ -529,8 +529,9 @@ the cell a stacking context, which moves its text to the end of the page's conte
   order; other text paints with the in-flow content. The root therefore takes `position: relative`
   exactly when some non-blank text node in the clip box has a non-`static` ancestor below the clip
   box, and stays `static` otherwise; either way the cell's text keeps its place in the content
-  stream. A cell mixing the two kinds was already split across both phases; it is painted in the
-  positioned phase, at its place in tree order. In the tag tree the cell's paragraphs stay `P`
+  stream. A cell mixing the two kinds was already split across both phases; it now paints in the
+  positioned phase at its place in tree order, and within it the unpositioned text still comes
+  before the positioned text, as the paint phases order them. In the tag tree the cell's paragraphs stay `P`
   elements inside the `TD`, in order; the grouping between them, a `Div` before, is now `NonStruct`.
 - **Left alone.** A clip box whose content fits, and one holding an absolutely or fixed positioned
   element, for which the `foreignObject` would become the containing block.
@@ -549,7 +550,7 @@ Measured over 19 cell shapes (Letter and A4 page 2, fractional margins, top/midd
 alignment, nested table, `gridSpan`, `vMerge`, RTL, image, hyperlink, exact and at-least spacing),
 the largest difference from the unrewritten export was:
 
-| Renderer | 72 dpi | 96 dpi | 150 dpi | 200 dpi | 300 dpi | 600 dpi |
+| Renderer | 72 dpi | 96 dpi (100% zoom) | 150 dpi | 200 dpi | 300 dpi | 600 dpi |
 |---|---|---|---|---|---|---|
 | poppler (`pdftoppm`) | 103/255 | 145/255 | 134/255 | 47/255 | 7/255 | 0 |
 | Ghostscript (4-bit text and graphics alpha) | 221/255 | 118/255 | 0 | 187/255 | 0 | 0 |
@@ -561,9 +562,10 @@ identical. Turning poppler's anti-aliasing off does not remove the row (hinting 
 edges across it). Chromium's own screen raster clips exactly and shows no difference.
 
 Making the PDF raster identical while keeping the text whole was investigated and is not possible in
-general: Skia writes no text for fully transparent paint, so every hidden glyph that reaches the text
-layer is also painted; text written under a zero-area clip paints nothing but must sit beside the
-visible copy, which still writes its fragments, so the text layer holds them twice. Lowering only the
+general. Text painted fully transparent never reaches the PDF writer, so every hidden glyph that
+reaches the text layer is also painted. A copy of the cell under a clip of zero area (spikes only)
+does write the whole text and paints nothing (raster-identical to hiding the cell), but it has to
+sit beside the visible cell, which still writes its fragments, so the text layer holds them twice. Lowering only the
 hidden glyphs of the cut line (a negative `vertical-align`, keeping stream order) removed the row at
 some resolutions (Letter: none left except 200 dpi), but it depends on reproducing Chromium's
 baseline and clip snapping exactly, splitting runs around the lowered glyphs changed visible pixels
@@ -572,7 +574,13 @@ in other layouts, and it moves those glyphs' text-layer positions off their line
 In the standalone HTML on screen, the SVG root snaps to the window's pixel grid rather than the page
 box's. On a page box whose top is not on a whole CSS pixel (the second and later pages of a page
 size with a fractional pixel height, such as A4) the rewritten cell's content and clip edge can sit
-up to one pixel off; the first page and the PDF are exact.
+up to one pixel off (measured: up to 255/255 on the glyphs of that cell on A4 page 2). On the first
+page the screen raster matched within 1/255, and the PDF is exact. Firefox draws the rewritten cell
+clipped like the original, with its text a fraction of a pixel off (up to 64/255 on page 1).
+
+A cell that hides a whole paragraph still fails export before this rewrite runs: PageMap
+verification finds no measurable fragment for that paragraph. The rewrite helps only cells whose
+hidden paragraphs are at least partly inside the row.
 
 Chromium printing uses `printBackground: true`, `preferCSSPageSize: true`, `tagged: true`,
 `outline: false`, `displayHeaderFooter: false`, scale 1, and zero browser margins. Tags receive
