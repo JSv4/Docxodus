@@ -142,11 +142,9 @@ export function alignExactLineBaselines(root: Element): void {
   if (!view) return;
   const offsetFor = baselineOffsets(root.ownerDocument);
   for (const run of Array.from(root.querySelectorAll<HTMLElement>("[data-docx-exact-run]"))) {
-    // A paginated note's number is a run of its first paragraph in Word, rendered just before it.
-    const paragraph = run.closest(PARAGRAPH_SELECTOR)
-      ?? run.closest(".footnote-number[data-note-run], .endnote-number[data-note-run]")
-        ?.parentElement?.querySelector(":scope > .footnote-content p, :scope > .endnote-content p")
-      ?? null;
+    // A paginated note's number is rendered inside its first paragraph, as Word's reference-mark
+    // run is (issue #1130), so it moves with that paragraph's line like any other exact run.
+    const paragraph = run.closest(PARAGRAPH_SELECTOR);
     if (!paragraph || !movable(run, view)) continue;
     const style = view.getComputedStyle(paragraph);
     if (!style.getPropertyValue("--docx-exact-line-height")) continue;

@@ -752,7 +752,8 @@ test.describe('Paginated footnote layout', () => {
 
   test('exact-spaced note lines and their number sit on Word\'s exact baseline', async ({ page }) => {
     // Issue #1120: the note band's exact-spaced runs take the same 80% baseline as body text, and
-    // the number, a run of the first paragraph in Word, moves with that paragraph's text.
+    // the number, a run of the first paragraph in Word and rendered inside it (issue #1130), moves
+    // with that paragraph's text.
     const exactRun = (text: string) => `<span data-docx-exact-run="true" style="vertical-align: top">${text}</span>`;
     await page.setContent(`
       <style>
@@ -760,15 +761,12 @@ test.describe('Paginated footnote layout', () => {
         .body { height: 20pt; margin: 0; }
         .footnote-item { margin: 0; line-height: 0; }
         .footnote-content { display: contents; }
-        .footnote-content p:first-of-type { display: inline; }
-        .footnote-content p:not(:first-of-type) { display: block; }
         .note { margin: 0; line-height: 18pt; --docx-exact-line-height: 18pt; }
       </style>
       <div id="staging">
         <div id="pagination-footnote-registry">
           <div class="footnote-item" data-footnote-id="f1">
-            <span class="footnote-number" data-note-run="true" style="line-height: 18pt">${exactRun('1')}</span>
-            <span class="footnote-content"><p class="note">${exactRun(' Ledger001')}</p><p class="note">${exactRun('Ledger002')}</p></span>
+            <span class="footnote-content"><p class="note"><span class="footnote-number" data-note-run="true" style="line-height: 18pt">${exactRun('1')}</span>${exactRun(' Ledger001')}</p><p class="note">${exactRun('Ledger002')}</p></span>
           </div>
         </div>
         <div data-section-index="0" data-page-width="312" data-page-height="312"
