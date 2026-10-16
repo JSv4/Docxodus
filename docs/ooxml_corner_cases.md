@@ -3002,6 +3002,37 @@ renderer's value is treated as Word behaviour.
 
 ---
 
+## Paragraph borders on a right-to-left paragraph stay on their physical sides (issue #1154)
+
+`w:ind`'s `w:left`/`w:right` on a `w:bidi` paragraph mean start/end: the leading indent moves to the
+right. `w:pBdr`'s `w:left`/`w:right` do not move. ISO/IEC 29500-1 says the left paragraph border
+"shall be displayed on the left side of the page around the specified paragraph. This shall not
+change based on the paragraph direction" (quoted in the
+[SDK's `LeftBorder` remarks](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.leftborder)).
+The only documented swap is `w:swapBordersFacingPages`, for odd pages with mirrored margins.
+
+```xml
+<w:p><w:pPr><w:bidi/>
+  <w:pBdr>
+    <w:left w:val="double" w:sz="24" w:space="4" w:color="C0392B"/>
+    <w:right w:val="single" w:sz="4" w:space="4" w:color="1F4E79"/>
+  </w:pBdr>
+  <w:ind w:start="1440" w:end="360"/>
+</w:pPr><w:r><w:t>Right to left paragraph.</w:t></w:r></w:p>
+```
+
+| | Thick double (`w:left`) | Thin single (`w:right`) | Indents |
+|---|---|---|---|
+| ISO/IEC 29500-1 | left | right (not stated for `w:right`; by symmetry) | start 72pt on the right, end 18pt on the left |
+| LibreOffice 25.8.7.3 | left | right | mirrored, as the spec says |
+| Docxodus | left | right | mirrored (issue #1129) |
+| Word | not yet measured | not yet measured | |
+
+Docxodus already behaved this way; `RightToLeftParagraphBorderTests` pins it. `CreateBorderDivs` in
+`WmlToHtmlConverter.cs` writes each border on its own side and puts the leading and trailing indents on
+the sides the paragraph's direction gives them, so each margin subtracts the outset of the border that
+is physically on that side. A Word reference for this fixture would settle the last row.
+
 ## Contributing
 
 When adding new corner cases to this document:

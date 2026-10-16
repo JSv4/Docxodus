@@ -10016,6 +10016,9 @@ namespace Docxodus
                     var pPr = g.First().Elements(W.pPr).First();
                     var pBdr = pPr.Element(W.pBdr);
                     var style = new Dictionary<string, string>();
+                    // w:left and w:right are physical even on a right-to-left paragraph (ISO/IEC 29500-1,
+                    // "Left Paragraph Border"), unlike w:ind's, which a bidi paragraph reads as start/end
+                    // (issue #1154).
                     GenerateBorderStyle(pBdr, W.top, style, BorderType.Paragraph);
                     GenerateBorderStyle(pBdr, W.right, style, BorderType.Paragraph);
                     GenerateBorderStyle(pBdr, W.bottom, style, BorderType.Paragraph);
