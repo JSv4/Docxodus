@@ -731,6 +731,32 @@ function isGeneratedChrome(node: Node | null | undefined): boolean {
 }
 
 /**
+ * A paginated note's number is chrome inside an editable paragraph, and the browser deletes a
+ * non-editable island as a unit when a caret deletion reaches it: Backspace just after it, Delete
+ * just before it, a word deletion that spans it. Nothing in the session re-creates the number (it
+ * is the renderer's, not run text), so refuse those deletions, as Word refuses to backspace over a
+ * reference mark. A deletion that replaces a selection is allowed; the repaint that commits it
+ * restores the number (see `DocxEditor.replaceNode`).
+ */
+function guardNoteNumber(block: HTMLElement, ev: InputEvent): void {
+  if (!ev.inputType.startsWith("delete")) return;
+  const number = block.querySelector(NOTE_NUMBER_SELECTOR);
+  if (!number) return;
+  const selection = block.ownerDocument.defaultView?.getSelection();
+  if (selection && !selection.isCollapsed) return;
+  const targets = typeof ev.getTargetRanges === "function" ? ev.getTargetRanges() : [];
+  for (const target of targets) {
+    const range = block.ownerDocument.createRange();
+    range.setStart(target.startContainer, target.startOffset);
+    range.setEnd(target.endContainer, target.endOffset);
+    if (range.intersectsNode(number)) {
+      ev.preventDefault();
+      return;
+    }
+  }
+}
+
+/**
  * A rendered field — PAGE / NUMPAGES in a running story, stamped `[data-field]` by the editor
  * render profile. Fields are ATOMIC for editing (`contenteditable=false`, the caret lands on
  * either side), and their content length is the field's CACHED result — the text the session
@@ -1221,6 +1247,13 @@ export class DocxEditor {
    * structural edit (split/merge/format) is lost. While this flag is set, commitBlock no-ops.
    */
   private replacing = false;
+  /**
+   * A pristine copy of the paginated note number each wired block opened with, keyed by the block.
+   * The number is chrome the converter derives from the whole note, so a single-block repaint
+   * cannot re-create it, and a selection replaced across it removes it from the live block; the
+   * swap in {@link replaceNode} restores it from here.
+   */
+  private readonly noteNumbers = new WeakMap<HTMLElement, HTMLElement>();
 
   /** Editor-owned block-move chrome. It is deliberately outside the rendered unit tree. */
   private blockDragHandle: HTMLElement | null = null;
@@ -2732,6 +2765,8 @@ export class DocxEditor {
     // a citation marker can't be deleted directly (which would orphan its note definition).
     el.querySelectorAll<HTMLElement>(GENERATED_CHROME_SELECTOR)
       .forEach((m) => m.setAttribute("contenteditable", "false"));
+    const noteNumber = el.querySelector<HTMLElement>(NOTE_NUMBER_SELECTOR);
+    if (noteNumber) this.noteNumbers.set(el, noteNumber.cloneNode(true) as HTMLElement);
     // Page-number fields are atomic, and remember their cached result so per-page substitution
     // in the page view never shifts the offset space (see `fieldText`).
     adoptFields(el);
@@ -2748,6 +2783,7 @@ export class DocxEditor {
     });
     el.addEventListener("blur", () => this.commitBlock(el));
     el.addEventListener("input", (ev) => noteTypedSpace(el, ev));
+    el.addEventListener("beforeinput", (ev) => guardNoteNumber(el, ev as InputEvent));
     el.addEventListener("keydown", (ev) => this.onKeydown(el, ev as KeyboardEvent));
     // A band block re-rendered by an incremental swap is a fresh DOM node; re-adopt it (with the
     // anchor its caller already stamped) so the band chrome can still address it.
@@ -2772,8 +2808,9 @@ export class DocxEditor {
       if (!oldEl.parentNode) return false;
       // A paginated note's number is chrome inside its first paragraph, drawn from the whole
       // note's context; a single-block render of that paragraph has none. A text edit never
-      // changes it, so the paragraph that replaces the numbered one keeps it.
-      const number = oldEl.querySelector(NOTE_NUMBER_SELECTOR);
+      // changes it, so the paragraph that replaces the numbered one keeps it. The copy kept at
+      // wiring covers a block whose selection was replaced across the number.
+      const number = oldEl.querySelector(NOTE_NUMBER_SELECTOR) ?? this.noteNumbers.get(oldEl);
       const first = newNodes.find((node): node is HTMLElement => node.nodeType === 1);
       if (number && first && !first.querySelector(NOTE_NUMBER_SELECTOR)) {
         first.prepend(number.cloneNode(true));
@@ -2891,6 +2928,12 @@ export class DocxEditor {
     } else if (ev.key === "Backspace") {
       const sel = typeof window !== "undefined" ? window.getSelection() : null;
       if (sel && sel.isCollapsed && caretOffsetIn(el) === 0 && !inTableCell) {
+        // A paginated note's first paragraph opens with its number, which is not run text, and
+        // the note is its own story: there is nothing before the text to delete or merge into.
+        if (el.querySelector(NOTE_NUMBER_SELECTOR)) {
+          ev.preventDefault();
+          return;
+        }
         const prev = this.previousEditable(el);
         if (prev) {
           ev.preventDefault();

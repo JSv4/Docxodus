@@ -357,4 +357,91 @@ test.describe('paginated editor note number (issue #1130)', () => {
     expect(out.afterRedo).toMatchObject({ numbers: ['1'], opens: true });
     expect(out.afterRedo!.text).toContain('Edited note.');
   });
+
+  /** Open the paginated editor on a one-note document; the editor is kept on `window`. */
+  async function openNoteEditor(page: Page): Promise<void> {
+    await page.goto('/test-harness.html');
+    await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 30000 });
+    await page.evaluate((bytes: number[]) => {
+      const D = (window as any).Docxodus;
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      (window as any).__noteEditor = D.DocxEditor.open(container, new Uint8Array(bytes), D, { paginated: true });
+    }, Array.from(generateFootnoteDocx(1, 3, 1)));
+  }
+
+  const NOTE_BLOCK = '.page-footnotes [data-anchor][contenteditable="true"]';
+
+  const noteState = (page: Page) => page.evaluate((selector: string) => {
+    const note = document.querySelector<HTMLElement>(selector);
+    return {
+      numbers: Array.from(document.querySelectorAll<HTMLElement>('.page-footnotes .footnote-number'))
+        .map((n) => n.textContent),
+      opens: !!note && note.querySelector('.footnote-number') === note.firstElementChild,
+      text: (note?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    };
+  }, NOTE_BLOCK);
+
+  /** Focus the note paragraph with a collapsed caret just before or just after its number. */
+  const placeCaret = (page: Page, side: 'before' | 'after') => page.evaluate(
+    ({ selector, side }: { selector: string; side: 'before' | 'after' }) => {
+      const note = document.querySelector<HTMLElement>(selector)!;
+      const number = note.querySelector<HTMLElement>('.footnote-number')!;
+      note.focus();
+      const range = document.createRange();
+      if (side === 'before') range.setStartBefore(number);
+      else range.setStartAfter(number);
+      range.collapse(true);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+    },
+    { selector: NOTE_BLOCK, side },
+  );
+
+  test('caret deletions beside the number leave it in place', async ({ page }) => {
+    // The number is a non-editable island inside the editable paragraph, which the browser would
+    // delete as a unit from a caret on either side; nothing in the session puts it back.
+    await openNoteEditor(page);
+    const before = await noteState(page);
+    expect(before).toMatchObject({ numbers: ['1'], opens: true });
+
+    await placeCaret(page, 'after');
+    await page.keyboard.press('Backspace');
+    expect(await noteState(page)).toEqual(before);
+
+    await placeCaret(page, 'before');
+    await page.keyboard.press('Delete');
+    expect(await noteState(page)).toEqual(before);
+  });
+
+  test('a selection replaced across the number gets the number back on commit', async ({ page }) => {
+    await openNoteEditor(page);
+    await page.evaluate((selector: string) => {
+      const note = document.querySelector<HTMLElement>(selector)!;
+      note.focus();
+      const range = document.createRange();
+      range.selectNodeContents(note);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }, NOTE_BLOCK);
+    await page.keyboard.type('Replaced note.');
+    await page.evaluate((selector: string) => {
+      document.querySelector<HTMLElement>(selector)!.dispatchEvent(new Event('blur'));
+    }, NOTE_BLOCK);
+    await page.waitForTimeout(300);
+
+    const after = await noteState(page);
+    expect(after).toMatchObject({ numbers: ['1'], opens: true });
+    expect(after.text).toMatch(/^1\s*Replaced note\.$/);
+    const notes = await page.evaluate(() => {
+      const D = (window as any).Docxodus;
+      const projection = JSON.parse(D.DocxSessionBridge.Project((window as any).__noteEditor.sessionHandle));
+      return Object.entries(projection.anchorIndex as Record<string, any>)
+        .filter(([id]) => id.startsWith('p:fn:'))
+        .map(([, target]) => target.textPreview as string);
+    });
+    expect(notes).toEqual(['Replaced note.']);
+  });
 });
