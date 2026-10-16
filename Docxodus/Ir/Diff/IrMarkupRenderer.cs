@@ -5948,9 +5948,12 @@ internal static partial class IrMarkupRenderer
                  RawSpanText(rightTokens, op.RightStart, op.RightEnd), StringComparison.Ordinal));
 
         // A span may leave the always-kept markers behind a trailing zero-width token to the op that owns that token
-        // (see SourceRunModel.Slice) only when that op is rendered here, from the same side's tokens: the next op
-        // holding tokens of that side, starting where this one ends. (A Consolidate paragraph renders each reviewer's
-        // ops in a call of their own, so the owner may live in another call.) One backward pass records the owners.
+        // (see SourceRunModel.Slice) only when that op is rendered here, from the same side's tokens (the next op
+        // holding tokens of that side, starting where this one ends; a Consolidate paragraph renders each reviewer's
+        // ops in a call of their own), and only when that op keeps the token unchanged: an Equal or FormatChanged
+        // span with identical raw text, which emits its runs unwrapped. A marker both documents carry stays unmarked
+        // that way. Behind a token that is itself inserted or deleted, deferring would pull the shared marker into
+        // that revision, so the marker stays with this op, as before. One backward pass records the owners.
         var nextLeftOwner = new int[ops.Count];
         var nextRightOwner = new int[ops.Count];
         for (int j = ops.Count - 1, leftOwner = -1, rightOwner = -1; j >= 0; j--)
@@ -5962,23 +5965,24 @@ internal static partial class IrMarkupRenderer
             if (ops[j].RightEnd > ops[j].RightStart)
                 rightOwner = j;
         }
+        bool KeepsUnchanged(IrTokenOp op) =>
+            op.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged && !SlicesLeft(op);
         bool LeftNextOwns(int index) =>
             nextLeftOwner[index] >= 0 && ops[nextLeftOwner[index]].LeftStart == ops[index].LeftEnd &&
+            KeepsUnchanged(ops[nextLeftOwner[index]]) &&
             NextOwnsEndZeroWidth(leftTokens, ops[index].LeftStart, ops[index].LeftEnd);
         bool RightNextOwns(int index) =>
             nextRightOwner[index] >= 0 && ops[nextRightOwner[index]].RightStart == ops[index].RightEnd &&
+            KeepsUnchanged(ops[nextRightOwner[index]]) &&
             NextOwnsEndZeroWidth(rightTokens, ops[index].RightStart, ops[index].RightEnd);
 
-        // Which left markers may be left to that owner: all of them when it slices the left source too, otherwise
-        // only those with a counterpart in its right span, which it claims as represented by the right copy it emits.
-        ISet<string>? LeftDeferOnlyKeys(int index)
+        // That owner emits only the right side's runs, so of the left markers only those with a counterpart in its
+        // right span may be left to it; it claims them as represented by the right copy it emits.
+        ISet<string> LeftDeferOnlyKeys(int index)
         {
             if (nextLeftOwner[index] < 0)
-                return null; // no owner here, so LeftNextOwns is false and nothing is deferred
-            var owner = ops[nextLeftOwner[index]];
-            if (SlicesLeft(owner))
-                return null;
-            var (ownerStart, ownerEnd) = RightSpanChars(rightTokens, owner);
+                return new HashSet<string>(); // no owner here, so LeftNextOwns is false and nothing is deferred
+            var (ownerStart, ownerEnd) = RightSpanChars(rightTokens, ops[nextLeftOwner[index]]);
             return rightRuns.MarkerKeysBetween(ownerStart, ownerEnd);
         }
 
@@ -10312,7 +10316,9 @@ internal static partial class IrMarkupRenderer
         /// token the next op emits, inverting their order — an edited table-of-contents entry's tab landed after its
         /// PAGEREF field's begin, instruction and separate characters (issue #1156). A marker before the token stays
         /// with this op, and with no next op to defer to (the flag false) every marker at <c>end</c> is still taken,
-        /// so none is dropped. <paramref name="deferOnlyKeys"/> narrows the deferral when the next op does not slice
+        /// so none is dropped. The caller passes the flag only when that op keeps the token unchanged (emits it
+        /// unwrapped), so a marker both sides carry is never pulled into an insertion or deletion.
+        /// <paramref name="deferOnlyKeys"/> narrows the deferral when the next op does not slice
         /// this model at all (a left marker before an Equal span, which emits only the right side's runs): then only
         /// a marker whose counterpart lies in that op's span on the other side (<see cref="MarkerKeysBetween"/>) is
         /// deferred, and that op claims it as represented by the copy it emits (<see cref="ClaimRepresented"/>); any
