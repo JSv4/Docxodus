@@ -9143,7 +9143,7 @@ namespace Docxodus
                         // something has gone wrong, so put 1/2 inch in
                         if (currentElement.Attribute(PtOpenXml.TabWidth) == null)
                             currentElement.Add(
-                                new XAttribute(PtOpenXml.TabWidth, 720m));
+                                new XAttribute(PtOpenXml.TabWidth, TabWidthValue(720m)));
                         break;
                     }
 
@@ -10192,8 +10192,10 @@ namespace Docxodus
             return rounded == 0m ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", rounded);
         }
 
-        /// <summary>A length in inches (how the converter carries tab advances) as CSS points.</summary>
-        private static string InchesCss(decimal inches) => PointsCss(inches * 72m);
+        /// <summary>A length in inches (how the converter carries tab advances) as CSS points. Tab advances
+        /// are whole twips carried at six decimals of an inch, so the value is rounded back to its twip:
+        /// summing two of them could otherwise leave 70.8499pt for 70.85pt.</summary>
+        private static string InchesCss(decimal inches) => PointsCss(Math.Round(inches * 1440m) / 20m);
 
         /// <summary>A page dimension or margin, measured in points, as CSS points. Page geometry keeps twip
         /// precision: hundredths of an inch made A4 about a quarter point short (issue #1153).</summary>

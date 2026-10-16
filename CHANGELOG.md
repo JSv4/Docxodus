@@ -90,7 +90,9 @@ All notable changes to this project will be documented in this file.
   a line break's leading margin) the same way, so a 1417-twip stop became `0.98in`. Tab advances were
   also carried internally at 0.001in. All of these, and the tab segment widths built from them, are
   now written in points from the exact twip value (`595.3pt 841.9pt`, `70.85pt`). The values change
-  unit in the HTML (`in` to `pt`) but not size, beyond the removed rounding.
+  unit in the CSS (`in` to `pt`) but not size, beyond the removed rounding. A tab advance that ran out
+  of tab stops now falls back to half an inch, as intended, instead of 720 inches. The page-geometry
+  `data-*` attributes the paginator reads still carry 0.1pt.
 - Table row heights honour `w:hRule` (issue #1122). A minimum (`atLeast`, or omitted) height now
   bounds the row's content and the collapsed horizontal borders are added to it, as in the reference
   layout (a 36pt row with 0.75pt borders advances 36.75pt); an `exact` height is the whole row and

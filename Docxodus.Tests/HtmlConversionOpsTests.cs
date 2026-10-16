@@ -1020,6 +1020,23 @@ public class HtmlConversionOpsTests
     // w:defaultTabStop. This pins the actual numeric fallback (720 twips == 0.5in) that
     // HCO057 only proved didn't crash — i.e. the missing-settings path doesn't just avoid
     // throwing, it produces the SAME width Word itself defaults to for an unset tab stop.
+    // The tab span's own declarations (inline, or its fabricated class's rule): the inline-flex segment
+    // that wraps it can carry the same width, so a search of the whole page would not tell them apart.
+    private static string TabSpanStyle(string html)
+    {
+        var root = XElement.Parse(html);
+        var tab = root.Descendants().Single(e => e.Attribute("data-docx-tab") != null);
+        var declarations = (string?)tab.Attribute("style") ?? "";
+        var css = string.Concat(root.Descendants().Where(e => e.Name.LocalName == "style").Select(e => e.Value));
+        foreach (var cls in ((string?)tab.Attribute("class") ?? "").Split(' ', System.StringSplitOptions.RemoveEmptyEntries))
+        {
+            var rule = System.Text.RegularExpressions.Regex.Match(css,
+                @"\." + System.Text.RegularExpressions.Regex.Escape(cls) + @"\s*\{([^}]*)\}");
+            if (rule.Success) declarations += rule.Groups[1].Value;
+        }
+        return declarations;
+    }
+
     [Fact]
     public void HCO058_MissingDocumentSettingsPart_TabWidthDefaultsTo720Twips()
     {
@@ -1041,7 +1058,7 @@ public class HtmlConversionOpsTests
 
         Assert.Contains("AfterTab", html);
         // 720 twips (Word's implicit default tab stop) == 0.5in from position 0.
-        Assert.Contains("width: 36pt", html);
+        Assert.Contains("width: 36pt", TabSpanStyle(html));
     }
 
     // Same computation, but with an explicit DocumentSettingsPart that overrides
@@ -1068,8 +1085,8 @@ public class HtmlConversionOpsTests
         string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions());
 
         Assert.Contains("AfterTab", html);
-        Assert.Contains("width: 72pt", html);
-        Assert.DoesNotContain("width: 36pt", html);
+        Assert.Contains("width: 72pt", TabSpanStyle(html));
+        Assert.DoesNotContain("width: 36pt", TabSpanStyle(html));
     }
 
     // DocumentSettingsPart present but with no w:defaultTabStop element at all (legal — the
@@ -1095,7 +1112,7 @@ public class HtmlConversionOpsTests
         string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions());
 
         Assert.Contains("AfterTab", html);
-        Assert.Contains("width: 36pt", html);
+        Assert.Contains("width: 36pt", TabSpanStyle(html));
     }
 
     // AddFormattingParts copies formatting parts into the RenderBlockHtml throwaway doc but no

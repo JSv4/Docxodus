@@ -108,4 +108,16 @@ public class PageAndTabLengthPrecisionTests
         Assert.Single(html.Descendants(), e => e.Name.LocalName == "br");
         Assert.Contains(html.Descendants(), e => Style(e).Contains("margin: 0 0 0 70.85pt"));
     }
+
+    [Fact]
+    public void TabSegmentAfterText_KeepsTwipPrecision()
+    {
+        // The segment holding "A" and its tab sums two advances; it still ends exactly at the 1417-twip stop.
+        var html = Html(
+            "<w:p><w:pPr><w:tabs><w:tab w:val=\"left\" w:pos=\"1417\"/></w:tabs></w:pPr>" +
+            "<w:r><w:t>A</w:t><w:tab/><w:t>Larch</w:t></w:r></w:p>");
+
+        var segment = Assert.Single(html.Descendants(), e => Style(e).Contains("display: inline-flex"));
+        Assert.Contains("width: 70.85pt", Style(segment));
+    }
 }
