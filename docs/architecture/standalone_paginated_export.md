@@ -500,6 +500,104 @@ the export swaps those CSS borders for padding of the declared width, keeping th
 place; after the page tree is final it draws the sides as SVG rectangles or dashed lines (keeping the
 dash rhythm of the one-pixel CSS border) from each page box's origin, which the printer does not snap.
 
+### Text clipped by exact-height rows (issue #1140)
+
+The converter clips the cells of an exact-height row (`w:hRule="exact"`) with `overflow: hidden`, as
+Word clips them. Chromium's PDF writer (Skia's `SkPDFDevice::internalDrawGlyphRun`) writes a glyph
+only when the glyph's bounds meet the *bounding rectangle* of the clip it is drawn under, so a line
+the row cuts through used to reach the text layer as the letters whose ascenders reach the row
+(`Overflow Birch continuation line.` extracted as `fl h l`). LibreOffice writes the whole line.
+
+`npm/src/exact-row-text.ts` runs on the final page tree, after `alignBaselinesToWord`. It moves each
+clip box that hides some of its text into an inline `<svg>` → `<foreignObject>` clipped by an SVG
+`clipPath` that paints exactly the rectangle Chromium snaps the overflow clip to, plus zero-area
+spikes in all four directions that stretch the clip's bounding rectangle past any page. Every glyph
+then meets the bounds, so the hidden text is written once, whole, at its laid-out position; the
+painted area is unchanged. (A CSS `clip-path` of the same shape works for the text layer but makes
+the cell a stacking context, which moves its text to the end of the page's content stream.)
+
+- **Geometry.** Chromium paints an SVG root at a whole pixel of its page box. The root is placed on
+  the pixel at or before the clip box, with negative margins so the cell's layout is unchanged, and
+  the `foreignObject` takes back the fraction. All lengths are written with six decimals, which hold
+  a 1/64 px layout unit exactly; four decimals let a margin and a height stop cancelling and grew a
+  row by one layout unit. The clip box keeps `overflow: clip` (the PageMap measurer intersects every
+  overflow-clipping ancestor, so PageMap geometry is unchanged) with an `overflow-clip-margin` wide
+  enough not to bound the glyphs.
+- **Paint order.** The SVG root paints its content atomically, so the cell's text moves to the
+  root's paint phase. Text in a positioned box (the relative offsets `alignBaselinesToWord` and
+  exact line spacing put on runs) paints after all in-flow content of its stacking context, in tree
+  order; other text paints with the in-flow content. The root takes `position: relative` when some
+  non-blank text node in the clip box has a non-`static` ancestor below the clip box, and stays
+  `static` otherwise. So the cell paints where its text painted before: a cell whose text all shares
+  the phase of the text around it keeps its place in the content stream, but a cell whose text paints
+  in the other phase than the page's does not. On a page of unpositioned text (at-least spacing), a
+  cell with an exactly spaced, and so offset, first line paints after the rest of the page, as that
+  line already did; its hidden line now follows it there. The tag tree keeps reading order
+  regardless. Inside the root, a stacking context of its own, a cell with text in both phases gives
+  its unpositioned text an offset-free relative box, so the cell's own text is written in tree order.
+  In the tag tree the cell's paragraphs stay `P` elements inside the `TD`, in order; the grouping
+  between them, a `Div` before, is now `NonStruct`.
+- **Which cells.** Layout overflow is not hidden text: a line box includes the font's whole ascent
+  and descent, and a paragraph its spacing, so a one-line row a little shorter than its line, or a
+  paragraph's space after, overflows the clip box while every glyph shows. A clip box is rewritten
+  only when the clip edge passes some text line's baseline (below the baseline every glyph keeps the
+  part above it; a glyph drawn wholly below its baseline, such as an underscore, is not looked for),
+  or when a whole character lies beyond a side edge. Over the 12 repository documents with exact
+  rows that export (214 exact-row cells), no cell is rewritten; testing layout overflow instead
+  rewrote 47 of them and recovered no text.
+  A clip box holding an absolutely or fixed positioned element is left alone, because the
+  `foreignObject` would become its containing block.
+- **Clip id.** A Word bookmark's name becomes an HTML id verbatim and `url(#id)` resolves to the first
+  element with that id, so the `clipPath` id is one `getElementById` does not already return.
+- **Tests.** `npm-export/tests/export.test.mjs` checks stream and structure order for positioned and
+  unpositioned pages and a cell mixing both, that only a cell hiding text is rewritten (not a
+  one-line row shorter than its line, nor space after), and that a bookmark cannot capture the clip
+  id. A geometry test compares the rewritten cell's baseline and PDF clip rectangle with its
+  unrewritten neighbour's on Letter (top and middle aligned) and on
+  page 2 of an A4 document with fractional margins, and lays the standalone HTML out with each
+  rewrite undone to prove nothing moves. It depends on the pinned Chromium snapping SVG roots and
+  overflow clips to the page box's pixel grid; a Chromium that changed either fails it.
+
+**Trade-off.** The hidden glyphs used to be left out of the PDF; now they are drawn, outside the
+clip. Their PDF clip and text matrices are identical to the unrewritten export, but a rasterizer can
+tint the one pixel row the clip edge crosses where a hidden glyph's top touches that row: the clip's
+anti-aliased coverage multiplies the glyph's, and hinting can move a glyph's edge by part of a pixel.
+Measured over 19 cell shapes (Letter and A4 page 2, fractional margins, top/middle/bottom
+alignment, nested table, `gridSpan`, `vMerge`, RTL, image, hyperlink, exact and at-least spacing),
+the largest difference from the unrewritten export was:
+
+| Renderer | 72 dpi | 96 dpi (100% zoom) | 150 dpi | 200 dpi | 300 dpi | 600 dpi |
+|---|---|---|---|---|---|---|
+| poppler (`pdftoppm`) | 103/255 | 145/255 | 134/255 | 47/255 | 7/255 | 0 |
+| Ghostscript (4-bit text and graphics alpha) | 221/255 | 118/255 | 0 | 187/255 | 0 | 0 |
+
+The differences sit on the pixel row at the clip edge (a few dozen pixels per row), except one
+Ghostscript artifact at 200 dpi: a visible glyph that used to start its own text run now continues
+a longer one, and Ghostscript rounds its pixel position differently although its PDF position is
+identical. Turning poppler's anti-aliasing off does not remove the row (hinting still moves glyph
+edges across it). Chromium's own screen raster clips exactly and shows no difference.
+
+Making the PDF raster identical while keeping the text whole was investigated and is not possible in
+general. Text painted fully transparent never reaches the PDF writer, so every hidden glyph that
+reaches the text layer is also painted. A copy of the cell under a clip of zero area (spikes only)
+does write the whole text and paints nothing (raster-identical to hiding the cell), but it has to
+sit beside the visible cell, which still writes its fragments, so the text layer holds them twice. Lowering only the
+hidden glyphs of the cut line (a negative `vertical-align`, keeping stream order) removed the row at
+some resolutions (Letter: none left except 200 dpi), but it depends on reproducing Chromium's
+baseline and clip snapping exactly, splitting runs around the lowered glyphs changed visible pixels
+in other layouts, and it moves those glyphs' text-layer positions off their line. It was not shipped.
+
+In the standalone HTML on screen, the SVG root snaps to the window's pixel grid rather than the page
+box's. On a page box whose top is not on a whole CSS pixel (the second and later pages of a page
+size with a fractional pixel height, such as A4) the rewritten cell's content and clip edge can sit
+up to one pixel off (measured: up to 255/255 on the glyphs of that cell on A4 page 2). On the first
+page the screen raster matched within 1/255, and the PDF is exact. Firefox draws the rewritten cell
+clipped like the original, with its text a fraction of a pixel off (up to 64/255 on page 1).
+
+A cell that hides a whole paragraph still fails export before this rewrite runs: PageMap
+verification finds no measurable fragment for that paragraph. The rewrite helps only cells whose
+hidden paragraphs are at least partly inside the row.
+
 Chromium printing uses `printBackground: true`, `preferCSSPageSize: true`, `tagged: true`,
 `outline: false`, `displayHeaderFooter: false`, scale 1, and zero browser margins. Tags receive
 structural smoke coverage but are not presented as PDF/UA conformance until reading order and

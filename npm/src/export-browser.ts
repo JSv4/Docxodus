@@ -10,6 +10,7 @@ import limitsContractJson from "./export-resource-limits-v1.json";
 import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
 import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExactLineInk } from "./line-metrics.js";
 import { prepareWordText, paintWordText } from "./word-text.js";
+import { preserveClippedExactRowText } from "./exact-row-text.js";
 import { prepareParagraphBorders, paintParagraphBorders } from "./paragraph-borders.js";
 import { measureRenderedSource, PaginationEngine, type PageMap } from "./pagination.js";
 export { renderedSourceMeasurerExpression } from "./pagination.js";
@@ -3775,6 +3776,9 @@ export async function convertDocxToPaginatedHtml(
     // without changing a line box. They run on the final page tree, after the clipping check: a glyph moved
     // down stays inside its line, but its inline box can pass a page band's edge by a pixel.
     alignBaselinesToWord(renderDocument.body);
+    // Text an exact-height row clips stays whole in the PDF text layer (issue #1140). It reads the
+    // paint phase those offsets give each cell's text, so it runs after them.
+    preserveClippedExactRowText(renderDocument.body);
     await runPhase(state, "output_verification", ["Word text baselines"], () =>
       paintWordText(renderDocument.getElementById("pagination-container") as HTMLElement,
         () => checkpointWordText(state)));
