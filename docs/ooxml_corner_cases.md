@@ -3069,6 +3069,21 @@ Docxodus already behaved this way; `RightToLeftParagraphBorderTests` pins it. `C
 the sides the paragraph's direction gives them, so each margin subtracts the outset of the border that
 is physically on that side. A Word reference for this fixture would settle the last row.
 
+### Mixed directions in one bordered group (issue #1155)
+
+Consecutive paragraphs with identical borders and indents join into one box with `w:between` borders.
+With unequal start and end indents, a left-to-right and a right-to-left paragraph have mirror-image
+boxes, so they cannot share one.
+
+| Two paragraphs, `w:ind w:start="720"`, second `w:bidi` | LibreOffice 25.8.7.3 | Docxodus before | Docxodus after |
+|---|---|---|---|
+| `w:end="720"` (equal) | one box, between border | one box | one box |
+| `w:end="1440"` (unequal) | a box per paragraph, each mirrored | one box: one paragraph's indents on the wrong sides | a box per paragraph, each mirrored |
+
+`BorderGroupKey` adds the direction to the key only when the box is not mirror-symmetric
+(`BorderBoxIsMirrorSymmetric`), so grouping is otherwise unchanged. Word's grouping for this case has
+not been measured.
+
 ## Contributing
 
 When adding new corner cases to this document:

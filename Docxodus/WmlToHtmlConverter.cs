@@ -10006,9 +10006,29 @@ namespace Docxodus
                 var ind = pPr!.Element(W.ind);
                 if (ind != null)
                     indStr = WithoutUnids(ind);
-                return WithoutUnids(pBdr) + indStr;
+                // A right-to-left paragraph mirrors its box (leading indent on the right), so with unequal
+                // leading and trailing indents it cannot share a box with a left-to-right paragraph. The
+                // direction joins the key only then: paragraphs whose boxes coincide still join, with
+                // between borders, as LibreOffice joins them (issue #1155).
+                var direction = HasBidi(pPr) && !BorderBoxIsMirrorSymmetric(ind) ? "|rtl" : string.Empty;
+                return WithoutUnids(pBdr) + indStr + direction;
             }
             return e.Name == W.tbl ? "table" : string.Empty;
+        }
+
+        private static bool HasBidi(XElement pPr) =>
+            pPr.Elements(W.bidi).Any(b => b.Attribute(W.val) == null || b.Attribute(W.val).ToBoolean() == true);
+
+        /// <summary>Whether a border box laid out from <paramref name="ind"/> is the same in either
+        /// direction: its leading edge (the leading indent less any hanging indent, as
+        /// <see cref="CreateBorderDivs"/> places it) and its trailing edge are equally far in.</summary>
+        private static bool BorderBoxIsMirrorSymmetric(XElement? ind)
+        {
+            if (ind == null) return true;
+            var leading = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndLeadingAttribute(ind)) ?? 0m;
+            var hanging = WordprocessingMLUtil.AttributeToDecimalTwips(ind.Attribute(W.hanging)) ?? 0m;
+            var trailing = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndTrailingAttribute(ind)) ?? 0m;
+            return Math.Max(0m, leading - hanging) == Math.Max(0m, trailing);
         }
 
         /// <summary>The element's markup with the projector's per-element Unid bookkeeping
