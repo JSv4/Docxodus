@@ -356,6 +356,8 @@ const MAX_EXHAUSTED_BODY_FOOTNOTE_AREA_RATIO = 0.95;
 // Hidden measurement and final absolutely-positioned note bands differ by sub-pixel border/margin
 // rounding in Chromium. Reserve a small physical-unit guard so the last baseline stays visible.
 const FOOTNOTE_MEASUREMENT_GUARD_PT = 2;
+/** Note-band space below which the paginator does not try to start a note on the citing page. */
+const MIN_FOOTNOTE_START_PT = 20;
 /** Internal provenance retained only while a note element waits between pages. */
 const FOOTNOTE_SOURCE_POSITION_ATTR = "data-pagination-footnote-source-position";
 
@@ -391,6 +393,13 @@ interface PartialFootnote {
 }
 
 /** Existing page payload that a newly split note must fit beside. */
+/** Answers {@link PaginationEngine.notesCanStartOnPage} has given for one page payload. */
+interface NoteStartMemo {
+  packedHeights: Map<string, number>;
+  startsFrom: Map<string, number>;
+  failsUpTo: Map<string, number>;
+}
+
 interface FootnotePackingContext {
   footnoteIds: readonly string[];
   continuation?: FootnoteContinuation | null;
@@ -2386,7 +2395,9 @@ export class PaginationEngine {
       return false;
     }
 
-    return this.canRangeFragmentParagraph(paragraph);
+    // A body paragraph may cite notes: the paginator places a fragment's notes with the
+    // fragment, so a citation never splits from its note (see notesCanStartOnPage).
+    return this.canRangeFragmentParagraph(paragraph, false, true);
   }
 
   /**
@@ -2398,9 +2409,15 @@ export class PaginationEngine {
   private canRangeFragmentParagraph(
     paragraph: HTMLElement,
     allowInlineRoot: boolean = false,
+    bodyParagraph: boolean = false,
   ): boolean {
+    // The converter writes a Word paragraph with an outline level (a heading style) as h1-h6;
+    // it breaks across pages like any other paragraph unless it keeps its lines together.
+    const wordParagraph = bodyParagraph
+      ? this.isWordParagraphElement(paragraph)
+      : paragraph.tagName === "P";
     if (
-      paragraph.tagName !== "P" ||
+      !wordParagraph ||
       paragraph.dataset.keepWithNext === "true" ||
       paragraph.dataset.keepLines === "true" ||
       paragraph.dataset.pageBreakBefore === "true" ||
@@ -2441,7 +2458,7 @@ export class PaginationEngine {
       "figure",
       "fieldset",
       "details",
-      "[data-footnote-id]",
+      ...(bodyParagraph ? [] : ["[data-footnote-id]"]),
       "[contenteditable]",
     ].join(", ");
     if (paragraph.querySelector(unsupportedDescendants)) {
@@ -2478,7 +2495,12 @@ export class PaginationEngine {
       return false;
     }
 
+    // A list item's number and the tab after a number render as aligned boxes ahead of the
+    // text. No fragment endpoint falls inside them, so they always stay whole with the first
+    // fragment and their inner layout is never cut.
+    const leading = this.leadingAtomicBoxes(paragraph);
     for (const descendant of Array.from(paragraph.querySelectorAll<HTMLElement>("*"))) {
+      if (leading.some((box) => box.contains(descendant))) continue;
       const style = this.view.getComputedStyle(descendant);
       if (
         style.display !== "inline" ||
@@ -2492,6 +2514,28 @@ export class PaginationEngine {
           || style.breakBefore !== "auto" || style.breakAfter !== "auto")) return false;
     }
     return true;
+  }
+
+  /**
+   * The boxes a paragraph opens with before its first text: its list marker, a note's number,
+   * and any box that holds no text, such as the tab that follows either.
+   */
+  private leadingAtomicBoxes(paragraph: HTMLElement): HTMLElement[] {
+    const boxes: HTMLElement[] = [];
+    for (const node of Array.from(paragraph.childNodes)) {
+      if (node.nodeType === this.view.Node.TEXT_NODE) {
+        if (this.hasVisibleText(node.textContent ?? "")) break;
+        continue;
+      }
+      if (!(node instanceof this.view.HTMLElement)) continue;
+      if (node.dataset.listMarker === "true" || node.dataset.noteRun === "true"
+          || !this.hasVisibleText(node.textContent ?? "")) {
+        boxes.push(node);
+        continue;
+      }
+      break;
+    }
+    return boxes;
   }
 
   /**
@@ -2658,7 +2702,8 @@ export class PaginationEngine {
     block: MeasuredBlock,
     dims: PageDimensions,
     availableHeightPt: number,
-    effectiveMarginTopPt: number
+    effectiveMarginTopPt: number,
+    notesStart?: (footnoteIds: string[], headHeightPt: number) => boolean,
   ): MeasuredBlock[] | null {
     if (availableHeightPt <= effectiveMarginTopPt) return null;
 
@@ -2675,9 +2720,35 @@ export class PaginationEngine {
     try {
       if (!this.canFragmentParagraph({ ...block, element: paragraph })) return null;
 
+      // Word moves a citing line, never part of one, to the page where its note can begin:
+      // stop the head above the first citation whose note cannot start beside it. A head
+      // holding any part of that line is taller than the citation's top.
+      let headLimitPt = availableHeightPt;
+      if (notesStart) {
+        const top = paragraph.getBoundingClientRect().top;
+        const cited: string[] = [];
+        for (const reference of Array.from(paragraph.querySelectorAll<HTMLElement>("[data-footnote-id]"))) {
+          const footnoteId = reference.dataset.footnoteId;
+          if (!footnoteId || cited.includes(footnoteId)) continue;
+          const marker = this.document.createRange();
+          marker.selectNodeContents(reference);
+          const rect = marker.getBoundingClientRect();
+          if (rect.height === 0) continue;
+          if (notesStart([...cited, footnoteId], pxToPt(rect.bottom - top))) {
+            cited.push(footnoteId);
+            continue;
+          }
+          headLimitPt = Math.min(headLimitPt, effectiveMarginTopPt + pxToPt(rect.top - top));
+          break;
+        }
+        if (headLimitPt <= effectiveMarginTopPt) return null;
+      }
+
+      // Below the last citation, the head's own lines still compete with its notes for the page.
       split = this.splitParagraphAtLargestFit(paragraph, (head) => {
         const measured = this.measureElement(head, dims, block.sectionIndex);
-        return effectiveMarginTopPt + measured.heightPt <= availableHeightPt;
+        return effectiveMarginTopPt + measured.heightPt <= headLimitPt
+          && (!notesStart || notesStart(this.extractFootnoteRefs(head), measured.heightPt));
       });
     } finally {
       host?.remove();
@@ -3208,6 +3279,79 @@ export class PaginationEngine {
         remainingElements: remaining,
       } : null,
     };
+  }
+
+  /**
+   * Whether every note in `footnoteIds` can begin in a note band of `availableHeightPt` that
+   * already holds the page's packed payload: each whole except the last, which may be split
+   * provided at least its first line fits. Mirrors the placement loop's decisions without
+   * changing any page state, so the paginator can move a citation to the next page instead of
+   * separating it from its note (Word starts a note on the page that cites it).
+   */
+  private notesCanStartOnPage(
+    footnoteIds: string[],
+    availableHeightPt: number,
+    contentWidth: number,
+    payload: FootnotePackingContext,
+    splitTailTaken: boolean,
+    memo?: NoteStartMemo,
+  ): boolean {
+    // The answer only improves as the band grows, so one known answer settles every band on
+    // its side. Paragraph fragmentation asks about the same citations at many head heights.
+    const key = footnoteIds.join(" ");
+    const startsFrom = memo?.startsFrom.get(key);
+    if (startsFrom !== undefined && availableHeightPt >= startsFrom) return true;
+    const failsUpTo = memo?.failsUpTo.get(key);
+    if (failsUpTo !== undefined && availableHeightPt <= failsUpTo) return false;
+    const starts = this.notesStart(footnoteIds, availableHeightPt, contentWidth, payload, splitTailTaken, memo);
+    if (memo && starts) memo.startsFrom.set(key, Math.min(startsFrom ?? Infinity, availableHeightPt));
+    if (memo && !starts) memo.failsUpTo.set(key, Math.max(failsUpTo ?? -Infinity, availableHeightPt));
+    return starts;
+  }
+
+  private notesStart(
+    footnoteIds: string[],
+    availableHeightPt: number,
+    contentWidth: number,
+    payload: FootnotePackingContext,
+    splitTailTaken: boolean,
+    memo?: NoteStartMemo,
+  ): boolean {
+    // The packed height of whole notes does not depend on the band.
+    const packedHeight = (ids: string[]) => {
+      const key = ids.join(" ");
+      let height = memo?.packedHeights.get(key);
+      if (height === undefined) {
+        height = this.measureFootnotesHeight(
+          ids, contentWidth, payload.continuation, payload.partialFootnotes);
+        memo?.packedHeights.set(key, height);
+      }
+      return height;
+    };
+    const placed = [...payload.footnoteIds];
+    let placedHeight = packedHeight(placed);
+    for (let index = 0; index < footnoteIds.length; index++) {
+      this.checkpoint();
+      const footnoteId = footnoteIds[index];
+      const footnote = this.footnoteRegistry.get(footnoteId);
+      if (!footnote) continue;
+      if (splitTailTaken) return false;
+      const candidateHeight = packedHeight([...placed, footnoteId]);
+      if (candidateHeight + FOOTNOTE_MEASUREMENT_GUARD_PT <= availableHeightPt) {
+        placed.push(footnoteId);
+        placedHeight = candidateHeight;
+        continue;
+      }
+      if (availableHeightPt - placedHeight <= MIN_FOOTNOTE_START_PT) return false;
+      const { fits } = this.splitFootnoteToFit(footnote, availableHeightPt, contentWidth, false, {
+        footnoteIds: placed,
+        continuation: payload.continuation,
+        partialFootnotes: payload.partialFootnotes,
+      });
+      // A split note takes the page's only continuation slot; a later note cannot start here.
+      return fits.length > 0 && index === footnoteIds.length - 1;
+    }
+    return true;
   }
 
   /**
@@ -4151,16 +4295,36 @@ export class PaginationEngine {
         ? MAX_FOOTNOTE_AREA_RATIO
         : MAX_EXHAUSTED_BODY_FOOTNOTE_AREA_RATIO);
 
+      // The note band left beside `bodyPt` more of body on this page, and whether a paragraph
+      // head of that height can start every note it cites in it. Word begins a note on the page
+      // that cites it, so a fragment ends before a citation whose note cannot start here.
+      const notePayload = {
+        footnoteIds: currentFootnoteIds,
+        continuation: currentContinuation,
+        partialFootnotes: currentPartialFootnotes,
+      };
+      const noteBandWith = (bodyPt: number) => Math.min(
+        maxFootnoteArea, effectiveContentHeight - bodyContentUsed - bodyPt);
+      const noteStartMemo: NoteStartMemo = { packedHeights: new Map(), startsFrom: new Map(), failsUpTo: new Map() };
+      const headNotesStart = (footnoteIds: string[], headHeightPt: number) => {
+        const headIds = footnoteIds.filter((id) => !currentFootnoteIds.includes(id));
+        return headIds.length === 0 || this.notesCanStartOnPage(headIds,
+          noteBandWith(effectiveMarginTop + headHeightPt), blockDimensions.contentWidth,
+          notePayload, nextPageContinuation !== null, noteStartMemo);
+      };
+
       // A paragraph that cannot fit as a whole may still have a simple text-only
       // prefix that fits this page. Fragment before the ordinary next-page or
       // oversized fallback so the cloned head participates in the same margin
-      // and footnote accounting as every other block.
-      if (blockSpace > effectiveRemainingHeight) {
+      // and footnote accounting as every other block. Only the paragraph's own lines decide
+      // this: notes too tall for the page are split or moved by the note placement below.
+      if (effectiveMarginTop + block.heightPt > effectiveRemainingHeight) {
         const paragraphFragments = this.tryFragmentParagraph(
           block,
           blockDimensions,
           effectiveRemainingHeight,
-          effectiveMarginTop
+          effectiveMarginTop,
+          headNotesStart,
         );
         if (paragraphFragments) {
           blocks.splice(i, 1, ...paragraphFragments);
@@ -4202,6 +4366,36 @@ export class PaginationEngine {
         const blockSpaceWithoutFootnotes = effectiveMarginTop + block.heightPt;
 
         if (newFootnoteIds.length > 0 && blockSpaceWithoutFootnotes <= effectiveRemainingHeight) {
+          // A note begins on the page that cites it. When a note this block cites cannot start
+          // here even in the expanded band, the citing line moves to the next page: keep the
+          // paragraph's lines up to that citation here, or, when the block itself cannot be
+          // split (kept lines, a table), move it whole. Deferring the note instead separates it
+          // from its citation, and the deferred notes accumulate into pages that carry nothing
+          // but notes. A paginator that splits no paragraph (the paginated editor) still defers:
+          // moving every citing paragraph whole would cost more pages than Word's split does.
+          const turnHelps = noteBandWith(blockSpaceWithoutFootnotes)
+            < freshBlockPageBodyHeight * MAX_FOOTNOTE_AREA_RATIO;
+          if (this.fragmentParagraphs && turnHelps && !this.notesCanStartOnPage(newFootnoteIds,
+            noteBandWith(blockSpaceWithoutFootnotes), blockDimensions.contentWidth, notePayload,
+            nextPageContinuation !== null, noteStartMemo)) {
+            const fragments = this.tryFragmentParagraph(
+              block,
+              blockDimensions,
+              effectiveRemainingHeight,
+              effectiveMarginTop,
+              headNotesStart,
+            );
+            if (fragments) {
+              blocks.splice(i, 1, ...fragments);
+              i--;
+              continue;
+            }
+            if (currentContent.length > 0) {
+              finishPage(block.sectionIndex);
+              i--;
+              continue;
+            }
+          }
           // Block itself fits, but footnotes don't - expand footnote area
           markSectionPlaced(block.sectionIndex);
           currentContent.push(this.cloneBlockForPage(
@@ -4256,7 +4450,7 @@ export class PaginationEngine {
               currentFootnoteHeight = candidateHeight;
             } else {
               // Footnote needs to be split - use all available expanded space
-              if (spaceLeftForFootnotes > 20) { // Minimum space to start a footnote
+              if (spaceLeftForFootnotes > MIN_FOOTNOTE_START_PT) {
                 const { fits, overflow } = this.splitFootnoteToFit(
                   footnote,
                   availableForFootnotes,

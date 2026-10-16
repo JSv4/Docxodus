@@ -159,7 +159,6 @@ test.describe('Pagination paragraph fragments', () => {
     await page.setContent(viewerHtml(`
       <p data-case="keep-lines" data-keep-lines="true">${words}</p>
       <p data-case="keep-next" data-keep-with-next="true">${words}</p>
-      <p data-case="footnote">${words}<sup data-footnote-id="f1">1</sup></p>
       <p data-case="clearing-break">alpha<br style="clear:left">bravo<br>charlie<br>delta<br>echo<br>foxtrot</p>
       <p data-case="page-break">alpha<br style="break-before:page">bravo<br>charlie<br>delta<br>echo<br>foxtrot</p>
       <p data-case="line-break" data-keep-lines="true">alpha<br>bravo<br>charlie<br>delta<br>echo<br>foxtrot</p>`));
@@ -179,7 +178,6 @@ test.describe('Pagination paragraph fragments', () => {
       return {
         keepLines: count('keep-lines'),
         keepNext: count('keep-next'),
-        footnote: count('footnote'),
         lineBreak: count('line-break'),
         clearingBreak: count('clearing-break'),
         pageBreak: count('page-break'),
@@ -189,7 +187,6 @@ test.describe('Pagination paragraph fragments', () => {
     expect(result).toEqual({
       keepLines: 1,
       keepNext: 1,
-      footnote: 1,
       lineBreak: 1,
       clearingBreak: 1,
       pageBreak: 1,

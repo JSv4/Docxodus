@@ -46,6 +46,8 @@ const FOOTER_TAB_STOP_PX = 312;
  * first line starts 6pt below the previous note's last line). Forced inline, the first paragraph
  * had dropped that spacing on the 92 single-paragraph notes here. The spacing after the band's
  * last paragraph is not reserved, as in LibreOffice, where that line sits on the bottom margin.
+ *
+ * #1151 (restored list spacing) is measured together with the value above in a later commit.
  */
 const PAGES = 53;
 const FOOTNOTE_CITATIONS = 94;
