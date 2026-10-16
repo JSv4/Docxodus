@@ -87,10 +87,11 @@ All notable changes to this project will be documented in this file.
   that document has them: a marker both documents have at the same boundary is written once, unmarked, and
   survives accepting and rejecting; any other marker is written as its document's tracked insertion or deletion,
   so accepting gives the revised document's markers and rejecting the original's (a bookmark that moved gets one
-  copy per document). Consolidating does the same for the base document's markers and each reviewer's. A block
+  copy per document). That holds too for a table, cell, block wrapper or note whose only difference is such a
+  marker, which the comparison otherwise treats as unchanged. Consolidating does the same for the base document's markers and each reviewer's. A block
   wrapper replaced whole now marks the markers between its blocks as part of its copy, so the deleted copy's
   bookmark no longer outlives it after accepting. Accepting and rejecting keep a body's or cell's non-paragraph
-  children in place instead of dropping them, and rejecting now reverses a tracked insertion or deletion written
+  children in place instead of dropping them (a `w:altChunk` stays outside a paragraph merged across it), and rejecting now reverses a tracked insertion or deletion written
   directly in the body or a cell.
 - Right-to-left bordered paragraphs (`w:bidi`) now draw their left and right borders outside the
   indented text, mirroring left-to-right paragraphs (issue #1129). The border wrapper put the
