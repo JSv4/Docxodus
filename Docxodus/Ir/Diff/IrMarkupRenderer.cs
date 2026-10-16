@@ -5935,10 +5935,60 @@ internal static partial class IrMarkupRenderer
             content.Add(runLevel);
         }
 
-        foreach (var tokenOp in CoalesceTokenOpsWordShaped(
-                     tokenDiff.Ops, leftTokens, rightTokens, state.Settings.FormatComparison,
-                     leftRuns, rightRuns))
+        var ops = CoalesceTokenOpsWordShaped(
+            tokenDiff.Ops, leftTokens, rightTokens, state.Settings.FormatComparison,
+            leftRuns, rightRuns).ToList();
+
+        // An op slices the left source only when it draws left content: a deletion, or an Equal/FormatChanged span
+        // whose raw text differs (drawn as del + ins). Any other Equal/FormatChanged span emits the right runs alone.
+        bool SlicesLeft(IrTokenOp op) =>
+            op.Kind == IrTokenOpKind.Delete ||
+            (op.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged &&
+             !string.Equals(RawSpanText(leftTokens, op.LeftStart, op.LeftEnd),
+                 RawSpanText(rightTokens, op.RightStart, op.RightEnd), StringComparison.Ordinal));
+
+        // A span may leave the always-kept markers behind a trailing zero-width token to the op that owns that token
+        // (see SourceRunModel.Slice) only when that op is rendered here, from the same side's tokens (the next op
+        // holding tokens of that side, starting where this one ends; a Consolidate paragraph renders each reviewer's
+        // ops in a call of their own), and only when that op keeps the token unchanged: an Equal or FormatChanged
+        // span with identical raw text, which emits its runs unwrapped. A marker both documents carry stays unmarked
+        // that way. Behind a token that is itself inserted or deleted, deferring would pull the shared marker into
+        // that revision, so the marker stays with this op, as before. One backward pass records the owners.
+        var nextLeftOwner = new int[ops.Count];
+        var nextRightOwner = new int[ops.Count];
+        for (int j = ops.Count - 1, leftOwner = -1, rightOwner = -1; j >= 0; j--)
         {
+            nextLeftOwner[j] = leftOwner;
+            nextRightOwner[j] = rightOwner;
+            if (ops[j].LeftEnd > ops[j].LeftStart)
+                leftOwner = j;
+            if (ops[j].RightEnd > ops[j].RightStart)
+                rightOwner = j;
+        }
+        bool KeepsUnchanged(IrTokenOp op) =>
+            op.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged && !SlicesLeft(op);
+        bool LeftNextOwns(int index) =>
+            nextLeftOwner[index] >= 0 && ops[nextLeftOwner[index]].LeftStart == ops[index].LeftEnd &&
+            KeepsUnchanged(ops[nextLeftOwner[index]]) &&
+            NextOwnsEndZeroWidth(leftTokens, ops[index].LeftStart, ops[index].LeftEnd);
+        bool RightNextOwns(int index) =>
+            nextRightOwner[index] >= 0 && ops[nextRightOwner[index]].RightStart == ops[index].RightEnd &&
+            KeepsUnchanged(ops[nextRightOwner[index]]) &&
+            NextOwnsEndZeroWidth(rightTokens, ops[index].RightStart, ops[index].RightEnd);
+
+        // That owner emits only the right side's runs, so of the left markers only those with a counterpart in its
+        // right span may be left to it; it claims them as represented by the right copy it emits.
+        ISet<string> LeftDeferOnlyKeys(int index)
+        {
+            if (nextLeftOwner[index] < 0)
+                return new HashSet<string>(); // no owner here, so LeftNextOwns is false and nothing is deferred
+            var (ownerStart, ownerEnd) = RightSpanChars(rightTokens, ops[nextLeftOwner[index]]);
+            return rightRuns.MarkerKeysBetween(ownerStart, ownerEnd);
+        }
+
+        for (int opIndex = 0; opIndex < ops.Count; opIndex++)
+        {
+            var tokenOp = ops[opIndex];
             switch (tokenOp.Kind)
             {
                 case IrTokenOpKind.Equal:
@@ -5957,11 +6007,18 @@ internal static partial class IrMarkupRenderer
                     var (lzs, lze) = ZeroWidthBoundaries(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
                     string rawRight = RawSpanText(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
                     string rawLeft = RawSpanText(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
-                    if (!string.Equals(rawLeft, rawRight, StringComparison.Ordinal))
+                    bool rawEqual = string.Equals(rawLeft, rawRight, StringComparison.Ordinal);
+                    // Keys of the markers the right-only rendering below emits: they stand in for the left copies of
+                    // the same markers in this span, which no later left-side op may then emit again.
+                    var representedMarkers = new HashSet<string>(StringComparer.Ordinal);
+                    if (!rawEqual)
                     {
-                        foreach (var r in leftRuns.Slice(ls, le, lzs, lze))
+                        foreach (var r in leftRuns.Slice(ls, le, lzs, lze,
+                                     LeftNextOwns(opIndex),
+                                     LeftDeferOnlyKeys(opIndex)))
                             content.AddRange(WrapFieldAware(r, RevKind.Del, state));
-                        foreach (var r in rightRuns.Slice(rs, re, rzs, rze))
+                        foreach (var r in rightRuns.Slice(rs, re, rzs, rze,
+                                     RightNextOwns(opIndex)))
                             content.AddRange(WrapFieldAware(r, RevKind.Ins, state));   // registers media on its clone
                     }
                     else if (tokenOp.Kind == IrTokenOpKind.FormatChanged)
@@ -5993,9 +6050,14 @@ internal static partial class IrMarkupRenderer
                             // the single-slice ownership exactly (claim-dedup guarantees each is emitted once).
                             bool subStartZw = bi == 0 ? rzs : true;
                             bool subEndZw = bi == boundaries.Count ? rze : false;
+                            // An interior cut always has a next sub-span starting at it.
+                            bool subNextOwns = bi < boundaries.Count ||
+                                RightNextOwns(opIndex);
                             // Left format is uniform across the sub-span, so one RPrAtChar at its start suffices.
                             var oldRPr = leftRuns.RPrAtChar(ls + (subStart - rs));
-                            foreach (var r in rightRuns.Slice(subStart, subEnd, subStartZw, subEndZw))
+                            var subSpan = rightRuns.Slice(subStart, subEnd, subStartZw, subEndZw, subNextOwns);
+                            representedMarkers.UnionWith(rightRuns.LastEmittedMarkerKeys);
+                            foreach (var r in subSpan)
                             {
                                 // Only a w:r carries run formatting — bookmarks/zero-width markers pass through
                                 // untouched (stamping an rPr onto them is schema-invalid). A w:hyperlink wrapper
@@ -6009,9 +6071,16 @@ internal static partial class IrMarkupRenderer
                     }
                     else
                     {
-                        foreach (var r in rightRuns.Slice(rs, re, rzs, rze))
+                        var span = rightRuns.Slice(rs, re, rzs, rze,
+                            RightNextOwns(opIndex));
+                        representedMarkers.UnionWith(rightRuns.LastEmittedMarkerKeys);
+                        foreach (var r in span)
                             AddStableSpan(r);
                     }
+                    if (rawEqual)
+                        leftRuns.ClaimRepresented(ls, le, lzs, lze,
+                            LeftNextOwns(opIndex),
+                            LeftDeferOnlyKeys(opIndex), representedMarkers);
                     break;
                 }
                 case IrTokenOpKind.Insert:
@@ -6022,7 +6091,8 @@ internal static partial class IrMarkupRenderer
                     var range = arrival is null ? default : CreateMoveRange(isFrom: false, arrival, state);
                     if (arrival is not null)
                         content.Add(range.Start);
-                    foreach (var r in rightRuns.Slice(s, e, zs, ze))
+                    foreach (var r in rightRuns.Slice(s, e, zs, ze,
+                                 RightNextOwns(opIndex)))
                         content.AddRange(WrapFieldAware(r, arrival is null ? RevKind.Ins : RevKind.MoveTo, state));   // registers media on its clone
                     if (arrival is not null)
                         content.Add(range.End);
@@ -6036,7 +6106,9 @@ internal static partial class IrMarkupRenderer
                     var range = departure is null ? default : CreateMoveRange(isFrom: true, departure, state);
                     if (departure is not null)
                         content.Add(range.Start);
-                    foreach (var r in leftRuns.Slice(s, e, zs, ze))
+                    foreach (var r in leftRuns.Slice(s, e, zs, ze,
+                                 LeftNextOwns(opIndex),
+                                 LeftDeferOnlyKeys(opIndex)))
                         content.AddRange(WrapFieldAware(r, departure is null ? RevKind.Del : RevKind.MoveFrom, state));
                     if (departure is not null)
                         content.Add(range.End);
@@ -6219,6 +6291,14 @@ internal static partial class IrMarkupRenderer
             ? (false, false)
             : (tokens[start].StartChar == tokens[start].EndChar,
                tokens[end - 1].StartChar == tokens[end - 1].EndChar);
+
+    /// <summary>Whether the token right after the non-empty token span [<paramref name="start"/>,
+    /// <paramref name="end"/>) is zero-width and sits at the span's end character, so the next op of the same side
+    /// owns a zero-width token at that position (see <see cref="SourceRunModel.Slice"/>).</summary>
+    private static bool NextOwnsEndZeroWidth(IReadOnlyList<IrDiffToken> tokens, int start, int end) =>
+        end > start && end < tokens.Count &&
+        tokens[end].StartChar == tokens[end].EndChar &&
+        tokens[end].StartChar == tokens[end - 1].EndChar;
 
     /// <summary>Concatenate the RAW token text over a half-open token-index span (empty span ⇒ "").</summary>
     private static string RawSpanText(IReadOnlyList<IrDiffToken> tokens, int start, int end)
@@ -10227,10 +10307,53 @@ internal static partial class IrMarkupRenderer
         /// zero-width (it sits at <c>end</c>, which no op's interior and no later op covers — the footnote-ref
         /// corruption) and DOUBLE-COUNTS a boundary one (an equal tab claimed both as equal by the op that owns it
         /// AND as deleted by the next op's start). Defaults <c>(true,false)</c> reproduce the original
-        /// always-start-inclusive / end-exclusive rule for callers that don't pass token boundaries.</para></summary>
-        public List<XElement> Slice(int start, int end, bool includeStartZeroWidth = true, bool includeEndZeroWidth = false)
+        /// always-start-inclusive / end-exclusive rule for callers that don't pass token boundaries.</para>
+        /// <para><b>Trailing markers keep their place behind a zero-width token.</b> An always-kept marker (field
+        /// plumbing, a bookmark or comment range endpoint) is not a diff token, so it is taken at either boundary of
+        /// the span. When <paramref name="nextOwnsEndZeroWidth"/> says the zero-width token at <c>end</c> belongs to
+        /// the next op of this same source model, a marker that FOLLOWS that token in document order is left to the
+        /// next op too (its start-inclusive rule takes it). Otherwise this op would emit the marker ahead of the
+        /// token the next op emits, inverting their order — an edited table-of-contents entry's tab landed after its
+        /// PAGEREF field's begin, instruction and separate characters (issue #1156). A marker before the token stays
+        /// with this op, and with no next op to defer to (the flag false) every marker at <c>end</c> is still taken,
+        /// so none is dropped. The caller passes the flag only when that op keeps the token unchanged (emits it
+        /// unwrapped), so a marker both sides carry is never pulled into an insertion or deletion.
+        /// <paramref name="deferOnlyKeys"/> narrows the deferral when the next op does not slice
+        /// this model at all (a left marker before an Equal span, which emits only the right side's runs): then only
+        /// a marker whose counterpart lies in that op's span on the other side (<see cref="MarkerKeysBetween"/>) is
+        /// deferred, and that op claims it as represented by the copy it emits (<see cref="ClaimRepresented"/>); any
+        /// other marker stays with this op so it is not lost.</para></summary>
+        public List<XElement> Slice(int start, int end, bool includeStartZeroWidth = true, bool includeEndZeroWidth = false,
+            bool nextOwnsEndZeroWidth = false, ISet<string>? deferOnlyKeys = null) =>
+            Scan(start, end, includeStartZeroWidth, includeEndZeroWidth, nextOwnsEndZeroWidth, deferOnlyKeys, claimOnlyKeys: null);
+
+        /// <summary>
+        /// Mark as emitted, without emitting them, the always-kept markers of this side's span that the other side's
+        /// copy stands in for: the markers whose <see cref="MarkerKey"/> is in <paramref name="representedKeys"/>
+        /// (the same field plumbing, bookmark or comment endpoint the other side's slice of the same span just
+        /// emitted, <see cref="LastEmittedMarkerKeys"/>). An Equal span emits only the right side's runs, so the left
+        /// side's copies of those markers are already in the output, at the same place; a later Delete starting at
+        /// the span's end must not emit them a second time (issue #1156). A marker whose counterpart sits elsewhere
+        /// (a bookmark moved within the paragraph) is not represented and stays for a later op of this side. The span bounds
+        /// and the trailing deferral follow <see cref="Slice"/>. A marker only this side carries is left unclaimed
+        /// for a later op of this side.
+        /// </summary>
+        public void ClaimRepresented(int start, int end, bool includeStartZeroWidth, bool includeEndZeroWidth,
+            bool nextOwnsEndZeroWidth, ISet<string>? deferOnlyKeys, ISet<string> representedKeys) =>
+            Scan(start, end, includeStartZeroWidth, includeEndZeroWidth, nextOwnsEndZeroWidth, deferOnlyKeys, representedKeys);
+
+        private List<XElement> Scan(int start, int end, bool includeStartZeroWidth, bool includeEndZeroWidth,
+            bool nextOwnsEndZeroWidth, ISet<string>? deferOnlyKeys, ISet<string>? claimOnlyKeys)
         {
             var result = new List<XElement>();
+            if (claimOnlyKeys is null)
+                _emittedMarkerKeys.Clear();
+            // Set once the scan passes a zero-width segment at `end` that the next op owns: always-kept markers at
+            // `end` after it are left to that op (only those in deferOnlyKeys, when given).
+            bool deferTrailingMarkers = false;
+            bool Deferred(Segment seg) =>
+                seg.Start == end && deferTrailingMarkers &&
+                (deferOnlyKeys is null || (MarkerKey(seg) is { } key && deferOnlyKeys.Contains(key)));
 
             // Two-level grouping. INNER: consecutive RunText/RunOther segments sharing the SAME source run are
             // rebuilt into one w:r (so a split w:t and its siblings keep one run + its rPr). OUTER: consecutive
@@ -10310,14 +10433,29 @@ internal static partial class IrMarkupRenderer
                 else if (seg.IsZeroWidth && seg.AlwaysKeep)
                     // A bookmark marker is taken anywhere in [start,end] (BOTH boundaries inclusive), regardless of
                     // the token-driven ownership flags — it is not a diff token, so those flags can't see it and a
-                    // boundary bookmark would otherwise be dropped. _claimedZeroWidth keeps it once per model.
-                    overlaps = seg.Start >= start && seg.Start <= end;
+                    // boundary bookmark would otherwise be dropped. _claimedZeroWidth keeps it once per model. The
+                    // one exception keeps document order: a marker behind a trailing zero-width token the next op
+                    // owns goes with that op.
+                    overlaps = seg.Start >= start && seg.Start <= end && !Deferred(seg);
                 else if (seg.IsZeroWidth)
+                {
                     overlaps = (seg.Start > start && seg.Start < end)     // strictly interior: always taken
                             || (seg.Start == start && includeStartZeroWidth)  // leading: only if this op owns it
                             || (seg.Start == end && includeEndZeroWidth);     // trailing: only if this op owns it
+                    if (!overlaps && seg.Start == end && nextOwnsEndZeroWidth)
+                        deferTrailingMarkers = true;
+                }
                 else
                     overlaps = seg.Start < end && seg.End > start;        // text overlap
+
+                if (claimOnlyKeys is not null)
+                {
+                    // Claim-only scan: record the represented always-kept markers as emitted, emit nothing.
+                    if (overlaps && seg.IsZeroWidth && seg.AlwaysKeep &&
+                        MarkerKey(seg) is { } represented && claimOnlyKeys.Contains(represented))
+                        _claimedZeroWidth.Add(seg.OtherChild ?? seg.Element);
+                    continue;
+                }
 
                 // A zero-width inline (note ref, drawing, tab, …) sits at ONE char position two adjacent
                 // token-ops can SHARE (prev op's end char == this op's start char), so a char-span slice would
@@ -10347,6 +10485,9 @@ internal static partial class IrMarkupRenderer
                         FlushRun();
                     continue;
                 }
+
+                if (seg.IsZeroWidth && seg.AlwaysKeep && MarkerKey(seg) is { } emittedKey)
+                    _emittedMarkerKeys.Add(emittedKey);
 
                 switch (seg.Kind)
                 {
@@ -10503,6 +10644,47 @@ internal static partial class IrMarkupRenderer
                         return false;
                 return true;
             }
+        }
+
+        private readonly HashSet<string> _emittedMarkerKeys = new(StringComparer.Ordinal);
+        private Dictionary<string, string>? _bookmarkNames;
+
+        /// <summary>The identities (<see cref="MarkerKey"/>) of the always-kept markers the most recent
+        /// <see cref="Slice"/> emitted.</summary>
+        public IReadOnlyCollection<string> LastEmittedMarkerKeys => _emittedMarkerKeys;
+
+        /// <summary>The identities (<see cref="MarkerKey"/>) of the always-kept markers at a position in
+        /// [<paramref name="start"/>, <paramref name="end"/>] (both inclusive, as <see cref="Slice"/> takes them).</summary>
+        public ISet<string> MarkerKeysBetween(int start, int end) => _segments
+            .Where(seg => seg.IsZeroWidth && seg.AlwaysKeep && seg.Start >= start && seg.Start <= end)
+            .Select(MarkerKey).OfType<string>().ToHashSet(StringComparer.Ordinal);
+
+        /// <summary>The identity an always-kept marker shares with its copy on the other side: any field plumbing
+        /// (a fine-rendered pair carries the same fields on both sides — a field-structure difference is a
+        /// whole-paragraph replacement — so the right side's plumbing always stands in for the left side's), a
+        /// bookmark endpoint by its bookmark's name, a comment range endpoint or reference by its comment id.
+        /// Null for anything else.</summary>
+        private string? MarkerKey(Segment seg)
+        {
+            var element = seg.OtherChild ?? seg.Element;
+            if (FieldPlumbingKeep(element.Name))
+                return "field";
+            if (element.Name == W.bookmarkStart)
+                return "bookmark:" + (string?)element.Attribute(W.name);
+            if (element.Name == W.bookmarkEnd)
+            {
+                _bookmarkNames ??= element.AncestorsAndSelf().Last().Descendants(W.bookmarkStart)
+                    .GroupBy(start => (string?)start.Attribute(W.id) ?? "")
+                    .ToDictionary(group => group.Key, group => (string?)group.First().Attribute(W.name) ?? "",
+                        StringComparer.Ordinal);
+                return _bookmarkNames.TryGetValue((string?)element.Attribute(W.id) ?? "", out var name)
+                    ? "bookmark:" + name
+                    : null;
+            }
+            if (element.Name == W.commentRangeStart || element.Name == W.commentRangeEnd ||
+                element.Name == W.commentReference)
+                return "comment:" + (string?)element.Attribute(W.id);
+            return null;
         }
 
         private sealed class Segment

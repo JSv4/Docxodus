@@ -55,6 +55,26 @@ All notable changes to this project will be documented in this file.
   paragraph after it keeps only half a range in each view. For `w:sdt` both behave as before; for
   `w:customXml` they used to keep each copy's markers in full under one duplicated id, so the
   redline is now well formed but these two shapes lose the range or the reference's place instead.
+- A comparison no longer breaks a field that spans paragraphs, such as a Word table of contents without its
+  content control (issue #1156). Such a field opens in its first entry paragraph and closes paragraphs later,
+  and field characters take up no room in the text the comparison lines up, so when the entry holding the
+  closing character was deleted or a new last entry appended, the paragraph the character moved into still
+  looked unchanged and its new copy went into the redline unmarked: rejecting the redline then left an extra
+  closing character, or lost one. The reader now records each paragraph's field characters that belong to a
+  field opened or closed in another paragraph, so a paragraph that gains or loses one is redlined as a
+  replaced paragraph, and accepting or rejecting leaves each document's field characters where they were.
+  Such a paragraph is no longer split, merged or streamed with its neighbours word by word either.
+  Separately, editing the text of a hyperlinked entry put the entry's tab after its page-number field's begin,
+  instruction and separate characters in the redline, inside the field's result: the edit claimed the field
+  characters sitting at its end even though the tab before them belonged to the next piece of the paragraph.
+  Field characters, bookmark endpoints and comment endpoints that both documents carry right after such a tab
+  now stay after it in both views; one only the original carries is kept where it was before (in front of the
+  tab), so rejecting still restores it. Unchanged text before a field now also stands in for the original's
+  copy of that field's begin, instruction and separate characters, so a field whose result changes right after
+  unchanged text (a table-of-contents entry whose page number changes) no longer gains a second copy of them on
+  reject. A result change that the comparison merges with a deletion of the text before the field, and one in
+  the entry that opens a table of contents, can still leave the field unbalanced on reject (issue #1165). The
+  semantic change set's field-envelope digest tag advanced to `docxodus-ir-field-envelope-v3`.
 - Right-to-left bordered paragraphs (`w:bidi`) now draw their left and right borders outside the
   indented text, mirroring left-to-right paragraphs (issue #1129). The border wrapper put the
   paragraph's leading (start) indent on its left side, although a right-to-left paragraph's start is
