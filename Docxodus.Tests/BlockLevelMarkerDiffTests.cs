@@ -308,6 +308,91 @@ public class BlockLevelMarkerDiffTests
         AssertRoundTrip(engine, left, right);
     }
 
+    // A marker-only difference inside a container the IR finds equal: the IR leaves markers out (rule N3), so
+    // nothing else tells the two sides apart and the container is emitted as one side's copy.
+
+    private static string Row(params string[] cellContents) =>
+        "<w:tr>" + string.Concat(cellContents.Select(c => $"<w:tc><w:tcPr><w:tcW w:w=\"3000\" w:type=\"dxa\"/></w:tcPr>{c}</w:tc>")) + "</w:tr>";
+
+    private static string Rows(int columns, params string[] rows) =>
+        "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid>" +
+        string.Concat(Enumerable.Range(0, columns).Select(_ => "<w:gridCol w:w=\"3000\"/>")) + "</w:tblGrid>" +
+        string.Concat(rows) + "</w:tbl>";
+
+    private static readonly string Bracketed = P("Alpha") + Start("Old") + P("Bravo") + End();
+    private static readonly string Plain = P("Alpha") + P("Bravo");
+
+    public static TheoryData<string, string, string> MarkerOnlyContainerChanges()
+    {
+        var data = new TheoryData<string, string, string>();
+        foreach (var engine in new[] { "DocxCompare", "DocxDiff" })
+            foreach (var (withMarker, without) in new[] { (Bracketed, Plain) })
+            {
+                // An entirely unchanged table; a body edit elsewhere.
+                data.Add(engine, P("Lead one") + Table(withMarker), P("Lead two") + Table(without));
+                data.Add(engine, P("Lead one") + Table(without), P("Lead two") + Table(withMarker));
+                // Another cell of the same row changes.
+                data.Add(engine, Rows(2, Row(withMarker, P("Other one"))), Rows(2, Row(without, P("Other two"))));
+                data.Add(engine, Rows(2, Row(without, P("Other one"))), Rows(2, Row(withMarker, P("Other two"))));
+                // Another row changes.
+                data.Add(engine, Rows(1, Row(withMarker), Row(P("Other one"))), Rows(1, Row(without), Row(P("Other two"))));
+                data.Add(engine, Rows(1, Row(without), Row(P("Other one"))), Rows(1, Row(withMarker), Row(P("Other two"))));
+                // An unchanged block wrapper and an unchanged custom-XML wrapper.
+                data.Add(engine, P("Lead one") + Sdt(withMarker), P("Lead two") + Sdt(without));
+                data.Add(engine, P("Lead one") + Sdt(without), P("Lead two") + Sdt(withMarker));
+                data.Add(engine, P("Lead one") + CustomXml(withMarker), P("Lead two") + CustomXml(without));
+                // A table nested in an unchanged table.
+                data.Add(engine, P("Lead one") + Table(P("Outer") + Table(withMarker) + P("After")),
+                    P("Lead two") + Table(P("Outer") + Table(without) + P("After")));
+            }
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(MarkerOnlyContainerChanges))]
+    public void Compare_MarkerOnlyChange_InAnEqualContainer_FollowsEachSide(string engine, string leftBody, string rightBody)
+    {
+        AssertRoundTrip(engine, Doc(leftBody), Doc(rightBody));
+    }
+
+    // ------------------------------------------------------------------- accepting a merged paragraph mark
+
+    private const string DeletedMark = "<w:pPr><w:rPr><w:del w:id=\"91\" w:author=\"A\" w:date=\"2026-01-01T00:00:00Z\"/></w:rPr></w:pPr>";
+
+    [Fact]
+    public void Accept_DeletedParagraphMark_MergesAcrossABookmarkStart_KeepsItBetweenTheTexts()
+    {
+        var document = Doc($"<w:p>{DeletedMark}<w:r><w:t>Alpha</w:t></w:r></w:p>" + Start("Mid") + P("Bravo") + End());
+
+        var body = Body(Accept(document));
+
+        Assert.Equal(new[] { "p", "bookmarkEnd" }, body.Elements().Where(e => e.Name != W + "sectPr").Select(e => e.Name.LocalName));
+        Assert.Equal(new[] { "r", "bookmarkStart", "r" }, body.Element(W + "p")!.Elements().Select(e => e.Name.LocalName));
+    }
+
+    [Fact]
+    public void Accept_DeletedParagraphMark_MergesAcrossAnAltChunk_KeepsTheAltChunkOutOfTheParagraph()
+    {
+        var source = Doc($"<w:p>{DeletedMark}<w:r><w:t>Alpha</w:t></w:r></w:p>" +
+            "<w:altChunk xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:id=\"rIdX\"/>" + P("Bravo"));
+        using var stream = new MemoryStream();
+        stream.Write(source.DocumentByteArray);
+        using (var package = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, true))
+        {
+            var chunk = package.MainDocumentPart!
+                .AddNewPart<DocumentFormat.OpenXml.Packaging.AlternativeFormatImportPart>("text/html", "rIdX");
+            using var writer = new StreamWriter(chunk.GetStream(FileMode.Create));
+            writer.Write("<html><body><p>Chunk</p></body></html>");
+        }
+        var document = new WmlDocument("altchunk.docx", stream.ToArray());
+
+        var accepted = Accept(document);
+
+        Assert.Empty(Body(accepted).Descendants(W + "p").Elements(W + "altChunk"));
+        Assert.Single(Body(accepted).Elements(W + "altChunk"));
+        AssertNoNewValidationErrors(accepted, document);
+    }
+
     // ---------------------------------------------------------------------------------- comment ranges
 
     [Theory]
@@ -402,6 +487,19 @@ public class BlockLevelMarkerDiffTests
 
         Assert.Equal("P:Note lead BS:InNote P:Alpha P:Bravo weekly BE:InNote", FootnoteLayout(Accept(redline)));
         Assert.Equal("P:Note lead BS:InNote P:Alpha P:Bravo monthly BE:InNote", FootnoteLayout(Reject(redline)));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_FootnoteBookmark_MarkerOnlyChange_FollowsEachSide(string engine)
+    {
+        var left = FootnoteDoc(P("Note lead") + Start("InNote") + P("Alpha") + P("Bravo") + End());
+        var right = FootnoteDoc(P("Note lead") + P("Alpha") + P("Bravo"));
+
+        var redline = Compare(engine, left, right);
+
+        Assert.Equal(FootnoteLayout(right), FootnoteLayout(Accept(redline)));
+        Assert.Equal(FootnoteLayout(left), FootnoteLayout(Reject(redline)));
     }
 
     // ------------------------------------------------------------------------------------ block wrappers

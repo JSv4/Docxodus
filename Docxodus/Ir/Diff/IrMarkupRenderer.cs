@@ -417,6 +417,7 @@ internal static partial class IrMarkupRenderer
                 // round-trips note content too. Done BEFORE PutXDocument of the note parts.
                 if (script.NoteOps is { Count: > 0 })
                     RenderNoteScopes(script.NoteOps, state, main, wDocRight, settings, streamDoc, rightStream);
+                ReconcileUnchangedNoteMarkers(main, wDocRight.MainDocumentPart, script.NoteOps, state);
 
                 // Header/footer story markup (2026-07-03 campaign): apply each changed story's edit ops
                 // INSIDE its header/footer part (the output package carries the LEFT parts; a changed
@@ -1439,6 +1440,7 @@ internal static partial class IrMarkupRenderer
                 EmitVerbatim(op.RightAnchor, state.RightSource, state, sink, fromRight: true, op.LeftAnchor);
                 if (sink.Count == equalStart + 1 && sink[equalStart].Name == W.p)
                     StampResolvedNumberingChange(sink[equalStart], op.LeftAnchor, op.RightAnchor, state);
+                ReconcileEqualCopy(op, state, sink, equalStart);
                 break;
 
             case IrEditOpKind.FormatOnlyBlock:
@@ -1446,7 +1448,11 @@ internal static partial class IrMarkupRenderer
                 // a TABLE stamps the native table-shell property markers (block-format-change family); any
                 // other non-paragraph pair falls through to a verbatim right emit.
                 if (ResolveBlock(op.RightAnchor, state.RightSource) is IrTable)
+                {
+                    var formatStart = sink.Count;
                     EmitFormatOnlyTable(op, state, sink);
+                    ReconcileEqualCopy(op, state, sink, formatStart);
+                }
                 else
                     EmitFormatOnlyParagraph(op, state, sink);
                 break;
@@ -1533,6 +1539,15 @@ internal static partial class IrMarkupRenderer
         }
     }
 
+    /// <summary>An equal or format-only table or block wrapper is emitted as the revised document's copy; put
+    /// back the markers between its blocks that only one side has (issue #1149).</summary>
+    private static void ReconcileEqualCopy(IrEditOp op, RenderState state, List<XElement> sink, int start)
+    {
+        if (sink.Count == start + 1 && sink[start].Name != W.p)
+            ReconcileEqualContainerMarkers(sink[start],
+                SourceElement(op.LeftAnchor, state.Left), SourceElement(op.RightAnchor, state.RightSource), state);
+    }
+
     /// <summary>Whether either side of an operation resolves to an atomic block wrapper (a block-level content
     /// control or <c>w:customXml</c> element).</summary>
     private static bool IsBlockSdtOp(IrEditOp op, RenderState state) =>
@@ -1551,12 +1566,20 @@ internal static partial class IrMarkupRenderer
         switch (op.Kind)
         {
             case IrEditOpKind.EqualBlock:
+            {
+                var start = sink.Count;
                 EmitVerbatim(op.RightAnchor, state.RightSource, state, sink, fromRight: true, op.LeftAnchor);
+                ReconcileEqualCopy(op, state, sink, start);
                 return;
+            }
 
             case IrEditOpKind.FormatOnlyBlock:
+            {
+                var start = sink.Count;
                 EmitVerbatim(op.RightAnchor, state.RightSource, state, sink, fromRight: true);
+                ReconcileEqualCopy(op, state, sink, start);
                 return;
+            }
 
             case IrEditOpKind.InsertBlock:
                 EmitWholeSdt(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
@@ -2007,7 +2030,10 @@ internal static partial class IrMarkupRenderer
                     state.RegisterMediaReferences(row);
                     // An EqualRow (content-equal) may still carry a trPr/tcPr shell change — track it.
                     if (rowOp.LeftRowAnchor is { } ela && leftRowsByAnchor.TryGetValue(ela, out var eleft))
+                    {
                         ApplyRowAndCellShellChanges(row, eleft, state);
+                        ReconcileEqualContainerMarkers(row, eleft, src, state);
+                    }
                     newTbl.Add(row);
                     break;
                 }
@@ -2205,6 +2231,7 @@ internal static partial class IrMarkupRenderer
             {
                 foreach (var b in cellSrc.Elements().Where(IsCellContent))
                     newCell.Add(RightClone(b));
+                ReconcileEqualContainerMarkers(newCell, leftCellSrc, cellSrc, state);
             }
             // Do not compare by output ordinal: a middle cellIns shifts every later right cell.  The
             // monotone differ guarantees leftCellSrc is exactly this paired operation's source cell.

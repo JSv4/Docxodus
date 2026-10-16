@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
 
 namespace Docxodus.Ir.Diff;
 
@@ -76,23 +77,7 @@ internal static partial class IrMarkupRenderer
         if (ComputeMarkerLayout(ops, state.Left, state.RightSource) is not { } layout)
             return null;
 
-        List<XElement> Render(List<MarkerEntry> entries)
-        {
-            var output = new List<XElement>();
-            foreach (var entry in entries)
-            {
-                if (layout.IsShared(entry))
-                {
-                    output.Add(StripUnids(new XElement(entry.Right!)));
-                    continue;
-                }
-                if (entry.Left is not null)
-                    output.Add(new XElement(W.del, state.RevisionAttributes(), StripUnids(new XElement(entry.Left))));
-                if (entry.Right is not null)
-                    output.Add(new XElement(W.ins, state.RevisionAttributes(), StripUnids(new XElement(entry.Right))));
-            }
-            return output;
-        }
+        List<XElement> Render(List<MarkerEntry> entries) => RenderMarkerEntries(entries, layout.IsShared, state);
 
         var plan = new BlockMarkerPlan();
         foreach (var (g, entries) in layout.GapStart)
@@ -245,10 +230,15 @@ internal static partial class IrMarkupRenderer
         IReadOnlyList<IrCompositeOp> ops, IrDocument baseIr, IReadOnlyList<IrDocument> reviewerIrs,
         IReadOnlyList<IReadOnlyList<IrEditOp>>? reviewerOps, IReadOnlyList<string> authors, RenderState state)
     {
-        // Without reviewer ops only the base's markers are placed: none between its blocks, nothing to do.
-        if (reviewerOps is null &&
-            !(ops.Select(o => SourceElement(o.Op.LeftAnchor, baseIr)?.Parent).FirstOrDefault(p => p is not null) is { } stream &&
-              stream.Elements().Any(IsBlockLevelMarker)))
+        // Nothing to place when the base has no marker between these blocks and no reviewer has one between
+        // theirs: decide that before resolving every op.
+        bool baseHasMarkers =
+            ops.Select(o => SourceElement(o.Op.LeftAnchor, baseIr)?.Parent).FirstOrDefault(p => p is not null) is { } stream &&
+            stream.Elements().Any(IsBlockLevelMarker);
+        var layouts = new MarkerLayout?[reviewerOps?.Count ?? 0];
+        for (int r = 0; r < layouts.Length && r < reviewerIrs.Count; r++)
+            layouts[r] = ComputeMarkerLayout(reviewerOps![r], baseIr, reviewerIrs[r]);
+        if (!baseHasMarkers && layouts.All(l => l is null))
             return null;
         var baseBlocks = ops.Select(o => SourceElement(o.Op.LeftAnchor, baseIr) is { } el
             ? new List<XElement> { el } : new List<XElement>()).ToArray();
@@ -273,11 +263,11 @@ internal static partial class IrMarkupRenderer
             list.Add((reviewer, marker));
         }
 
-        for (int r = 0; reviewerOps is not null && r < reviewerOps.Count && r < reviewerIrs.Count; r++)
+        for (int r = 0; r < layouts.Length; r++)
         {
-            var rops = reviewerOps[r];
-            if (ComputeMarkerLayout(rops, baseIr, reviewerIrs[r]) is not { } layout)
+            if (layouts[r] is not { } layout)
                 continue;
+            var rops = reviewerOps![r];
             var two = layout.TwoSidedOps;
             int reviewer = r;
             void Take(MarkerEntry entry, Dictionary<int, List<(int, XElement)>> map, int position)
@@ -341,6 +331,166 @@ internal static partial class IrMarkupRenderer
         }
         state.AuthorOverride = savedAuthor;
         return plan;
+    }
+
+    /// <summary>
+    /// Put both sides' block-level markers into a block container the renderer emitted as one side's copy
+    /// because the IR found the two equal: an unchanged table, row, cell or block wrapper. The IR leaves markers
+    /// out (rule N3), so a container whose only difference is a bookmark or comment range between its blocks
+    /// pairs equal and is cloned from the revised document, which loses the original's markers and leaves the
+    /// revised document's bare. Equal containers have the same blocks in the same order, so the k-th block of
+    /// each side is the same block: each boundary's markers are merged as <see cref="PlanBlockLevelMarkers"/>
+    /// merges a gap boundary, replacing the copy's own, and nested tables and wrappers are visited the same way.
+    /// Containers whose shapes do not line up (a copy carrying preserved input revisions) are left as emitted.
+    /// </summary>
+    internal static void ReconcileEqualContainerMarkers(XElement emitted, XElement? left, XElement? right, RenderState state)
+    {
+        if (left is null || right is null || ReferenceEquals(left, right) ||
+            !left.Descendants().Any(IsBlockLevelMarker) && !right.Descendants().Any(IsBlockLevelMarker))
+            return;
+        var entries = new List<(XElement Stream, int Boundary, List<MarkerEntry> Entries)>();
+        CollectEqualStreamMarkers(emitted, left, right, entries);
+        if (entries.Count == 0)
+            return;
+
+        var unmatched = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in entries.SelectMany(e => e.Entries))
+            if (entry.Left is null || entry.Right is null)
+                unmatched.Add(MarkerIdentity(entry.Left ?? entry.Right!));
+        if (unmatched.Count == 0)
+            return; // every marker matched: the copy already holds both sides' markers
+        foreach (var group in entries.GroupBy(e => e.Stream))
+        {
+            var stream = group.Key;
+            var blocks = stream.Elements().Where(IsBlockContent).ToList();
+            stream.Elements().Where(IsBlockLevelMarker).Remove();
+            foreach (var (_, boundary, list) in group)
+            {
+                var rendered = RenderMarkerEntries(list, entry => entry.Left is not null && entry.Right is not null &&
+                    !unmatched.Contains(MarkerIdentity(entry.Right)), state);
+                if (boundary < blocks.Count)
+                    blocks[boundary].AddBeforeSelf(rendered);
+                else if (blocks.Count > 0)
+                    blocks[^1].AddAfterSelf(rendered);
+                else
+                    stream.Add(rendered);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The output keeps the original's copy of every note the comparison did not change, so a note whose only
+    /// difference is a bookmark or comment range between its blocks (invisible to the IR, rule N3) kept the
+    /// original's markers on accept too. A note the comparison left alone has the same id in both documents (a
+    /// renumbered one gets a diff), so each such note is reconciled against the revised document's note of that
+    /// id, as an equal container is (<see cref="ReconcileEqualContainerMarkers"/>).
+    /// </summary>
+    private static void ReconcileUnchangedNoteMarkers(
+        MainDocumentPart main, MainDocumentPart? rightMain, IReadOnlyList<IrNoteDiff>? noteOps, RenderState state)
+    {
+        foreach (var (part, rightPart, name, kind) in new (OpenXmlPart?, OpenXmlPart?, XName, IrNoteKind)[]
+                 {
+                     (main.FootnotesPart, rightMain?.FootnotesPart, W.footnote, IrNoteKind.Footnote),
+                     (main.EndnotesPart, rightMain?.EndnotesPart, W.endnote, IrNoteKind.Endnote),
+                 })
+        {
+            if (part?.GetXDocument().Root is not { } root || rightPart?.GetXDocument().Root is not { } rightRoot ||
+                !root.Descendants().Any(IsBlockLevelMarker) && !rightRoot.Descendants().Any(IsBlockLevelMarker))
+                continue;
+            var touched = (noteOps ?? Array.Empty<IrNoteDiff>()).Where(d => d.Kind == kind)
+                .SelectMany(d => new[] { d.NoteId, d.LeftNoteId }).OfType<string>().ToHashSet(StringComparer.Ordinal);
+            var rightById = rightRoot.Elements(name).Where(n => n.Attribute(W.id) is not null)
+                .GroupBy(n => (string)n.Attribute(W.id)!).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+            bool changed = false;
+            foreach (var note in root.Elements(name).ToList())
+            {
+                if ((string?)note.Attribute(W.id) is not { } id || touched.Contains(id) ||
+                    !rightById.TryGetValue(id, out var rightNote))
+                    continue;
+                var before = note.ToString(SaveOptions.DisableFormatting);
+                ReconcileEqualContainerMarkers(note, new XElement(note), rightNote, state);
+                changed |= note.ToString(SaveOptions.DisableFormatting) != before;
+            }
+            if (changed)
+                part.PutXDocument();
+        }
+    }
+
+    /// <summary>The merged markers at each block boundary of every block stream inside an equal container pair
+    /// (see <see cref="ReconcileEqualContainerMarkers"/>), for the boundaries where the sides differ.</summary>
+    private static void CollectEqualStreamMarkers(XElement emitted, XElement left, XElement right,
+        List<(XElement Stream, int Boundary, List<MarkerEntry> Entries)> sink)
+    {
+        if (emitted.Name != left.Name || emitted.Name != right.Name)
+            return;
+        if (emitted.Name == W.tbl || emitted.Name == W.tr)
+        {
+            var child = emitted.Name == W.tbl ? W.tr : W.tc;
+            var (e, l, r) = (emitted.Elements(child).ToList(), left.Elements(child).ToList(), right.Elements(child).ToList());
+            if (e.Count == l.Count && e.Count == r.Count)
+                for (int i = 0; i < e.Count; i++)
+                    CollectEqualStreamMarkers(e[i], l[i], r[i], sink);
+            return;
+        }
+        var stream = emitted.Name == W.sdt ? emitted.Element(W.sdtContent) : emitted;
+        var leftStream = left.Name == W.sdt ? left.Element(W.sdtContent) : left;
+        var rightStream = right.Name == W.sdt ? right.Element(W.sdtContent) : right;
+        if (stream is null || leftStream is null || rightStream is null ||
+            !(emitted.Name == W.tc || emitted.Name == W.sdt || emitted.Name == W.customXml ||
+              emitted.Name == W.footnote || emitted.Name == W.endnote))
+            return;
+        // A copy holding a revision wrapper between its blocks (preserved input revisions) is not a plain clone.
+        if (stream.Elements().Any(c => c.Name == W.ins || c.Name == W.del))
+            return;
+
+        static (List<XElement> Blocks, List<List<XElement>> Before) Split(XElement s)
+        {
+            var blocks = new List<XElement>();
+            var before = new List<List<XElement>> { new() };
+            foreach (var c in s.Elements())
+            {
+                if (IsBlockLevelMarker(c))
+                    before[^1].Add(c);
+                else if (IsBlockContent(c))
+                {
+                    blocks.Add(c);
+                    before.Add(new List<XElement>());
+                }
+            }
+            return (blocks, before);
+        }
+        var (eb, _) = Split(stream);
+        var (lb, lm) = Split(leftStream);
+        var (rb, rm) = Split(rightStream);
+        if (eb.Count != lb.Count || eb.Count != rb.Count)
+            return;
+        for (int k = 0; k <= eb.Count; k++)
+            if (lm[k].Count > 0 || rm[k].Count > 0)
+                sink.Add((stream, k, MergeMarkers(lm[k], rm[k])));
+        for (int k = 0; k < eb.Count; k++)
+            if (eb[k].Name != W.p)
+                CollectEqualStreamMarkers(eb[k], lb[k], rb[k], sink);
+    }
+
+    /// <summary>Render merged marker entries: a shared one bare (the revised document's copy), any other as its
+    /// side's revision.</summary>
+    private static List<XElement> RenderMarkerEntries(IEnumerable<MarkerEntry> entries, Func<MarkerEntry, bool> isShared,
+        RenderState state)
+    {
+        var output = new List<XElement>();
+        foreach (var entry in entries)
+        {
+            if (isShared(entry))
+            {
+                output.Add(StripUnids(new XElement(entry.Right!)));
+                continue;
+            }
+            if (entry.Left is not null)
+                output.Add(new XElement(W.del, state.RevisionAttributes(), StripUnids(new XElement(entry.Left))));
+            if (entry.Right is not null)
+                output.Add(new XElement(W.ins, state.RevisionAttributes(), StripUnids(new XElement(entry.Right))));
+        }
+        return output;
     }
 
     /// <summary>The source blocks an op consumes on each side, in document order.</summary>

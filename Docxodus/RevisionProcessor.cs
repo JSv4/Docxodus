@@ -2706,6 +2706,12 @@ namespace Docxodus
                         looseBefore.TryGetValue(block, out var loose)
                             ? loose.Select(AcceptDeletedAndMoveFromParagraphMarksTransform)
                             : Enumerable.Empty<object?>();
+                    // The block's own output, after the loose children in front of it; just the block when it has
+                    // none, which is every block of a stream with no loose child.
+                    IEnumerable<object?> LooseThen(XElement block, object? output) =>
+                        looseBefore.TryGetValue(block, out var loose)
+                            ? loose.Select(AcceptDeletedAndMoveFromParagraphMarksTransform).Append(output)
+                            : new[] { output };
 
                     var groupedParagraphs = zipped
                         .GroupAdjacent(z => z.GroupingInfo.GroupingKey);
@@ -2727,7 +2733,7 @@ namespace Docxodus
                                     .ToList();
                                 var tableMembers = g
                                     .Where(z => z.BlockLevelContent.ThisBlockContentElement!.Name == W.tbl)
-                                    .SelectMany(z => Loose(z.BlockLevelContent.ThisBlockContentElement!).Append(new XElement(
+                                    .SelectMany(z => LooseThen(z.BlockLevelContent.ThisBlockContentElement!, new XElement(
                                         z.BlockLevelContent.ThisBlockContentElement!.Name,
                                         z.BlockLevelContent.ThisBlockContentElement!.Attributes(),
                                         z.BlockLevelContent.ThisBlockContentElement!.Nodes()
@@ -2747,7 +2753,12 @@ namespace Docxodus
                                     if (onlyDeletedBefore)
                                         leadingLoose.AddRange(loose);
                                     else
-                                        innerLoose[k] = loose;
+                                    {
+                                        // Only paragraph content goes inside; anything a paragraph cannot hold
+                                        // (w:altChunk) stays in front of the merged paragraph.
+                                        innerLoose[k] = loose.Where(IsParagraphContent).ToList();
+                                        leadingLoose.AddRange(loose.Where(l => !IsParagraphContent(l)));
+                                    }
                                     onlyDeletedBefore &= AllParaContentIsDeleted(member);
                                 }
                                 tableMembers.InsertRange(0, leadingLoose.OfType<object>());
@@ -2795,19 +2806,18 @@ namespace Docxodus
                             }
                             else
                             {
-                                return g.SelectMany(z =>
-                                {
-                                    // A block custom-XML wrapper is a block container itself: transform the
-                                    // wrapper, not just its children, so its paragraph marks are processed
-                                    // inside it and its w:customXmlPr is kept.
-                                    var block = z.BlockLevelContent.ThisBlockContentElement!;
-                                    if (block.Name == W.customXml)
-                                        return Loose(block).Append(AcceptDeletedAndMoveFromParagraphMarksTransform(block));
-                                    var newEle = new XElement(block.Name,
+                                // A block custom-XML wrapper is a block container itself: transform the
+                                // wrapper, not just its children, so its paragraph marks are processed
+                                // inside it and its w:customXmlPr is kept.
+                                static object? Output(XElement block) => block.Name == W.customXml
+                                    ? AcceptDeletedAndMoveFromParagraphMarksTransform(block)
+                                    : new XElement(block.Name,
                                         block.Attributes(),
                                         block.Nodes().Select(n => AcceptDeletedAndMoveFromParagraphMarksTransform(n)));
-                                    return Loose(block).Append(newEle);
-                                });
+                                if (looseBefore.Count == 0)
+                                    return g.Select(z => Output(z.BlockLevelContent.ThisBlockContentElement!));
+                                return g.SelectMany(z => LooseThen(z.BlockLevelContent.ThisBlockContentElement!,
+                                    Output(z.BlockLevelContent.ThisBlockContentElement!)));
                             }
                         }),
                         looseTrailing.Select(AcceptDeletedAndMoveFromParagraphMarksTransform),
@@ -2832,6 +2842,22 @@ namespace Docxodus
         /// the body's final <c>w:sectPr</c> are not among them: the rebuild places those itself.
         /// </summary>
         private static readonly Dictionary<XElement, List<XElement>> NoLooseChildren = new();
+        private static readonly List<XElement> NoTrailingChildren = new();
+
+        /// <summary>Whether a block stream's loose child may sit inside a paragraph (<c>CT_P</c> content: range
+        /// markers, revision wrappers, permission and proofing marks, math), so a paragraph merged across it on
+        /// accept can hold it. A <c>w:altChunk</c> cannot.</summary>
+        private static bool IsParagraphContent(object? loose) =>
+            loose is XElement e &&
+            (e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd || e.Name == W.commentRangeStart ||
+             e.Name == W.commentRangeEnd || e.Name == W.permStart || e.Name == W.permEnd || e.Name == W.proofErr ||
+             e.Name == W.ins || e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveTo ||
+             e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd || e.Name == W.moveToRangeStart ||
+             e.Name == W.moveToRangeEnd || e.Name == W.customXmlInsRangeStart || e.Name == W.customXmlInsRangeEnd ||
+             e.Name == W.customXmlDelRangeStart || e.Name == W.customXmlDelRangeEnd ||
+             e.Name == W.customXmlMoveFromRangeStart || e.Name == W.customXmlMoveFromRangeEnd ||
+             e.Name == W.customXmlMoveToRangeStart || e.Name == W.customXmlMoveToRangeEnd ||
+             e.Name == M.oMath || e.Name == M.oMathPara);
 
         private static (Dictionary<XElement, List<XElement>> Before, List<XElement> Trailing) LooseChildrenOfBlockStream(
             XElement container)
@@ -2862,7 +2888,7 @@ namespace Docxodus
                     pending = null;
                 }
             }
-            return (before ?? NoLooseChildren, pending ?? new List<XElement>());
+            return (before ?? NoLooseChildren, pending ?? NoTrailingChildren);
         }
 
         /// <summary>
