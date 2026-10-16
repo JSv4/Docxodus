@@ -334,3 +334,104 @@ export function generateTrackedRevisionDocx() {
     },
   ]);
 }
+
+export function exactRowCell(body, properties = "") {
+  return `<w:tc><w:tcPr><w:tcW w:w="3600" w:type="dxa"/>${properties}</w:tcPr>${body}</w:tc>`;
+}
+
+export function exactRowParagraph(text, properties = "", spacing = 'w:line="240" w:lineRule="auto"') {
+  return `<w:p><w:pPr>${properties}<w:spacing w:before="0" w:after="0" ${spacing}/></w:pPr>`
+    + `<w:r><w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
+}
+
+/**
+ * A table whose first row has an exact height (`w:hRule="exact"`) too short for its first cell, so
+ * the cell's second paragraph is clipped as Word clips it. Paragraphs before and after the table
+ * and an ordinary second row pin the order of the PDF's text. The options move the table to other
+ * page geometries and cell shapes:
+ * - `pageWidth`, `pageHeight`, `margins` (twips) and `leadingParagraphs` (filler paragraphs before the table);
+ * - `vAlign` for the clipped cell, `rowHeight` (twips) for the exact row, `spacing` for every paragraph;
+ * - `firstRow`/`secondRow` replace a row's `<w:tr>` outright (`exactRowCell`, `exactRowParagraph` build them);
+ * - `extraParts`/`extraRelationships`/`extraContentTypes` add media the replaced rows refer to.
+ */
+export function generateExactRowOverflowDocx(options = {}) {
+  const {
+    pageWidth = 12240,
+    pageHeight = 15840,
+    margins = { top: 1440, right: 1440, bottom: 1440, left: 1440 },
+    leadingParagraphs = 0,
+    vAlign,
+    rowHeight = 360,
+    spacing,
+    extraParts = [],
+    extraRelationships = "",
+    extraContentTypes = "",
+  } = options;
+  const p = (text) => exactRowParagraph(text, "", spacing);
+  const borders = ["top", "left", "bottom", "right", "insideH", "insideV"]
+    .map((side) => `<w:${side} w:val="single" w:sz="6" w:color="444444"/>`).join("");
+  const alignment = vAlign ? `<w:vAlign w:val="${vAlign}"/>` : "";
+  const firstRow = options.firstRow ?? `<w:tr><w:trPr><w:trHeight w:val="${rowHeight}" w:hRule="exact"/></w:trPr>`
+    + exactRowCell(p("Birch exact record.") + p("Overflow Birch continuation line."), alignment)
+    + exactRowCell(p("Neighbour cell."))
+    + `</w:tr>`;
+  const secondRow = options.secondRow ?? `<w:tr>${exactRowCell(p("Following row text."))}`
+    + `${exactRowCell(p("Second column."))}</w:tr>`;
+  const filler = Array.from({ length: leadingParagraphs }, (_, index) =>
+    p(`Filler paragraph ${index + 1} keeps the table further down the document.`)).join("");
+  return storedZip([
+    {
+      name: "[Content_Types].xml",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>${extraContentTypes}
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+</Types>`),
+    },
+    {
+      name: "_rels/.rels",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="${R_NS}/officeDocument" Target="word/document.xml"/>
+</Relationships>`),
+    },
+    {
+      name: "word/_rels/document.xml.rels",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="${R_NS}/styles" Target="styles.xml"/>${extraRelationships}
+</Relationships>`),
+    },
+    {
+      name: "word/styles.xml",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="${W_NS}">
+  <w:docDefaults><w:rPrDefault><w:rPr>
+    <w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif" w:cs="Liberation Serif"/>
+    <w:sz w:val="24"/><w:szCs w:val="24"/>
+  </w:rPr></w:rPrDefault></w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+</w:styles>`),
+    },
+    {
+      name: "word/document.xml",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"
+  xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>
+  ${filler}${p("Opening ledger paragraph.")}
+  <w:tbl><w:tblPr><w:tblW w:w="7200" w:type="dxa"/><w:tblBorders>${borders}</w:tblBorders></w:tblPr>
+    <w:tblGrid><w:gridCol w:w="3600"/><w:gridCol w:w="3600"/></w:tblGrid>
+    ${firstRow}
+    ${secondRow}
+  </w:tbl>
+  ${p("Closing ledger paragraph.")}
+  <w:sectPr><w:pgSz w:w="${pageWidth}" w:h="${pageHeight}"/><w:pgMar w:top="${margins.top}" w:right="${margins.right}" w:bottom="${margins.bottom}" w:left="${margins.left}" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>
+</w:body></w:document>`),
+    },
+    ...extraParts,
+  ]);
+}

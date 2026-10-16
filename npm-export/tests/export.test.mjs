@@ -25,6 +25,9 @@ import {
 import { canonicalJson } from "../dist/canonical.js";
 import { pdfLineText, joinHyphenatedLines } from "./pdf-line-text.mjs";
 import {
+  exactRowCell,
+  exactRowParagraph,
+  generateExactRowOverflowDocx,
   generateLongFootnoteDocx,
   generateMixedSectionDocx,
   generateTrackedRevisionDocx,
@@ -118,6 +121,104 @@ async function inspectPdf(bytes) {
     marked: markInfo?.Marked === true,
     pages,
   };
+}
+
+/**
+ * One page's text three ways: in content-stream order, in tagged-structure order, and the rectangle
+ * of every clip the page sets (as `[left, top, right, bottom]` in the page's content units).
+ */
+async function inspectPdfPageOrder(bytes, pageNumber) {
+  const loading = getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, useSystemFonts: true });
+  const pdf = await loading.promise;
+  try {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent({ includeMarkedContent: true });
+    const textByContentId = new Map();
+    const open = [];
+    const streamText = [];
+    for (const item of content.items) {
+      if (item.type === "beginMarkedContentProps" || item.type === "beginMarkedContent") {
+        open.push(item.id);
+      } else if (item.type === "endMarkedContent") {
+        open.pop();
+      } else if ("str" in item) {
+        streamText.push(item.str);
+        const id = open.at(-1);
+        if (id !== undefined) textByContentId.set(id, (textByContentId.get(id) ?? "") + item.str);
+      }
+    }
+    const roles = [];
+    const structureText = [];
+    const walk = (node, ancestors) => {
+      if (node.type === "content") {
+        const text = textByContentId.get(node.id);
+        if (text?.trim()) {
+          structureText.push(text);
+          roles.push({ text: text.trim(), ancestors });
+        }
+        return;
+      }
+      for (const child of node.children ?? []) walk(child, [...ancestors, node.role]);
+    };
+    walk(await page.getStructTree(), []);
+    const operators = await page.getOperatorList();
+    const clipRects = [];
+    for (let index = 0; index < operators.fnArray.length; index++) {
+      if (operators.fnArray[index] !== OPS.clip && operators.fnArray[index] !== OPS.eoClip) continue;
+      const path = operators.argsArray.slice(index + 1).find((_, offset) =>
+        operators.fnArray[index + 1 + offset] === OPS.constructPath);
+      if (path) clipRects.push(Array.from(path.at(-1)));
+    }
+    const normalize = (parts) => parts.join(" ").replace(/\s+/g, " ").trim();
+    return { streamText: normalize(streamText), structureText: normalize(structureText), roles, clipRects };
+  } finally {
+    await loading.destroy();
+  }
+}
+
+/**
+ * Lay the standalone HTML out twice, with each exact-row SVG rewrite in place and then undone (its
+ * clip box moved back with the converter's own overflow clip), and return every element whose
+ * page-relative box differs. The rewrite must not move anything.
+ */
+async function exactRowRewriteLayoutShifts(html) {
+  const context = await browser.newContext({ serviceWorkers: "block", bypassCSP: true });
+  try {
+    const page = await context.newPage();
+    await page.setContent(html, { waitUntil: "load" });
+    return await page.evaluate(() => {
+      const snapshot = () => Array.from(document.querySelectorAll(".page-box")).flatMap((pageBox) => {
+        const origin = pageBox.getBoundingClientRect();
+        return Array.from(pageBox.querySelectorAll("[data-source-anchor-id], [data-docx-exact-row-cell]"))
+          .map((element) => {
+            const rect = element.getBoundingClientRect();
+            return {
+              id: element.getAttribute("data-source-anchor-id") ?? "clip",
+              box: [rect.left - origin.left, rect.top - origin.top, rect.width, rect.height],
+            };
+          });
+      });
+      const rewritten = snapshot();
+      const svgs = Array.from(document.querySelectorAll("svg[data-docx-exact-row-text]"));
+      for (const svg of svgs) {
+        const clip = svg.querySelector("[data-docx-exact-row-cell]");
+        for (const property of ["width", "display", "overflow", "overflow-clip-margin"])
+          clip.style.removeProperty(property);
+        svg.replaceWith(clip);
+      }
+      const original = snapshot();
+      return {
+        undone: svgs.length,
+        shifts: original.flatMap((entry, index) => {
+          const other = rewritten[index];
+          return entry.id === other.id && entry.box.every((value, axis) => value === other.box[axis])
+            ? [] : [{ id: entry.id, original: entry.box, rewritten: other.box }];
+        }),
+      };
+    });
+  } finally {
+    await context.close();
+  }
 }
 
 function assertPdfBoxes(inspection, expectedPages, tolerance = 0.5) {
@@ -738,6 +839,127 @@ describe("@docxodus/export", { concurrency: false }, () => {
     await writeFile(join(successArtifacts, "long-footnote.html"), result.html);
     await writeJson(join(successArtifacts, "long-footnote-page-map.json"), result.pageMap);
     await writeJson(join(successArtifacts, "long-footnote-pdf-inspection.json"), inspection);
+  });
+
+  // Issue #1140: Chromium's PDF writer keeps a glyph only when it meets the bounding rectangle of the
+  // clip it is drawn under, so a line that an exact-height row cuts through used to survive as the
+  // letters whose ascenders reach the row ("fl h l"). The clipped line must instead appear whole,
+  // once, in reading order, in both the content stream and the tagged structure.
+  test("keeps text an exact-height row clips whole and in order in the PDF text layer", {
+    timeout: 180_000,
+  }, async () => {
+    const expected = "Opening ledger paragraph. Birch exact record. Overflow Birch continuation line. "
+      + "Neighbour cell. Following row text. Second column. Closing ledger paragraph.";
+    const result = await renderDocxArtifacts(generateExactRowOverflowDocx(), {
+      ...baseOptions,
+      browser,
+      outputs: ["html", "pdf"],
+    });
+    const order = await inspectPdfPageOrder(result.pdf, 1);
+    assert.equal(order.streamText, expected);
+    assert.equal(order.structureText, expected);
+    const hidden = order.roles.find((entry) => entry.text === "Overflow Birch continuation line.");
+    assert.ok(hidden, "the clipped paragraph is tagged");
+    assert.equal(hidden.ancestors.at(-2), "P", `clipped paragraph tagged as ${hidden.ancestors.join(" > ")}`);
+    assert.ok(hidden.ancestors.includes("TD") && !hidden.ancestors.includes("Figure"));
+    // Only the cell whose content overflows its row is rewritten.
+    assert.equal(result.html.match(/data-docx-exact-row-text/g)?.length, 1);
+
+    const fitting = await renderDocxArtifacts(generateExactRowOverflowDocx({ rowHeight: 720 }), {
+      ...baseOptions,
+      browser,
+      outputs: ["html", "pdf"],
+    });
+    assert.equal(fitting.html.match(/data-docx-exact-row-text/g), null);
+    assert.equal((await inspectPdfPageOrder(fitting.pdf, 1)).streamText, expected);
+
+    // At-least line spacing leaves every run unpositioned, so all of the page's text paints with the
+    // in-flow content; the rewritten cell must paint there too, not after the rest of the page.
+    const unpositioned = await renderDocxArtifacts(
+      generateExactRowOverflowDocx({ spacing: 'w:line="300" w:lineRule="atLeast"' }),
+      { ...baseOptions, browser, outputs: ["html", "pdf"] },
+    );
+    assert.equal(unpositioned.html.match(/data-docx-exact-row-text/g)?.length, 1);
+    const unpositionedOrder = await inspectPdfPageOrder(unpositioned.pdf, 1);
+    assert.equal(unpositionedOrder.streamText, expected);
+    assert.equal(unpositionedOrder.structureText, expected);
+
+    await writeFile(join(successArtifacts, "exact-row-overflow.pdf"), result.pdf);
+    await writeFile(join(successArtifacts, "exact-row-overflow.html"), result.html);
+  });
+
+  // The rewrite that keeps clipped exact-row text whole moves the clipped content into an inline SVG,
+  // which Chromium paints at a whole pixel; the export takes the fraction back so the content and the
+  // row's clip land exactly where the row's own overflow clip put them. A cell beside it that is not
+  // rewritten is the reference: same row, same clip, same first line. The margins and the A4 page 2
+  // put the row at a fractional pixel on both axes; a pinned Chromium that snapped differently would
+  // move the rewritten cell by that fraction.
+  test("places clipped exact-row content where the row's own clip put it", {
+    timeout: 180_000,
+  }, async () => {
+    const nestedTable = `<w:tbl><w:tblPr><w:tblW w:w="3000" w:type="dxa"/><w:tblBorders>`
+      + `<w:top w:val="single" w:sz="4"/><w:bottom w:val="single" w:sz="4"/><w:insideH w:val="single" w:sz="4"/>`
+      + `</w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="3000"/></w:tblGrid>`
+      + `<w:tr>${exactRowCell(exactRowParagraph("Nested first line."))}</w:tr>`
+      + `<w:tr>${exactRowCell(exactRowParagraph("Nested second line."))}</w:tr></w:tbl>`;
+    const geometries = [
+      { name: "letter", options: {}, page: 1 },
+      {
+        name: "nested table",
+        options: {
+          firstRow: `<w:tr><w:trPr><w:trHeight w:val="860" w:hRule="exact"/></w:trPr>`
+            + exactRowCell(nestedTable + exactRowParagraph("Trailing nested cell line."))
+            + exactRowCell(exactRowParagraph("Neighbour cell.")) + "</w:tr>",
+        },
+        page: 1,
+        // The nested table's border puts its first line lower than the neighbour's.
+        sameFirstBaseline: false,
+      },
+      {
+        name: "A4 page 2, odd margins, bottom-aligned",
+        options: {
+          pageWidth: 11906,
+          pageHeight: 16838,
+          margins: { top: 1001, right: 1117, bottom: 1237, left: 1333 },
+          leadingParagraphs: 61,
+          vAlign: "bottom",
+        },
+        page: 2,
+      },
+    ];
+    for (const { name, options, page, sameFirstBaseline = true } of geometries) {
+      const result = await renderDocxArtifacts(generateExactRowOverflowDocx(options), {
+        ...baseOptions,
+        browser,
+        outputs: ["html", "pdf"],
+      });
+      assert.equal(result.pageCount, page, `${name}: the table lands on page ${page}`);
+      if (sameFirstBaseline) {
+        const inspection = await inspectPdf(result.pdf);
+        const run = (text) => inspection.pages[page - 1].textRuns.find((entry) => entry.text === text);
+        const clipped = run("Birch exact record.");
+        const neighbour = run("Neighbour cell.");
+        assert.ok(clipped && neighbour, `${name}: both first lines are in the PDF`);
+        // 3600 twips separate the two cells' text; their baselines are the row's.
+        assert.ok(Math.abs(clipped.transform[5] - neighbour.transform[5]) <= 0.01,
+          `${name}: baseline ${clipped.transform[5]} != ${neighbour.transform[5]}`);
+        assert.ok(Math.abs(neighbour.transform[4] - clipped.transform[4] - 180) <= 0.01,
+          `${name}: cell offset ${neighbour.transform[4] - clipped.transform[4]} != 180pt`);
+      }
+
+      // The rewritten cell's clip is the neighbour's, 180pt (750 device units at 300 dpi) to the left.
+      const { clipRects } = await inspectPdfPageOrder(result.pdf, page);
+      const height = (rect) => rect[3] - rect[1];
+      const neighbourClip = clipRects.find((rect) =>
+        clipRects.some((other) => Math.abs(rect[0] - other[0] - 750) <= 0.01
+          && Math.abs(rect[1] - other[1]) <= 0.01 && Math.abs(height(rect) - height(other)) <= 0.01));
+      assert.ok(neighbourClip, `${name}: no clip matches the neighbour cell's: ${JSON.stringify(clipRects)}`);
+
+      // Nothing on the page moves, not even by a layout unit: undoing the rewrite lays out the same.
+      const { undone, shifts } = await exactRowRewriteLayoutShifts(result.html);
+      assert.equal(undone, 1, `${name}: one cell was rewritten`);
+      assert.deepEqual(shifts, [], `${name}: the rewrite moved content`);
+    }
   });
 
   test("PDF text extraction is predictable for each review profile", { timeout: 180_000 }, async () => {
