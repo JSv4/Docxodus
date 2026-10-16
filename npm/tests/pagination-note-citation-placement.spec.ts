@@ -30,15 +30,17 @@ function lines(prefix: string, count: number): string {
  * A note of `lineCount` lines. `tabLed` opens its paragraph the way the converter writes the
  * FootnoteText style's tab after the number: an empty inline-flex box of block children.
  */
-function note(id: string, lineCount: number, tabLed = false): string {
+function note(id: string, lineCount: number, tabLed = false, numberInside = false): string {
   const tab = tabLed
     ? '<span style="display:inline-flex"><span style="display:block;white-space:nowrap"></span>'
       + '<span data-docx-tab="left" style="display:block;width:18pt"></span></span>'
     : '';
+  // A note whose number is a run of its first paragraph, as Word stores it.
+  const number = `<span class="footnote-number">${id}</span>`;
   return `
     <div class="footnote-item" data-footnote-id="${id}">
-      <span class="footnote-number">${id}</span>
-      <div class="footnote-content"><p>${tab}${lines(`note ${id} line`, lineCount)}</p></div>
+      ${numberInside ? '' : number}
+      <div class="footnote-content"><p>${numberInside ? number : ''}${tab}${lines(`note ${id} line`, lineCount)}</p></div>
     </div>`;
 }
 
@@ -52,6 +54,8 @@ function staging(blocks: string, notes: string): string {
       body { font: 12pt/${LINE_PT}pt serif; }
       p, h4 { margin: 0; padding: 0; font: inherit; }
       .filler { height: ${LINE_PT * 15}pt; overflow: hidden; }
+      .filler10 { height: ${LINE_PT * 10}pt; overflow: hidden; }
+      td { padding: 0; font: inherit; }
     </style>
     <div id="staging">
       <div id="pagination-footnote-registry">${notes}</div>
@@ -219,6 +223,53 @@ test.describe('Paginated note placement beside its citation', () => {
     expect(layout.body[0][0]).toBe('alpha1betagamma');
     expect(layout.referenceCount['1']).toBe(1);
     expect(layout.notePage['1']).toBe(1);
+  });
+
+  test('a citing line with two citations moves whole, never cut between them', async ({ page }) => {
+    // Note 2 cannot start beside the last line, which cites notes 1 and 2. Ending the head after
+    // the first citation would cut that line in two; the whole line moves instead.
+    const layout = await paginate(page, staging(
+      `<p class="filler10">filler</p><p>${lines('c', 4)}<br>c 5 x${reference('1')} y${reference('2')}</p>`
+        + `<p>${lines('after', 6)}</p>`,
+      note('1', 1) + note('2', 30)));
+
+    expect(layout.body.flat().some((text) => text.includes('c 5 x1 y2'))).toBe(true);
+  });
+
+  test('a citing paragraph is not moved away from the heading that keeps with it', async ({ page }) => {
+    // The paragraph keeps its lines together and its note cannot start beside it. Moving it
+    // would leave the keep-with-next heading alone at the foot of the page, so the note is
+    // deferred instead and the heading and paragraph stay together.
+    const layout = await paginate(page, staging(
+      `<p class="filler">filler</p><h4 data-keep-with-next="true">HEADING</h4>`
+        + `<p data-keep-lines="true">${lines('kept', 2)}<br>kept 3${reference('1')}</p><p>after</p>`,
+      note('1', 25)));
+
+    const headingPage = layout.body.findIndex((blocks) => blocks.includes('HEADING'));
+    expect(layout.body[headingPage].some((text) => text.startsWith('kept 1'))).toBe(true);
+  });
+
+  test('a table that cites a note stays on its page; the note follows', async ({ page }) => {
+    // Only a paragraph moves to its note's page. A table moved whole would leave half a page
+    // empty, so its note is deferred as before.
+    const rows = Array.from({ length: 9 }, (_, index) =>
+      `<tr><td>row ${index + 1}${index === 8 ? reference('1') : ''}</td></tr>`).join('');
+    const layout = await paginate(page, staging(
+      `<p class="filler10">filler</p><table style="border-collapse:collapse"><tbody>${rows}</tbody></table>`
+        + `<p>${lines('after', 6)}</p>`,
+      note('1', 6)));
+
+    expect(layout.body[0].join(' ')).toContain('row 9');
+  });
+
+  test('a note whose number sits inside its first paragraph still splits', async ({ page }) => {
+    // The number is a generic `footnote-number` run, without a reference-run marker.
+    const layout = await paginate(page, staging(
+      `<p>cites${reference('1')}</p><p>${lines('body', 10)}</p>`,
+      note('1', 30, true, true)));
+
+    expect(layout.notes[0]).toContain('note 1 line 1');
+    expect(layout.notes.slice(1).some((text) => text.includes('note 1 line 30'))).toBe(true);
   });
 
   test('a note that opens with a tab after its number continues on the next page', async ({ page }) => {

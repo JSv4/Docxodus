@@ -2517,6 +2517,43 @@ export class PaginationEngine {
   }
 
   /**
+   * Whether the text after `endpoint` begins a new visual line of the laid-out `paragraph`: the
+   * nearest glyph after it sits lower than the nearest glyph before it by more than half a line.
+   * A raised citation number in the middle of a line sits higher, so it stays on its line.
+   */
+  private startsVisualLine(paragraph: HTMLElement, endpoint: ParagraphFragmentEndpoint): boolean {
+    if (endpoint.consumeBreak) return true;
+    const glyph = (forward: boolean): DOMRect | null => {
+      const range = this.document.createRange();
+      range.selectNodeContents(paragraph);
+      if (forward) range.setStart(endpoint.node, endpoint.offset);
+      else range.setEnd(endpoint.node, endpoint.offset);
+      const walker = this.document.createTreeWalker(range.commonAncestorContainer, this.view.NodeFilter.SHOW_TEXT);
+      const texts: Text[] = [];
+      for (let node = walker.nextNode(); node; node = walker.nextNode())
+        if (range.intersectsNode(node)) texts.push(node as Text);
+      if (!forward) texts.reverse();
+      for (const text of texts) {
+        const start = text === range.startContainer ? range.startOffset : 0;
+        const end = text === range.endContainer ? range.endOffset : text.data.length;
+        for (let k = 0; k < end - start; k++) {
+          const index = forward ? start + k : end - 1 - k;
+          if (/\s/.test(text.data[index])) continue;
+          const character = this.document.createRange();
+          character.setStart(text, index);
+          character.setEnd(text, index + 1);
+          const rect = character.getBoundingClientRect();
+          if (rect.height > 0) return rect;
+        }
+      }
+      return null;
+    };
+    const before = glyph(false);
+    const after = glyph(true);
+    return !before || !after || after.top > before.top + before.height / 2;
+  }
+
+  /**
    * The boxes a paragraph opens with before its first text: its list marker, a note's number,
    * and any box that holds no text, such as the tab that follows either.
    */
@@ -2529,6 +2566,7 @@ export class PaginationEngine {
       }
       if (!(node instanceof this.view.HTMLElement)) continue;
       if (node.dataset.listMarker === "true" || node.dataset.noteRun === "true"
+          || node.classList.contains("footnote-number") || node.classList.contains("endnote-number")
           || !this.hasVisibleText(node.textContent ?? "")) {
         boxes.push(node);
         continue;
@@ -2611,6 +2649,8 @@ export class PaginationEngine {
     options: {
       emergencyGraphemeBreaks?: boolean;
       forceFirstOnNoFit?: boolean;
+      /** Break only where a visual line starts, never within a line. */
+      lineStartsOnly?: boolean;
     } = {},
   ): ParagraphSplitAttempt {
     const largestFit = (endpoints: ParagraphFragmentEndpoint[]) => {
@@ -2659,6 +2699,20 @@ export class PaginationEngine {
 
     let endpoints = this.paragraphFragmentEndpoints(paragraph);
     let best = largestFit(endpoints);
+    if (best && options.lineStartsOnly && !this.startsVisualLine(paragraph, best.endpoint)) {
+      // Fit is monotone in the head's length, so the nearest earlier endpoint that ends a line
+      // fits as well: it is the head without the partly-filled last line.
+      let index = endpoints.indexOf(best.endpoint) - 1;
+      while (index >= 0 && !this.startsVisualLine(paragraph, endpoints[index])) index--;
+      if (index < 0) {
+        best = null;
+      } else {
+        const headRange = this.document.createRange();
+        headRange.setStart(paragraph, 0);
+        headRange.setEnd(endpoints[index].node, endpoints[index].offset);
+        best = { endpoint: endpoints[index], head: this.createParagraphFragment(paragraph, headRange, true, false) };
+      }
+    }
     if (!best && options.emergencyGraphemeBreaks) {
       endpoints = this.paragraphFragmentEndpoints(paragraph, true);
       best = largestFit(endpoints);
@@ -2745,11 +2799,13 @@ export class PaginationEngine {
       }
 
       // Below the last citation, the head's own lines still compete with its notes for the page.
+      // A head whose notes do not start may still fit by ending earlier on the citing line, so a
+      // note-aware split breaks only where a line starts: the citing line moves whole.
       split = this.splitParagraphAtLargestFit(paragraph, (head) => {
         const measured = this.measureElement(head, dims, block.sectionIndex);
         return effectiveMarginTopPt + measured.heightPt <= headLimitPt
           && (!notesStart || notesStart(this.extractFootnoteRefs(head), measured.heightPt));
-      });
+      }, { lineStartsOnly: notesStart !== undefined });
     } finally {
       host?.remove();
     }
@@ -4370,8 +4426,8 @@ export class PaginationEngine {
         if (newFootnoteIds.length > 0 && blockSpaceWithoutFootnotes <= effectiveRemainingHeight) {
           // A note begins on the page that cites it. When a note this block cites cannot start
           // here even in the expanded band, the citing line moves to the next page: keep the
-          // paragraph's lines up to that citation here, or, when the block itself cannot be
-          // split (kept lines, a table), move it whole. Deferring the note instead separates it
+          // paragraph's lines up to that citation here, or, when the paragraph cannot be split
+          // (it keeps its lines together), move it whole. Deferring the note instead separates it
           // from its citation, and the deferred notes accumulate into pages that carry nothing
           // but notes. A paginator that splits no paragraph (the paginated editor) still defers:
           // moving every citing paragraph whole would cost more pages than Word's split does.
@@ -4394,7 +4450,10 @@ export class PaginationEngine {
               i--;
               continue;
             }
-            if (currentContent.length > 0) {
+            // Only a paragraph moves, and not away from a block that keeps with it: a table and
+            // a heading left alone at the foot of a page cost more than the deferred note.
+            if (currentContent.length > 0 && this.isWordParagraphElement(block.element)
+                && !blocks[i - 1]?.keepWithNext) {
               finishPage(block.sectionIndex);
               i--;
               continue;
