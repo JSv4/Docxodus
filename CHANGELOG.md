@@ -132,8 +132,9 @@ All notable changes to this project will be documented in this file.
 - Text that an exact-height table row (`w:hRule="exact"`) clips now stays whole in the exported
   PDF's text layer (issue #1140). Chromium's PDF writer kept only the letters of a clipped line
   that reached into the row, so search, copy and screen readers met word fragments such as
-  `fl h l`; the hidden line is now extracted once, whole and in reading order, as LibreOffice
-  writes it, while the row still shows only what fits. The trade-off: the hidden letters are now
+  `fl h l`; the hidden line is now extracted once and whole, as LibreOffice writes it, in
+  reading order in the tagged structure and in the content stream next to the cell's visible text,
+  while the row still shows only what fits. The trade-off: the hidden letters are now
   drawn (outside the clip), and a PDF rasterizer can tint the one pixel row the clip edge crosses
   where their tops touch it. In the cases measured that row differs by up to 145/255 at 96 dpi
   (about 100% zoom on screen) and 134/255 at 150 dpi, at most 7/255 at 300 dpi and not at all at

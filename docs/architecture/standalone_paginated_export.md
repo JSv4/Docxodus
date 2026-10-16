@@ -509,7 +509,7 @@ the row cuts through used to reach the text layer as the letters whose ascenders
 (`Overflow Birch continuation line.` extracted as `fl h l`). LibreOffice writes the whole line.
 
 `npm/src/exact-row-text.ts` runs on the final page tree, after `alignBaselinesToWord`. It moves each
-clip box whose content overflows into an inline `<svg>` → `<foreignObject>` clipped by an SVG
+clip box that hides some of its text into an inline `<svg>` → `<foreignObject>` clipped by an SVG
 `clipPath` that paints exactly the rectangle Chromium snaps the overflow clip to, plus zero-area
 spikes in all four directions that stretch the clip's bounding rectangle past any page. Every glyph
 then meets the bounds, so the hidden text is written once, whole, at its laid-out position; the
@@ -526,18 +526,34 @@ the cell a stacking context, which moves its text to the end of the page's conte
 - **Paint order.** The SVG root paints its content atomically, so the cell's text moves to the
   root's paint phase. Text in a positioned box (the relative offsets `alignBaselinesToWord` and
   exact line spacing put on runs) paints after all in-flow content of its stacking context, in tree
-  order; other text paints with the in-flow content. The root therefore takes `position: relative`
-  exactly when some non-blank text node in the clip box has a non-`static` ancestor below the clip
-  box, and stays `static` otherwise; either way the cell's text keeps its place in the content
-  stream. A cell mixing the two kinds was already split across both phases; it now paints in the
-  positioned phase at its place in tree order, and within it the unpositioned text still comes
-  before the positioned text, as the paint phases order them. In the tag tree the cell's paragraphs stay `P`
-  elements inside the `TD`, in order; the grouping between them, a `Div` before, is now `NonStruct`.
-- **Left alone.** A clip box whose content fits, and one holding an absolutely or fixed positioned
-  element, for which the `foreignObject` would become the containing block.
+  order; other text paints with the in-flow content. The root takes `position: relative` when some
+  non-blank text node in the clip box has a non-`static` ancestor below the clip box, and stays
+  `static` otherwise. So the cell paints where its text painted before: a cell whose text all shares
+  the phase of the text around it keeps its place in the content stream, but a cell whose text paints
+  in the other phase than the page's does not. On a page of unpositioned text (at-least spacing), a
+  cell with an exactly spaced, and so offset, first line paints after the rest of the page, as that
+  line already did; its hidden line now follows it there. The tag tree keeps reading order
+  regardless. Inside the root, a stacking context of its own, a cell with text in both phases gives
+  its unpositioned text an offset-free relative box, so the cell's own text is written in tree order.
+  In the tag tree the cell's paragraphs stay `P` elements inside the `TD`, in order; the grouping
+  between them, a `Div` before, is now `NonStruct`.
+- **Which cells.** Layout overflow is not hidden text: a line box includes the font's whole ascent
+  and descent, and a paragraph its spacing, so a one-line row a little shorter than its line, or a
+  paragraph's space after, overflows the clip box while every glyph shows. A clip box is rewritten
+  only when the clip edge passes some text line's baseline (below the baseline every glyph keeps the
+  part above it; a glyph drawn wholly below its baseline, such as an underscore, is not looked for),
+  or when a whole character lies beyond a side edge. Over the 12 repository documents with exact
+  rows that export (214 exact-row cells), no cell is rewritten; testing layout overflow instead
+  rewrote 47 of them and recovered no text.
+  A clip box holding an absolutely or fixed positioned element is left alone, because the
+  `foreignObject` would become its containing block.
+- **Clip id.** A Word bookmark's name becomes an HTML id verbatim and `url(#id)` resolves to the first
+  element with that id, so the `clipPath` id is one `getElementById` does not already return.
 - **Tests.** `npm-export/tests/export.test.mjs` checks stream and structure order for positioned and
-  unpositioned pages, and that only the overflowing cell is rewritten. A geometry test compares the
-  rewritten cell's baseline and PDF clip rectangle with its unrewritten neighbour's on Letter and on
+  unpositioned pages and a cell mixing both, that only a cell hiding text is rewritten (not a
+  one-line row shorter than its line, nor space after), and that a bookmark cannot capture the clip
+  id. A geometry test compares the rewritten cell's baseline and PDF clip rectangle with its
+  unrewritten neighbour's on Letter (top and middle aligned) and on
   page 2 of an A4 document with fractional margins, and lays the standalone HTML out with each
   rewrite undone to prove nothing moves. It depends on the pinned Chromium snapping SVG roots and
   overflow clips to the page box's pixel grid; a Chromium that changed either fails it.
