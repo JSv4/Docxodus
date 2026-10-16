@@ -715,6 +715,31 @@ public class BlockWrapperNestedDiffTests
         AssertFieldsSurviveRoundTrip(original, revised, DocxCompare.Compare(original, revised), "HC022");
     }
 
+    /// <summary>A Word-authored document whose block content control holds a heading, a prose paragraph, a
+    /// seven-row table and a prose paragraph (the pair under <c>TestFiles/Issue1143</c>, see its README): one
+    /// word edited inside the control is drawn as that word inside one copy of the control, through the
+    /// <see cref="DocxCompare"/> front door.</summary>
+    [Fact]
+    public void Compare_RealClauseControlWithOneWordEdited_DiffsInsideTheControl()
+    {
+        var original = new WmlDocument(Path.Combine(FixtureDir.FullName, "Issue1143/clause-control-original.docx"));
+        var revised = new WmlDocument(Path.Combine(FixtureDir.FullName, "Issue1143/clause-control-revised.docx"));
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        var body = Body(redline);
+        AssertSingleWrapperWithoutRangeMarkers(body, Wrapper.ContentControl);
+        Assert.Equal("only", string.Concat(body.Descendants(W.delText).Select(t => t.Value)).Trim());
+        Assert.Equal("just", string.Concat(body.Descendants(W.ins).Descendants(W.t).Select(t => t.Value)).Trim());
+        Assert.Equal(
+            new[] { (DocxDiffRevisionType.Inserted, "just"), (DocxDiffRevisionType.Deleted, "only") },
+            DocxDiff.GetRevisions(original, revised)
+                .Where(r => r.Type is DocxDiffRevisionType.Inserted or DocxDiffRevisionType.Deleted)
+                .Select(r => (r.Type, r.Text.Trim())).OrderBy(r => r.Item2));
+        AssertNoNewValidationErrors(redline, original, revised);
+        AssertRoundTrip(original, revised, redline, "Issue1143");
+    }
+
     /// <summary>The redline adds no validation error, accepts to <paramref name="revised"/> and rejects to
     /// <paramref name="original"/> block for block, and each view holds the field characters of its document.</summary>
     private static void AssertFieldsSurviveRoundTrip(WmlDocument original, WmlDocument revised, WmlDocument redline, string name)
