@@ -116,12 +116,14 @@ internal static class IrCompositeMerger
     /// </list>
     /// Every reviewer note diff also yields an <see cref="IrReviewerNoteIdMap"/> entry so the renderer can
     /// rewrite reviewer-sourced body references into the base-anchored output id space.
+    /// <paramref name="plannedScripts"/> are the reviewers' scripts after <see cref="ApplyMovePlan"/>, so a
+    /// move inside a note already carries its global move-group id.
     /// </summary>
     private static (IrNodeList<IrCompositeNoteDiff>? NoteOps, IrNodeList<IrReviewerNoteIdMap>? NoteIdMaps)
         MergeNoteScopes(
             IrDocument baseIr,
             IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
-            IReadOnlyList<IrEditScript> rawScripts,
+            IReadOnlyList<IrEditScript> plannedScripts,
             Docxodus.ConflictResolution policy,
             IrDiffSettings settings,
             List<IrConflict> conflicts,
@@ -136,9 +138,9 @@ internal static class IrCompositeMerger
 
             var byBaseNote = new Dictionary<string, List<(int Reviewer, IrNoteDiff Diff)>>();
             var insertedNotes = new List<(int Reviewer, IrNoteDiff Diff)>();
-            for (int r = 0; r < rawScripts.Count; r++)
+            for (int r = 0; r < plannedScripts.Count; r++)
             {
-                if (rawScripts[r].NoteOps is not { } nds)
+                if (plannedScripts[r].NoteOps is not { } nds)
                     continue;
                 foreach (var nd in nds)
                 {
@@ -327,8 +329,10 @@ internal static class IrCompositeMerger
     /// (<c>w:moveFrom</c>/<c>w:moveTo</c>, authored to the mover) or is LOWERED to del/ins, plus the GLOBAL
     /// move-group id assigned to a native group. Keyed by <c>(reviewer index, the reviewer's LOCAL
     /// <see cref="IrEditOp.MoveGroupId"/>)</c> — both halves of a move share the local gid, so both resolve to
-    /// the same verdict and global gid. <see cref="GlobalGidByGroup"/> contains an entry ONLY for native groups
-    /// (a group absent from the map is lowered).
+    /// the same verdict and global gid. <see cref="GlobalGidByGroup"/> contains an entry for every native
+    /// body-level group (a body-level group absent from the map is lowered) and for every move nested in a
+    /// table row or cell, textbox, block wrapper or note, which always renders with the op that carries it and
+    /// needs only the global id.
     /// </summary>
     internal sealed record MovePlan(IReadOnlyDictionary<(int Reviewer, int LocalGid), int> GlobalGidByGroup);
 
@@ -1686,20 +1690,7 @@ internal static class IrCompositeMerger
         if (!reviewerIr.AnchorIndex.TryGetValue(ra, out var block))
             return "";
         var sb = new System.Text.StringBuilder();
-        switch (block)
-        {
-            case IrParagraph p:
-                foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
-                    sb.Append(t.Text);
-                break;
-            case IrTable tbl:
-                // Serialize the table's cell text so a table conflict's competitor ResultText is meaningful
-                // (rather than ""): concatenate each cell's paragraph text, cells separated by '␟' (unit
-                // separator) and rows by '␞' (record separator) so two differently-edited tables produce
-                // distinguishable strings. v1 does not compose table cells; this text is for conflict reporting.
-                AppendTableText(tbl, sb, settings);
-                break;
-        }
+        AppendBlockText(block, sb, settings);
         return sb.ToString();
     }
 
@@ -1718,6 +1709,16 @@ internal static class IrCompositeMerger
         if (op.LeftAnchor is not { } la || !baseIr.AnchorIndex.TryGetValue(la, out var block))
             return "";
         var sb = new System.Text.StringBuilder();
+        AppendBlockText(block, sb, settings);
+        return sb.ToString();
+    }
+
+    /// <summary>Append a block's text to <paramref name="sb"/> for conflict-competitor reporting, so a
+    /// competitor's ResultText is meaningful rather than "": a paragraph's tokens (tokenized with the diff
+    /// tokenizer so the text matches what the diff sees), a table's cell text (<see cref="AppendTableText"/>),
+    /// and a block wrapper's children in turn (issue #1143). Any other block contributes nothing.</summary>
+    private static void AppendBlockText(IrBlock block, System.Text.StringBuilder sb, IrDiffSettings settings)
+    {
         switch (block)
         {
             case IrParagraph p:
@@ -1727,13 +1728,17 @@ internal static class IrCompositeMerger
             case IrTable tbl:
                 AppendTableText(tbl, sb, settings);
                 break;
+            case IrSdtBlock wrapper:
+                foreach (var child in wrapper.Blocks)
+                    AppendBlockText(child, sb, settings);
+                break;
         }
-        return sb.ToString();
     }
 
-    /// <summary>Append <paramref name="tbl"/>'s cell text (row/cell-delimited) to <paramref name="sb"/> for
-    /// conflict-competitor reporting. Nested paragraphs in a cell are tokenized with the diff tokenizer so the
-    /// text matches what the diff sees; nested tables recurse.</summary>
+    /// <summary>Append <paramref name="tbl"/>'s cell text to <paramref name="sb"/>: each cell's blocks
+    /// (<see cref="AppendBlockText"/>), cells separated by '␟' (unit separator) and rows by '␞' (record
+    /// separator), so two differently-edited tables produce distinguishable strings. v1 does not compose table
+    /// cells; this text is for conflict reporting.</summary>
     private static void AppendTableText(IrTable tbl, System.Text.StringBuilder sb, IrDiffSettings settings)
     {
         bool firstRow = true;
@@ -1747,13 +1752,7 @@ internal static class IrCompositeMerger
                 if (!firstCell) sb.Append('␟');
                 firstCell = false;
                 foreach (var b in cell.Blocks)
-                {
-                    if (b is IrParagraph cp)
-                        foreach (var t in IrDiffTokenizer.Tokenize(cp, settings))
-                            sb.Append(t.Text);
-                    else if (b is IrTable nested)
-                        AppendTableText(nested, sb, settings);
-                }
+                    AppendBlockText(b, sb, settings);
             }
         }
     }
