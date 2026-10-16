@@ -13,17 +13,23 @@ All notable changes to this project will be documented in this file.
   wrapper: a one-word edit marks only that word, and inserted, deleted, moved and edited paragraphs and
   tables inside it get their usual marks. The wrapper's own markup is a control's `w:sdtPr` and
   `w:sdtEndPr`, or a custom-XML element's attributes and `w:customXmlPr`. When it changes, the whole
-  wrapper is still replaced. It is also replaced whole when a bookmark or comment range sits between
-  blocks anywhere inside it (directly, in a nested wrapper, or in a table row or cell), because the
-  in-place diff carries only blocks and would drop those markers; the whole copy keeps them. This applies to `DocxCompare`/`DocxDiff.Compare`, `GetRevisions`,
-  consolidate when one reviewer edits the wrapper, and `SemanticDiff`. `SemanticDiff` now reports a
-  `content_control.envelope` change only when the control's `w:sdtPr`/`w:sdtEndPr` change (its digests
-  are labelled `docxodus-ir-sdt-shell-v1`), not for every edit inside the control, matching
-  `custom_xml.envelope`. When two reviewers edit inside the same wrapper, consolidate still records a
-  block conflict. The edit script gains an optional `wrapperOps` array on such a `ModifyBlock`, holding
-  the child ops in the usual op shape. Two edited
-  wrappers with the same own markup now pair in the alignment even when they are not the only change
-  in their region.
+  wrapper is still replaced. It is also replaced whole in two cases the in-place diff could not carry
+  faithfully: when a bookmark or comment range sits between blocks inside it (directly, or in a table
+  row or cell inside it), because the in-place diff carries only blocks and would drop those markers;
+  and when a complex field opens in one of its paragraphs and closes in another, as the TOC field of
+  every Word table of contents does, because an entry inserted or deleted at the edge of that span
+  would move a field character between paragraphs without a mark and leave the field unbalanced once
+  the redline is accepted or rejected. The whole copy keeps markers and fields intact. A nested
+  wrapper's own markers or fields do not stop the enclosing wrapper from being diffed in place: the
+  nested wrapper is kept or replaced as one child. This applies to `DocxCompare`/`DocxDiff.Compare`,
+  `GetRevisions`, consolidate when one reviewer edits the wrapper, and `SemanticDiff`. `SemanticDiff`
+  now reports a `content_control.envelope` change only when the control's `w:sdtPr`/`w:sdtEndPr`
+  change (its digests are labelled `docxodus-ir-sdt-shell-v1`), not for every edit inside the control,
+  matching `custom_xml.envelope`. When two reviewers edit inside the same wrapper, consolidate still
+  records a block conflict, and each competitor now carries the wrapper's resulting text (it was
+  empty). The edit script gains an optional `wrapperOps` array on such a `ModifyBlock`, holding the
+  child ops in the usual op shape. Two edited wrappers with the same own markup now pair in the
+  alignment even when they are not the only change in their region.
 
 ### Fixed
 
