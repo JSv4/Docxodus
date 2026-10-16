@@ -1,0 +1,489 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Xml.Linq;
+
+namespace Docxodus.Ir.Diff;
+
+/// <summary>
+/// Block-level bookmark and comment-range markers (issue #1149). A <c>w:bookmarkStart</c>/<c>w:bookmarkEnd</c>
+/// or <c>w:commentRangeStart</c>/<c>w:commentRangeEnd</c> can sit directly in a block stream (the body, a table
+/// cell, a block wrapper's content, a note, a header or footer) as a sibling of <c>w:p</c>; Word writes a bookmark
+/// that spans whole paragraphs that way. The IR leaves these markers out of its block list (rule N3), so the edit
+/// script never mentions them. The renderer puts them back from the source documents, around the blocks they
+/// bracket: each block stream's ops are rendered through <see cref="RenderBlockOpsWordShaped"/>, which places the
+/// markers this plan assigns to it.
+/// </summary>
+internal static partial class IrMarkupRenderer
+{
+    /// <summary>A bookmark or comment-range marker: the children a block stream holds that are neither a block nor
+    /// the stream's own properties, and that the IR drops (rule N3).</summary>
+    internal static bool IsBlockLevelMarker(XElement e) =>
+        e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd ||
+        e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd;
+
+    /// <summary>A bookmark marker in a revision wrapper written directly into a block stream: a marker the block
+    /// placement (or a replaced wrapper's copy) gave to one document's view only.</summary>
+    private static bool IsBlockLevelRevisionMarker(XElement marker) =>
+        marker.Parent is { } wrapper && (wrapper.Name == W.ins || wrapper.Name == W.del) &&
+        wrapper.Parent is { } stream && (stream.Name == W.body || stream.Name == W.tc ||
+            stream.Name == W.sdtContent || stream.Name == W.customXml);
+
+    /// <summary>Where the block-level markers of one block stream go, relative to its ops (see
+    /// <see cref="PlanBlockLevelMarkers"/>). Every list holds rendered elements: a bare clone, or a clone in a
+    /// <c>w:del</c>/<c>w:ins</c>.</summary>
+    private sealed class BlockMarkerPlan
+    {
+        /// <summary>The run of one-sided ops between two ops that have blocks on both sides is a gap; gap
+        /// <c>g</c> comes before the <c>g</c>-th two-sided op, the last one after every op. Its start markers go
+        /// before the gap's output, its end markers after it.</summary>
+        public readonly Dictionary<int, List<XElement>> GapStart = new();
+
+        public readonly Dictionary<int, List<XElement>> GapEnd = new();
+
+        /// <summary>Markers that travel with one op's output, in front of it: a one-sided marker inside a gap,
+        /// or one between two blocks the same op consumes.</summary>
+        public readonly Dictionary<IrEditOp, List<XElement>> OpPrefix = new(ReferenceEqualityComparer.Instance);
+
+        public List<XElement> PrefixOf(IrEditOp op) => OpPrefix.TryGetValue(op, out var list) ? list : Empty;
+
+        public static List<XElement> Of(Dictionary<int, List<XElement>> map, int key) =>
+            map.TryGetValue(key, out var list) ? list : Empty;
+
+        private static readonly List<XElement> Empty = new();
+    }
+
+    /// <summary>One side's markers: those before a block (keyed by the op that consumes it and the block's index
+    /// among that op's blocks on this side) and those after the last block.</summary>
+    private sealed record SideMarkers(Dictionary<(int Op, int Index), List<XElement>> Before, List<XElement> Trailing);
+
+    /// <summary>A position's marker list after merging the two sides: matched markers render bare, the others
+    /// as their side's revision.</summary>
+    private sealed record MarkerEntry(XElement? Left, XElement? Right);
+
+    /// <summary>
+    /// Place the block-level markers of both sides of one block stream around its <paramref name="ops"/>. Each
+    /// side's marker sits before one of its blocks or after the last; that fixes a position in the op sequence:
+    /// at the start or end of a gap (a run of one-sided ops) or inside one. A marker both sides have at the same
+    /// gap boundary is emitted bare, so it survives accept and reject; any other marker is emitted as its side's
+    /// revision (<c>w:del</c> for the original's, <c>w:ins</c> for the revised document's), so accept gives the
+    /// revised document's markers and reject the original's. A bookmark or comment whose markers are not all
+    /// matched keeps one whole copy per side rather than sharing some markers: a shared start with one end per
+    /// side could not be paired. Returns null when neither side's stream has a block-level marker.
+    /// </summary>
+    private static BlockMarkerPlan? PlanBlockLevelMarkers(IReadOnlyList<IrEditOp> ops, RenderState state)
+    {
+        if (ComputeMarkerLayout(ops, state.Left, state.RightSource) is not { } layout)
+            return null;
+
+        List<XElement> Render(List<MarkerEntry> entries)
+        {
+            var output = new List<XElement>();
+            foreach (var entry in entries)
+            {
+                if (layout.IsShared(entry))
+                {
+                    output.Add(StripUnids(new XElement(entry.Right!)));
+                    continue;
+                }
+                if (entry.Left is not null)
+                    output.Add(new XElement(W.del, state.RevisionAttributes(), StripUnids(new XElement(entry.Left))));
+                if (entry.Right is not null)
+                    output.Add(new XElement(W.ins, state.RevisionAttributes(), StripUnids(new XElement(entry.Right))));
+            }
+            return output;
+        }
+
+        var plan = new BlockMarkerPlan();
+        foreach (var (g, entries) in layout.GapStart)
+            if (entries.Count > 0)
+                plan.GapStart[g] = Render(entries);
+        foreach (var (g, entries) in layout.GapEnd)
+            if (entries.Count > 0)
+                plan.GapEnd[g] = Render(entries);
+        foreach (var group in layout.Interior.GroupBy(x => x.Op))
+            plan.OpPrefix[ops[group.Key]] = Render(group.Select(x => x.Entry).ToList());
+        return plan;
+    }
+
+    /// <summary>Both sides' block-level markers of one block stream, merged at the positions of
+    /// <see cref="PlanBlockLevelMarkers"/>: gap starts and ends (by gap index) and op interiors (by op index).
+    /// <see cref="TwoSidedOps"/> lists the ops that bound the gaps: gap <c>g</c> ends at <c>TwoSidedOps[g]</c>.</summary>
+    private sealed record MarkerLayout(
+        Dictionary<int, List<MarkerEntry>> GapStart,
+        Dictionary<int, List<MarkerEntry>> GapEnd,
+        List<(int Op, MarkerEntry Entry)> Interior,
+        List<int> TwoSidedOps,
+        HashSet<string> Unmatched)
+    {
+        /// <summary>A marker both sides have at this position, of a bookmark or comment all of whose block-level
+        /// markers match: it is emitted once, bare.</summary>
+        public bool IsShared(MarkerEntry entry) =>
+            entry.Left is not null && entry.Right is not null && !Unmatched.Contains(MarkerIdentity(entry.Right));
+    }
+
+    private static MarkerLayout? ComputeMarkerLayout(IReadOnlyList<IrEditOp> ops, IrDocument leftDoc, IrDocument rightDoc)
+    {
+        var leftBlocks = new List<XElement>[ops.Count];
+        var rightBlocks = new List<XElement>[ops.Count];
+        for (int i = 0; i < ops.Count; i++)
+            (leftBlocks[i], rightBlocks[i]) = OpSourceBlocks(ops[i], leftDoc, rightDoc);
+
+        var left = ReadSideMarkers(leftBlocks);
+        var right = ReadSideMarkers(rightBlocks);
+        if (left is null && right is null)
+            return null;
+        left ??= new SideMarkers(new(), new());
+        right ??= new SideMarkers(new(), new());
+
+        // Gap g holds the one-sided ops after the (g-1)-th two-sided op; each side's ops in it, in order.
+        var twoSided = new bool[ops.Count];
+        var gapOf = new int[ops.Count];
+        int gaps = 0;
+        var leftGapOps = new List<List<int>> { new() };
+        var rightGapOps = new List<List<int>> { new() };
+        for (int i = 0; i < ops.Count; i++)
+        {
+            twoSided[i] = leftBlocks[i].Count > 0 && rightBlocks[i].Count > 0;
+            gapOf[i] = gaps;
+            if (twoSided[i])
+            {
+                gaps++;
+                leftGapOps.Add(new());
+                rightGapOps.Add(new());
+                continue;
+            }
+            if (leftBlocks[i].Count > 0)
+                leftGapOps[gaps].Add(i);
+            if (rightBlocks[i].Count > 0)
+                rightGapOps[gaps].Add(i);
+        }
+
+        var interior = new List<(int Op, MarkerEntry Entry)>();
+
+        // Sort each side's markers into gap-start, gap-end and interior buckets.
+        (Dictionary<int, List<XElement>> Start, Dictionary<int, List<XElement>> End) Bucket(
+            SideMarkers side, List<List<int>> gapOps, bool isLeft)
+        {
+            var start = new Dictionary<int, List<XElement>>();
+            var end = new Dictionary<int, List<XElement>>();
+            void Add(Dictionary<int, List<XElement>> map, int g, List<XElement> markers)
+            {
+                if (!map.TryGetValue(g, out var list))
+                    map[g] = list = new List<XElement>();
+                list.AddRange(markers);
+            }
+            foreach (var ((op, index), markers) in side.Before.OrderBy(kv => kv.Key.Op).ThenBy(kv => kv.Key.Index))
+            {
+                if (index == 0 && twoSided[op])
+                    Add(end, gapOf[op], markers);
+                else if (index == 0 && gapOps[gapOf[op]].IndexOf(op) == 0)
+                    Add(start, gapOf[op], markers);
+                else
+                    interior.AddRange(markers.Select(m => (op, isLeft ? new MarkerEntry(m, null) : new MarkerEntry(null, m))));
+            }
+            Add(end, gaps, side.Trailing);
+            return (start, end);
+        }
+
+        var (leftStart, leftEnd) = Bucket(left, leftGapOps, isLeft: true);
+        var (rightStart, rightEnd) = Bucket(right, rightGapOps, isLeft: false);
+
+        // Merge the two sides at each gap boundary. A side with no op in the gap has one boundary there, which
+        // the other side's start and end both face: split its markers between them where most of them match.
+        var gapStart = new Dictionary<int, List<MarkerEntry>>();
+        var gapEnd = new Dictionary<int, List<MarkerEntry>>();
+        for (int g = 0; g <= gaps; g++)
+        {
+            var ls = BlockMarkerPlan.Of(leftStart, g);
+            var le = BlockMarkerPlan.Of(leftEnd, g);
+            var rs = BlockMarkerPlan.Of(rightStart, g);
+            var re = BlockMarkerPlan.Of(rightEnd, g);
+            bool leftEmpty = leftGapOps[g].Count == 0, rightEmpty = rightGapOps[g].Count == 0;
+            if (leftEmpty && !rightEmpty)
+                (gapStart[g], gapEnd[g]) = MergeAcrossSplit(le, rs, re, leftIsSplit: true);
+            else if (rightEmpty && !leftEmpty)
+                (gapStart[g], gapEnd[g]) = MergeAcrossSplit(re, ls, le, leftIsSplit: false);
+            else
+            {
+                gapStart[g] = MergeMarkers(ls, rs);
+                gapEnd[g] = MergeMarkers(le, re);
+            }
+        }
+
+        // A bookmark or comment with any one-sided marker keeps a whole copy per side: split its matched ones.
+        var unmatched = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in gapStart.Values.Concat(gapEnd.Values).SelectMany(l => l)
+                     .Concat(interior.Select(x => x.Entry)))
+            if (entry.Left is null || entry.Right is null)
+                unmatched.Add(MarkerIdentity(entry.Left ?? entry.Right!));
+
+        var twoSidedOps = Enumerable.Range(0, ops.Count).Where(i => twoSided[i]).ToList();
+        return new MarkerLayout(gapStart, gapEnd, interior, twoSidedOps, unmatched);
+    }
+
+    /// <summary>
+    /// The consolidate counterpart of <see cref="PlanBlockLevelMarkers"/> for one base-anchored block stream of
+    /// composite <paramref name="ops"/>: the markers to emit before each op (index <c>ops.Count</c>: after the
+    /// last). Each base marker stays where the base has it, bare, or as the deletion of the first reviewer whose
+    /// own comparison with the base (<paramref name="reviewerOps"/>, that reviewer's two-way ops over the same
+    /// stream) does not keep it. Each reviewer's own marker goes in as that reviewer's insertion, at the same
+    /// position relative to the base blocks, or before the reviewer's inserted block it precedes. With no
+    /// reviewer ops (a stream the merger composed without them) the base markers are kept as they are. Returns
+    /// null when there is nothing to place.
+    /// </summary>
+    internal static Dictionary<int, List<XElement>>? PlanCompositeBlockLevelMarkers(
+        IReadOnlyList<IrCompositeOp> ops, IrDocument baseIr, IReadOnlyList<IrDocument> reviewerIrs,
+        IReadOnlyList<IReadOnlyList<IrEditOp>>? reviewerOps, IReadOnlyList<string> authors, RenderState state)
+    {
+        var baseBlocks = ops.Select(o => SourceElement(o.Op.LeftAnchor, baseIr) is { } el
+            ? new List<XElement> { el } : new List<XElement>()).ToArray();
+        var baseSide = ReadSideMarkers(baseBlocks);
+
+        var byBaseAnchor = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (int i = 0; i < ops.Count; i++)
+            if (ops[i].Op.LeftAnchor is { } a)
+                byBaseAnchor.TryAdd(a, i);
+        int? BaseIndex(string? anchor) => anchor is not null && byBaseAnchor.TryGetValue(anchor, out var i) ? i : null;
+
+        var deletedBy = new Dictionary<XElement, int>(ReferenceEqualityComparer.Instance);
+        var afterPrevious = new Dictionary<int, List<(int Reviewer, XElement Marker)>>();
+        var beforeOp = new Dictionary<int, List<(int Reviewer, XElement Marker)>>();
+        var added = new HashSet<string>(StringComparer.Ordinal);
+        void Add(Dictionary<int, List<(int, XElement)>> map, int position, int reviewer, XElement marker)
+        {
+            if (!added.Add(MarkerKey(marker)))
+                return; // another reviewer already brought the same marker
+            if (!map.TryGetValue(position, out var list))
+                map[position] = list = new List<(int, XElement)>();
+            list.Add((reviewer, marker));
+        }
+
+        for (int r = 0; reviewerOps is not null && r < reviewerOps.Count && r < reviewerIrs.Count; r++)
+        {
+            var rops = reviewerOps[r];
+            if (ComputeMarkerLayout(rops, baseIr, reviewerIrs[r]) is not { } layout)
+                continue;
+            var two = layout.TwoSidedOps;
+            int reviewer = r;
+            void Take(MarkerEntry entry, Dictionary<int, List<(int, XElement)>> map, int position)
+            {
+                if (layout.IsShared(entry))
+                    return;
+                if (entry.Left is not null)
+                    deletedBy.TryAdd(entry.Left, reviewer);
+                if (entry.Right is not null)
+                    Add(map, position, reviewer, entry.Right);
+            }
+            foreach (var (g, entries) in layout.GapStart)
+            {
+                int position = g == 0 ? 0 : (BaseIndex(rops[two[g - 1]].LeftAnchor) ?? ops.Count - 1) + 1;
+                foreach (var entry in entries)
+                    Take(entry, afterPrevious, position);
+            }
+            foreach (var (g, entries) in layout.GapEnd)
+            {
+                int position = g < two.Count ? BaseIndex(rops[two[g]].LeftAnchor) ?? ops.Count : ops.Count;
+                foreach (var entry in entries)
+                    Take(entry, beforeOp, position);
+            }
+            foreach (var (j, entry) in layout.Interior)
+            {
+                var op = rops[j];
+                int position = (op.RightAnchor is { } right
+                        ? Enumerable.Range(0, ops.Count).Cast<int?>().FirstOrDefault(i =>
+                            ops[i!.Value].SourceReviewer == reviewer && ops[i.Value].Op.RightAnchor == right)
+                        : null)
+                    ?? BaseIndex(op.LeftAnchor) ?? ops.Count;
+                Take(entry, beforeOp, position);
+            }
+        }
+
+        if (baseSide is null && afterPrevious.Count == 0 && beforeOp.Count == 0)
+            return null;
+
+        var savedAuthor = state.AuthorOverride;
+        XElement Revision(XName name, int reviewer, XElement marker)
+        {
+            state.AuthorOverride = reviewer >= 0 && reviewer < authors.Count ? authors[reviewer] : savedAuthor;
+            return new XElement(name, state.RevisionAttributes(), StripUnids(new XElement(marker)));
+        }
+        var plan = new Dictionary<int, List<XElement>>();
+        for (int i = 0; i <= ops.Count; i++)
+        {
+            var output = new List<XElement>();
+            foreach (var (reviewer, marker) in afterPrevious.GetValueOrDefault(i) ?? new())
+                output.Add(Revision(W.ins, reviewer, marker));
+            var baseMarkers = baseSide is null ? new List<XElement>()
+                : i == ops.Count ? baseSide.Trailing : baseSide.Before.GetValueOrDefault((i, 0)) ?? new List<XElement>();
+            foreach (var marker in baseMarkers)
+                output.Add(deletedBy.TryGetValue(marker, out var reviewer)
+                    ? Revision(W.del, reviewer, marker)
+                    : StripUnids(new XElement(marker)));
+            foreach (var (reviewer, marker) in beforeOp.GetValueOrDefault(i) ?? new())
+                output.Add(Revision(W.ins, reviewer, marker));
+            if (output.Count > 0)
+                plan[i] = output;
+        }
+        state.AuthorOverride = savedAuthor;
+        return plan;
+    }
+
+    /// <summary>The source blocks an op consumes on each side, in document order.</summary>
+    private static (List<XElement> Left, List<XElement> Right) OpSourceBlocks(IrEditOp op, RenderState state) =>
+        OpSourceBlocks(op, state.Left, state.RightSource);
+
+    private static (List<XElement> Left, List<XElement> Right) OpSourceBlocks(IrEditOp op, IrDocument leftDoc, IrDocument rightDoc)
+    {
+        var left = new List<XElement>();
+        var right = new List<XElement>();
+        void Add(List<XElement> list, string? anchor, IrDocument doc)
+        {
+            if (SourceElement(anchor, doc) is { } el && !list.Contains(el))
+                list.Add(el);
+        }
+        switch (op.Kind)
+        {
+            case IrEditOpKind.SplitBlock:
+                Add(left, op.LeftAnchor, leftDoc);
+                foreach (var a in (IEnumerable<string>?)op.SplitMergeAnchors ?? Array.Empty<string>())
+                    Add(right, a, rightDoc);
+                break;
+            case IrEditOpKind.MergeBlock:
+                foreach (var a in (IEnumerable<string>?)op.SplitMergeAnchors ?? Array.Empty<string>())
+                    Add(left, a, leftDoc);
+                Add(right, op.RightAnchor, rightDoc);
+                break;
+            case IrEditOpKind.CrossParagraphRunBlock when op.CrossParagraphCells is { } cells:
+                foreach (var cell in cells)
+                {
+                    Add(left, cell.LeftAnchor, leftDoc);
+                    Add(right, cell.RightAnchor, rightDoc);
+                }
+                break;
+            default:
+                Add(left, op.LeftAnchor, leftDoc);
+                Add(right, op.RightAnchor, rightDoc);
+                break;
+        }
+        return (left, right);
+    }
+
+    /// <summary>One side's block-level markers in the stream that holds its <paramref name="blocks"/>: every run
+    /// of markers keyed by the consumed block that follows it, and those after the last consumed block. Null
+    /// when the side consumes no block or its stream has no marker.</summary>
+    private static SideMarkers? ReadSideMarkers(List<XElement>[] blocks)
+    {
+        var stream = blocks.SelectMany(b => b).Select(b => b.Parent).FirstOrDefault(p => p is not null);
+        if (stream is null || !stream.Elements().Any(IsBlockLevelMarker))
+            return null;
+
+        var consumed = new Dictionary<XElement, (int Op, int Index)>();
+        for (int i = 0; i < blocks.Length; i++)
+            for (int k = 0; k < blocks[i].Count; k++)
+                if (blocks[i][k].AncestorsAndSelf().FirstOrDefault(a => a.Parent == stream) is { } child)
+                    consumed.TryAdd(child, (i, k));
+
+        var before = new Dictionary<(int Op, int Index), List<XElement>>();
+        var pending = new List<XElement>();
+        foreach (var child in stream.Elements())
+        {
+            if (IsBlockLevelMarker(child))
+            {
+                pending.Add(child);
+                continue;
+            }
+            if (pending.Count > 0 && consumed.TryGetValue(child, out var key))
+            {
+                before[key] = pending;
+                pending = new List<XElement>();
+            }
+        }
+        return new SideMarkers(before, pending);
+    }
+
+    /// <summary>The markers both sides have at one boundary, in an order both sides keep (a longest common
+    /// subsequence of their keys), with each side's others between them in that side's order.</summary>
+    private static List<MarkerEntry> MergeMarkers(IReadOnlyList<XElement> left, IReadOnlyList<XElement> right)
+    {
+        var output = new List<MarkerEntry>();
+        if (left.Count == 0 || right.Count == 0)
+        {
+            output.AddRange(left.Select(l => new MarkerEntry(l, null)));
+            output.AddRange(right.Select(r => new MarkerEntry(null, r)));
+            return output;
+        }
+        var lk = left.Select(MarkerKey).ToArray();
+        var rk = right.Select(MarkerKey).ToArray();
+        var lcs = new int[lk.Length + 1, rk.Length + 1];
+        for (int i = lk.Length - 1; i >= 0; i--)
+            for (int j = rk.Length - 1; j >= 0; j--)
+                lcs[i, j] = lk[i] == rk[j] ? lcs[i + 1, j + 1] + 1 : Math.Max(lcs[i + 1, j], lcs[i, j + 1]);
+        int a = 0, b = 0;
+        while (a < lk.Length && b < rk.Length)
+        {
+            if (lk[a] == rk[b])
+                output.Add(new MarkerEntry(left[a++], right[b++]));
+            else if (lcs[a + 1, b] >= lcs[a, b + 1])
+                output.Add(new MarkerEntry(left[a++], null));
+            else
+                output.Add(new MarkerEntry(null, right[b++]));
+        }
+        while (a < lk.Length)
+            output.Add(new MarkerEntry(left[a++], null));
+        while (b < rk.Length)
+            output.Add(new MarkerEntry(null, right[b++]));
+        return output;
+    }
+
+    /// <summary>Merge one side's markers at a boundary that faces both the start and the end of the other side's
+    /// run of ops: its first markers go to the start and the rest to the end, split where the most of them match
+    /// the other side's.</summary>
+    private static (List<MarkerEntry> Start, List<MarkerEntry> End) MergeAcrossSplit(
+        List<XElement> split, List<XElement> otherStart, List<XElement> otherEnd, bool leftIsSplit)
+    {
+        List<MarkerEntry> Merge(IReadOnlyList<XElement> mine, IReadOnlyList<XElement> other) =>
+            leftIsSplit ? MergeMarkers(mine, other) : MergeMarkers(other, mine);
+        static int Matched(List<MarkerEntry> entries) => entries.Count(e => e.Left is not null && e.Right is not null);
+
+        var best = (Start: Merge(split, otherStart), End: Merge(Array.Empty<XElement>(), otherEnd));
+        int bestScore = Matched(best.Start);
+        for (int k = split.Count - 1; k >= 0; k--)
+        {
+            var candidate = (Start: Merge(split.Take(k).ToList(), otherStart), End: Merge(split.Skip(k).ToList(), otherEnd));
+            int score = Matched(candidate.Start) + Matched(candidate.End);
+            if (score > bestScore)
+                (best, bestScore) = (candidate, score);
+        }
+        return best;
+    }
+
+    /// <summary>What makes a marker on one side the same marker as one on the other: its kind and the bookmark's
+    /// name (an end's through its start in the same document) or the comment's id.</summary>
+    private static string MarkerKey(XElement marker) =>
+        marker.Name.LocalName + "\u0000" + MarkerIdentity(marker);
+
+    /// <summary>The bookmark or comment a marker belongs to: a bookmark by name, a comment by id.</summary>
+    private static string MarkerIdentity(XElement marker)
+    {
+        var id = (string?)marker.Attribute(W.id) ?? string.Empty;
+        if (marker.Name == W.bookmarkStart)
+            return "b\u0000" + ((string?)marker.Attribute(W.name) ?? "#" + id);
+        if (marker.Name == W.bookmarkEnd)
+        {
+            var names = marker.Document is { } document
+                ? BookmarkNamesById.GetValue(document, d => d.Descendants(W.bookmarkStart)
+                    .Where(s => s.Attribute(W.id) is not null && s.Attribute(W.name) is not null)
+                    .GroupBy(s => (string)s.Attribute(W.id)!)
+                    .ToDictionary(g => g.Key, g => (string)g.First().Attribute(W.name)!, StringComparer.Ordinal))
+                : null;
+            return "b\u0000" + (names?.GetValueOrDefault(id) ?? "#" + id);
+        }
+        return "c\u0000" + id;
+    }
+
+    /// <summary>Each source document's bookmark names by id, built once per document: an end names its bookmark
+    /// only through its start. The renderer only reads its source documents.</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<XDocument, Dictionary<string, string>>
+        BookmarkNamesById = new();
+}

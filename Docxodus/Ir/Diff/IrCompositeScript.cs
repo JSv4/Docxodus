@@ -206,4 +206,5 @@ internal sealed record IrCompositeScript(
     IrNodeList<IrConflict> Conflicts,
     IrNodeList<IrCompositeNoteDiff>? NoteOps = null,
     IrNodeList<IrReviewerNoteIdMap>? NoteIdMaps = null,
-    IrComposedShellRef? TrailingSectPr = null);
+    IrComposedShellRef? TrailingSectPr = null,
+    IrNodeList<IrNodeList<IrEditOp>>? ReviewerBodyOps = null);

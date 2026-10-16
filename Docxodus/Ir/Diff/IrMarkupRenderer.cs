@@ -869,6 +869,12 @@ internal static partial class IrMarkupRenderer
         var pendingInserts = new List<IrEditOp>();
         var pendingDeletes = new List<IrEditOp>();
 
+        // Bookmarks and comment ranges written between this stream's blocks (rule N3 keeps them out of the
+        // ops; issue #1149) go back around the blocks they bracket: see PlanBlockLevelMarkers.
+        var markers = PlanBlockLevelMarkers(opList, state);
+        int gap = 0;
+        bool gapHasOps = false;
+
         // The trailing section-break op renders nothing (last-section metadata is preserved on the
         // package separately), so it is transparent for the story-end test: a gap flushed by it — or
         // by the end of the op list — reaches the story end.
@@ -883,16 +889,34 @@ internal static partial class IrMarkupRenderer
 
             // Render each op into its own element group, marks stamped as usual (¶INS / ¶DEL).
             // Insert order = next order, delete order = base order.
-            var insGroups = RenderGapGroups(pendingInserts, state);
-            var delGroups = RenderGapGroups(pendingDeletes, state);
+            var insGroups = RenderGapGroups(pendingInserts, state, markers);
+            var delGroups = RenderGapGroups(pendingDeletes, state, markers);
             pendingInserts.Clear();
             pendingDeletes.Clear();
 
             EmitGapArranged(insGroups, delGroups, storyEnd, state, sink);
         }
+        // A gap's start markers go out when its first op is reached, before anything of the gap renders; its end
+        // markers after the gap has flushed (with the start ones, if the gap had no op).
+        void CloseGap()
+        {
+            if (markers is null)
+                return;
+            if (!gapHasOps)
+                sink.AddRange(BlockMarkerPlan.Of(markers.GapStart, gap));
+            sink.AddRange(BlockMarkerPlan.Of(markers.GapEnd, gap));
+            gap++;
+            gapHasOps = false;
+        }
         for (int i = 0; i < opList.Count; i++)
         {
             var op = opList[i];
+            bool twoSided = markers is not null && OpIsTwoSided(op);
+            if (markers is not null && !twoSided && !gapHasOps)
+            {
+                sink.AddRange(BlockMarkerPlan.Of(markers.GapStart, gap));
+                gapHasOps = true;
+            }
             // A relocated half (issue #887) is drawn as a whole-paragraph move, outside the gap arrangement,
             // exactly as an aligner move is: the pilcrow pairing must not fuse it into a neighbouring change.
             if ((op.Kind == IrEditOpKind.DeleteBlock || op.Kind == IrEditOpKind.InsertBlock) &&
@@ -905,9 +929,21 @@ internal static partial class IrMarkupRenderer
                 continue;
             }
             FlushGap(storyEnd: i > lastRenderableIndex);
+            if (twoSided)
+                CloseGap();
+            if (markers is not null)
+                sink.AddRange(markers.PrefixOf(op));
             RenderBlockOp(op, state, sink);
         }
         FlushGap(storyEnd: true);
+        CloseGap();
+
+        // Whether an op consumes blocks of both documents (a gap boundary for the marker placement).
+        bool OpIsTwoSided(IrEditOp op)
+        {
+            var (left, right) = OpSourceBlocks(op, state);
+            return left.Count > 0 && right.Count > 0;
+        }
     }
 
     /// <summary>One gap op's rendered elements plus the facts the arrangement grammar keys on.</summary>
@@ -926,16 +962,21 @@ internal static partial class IrMarkupRenderer
         /// <summary>Any non-whitespace visible text (<c>w:t</c>/<c>w:delText</c>). A break-only
         /// paragraph counts as empty for the chain rule.</summary>
         public bool Wordful { get; init; }
+
+        /// <summary>Block-level markers that sit in front of this op's block on its side only (issue #1149),
+        /// emitted ahead of <see cref="Elements"/>.</summary>
+        public List<XElement> Markers { get; init; } = new();
     }
 
-    private static List<GapGroup> RenderGapGroups(List<IrEditOp> ops, RenderState state)
+    private static List<GapGroup> RenderGapGroups(List<IrEditOp> ops, RenderState state, BlockMarkerPlan? markers)
     {
         var groups = new List<GapGroup>(ops.Count);
         foreach (var op in ops)
         {
             var els = new List<XElement>();
             RenderBlockOp(op, state, els);
-            if (els.Count == 0)
+            var prefix = markers?.PrefixOf(op) ?? new List<XElement>();
+            if (els.Count == 0 && prefix.Count == 0)
                 continue; // a section-break op renders nothing
             var para = els.Count == 1 && els[0].Name == W.p ? els[0] : null;
             bool plain = para is not null &&
@@ -947,6 +988,7 @@ internal static partial class IrMarkupRenderer
                 Paragraph = para,
                 IsPlainParagraph = plain,
                 Wordful = para is null || ParagraphHasVisibleContent(para),
+                Markers = prefix,
             });
         }
         return groups;
@@ -983,6 +1025,19 @@ internal static partial class IrMarkupRenderer
         List<GapGroup> insGroups, List<GapGroup> delGroups, bool storyEnd,
         RenderState state, List<XElement> sink)
     {
+        // A block-level marker that one side has in front of a block inside the gap (issue #1149) must stay in
+        // front of that block, which pilcrow fusion would merge into another. Such a gap is emitted fully
+        // marked, inserts first: the shape the arrangement falls back to whenever it cannot pair.
+        if (insGroups.Concat(delGroups).Any(g => g.Markers.Count > 0))
+        {
+            foreach (var g in insGroups.Concat(delGroups))
+            {
+                sink.AddRange(g.Markers);
+                sink.AddRange(g.Elements);
+            }
+            return;
+        }
+
         // ---- pilcrow pairing. B/N = index into delGroups/insGroups; -1 = virtual (that side ends
         // with a table at the story end, so the other side's final pilcrow is retained alone).
         var pairs = new List<(int B, int N)>();
@@ -2121,9 +2176,12 @@ internal static partial class IrMarkupRenderer
                 leftCellSrc = leftCells[leftIndex++];
             }
 
+            // The cell's properties first. Its bookmarks and comment ranges between blocks are content, kept in
+            // place among the blocks (issue #1149): the block ops place them, and an unchanged cell keeps its own.
             var newCell = new XElement(W.tc);
-            foreach (var pre in cellSrc.Elements().Where(e => !IsBlockContent(e)))
+            foreach (var pre in cellSrc.Elements().Where(e => !IsBlockContent(e) && !IsBlockLevelMarker(e)))
                 newCell.Add(RightClone(pre));
+            static bool IsCellContent(XElement e) => IsBlockContent(e) || IsBlockLevelMarker(e);
 
             if (cellOp.BlockOps != null)
             {
@@ -2132,14 +2190,17 @@ internal static partial class IrMarkupRenderer
                 RenderBlockOpsWordShaped(cellOp.BlockOps, state, cellSink);
                 // A cell must contain at least one block-level child; if the ops produced none, keep the right
                 // cell's content verbatim so the table stays schema-valid.
-                if (cellSink.Count == 0)
-                    foreach (var b in cellSrc.Elements().Where(IsBlockContent))
+                if (!cellSink.Any(IsBlockContent))
+                {
+                    cellSink.Clear();
+                    foreach (var b in cellSrc.Elements().Where(IsCellContent))
                         cellSink.Add(RightClone(b));
+                }
                 newCell.Add(cellSink);
             }
             else
             {
-                foreach (var b in cellSrc.Elements().Where(IsBlockContent))
+                foreach (var b in cellSrc.Elements().Where(IsCellContent))
                     newCell.Add(RightClone(b));
             }
             // Do not compare by output ordinal: a middle cellIns shifts every later right cell.  The
@@ -2582,8 +2643,10 @@ internal static partial class IrMarkupRenderer
                 shellSrc = reviewerCellSrc;
             }
 
+            // The shell's properties first; the base cell's bookmarks and comment ranges between blocks stay in
+            // place among its blocks (issue #1149).
             var newCell = new XElement(W.tc);
-            foreach (var pre in shellSrc.Elements().Where(e => !IsBlockContent(e)))
+            foreach (var pre in shellSrc.Elements().Where(e => !IsBlockContent(e) && !IsBlockLevelMarker(e)))
                 newCell.Add(StripUnids(new XElement(pre)));
 
             // The winner's shell was swapped in above; stamp a native w:tcPrChange (inner = BASE tcPr)
@@ -2601,18 +2664,29 @@ internal static partial class IrMarkupRenderer
 
             if (cellOp.ComposedBlockOps is { } blockOps)
             {
+                var cellMarkers = PlanCompositeBlockLevelMarkers(blockOps, baseIr, reviewerIrs, null,
+                    Array.Empty<string>(), state);
                 var cellSink = new List<XElement>();
-                foreach (var cellBlock in blockOps)
-                    renderOneCompositeBlock(cellBlock, baseIr, reviewerIrs, state, cellSink);
-                if (cellSink.Count == 0)
-                    foreach (var b in baseCellSrc.Elements().Where(IsBlockContent))
+                for (int b = 0; b < blockOps.Count; b++)
+                {
+                    if (cellMarkers?.GetValueOrDefault(b) is { } before)
+                        cellSink.AddRange(before);
+                    renderOneCompositeBlock(blockOps[b], baseIr, reviewerIrs, state, cellSink);
+                }
+                if (cellMarkers?.GetValueOrDefault(blockOps.Count) is { } trailing)
+                    cellSink.AddRange(trailing);
+                if (!cellSink.Any(IsBlockContent))
+                {
+                    cellSink.Clear();
+                    foreach (var b in baseCellSrc.Elements().Where(e => IsBlockContent(e) || IsBlockLevelMarker(e)))
                         cellSink.Add(StripUnids(new XElement(b)));
+                }
                 newCell.Add(cellSink);
             }
             else
             {
                 // Base passthrough: the base cell's content verbatim.
-                foreach (var b in baseCellSrc.Elements().Where(IsBlockContent))
+                foreach (var b in baseCellSrc.Elements().Where(e => IsBlockContent(e) || IsBlockLevelMarker(e)))
                     newCell.Add(StripUnids(new XElement(b)));
             }
             newRow.Add(newCell);
@@ -2845,7 +2919,7 @@ internal static partial class IrMarkupRenderer
                 if (rightNote == null)
                     continue;
                 noteEl = new XElement(noteName, rightNote.Attributes());
-                foreach (var pre in rightNote.Elements().Where(e => !IsBlockContent(e)))
+                foreach (var pre in rightNote.Elements().Where(e => !IsBlockContent(e) && !IsBlockLevelMarker(e)))
                     noteEl.Add(StripUnids(new XElement(pre)));
                 root.Add(noteEl);
             }
@@ -2862,7 +2936,8 @@ internal static partial class IrMarkupRenderer
                 StripUnids(b);
 
             // Replace the note's block-level children (w:p / w:tbl / w:sdt), keeping any non-block prelude.
-            noteEl.Elements().Where(IsBlockContent).Remove();
+            // The note's bookmarks and comment ranges between blocks ride with the rendered blocks (issue #1149).
+            noteEl.Elements().Where(e => IsBlockContent(e) || IsBlockLevelMarker(e)).Remove();
             noteEl.Add(noteBlocks);
 
             // Re-id a MATCHED note's definition to its RIGHT/scope id so the definition shares an id space with
@@ -3293,7 +3368,8 @@ internal static partial class IrMarkupRenderer
             foreach (var b in blocks)
                 SimplifyMoveMarkup(b);
 
-        root.Elements().Where(IsBlockContent).Remove();
+        // The story's bookmarks and comment ranges between blocks ride with the rendered blocks (issue #1149).
+        root.Elements().Where(e => IsBlockContent(e) || IsBlockLevelMarker(e)).Remove();
         root.Add(blocks);
 
         ImportStorySourcedRelationships(diff, state, clonesBefore, part, rightMain,
@@ -4222,6 +4298,8 @@ internal static partial class IrMarkupRenderer
                 continue; // inserted/deleted: leave revision context; (B)/(C) keep ids unique + paired
             if (nameStarts.Concat(nameEnds).Any(IsInWholeBlockRevisedParagraph))
                 continue; // whole-block: del + ins copies each carry the name into their own resolution
+            if (nameStarts.Concat(nameEnds).Any(IsBlockLevelRevisionMarker))
+                continue; // a copy per side between blocks: the block placement found no boundary both share
 
             // Collapse to a single bare start + bare end (both survive accept AND reject).
             var keepStart = nameStarts[0];
@@ -4402,7 +4480,10 @@ internal static partial class IrMarkupRenderer
             var el = block.Source.Element;
             if (el == null)
                 continue;
-            foreach (var bk in el.DescendantsAndSelf(W.bookmarkStart))
+            // A bookmark that starts between body blocks is no block's descendant (issue #1149).
+            foreach (var bk in el.DescendantsAndSelf(W.bookmarkStart)
+                         .Concat(el.ElementsBeforeSelf().Reverse().TakeWhile(IsBlockLevelMarker)
+                             .Where(e => e.Name == W.bookmarkStart)))
                 if ((string?)bk.Attribute(W.name) is { } n && n.Length > 0)
                     names.Add(n);
         }
@@ -4438,8 +4519,11 @@ internal static partial class IrMarkupRenderer
         {
             if (a.Name == W.p || a.Name == W.body || a.Name == W.tc)
                 return true;
+            // A block w:customXml is a block stream like w:sdtContent; one inside a paragraph is opaque content.
+            bool blockCustomXml = a.Name == W.customXml && !a.Ancestors(W.p).Any();
             if (a.Name != W.ins && a.Name != W.del && a.Name != W.hyperlink &&
-                a.Name != W.sdt && a.Name != W.sdtContent && a.Name != W.smartTag && a.Name != W.fldSimple)
+                a.Name != W.sdt && a.Name != W.sdtContent && !blockCustomXml && a.Name != W.smartTag &&
+                a.Name != W.fldSimple)
                 return false;
         }
         return false;
@@ -5002,6 +5086,18 @@ internal static partial class IrMarkupRenderer
             var boundaries = MarkWholeSdtEnvelope(child, kind, state);
             child.AddBeforeSelf(boundaries.Before);
             child.AddAfterSelf(boundaries.After);
+            return;
+        }
+
+        // A bookmark or comment range between the wrapper's blocks belongs to this copy's view only, like its
+        // runs: a deleted wrapper accepts by collapsing to its content, so an unmarked marker would outlive it
+        // next to the inserted copy's (issue #1149).
+        if (IsBlockLevelMarker(child))
+        {
+            var revision = new XElement(RevElementName(IsDeleteGrade(kind) ? RevKind.Del : RevKind.Ins),
+                state.RevisionAttributes());
+            child.ReplaceWith(revision);
+            revision.Add(child);
             return;
         }
 

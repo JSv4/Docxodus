@@ -95,7 +95,11 @@ internal static class IrCompositeMerger
         var trailingSectPr = ComposeTrailingSection(
             baseIr, reviewers, policy, settings, conflicts, ref nextConflictId);
 
-        return new IrCompositeScript(IrNodeList.From(ops), IrNodeList.From(conflicts), noteOps, noteIdMaps, trailingSectPr);
+        // Each reviewer's own body ops ride along for the renderer: the composite ops say nothing about the
+        // bookmarks and comment ranges a reviewer has between blocks (rule N3), and placing them needs that
+        // reviewer's alignment with the base (issue #1149).
+        return new IrCompositeScript(IrNodeList.From(ops), IrNodeList.From(conflicts), noteOps, noteIdMaps, trailingSectPr,
+            IrNodeList.From(scripts.Select(script => script.Operations)));
     }
 
     // ---- N-way note-scope merge ----
