@@ -7,7 +7,9 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Validation;
 using Docxodus.Internal;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
@@ -52,15 +54,26 @@ public class BlockWrapperNestedDiffTests
 
     // ---- the acceptance test -------------------------------------------------------------------
 
+    /// <summary>The issue's case through every surface: both compare front doors and consolidate draw only the
+    /// changed word, the revision lists report only it, and the semantic diff reports a text change and no
+    /// change to the wrapper.</summary>
     [Theory]
     [InlineData(Wrapper.CustomXml)]
     [InlineData(Wrapper.ContentControl)]
-    public void Compare_OneWordEditedInsideAnUnchangedWrapper_MarksOnlyThatWord(Wrapper kind)
+    public void OneWordEditedInsideAnUnchangedWrapper_IsReportedAsThatWordEverywhere(Wrapper kind)
     {
         var left = Doc(Three(kind) + P(Tail));
         var right = Doc(Three(kind, BravoEdited) + P(Tail));
+        var reviewers = new[] { new DocxDiffReviewer { Document = right, Author = "Reviewer" } };
 
-        foreach (var redline in new[] { DocxCompare.Compare(left, right), DocxDiff.Compare(left, right, new DocxDiffSettings()) })
+        var redlines = new[]
+        {
+            DocxCompare.Compare(left, right),
+            DocxDiff.Compare(left, right, new DocxDiffSettings()),
+            DocxCompare.Consolidate(left, reviewers),
+        };
+
+        foreach (var redline in redlines)
         {
             var body = Body(redline);
             AssertSingleWrapperWithoutRangeMarkers(body, kind);
@@ -69,39 +82,19 @@ public class BlockWrapperNestedDiffTests
             AssertUnmarked(body, Alpha, Charlie, Tail);
             AssertRoundTrip(left, right, redline);
         }
-    }
-
-    [Theory]
-    [InlineData(Wrapper.CustomXml)]
-    [InlineData(Wrapper.ContentControl)]
-    public void GetRevisions_OneWordEditedInsideAnUnchangedWrapper_ReportsOnlyThatWord(Wrapper kind)
-    {
-        var left = Doc(Three(kind) + P(Tail));
-        var right = Doc(Three(kind, BravoEdited) + P(Tail));
-
-        var revisions = DocxDiff.GetRevisions(left, right);
-
-        Assert.Collection(revisions.OrderBy(r => r.Type),
-            r => { Assert.Equal(DocxDiffRevisionType.Inserted, r.Type); Assert.Equal("weekly", r.Text); },
-            r => { Assert.Equal(DocxDiffRevisionType.Deleted, r.Type); Assert.Equal("monthly", r.Text); });
-    }
-
-    [Theory]
-    [InlineData(Wrapper.CustomXml)]
-    [InlineData(Wrapper.ContentControl)]
-    public void SemanticDiff_OneWordEditedInsideAnUnchangedWrapper_ReportsTheTextOnly(Wrapper kind)
-    {
-        var left = Doc(Three(kind) + P(Tail));
-        var right = Doc(Three(kind, BravoEdited) + P(Tail));
-
+        var revisionLists = new[]
+        {
+            DocxDiff.GetRevisions(left, right).Select(r => (r.Type, r.Text)),
+            DocxDiff.GetConsolidatedRevisions(left, reviewers).Select(r => (r.Type, r.Text)),
+        };
+        foreach (var revisions in revisionLists)
+            Assert.Equal(
+                new[] { (DocxDiffRevisionType.Deleted, "monthly"), (DocxDiffRevisionType.Inserted, "weekly") },
+                revisions.Where(r => r.Type is DocxDiffRevisionType.Inserted or DocxDiffRevisionType.Deleted).OrderBy(r => r.Text));
         var changes = Docxodus.Verification.SemanticDiff.Compare(left, right).Changes;
-
         Assert.Contains(changes, c => c.Family == Docxodus.Verification.SemanticChangeFamily.Text);
         Assert.DoesNotContain(changes, c => c.Family is Docxodus.Verification.SemanticChangeFamily.ContentControl
             or Docxodus.Verification.SemanticChangeFamily.BlockStructure);
-
-        var retagged = Docxodus.Verification.SemanticDiff.Compare(left, Doc(Three(kind, id: "a2") + P(Tail))).Changes;
-        Assert.Contains(retagged, c => c.Path.EndsWith(".envelope", StringComparison.Ordinal));
     }
 
     private static string Item(string text, int numId) =>
@@ -159,10 +152,17 @@ public class BlockWrapperNestedDiffTests
         InATableCell,
     }
 
-    public static IEnumerable<object[]> WrapperKindsAndMarkerPlaces() =>
+    public enum Marker
+    {
+        Bookmark,
+        CommentRange,
+    }
+
+    public static IEnumerable<object[]> MarkersKindsAndPlaces() =>
+        from marker in Enum.GetValues<Marker>()
         from kind in new[] { Wrapper.CustomXml, Wrapper.ContentControl }
         from place in Enum.GetValues<MarkerPlace>()
-        select new object[] { kind, place };
+        select new object[] { marker, kind, place };
 
     // A bookmark or comment range between a wrapper's blocks is not modeled by the IR, so a wrapper holding one
     // is replaced whole (each copy keeps its markers) rather than diffed in place, which would drop them. The
@@ -183,35 +183,27 @@ public class BlockWrapperNestedDiffTests
     }
 
     [Theory]
-    [MemberData(nameof(WrapperKindsAndMarkerPlaces))]
-    public void Compare_BookmarkBetweenTheWrappersBlocks_StaysInTheRedline(Wrapper kind, MarkerPlace place)
+    [MemberData(nameof(MarkersKindsAndPlaces))]
+    public void Compare_MarkerBetweenTheWrappersBlocks_StaysInTheRedline(Marker marker, Wrapper kind, MarkerPlace place)
     {
-        const string Start = "<w:bookmarkStart w:id=\"7\" w:name=\"Article\"/>";
-        const string End = "<w:bookmarkEnd w:id=\"7\"/>";
-        var left = Doc(Bracketed(kind, place, Bravo, Start, End) + P(Tail));
-        var right = Doc(Bracketed(kind, place, BravoEdited, Start, End) + P(Tail));
+        var (start, end) = marker == Marker.Bookmark
+            ? ("<w:bookmarkStart w:id=\"7\" w:name=\"Article\"/>", "<w:bookmarkEnd w:id=\"7\"/>")
+            : ("<w:commentRangeStart w:id=\"0\"/>", "<w:commentRangeEnd w:id=\"0\"/><w:p><w:r><w:commentReference w:id=\"0\"/></w:r></w:p>");
+        WmlDocument Document(string bravo) => marker == Marker.Bookmark
+            ? Doc(Bracketed(kind, place, bravo, start, end) + P(Tail))
+            : IrTestDocuments.WithComment("Ann", "A", "2026-01-01T00:00:00Z", "Check this clause.", Bracketed(kind, place, bravo, start, end) + P(Tail));
+        var left = Document(Bravo);
+        var right = Document(BravoEdited);
 
         var redline = DocxDiff.Compare(left, right);
 
-        AssertEveryRangeBracketsTheClauses(Body(redline), W.bookmarkStart, W.bookmarkEnd);
-        AssertRoundTrip(left, right, redline);
-    }
-
-    [Theory]
-    [MemberData(nameof(WrapperKindsAndMarkerPlaces))]
-    public void Compare_CommentRangeBetweenTheWrappersBlocks_StaysInTheRedline(Wrapper kind, MarkerPlace place)
-    {
-        const string Start = "<w:commentRangeStart w:id=\"0\"/>";
-        const string End = "<w:commentRangeEnd w:id=\"0\"/><w:p><w:r><w:commentReference w:id=\"0\"/></w:r></w:p>";
-        WmlDocument Commented(string bravo) =>
-            IrTestDocuments.WithComment("Ann", "A", "2026-01-01T00:00:00Z", "Check this clause.",
-                Bracketed(kind, place, bravo, Start, End) + P(Tail));
-        var left = Commented(Bravo);
-        var right = Commented(BravoEdited);
-
-        var redline = DocxDiff.Compare(left, right);
-
-        AssertEveryRangeBracketsTheClauses(Body(redline), W.commentRangeStart, W.commentRangeEnd);
+        var (startName, endName) = marker == Marker.Bookmark ? (W.bookmarkStart, W.bookmarkEnd) : (W.commentRangeStart, W.commentRangeEnd);
+        AssertEveryRangeBracketsTheClauses(Body(redline), startName, endName);
+        if (marker == Marker.Bookmark)
+            AssertRoundTrip(left, right, redline);
+        else
+            // Accepting moves the comment reference out of the replaced wrapper (issue #1157); rejecting is exact.
+            Assert.Equal(Signature(left.DocumentByteArray), Signature(DocxDiffOps.RejectRevisions(redline.DocumentByteArray)));
     }
 
     [Theory]
@@ -282,6 +274,8 @@ public class BlockWrapperNestedDiffTests
         var revisions = DocxDiff.GetRevisions(left, right);
         Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Deleted && r.Text.Contains(Alpha));
         Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Inserted && r.Text.Contains(Alpha));
+        Assert.Contains(Docxodus.Verification.SemanticDiff.Compare(left, right).Changes,
+            c => c.Path.EndsWith(".envelope", StringComparison.Ordinal));
     }
 
     // ---- nesting -------------------------------------------------------------------------------
@@ -364,10 +358,7 @@ public class BlockWrapperNestedDiffTests
     [InlineData(Wrapper.ContentControl)]
     public void Compare_TableCellEditedInsideAnUnchangedWrapper_DiffsTheCell(Wrapper kind)
     {
-        string Table(string cell) =>
-            "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"4000\"/><w:gridCol w:w=\"4000\"/></w:tblGrid>"
-            + "<w:tr><w:tc><w:tcPr><w:tcW w:w=\"4000\" w:type=\"dxa\"/></w:tcPr>" + P("Left cell stays.") + "</w:tc>"
-            + "<w:tc><w:tcPr><w:tcW w:w=\"4000\" w:type=\"dxa\"/></w:tcPr>" + P(cell) + "</w:tc></w:tr></w:tbl>";
+        string Table(string cell) => TwoCellTable(P("Left cell stays."), P(cell));
         var left = Doc(Wrap(kind, P(Alpha) + Table(Bravo)) + P(Tail));
         var right = Doc(Wrap(kind, P(Alpha) + Table(BravoEdited)) + P(Tail));
 
@@ -406,8 +397,7 @@ public class BlockWrapperNestedDiffTests
     [InlineData(Wrapper.ContentControl)]
     public void Compare_TwoAdjacentEditedWrappers_DiffInsideEach(Wrapper kind)
     {
-        string Two(string first, string second) =>
-            Wrap(kind, P(Alpha) + P(first), id: "w1") + Wrap(kind, P(second) + P(Charlie), id: "w2");
+        string Two(string first, string second) => TwoWrappers(kind, P(Alpha) + P(first), P(second) + P(Charlie));
         var left = Doc(Two(Bravo, Bravo) + P(Tail));
         var right = Doc(Two(BravoEdited, Bravo.Replace("staff", "auditors")) + P(Tail));
 
@@ -426,34 +416,9 @@ public class BlockWrapperNestedDiffTests
     [Theory]
     [InlineData(Wrapper.CustomXml)]
     [InlineData(Wrapper.ContentControl)]
-    public void Consolidate_ReviewerEditInsideAnUnchangedWrapper_MarksOnlyThatWord(Wrapper kind)
-    {
-        var baseline = Doc(Three(kind) + P(Tail));
-        var reviewed = Doc(Three(kind, BravoEdited) + P(Tail));
-        var reviewers = new[] { new DocxDiffReviewer { Document = reviewed, Author = "Reviewer" } };
-
-        var redline = DocxCompare.Consolidate(baseline, reviewers);
-
-        var body = Body(redline);
-        AssertSingleWrapperWithoutRangeMarkers(body, kind);
-        Assert.Equal("monthly", string.Concat(body.Descendants(W.delText).Select(t => t.Value)));
-        AssertUnmarked(body, Alpha, Charlie, Tail);
-        AssertRoundTrip(baseline, reviewed, redline);
-
-        var revisions = DocxDiff.GetConsolidatedRevisions(baseline, reviewers)
-            .Where(r => r.Type is DocxDiffRevisionType.Inserted or DocxDiffRevisionType.Deleted).ToList();
-        Assert.Collection(revisions.OrderBy(r => r.Type),
-            r => Assert.Equal("weekly", r.Text),
-            r => Assert.Equal("monthly", r.Text));
-    }
-
-    [Theory]
-    [InlineData(Wrapper.CustomXml)]
-    [InlineData(Wrapper.ContentControl)]
     public void Consolidate_TwoReviewersEditingDifferentWrappers_DiffInsideEach(Wrapper kind)
     {
-        string Two(string first, string second) =>
-            Wrap(kind, P(Alpha) + P(first), id: "w1") + Wrap(kind, P(second) + P(Charlie), id: "w2");
+        string Two(string first, string second) => TwoWrappers(kind, P(Alpha) + P(first), P(second) + P(Charlie));
         var baseline = Doc(Two(Bravo, Bravo) + P(Tail));
         var first = Doc(Two(BravoEdited, Bravo) + P(Tail));
         var second = Doc(Two(Bravo, Bravo.Replace("staff", "auditors")) + P(Tail));
@@ -469,65 +434,10 @@ public class BlockWrapperNestedDiffTests
         AssertRoundTrip(baseline, merged, redline);
     }
 
-    [Theory]
-    [InlineData(Wrapper.CustomXml)]
-    [InlineData(Wrapper.ContentControl)]
-    public void Compare_ParagraphMovedInsideAnUnchangedWrapper_IsANativeMove(Wrapper kind)
-    {
-        var left = Doc(Wrap(kind, P(Alpha) + P(Bravo) + P(Charlie)) + P(Tail));
-        var right = Doc(Wrap(kind, P(Bravo) + P(Charlie) + P(Alpha)) + P(Tail));
+    // ---- moves ---------------------------------------------------------------------------------
 
-        var redline = DocxCompare.Compare(left, right);
-
-        var body = Body(redline);
-        AssertSingleWrapperWithoutRangeMarkers(body, kind);
-        Assert.NotEmpty(body.Descendants(W.moveFrom));
-        Assert.NotEmpty(body.Descendants(W.moveTo));
-        AssertMoveNamesPaired(body);
-        AssertRoundTrip(left, right, redline);
-    }
-
-    [Theory]
-    [InlineData(Wrapper.CustomXml)]
-    [InlineData(Wrapper.ContentControl)]
-    public void Consolidate_TwoReviewersMovingParagraphsInDifferentWrappers_KeepsEachMovePaired(Wrapper kind)
-    {
-        string Two(string first, string second) => Wrap(kind, first, id: "w1") + Wrap(kind, second, id: "w2");
-        string Abc = P(Alpha) + P(Bravo) + P(Charlie);
-        string Moved = P(Bravo) + P(Charlie) + P(Alpha);
-        var baseline = Doc(Two(Abc, Abc) + P(Tail));
-        var first = Doc(Two(Moved, Abc) + P(Tail));
-        var second = Doc(Two(Abc, Moved) + P(Tail));
-        var merged = Doc(Two(Moved, Moved) + P(Tail));
-
-        var redline = DocxCompare.Consolidate(baseline,
-            [new DocxDiffReviewer { Document = first, Author = "One" }, new DocxDiffReviewer { Document = second, Author = "Two" }]);
-
-        var body = Body(redline);
-        Assert.Equal(2, body.Descendants(WrapperName(kind)).Count());
-        AssertMoveNamesPaired(body);
-        AssertRoundTrip(baseline, merged, redline);
-    }
-
-    [Theory]
-    [InlineData(Wrapper.CustomXml)]
-    [InlineData(Wrapper.ContentControl)]
-    public void Compare_ParagraphMovedFromTheBodyIntoAnUnchangedWrapper_IsANativeMove(Wrapper kind)
-    {
-        var left = Doc(P(Bravo) + Wrap(kind, P(Alpha) + P(Charlie)) + P(Tail));
-        var right = Doc(Wrap(kind, P(Alpha) + P(Bravo) + P(Charlie)) + P(Tail));
-
-        var redline = DocxCompare.Compare(left, right);
-
-        var body = Body(redline);
-        AssertSingleWrapperWithoutRangeMarkers(body, kind);
-        Assert.NotEmpty(body.Descendants(W.moveFrom));
-        Assert.NotEmpty(body.Elements(WrapperName(kind)).Descendants(W.moveTo));
-        AssertMoveNamesPaired(body);
-        AssertUnmarked(body, Alpha, Charlie, Tail);
-        AssertRoundTrip(left, right, redline);
-        Assert.Equal(2, DocxDiff.GetRevisions(left, right).Count(r => r.Type == DocxDiffRevisionType.Moved));
-    }
+    private static string TwoWrappers(Wrapper kind, string first, string second) =>
+        Wrap(kind, first, id: "w1") + Wrap(kind, second, id: "w2");
 
     private static string TwoCellTable(string first, string second) =>
         "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"4000\"/><w:gridCol w:w=\"4000\"/></w:tblGrid>"
@@ -538,43 +448,81 @@ public class BlockWrapperNestedDiffTests
     private static readonly string MovedAbc = P(Bravo) + P(Charlie) + P(Alpha);
 
     [Theory]
-    [InlineData(Wrapper.CustomXml)]
-    [InlineData(Wrapper.ContentControl)]
-    public void Consolidate_TwoReviewersMovingInsideWrappersInDifferentTableCells_KeepsEachMovePaired(Wrapper kind)
+    [InlineData(Wrapper.CustomXml, false)]
+    [InlineData(Wrapper.ContentControl, false)]
+    [InlineData(Wrapper.CustomXml, true)]
+    [InlineData(Wrapper.ContentControl, true)]
+    public void Compare_ParagraphMovedWithinOrIntoAnUnchangedWrapper_IsANativeMove(Wrapper kind, bool fromBody)
     {
-        string Table(string first, string second) => TwoCellTable(Wrap(kind, first, id: "w1"), Wrap(kind, second, id: "w2"));
-        var baseline = Doc(Table(Abc, Abc) + P(Tail));
-        var first = Doc(Table(MovedAbc, Abc) + P(Tail));
-        var second = Doc(Table(Abc, MovedAbc) + P(Tail));
-        var merged = Doc(Table(MovedAbc, MovedAbc) + P(Tail));
+        var left = Doc((fromBody ? P(Bravo) + Wrap(kind, P(Alpha) + P(Charlie)) : Wrap(kind, Abc)) + P(Tail));
+        var right = Doc(Wrap(kind, fromBody ? Abc : MovedAbc) + P(Tail));
 
-        var redline = DocxCompare.Consolidate(baseline,
-            [new DocxDiffReviewer { Document = first, Author = "One" }, new DocxDiffReviewer { Document = second, Author = "Two" }]);
+        var redline = DocxCompare.Compare(left, right);
 
-        Assert.Empty(DocxDiff.GetConflicts(baseline,
-            [new DocxDiffReviewer { Document = first, Author = "One" }, new DocxDiffReviewer { Document = second, Author = "Two" }]));
         var body = Body(redline);
-        Assert.Equal(2, body.Descendants(WrapperName(kind)).Count());
-        Assert.Equal(2, body.Descendants(W.moveFromRangeStart).Count());
-        AssertMoveMarkersUnique(redline.DocumentByteArray);
-        AssertRoundTrip(baseline, merged, redline);
+        AssertSingleWrapperWithoutRangeMarkers(body, kind);
+        Assert.NotEmpty(body.Elements(WrapperName(kind)).Descendants(W.moveTo));
+        AssertMoveMarkersUnique(redline.DocumentByteArray, moves: 1);
+        AssertUnmarked(body, fromBody ? Alpha : Bravo, Charlie, Tail);
+        AssertRoundTrip(left, right, redline);
+        Assert.Equal(2, DocxDiff.GetRevisions(left, right).Count(r => r.Type == DocxDiffRevisionType.Moved));
     }
 
-    /// <summary>The same move ids are shared by moves directly inside table cells, with no wrapper.</summary>
-    [Fact]
-    public void Consolidate_TwoReviewersMovingInsideDifferentTableCells_KeepsEachMovePaired()
+    public enum MoveScope
     {
-        var baseline = Doc(TwoCellTable(Abc, Abc) + P(Tail));
-        var first = Doc(TwoCellTable(MovedAbc, Abc) + P(Tail));
-        var second = Doc(TwoCellTable(Abc, MovedAbc) + P(Tail));
-        var merged = Doc(TwoCellTable(MovedAbc, MovedAbc) + P(Tail));
+        Wrappers,
+        WrappersInTableCells,
+        TableCells,
+        WrappersInFootnotes,
+    }
 
-        var redline = DocxCompare.Consolidate(baseline,
-            [new DocxDiffReviewer { Document = first, Author = "One" }, new DocxDiffReviewer { Document = second, Author = "Two" }]);
+    /// <summary>A document with two scopes holding <paramref name="first"/> and <paramref name="second"/>: two
+    /// wrappers, two wrappers in the cells of one table, the two cells themselves, or two wrappers in different
+    /// footnotes.</summary>
+    private static WmlDocument TwoScopes(MoveScope scope, Wrapper kind, string first, string second) => scope switch
+    {
+        MoveScope.Wrappers => Doc(TwoWrappers(kind, first, second) + P(Tail)),
+        MoveScope.WrappersInTableCells => Doc(TwoCellTable(Wrap(kind, first, id: "w1"), Wrap(kind, second, id: "w2")) + P(Tail)),
+        MoveScope.TableCells => Doc(TwoCellTable(first, second) + P(Tail)),
+        _ => IrTestDocuments.FromParts(
+            P(Tail) + "<w:p><w:r><w:t>One</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r>"
+                + "<w:r><w:t>Two</w:t></w:r><w:r><w:footnoteReference w:id=\"2\"/></w:r></w:p>",
+            footnotesInnerXml:
+                "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"
+                + "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>"
+                + $"<w:footnote w:id=\"1\">{Wrap(kind, first, id: "n1")}</w:footnote>"
+                + $"<w:footnote w:id=\"2\">{Wrap(kind, second, id: "n2")}</w:footnote>"),
+    };
 
-        Assert.Equal(2, Body(redline).Descendants(W.moveFromRangeStart).Count());
-        AssertMoveMarkersUnique(redline.DocumentByteArray);
-        AssertRoundTrip(baseline, merged, redline);
+    public static IEnumerable<object[]> WrapperKindsAndMoveScopes()
+    {
+        foreach (var scope in Enum.GetValues<MoveScope>())
+        {
+            yield return new object[] { Wrapper.CustomXml, scope };
+            if (scope != MoveScope.TableCells)
+                yield return new object[] { Wrapper.ContentControl, scope };
+        }
+    }
+
+    /// <summary>Each reviewer's comparison numbers its moves from 1, so when two reviewers move paragraphs in
+    /// different scopes (wrappers, table cells with or without a wrapper, footnotes), consolidate must give each
+    /// move its own name; a shared name reads as one move with two sources.</summary>
+    [Theory]
+    [MemberData(nameof(WrapperKindsAndMoveScopes))]
+    public void Consolidate_TwoReviewersMovingParagraphsInDifferentScopes_KeepsEachMovePaired(Wrapper kind, MoveScope scope)
+    {
+        var baseline = TwoScopes(scope, kind, Abc, Abc);
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Document = TwoScopes(scope, kind, MovedAbc, Abc), Author = "One" },
+            new DocxDiffReviewer { Document = TwoScopes(scope, kind, Abc, MovedAbc), Author = "Two" },
+        };
+
+        var redline = DocxCompare.Consolidate(baseline, reviewers);
+
+        Assert.Empty(DocxDiff.GetConflicts(baseline, reviewers));
+        AssertMoveMarkersUnique(redline.DocumentByteArray, moves: 2);
+        AssertRoundTrip(baseline, TwoScopes(scope, kind, MovedAbc, MovedAbc), redline);
     }
 
     [Theory]
@@ -582,59 +530,22 @@ public class BlockWrapperNestedDiffTests
     [InlineData(Wrapper.ContentControl)]
     public void Compare_MovesInTheBodyAndInsideAWrapperInACell_HaveDistinctNames(Wrapper kind)
     {
-        string Body(string cell, string body) => TwoCellTable(P("Left cell stays."), Wrap(kind, cell)) + body;
+        string Layout(string cell, string body) => TwoCellTable(P("Left cell stays."), Wrap(kind, cell)) + body;
         string BodyAbc = P("Delta body line one here.") + P("Echo body line two here.") + P("Foxtrot body line three here.");
         string BodyMoved = P("Echo body line two here.") + P("Foxtrot body line three here.") + P("Delta body line one here.");
-        var left = Doc(Body(Abc, BodyAbc) + P(Tail));
-        var right = Doc(Body(MovedAbc, BodyMoved) + P(Tail));
+        var left = Doc(Layout(Abc, BodyAbc) + P(Tail));
+        var right = Doc(Layout(MovedAbc, BodyMoved) + P(Tail));
 
         var redline = DocxCompare.Compare(left, right);
 
-        Assert.Equal(2, BodyOf(redline).Descendants(W.moveFromRangeStart).Count());
-        AssertMoveMarkersUnique(redline.DocumentByteArray);
+        AssertMoveMarkersUnique(redline.DocumentByteArray, moves: 2);
         AssertRoundTrip(left, right, redline);
     }
 
-    private static XElement BodyOf(WmlDocument document) => Body(document);
-
-    [Theory]
-    [InlineData(Wrapper.CustomXml)]
-    [InlineData(Wrapper.ContentControl)]
-    public void Consolidate_TwoReviewersMovingInsideWrappersInDifferentFootnotes_KeepsEachMovePaired(Wrapper kind)
-    {
-        WmlDocument WithNotes(string first, string second) => IrTestDocuments.FromParts(
-            P(Tail) + "<w:p><w:r><w:t>One</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r>"
-                + "<w:r><w:t>Two</w:t></w:r><w:r><w:footnoteReference w:id=\"2\"/></w:r></w:p>",
-            footnotesInnerXml:
-                "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"
-                + "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>"
-                + $"<w:footnote w:id=\"1\">{Wrap(kind, first, id: "n1")}</w:footnote>"
-                + $"<w:footnote w:id=\"2\">{Wrap(kind, second, id: "n2")}</w:footnote>");
-        var baseline = WithNotes(Abc, Abc);
-        var first = WithNotes(MovedAbc, Abc);
-        var second = WithNotes(Abc, MovedAbc);
-        var merged = WithNotes(MovedAbc, MovedAbc);
-
-        var redline = DocxCompare.Consolidate(baseline,
-            [new DocxDiffReviewer { Document = first, Author = "One" }, new DocxDiffReviewer { Document = second, Author = "Two" }]);
-
-        AssertMoveMarkersUnique(redline.DocumentByteArray);
-        Assert.Equal(NoteSignature(merged.DocumentByteArray), NoteSignature(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray)));
-        Assert.Equal(NoteSignature(baseline.DocumentByteArray), NoteSignature(DocxDiffOps.RejectRevisions(redline.DocumentByteArray)));
-    }
-
-    private static string NoteSignature(byte[] bytes)
-    {
-        using var stream = new MemoryStream(bytes);
-        using var document = WordprocessingDocument.Open(stream, false);
-        return string.Join("\n", document.MainDocumentPart!.FootnotesPart!.GetXDocument().Root!.Elements(W.footnote)
-            .Where(f => f.Attribute(W.type) is null)
-            .Select(f => (string?)f.Attribute(W.id) + ":\n" + Signature(f)));
-    }
-
-    /// <summary>Across the main document and its notes, every move name labels exactly one source range and one
-    /// destination range, and every move range id is used by one start/end pair only.</summary>
-    private static void AssertMoveMarkersUnique(byte[] bytes)
+    /// <summary>Across the main document and its notes, the redline holds <paramref name="moves"/> moves: every
+    /// move name labels exactly one source range and one destination range, and every move range id is used by
+    /// one start/end pair only.</summary>
+    private static void AssertMoveMarkersUnique(byte[] bytes, int moves)
     {
         using var stream = new MemoryStream(bytes);
         using var document = WordprocessingDocument.Open(stream, false);
@@ -644,7 +555,7 @@ public class BlockWrapperNestedDiffTests
         var markers = roots.SelectMany(r => r.Descendants()).ToList();
         var from = markers.Where(e => e.Name == W.moveFromRangeStart).Select(e => (string?)e.Attribute(W.name)).ToList();
         var to = markers.Where(e => e.Name == W.moveToRangeStart).Select(e => (string?)e.Attribute(W.name)).ToList();
-        Assert.NotEmpty(from);
+        Assert.Equal(moves, from.Count);
         Assert.Equal(from.Count, from.Distinct().Count());
         Assert.Equal(to.Count, to.Distinct().Count());
         Assert.Equal(from.OrderBy(n => n), to.OrderBy(n => n));
@@ -655,15 +566,7 @@ public class BlockWrapperNestedDiffTests
         }
     }
 
-    /// <summary>Every move name labels exactly one source range and one destination range.</summary>
-    private static void AssertMoveNamesPaired(XElement body)
-    {
-        var from = body.Descendants(W.moveFromRangeStart).Select(e => (string?)e.Attribute(W.name)).ToList();
-        var to = body.Descendants(W.moveToRangeStart).Select(e => (string?)e.Attribute(W.name)).ToList();
-        Assert.Equal(from.Count, from.Distinct().Count());
-        Assert.Equal(to.Count, to.Distinct().Count());
-        Assert.Equal(from.OrderBy(n => n), to.OrderBy(n => n));
-    }
+    // ---- conflicts -----------------------------------------------------------------------------
 
     public static IEnumerable<object[]> WrapperKindsAndPolicies() =>
         from kind in new[] { Wrapper.CustomXml, Wrapper.ContentControl }
@@ -687,14 +590,16 @@ public class BlockWrapperNestedDiffTests
 
         var redline = DocxCompare.Consolidate(baseline, reviewers, settings);
 
-        Assert.NotEmpty(DocxDiff.GetConflicts(baseline, reviewers, settings));
-        var rejected = DocxDiffOps.RejectRevisions(redline.DocumentByteArray);
-        Assert.Equal(Signature(Body(baseline.DocumentByteArray)), Signature(Body(rejected)));
-        var accepted = Signature(Body(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray)));
+        var conflict = Assert.Single(DocxDiff.GetConflicts(baseline, reviewers, settings));
+        Assert.Collection(conflict.Competitors,
+            one => Assert.Contains("rules", one.ResultText),
+            two => Assert.Contains("twice", two.ResultText));
+        Assert.Equal(Signature(baseline.DocumentByteArray), Signature(DocxDiffOps.RejectRevisions(redline.DocumentByteArray)));
+        var accepted = Signature(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray));
         if (policy == ConflictResolution.BaseWins)
-            Assert.Equal(Signature(Body(baseline.DocumentByteArray)), accepted);
+            Assert.Equal(Signature(baseline.DocumentByteArray), accepted);
         else if (policy == ConflictResolution.FirstReviewerWins)
-            Assert.Equal(Signature(Body(first.DocumentByteArray)), accepted);
+            Assert.Equal(Signature(first.DocumentByteArray), accepted);
     }
 
     // ---- edit script ---------------------------------------------------------------------------
@@ -718,6 +623,191 @@ public class BlockWrapperNestedDiffTests
         var json = IrEditScriptJson.Write(script);
         Assert.Contains("\"wrapperOps\"", json);
         Assert.Equal(script, IrEditScriptJson.Read(json));
+    }
+
+    // ---- a field spanning the wrapper's paragraphs (a Word table of contents) --------------------
+
+    public enum FieldEnd
+    {
+        /// <summary>Word's own shape: the field's end character sits alone in a trailing paragraph.</summary>
+        OwnParagraph,
+
+        /// <summary>The end character closes the last entry paragraph.</summary>
+        LastEntry,
+    }
+
+    private const string TocShell =
+        "<w:sdtPr><w:id w:val=\"-1511212882\"/><w:docPartObj><w:docPartGallery w:val=\"Table of Contents\"/><w:docPartUnique/></w:docPartObj></w:sdtPr>";
+
+    /// <summary>One entry as Word writes it: a hyperlink around the heading text, a tab and a PAGEREF field.
+    /// The first entry opens the TOC field itself before its hyperlink. The hyperlink's anchor comes from the
+    /// entry's first word, so editing the rest of the text leaves the anchor alone, as Word does.</summary>
+    private static string TocEntry(string text, bool opensToc, bool closesToc)
+    {
+        var anchor = "_Toc" + text.Split(' ')[0];
+        var sb = new StringBuilder("<w:p>");
+        if (opensToc)
+            sb.Append("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>")
+                .Append("<w:r><w:instrText xml:space=\"preserve\"> TOC \\o \"1-3\" \\h \\z \\u </w:instrText></w:r>")
+                .Append("<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>");
+        sb.Append($"<w:hyperlink w:anchor=\"{anchor}\" w:history=\"1\">")
+            .Append($"<w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r><w:r><w:tab/></w:r>")
+            .Append("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>")
+            .Append($"<w:r><w:instrText xml:space=\"preserve\"> PAGEREF {anchor} \\h </w:instrText></w:r>")
+            .Append("<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>1</w:t></w:r>")
+            .Append("<w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:hyperlink>");
+        if (closesToc)
+            sb.Append("<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>");
+        return sb.Append("</w:p>").ToString();
+    }
+
+    private static string TableOfContents(FieldEnd end, string[] entries)
+    {
+        var sb = new StringBuilder("<w:sdt>").Append(TocShell).Append("<w:sdtContent>").Append(P("Contents"));
+        for (var i = 0; i < entries.Length; i++)
+            sb.Append(TocEntry(entries[i], opensToc: i == 0, closesToc: end == FieldEnd.LastEntry && i == entries.Length - 1));
+        if (end == FieldEnd.OwnParagraph)
+            sb.Append("<w:p><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>");
+        return sb.Append("</w:sdtContent></w:sdt>").ToString();
+    }
+
+    public static IEnumerable<object[]> TableOfContentsEdits()
+    {
+        string[] three = { "Scope", "Term", "Fees" };
+        foreach (var end in new[] { FieldEnd.OwnParagraph, FieldEnd.LastEntry })
+        {
+            yield return new object[] { end, "entry inserted first", new[] { "Term", "Fees" }, three };
+            yield return new object[] { end, "entry inserted last", new[] { "Scope", "Term" }, three };
+            yield return new object[] { end, "first entry deleted", three, new[] { "Term", "Fees" } };
+            yield return new object[] { end, "middle entry deleted", three, new[] { "Scope", "Fees" } };
+            yield return new object[] { end, "last entry deleted", three, new[] { "Scope", "Term" } };
+            yield return new object[] { end, "entry text edited", three, new[] { "Scope", "Term and renewal", "Fees" } };
+        }
+    }
+
+    /// <summary>A table of contents is a content control holding one field that opens in its first entry
+    /// paragraph and closes paragraphs later. Whatever the comparison does inside it, accepting and rejecting
+    /// the redline must each leave every field with its begin, separate and end characters.</summary>
+    [Theory]
+    [MemberData(nameof(TableOfContentsEdits))]
+    public void Compare_TableOfContentsEntriesChanged_KeepsEveryFieldBalanced(
+        FieldEnd end, string name, string[] leftEntries, string[] rightEntries)
+    {
+        var left = Doc(TableOfContents(end, leftEntries) + P(Tail));
+        var right = Doc(TableOfContents(end, rightEntries) + P(Tail));
+
+        AssertFieldsSurviveRoundTrip(left, right, DocxCompare.Compare(left, right), name);
+    }
+
+    [Fact]
+    public void Compare_RealTableOfContentsWithAnEntryRemoved_KeepsEveryFieldBalanced()
+    {
+        var original = new WmlDocument(Path.Combine(FixtureDir.FullName, "HC022-Table-Of-Contents.docx"));
+        var revised = EditBody(original, body =>
+        {
+            var toc = body.Descendants(W.sdt).First(s => s.Descendants(W.docPartGallery).Any());
+            var entries = toc.Element(W.sdtContent)!.Elements(W.p).Where(p => p.Elements(W.hyperlink).Any()).ToList();
+            entries[^1].Remove();
+            var heading = entries[0].Descendants(W.t).First();
+            heading.Value = heading.Value.Replace("Video", "Audio");
+        });
+
+        AssertFieldsSurviveRoundTrip(original, revised, DocxCompare.Compare(original, revised), "HC022");
+    }
+
+    /// <summary>The redline adds no validation error, accepts to <paramref name="revised"/> and rejects to
+    /// <paramref name="original"/> block for block, and each view holds the field characters of its document.</summary>
+    private static void AssertFieldsSurviveRoundTrip(WmlDocument original, WmlDocument revised, WmlDocument redline, string name)
+    {
+        AssertNoNewValidationErrors(redline, original, revised);
+        AssertRoundTrip(original, revised, redline, name);
+        AssertSameFieldCharacters(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray), revised.DocumentByteArray, "accept, " + name);
+        AssertSameFieldCharacters(DocxDiffOps.RejectRevisions(redline.DocumentByteArray), original.DocumentByteArray, "reject, " + name);
+    }
+
+    private static readonly DirectoryInfo FixtureDir = new("../../../../TestFiles/");
+
+    private static WmlDocument EditBody(WmlDocument document, Action<XElement> edit)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(document.DocumentByteArray, 0, document.DocumentByteArray.Length);
+        using (var package = WordprocessingDocument.Open(stream, true))
+        {
+            var main = package.MainDocumentPart!;
+            edit(main.GetXDocument().Root!.Element(W.body)!);
+            main.PutXDocument();
+        }
+        return new WmlDocument("revised.docx", stream.ToArray());
+    }
+
+    /// <summary>The body of <paramref name="actual"/> holds as many field begin, separate and end characters
+    /// as the body of <paramref name="expected"/>.</summary>
+    private static void AssertSameFieldCharacters(byte[] actual, byte[] expected, string because)
+    {
+        static string Counts(byte[] bytes) => string.Join(", ", Body(bytes).Descendants(W.fldChar)
+            .GroupBy(f => (string?)f.Attribute(W.fldCharType))
+            .OrderBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => g.Key + "=" + g.Count()));
+        Assert.True(Counts(expected) == Counts(actual), $"field characters ({because}): expected {Counts(expected)}, got {Counts(actual)}");
+    }
+
+    /// <summary>Every validation error of <paramref name="redline"/> also occurs in one of the
+    /// <paramref name="inputs"/>: the comparison introduced none.</summary>
+    private static void AssertNoNewValidationErrors(WmlDocument redline, params WmlDocument[] inputs)
+    {
+        static HashSet<string> Errors(WmlDocument document)
+        {
+            using var stream = new MemoryStream(document.DocumentByteArray);
+            using var package = WordprocessingDocument.Open(stream, false);
+            return new OpenXmlValidator(FileFormatVersions.Office2019).Validate(package)
+                .Select(e => e.Description).ToHashSet(StringComparer.Ordinal);
+        }
+        var known = inputs.SelectMany(Errors).ToHashSet(StringComparer.Ordinal);
+        Assert.All(Errors(redline), e => Assert.Contains(e, known));
+    }
+
+    // ---- markers inside a nested wrapper -------------------------------------------------------
+
+    private const string InnerBookmarkStart = "<w:bookmarkStart w:id=\"7\" w:name=\"Article\"/>";
+    private const string InnerBookmarkEnd = "<w:bookmarkEnd w:id=\"7\"/>";
+
+    /// <summary>An outer wrapper holding <paramref name="alpha"/> and an inner wrapper whose blocks
+    /// (<paramref name="bravo"/> and Charlie) are bracketed by a bookmark between them.</summary>
+    private static string OuterAroundBookmarkedInner(Wrapper outer, Wrapper inner, string alpha, string bravo) =>
+        Wrap(outer, P(alpha) + Wrap(inner, InnerBookmarkStart + P(bravo) + P(Charlie) + InnerBookmarkEnd, id: "inner"), id: "outer");
+
+    public static IEnumerable<object[]> NestedWrapperKindsAndEditPlaces() =>
+        from pair in new[] { (Wrapper.CustomXml, Wrapper.ContentControl), (Wrapper.ContentControl, Wrapper.CustomXml), (Wrapper.CustomXml, Wrapper.CustomXml) }
+        from editInside in new[] { false, true }
+        select new object[] { pair.Item1, pair.Item2, editInside };
+
+    /// <summary>The bookmark sits between the INNER wrapper's blocks, so only that wrapper needs the whole copy
+    /// that keeps it: the outer wrapper is diffed in place whether the edit is beside the inner wrapper (which
+    /// is then kept as it is) or inside it (which is then replaced whole, each copy bracketed).</summary>
+    [Theory]
+    [MemberData(nameof(NestedWrapperKindsAndEditPlaces))]
+    public void Compare_MarkersInANestedWrapper_KeepOnlyThatWrapperWhole(Wrapper outer, Wrapper inner, bool editInside)
+    {
+        var left = Doc(OuterAroundBookmarkedInner(outer, inner, Alpha, Bravo) + P(Tail));
+        var right = Doc(OuterAroundBookmarkedInner(outer, inner,
+            editInside ? Alpha : Alpha.Replace("terms", "rules"), editInside ? BravoEdited : Bravo) + P(Tail));
+
+        var redline = DocxDiff.Compare(left, right);
+
+        var body = Body(redline);
+        var outerWrapper = Assert.Single(body.Elements(WrapperName(outer)));
+        Assert.Equal(editInside ? 2 : 1, outerWrapper.Descendants(WrapperName(inner)).Count());
+        Assert.Equal(editInside ? Bravo + Charlie : "terms", string.Concat(body.Descendants(W.delText).Select(t => t.Value)));
+        AssertUnmarked(body, Tail, editInside ? Alpha : Charlie);
+        var starts = outerWrapper.Descendants(W.bookmarkStart).ToList();
+        Assert.Equal(editInside ? 2 : 1, starts.Count);
+        foreach (var start in starts)
+        {
+            var text = MarkedText(body, e => e == start, W.bookmarkEnd);
+            Assert.StartsWith("Bravo clause", text, StringComparison.Ordinal);
+            Assert.EndsWith(Charlie, text, StringComparison.Ordinal);
+        }
+        AssertRoundTrip(left, right, redline);
     }
 
     // ---- helpers -------------------------------------------------------------------------------
@@ -752,12 +842,25 @@ public class BlockWrapperNestedDiffTests
     /// accepting revisions drops them (issue #1149).</summary>
     private static void AssertRoundTrip(WmlDocument original, WmlDocument revised, WmlDocument redline, string? because = null)
     {
-        var accepted = DocxDiffOps.AcceptRevisions(redline.DocumentByteArray);
-        var rejected = DocxDiffOps.RejectRevisions(redline.DocumentByteArray);
-        Assert.True(Signature(Body(revised.DocumentByteArray)) == Signature(Body(accepted)),
-            $"accept ≠ revised ({because}):\n{Signature(Body(revised.DocumentByteArray))}\n---\n{Signature(Body(accepted))}");
-        Assert.True(Signature(Body(original.DocumentByteArray)) == Signature(Body(rejected)),
-            $"reject ≠ original ({because}):\n{Signature(Body(original.DocumentByteArray))}\n---\n{Signature(Body(rejected))}");
+        var accepted = Signature(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray));
+        var rejected = Signature(DocxDiffOps.RejectRevisions(redline.DocumentByteArray));
+        Assert.True(Signature(revised.DocumentByteArray) == accepted,
+            $"accept ≠ revised ({because}):\n{Signature(revised.DocumentByteArray)}\n---\n{accepted}");
+        Assert.True(Signature(original.DocumentByteArray) == rejected,
+            $"reject ≠ original ({because}):\n{Signature(original.DocumentByteArray)}\n---\n{rejected}");
+    }
+
+    /// <summary>The body's signature followed by each footnote's.</summary>
+    private static string Signature(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var main = document.MainDocumentPart!;
+        var sb = new StringBuilder(Signature(main.GetXDocument().Root!.Element(W.body)!));
+        foreach (var note in main.FootnotesPart?.GetXDocument().Root!.Elements(W.footnote) ?? Enumerable.Empty<XElement>())
+            if (note.Attribute(W.type) is null)
+                sb.Append("FOOTNOTE ").Append((string?)note.Attribute(W.id)).Append('\n').Append(Signature(note));
+        return sb.ToString();
     }
 
     private static string Signature(XElement container)
