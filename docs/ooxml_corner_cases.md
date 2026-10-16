@@ -3009,7 +3009,9 @@ right. `w:pBdr`'s `w:left`/`w:right` do not move. ISO/IEC 29500-1 says the left 
 "shall be displayed on the left side of the page around the specified paragraph. This shall not
 change based on the paragraph direction" (quoted in the
 [SDK's `LeftBorder` remarks](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.leftborder)).
-The only documented swap is `w:swapBordersFacingPages`, for odd pages with mirrored margins.
+The `RightBorder` remarks say the same of `w:right`. The only documented swap is the
+`w:swapBordersFacingPages` compatibility setting, which swaps them on odd-numbered pages when the
+document also uses `w:mirrorMargins` and `w:evenAndOddHeaders`.
 
 ```xml
 <w:p><w:pPr><w:bidi/>
@@ -3023,7 +3025,7 @@ The only documented swap is `w:swapBordersFacingPages`, for odd pages with mirro
 
 | | Thick double (`w:left`) | Thin single (`w:right`) | Indents |
 |---|---|---|---|
-| ISO/IEC 29500-1 | left | right (not stated for `w:right`; by symmetry) | start 72pt on the right, end 18pt on the left |
+| ISO/IEC 29500-1 | left | right | start 72pt on the right, end 18pt on the left |
 | LibreOffice 25.8.7.3 | left | right | mirrored, as the spec says |
 | Docxodus | left | right | mirrored (issue #1129) |
 | Word | not yet measured | not yet measured | |
