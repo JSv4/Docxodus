@@ -2919,9 +2919,12 @@ export class PaginationEngine {
    *
    * Keep the source `.footnote-item > .footnote-content` ancestry: document
    * CSS, inherited direction/language, and custom classes frequently target
-   * those shells. Only the number and initial HTML/editor identities are
-   * omitted. A hidden sentinel preserves `p:not(:first-of-type)` for a page
-   * whose first carried element was a later source paragraph.
+   * those shells. Only a number rendered beside the content and the initial
+   * HTML/editor identities are omitted; the converter's number travels inside
+   * the first paragraph (issue #1130). A hidden sentinel preserves
+   * `p:not(:first-of-type)` in document CSS for a page whose first carried
+   * element was a later source paragraph; the generated stylesheet has no
+   * first-paragraph rule any more.
    */
   private createFootnoteContinuationWrapper(
     continuation: FootnoteContinuation,
@@ -2962,8 +2965,9 @@ export class PaginationEngine {
       const clone = element.cloneNode(true) as HTMLElement;
       clone.removeAttribute(FOOTNOTE_SOURCE_POSITION_ATTR);
       if (index === 0 && clone.tagName === "P") {
-        // Without the initial number, a carried paragraph always starts a new
-        // line even when source CSS made the note's first paragraph inline.
+        // A carried paragraph always starts a new line, even when document CSS
+        // makes the note's first paragraph inline (the generated stylesheet no
+        // longer does, issue #1130).
         clone.style.setProperty("display", "block", "important");
       }
       content.appendChild(clone);
@@ -2978,7 +2982,10 @@ export class PaginationEngine {
     fittingElements: readonly HTMLElement[],
   ): HTMLElement {
     const item = footnote.cloneNode(false) as HTMLElement;
-    const number = footnote.querySelector(".footnote-number");
+    // Only a number rendered beside the content. The converter puts it inside the first
+    // paragraph, as Word does (issue #1130), where it travels with that paragraph's leading
+    // fragment in `fittingElements`; copying it here as well would draw it twice.
+    const number = footnote.querySelector(":scope > .footnote-number");
     if (number) item.appendChild(number.cloneNode(true));
 
     const sourceContent = footnote.querySelector<HTMLElement>(".footnote-content");

@@ -89,6 +89,24 @@ All notable changes to this project will be documented in this file.
   inside another reviewer's cell could both be named `move1`, which reads as one move with two sources.
   Every move a reviewer's comparison reports, at any depth (table rows and cells, text boxes, block
   wrappers, notes), now gets a number unique across all reviewers.
+- A paginated footnote's first paragraph now keeps its own indentation on every line (issue #1130).
+  The note number was rendered beside the note text, and the first paragraph was forced
+  `display: inline` so the two shared a line; an inline paragraph ignores its own margins and
+  text-indent, so a hanging-indented note (`w:left="360" w:hanging="360"`) wrapped its later lines to
+  the note band's edge instead of 18pt in. The number is now the first content of the note's first
+  paragraph, where Word's reference-mark run sits (endnotes already worked this way), and no rule
+  overrides a note paragraph's display. The first paragraph also keeps its spacing before and after
+  now: a FootnoteText style with 6pt after, as in the NVCA model charter, separates consecutive
+  notes by 6pt, as LibreOffice does, which takes that charter from 51 to 53 pages in the paginated
+  editor. The spacing after the note area's last paragraph is no longer reserved, so the last note
+  line sits on the bottom margin, as in LibreOffice; before, a multi-paragraph last note lifted the
+  notes by it. A note split across pages still shows its number once, on the citing page. The
+  paginated editor treats the number as generated chrome, so it is never editable or committed as
+  note text, and keeps it when a note edit re-renders the paragraph; a caret deletion beside the
+  number (Backspace after it, Delete before it) leaves it in place, and a selection replaced across
+  it gets the number back when the edit commits. A note whose first paragraph is written as a
+  heading element (its style carries an outline level) gets its number in that paragraph, not the
+  next one.
 - Paragraphs inside a block-level `w:customXml` wrapper now appear in `Project()` markdown, and a
   comparison tracks edits inside one (issue #1114). The IR read the wrapper as an opaque block, so an
   edit inside it came out of `DocxCompare`/`DocxDiff` (and consolidate) as the old and new wrappers side

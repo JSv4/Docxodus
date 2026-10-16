@@ -88,8 +88,11 @@ export function generateTableCommentDocx(collapsed = false): Uint8Array {
   ]);
 }
 
-/** A real native endnote with one deliberately oversized text paragraph. */
-export function generateLongEndnoteDocx(wordCount = 1200): Uint8Array {
+/**
+ * A real native endnote with one deliberately oversized text paragraph. `paragraphProperties`
+ * adds `w:pPr` children to that paragraph, e.g. a hanging `w:ind`.
+ */
+export function generateLongEndnoteDocx(wordCount = 1200, paragraphProperties = ''): Uint8Array {
   const words = Array.from({ length: wordCount }, (_, index) => `endnote${index}`).join(' ');
   return storedZip([
     {
@@ -115,7 +118,7 @@ export function generateLongEndnoteDocx(wordCount = 1200): Uint8Array {
 <w:endnotes xmlns:w="${W_NS}">
   <w:endnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:endnote>
   <w:endnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:endnote>
-  <w:endnote w:id="1"><w:p><w:pPr><w:pStyle w:val="EndnoteText"/></w:pPr>
+  <w:endnote w:id="1"><w:p><w:pPr><w:pStyle w:val="EndnoteText"/>${paragraphProperties}</w:pPr>
     <w:r><w:rPr><w:rStyle w:val="EndnoteReference"/></w:rPr><w:endnoteRef/></w:r>
     <w:r><w:t xml:space="preserve"> ${words}</w:t></w:r></w:p></w:endnote>
 </w:endnotes>`),

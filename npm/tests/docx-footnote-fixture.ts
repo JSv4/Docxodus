@@ -33,6 +33,7 @@ function footnote(
   id: number,
   paragraphCount: number,
   wordCounts: number | readonly number[],
+  paragraphProperties: string,
 ): string {
   const paragraphWordCounts = Array.isArray(wordCounts) ? wordCounts : undefined;
   const wordsPerParagraph = typeof wordCounts === 'number' ? wordCounts : 0;
@@ -53,7 +54,7 @@ function footnote(
       : Array.from({ length: requestedWords }, (_, wordIndex) =>
         `note${id}p${index + 1}w${wordIndex + 1}`).join(' ');
     return (
-      `<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>` +
+      `<w:p><w:pPr><w:pStyle w:val="FootnoteText"/>${paragraphProperties}</w:pPr>` +
       (index === 0
         ? `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r>`
         : '') +
@@ -71,6 +72,8 @@ function footnote(
  * @param paragraphsPerNote paragraphs emitted inside each note.
  * @param wordCounts either a shared exact word count for every note paragraph, or per-paragraph
  *   word counts for constructing notes with uneven continuation pressure.
+ * @param noteParagraphProperties extra `w:pPr` children for every note paragraph, e.g. a
+ *   hanging `w:ind`.
  */
 export function generateFootnoteDocx(
   noteCount = 1,
@@ -81,6 +84,7 @@ export function generateFootnoteDocx(
     normalText?: string;
     continuationText?: string;
   } = {},
+  noteParagraphProperties = '',
 ): Uint8Array {
   const noteIds = Array.from({ length: noteCount }, (_, i) => i + 1);
   const body = Array.from({ length: bodyLines }, (_, i) =>
@@ -145,7 +149,7 @@ export function generateFootnoteDocx(
   <w:footnote w:type="continuationSeparator" w:id="0">${separatorRun(
     'continuationSeparator', separatorStories.continuationText,
   )}</w:footnote>
-  ${noteIds.map((id) => footnote(id, paragraphsPerNote, wordCounts)).join('\n  ')}
+  ${noteIds.map((id) => footnote(id, paragraphsPerNote, wordCounts, noteParagraphProperties)).join('\n  ')}
 </w:footnotes>`),
     },
     {

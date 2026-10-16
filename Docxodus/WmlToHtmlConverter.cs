@@ -2384,18 +2384,21 @@ namespace Docxodus
             // FootnoteText paragraph. The item and its content wrapper are set in the page's default
             // font, and a strut in that font made the note's line box taller than the paragraph's own,
             // which lifted the bottom-anchored text about a pixel above Word's (issue #955). So the item
-            // contributes no strut (line-height 0, which the number inherits, so a raised number does not
-            // grow the line either), and the wrapper generates no box and hands `normal` back to the
-            // paragraph, whose own font then sizes its lines.
+            // contributes no strut (line-height 0), and the wrapper generates no box and hands `normal`
+            // back to the paragraph, whose own font then sizes its lines. The number, inside the
+            // paragraph, declares its own zero line height below.
             sb.AppendLine(".footnote-item {");
             sb.AppendLine("    margin-bottom: 0;");
             sb.AppendLine("    line-height: 0;");
             sb.AppendLine("}");
 
-            // Footnote number - inline with superscript styling
+            // Footnote number - inline with superscript styling. It is the first content of the
+            // note's first paragraph, so it does not inherit the item's zero line height; it
+            // declares its own, so a raised number cannot grow the paragraph's line (issue #955).
             sb.AppendLine(".footnote-number {");
             sb.AppendLine("    font-weight: normal;");
             sb.AppendLine("    display: inline;");
+            sb.AppendLine("    line-height: 0;");
             sb.AppendLine($"    vertical-align: {ScriptRaiseCss(superscript: true)};");
             sb.AppendLine($"    font-size: {ScriptSizeCss};");
             sb.AppendLine("    margin-right: 2pt;");
@@ -2415,26 +2418,24 @@ namespace Docxodus
             sb.AppendLine("    line-height: normal;");
             sb.AppendLine("}");
 
-            // Make first paragraph in footnote content inline to flow with number
-            // Use :first-of-type instead of :first-child because XML serialization adds
-            // whitespace text nodes that would prevent :first-child from matching.
+            // No rule targets the note paragraphs themselves. The number is a run of the first
+            // paragraph, as in Word (issue #1130), so every paragraph is an ordinary block whose
+            // resolved classes alone set its display, indentation and spacing. A generic inset or
+            // gap outranked those classes and moved later note lines (issue #1120); forcing the
+            // first paragraph inline, to share a line with a number rendered beside it, made it
+            // ignore its own margins and text-indent.
             //
-            // NOTE: descendant selectors, NOT the `>` child combinator these rules used to use.
-            // The stylesheet is the VALUE of an h:style element, so serializing the XHTML escapes
-            // `>` to `&gt;` — `.footnote-content &gt; p:first-of-type` is not a valid selector and
-            // every browser silently drops the rule. The symptom was subtle and looked like a
-            // layout bug rather than a broken stylesheet: in paginated mode every footnote rendered
-            // its number alone on one line with the text beginning on the next. Generated CSS must
-            // therefore avoid characters XML escapes; NoGeneratedCssIsXmlEscaped pins that.
-            sb.AppendLine(".footnote-content p:first-of-type {");
-            sb.AppendLine("    display: inline;");
-            sb.AppendLine("}");
+            // Generated CSS must avoid characters XML escapes: the stylesheet is the VALUE of an
+            // h:style element, so a `>` child combinator reaches the browser as `&gt;` and the
+            // rule is silently dropped. NoGeneratedCssIsXmlEscaped pins that.
 
-            // Later paragraphs are ordinary blocks. Their indentation and spacing are the note
-            // paragraph's own resolved properties: a generic inset or gap here outranks those
-            // classes by specificity and moved every later note line (issue #1120).
-            sb.AppendLine(".footnote-content p:not(:first-of-type) {");
-            sb.AppendLine("    display: block;");
+            // The one exception: the spacing after the note area's last paragraph. The area is
+            // bottom-anchored, and the reference renderers set that paragraph's last line on the
+            // bottom margin; counting its spacing after lifted every page's notes by it (6pt for
+            // the common FootnoteText style) and reserved that much body space (issue #1130).
+            // The engine measures and paints the same tree, so both see this.
+            sb.AppendLine($".{prefix}footnotes .footnote-item:last-child .footnote-content p:last-of-type {{");
+            sb.AppendLine("    margin-bottom: 0 !important;");
             sb.AppendLine("}");
 
             return sb.ToString();
@@ -4238,14 +4239,9 @@ namespace Docxodus
             // clones retain both the p:en and en:en identities when a long paragraph splits.
             if (noteType == "en" && settings.RenderPagination == PaginationMode.Paginated)
             {
-                var firstParagraph = content.OfType<XElement>().SelectMany(e => e.DescendantsAndSelf())
-                    .FirstOrDefault(e => e.Name == Xhtml.p);
-                if (firstParagraph != null)
-                {
-                    var format = tracker?.EndnoteNumberFormat ?? "lowerRoman";
-                    firstParagraph.AddFirst(RenderPaginatedNoteNumber(wordDoc, settings,
-                        noteElement, FormatNoteNumber(displayNumber, format), endnote: true));
-                }
+                var format = tracker?.EndnoteNumberFormat ?? "lowerRoman";
+                AddNoteNumberToFirstParagraph(content, RenderPaginatedNoteNumber(wordDoc, settings,
+                    noteElement, FormatNoteNumber(displayNumber, format), endnote: true));
                 foreach (var paragraph in content.OfType<XElement>()
                     .Where(e => e.Name == Xhtml.p))
                 {
@@ -4437,12 +4433,16 @@ namespace Docxodus
                 // area is a print surface: Word and LibreOffice render the bare superscript
                 // number (no "N." label) and no back-reference link, so neither belongs here —
                 // the web-view <ol> section keeps both.
+                // In Word the number is a run of the note's first paragraph, so that paragraph's own
+                // indentation governs the number's line and every line after it (issue #1130).
+                var number = RenderPaginatedNoteNumber(wordDoc, settings, fn, displayNumber);
+                var numberedParagraph = AddNoteNumberToFirstParagraph(content, number);
                 var footnoteItem = new XElement(Xhtml.div,
                     new XAttribute("data-footnote-id", footnoteId),
                     new XAttribute("data-display-number", displayNumber),
                     new XAttribute("class", "footnote-item"),
                     SourceAnchorIdentityAttribute(settings, fn),
-                    RenderPaginatedNoteNumber(wordDoc, settings, fn, displayNumber),
+                    numberedParagraph ? null : number,
                     new XElement(Xhtml.span,
                         new XAttribute("class", "footnote-content"),
                         content));
@@ -4451,6 +4451,28 @@ namespace Docxodus
             }
 
             return registry.HasElements ? registry : null;
+        }
+
+        /// <summary>
+        /// The elements a Word paragraph is written as: a heading element when its style carries
+        /// an outline level, otherwise a paragraph.
+        /// </summary>
+        private static readonly HashSet<XName> ParagraphElementNames = new()
+        {
+            Xhtml.p, Xhtml.h1, Xhtml.h2, Xhtml.h3, Xhtml.h4, Xhtml.h5, Xhtml.h6,
+        };
+
+        /// <summary>
+        /// Make a paginated note's number the first content of the note's first paragraph, where
+        /// Word's reference-mark run sits. Returns false, leaving the number unplaced, when the
+        /// note has no paragraph.
+        /// </summary>
+        private static bool AddNoteNumberToFirstParagraph(IEnumerable<object?> content, XElement number)
+        {
+            var firstParagraph = content.OfType<XElement>().SelectMany(e => e.DescendantsAndSelf())
+                .FirstOrDefault(e => ParagraphElementNames.Contains(e.Name));
+            firstParagraph?.AddFirst(number);
+            return firstParagraph != null;
         }
 
         /// <summary>
@@ -4473,16 +4495,16 @@ namespace Docxodus
             var number = new XElement(Xhtml.span,
                 new XAttribute("class", endnote ? "endnote-number" : "footnote-number"),
                 endnote ? new XAttribute("data-endnote-number", "true") : null);
-            // The marker is outside the footnote paragraph. Set its family here without
-            // changing the item/content shells' inherited line metrics during pagination.
+            // Set the note paragraph's family on the number itself, so a number that cannot be
+            // placed in a paragraph (a note without one) still matches the note text.
             var numberStyle = new Dictionary<string, string>();
             var paragraph = footnote.Descendants(W.p).FirstOrDefault();
             if (paragraph != null) DefineStrutFont(numberStyle, paragraph);
             numberStyle.Remove("font-size");
             // In Word the number is a run of the first note paragraph, so it sits on that
             // paragraph's line. An exact-spaced line top-aligns its runs in a box of the declared
-            // height; without that height the number inherited the item's zero line height and
-            // painted half a line above its text (issue #1120).
+            // height; with the generic rule's zero line height instead, the number painted half a
+            // line above its text (issue #1120).
             // Only a number rendered from the note's own run on its baseline: a generic number or
             // a run raised by w:position is shifted by CSS, and a line height would let that raised
             // box grow the line (the #955 strut the item's zero line height prevents).
