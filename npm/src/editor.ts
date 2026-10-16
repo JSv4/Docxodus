@@ -18,6 +18,7 @@
  */
 
 import { paginateHtml } from "./pagination.js";
+import { applyUnroundedNormalLineHeights } from "./line-metrics.js";
 import { DocumentViewport } from "./viewport.js";
 import type { ColumnWidth } from "./viewport.js";
 import { HeaderFooterRegion } from "./editor-headerfooter.js";
@@ -2742,6 +2743,10 @@ export class DocxEditor {
   }
 
   private wireBlock(el: HTMLElement): void {
+    // The paginator gives every line its font's unrounded height before it lays pages out. A block
+    // rendered afresh after an edit has not had that pass; without it, it would advance at
+    // Chromium's whole-pixel pitch while the rest of the page does not (issue #1151).
+    if (this.options.paginated && el.isConnected) applyUnroundedNormalLineHeights(el);
     if (!EDITABLE_TAGS.has(el.tagName)) return;
     if (
       el.closest("tr[class$='row-del'], tr[class*='row-del ']") ||

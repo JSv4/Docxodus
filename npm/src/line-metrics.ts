@@ -16,26 +16,32 @@ const PROBE_FONT_SIZE_PX = 1000;
 /** Probe text for an element whose own text the primary font covers (Latin, through U+024F). */
 const LATIN_PROBE = "Hg";
 
+/** A character the Latin probe's font may not cover (beyond U+024F), other than white space. */
+const BEYOND_LATIN = /[^\u0000-\u024f\s]/u;
+const BEYOND_LATIN_CHARACTERS = /[^\u0000-\u024f\s]/gu;
+
 /** At most this many distinct characters of an element's own text go into its probe. */
 const MAX_PROBE_CHARACTERS = 256;
 
 /**
- * What to measure an element's natural line height with. Under `normal`, Chromium also grows a line
- * for the fallback fonts its text needs (a CJK run in a Calibri paragraph lays out taller than Latin
- * text), so an element whose own text goes beyond Latin is probed with those characters themselves.
+ * The characters to measure an element's natural line height with, beyond {@link LATIN_PROBE}.
+ * Under `normal`, Chromium also grows a line for the fallback fonts its text needs (a CJK run in a
+ * Calibri paragraph lays out taller than Latin text), so an element whose own text goes beyond
+ * Latin is probed with those characters themselves.
  */
-function probeText(element: Element): string {
+function probeCharacters(element: Element): string[] {
   const characters = new Set<string>();
   for (const node of Array.from(element.childNodes)) {
     if (node.nodeType !== 3) continue;
-    for (const character of node.textContent ?? "") {
-      if (/\s/.test(character)) continue;
+    // Most text is Latin throughout; test the whole string once before looking at characters.
+    const text = node.textContent ?? "";
+    if (!BEYOND_LATIN.test(text)) continue;
+    for (const [character] of text.matchAll(BEYOND_LATIN_CHARACTERS)) {
       characters.add(character);
-      if (characters.size >= MAX_PROBE_CHARACTERS) break;
+      if (characters.size >= MAX_PROBE_CHARACTERS) return Array.from(characters);
     }
   }
-  const beyondLatin = Array.from(characters).filter((character) => character.codePointAt(0)! > 0x024f);
-  return beyondLatin.length === 0 ? LATIN_PROBE : LATIN_PROBE + beyondLatin.sort().join("");
+  return Array.from(characters);
 }
 
 /**
@@ -44,7 +50,7 @@ function probeText(element: Element): string {
  */
 function naturalLineHeightRatios(document: Document): (style: CSSStyleDeclaration, text: string) => number {
   const ratios = new Map<string, number>();
-  return (style, text) => {
+  const ratio = (style: CSSStyleDeclaration, text: string): number => {
     const key = `${style.fontStyle}|${style.fontWeight}|${style.fontStretch}|${style.fontFamily}|${text}`;
     let ratio = ratios.get(key);
     if (ratio === undefined) {
@@ -65,6 +71,54 @@ function naturalLineHeightRatios(document: Document): (style: CSSStyleDeclaratio
     }
     return ratio;
   };
+  return ratio;
+}
+
+/**
+ * How far a `normal` line of `style`'s font reaches above and below its baseline, as fractions of
+ * the font size, for Latin text plus `characters`. The fonts on one line share its baseline, so
+ * the line reaches as far up and down as the furthest of them. Each character is measured beside
+ * the Latin probe on its own and cached: text varies far more than the characters in it (smart
+ * quotes, dashes, section signs), and every new probe forces a layout.
+ */
+type ProbeFont = Pick<CSSStyleDeclaration, "fontStyle" | "fontWeight" | "fontStretch" | "fontFamily">;
+
+function naturalLineExtents(document: Document): (style: ProbeFont, characters: string[]) => number {
+  const extents = new Map<string, { above: number; below: number }>();
+  const measure = (style: ProbeFont, text: string) => {
+    const key = `${style.fontStyle}|${style.fontWeight}|${style.fontStretch}|${style.fontFamily}|${text}`;
+    let extent = extents.get(key);
+    if (extent === undefined) {
+      const probe = document.createElement("span");
+      probe.setAttribute("aria-hidden", "true");
+      probe.style.cssText = "position:absolute;left:-100000px;top:0;visibility:hidden;"
+        + "display:inline-block;white-space:nowrap;line-height:normal;margin:0;padding:0;border:0;";
+      probe.style.fontFamily = style.fontFamily;
+      probe.style.fontStyle = style.fontStyle;
+      probe.style.fontWeight = style.fontWeight;
+      probe.style.fontStretch = style.fontStretch;
+      probe.style.fontSize = `${PROBE_FONT_SIZE_PX}px`;
+      const marker = document.createElement("span");
+      marker.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline;margin:0;padding:0;border:0;";
+      probe.append(marker, text);
+      (document.body ?? document.documentElement).appendChild(probe);
+      const box = probe.getBoundingClientRect();
+      const baseline = marker.getBoundingClientRect().bottom - box.top;
+      extent = { above: baseline / PROBE_FONT_SIZE_PX, below: (box.height - baseline) / PROBE_FONT_SIZE_PX };
+      probe.remove();
+      extents.set(key, extent);
+    }
+    return extent;
+  };
+  return (style, characters) => {
+    let { above, below } = measure(style, LATIN_PROBE);
+    for (const character of characters) {
+      const extent = measure(style, LATIN_PROBE + character);
+      above = Math.max(above, extent.above);
+      below = Math.max(below, extent.below);
+    }
+    return above + below;
+  };
 }
 
 /**
@@ -82,17 +136,25 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
   const document = root.ownerDocument;
   const view = document.defaultView;
   if (!view) return 0;
-  const ratioFor = naturalLineHeightRatios(document);
+  const ratioFor = naturalLineExtents(document);
 
-  const targets: Array<{ element: HTMLElement; lineHeight: number }> = [];
+  // Read every style before probing: each probe changes the document, so a style read after one
+  // recomputes the styles of the whole tree.
+  const candidates: Array<{ element: HTMLElement; font: ProbeFont; fontSize: number; characters: string[] }> = [];
   for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
     if (!(element instanceof view.HTMLElement)) continue;
     const style = view.getComputedStyle(element);
     if (style.lineHeight !== "normal") continue;
     const fontSize = Number.parseFloat(style.fontSize);
-    const ratio = ratioFor(style, probeText(element));
-    if (!(fontSize > 0) || !(ratio > 0)) continue;
-    targets.push({ element, lineHeight: ratio * fontSize });
+    if (!(fontSize > 0)) continue;
+    const { fontStyle, fontWeight, fontStretch, fontFamily } = style;
+    candidates.push({ element, font: { fontStyle, fontWeight, fontStretch, fontFamily }, fontSize,
+      characters: probeCharacters(element) });
+  }
+  const targets: Array<{ element: HTMLElement; lineHeight: number }> = [];
+  for (const { element, font, fontSize, characters } of candidates) {
+    const ratio = ratioFor(font, characters);
+    if (ratio > 0) targets.push({ element, lineHeight: ratio * fontSize });
   }
   for (const { element, lineHeight } of targets) {
     element.style.setProperty("line-height", `${lineHeight.toFixed(4)}px`);
