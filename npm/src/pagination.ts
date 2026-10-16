@@ -4333,10 +4333,12 @@ export class PaginationEngine {
         }
       }
 
-      // Check if block fits on current page (including its footnotes)
+      // Check if block fits on current page (including its footnotes). The note cap judges the
+      // notes this block adds; notes already admitted to the page do not refuse a block that
+      // cites none (a carried continuation can fill the capped area exactly).
       if (
         blockSpace <= effectiveRemainingHeight
-        && (combinedFootnoteHeight === 0
+        && (newFootnoteIds.length === 0
           || combinedFootnoteHeight + FOOTNOTE_MEASUREMENT_GUARD_PT <= maxFootnoteArea)
       ) {
         // Block fits with current footnote allocation
@@ -4373,7 +4375,9 @@ export class PaginationEngine {
           // from its citation, and the deferred notes accumulate into pages that carry nothing
           // but notes. A paginator that splits no paragraph (the paginated editor) still defers:
           // moving every citing paragraph whole would cost more pages than Word's split does.
-          const turnHelps = noteBandWith(blockSpaceWithoutFootnotes)
+          // Moving the line helps only if a fresh page would offer its notes more room than is
+          // free here; a note too tall for any band is split on this page instead.
+          const turnHelps = noteBandWith(blockSpaceWithoutFootnotes) - currentFootnoteHeight
             < freshBlockPageBodyHeight * MAX_FOOTNOTE_AREA_RATIO;
           if (this.fragmentParagraphs && turnHelps && !this.notesCanStartOnPage(newFootnoteIds,
             noteBandWith(blockSpaceWithoutFootnotes), blockDimensions.contentWidth, notePayload,

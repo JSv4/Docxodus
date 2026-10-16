@@ -3120,6 +3120,12 @@ and deferred more, until a page held nothing but notes. Two limits made this com
 - A paragraph is split for being too tall only when its own lines do not fit. When it is its notes
   that do not fit, the notes are split instead (earlier, every split left a paragraph that still
   could not take its notes whole, and it shrank word by word).
+- Moving a citing line is worthwhile when a fresh page offers the note more room than is free on
+  this one, which is the case when an earlier note's continuation already fills this page's note
+  area. The test compares that free space, not the size of the area.
+- The note cap judges only the notes a block adds. A block that cites nothing was refused once a
+  carried continuation filled the capped area, so the page kept its notes and lost its body text
+  (this also happened before #1151).
 
 Tests: `npm/tests/pagination-note-citation-placement.spec.ts`.
 

@@ -183,6 +183,32 @@ test.describe('Paginated note placement beside its citation', () => {
     expect(layout.body[1].join(' ')).not.toContain('1.');
   });
 
+  test('a citation moves when the note area is full though as large as any page\'s', async ({ page }) => {
+    // Note 1 continues from page 1 and fills page 2's note area, which is as large as any page's.
+    // The paragraph opening page 2 cites note 2 on its second line: that line fits, but no room
+    // is left for the note, while page 3 will have some. So the first line stays on page 2 and
+    // the citing line moves to page 3 with its note.
+    const layout = await paginate(page, staging(
+      `<p>cites one${reference('1')}</p><div data-page-break="true"></div>`
+        + `<p>${lines('two', 1)}<br>two 2${reference('2')}</p><p>after</p>`,
+      note('1', 26) + note('2', 2)));
+
+    expect(layout.referencePage['2']).toBe(layout.notePage['2']);
+    expect(layout.body[1].join(' ')).toContain('two 1');
+  });
+
+  test('a page whose note area a continuation fills still takes body text that cites nothing', async ({ page }) => {
+    // The continuation of note 1 fills page 2's capped note area exactly. The paragraph that
+    // follows cites no note, so the cap has nothing to judge; it used to be refused all the same,
+    // leaving page 2 with notes and no body.
+    const layout = await paginate(page, staging(
+      `<p>cites one${reference('1')}</p><p>${lines('filler', 7)}</p><p>after</p>`,
+      note('1', 24)));
+
+    const lastWithBody = layout.body.map((blocks) => blocks.length > 0).lastIndexOf(true);
+    expect(layout.body.slice(0, lastWithBody + 1).every((blocks) => blocks.length > 0)).toBe(true);
+  });
+
   test('a note keeps the citing paragraph whole when the note is what does not fit', async ({ page }) => {
     // The paragraph's own lines fit; its 30-line note must split. Only the note splits:
     // the paragraph is not cut down word by word to make room for a note too tall for any page.
