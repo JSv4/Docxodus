@@ -779,12 +779,13 @@ namespace Docxodus
         /// content control or smart tag) is a run-level revision that reject reverses. Besides a paragraph and the
         /// run containers inside one, that is a block stream: a revision wrapper written between blocks holds
         /// run-level markup such as a bookmark or comment-range marker (issue #1149), and a block
-        /// <c>w:customXml</c> is a block stream too.
+        /// <c>w:customXml</c> (one outside any paragraph) is a block stream too.
         /// </summary>
         private static bool IsRunLevelRevisionParent(XElement? parent) =>
             parent is not null &&
             (parent.Name == W.p || parent.Name == W.hyperlink || parent.Name == W.fldSimple ||
-             parent.Name == W.dir || parent.Name == W.bdo || parent.Name == W.customXml ||
+             parent.Name == W.dir || parent.Name == W.bdo ||
+             (parent.Name == W.customXml && !parent.Ancestors(W.p).Any()) ||
              W.BlockLevelContentContainers.Contains(parent.Name));
 
         private static object? ReverseRevisionsTransform(XNode? node, ReverseRevisionsInfo rri)
@@ -2739,7 +2740,7 @@ namespace Docxodus
                                 var leadingLoose = new List<object?>();
                                 var innerLoose = new List<object?>[paragraphMembers.Count];
                                 bool onlyDeletedBefore = true;
-                                for (int k = 0; k < paragraphMembers.Count; k++)
+                                for (int k = 0; looseBefore.Count > 0 && k < paragraphMembers.Count; k++)
                                 {
                                     var member = paragraphMembers[k].BlockLevelContent.ThisBlockContentElement!;
                                     var loose = Loose(member).ToList();

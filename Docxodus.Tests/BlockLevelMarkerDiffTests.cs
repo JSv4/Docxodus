@@ -334,6 +334,76 @@ public class BlockLevelMarkerDiffTests
         AssertRoundTrip(engine, left, right);
     }
 
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_BodyCommentRange_AddedOnlyInTheRevisedDocument_AcceptKeepsItAndRejectDropsIt(string engine)
+    {
+        var left = Doc(P("Alpha") + P("Bravo monthly") + P("Charlie"));
+        var right = CommentDoc("<w:commentRangeStart w:id=\"0\"/>" + P("Alpha") + P("Bravo weekly") +
+            "<w:commentRangeEnd w:id=\"0\"/>" + $"<w:p>{CommentReference}<w:r><w:t>Charlie</w:t></w:r></w:p>");
+
+        AssertRoundTrip(engine, left, right);
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_BodyCommentRange_RemovedInTheRevisedDocument_AcceptDropsItAndRejectKeepsIt(string engine)
+    {
+        var left = CommentDoc("<w:commentRangeStart w:id=\"0\"/>" + P("Alpha") + P("Bravo monthly") +
+            "<w:commentRangeEnd w:id=\"0\"/>" + $"<w:p>{CommentReference}<w:r><w:t>Charlie</w:t></w:r></w:p>");
+        var right = Doc(P("Alpha") + P("Bravo weekly") + P("Charlie"));
+
+        AssertRoundTrip(engine, left, right);
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_BodyBookmark_AroundAMovedParagraph_FollowsEachSide(string engine)
+    {
+        const string moved = "This whole paragraph moves further down the document unchanged";
+        var left = Doc(P("Lead") + Start("Moved") + P(moved) + End() + P("Alpha paragraph stays") + P("Bravo paragraph stays") + P("Tail"));
+        var right = Doc(P("Lead") + P("Alpha paragraph stays") + P("Bravo paragraph stays") + Start("Moved") + P(moved) + End() + P("Tail"));
+
+        AssertRoundTrip(engine, left, right);
+    }
+
+    // ------------------------------------------------------------------------------------------ notes
+
+    private const string Separators =
+        "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>" +
+        "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>";
+
+    private static WmlDocument FootnoteDoc(string noteContent) => IrTestDocuments.FromParts(
+        "<w:p><w:r><w:t>Body</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p>",
+        footnotesInnerXml: Separators + $"<w:footnote w:id=\"1\">{noteContent}</w:footnote>");
+
+    /// <summary>The children of footnote 1: paragraphs by text, bookmark markers by kind and name.</summary>
+    private static string FootnoteLayout(WmlDocument document)
+    {
+        var note = Part(document, "word/footnotes.xml").Root!.Elements(W + "footnote")
+            .Single(n => (string?)n.Attribute(W + "id") == "1");
+        var names = note.Descendants(W + "bookmarkStart").GroupBy(b => (string?)b.Attribute(W + "id") ?? "")
+            .ToDictionary(g => g.Key, g => (string?)g.First().Attribute(W + "name") ?? "");
+        return string.Join(" ", note.Elements().Select(e =>
+            e.Name == W + "p" ? "P:" + string.Concat(e.Descendants(W + "t").Select(t => t.Value))
+            : e.Name == W + "bookmarkStart" ? "BS:" + (string?)e.Attribute(W + "name")
+            : e.Name == W + "bookmarkEnd" ? "BE:" + names.GetValueOrDefault((string?)e.Attribute(W + "id") ?? "", "?")
+            : e.Name.LocalName));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_FootnoteBookmark_AroundAnEditedParagraph_StaysAroundItsParagraphs(string engine)
+    {
+        var left = FootnoteDoc(P("Note lead") + Start("InNote") + P("Alpha") + P("Bravo monthly") + End());
+        var right = FootnoteDoc(P("Note lead") + Start("InNote") + P("Alpha") + P("Bravo weekly") + End());
+
+        var redline = Compare(engine, left, right);
+
+        Assert.Equal("P:Note lead BS:InNote P:Alpha P:Bravo weekly BE:InNote", FootnoteLayout(Accept(redline)));
+        Assert.Equal("P:Note lead BS:InNote P:Alpha P:Bravo monthly BE:InNote", FootnoteLayout(Reject(redline)));
+    }
+
     // ------------------------------------------------------------------------------------ block wrappers
 
     [Theory]

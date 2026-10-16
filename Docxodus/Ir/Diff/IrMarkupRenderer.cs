@@ -965,8 +965,11 @@ internal static partial class IrMarkupRenderer
 
         /// <summary>Block-level markers that sit in front of this op's block on its side only (issue #1149),
         /// emitted ahead of <see cref="Elements"/>.</summary>
-        public List<XElement> Markers { get; init; } = new();
+        public List<XElement> Markers { get; init; } = NoMarkers;
     }
+
+    /// <summary>The shared empty marker list of a gap group with none; never added to.</summary>
+    private static readonly List<XElement> NoMarkers = new();
 
     private static List<GapGroup> RenderGapGroups(List<IrEditOp> ops, RenderState state, BlockMarkerPlan? markers)
     {
@@ -975,7 +978,7 @@ internal static partial class IrMarkupRenderer
         {
             var els = new List<XElement>();
             RenderBlockOp(op, state, els);
-            var prefix = markers?.PrefixOf(op) ?? new List<XElement>();
+            var prefix = markers?.PrefixOf(op) ?? NoMarkers;
             if (els.Count == 0 && prefix.Count == 0)
                 continue; // a section-break op renders nothing
             var para = els.Count == 1 && els[0].Name == W.p ? els[0] : null;
