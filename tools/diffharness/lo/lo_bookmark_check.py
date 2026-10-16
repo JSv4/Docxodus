@@ -138,8 +138,10 @@ def main() -> int:
         doc.close(False)
         return 0
     finally:
-        lo_soffice.unaccept(port, profile)
-        lo_soffice.stop_listener(soffice)
+        try:
+            lo_soffice.unaccept(port, profile)
+        finally:
+            lo_soffice.stop_listener(soffice)
 
 
 if __name__ == "__main__":

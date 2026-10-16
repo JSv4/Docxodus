@@ -11,6 +11,7 @@ group, and is stopped by signalling the whole group, `soffice.bin` included.
 import os
 import signal
 import subprocess
+import time
 
 _DETACHED = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                  start_new_session=True)
@@ -28,7 +29,10 @@ def start_listener(port, profile, executable="soffice"):
 
 def run_detached(arguments, timeout):
     """Run a command without the caller's pipes; after `timeout` seconds, kill its whole process group."""
-    process = subprocess.Popen(arguments, **_DETACHED)
+    try:
+        process = subprocess.Popen(arguments, **_DETACHED)
+    except OSError:
+        return
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -47,17 +51,28 @@ def stop_listener(process, grace=10):
 
 
 def _stop_group(process, grace):
-    # The group outlives the wrapper whose pid names it, so it is signalled even after that exits.
+    # The group outlives the wrapper whose pid names it (soffice.bin keeps running after the
+    # wrapper exits), so the grace period waits for the whole group, not just the wrapper.
     _signal_group(process, signal.SIGTERM)
-    try:
-        process.wait(timeout=grace)
-    except subprocess.TimeoutExpired:
-        pass
+    deadline = time.monotonic() + grace
+    while _group_alive(process) and time.monotonic() < deadline:
+        time.sleep(0.05)
     _signal_group(process, signal.SIGKILL)
     try:
         process.wait(timeout=grace)
     except subprocess.TimeoutExpired:
         pass
+
+
+def _group_alive(process):
+    process.poll()  # reap the wrapper, so a zombie leader does not count as alive
+    if not hasattr(os, "killpg"):
+        return process.returncode is None
+    try:
+        os.killpg(process.pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
 
 
 def _signal_group(process, signum):

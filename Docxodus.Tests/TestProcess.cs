@@ -34,6 +34,8 @@ public static class TestProcess
         start.RedirectStandardOutput = true;
         start.RedirectStandardError = true;
         start.UseShellExecute = false;
+        // Python scripts run from the source tree; keep their bytecode caches out of it.
+        start.Environment["PYTHONDONTWRITEBYTECODE"] = "1";
 
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
@@ -42,12 +44,12 @@ public static class TestProcess
         var pumps = new[] { Pump(process.StandardOutput, stdout), Pump(process.StandardError, stderr) };
 
         // With no async event handlers registered, the timed wait waits only for the process to exit.
-        var timedOut = !process.WaitForExit((int)timeout.TotalMilliseconds);
+        var timedOut = !process.WaitForExit(timeout);
         if (timedOut)
         {
             try { process.Kill(entireProcessTree: true); }
             catch (InvalidOperationException) { } // it exited between the wait and the kill
-            process.WaitForExit((int)(drainGrace ?? DefaultDrainGrace).TotalMilliseconds);
+            process.WaitForExit(drainGrace ?? DefaultDrainGrace);
         }
 
         var drained = Task.WaitAll(pumps, drainGrace ?? DefaultDrainGrace);

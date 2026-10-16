@@ -57,8 +57,9 @@ All notable changes to this project will be documented in this file.
   so the read never ended and the two-minute timeout never ran: one run sat idle for 80 minutes. The
   tests now run the scripts through a shared helper (`TestProcess`) that reads on background tasks,
   kills the process tree at the deadline and stops waiting on a pipe a leftover process still holds,
-  and every script under `tools/diffharness/lo/` starts and stops `soffice` through `lo_soffice.py`,
-  which gives it no inherited output and its own process group, and ends the whole group.
+  and the six UNO oracle scripts under `tools/diffharness/lo/` (the header/footer, comment, bookmark,
+  footnote, compare and batch checks) start and stop `soffice` through `lo_soffice.py`, which gives
+  it no inherited output and its own process group, and ends the whole group.
 
 - A consolidated redline no longer gives two reviewers' moves the same move name when the moves are
   inside table cells (issue #1143). Each reviewer's comparison numbers its moves from 1, and consolidate
