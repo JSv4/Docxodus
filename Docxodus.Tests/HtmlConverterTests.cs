@@ -1777,7 +1777,7 @@ namespace Docxodus.Tests
                     Assert.Contains("data-docx-tab=\"left\"", htmlString);
                     Assert.Contains("display: inline-flex;", htmlString);
                     Assert.Contains("flex-shrink: 0;", htmlString);
-                    Assert.Contains("width: 0.500in;", htmlString);
+                    Assert.Contains("width: 36pt;", htmlString);
 
                     Assert.Contains("2.3", htmlString);
                     Assert.Contains("Section Title", htmlString);
@@ -3943,11 +3943,11 @@ namespace Docxodus.Tests
                     Assert.Contains("@page", htmlString);
                     // Should contain size declaration (8.5 x 11 inches)
                     Assert.Contains("size:", htmlString);
-                    Assert.Contains("8.50in", htmlString);
-                    Assert.Contains("11.00in", htmlString);
+                    Assert.Contains("612pt", htmlString);
+                    Assert.Contains("792pt", htmlString);
                     // Should contain margin declaration (1 inch each)
                     Assert.Contains("margin:", htmlString);
-                    Assert.Contains("1.00in", htmlString);
+                    Assert.Contains("72pt", htmlString);
                 }
             }
         }
@@ -3987,8 +3987,8 @@ namespace Docxodus.Tests
                     // Should contain @page rule with A4 dimensions
                     Assert.Contains("@page", htmlString);
                     // A4 width ≈ 8.27in, height ≈ 11.69in
-                    Assert.Contains("8.27in", htmlString);
-                    Assert.Contains("11.69in", htmlString);
+                    Assert.Contains("595.3pt", htmlString);
+                    Assert.Contains("841.9pt", htmlString);
                 }
             }
         }
@@ -4064,10 +4064,10 @@ namespace Docxodus.Tests
 
                     // Should contain @page rule with custom margins
                     Assert.Contains("@page", htmlString);
-                    Assert.Contains("0.50in", htmlString);  // Top
-                    Assert.Contains("0.75in", htmlString);  // Right
-                    Assert.Contains("1.50in", htmlString);  // Bottom
-                    Assert.Contains("1.25in", htmlString);  // Left
+                    Assert.Contains("36pt", htmlString);  // Top
+                    Assert.Contains("54pt", htmlString);  // Right
+                    Assert.Contains("108pt", htmlString);  // Bottom
+                    Assert.Contains("90pt", htmlString);  // Left
                 }
             }
         }

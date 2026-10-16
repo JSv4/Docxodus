@@ -84,6 +84,13 @@ All notable changes to this project will be documented in this file.
   (70.85pt) became `0.98in` (70.56pt). They are now written in points from the exact twip value, on
   plain paragraphs, inside bordered groups, and on semantic-list items (`SemanticLists`), whose
   nested indents were measured from the rounded values as well.
+- Page size, page margins and tab advances keep twip precision in the HTML (issue #1153). The
+  `@page` rules wrote `size` and `margin` as CSS inches rounded to 0.01in, so A4 (`11906 x 16838`
+  twips) became `8.27in 11.69in`, about a quarter point short, and tab spans wrote their width (and
+  a line break's leading margin) the same way, so a 1417-twip stop became `0.98in`. Tab advances were
+  also carried internally at 0.001in. All of these, and the tab segment widths built from them, are
+  now written in points from the exact twip value (`595.3pt 841.9pt`, `70.85pt`). The values change
+  unit in the HTML (`in` to `pt`) but not size, beyond the removed rounding.
 - Table row heights honour `w:hRule` (issue #1122). A minimum (`atLeast`, or omitted) height now
   bounds the row's content and the collapsed horizontal borders are added to it, as in the reference
   layout (a 36pt row with 0.75pt borders advances 36.75pt); an `exact` height is the whole row and
