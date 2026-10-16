@@ -19,7 +19,7 @@ public class TestProcessTests
 
         // The shell exits at once; the background sleep it started keeps stdout's write end for 60 s.
         var watch = Stopwatch.StartNew();
-        var result = TestProcess.Run(Shell("sleep 60 & echo $!"), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1));
+        var result = TestProcess.Run(Shell("sleep 60 & echo $!"), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(3));
         watch.Stop();
         KillQuietly(result.Output);
 

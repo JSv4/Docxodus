@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Docxodus.Tests;
@@ -62,18 +63,31 @@ public static class TestProcess
     }
 
     // Reads in chunks rather than to the end, so whatever arrived is available when the drain gives up.
-    private static Task Pump(StreamReader reader, StringBuilder sink) => Task.Run(async () =>
+    // Each pump is its own thread, not a pool task: a busy test host can starve the thread pool for
+    // longer than the drain grace, and then nothing would be read at all.
+    private static Task Pump(StreamReader reader, StringBuilder sink)
     {
-        var buffer = new char[4096];
-        try
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
         {
-            int read;
-            while ((read = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
-                lock (sink) sink.Append(buffer, 0, read);
-        }
-        catch (Exception e) when (e is IOException or ObjectDisposedException)
-        {
-            // The pipe broke or the reader was closed: what arrived so far is all there is.
-        }
-    });
+            var buffer = new char[4096];
+            try
+            {
+                int read;
+                while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+                    lock (sink) sink.Append(buffer, 0, read);
+            }
+            catch (Exception e) when (e is IOException or ObjectDisposedException)
+            {
+                // The pipe broke or the reader was closed: what arrived so far is all there is.
+            }
+            finally
+            {
+                done.TrySetResult();
+            }
+        })
+        { IsBackground = true, Name = "TestProcess output pump" };
+        thread.Start();
+        return done.Task;
+    }
 }
