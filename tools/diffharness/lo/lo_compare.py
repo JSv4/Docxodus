@@ -11,11 +11,11 @@ Runs an ISOLATED soffice instance (private UserInstallation + socket) so it
 never collides with a soffice the user already has open.
 """
 import os
-import subprocess
 import sys
 import time
 from typing import Any
 
+import lo_soffice
 import uno
 from com.sun.star.beans import PropertyValue
 
@@ -36,12 +36,7 @@ def main() -> None:
     port = sys.argv[4] if len(sys.argv) > 4 else "2002"
     profile = "file:///tmp/lo_profile_diff_%s" % port
 
-    soffice = subprocess.Popen([
-        "soffice", "--headless", "--invisible", "--norestore", "--nologo",
-        "--nofirststartwizard", "--nodefault",
-        "--accept=socket,host=localhost,port=%s;urp;StarOffice.ComponentContext" % port,
-        "-env:UserInstallation=" + profile,
-    ])
+    soffice = lo_soffice.start_listener(port, profile)
     try:
         local = uno.getComponentContext()
         resolver = local.ServiceManager.createInstanceWithContext(
@@ -87,11 +82,7 @@ def main() -> None:
         except Exception:  # noqa: BLE001
             pass
         time.sleep(1)
-        soffice.terminate()
-        try:
-            soffice.wait(timeout=10)
-        except Exception:  # noqa: BLE001
-            soffice.kill()
+        lo_soffice.stop_listener(soffice)
 
 
 if __name__ == "__main__":

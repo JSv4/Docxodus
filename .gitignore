@@ -45,6 +45,7 @@ Docxodus.Tests/Ir/Diff/FuzzArtifacts/
 # macOS
 .DS_Store
 tools/mcp-server/smoke/__pycache__/
+tools/diffharness/lo/__pycache__/
 
 # Local session artifacts that must never ship
 /.playwright-mcp/

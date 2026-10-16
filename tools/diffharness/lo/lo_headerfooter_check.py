@@ -17,11 +17,11 @@ Output is one machine-readable summary line plus per-failure lines.
 Exit 0 + "RESULT: OK" on clean; exit 1 + per-failure lines otherwise.
 """
 import os
-import subprocess
 import sys
 import time
 from typing import Any
 
+import lo_soffice
 import uno
 from com.sun.star.beans import PropertyValue
 
@@ -83,12 +83,7 @@ def main() -> int:
         i += 1
     profile = "file:///tmp/lo_profile_hf_%s" % port
 
-    soffice = subprocess.Popen([
-        "soffice", "--headless", "--invisible", "--norestore", "--nologo",
-        "--nofirststartwizard", "--nodefault",
-        "--accept=socket,host=localhost,port=%s;urp;StarOffice.ComponentContext" % port,
-        "-env:UserInstallation=" + profile,
-    ])
+    soffice = lo_soffice.start_listener(port, profile)
     try:
         local = uno.getComponentContext()
         resolver = local.ServiceManager.createInstanceWithContext(
@@ -139,13 +134,9 @@ def main() -> int:
         return 0
     finally:
         try:
-            subprocess.run(["soffice", "--headless",
-                            "-env:UserInstallation=" + profile,
-                            "--unaccept=socket,host=localhost,port=%s;urp;" % port],
-                           timeout=10)
-        except Exception:
-            pass
-        soffice.terminate()
+            lo_soffice.unaccept(port, profile)
+        finally:
+            lo_soffice.stop_listener(soffice)
 
 
 if __name__ == "__main__":

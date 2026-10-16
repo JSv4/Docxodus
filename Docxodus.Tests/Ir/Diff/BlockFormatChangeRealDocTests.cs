@@ -214,16 +214,9 @@ public class BlockFormatChangeRealDocTests
             string stdout;
             try
             {
-                var psi = new ProcessStartInfo(python, $"\"{script}\" \"{docxPath}\"")
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                };
-                using var proc = Process.Start(psi);
-                if (proc == null) continue;
-                stdout = proc.StandardOutput.ReadToEnd() + proc.StandardError.ReadToEnd();
-                if (!proc.WaitForExit(120_000)) { try { proc.Kill(true); } catch { } _out.WriteLine("[lo-skip] timed out"); return; }
+                var run = TestProcess.Run(new ProcessStartInfo(python, $"\"{script}\" \"{docxPath}\""), TimeSpan.FromSeconds(120));
+                stdout = run.Output;
+                if (run.TimedOut) { _out.WriteLine("[lo-skip] timed out"); return; }
             }
             catch (Exception e)
             {
