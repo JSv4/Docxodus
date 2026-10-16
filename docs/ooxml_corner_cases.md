@@ -802,14 +802,17 @@ validator accepts that. Accept unwraps such a `w:ins` and drops such a `w:del`; 
 | Behaviour | Word | LibreOffice 25.8 | Docxodus |
 |-----------|------|------------------|----------|
 | Loads a body-level bookmark | yes (Word writes this shape) | yes (counted as a bookmark) | yes |
-| Loads a body-level `w:ins`/`w:del` around a bookmark | not verified | yes, as a plain bookmark | writes it for a one-sided marker |
-| Accept all / reject all removes a tracked bookmark | not verified | no: LibreOffice keeps the bookmark either way, and does the same for a `w:ins`-wrapped bookmark inside a paragraph | yes (`RevisionProcessor`) |
+| Loads a body-level or cell-level `w:ins`/`w:del` around a bookmark | yes: opens with no repair prompt and lists the bookmark | yes, as a plain bookmark | writes it for a one-sided marker |
+| Accept all / reject all removes a tracked bookmark | no: after Reject All Changes both the deleted-side and the inserted-side bookmark are still listed | no: LibreOffice keeps the bookmark either way, and does the same for a `w:ins`-wrapped bookmark inside a paragraph | yes (`RevisionProcessor`) |
 | Accept/reject of a revision-free document keeps a body-level bookmark | not verified | yes | yes since #1149 (before: dropped) |
 
 LibreOffice was checked with `tools/diffharness/lo/lo_bookmark_check.py` (every bookmark loads, every `REF`
 resolves) and with `.uno:AcceptAllTrackedChanges`/`.uno:RejectAllTrackedChanges` on the redlines. Its bookmarks
 are not revision-aware, so a one-sided bookmark survives both of its resolutions; that is not specific to
-block-level markers.
+block-level markers. Word behaves the same way: it opened a redline with a deleted bookmark tracked directly in
+the body and an inserted one tracked directly in a table cell without complaint, kept both through Reject All
+Changes, and opened a three-reviewer consolidated redline of the same shape. Neither application loses a
+bookmark Docxodus tracks this way; only Docxodus's own accept and reject resolve it per side.
 
 ### Docxodus code
 
