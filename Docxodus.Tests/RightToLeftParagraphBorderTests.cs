@@ -127,4 +127,15 @@ public class RightToLeftParagraphBorderTests
         Assert.Equal("31.25pt", Style(wrapper)["margin-right"]);
         Assert.Equal("67.25pt", Style(wrapper)["margin-left"]);
     }
+    [Fact]
+    public void MixedDirectionsShareOneBoxWhenAHangingIndentMakesTheBoxSymmetric()
+    {
+        // Start 72pt less a 36pt hanging indent puts the box's leading edge 36pt in, the same as the
+        // 36pt end: the box is the same in either direction, so the paragraphs join (as LibreOffice joins them).
+        var hanging = "<w:ind w:start=\"1440\" w:hanging=\"720\" w:end=\"720\"/>";
+        var html = Convert(Boxed("Eastward", hanging, bidi: false), Boxed("Westward", hanging, bidi: true));
+
+        var wrapper = Assert.Single(Wrappers(html));
+        Assert.Equal(2, wrapper.Descendants().Count(e => e.Name.LocalName == "p"));
+    }
 }
