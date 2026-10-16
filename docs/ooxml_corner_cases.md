@@ -2126,7 +2126,9 @@ point (`{0:0.0#}pt`). The paginated export now runs `applyUnroundedNormalLineHei
 The converter's output is unchanged. Since issue #1151 the paginator itself runs the same pass on its
 staging tree, so the paginated view and the paginated editor lay single-spaced lines out at the same
 unrounded pitch as the export; after the export's earlier pass no line height is `normal`, so the
-paginator's pass changes nothing there. For the 11pt Times New Roman body of the NVCA model charter that is 12.65pt a line instead of
+paginator's pass changes nothing there. The paginated editor runs it again on each block it renders
+afresh after an edit (`wireBlock` in `npm/src/editor.ts`), so an edited paragraph keeps the page's
+pitch. For the 11pt Times New Roman body of the NVCA model charter that is 12.65pt a line instead of
 12.75pt, and 11.50pt instead of 12pt for its 10pt notes (Times New Roman's `hhea` height is
 2355/2048 = 1.1499 em; LibreOffice advances 12.65pt and 11.55pt). Word's baseline placement
 for `auto` multiples (extra leading below the text, not split around it) is the next section.
@@ -3105,11 +3107,14 @@ and deferred more, until a page held nothing but notes. Two limits made this com
 
 - `notesCanStartOnPage` answers whether a set of new notes can begin in the note band left beside
   a given amount of body: each fits whole except the last, which may split if its first line fits.
-  When a block's notes cannot all start, the paginator splits the paragraph above the first line
-  whose citation fails (`tryFragmentParagraph`, which stops the head above that citation's line,
-  so a line is never cut), or, when the block itself cannot be split (it keeps its lines
-  together, or is a table), moves it whole to the next page. Deferral remains for a block that
-  already starts its page, and in the paginated editor, which splits no paragraph: moving each
+  When a block's notes cannot all start, the paginator splits the paragraph above the line whose
+  citation fails (`tryFragmentParagraph`: a note-aware split breaks only where a visual line
+  starts, so the citing line moves whole, with every citation on it), or, when the paragraph
+  cannot be split because it keeps its lines together, moves it whole to the next page. The note
+  is still deferred, as before, for a block that already starts its page, for a table (moving it
+  whole would leave much of the page empty; splitting it at the citing row is not attempted), for
+  a paragraph that a keep-with-next block before it keeps with (moving it would strand that block
+  at the foot of the page), and in the paginated editor, which splits no paragraph: moving each
   citing paragraph whole there would leave more of every page empty than Word's split does. The
   editor's count rises by one page, from the spacing restored in the next section.
 - `canFragmentParagraph` admits paragraphs written as `h1`–`h6` and paragraphs that cite notes; a
@@ -3146,9 +3151,11 @@ Tests: `npm/tests/pagination-note-citation-placement.spec.ts`.
 | Docxodus before #1151 | 12.5pt (no spacing) |
 | Docxodus after | 24.64pt |
 
-Word removes the spacing between two paragraphs only through `w:contextualSpacing`, and then only
-between paragraphs of the same style (Word's List Paragraph style sets it, which is why ordinary
-bulleted lists are tight). The converter, following the original OpenXmlPowerTools behaviour, also
+The markup's only property for removing the spacing between two paragraphs is
+`w:contextualSpacing`, which applies between paragraphs of the same style (Word's List Paragraph
+style sets it, which is why ordinary bulleted lists are tight). Nothing in these paragraphs sets
+it, and LibreOffice keeps the spacing; Word has not been checked against a reference for this
+document. The converter, following the original OpenXmlPowerTools behaviour, also
 dropped the spacing after of every paragraph but the last in a run of paragraphs from one numbered
 list. A numbered legal document lost its spacing between clauses: in the NVCA charter, 1. → 2.,
 FIRST → SECOND → THIRD, "General" → "Voting", and the space after the "A. COMMON STOCK" heading.
@@ -3157,6 +3164,10 @@ FIRST → SECOND → THIRD, "General" → "Voting", and the space after the "A. 
 `Docxodus/WmlToHtmlConverter.cs` groups paragraphs only by `w:contextualSpacing` and style. Numbering
 no longer suppresses spacing. Restoring the spacing adds two pages to the charter's paginated view,
 height LibreOffice also lays out.
+
+**Remaining gap.** LibreOffice also tightens list items whose spacing is `w:beforeAutospacing` /
+`w:afterAutospacing` (HTML-style automatic spacing). Docxodus does not model automatic spacing for
+list items; this predates #1151.
 
 Tests: `Docxodus.Tests/NumberedParagraphSpacingTests.cs`.
 

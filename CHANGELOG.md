@@ -170,16 +170,18 @@ All notable changes to this project will be documented in this file.
   Three causes, each fixed where it arises:
   - A note that did not fit beside its citation used to start on the next page while the citing
     line stayed behind. Deferred notes piled up into pages holding nothing but notes. The citing
-    line now moves to the page where its note begins. The paragraph is split above that line, or
-    moved whole when it keeps its lines together. The paginated editor, which never splits a
-    paragraph, still defers the note.
+    line now moves, whole, to the page where its note begins. The paragraph is split above that
+    line, or moved whole when it keeps its lines together. A table, a paragraph kept with the
+    heading before it, and the paginated editor (which never splits a paragraph) still defer
+    the note.
   - Paragraphs could not be split across pages if they cited a note, were written as a heading
     (any paragraph whose style has an outline level, such as the numbered clauses of a legal
     document), or opened with a list number. Notes that open with a tab after their number could
     not be split either. All of these now split like plain paragraphs, keeping the number and the
     tab whole on the first piece.
-  - The converter dropped the spacing after of consecutive paragraphs in one numbered list. Word
-    removes that spacing only for `w:contextualSpacing`, so the spacing is now kept.
+  - The converter dropped the spacing after of consecutive paragraphs in one numbered list.
+    LibreOffice keeps it, and the only markup that removes such spacing, `w:contextualSpacing`,
+    is not set, so the spacing is now kept.
 
   The paginated view and editor also lay single-spaced lines out at the font's exact height, as the
   PDF export already did. Chromium rounds them to a whole pixel, so 11pt Times New Roman advanced
