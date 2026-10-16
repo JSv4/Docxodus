@@ -884,8 +884,67 @@ describe("@docxodus/export", { concurrency: false }, () => {
     assert.equal(unpositionedOrder.streamText, expected);
     assert.equal(unpositionedOrder.structureText, expected);
 
+    // A cell with text in both paint phases (an exactly spaced first line, which is offset, over an
+    // unpositioned hidden line) on a page whose text is unpositioned paints where its positioned text
+    // did, after the page's in-flow text, but reads in tree order inside.
+    const exactly = 'w:line="280" w:lineRule="exact"';
+    const atLeast = 'w:line="300" w:lineRule="atLeast"';
+    const mixed = await renderDocxArtifacts(generateExactRowOverflowDocx({
+      spacing: atLeast,
+      firstRow: `<w:tr><w:trPr><w:trHeight w:val="360" w:hRule="exact"/></w:trPr>`
+        + exactRowCell(exactRowParagraph("Birch exact record.", "", exactly)
+          + exactRowParagraph("Overflow Birch continuation line.", "", atLeast))
+        + exactRowCell(exactRowParagraph("Neighbour cell.", "", atLeast)) + "</w:tr>",
+    }), { ...baseOptions, browser, outputs: ["html", "pdf"] });
+    const mixedOrder = await inspectPdfPageOrder(mixed.pdf, 1);
+    assert.equal(mixedOrder.structureText, expected);
+    assert.match(mixedOrder.streamText, /Birch exact record\. Overflow Birch continuation line\./);
+    assert.equal(mixedOrder.streamText.match(/Overflow Birch continuation line\./g)?.length, 1);
+
     await writeFile(join(successArtifacts, "exact-row-overflow.pdf"), result.pdf);
     await writeFile(join(successArtifacts, "exact-row-overflow.html"), result.html);
+  });
+
+  // Layout overflow is not hidden text: a line box includes the font's whole ascent and descent and a
+  // paragraph its spacing, so a one-line row a little shorter than its line, or space after, overflows
+  // the clip box while every glyph still shows.
+  test("leaves exact-height rows that hide no text as they were", { timeout: 180_000 }, async () => {
+    const spacedAfter = '<w:p><w:pPr><w:spacing w:before="0" w:after="200"/></w:pPr>'
+      + "<w:r><w:t>Birch exact record.</w:t></w:r></w:p>";
+    for (const [name, rowHeight, body] of [
+      ["one line in a 13pt row", 260, exactRowParagraph("Birch exact record.")],
+      ["one line in a 14pt row", 280, exactRowParagraph("Birch exact record.")],
+      ["one line with space after", 400, spacedAfter],
+    ]) {
+      const result = await renderDocxArtifacts(generateExactRowOverflowDocx({
+        firstRow: `<w:tr><w:trPr><w:trHeight w:val="${rowHeight}" w:hRule="exact"/></w:trPr>`
+          + exactRowCell(body) + exactRowCell(exactRowParagraph("Neighbour cell.")) + "</w:tr>",
+      }), { ...baseOptions, browser, outputs: ["html", "pdf"] });
+      assert.equal(result.html.match(/data-docx-exact-row-text/g), null, `${name}: rewritten`);
+      assert.equal((await inspectPdfPageOrder(result.pdf, 1)).streamText,
+        "Opening ledger paragraph. Birch exact record. Neighbour cell. Following row text. Second column. "
+          + "Closing ledger paragraph.", name);
+    }
+  });
+
+  // A Word bookmark's name becomes an HTML id verbatim, and url(#id) resolves to the first element with
+  // that id: the clip the rewrite mints must not be one the document already uses.
+  test("mints an exact-row clip id no bookmark already holds", { timeout: 180_000 }, async () => {
+    const result = await renderDocxArtifacts(generateExactRowOverflowDocx({
+      firstRow: "<w:tr>" + exactRowCell('<w:p><w:bookmarkStart w:id="5" w:name="docx-exact-row-clip-0"/>'
+        + '<w:r><w:t>Bookmarked row.</w:t></w:r><w:bookmarkEnd w:id="5"/></w:p>')
+        + exactRowCell(exactRowParagraph("Bookmark neighbour.")) + "</w:tr>"
+        + `<w:tr><w:trPr><w:trHeight w:val="360" w:hRule="exact"/></w:trPr>`
+        + exactRowCell(exactRowParagraph("Birch exact record.")
+          + exactRowParagraph("Overflow Birch continuation line."))
+        + exactRowCell(exactRowParagraph("Neighbour cell.")) + "</w:tr>",
+    }), { ...baseOptions, browser, outputs: ["html", "pdf"] });
+    const reference = /clip-path="url\(#([^)]+)\)"/.exec(result.html)?.[1];
+    assert.ok(reference, "the rewritten cell is clipped by reference");
+    const holders = [...result.html.matchAll(new RegExp(`<([a-zA-Z]+)[^>]*\\sid="${reference}"`, "g"))];
+    assert.deepEqual(holders.map((match) => match[1]), ["clipPath"]);
+    assert.match((await inspectPdfPageOrder(result.pdf, 1)).streamText,
+      /Birch exact record\. Overflow Birch continuation line\. Neighbour cell\./);
   });
 
   // The rewrite that keeps clipped exact-row text whole moves the clipped content into an inline SVG,
@@ -915,6 +974,7 @@ describe("@docxodus/export", { concurrency: false }, () => {
         // The nested table's border puts its first line lower than the neighbour's.
         sameFirstBaseline: false,
       },
+      { name: "letter, middle-aligned", options: { vAlign: "center" }, page: 1 },
       {
         name: "A4 page 2, odd margins, bottom-aligned",
         options: {
