@@ -343,22 +343,22 @@ internal static partial class IrMarkupRenderer
     /// merges a gap boundary, replacing the copy's own, and nested tables and wrappers are visited the same way.
     /// Containers whose shapes do not line up (a copy carrying preserved input revisions) are left as emitted.
     /// </summary>
-    internal static void ReconcileEqualContainerMarkers(XElement emitted, XElement? left, XElement? right, RenderState state)
+    internal static bool ReconcileEqualContainerMarkers(XElement emitted, XElement? left, XElement? right, RenderState state)
     {
         if (left is null || right is null || ReferenceEquals(left, right) ||
-            !left.Descendants().Any(IsBlockLevelMarker) && !right.Descendants().Any(IsBlockLevelMarker))
-            return;
+            !HasMarkerBetweenBlocks(left) && !HasMarkerBetweenBlocks(right))
+            return false;
         var entries = new List<(XElement Stream, int Boundary, List<MarkerEntry> Entries)>();
         CollectEqualStreamMarkers(emitted, left, right, entries);
         if (entries.Count == 0)
-            return;
+            return false;
 
         var unmatched = new HashSet<string>(StringComparer.Ordinal);
         foreach (var entry in entries.SelectMany(e => e.Entries))
             if (entry.Left is null || entry.Right is null)
                 unmatched.Add(MarkerIdentity(entry.Left ?? entry.Right!));
         if (unmatched.Count == 0)
-            return; // every marker matched: the copy already holds both sides' markers
+            return false; // every marker matched: the copy already holds both sides' markers
         foreach (var group in entries.GroupBy(e => e.Stream))
         {
             var stream = group.Key;
@@ -376,7 +376,14 @@ internal static partial class IrMarkupRenderer
                     stream.Add(rendered);
             }
         }
+        return true;
     }
+
+    /// <summary>Whether <paramref name="container"/> (itself included) holds a marker directly in a block stream
+    /// below it: a cell, a block wrapper's content or a note.</summary>
+    private static bool HasMarkerBetweenBlocks(XElement container) =>
+        container.DescendantsAndSelf().Any(e => IsBlockLevelMarker(e) && e.Parent is { } p &&
+            (p.Name == W.tc || p.Name == W.sdtContent || p.Name == W.customXml || p.Name == W.footnote || p.Name == W.endnote));
 
     /// <summary>
     /// The output keeps the original's copy of every note the comparison did not change, so a note whose only
@@ -395,7 +402,7 @@ internal static partial class IrMarkupRenderer
                  })
         {
             if (part?.GetXDocument().Root is not { } root || rightPart?.GetXDocument().Root is not { } rightRoot ||
-                !root.Descendants().Any(IsBlockLevelMarker) && !rightRoot.Descendants().Any(IsBlockLevelMarker))
+                !HasMarkerBetweenBlocks(root) && !HasMarkerBetweenBlocks(rightRoot))
                 continue;
             var touched = (noteOps ?? Array.Empty<IrNoteDiff>()).Where(d => d.Kind == kind)
                 .SelectMany(d => new[] { d.NoteId, d.LeftNoteId }).OfType<string>().ToHashSet(StringComparer.Ordinal);
@@ -405,11 +412,11 @@ internal static partial class IrMarkupRenderer
             foreach (var note in root.Elements(name).ToList())
             {
                 if ((string?)note.Attribute(W.id) is not { } id || touched.Contains(id) ||
-                    !rightById.TryGetValue(id, out var rightNote))
+                    !rightById.TryGetValue(id, out var rightNote) ||
+                    !HasMarkerBetweenBlocks(note) && !HasMarkerBetweenBlocks(rightNote))
                     continue;
-                var before = note.ToString(SaveOptions.DisableFormatting);
-                ReconcileEqualContainerMarkers(note, new XElement(note), rightNote, state);
-                changed |= note.ToString(SaveOptions.DisableFormatting) != before;
+                // The output note is the original's copy; reconcile it against a snapshot of itself.
+                changed |= ReconcileEqualContainerMarkers(note, new XElement(note), rightNote, state);
             }
             if (changed)
                 part.PutXDocument();
@@ -442,6 +449,18 @@ internal static partial class IrMarkupRenderer
         // A copy holding a revision wrapper between its blocks (preserved input revisions) is not a plain clone.
         if (stream.Elements().Any(c => c.Name == W.ins || c.Name == W.del))
             return;
+
+        if (!leftStream.Elements().Any(IsBlockLevelMarker) && !rightStream.Elements().Any(IsBlockLevelMarker))
+        {
+            // No marker at this level: only nested containers can hold one.
+            var (en, ln, rn) = (stream.Elements().Where(IsBlockContent).ToList(),
+                leftStream.Elements().Where(IsBlockContent).ToList(), rightStream.Elements().Where(IsBlockContent).ToList());
+            if (en.Count == ln.Count && en.Count == rn.Count)
+                for (int k = 0; k < en.Count; k++)
+                    if (en[k].Name != W.p)
+                        CollectEqualStreamMarkers(en[k], ln[k], rn[k], sink);
+            return;
+        }
 
         static (List<XElement> Blocks, List<List<XElement>> Before) Split(XElement s)
         {
