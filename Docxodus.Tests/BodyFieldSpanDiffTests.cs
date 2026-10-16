@@ -40,8 +40,11 @@ public class BodyFieldSpanDiffTests
     /// <summary>One entry as Word writes it: a hyperlink around the heading text, a tab and a PAGEREF field.
     /// The first entry opens the TOC field itself before its hyperlink. The anchor comes from the entry's first
     /// word, so editing the rest of the text leaves the anchor alone, as Word does.</summary>
-    private static string Entry(string text, bool opensToc, bool closesToc)
+    /// <summary>An entry may carry its page number after a <c>|</c>, as <c>"Fees|7"</c>; it is 1 otherwise.</summary>
+    private static string Entry(string entry, bool opensToc, bool closesToc)
     {
+        var text = entry.Split('|')[0];
+        var page = entry.Contains('|', StringComparison.Ordinal) ? entry.Split('|')[1] : "1";
         var anchor = "_Toc" + text.Split(' ')[0];
         var sb = new StringBuilder("<w:p>");
         if (opensToc)
@@ -52,7 +55,7 @@ public class BodyFieldSpanDiffTests
             .Append($"<w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r><w:r><w:tab/></w:r>")
             .Append("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>")
             .Append($"<w:r><w:instrText xml:space=\"preserve\"> PAGEREF {anchor} \\h </w:instrText></w:r>")
-            .Append("<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>1</w:t></w:r>")
+            .Append($"<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>{page}</w:t></w:r>")
             .Append("<w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:hyperlink>");
         if (closesToc)
             sb.Append("<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>");
@@ -86,6 +89,8 @@ public class BodyFieldSpanDiffTests
             yield return new object[] { end, "entry text edited", three, new[] { "Scope", "Term and renewal", "Fees" } };
             yield return new object[] { end, "entry text shortened", new[] { "Scope", "Term and renewal", "Fees" }, three };
             yield return new object[] { end, "entry text replaced", three, new[] { "Scope", "Term", "Costs" } };
+            yield return new object[] { end, "entry text shortened and page changed", new[] { "Scope", "Term and renewal", "Fees" }, new[] { "Scope", "Term|2", "Fees" } };
+            yield return new object[] { end, "last entry page changed", three, new[] { "Scope", "Term", "Fees|7" } };
         }
     }
 
@@ -219,31 +224,144 @@ public class BodyFieldSpanDiffTests
         entry.Remove();
     }
 
+    // ---- markers behind a tab -------------------------------------------------------------------
+
+    private const string Tab = "<w:r><w:tab/></w:r>";
+    private const string CommentReference = "<w:r><w:commentReference w:id=\"0\"/></w:r>";
+    private static string R(string text) => $"<w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r>";
+    private static string Para(params string[] content) => "<w:p>" + string.Concat(content) + "</w:p>";
+    private static string BookmarkStart(string name) => $"<w:bookmarkStart w:id=\"1\" w:name=\"{name}\"/>";
+    private const string BookmarkEnd = "<w:bookmarkEnd w:id=\"1\"/>";
+    private const string CommentStart = "<w:commentRangeStart w:id=\"0\"/>";
+    private const string CommentEnd = "<w:commentRangeEnd w:id=\"0\"/>";
+    private static string Field(string instruction, string result) =>
+        "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>" +
+        $"<w:r><w:instrText xml:space=\"preserve\"> {instruction} </w:instrText></w:r>" +
+        "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>" + R(result) +
+        "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+
+    private static WmlDocument MarkerDoc(string paragraph) => paragraph.Contains("commentR", StringComparison.Ordinal)
+        ? IrTestDocuments.WithComment("A", "A", "2020-01-01T00:00:00Z", "note", paragraph + P(Tail))
+        : IrTestDocuments.FromBodyXml(paragraph + P(Tail));
+
+    /// <summary>The words before a tab are edited, and a marker both documents carry sits right after the tab. The
+    /// marker belongs after the tab in both views; the edit must not pull the marker (or a second copy of it) in
+    /// front of the tab, nor let a later edit after the tab carry it past the following text.</summary>
+    public static IEnumerable<object[]> MarkersBehindATab() => new[]
+    {
+        new object[] { "bookmark start", Para(R("Alpha beta"), Tab, BookmarkStart("bk"), R("gamma"), BookmarkEnd), Para(R("Alpha"), Tab, BookmarkStart("bk"), R("gamma"), BookmarkEnd) },
+        new object[] { "bookmark end", Para(BookmarkStart("bk"), R("Alpha beta"), Tab, BookmarkEnd, R("x y")), Para(BookmarkStart("bk"), R("Alpha"), Tab, BookmarkEnd, R("y")) },
+        new object[] { "comment start", Para(R("Alpha beta"), Tab, CommentStart, R("gamma"), CommentEnd, CommentReference), Para(R("Alpha"), Tab, CommentStart, R("gamma"), CommentEnd, CommentReference) },
+        new object[] { "comment end", Para(CommentStart, R("Alpha beta"), Tab, CommentEnd, R("gamma")), Para(CommentStart, R("Alpha"), Tab, CommentEnd, R("gamma")) },
+        new object[] { "comment end, then the next word replaced", Para(CommentStart, R("Alpha beta"), Tab, CommentEnd, CommentReference, R("gamma")), Para(CommentStart, R("Alpha"), Tab, CommentEnd, CommentReference, R("delta")) },
+        new object[] { "field", Para(R("Alpha beta"), Tab, Field("PAGEREF x \\h", "1")), Para(R("Alpha"), Tab, Field("PAGEREF x \\h", "1")) },
+    };
+
+    [Theory]
+    [MemberData(nameof(MarkersBehindATab))]
+    public void Compare_EditBeforeATab_LeavesTheMarkerBehindTheTabInBothViews(string name, string left, string right)
+    {
+        var original = MarkerDoc(left);
+        var revised = MarkerDoc(right);
+
+        AssertShapesSurviveRoundTrip(original, revised, DocxCompare.Compare(original, revised), name, markers: true);
+    }
+
+    /// <summary>A marker only the original carries, right after a tab, behind a deleted word: the revised side has no
+    /// copy to stand in for it, so the redline must keep the original's (rejecting restores it).</summary>
+    [Theory]
+    [InlineData("bookmark")]
+    [InlineData("comment")]
+    public void Compare_MarkerOnlyTheOriginalHasBehindATab_SurvivesReject(string marker)
+    {
+        var original = MarkerDoc(marker == "bookmark"
+            ? Para(R("Alpha beta"), Tab, BookmarkStart("bk"), R("gamma"), BookmarkEnd)
+            : Para(R("Alpha beta"), Tab, CommentStart, R("gamma"), CommentEnd, CommentReference));
+        var revised = MarkerDoc(Para(R("Alpha"), Tab, R("gamma")));
+
+        var redline = DocxCompare.Compare(original, revised).DocumentByteArray;
+
+        var rejected = Paragraphs(DocxDiffOps.RejectRevisions(redline), markers: true)[0].Split(' ');
+        if (marker == "bookmark")
+            Assert.True(rejected.Contains("BS:bk") && rejected.Contains("BE:bk"), string.Join(" ", rejected));
+        else
+            Assert.True(rejected.Contains("CS") && rejected.Contains("CE"), string.Join(" ", rejected));
+        Assert.Equal(Paragraphs(revised.DocumentByteArray, markers: true),
+            Paragraphs(DocxDiffOps.AcceptRevisions(redline), markers: true));
+    }
+
+    /// <summary>A bookmark both documents carry, but moved from the start of the paragraph to the end of text the
+    /// revision appends: the revised copy is not in the unchanged text the original's sits in, so it does not stand
+    /// in for it, and both views keep the bookmark. (Where reject puts it is the bookmark normalization's choice: a
+    /// bookmark both documents carry is reduced to one unmarked pair.)</summary>
+    [Fact]
+    public void Compare_BookmarkMovedBehindInsertedText_SurvivesBothViews()
+    {
+        var original = MarkerDoc(Para(BookmarkStart("bk"), BookmarkEnd, R("This is a test.")));
+        var revised = MarkerDoc(Para(R("This was a test. Isn't it?"), BookmarkStart("bk"), BookmarkEnd));
+
+        var redline = DocxCompare.Compare(original, revised).DocumentByteArray;
+
+        foreach (var view in new[] { DocxDiffOps.AcceptRevisions(redline), DocxDiffOps.RejectRevisions(redline) })
+        {
+            var parts = Paragraphs(view, markers: true)[0].Split(' ');
+            Assert.True(parts.Contains("BS:bk") && parts.Contains("BE:bk"), string.Join(" ", parts));
+        }
+    }
+
+    /// <summary>A field whose result changes right after unchanged or edited text: the unchanged text's span emits the
+    /// revised side's begin, instruction and separate characters, which stand in for the original's, so the deleted
+    /// result must not bring a second copy of them (issue #1165, the boundary case).</summary>
+    public static IEnumerable<object[]> FieldResultEdits() => new[]
+    {
+        new object[] { "result only", Para(R("Alpha "), Field("PAGE", "1")), Para(R("Alpha "), Field("PAGE", "2")) },
+        new object[] { "result after a tab", Para(R("Alpha"), Tab, Field("PAGEREF x \\h", "1")), Para(R("Alpha"), Tab, Field("PAGEREF x \\h", "2")) },
+        new object[] { "word before the tab deleted", Para(R("Alpha beta"), Tab, Field("PAGE", "1"), R(" x")), Para(R("Alpha"), Tab, Field("PAGE", "2"), R(" x")) },
+    };
+
+    [Theory]
+    [MemberData(nameof(FieldResultEdits))]
+    public void Compare_FieldResultChanged_KeepsOneCopyOfTheFieldInBothViews(string name, string left, string right)
+    {
+        var original = MarkerDoc(left);
+        var revised = MarkerDoc(right);
+
+        AssertShapesSurviveRoundTrip(original, revised, DocxCompare.Compare(original, revised), name, markers: false);
+    }
+
     // ---- assertions ---------------------------------------------------------------------------
 
     /// <summary>The redline adds no validation error, and accepting / rejecting it leaves each paragraph with the
     /// field characters, instructions, text and tabs of the revised / original document, in the same order.</summary>
-    private static void AssertFieldsSurviveRoundTrip(WmlDocument original, WmlDocument revised, WmlDocument redline, string name)
+    private static void AssertFieldsSurviveRoundTrip(WmlDocument original, WmlDocument revised, WmlDocument redline, string name) =>
+        AssertShapesSurviveRoundTrip(original, revised, redline, name, markers: false);
+
+    private static void AssertShapesSurviveRoundTrip(
+        WmlDocument original, WmlDocument revised, WmlDocument redline, string name, bool markers)
     {
-        var failures = FieldShapeMismatch(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray), revised.DocumentByteArray, "accept, " + name)
-            + FieldShapeMismatch(DocxDiffOps.RejectRevisions(redline.DocumentByteArray), original.DocumentByteArray, "reject, " + name);
+        var failures = FieldShapeMismatch(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray), revised.DocumentByteArray, "accept, " + name, markers)
+            + FieldShapeMismatch(DocxDiffOps.RejectRevisions(redline.DocumentByteArray), original.DocumentByteArray, "reject, " + name, markers);
         Assert.True(failures.Length == 0, failures);
         AssertNoNewValidationErrors(redline, original, revised);
     }
 
-    private static string FieldShapeMismatch(byte[] actual, byte[] expected, string because)
+    private static string FieldShapeMismatch(byte[] actual, byte[] expected, string because, bool markers)
     {
-        var want = string.Join("\n", Paragraphs(expected));
-        var got = string.Join("\n", Paragraphs(actual));
+        var want = string.Join("\n", Paragraphs(expected, markers));
+        var got = string.Join("\n", Paragraphs(actual, markers));
         return want == got ? "" : $"field shape ({because}):\nexpected:\n{want}\n---\ngot:\n{got}\n";
     }
 
     /// <summary>Each body paragraph as the sequence of its field characters, instructions, tabs and text runs
-    /// (adjacent text joined), in document order.</summary>
-    private static List<string> Paragraphs(byte[] bytes)
+    /// (adjacent text joined), in document order. With <paramref name="markers"/>, bookmark endpoints (by name),
+    /// comment range endpoints and comment references are included too.</summary>
+    private static List<string> Paragraphs(byte[] bytes, bool markers = false)
     {
         var result = new List<string>();
-        foreach (var p in Body(bytes).Descendants(W.p))
+        var body = Body(bytes);
+        var bookmarkNames = body.Descendants(W.bookmarkStart)
+            .ToDictionary(b => (string?)b.Attribute(W.id) ?? "", b => (string?)b.Attribute(W.name) ?? "");
+        foreach (var p in body.Descendants(W.p))
         {
             var parts = new List<string>();
             var text = new StringBuilder();
@@ -274,6 +392,17 @@ public class BodyFieldSpanDiffTests
                 {
                     Flush();
                     parts.Add(((string?)e.Attribute(W.fldCharType) ?? "?").ToUpperInvariant());
+                }
+                else if (markers && (e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd))
+                {
+                    Flush();
+                    bookmarkNames.TryGetValue((string?)e.Attribute(W.id) ?? "", out var bookmark);
+                    parts.Add((e.Name == W.bookmarkStart ? "BS:" : "BE:") + bookmark);
+                }
+                else if (markers && (e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference))
+                {
+                    Flush();
+                    parts.Add(e.Name == W.commentRangeStart ? "CS" : e.Name == W.commentRangeEnd ? "CE" : "CREF");
                 }
             }
             Flush();
