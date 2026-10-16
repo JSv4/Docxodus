@@ -81,4 +81,61 @@ public class RightToLeftParagraphBorderTests
         Assert.Equal("67.25pt", rtl["margin-right"]);
         Assert.Equal("6.5pt", rtl["margin-left"]);
     }
+    // Issue #1155: consecutive bordered paragraphs share a box only when their boxes coincide.
+    private const string SingleBorders =
+        "<w:pBdr><w:top w:val=\"single\" w:sz=\"8\" w:space=\"4\"/><w:left w:val=\"single\" w:sz=\"8\" w:space=\"4\"/>" +
+        "<w:bottom w:val=\"single\" w:sz=\"8\" w:space=\"4\"/><w:right w:val=\"single\" w:sz=\"8\" w:space=\"4\"/>" +
+        "<w:between w:val=\"single\" w:sz=\"8\" w:space=\"4\"/></w:pBdr>";
+
+    private static string Boxed(string text, string ind, bool bidi) =>
+        $"<w:p><w:pPr>{(bidi ? "<w:bidi/>" : "")}{SingleBorders}{ind}</w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>";
+
+    private const string Unequal = "<w:ind w:start=\"720\" w:end=\"1440\"/>";
+
+    [Fact]
+    public void MixedDirectionsWithUnequalIndentsGetMirroredBoxes()
+    {
+        var html = Convert(Boxed("Eastward", Unequal, bidi: false), Boxed("Westward", Unequal, bidi: true));
+
+        Assert.Equal(2, Wrappers(html).Count);
+        var ltr = Style(WrapperOf(html, "Eastward"));
+        var rtl = Style(WrapperOf(html, "Westward"));
+        // Start 36pt and end 72pt, each less the 4pt space and the 0.75pt border.
+        Assert.Equal("31.25pt", ltr["margin-left"]);
+        Assert.Equal("67.25pt", ltr["margin-right"]);
+        Assert.Equal("31.25pt", rtl["margin-right"]);
+        Assert.Equal("67.25pt", rtl["margin-left"]);
+    }
+
+    [Fact]
+    public void MixedDirectionsWithEqualIndentsStillShareOneBox()
+    {
+        var equal = "<w:ind w:start=\"720\" w:end=\"720\"/>";
+        var html = Convert(Boxed("Eastward", equal, bidi: false), Boxed("Westward", equal, bidi: true),
+            Boxed("Onward", equal, bidi: false));
+
+        var wrapper = Assert.Single(Wrappers(html));
+        Assert.Equal(3, wrapper.Descendants().Count(e => e.Name.LocalName == "p"));
+    }
+
+    [Fact]
+    public void RightToLeftParagraphsWithUnequalIndentsShareOneBox()
+    {
+        var html = Convert(Boxed("Westward", Unequal, bidi: true), Boxed("Seaward", Unequal, bidi: true));
+
+        var wrapper = Assert.Single(Wrappers(html));
+        Assert.Equal("31.25pt", Style(wrapper)["margin-right"]);
+        Assert.Equal("67.25pt", Style(wrapper)["margin-left"]);
+    }
+    [Fact]
+    public void MixedDirectionsShareOneBoxWhenAHangingIndentMakesTheBoxSymmetric()
+    {
+        // Start 72pt less a 36pt hanging indent puts the box's leading edge 36pt in, the same as the
+        // 36pt end: the box is the same in either direction, so the paragraphs join (as LibreOffice joins them).
+        var hanging = "<w:ind w:start=\"1440\" w:hanging=\"720\" w:end=\"720\"/>";
+        var html = Convert(Boxed("Eastward", hanging, bidi: false), Boxed("Westward", hanging, bidi: true));
+
+        var wrapper = Assert.Single(Wrappers(html));
+        Assert.Equal(2, wrapper.Descendants().Count(e => e.Name.LocalName == "p"));
+    }
 }

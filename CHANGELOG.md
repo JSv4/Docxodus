@@ -163,6 +163,12 @@ All notable changes to this project will be documented in this file.
   unit in the CSS (`in` to `pt`) but not size, beyond the removed rounding. A tab advance that ran out
   of tab stops now falls back to half an inch, as intended, instead of 720 inches. The page-geometry
   `data-*` attributes the paginator reads still carry 0.1pt.
+- Consecutive bordered paragraphs that mix text directions no longer share one border box when their
+  start and end indents differ (issue #1155). The converter joined paragraphs with the same borders
+  and indents into one box, but a right-to-left paragraph mirrors its box (its start indent is on the
+  right), so with `w:start="720" w:end="1440"` one paragraph of the pair got its indents on the wrong
+  sides. Such paragraphs now get a box each, as LibreOffice draws them; paragraphs whose boxes
+  coincide in both directions (equal start and end) still join, with between borders.
 - Table row heights honour `w:hRule` (issue #1122). A minimum (`atLeast`, or omitted) height now
   bounds the row's content and the collapsed horizontal borders are added to it, as in the reference
   layout (a 36pt row with 0.75pt borders advances 36.75pt); an `exact` height is the whole row and
