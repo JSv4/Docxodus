@@ -199,11 +199,112 @@ public class BlockWrapperNestedDiffTests
 
         var (startName, endName) = marker == Marker.Bookmark ? (W.bookmarkStart, W.bookmarkEnd) : (W.commentRangeStart, W.commentRangeEnd);
         AssertEveryRangeBracketsTheClauses(Body(redline), startName, endName);
-        if (marker == Marker.Bookmark)
-            AssertRoundTrip(left, right, redline);
-        else
-            // Accepting moves the comment reference out of the replaced wrapper (issue #1157); rejecting is exact.
-            Assert.Equal(Signature(left.DocumentByteArray), Signature(DocxDiffOps.RejectRevisions(redline.DocumentByteArray)));
+        AssertRoundTrip(left, right, redline);
+    }
+
+    // ---- issue #1157: a comment range between the blocks of a wrapper that is replaced whole -----------
+
+    public static IEnumerable<object[]> CommentWrapperKindsAndPlaces() =>
+        from kind in new[] { Wrapper.CustomXml, Wrapper.ContentControl }
+        from place in Enum.GetValues<MarkerPlace>()
+        from inBodyTableCell in new[] { false, true }
+        select new object[] { kind, place, inBodyTableCell };
+
+    /// <summary>The wrapper is replaced whole (the range between its blocks is not diffed in place), so the redline
+    /// holds a deleted and an inserted copy. Each copy must keep a complete comment of its own — range start, range
+    /// end and reference under one id, resolving to the comment's text — so that accepting yields the revised
+    /// document with the reference still in the wrapper's last paragraph, and rejecting yields the original.</summary>
+    [Theory]
+    [MemberData(nameof(CommentWrapperKindsAndPlaces))]
+    public void Compare_CommentRangeBetweenTheWrappersBlocks_AcceptAndRejectKeepTheReferenceInTheWrapper(
+        Wrapper kind, MarkerPlace place, bool inBodyTableCell)
+    {
+        const string Start = "<w:commentRangeStart w:id=\"0\"/>";
+        const string End = "<w:commentRangeEnd w:id=\"0\"/><w:p><w:r><w:commentReference w:id=\"0\"/></w:r></w:p>";
+        WmlDocument Document(string bravo)
+        {
+            var wrapper = Bracketed(kind, place, bravo, Start, End);
+            var body = (inBodyTableCell ? TwoCellTable(P("Left cell stays."), wrapper) : wrapper) + P(Tail);
+            return IrTestDocuments.WithComment("Ann", "A", "2026-01-01T00:00:00Z", CommentText, body);
+        }
+        var left = Document(Bravo);
+        var right = Document(BravoEdited);
+
+        var redline = DocxDiff.Compare(left, right);
+
+        AssertRoundTrip(left, right, redline);
+        AssertEachWrapperCopyHasItsOwnComment(redline.DocumentByteArray, kind, copies: 2, rangeKept: true);
+        AssertEveryRangeBracketsTheClauses(Body(redline), W.commentRangeStart, W.commentRangeEnd);
+        AssertNoNewValidationErrors(redline, left, right);
+        AssertEachWrapperCopyHasItsOwnComment(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray), kind, copies: 1, rangeKept: false);
+        AssertEachWrapperCopyHasItsOwnComment(DocxDiffOps.RejectRevisions(redline.DocumentByteArray), kind, copies: 1, rangeKept: false);
+    }
+
+    /// <summary>A comment that opens in a paragraph before the replaced wrapper and closes inside it keeps one
+    /// comment: the collapse that serves its shared start is not undone by splitting the deleted copy's
+    /// reference off under a fresh id, so rejecting restores the original with the reference and the range on
+    /// the same comment. (Accepting still leaves the reference before the wrapper, as it did before #1157: no
+    /// single set of markers can serve both copies of the wrapper.)</summary>
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Compare_CommentOpeningBeforeAReplacedWrapper_RejectKeepsTheReferenceOnTheSameComment(Wrapper kind)
+    {
+        WmlDocument Document(string bravo) => IrTestDocuments.WithComment("Ann", "A", "2026-01-01T00:00:00Z", CommentText,
+            "<w:p><w:r><w:t xml:space=\"preserve\">Before the wrapper.</w:t></w:r><w:commentRangeStart w:id=\"0\"/></w:p>"
+            + Wrap(kind, P(Alpha) + P(bravo) + "<w:commentRangeEnd w:id=\"0\"/><w:p><w:r><w:commentReference w:id=\"0\"/></w:r></w:p>")
+            + P(Tail));
+        var left = Document(Bravo);
+        var right = Document(BravoEdited);
+
+        var redline = DocxDiff.Compare(left, right);
+
+        var rejected = Body(DocxDiffOps.RejectRevisions(redline.DocumentByteArray));
+        Assert.Equal(Signature(left.DocumentByteArray), Signature(rejected));
+        var start = Assert.Single(rejected.Descendants(W.commentRangeStart));
+        var reference = Assert.Single(rejected.Descendants(W.commentReference));
+        Assert.Equal((string?)start.Attribute(W.id), (string?)reference.Attribute(W.id));
+    }
+
+    private const string CommentText = "Check this clause.";
+
+    /// <summary>The document holds <paramref name="copies"/> comments, each with one reference and one range start
+    /// and end (at most one when not <paramref name="rangeKept"/>: accepting and rejecting revisions drop range
+    /// markers between blocks, issue #1149), all inside the same innermost <paramref name="kind"/> wrapper, the
+    /// reference in that wrapper's own last paragraph, and the id resolving to a definition reading
+    /// <see cref="CommentText"/>. Copies of the comment carry distinct ids.</summary>
+    private static void AssertEachWrapperCopyHasItsOwnComment(byte[] bytes, Wrapper kind, int copies, bool rangeKept)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var main = document.MainDocumentPart!;
+        var body = main.GetXDocument().Root!.Element(W.body)!;
+        var definitions = main.WordprocessingCommentsPart?.GetXDocument().Root?.Elements(W.comment)
+            .ToDictionary(c => (string)c.Attribute(W.id)!, c => string.Concat(c.Descendants(W.t).Select(t => t.Value)))
+            ?? new Dictionary<string, string>();
+        XElement? WrapperOf(XElement e) => e.Ancestors(WrapperName(kind)).FirstOrDefault();
+
+        var references = body.Descendants(W.commentReference).ToList();
+        Assert.Equal(copies, references.Count);
+        Assert.Equal(copies, references.Select(r => (string?)r.Attribute(W.id)).Distinct().Count());
+        foreach (var reference in references)
+        {
+            var id = (string)reference.Attribute(W.id)!;
+            Assert.True(definitions.TryGetValue(id, out var text), $"comment {id} has no definition");
+            Assert.Equal(CommentText, text);
+            var wrapper = WrapperOf(reference);
+            Assert.NotNull(wrapper);
+            var paragraph = reference.Ancestors(W.p).First();
+            Assert.Same(paragraph, wrapper!.Descendants(W.p).Last());
+            foreach (var name in new[] { W.commentRangeStart, W.commentRangeEnd })
+            {
+                var markers = body.Descendants(name).Where(m => (string?)m.Attribute(W.id) == id).ToList();
+                Assert.True(rangeKept ? markers.Count == 1 : markers.Count <= 1,
+                    $"comment {id} has {markers.Count} {name.LocalName} markers");
+                foreach (var marker in markers)
+                    Assert.Same(wrapper, WrapperOf(marker));
+            }
+        }
     }
 
     [Theory]

@@ -3737,15 +3737,18 @@ internal static partial class IrMarkupRenderer
     /// <c>w:commentRangeEnd</c> of the same id, and an unchanged comment survives BOTH accept and reject. The
     /// comment analogue of <see cref="NormalizeBookmarks"/>; three phases:
     /// <list type="bullet">
-    /// <item><b>(A) collapse.</b> A comment present in BOTH sources (common) that still has a BARE marker is
-    /// position-stable (it anchors equal content): collapse each of its three marker kinds to a single bare
-    /// survivor (lifting one out of a <c>w:ins</c>/<c>w:del</c> wrapper if needed) so it survives accept AND
-    /// reject. The fine path can emit the SAME marker both bare (from the right model's equal span) and
-    /// revision-wrapped (from the left model's del span) at an edit boundary — this de-duplicates that.</item>
-    /// <item><b>(B) dedup.</b> A comment whose markers are wholly inside BOTH a <c>w:del</c> and a <c>w:ins</c>
-    /// subtree (a wholly rewritten anchor, or a comment in a whole-block-bailed table/opaque) has no bare
-    /// survivor: give the DELETED copy a fresh id + a cloned definition (paraId-stripped so threading never
-    /// collides). Accept ≡ right comment, reject ≡ left comment.</item>
+    /// <item><b>(A) collapse.</b> A comment present in BOTH sources (common) that still has a marker surviving
+    /// both views (<see cref="CommentMarkerView"/> is null: no <c>w:ins</c>/<c>w:del</c> around it and no whole
+    /// deleted/inserted block wrapper copy around it) is position-stable (it anchors equal content): collapse each
+    /// of its three marker kinds to a single bare survivor (lifting one out of a <c>w:ins</c>/<c>w:del</c> wrapper
+    /// if needed) so it survives accept AND reject. The fine path can emit the SAME marker both bare (from the
+    /// right model's equal span) and revision-wrapped (from the left model's del span) at an edit boundary — this
+    /// de-duplicates that.</item>
+    /// <item><b>(B) dedup.</b> A comment whose markers all toggle with a revision, some with the deleted view and
+    /// some with the inserted one (a wholly rewritten anchor, a comment in a whole-block-bailed table/opaque, or
+    /// one between the blocks of a block wrapper replaced whole — issue #1157), has no survivor of both views:
+    /// give the DELETED copy a fresh id + a cloned definition (paraId-stripped so threading never collides).
+    /// Accept ≡ right comment, reject ≡ left comment.</item>
     /// <item><b>(C) pair + resolve.</b> Drop any marker/reference whose id has no definition; re-close an
     /// orphaned start with a synthetic zero-width end in the start's own context; drop an orphaned end.</item>
     /// </list>
@@ -3762,8 +3765,8 @@ internal static partial class IrMarkupRenderer
         var commentsPart = main.WordprocessingCommentsPart;
 
         static string? IdOf(XElement e) => (string?)e.Attribute(W.id);
-        static bool Inside(XElement e, XName wrapper) => e.Ancestors().Any(a => a.Name == wrapper);
         static bool IsBare(XElement e) => !e.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del);
+        static bool InBothViews(XElement e) => CommentMarkerView(e) == null;
         List<XElement> Markers() => body.Descendants()
             .Where(e => (e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference)
                         && IsRunLevelCommentMarker(e)).ToList();
@@ -3780,13 +3783,15 @@ internal static partial class IrMarkupRenderer
         bool StillInBody(XElement m) => m.Ancestors().Any(a => ReferenceEquals(a, body));
 
         // (A) Identity-aware collapse — common comment with a bare survivor → single bare marker per kind.
+        var collapsed = new HashSet<string>(StringComparer.Ordinal);
         foreach (var id in markersById.Keys)
         {
             if (!(leftIds.Contains(id) && rightIds.Contains(id)))
                 continue; // right-added / left-deleted: keep its revision context
             var all = MarkersWithId(id);
-            if (!all.Any(IsBare))
-                continue; // all wrapped (rewritten anchor) → (B)
+            if (!all.Any(InBothViews))
+                continue; // every marker toggles with a revision (rewritten anchor, replaced wrapper) → (B)
+            collapsed.Add(id);
             foreach (var kind in new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference })
             {
                 var kinds = all.Where(m => m.Name == kind).ToList();
@@ -3819,7 +3824,7 @@ internal static partial class IrMarkupRenderer
             if (!rightAdded && !leftDeleted)
                 continue;
             var kind = rightAdded ? RevKind.Ins : RevKind.Del;
-            foreach (var m in MarkersWithId(id).Where(IsBare).ToList())
+            foreach (var m in MarkersWithId(id).Where(InBothViews).ToList())
             {
                 WrapMarkerInRevision(m, kind, state);
                 changed = true;
@@ -3831,9 +3836,11 @@ internal static partial class IrMarkupRenderer
         if (commentsRoot != null)
         {
             var markers = Markers();
-            var delIds = markers.Where(m => Inside(m, W.del)).Select(IdOf).Where(i => i != null).ToHashSet();
-            var insIds = markers.Where(m => Inside(m, W.ins)).Select(IdOf).Where(i => i != null).ToHashSet();
-            var duplicated = delIds.Where(insIds.Contains).ToList();
+            var delIds = markers.Where(m => CommentMarkerView(m) == RevKind.Del).Select(IdOf).Where(i => i != null).ToHashSet();
+            var insIds = markers.Where(m => CommentMarkerView(m) == RevKind.Ins).Select(IdOf).Where(i => i != null).ToHashSet();
+            // A comment (A) collapsed is one comment by now: a survivor it kept inside a replaced wrapper's copy
+            // can still read as one-sided, but splitting it off under a fresh id would part it from the rest.
+            var duplicated = delIds.Where(i => insIds.Contains(i) && !collapsed.Contains(i!)).ToList();
             if (duplicated.Count > 0)
             {
                 int nextId = commentsRoot.Elements(W.comment)
@@ -3843,7 +3850,7 @@ internal static partial class IrMarkupRenderer
                 foreach (var oldId in duplicated)
                 {
                     var newId = (nextId++).ToString();
-                    foreach (var m in markers.Where(m => IdOf(m) == oldId && Inside(m, W.del)))
+                    foreach (var m in markers.Where(m => IdOf(m) == oldId && CommentMarkerView(m) == RevKind.Del))
                         m.SetAttributeValue(W.id, newId);
                     var def = commentsRoot.Elements(W.comment).FirstOrDefault(c => (string?)c.Attribute(W.id) == oldId);
                     if (def != null)
@@ -3977,10 +3984,34 @@ internal static partial class IrMarkupRenderer
         part!.PutXDocument();
     }
 
+    /// <summary>
+    /// The one revision view a comment marker toggles with — <see cref="RevKind.Del"/> when only reject keeps
+    /// it, <see cref="RevKind.Ins"/> when only accept does — or null when it survives both. The nearest
+    /// tracked context decides: a <c>w:del</c>/<c>w:ins</c> wrapper around it, or a block wrapper
+    /// (<c>w:sdt</c>/<c>w:customXml</c>) emitted as a whole deleted or inserted copy. The second matters for a
+    /// marker BETWEEN a replaced wrapper's blocks: it carries no run revision of its own, yet it exists in only
+    /// that copy's view, exactly like the copy's run content.
+    /// </summary>
+    private static RevKind? CommentMarkerView(XElement marker)
+    {
+        foreach (var a in marker.Ancestors())
+        {
+            if (a.Name == W.del)
+                return RevKind.Del;
+            if (a.Name == W.ins)
+                return RevKind.Ins;
+            var content = a.Name == W.sdt ? a.Element(W.sdtContent) : a.Name == W.customXml ? a : null;
+            if (content != null && Internal.StructuredRevisionOps.TrackedWrapperIsDeleted(content) is { } deleted)
+                return deleted ? RevKind.Del : RevKind.Ins;
+        }
+        return null;
+    }
+
     /// <summary>True iff the comment marker sits at the paragraph/body run level (its ancestors up to the
     /// enclosing <c>w:p</c>/<c>w:body</c>/<c>w:tc</c> are only run-level wrappers — including the <c>w:r</c> that
-    /// hosts a <c>w:commentReference</c>). A marker reached through opaque content (math, drawing, textbox) is
-    /// part of that element's content hash and must NOT be reconciled.</summary>
+    /// hosts a <c>w:commentReference</c> — or the content of a <c>w:sdt</c>/<c>w:customXml</c> wrapper). A marker
+    /// reached through opaque content (math, drawing, textbox) is part of that element's content hash and must NOT
+    /// be reconciled.</summary>
     private static bool IsRunLevelCommentMarker(XElement marker)
     {
         for (var a = marker.Parent; a != null; a = a.Parent)
@@ -3988,7 +4019,8 @@ internal static partial class IrMarkupRenderer
             if (a.Name == W.p || a.Name == W.body || a.Name == W.tc)
                 return true;
             if (a.Name != W.r && a.Name != W.ins && a.Name != W.del && a.Name != W.hyperlink &&
-                a.Name != W.sdt && a.Name != W.sdtContent && a.Name != W.smartTag && a.Name != W.fldSimple)
+                a.Name != W.sdt && a.Name != W.sdtContent && a.Name != W.customXml && a.Name != W.smartTag &&
+                a.Name != W.fldSimple)
                 return false;
         }
         return false;
