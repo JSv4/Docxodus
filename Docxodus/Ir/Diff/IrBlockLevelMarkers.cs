@@ -124,6 +124,15 @@ internal static partial class IrMarkupRenderer
 
     private static MarkerLayout? ComputeMarkerLayout(IReadOnlyList<IrEditOp> ops, IrDocument leftDoc, IrDocument rightDoc)
     {
+        // Most streams have no marker between their blocks: find that out from one block per side before
+        // resolving every op.
+        bool HasMarkers(Func<IrEditOp, string?> anchor, IrDocument doc) =>
+            ops.Select(op => SourceElement(anchor(op), doc)?.Parent).FirstOrDefault(p => p is not null) is { } stream &&
+            stream.Elements().Any(IsBlockLevelMarker);
+        if (!HasMarkers(op => op.LeftAnchor ?? op.SplitMergeAnchors?.FirstOrDefault(), leftDoc) &&
+            !HasMarkers(op => op.RightAnchor ?? op.SplitMergeAnchors?.FirstOrDefault(), rightDoc))
+            return null;
+
         var leftBlocks = new List<XElement>[ops.Count];
         var rightBlocks = new List<XElement>[ops.Count];
         for (int i = 0; i < ops.Count; i++)
@@ -236,6 +245,11 @@ internal static partial class IrMarkupRenderer
         IReadOnlyList<IrCompositeOp> ops, IrDocument baseIr, IReadOnlyList<IrDocument> reviewerIrs,
         IReadOnlyList<IReadOnlyList<IrEditOp>>? reviewerOps, IReadOnlyList<string> authors, RenderState state)
     {
+        // Without reviewer ops only the base's markers are placed: none between its blocks, nothing to do.
+        if (reviewerOps is null &&
+            !(ops.Select(o => SourceElement(o.Op.LeftAnchor, baseIr)?.Parent).FirstOrDefault(p => p is not null) is { } stream &&
+              stream.Elements().Any(IsBlockLevelMarker)))
+            return null;
         var baseBlocks = ops.Select(o => SourceElement(o.Op.LeftAnchor, baseIr) is { } el
             ? new List<XElement> { el } : new List<XElement>()).ToArray();
         var baseSide = ReadSideMarkers(baseBlocks);

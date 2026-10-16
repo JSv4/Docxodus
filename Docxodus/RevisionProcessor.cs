@@ -2830,29 +2830,38 @@ namespace Docxodus
         /// the ones after the last block. The container's own properties (<c>w:tcPr</c>, <c>w:customXmlPr</c>) and
         /// the body's final <c>w:sectPr</c> are not among them: the rebuild places those itself.
         /// </summary>
+        private static readonly Dictionary<XElement, List<XElement>> NoLooseChildren = new();
+
         private static (Dictionary<XElement, List<XElement>> Before, List<XElement> Trailing) LooseChildrenOfBlockStream(
             XElement container)
         {
-            var before = new Dictionary<XElement, List<XElement>>();
-            var pending = new List<XElement>();
+            Dictionary<XElement, List<XElement>>? before = null;
+            List<XElement>? pending = null;
             foreach (var child in container.Elements())
             {
-                if (child.Name == W.tcPr || child.Name == W.customXmlPr ||
+                if (child.Name == W.p || child.Name == W.tbl || child.Name == W.tcPr || child.Name == W.customXmlPr ||
                     (child.Name == W.sectPr && container.Name == W.body))
+                {
+                    if (pending is not null && (child.Name == W.p || child.Name == W.tbl))
+                    {
+                        (before ??= new())[child] = pending;
+                        pending = null;
+                    }
                     continue;
+                }
                 var block = child.DescendantsAndSelf().FirstOrDefault(e => IsBlockContentElement(e, container));
                 if (block is null)
                 {
-                    pending.Add(child);
+                    (pending ??= new()).Add(child);
                     continue;
                 }
-                if (pending.Count > 0)
+                if (pending is not null)
                 {
-                    before[block] = pending;
-                    pending = new List<XElement>();
+                    (before ??= new())[block] = pending;
+                    pending = null;
                 }
             }
-            return (before, pending);
+            return (before ?? NoLooseChildren, pending ?? new List<XElement>());
         }
 
         /// <summary>

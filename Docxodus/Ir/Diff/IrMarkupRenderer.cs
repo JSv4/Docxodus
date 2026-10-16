@@ -4480,13 +4480,16 @@ internal static partial class IrMarkupRenderer
             var el = block.Source.Element;
             if (el == null)
                 continue;
-            // A bookmark that starts between body blocks is no block's descendant (issue #1149).
-            foreach (var bk in el.DescendantsAndSelf(W.bookmarkStart)
-                         .Concat(el.ElementsBeforeSelf().Reverse().TakeWhile(IsBlockLevelMarker)
-                             .Where(e => e.Name == W.bookmarkStart)))
+            foreach (var bk in el.DescendantsAndSelf(W.bookmarkStart))
                 if ((string?)bk.Attribute(W.name) is { } n && n.Length > 0)
                     names.Add(n);
         }
+        // A bookmark that starts between body blocks is no block's descendant (issue #1149).
+        if (source.Body.Blocks.Select(b => b.Source.Element?.Parent).FirstOrDefault(p => p is not null) is { } body &&
+            body.Name == W.body)
+            foreach (var bk in body.Elements(W.bookmarkStart))
+                if ((string?)bk.Attribute(W.name) is { } n && n.Length > 0)
+                    names.Add(n);
         return names;
     }
 
