@@ -297,6 +297,14 @@ public class BlockWrapperNestedDiffTests
         /// paragraph (not the one next to the reference).</summary>
         ReferencedAfterInAnEditedParagraph,
 
+        /// <summary>As <see cref="ReferencedAfter"/>, but the revision inserts words right before the reference,
+        /// so the comparison draws the reference inside that insertion.</summary>
+        ReferencedAfterAnAdjacentInsertion,
+
+        /// <summary>As <see cref="OpensBefore"/>, but the revision rewrites the word right before the range
+        /// start.</summary>
+        OpensAfterAnAdjacentEdit,
+
         /// <summary>As <see cref="ReferencedAfterInATextRun"/>, but the revision makes that run bold, so it carries
         /// a tracked formatting change.</summary>
         ReferencedAfterInAFormatChangedRun,
@@ -361,6 +369,10 @@ public class BlockWrapperNestedDiffTests
                 + $"<w:t xml:space=\"preserve\">{Tail}</w:t></w:r></w:p>",
             StraddlePlace.ReferencedAfterInAnEditedParagraph => Replaced(RangeInside())
                 + $"<w:p>{Run(revised ? "Lead blue words " : "Lead red words ")}{ReferenceRun}{Run(Tail)}</w:p>",
+            StraddlePlace.ReferencedAfterAnAdjacentInsertion => Replaced(RangeInside())
+                + $"<w:p>{Run(revised ? "Lead amended " : "Lead ")}{ReferenceRun}{Run(Tail)}</w:p>",
+            StraddlePlace.OpensAfterAnAdjacentEdit =>
+                $"<w:p>{Run(revised ? "Before the box" : "Before the wrapper")}{Start}</w:p>" + Replaced(ClosingInside()) + P(Tail),
             StraddlePlace.ReferencedAfterInAFormatChangedRun => Replaced(RangeInside())
                 + $"<w:p><w:r>{(revised ? "<w:rPr><w:b/></w:rPr>" : "")}<w:t xml:space=\"preserve\">Lead </w:t><w:commentReference w:id=\"0\"/>"
                 + $"<w:t xml:space=\"preserve\">{Tail}</w:t></w:r></w:p>",
@@ -392,7 +404,8 @@ public class BlockWrapperNestedDiffTests
         bool earlierWrapper = place is StraddlePlace.OpensInAnEarlierWrapper or StraddlePlace.OpensBetweenTheBlocksOfAnEarlierWrapper;
         Assert.Equal(earlierWrapper ? 3 : 2, redlineBody.Descendants(WrapperName(kind)).Count());
         if (place is not (StraddlePlace.OpensInAnEditedParagraph or StraddlePlace.ReferencedAfterInAnEditedParagraph
-            or StraddlePlace.ReferencedAfterInAFormatChangedRun))
+            or StraddlePlace.ReferencedAfterInAFormatChangedRun or StraddlePlace.ReferencedAfterAnAdjacentInsertion
+            or StraddlePlace.OpensAfterAnAdjacentEdit))
         {
             // The text outside the wrapper is unchanged, so only the comment's markers there may toggle with a view.
             var outsideParagraphs = redlineBody.Descendants(W.p).Where(p => p.Descendants().Any(e =>

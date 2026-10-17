@@ -93,9 +93,10 @@ All notable changes to this project will be documented in this file.
   each marked deleted or inserted with that copy's author and date, and the comment is split into a
   comment per copy the way a comment wholly inside a replaced wrapper already was. Accepting yields
   the revised document and rejecting the original, with the reference and both range ends where they
-  were; a threaded reply follows its parent into each view. When the outside reference shares a run
-  with text, the reference is moved into a run of its own so the text is not marked as changed, and
-  every copied run property change gets a revision id of its own. The same clean-up now also gives a
+  were; a threaded reply follows its parent into each view. This holds when the revision also edits
+  the text right beside the outside marker (each copy keeps the marker its own view shows). When the
+  outside reference shares a run with text, the reference is moved into a run of its own so the text
+  is not marked as changed, and every copied run property change gets a revision id of its own. The same clean-up now also gives a
   comment a separate id in each reviewer's copy when two reviewers of a consolidate both replace the
   wrapper (it repeated the comment's markers under one id), and numbers the copies above every comment
   id in the document, so a copy no longer takes the id of an undefined comment whose markers are

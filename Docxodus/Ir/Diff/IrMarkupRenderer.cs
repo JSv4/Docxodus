@@ -3946,13 +3946,13 @@ internal static partial class IrMarkupRenderer
             if (!(leftIds.Contains(id) && rightIds.Contains(id)))
                 continue; // right-added / left-deleted: keep its revision context
             var all = MarkersWithId(id);
-            if (!all.Any(InBothViews))
-                continue; // every marker toggles with a revision (rewritten anchor, replaced wrapper) → (B)
             if (SplitAcrossReplacedWrapperCopies(all, state))
             {
-                changed = true; // every marker is one-sided now → (B) gives the deleted view its own comment
+                changed = true; // every marker is one-sided now → (B) gives each copy its own comment
                 continue;
             }
+            if (!all.Any(InBothViews))
+                continue; // every marker toggles with a revision (rewritten anchor, replaced wrapper) → (B)
             collapsed.Add(id);
             foreach (var kind in new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference })
             {
@@ -4226,9 +4226,9 @@ internal static partial class IrMarkupRenderer
     /// (issue #1157).
     /// </summary>
     /// <remarks>
-    /// Applies only when each marker kind of the comment is either wholly outside every replaced wrapper copy
-    /// (with a survivor of both views, collapsed first as phase A would) or wholly inside replaced copies, with
-    /// one in a deleted and one in an inserted copy. Anything else returns false and is collapsed as before.
+    /// Applies only when each marker kind of the comment is either wholly outside every replaced wrapper copy or
+    /// wholly inside replaced copies, with one in a deleted and one in an inserted copy, and both sorts occur.
+    /// Anything else returns false and goes on to phase A's collapse or phase B as before.
     /// </remarks>
     private static bool SplitAcrossReplacedWrapperCopies(List<XElement> markers, RenderState state)
     {
@@ -4239,8 +4239,8 @@ internal static partial class IrMarkupRenderer
             var views = sameKind.Select(m => ReplacedWrapperCopy(m) is { } copy ? WholeWrapperCopyView(copy) : null).ToList();
             if (views.All(v => v == null))
             {
-                if (!sameKind.Any(m => CommentMarkerView(m) == null))
-                    return false;
+                // Outside every replaced copy. The fine path may have drawn it in a w:ins/w:del of its own (an edit
+                // right beside it), or once in each.
                 shared.Add(sameKind);
                 continue;
             }
@@ -4260,26 +4260,44 @@ internal static partial class IrMarkupRenderer
 
         foreach (var sameKind in shared)
         {
-            var keep = CollapseToSurvivor(sameKind).Survivor;
-            var target = keep.Name == W.commentReference ? IsolateReferenceRun(keep, state) : keep;
-            var anchor = target;
-            for (int i = 0; i < copies.Count; i++)
+            // Each copy takes the marker its own view shows (the leftmost start, the rightmost end), falling back
+            // to the phase A survivor when its view shows none (the fine path drew the marker only inside the
+            // other view's insertion or deletion). Markers no copy takes are dropped.
+            var chosen = copies.Select(c =>
             {
-                var twin = target;
-                if (i > 0)
+                var visible = sameKind.Where(m => CommentMarkerView(m) is null || CommentMarkerView(m) == c.View).ToList();
+                return SurvivorOf(visible.Count > 0 ? visible : sameKind);
+            }).ToList();
+            foreach (var m in sameKind)
+                if (!chosen.Contains(m))
+                    RemoveCommentMarker(m);
+            foreach (var marker in chosen.Distinct().ToList())
+            {
+                var users = Enumerable.Range(0, copies.Count).Where(i => ReferenceEquals(chosen[i], marker)).ToList();
+                if (users.Count == 1 && CommentMarkerView(marker) == copies[users[0]].View)
+                    continue; // already drawn in that copy's view alone
+                if (marker.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del))
+                    LiftCommentMarkerBare(marker);
+                var target = marker.Name == W.commentReference ? IsolateReferenceRun(marker, state) : marker;
+                var anchor = target;
+                for (int u = 0; u < users.Count; u++)
                 {
-                    twin = FreshenRevisionIds(new XElement(target), state);
-                    anchor.AddAfterSelf(twin);
-                }
-                var (view, envelope) = copies[i];
-                var revision = WrapMarkerInRevision(twin.Name == W.r ? twin.Element(W.commentReference)! : twin, view,
-                    new object[]
+                    var twin = target;
+                    if (u > 0)
                     {
-                        new XAttribute(W.author, EnvelopeAuthor(envelope) ?? state.AuthorOverride ?? state.Settings.AuthorForRevisions),
-                        new XAttribute(W.id, state.NextId()),
-                        new XAttribute(W.date, (string?)envelope?.Attribute(W.date) ?? state.Settings.DateTimeForRevisions),
-                    });
-                anchor = revision ?? anchor;
+                        twin = FreshenRevisionIds(new XElement(target), state);
+                        anchor.AddAfterSelf(twin);
+                    }
+                    var (view, envelope) = copies[users[u]];
+                    var revision = WrapMarkerInRevision(twin.Name == W.r ? twin.Element(W.commentReference)! : twin, view,
+                        new object[]
+                        {
+                            new XAttribute(W.author, EnvelopeAuthor(envelope) ?? state.AuthorOverride ?? state.Settings.AuthorForRevisions),
+                            new XAttribute(W.id, state.NextId()),
+                            new XAttribute(W.date, (string?)envelope?.Attribute(W.date) ?? state.Settings.DateTimeForRevisions),
+                        });
+                    anchor = revision ?? anchor;
+                }
             }
         }
         return true;
