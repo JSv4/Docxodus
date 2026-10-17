@@ -338,6 +338,13 @@ All notable changes to this project will be documented in this file.
   where their tops touch it. In the cases measured that row differs by up to 145/255 at 96 dpi
   (about 100% zoom on screen) and 134/255 at 150 dpi, at most 7/255 at 300 dpi and not at all at
   600 dpi; the PDF's clip and text positions are unchanged. See `docs/architecture/standalone_paginated_export.md`.
+- A PDF export, or a paginated view asked for a PageMap, no longer fails with "source anchor … has no
+  measurable fragment" when an exact-height table row hides a whole paragraph of a cell (issue
+  #1168). Word draws only what fits the row; the hidden paragraph renders nowhere, so it now gets no
+  PageMap fragment instead of failing the layout, and a citation of it reads `anchor_not_mapped`.
+  Content any other clip hides whole still fails, because there it was lost by the layout. In the
+  PDF the paragraph is clipped like the rest of the row, and its text is in the text layer, as
+  issue #1140 does for a cut line.
 
 ## [13.0.0] - 2026-10-12
 

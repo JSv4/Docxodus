@@ -35,7 +35,8 @@
  * positioned element, for which the `foreignObject` would become the containing block and move it.
  */
 
-const EXACT_ROW_CELL = 'div[data-docx-exact-row-cell="true"]';
+/** The converter's clip box around an exact-height row cell's content (`ClipExactRowCells`). */
+export const EXACT_ROW_CELL = 'div[data-docx-exact-row-cell="true"]';
 /** Marks the SVG root that now holds an exact-row cell's clipped content. */
 const EXACT_ROW_TEXT_ATTRIBUTE = 'data-docx-exact-row-text';
 const SVG_NS = 'http://www.w3.org/2000/svg';

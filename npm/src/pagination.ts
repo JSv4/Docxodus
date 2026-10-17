@@ -17,6 +17,7 @@ import {
   resolvePageBands,
 } from "./page-geometry.js";
 import type { PageBands, PageDimensions } from "./page-geometry.js";
+import { EXACT_ROW_CELL } from "./exact-row-text.js";
 
 export type { PageBands, PageDimensions } from "./page-geometry.js";
 
@@ -535,6 +536,24 @@ export const DRAWING_HOST_ATTRIBUTE = "data-docx-anchor-host";
  * {@link measureRenderedSource} looks up promoted drawings only for elements that have them.
  */
 export const HOSTS_PROMOTED_DRAWING_ATTRIBUTE = "data-docx-hosts-promoted-drawing";
+
+/**
+ * Whether the document itself clips `element` away whole: its layout box (`rect`) lies entirely
+ * outside the exact-height row cell it sits in, as Word hides whatever an exact row cannot hold
+ * (issue #1168). Such content renders nowhere, so it has no fragment and is not missing either.
+ * Only that clip counts: the body band and the paginator's own clips also hide overflow, but there
+ * a hidden source is content the layout lost, which PageMap completeness exists to catch.
+ */
+function clippedAwayByExactRow(element: HTMLElement, rect: DOMRect): boolean {
+  if (!(rect.width > 0 && rect.height > 0)) return false;
+  // Every enclosing exact row clips: a nested table's row can itself lie below its outer row.
+  for (let clip = element.parentElement?.closest<HTMLElement>(EXACT_ROW_CELL); clip;
+    clip = clip.parentElement?.closest<HTMLElement>(EXACT_ROW_CELL)) {
+    const box = clip.getBoundingClientRect();
+    if (rect.bottom <= box.top || rect.top >= box.bottom || rect.right <= box.left || rect.left >= box.right) return true;
+  }
+  return false;
+}
 
 /** True when `element` shows no text (beyond white space) and no image, SVG or canvas. */
 function rendersOnlyItsLine(element: HTMLElement): boolean {
@@ -1065,6 +1084,7 @@ export class PaginationEngine {
       throw new Error("cannot publish an available PageMap without canonical source inventory");
     }
     const measuredAnchorIds = new Set<string>();
+    const clippedAnchorIds = new Set<string>();
     const emittedFragmentCounts = new Map<string, number>();
     for (const page of this.lastPages) {
       this.checkpoint();
@@ -1099,6 +1119,7 @@ export class PaginationEngine {
         if (rect.width <= 0 || rect.height <= 0 || right <= left || bottom <= top) {
           // A continued note/story clone can contain children clipped off this page which become
           // measurable on its next clone. Enforce completeness once every page has been inspected.
+          if (clippedAwayByExactRow(element, rect)) clippedAnchorIds.add(anchorId);
           continue;
         }
 
@@ -1133,7 +1154,8 @@ export class PaginationEngine {
       }
     }
 
-    const missingAnchor = Array.from(requiredAnchorIds).find((id) => !measuredAnchorIds.has(id));
+    const missingAnchor = Array.from(requiredAnchorIds)
+      .find((id) => !measuredAnchorIds.has(id) && !clippedAnchorIds.has(id));
     if (missingAnchor) {
       throw new Error(`source anchor ${missingAnchor} has no measurable fragment in the paginated layout`);
     }
