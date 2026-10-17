@@ -454,6 +454,52 @@ public class BodyFieldSpanDiffTests
             Para(R("Alpha "), BeginChar, ProofErr("spellStart"), Instruction("PAGEREF"), ProofErr("spellEnd"), Instruction("x \\h"), SeparateChar, R("7"), EndChar) },
     };
 
+    /// <summary>A marker beside a field character that only one side carries (issue #1165 review): Word's
+    /// <c>_GoBack</c> bookmark, a proofing mark, a bookmark or comment added or removed around the field. The
+    /// field's characters are still placed once, and the one-sided marker is drawn as that side's own change on
+    /// its side of the character.</summary>
+    public static IEnumerable<object[]> OneSidedMarkersBesideFieldCharacters() => new[]
+    {
+        new object[] { "_GoBack before the field, original only",
+            Para(R("Alpha beta "), BookmarkStart("_GoBack"), BookmarkEnd, Field("PAGE", "1")),
+            Para(R("Alpha "), Field("PAGE", "7")) },
+        new object[] { "_GoBack after the field, revision only",
+            Para(R("Alpha beta "), Field("PAGE", "1"), R(" z")),
+            Para(R("Alpha "), Field("PAGE", "7"), BookmarkStart("_GoBack"), BookmarkEnd, R(" z")) },
+        new object[] { "proofing mark before the field, original only",
+            Para(R("Alpha beta "), ProofErr("gramStart"), Field("PAGE", "1")),
+            Para(R("Alpha "), Field("PAGE", "7")) },
+        new object[] { "proofing marks of different types",
+            Para(R("Alpha beta "), ProofErr("spellStart"), Field("PAGE", "1")),
+            Para(R("Alpha "), ProofErr("gramStart"), Field("PAGE", "7")) },
+        new object[] { "bookmark added around the field",
+            Para(R("Alpha beta "), Field("PAGE", "1"), R(" z")),
+            Para(R("Alpha "), BookmarkStart("bk"), Field("PAGE", "7"), BookmarkEnd, R(" z")) },
+        new object[] { "bookmark removed from around the field",
+            Para(R("Alpha beta "), BookmarkStart("bk"), Field("PAGE", "1"), BookmarkEnd, R(" z")),
+            Para(R("Alpha "), Field("PAGE", "7"), R(" z")) },
+        new object[] { "comment around the field, original only",
+            Para(R("Alpha beta "), CommentStart, Field("PAGE", "1"), CommentEnd, CommentReference, R(" z")),
+            Para(R("Alpha "), Field("PAGE", "7"), R(" z")) },
+        new object[] { "rendered page break between a field's begin and its instruction",
+            Para(R("Alpha beta "), BeginChar, "<w:r><w:lastRenderedPageBreak/></w:r>", Instruction("PAGE"), SeparateChar, R("1"), EndChar),
+            Para(R("Alpha "), BeginChar, "<w:r><w:lastRenderedPageBreak/></w:r>", Instruction("PAGE"), SeparateChar, R("7"), EndChar) },
+    };
+
+    [Theory]
+    [MemberData(nameof(OneSidedMarkersBesideFieldCharacters))]
+    public void Compare_OneSidedMarkerBesideAFieldCharacter_KeepsTheFieldAndTheMarkerInBothViews(string name, string left, string right)
+    {
+        var original = MarkerDoc(left);
+        var revised = MarkerDoc(right);
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        AssertShapesSurviveRoundTrip(original, revised, redline, name, markers: true);
+        AssertFieldCharacterCounts(original, revised, redline);
+        AssertFieldCharactersBare(redline, expectedCount: 3);
+    }
+
     private static string ProofErr(string type) => $"<w:proofErr w:type=\"{type}\"/>";
 
     [Theory]

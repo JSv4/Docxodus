@@ -75,7 +75,9 @@ All notable changes to this project will be documented in this file.
   revised document's `begin`/`separate`/`end` characters and rejecting exactly the original's, in the
   same place among the text. A bookmark, comment range or comment reference right next to a field
   character moves with it, so a caption's bookmark still encloses its `SEQ` field and a bookmark around
-  a field's result stays around it. This applies to `DocxCompare.Compare`/`DocxDiff.Compare` in the body,
+  a field's result stays around it; one only one document has there (Word's `_GoBack` bookmark, a
+  proofing mark, a bookmark or comment added or removed) is marked as inserted or deleted on its side of
+  the field. This applies to `DocxCompare.Compare`/`DocxDiff.Compare` in the body,
   headers, footers and notes, and to a consolidate with one reviewer. A consolidate of two or more
   reviewers can still double or drop a field character where one reviewer's edit meets another's, and a
   paragraph with a field nested in another field's code (`{= {PAGE} - 1}`) is drawn as before.

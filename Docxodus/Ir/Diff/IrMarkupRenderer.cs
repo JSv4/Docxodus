@@ -6419,15 +6419,28 @@ internal static partial class IrMarkupRenderer
         // The field characters both sides of a paired paragraph carry are emitted once each, where both sides
         // reach them (issue #1165); see SyncFieldCharacters. Only a whole-paragraph pair is planned this way: the
         // other callers render a slice of a paragraph's tokens, or one reviewer's ops at a time.
-        List<SourceRunModel.FieldCharacter>[]? fieldCharactersBefore = null;
+        List<PlacedFieldCharacter>[]? fieldCharactersBefore = null;
         if (syncFieldCharacters)
             ops = SyncFieldCharacters(ops, leftTokens, rightTokens, leftRuns, rightRuns, out fieldCharactersBefore);
 
         void EmitFieldCharactersBefore(int opIndex)
         {
-            if (fieldCharactersBefore?[opIndex] is { } due)
-                foreach (var fieldCharacter in due)
-                    content.AddRange(rightRuns.EmitFieldCharacter(fieldCharacter));
+            if (fieldCharactersBefore?[opIndex] is not { } due)
+                return;
+            void EmitOneSided(SourceRunModel model, HashSet<XElement> members, RevKind kind)
+            {
+                if (members.Count > 0)
+                    foreach (var r in model.EmitFieldCharacter(members))
+                        content.AddRange(WrapFieldAware(r, kind, state));
+            }
+            foreach (var placed in due)
+            {
+                EmitOneSided(leftRuns, placed.LeftOnlyBefore, RevKind.Del);
+                EmitOneSided(rightRuns, placed.RightOnlyBefore, RevKind.Ins);
+                content.AddRange(rightRuns.EmitFieldCharacter(placed.Shared));
+                EmitOneSided(leftRuns, placed.LeftOnlyAfter, RevKind.Del);
+                EmitOneSided(rightRuns, placed.RightOnlyAfter, RevKind.Ins);
+            }
         }
 
         // An op slices the left source only when it draws left content: a deletion, or an Equal/FormatChanged span
@@ -6634,7 +6647,7 @@ internal static partial class IrMarkupRenderer
     private static List<IrTokenOp> SyncFieldCharacters(
         List<IrTokenOp> ops, IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
         SourceRunModel leftRuns, SourceRunModel rightRuns,
-        out List<SourceRunModel.FieldCharacter>[]? emitBefore)
+        out List<PlacedFieldCharacter>[]? emitBefore)
     {
         emitBefore = null;
         var left = leftRuns.FieldCharacters();
@@ -6648,22 +6661,23 @@ internal static partial class IrMarkupRenderer
         // code, so neither a nested character nor the outer field's own ones pair reliably, and placing some of
         // them while the slices place the rest reorders the field code.
         for (int k = 0; k < left.Count; k++)
-            if (left[k].Type != right[k].Type || left[k].InInstruction || right[k].InInstruction)
+            if (left[k].Type != right[k].Type || left[k].InInstruction || right[k].InInstruction ||
+                left[k].Field != right[k].Field)
                 return ops;
 
-        // The token index each synced character sits before, on each side.
-        var synced = new List<(int Left, int Right, int Index)>();
+        // The token index each character sits before on each side; (-1, -1) where it has no point both sides reach,
+        // and (-2, -2) where it lies strictly inside a span whose text is unchanged, which emits it once in place.
+        var points = new (int Left, int Right)[left.Count];
         for (int k = 0; k < left.Count; k++)
         {
             int lt = FieldCharacterTokenIndex(leftTokens, left[k]);
             int rt = FieldCharacterTokenIndex(rightTokens, right[k]);
-            // The markers emitted with the character stand in for the original's only when it carries the same ones.
-            if (lt < 0 || rt < 0 || left[k].Signature != right[k].Signature ||
-                (synced.Count > 0 && (lt < synced[^1].Left || rt < synced[^1].Right)))
-                continue;
-            bool onPath = true;
+            bool onPath = lt >= 0 && rt >= 0 && left[k].CoreSignature == right[k].CoreSignature;
+            bool held = false;
             foreach (var op in ops)
             {
+                if (!onPath)
+                    break;
                 bool hasLeft = op.LeftEnd > op.LeftStart, hasRight = op.RightEnd > op.RightStart;
                 bool insideLeft = op.LeftStart < lt && lt < op.LeftEnd;
                 bool insideRight = op.RightStart < rt && rt < op.RightEnd;
@@ -6672,17 +6686,30 @@ internal static partial class IrMarkupRenderer
                     // A span over both sides passes the point only at the same offset into both, and one whose
                     // text is unchanged keeps an interior character itself.
                     onPath = insideLeft || insideRight
-                        ? insideLeft && insideRight && lt - op.LeftStart == rt - op.RightStart &&
-                          !KeepsTextUnchanged(op, leftTokens, rightTokens)
+                        ? insideLeft && insideRight && lt - op.LeftStart == rt - op.RightStart
                         : (op.LeftStart >= lt) == (op.RightStart >= rt);
+                    held |= onPath && insideLeft && KeepsTextUnchanged(op, leftTokens, rightTokens);
                 }
                 else if (insideLeft || insideRight)
                     onPath = op.RelocationGroupId is null;
-                if (!onPath)
-                    break;
             }
-            if (onPath)
-                synced.Add((lt, rt, k));
+            points[k] = !onPath ? (-1, -1) : held ? (-2, -2) : (lt, rt);
+        }
+
+        // A field is placed whole or not at all: placing some of its characters while the slices place the others
+        // tears it apart (a begin placed ahead of a separate a deletion still carries reads the deleted text as the
+        // result in both views).
+        // A character an unchanged span keeps in place is consistent with the placed ones around it.
+        var unplaceable = Enumerable.Range(0, left.Count).Where(k => points[k].Left == -1)
+            .Select(k => left[k].Field).ToHashSet();
+        var synced = new List<(int Left, int Right, int Index)>();
+        for (int k = 0; k < left.Count; k++)
+        {
+            if (points[k].Left == -2 || unplaceable.Contains(left[k].Field))
+                continue;
+            if (synced.Count > 0 && (points[k].Left < synced[^1].Left || points[k].Right < synced[^1].Right))
+                return ops;
+            synced.Add((points[k].Left, points[k].Right, k));
         }
         if (synced.Count == 0)
             return ops;
@@ -6715,17 +6742,67 @@ internal static partial class IrMarkupRenderer
         var ordered = split.Select((op, index) => (Op: op, Index: index, Follows: Follows(op)))
             .OrderBy(entry => entry.Follows).ThenBy(entry => entry.Index).ToList();
 
-        emitBefore = new List<SourceRunModel.FieldCharacter>[ordered.Count + 1];
+        emitBefore = new List<PlacedFieldCharacter>[ordered.Count + 1];
         for (int j = 0; j < synced.Count; j++)
         {
             int slot = ordered.FindIndex(entry => entry.Follows > j);
             if (slot < 0)
                 slot = ordered.Count;
-            (emitBefore[slot] ??= new()).Add(right[synced[j].Index]);
-            leftRuns.WithholdFieldCharacter(left[synced[j].Index]);
-            rightRuns.WithholdFieldCharacter(right[synced[j].Index]);
+            var placed = PlaceFieldCharacter(left[synced[j].Index], right[synced[j].Index]);
+            (emitBefore[slot] ??= new()).Add(placed);
+            leftRuns.WithholdFieldCharacter(left[synced[j].Index].Core
+                .Concat(left[synced[j].Index].Markers.Select(m => m.Element)));
+            rightRuns.WithholdFieldCharacter(right[synced[j].Index].Core
+                .Concat(right[synced[j].Index].Markers.Select(m => m.Element)));
         }
         return ordered.Select(entry => entry.Op).ToList();
+    }
+
+    /// <summary>What one placed field character emits: <see cref="Shared"/>, the revision's copy of its core (the
+    /// <c>w:fldChar</c> and its instruction runs) and of the markers beside it that both sides carry on the same
+    /// side of the <c>w:fldChar</c> in the same order (a longest common run by key), bare and in source order; and
+    /// the markers beside it only one side carries there (Word's <c>_GoBack</c> bookmark, a proofing mark, a
+    /// bookmark or comment added or removed), drawn as that side's own deletion or insertion before or after it,
+    /// as they were placed in the source.</summary>
+    private sealed record PlacedFieldCharacter(
+        HashSet<XElement> Shared,
+        HashSet<XElement> LeftOnlyBefore, HashSet<XElement> RightOnlyBefore,
+        HashSet<XElement> LeftOnlyAfter, HashSet<XElement> RightOnlyAfter);
+
+    private static PlacedFieldCharacter PlaceFieldCharacter(
+        SourceRunModel.FieldCharacter left, SourceRunModel.FieldCharacter right)
+    {
+        var shared = new HashSet<XElement>(right.Core);
+        var oneSided = new HashSet<XElement>[4];   // left before, right before, left after, right after
+        foreach (var after in new[] { false, true })
+        {
+            var l = left.Markers.Where(m => m.AfterFieldChar == after).ToList();
+            var r = right.Markers.Where(m => m.AfterFieldChar == after).ToList();
+            var lengths = new int[l.Count + 1, r.Count + 1];
+            for (int i = l.Count - 1; i >= 0; i--)
+                for (int j = r.Count - 1; j >= 0; j--)
+                    lengths[i, j] = l[i].Key == r[j].Key
+                        ? lengths[i + 1, j + 1] + 1
+                        : Math.Max(lengths[i + 1, j], lengths[i, j + 1]);
+            var leftOnly = new HashSet<XElement>(l.Select(m => m.Element));
+            var rightOnly = new HashSet<XElement>(r.Select(m => m.Element));
+            for (int i = 0, j = 0; i < l.Count && j < r.Count;)
+            {
+                if (l[i].Key == r[j].Key)
+                {
+                    leftOnly.Remove(l[i++].Element);
+                    shared.Add(r[j].Element);
+                    rightOnly.Remove(r[j++].Element);
+                }
+                else if (lengths[i + 1, j] >= lengths[i, j + 1])
+                    i++;
+                else
+                    j++;
+            }
+            oneSided[after ? 2 : 0] = leftOnly;
+            oneSided[after ? 3 : 1] = rightOnly;
+        }
+        return new PlacedFieldCharacter(shared, oneSided[0], oneSided[1], oneSided[2], oneSided[3]);
     }
 
     /// <summary>The index of the token a field character sits before: the tokens wholly before its character
@@ -10989,32 +11066,42 @@ internal static partial class IrMarkupRenderer
             bool nextOwnsEndZeroWidth, ISet<string>? deferOnlyKeys, ISet<string> representedKeys) =>
             Scan(start, end, includeStartZeroWidth, includeEndZeroWidth, nextOwnsEndZeroWidth, deferOnlyKeys, representedKeys);
 
-        /// <summary>One <c>w:fldChar</c> of this paragraph with the instruction runs right after it (issue #1165),
-        /// and the markers that share its character position next to it in document order (a bookmark or comment
-        /// range endpoint, a comment reference, a proofing mark): its <see cref="Type"/>, its character position, how
-        /// many of the zero-width segments that could be diff tokens (a tab, a break, a note reference…) sit at that
-        /// position before it and in all, the source elements that make it up in document order
-        /// (<see cref="Members"/>), their identity (<see cref="Signature"/>: the character type, the instruction,
-        /// each marker by bookmark name or comment id, so the other side's copy can be checked to carry the same
-        /// markers in the same order), and whether it lies in another field's instruction, a field nested in a
-        /// field code.</summary>
+        /// <summary>One <c>w:fldChar</c> of this paragraph (issue #1165): its <see cref="Type"/>, its character
+        /// position, how many of the zero-width segments that could be diff tokens (a tab, a break, a note
+        /// reference…) sit at that position before it and in all, its <see cref="Core"/> (the <c>w:fldChar</c> and
+        /// the instruction runs right after it), the <see cref="Markers"/> that share its position next to it in
+        /// document order, the field it belongs to (<see cref="Field"/>: the characters of one top-level field share
+        /// an id, and the characters of fields opened or closed in another paragraph share -1), and whether it lies
+        /// in another field's instruction (a field nested in a field code).</summary>
         public sealed record FieldCharacter(
-            string Type, int Char, int ZeroWidthBefore, int ZeroWidthAt, IReadOnlyList<XElement> Members,
-            string Signature, bool InInstruction);
+            string Type, int Char, int ZeroWidthBefore, int ZeroWidthAt, IReadOnlyList<XElement> Core,
+            IReadOnlyList<FieldCharacterMarker> Markers, int Field, bool InInstruction)
+        {
+            /// <summary>The character's type and whether instruction runs follow it: what the other side's copy
+            /// must match for the two to be one character.</summary>
+            public string CoreSignature => Type + (Core.Count > 1 ? "+instr" : "");
+        }
+
+        /// <summary>A marker next to a field character at its position: a bookmark or comment range endpoint, a
+        /// comment reference, a proofing mark or a rendered page break. <see cref="Key"/> is its identity on both
+        /// sides (a bookmark by name, a comment by id); <see cref="AfterFieldChar"/> whether it follows the
+        /// <c>w:fldChar</c> (after it or among its instruction runs) or precedes it.</summary>
+        public sealed record FieldCharacterMarker(XElement Element, string Key, bool AfterFieldChar);
 
         /// <summary>The paragraph's field characters in document order, or null when an instruction run follows no
         /// field character at its position (the characters cannot be told apart then). Field characters inside an
         /// atomic container (a content control, a simple field) are not segments and are not listed.
         /// <para>A marker at a field character's position belongs to it when nothing but other such markers (or an
-        /// empty run) separates them: one right before the character, or after it or its instruction runs. A marker
-        /// between two field characters at one position goes with the first. Emitting the markers with the
-        /// character keeps them on their side of it in both views: a bookmark ending after a caption's
-        /// <c>SEQ</c> field still encloses the field's end.</para></summary>
+        /// empty run) separates them: one right before the character, or after it or among its instruction runs.
+        /// A marker between two field characters at one position goes with the first. Emitting the markers both
+        /// sides carry with the character keeps them on their side of it in both views: a bookmark ending after a
+        /// caption's <c>SEQ</c> field still encloses the field's end.</para></summary>
         public List<FieldCharacter>? FieldCharacters()
         {
             var result = new List<FieldCharacter>();
             var attached = new HashSet<int>();
-            var open = new List<bool>();   // per open field: whether its separate has been met
+            var open = new List<(bool Separated, int Field)>();
+            int nextField = 0;
             for (int i = 0; i < _segments.Count; i++)
             {
                 var seg = _segments[i];
@@ -11030,41 +11117,50 @@ internal static partial class IrMarkupRenderer
                 while (first > 0 && !attached.Contains(first - 1) && _segments[first - 1].Start == seg.Start &&
                        (IsAttachableMarker(_segments[first - 1]) || IsEmptyRun(_segments[first - 1])))
                     first--;
-                // The character, its instruction runs, and the markers after them at its position.
+                // The character, its instruction runs, and the markers after or among them at its position.
                 int last = i;
                 while (last + 1 < _segments.Count && _segments[last + 1].Start == seg.Start &&
                        (IsInstruction(_segments[last + 1]) || IsAttachableMarker(_segments[last + 1]) ||
                         IsEmptyRun(_segments[last + 1])))
                     last++;
 
-                var members = new List<XElement>();
-                var signature = new List<string>();
+                var core = new List<XElement>();
+                var markers = new List<FieldCharacterMarker>();
                 for (int j = first; j <= last; j++)
                 {
                     attached.Add(j);
                     var member = _segments[j];
                     if (IsEmptyRun(member))
                         continue;
-                    members.Add(member.OtherChild ?? member.Element);
-                    var key = IsFieldChar(member) ? "fldChar:" + (string?)member.OtherChild!.Attribute(W.fldCharType)
-                        : IsInstruction(member) ? "instr"
-                        : MarkerKey(member) ?? (member.OtherChild ?? member.Element).Name.LocalName + ":" +
-                            (string?)(member.OtherChild ?? member.Element).Attribute(W.type);
-                    if (key != "instr" || signature.Count == 0 || signature[^1] != "instr")
-                        signature.Add(key);
+                    var element = member.OtherChild ?? member.Element;
+                    if (IsFieldChar(member) || IsInstruction(member))
+                        core.Add(element);
+                    else
+                        markers.Add(new FieldCharacterMarker(element,
+                            element.Name.LocalName + ":" + (MarkerKey(member) ?? (string?)element.Attribute(W.type)), j > i));
                 }
 
                 var type = (string?)seg.OtherChild!.Attribute(W.fldCharType) ?? "";
-                bool inInstruction = open.Take(open.Count - (type == "begin" ? 0 : 1)).Any(separated => !separated);
+                bool inInstruction = open.Take(open.Count - (type == "begin" ? 0 : 1)).Any(f => !f.Separated);
+                int field;
                 if (type == "begin")
-                    open.Add(false);
-                else if (type == "separate" && open.Count > 0)
-                    open[^1] = true;
-                else if (type == "end" && open.Count > 0)
-                    open.RemoveAt(open.Count - 1);
+                {
+                    field = open.Count == 0 ? nextField++ : open[0].Field;
+                    open.Add((false, field));
+                }
+                else if (open.Count == 0)
+                    field = -1;   // closes or separates a field opened in another paragraph
+                else
+                {
+                    field = open[^1].Field;
+                    if (type == "separate")
+                        open[^1] = (true, field);
+                    else if (type == "end")
+                        open.RemoveAt(open.Count - 1);
+                }
 
                 int before = _segments.Take(first).Count(other => other.Start == seg.Start && MayBeZeroWidthToken(other));
-                result.Add(new FieldCharacter(type, seg.Start, before, 0, members, string.Join(" ", signature), inInstruction));
+                result.Add(new FieldCharacter(type, seg.Start, before, 0, core, markers, field, inInstruction));
                 i = last;
             }
             for (int k = 0; k < result.Count; k++)
@@ -11082,26 +11178,30 @@ internal static partial class IrMarkupRenderer
 
         private static bool IsEmptyRun(Segment seg) => seg.Kind == SegmentKind.RunOther && seg.OtherChild is null;
 
+        /// <summary>A proofing mark or a rendered page break: zero-width, no diff token, and no content of the
+        /// paragraph's (the reader drops both).</summary>
+        private static bool IsLayoutMark(Segment seg) =>
+            (seg.Kind == SegmentKind.ZeroWidth && seg.Element.Name == W.proofErr) ||
+            (seg.Kind == SegmentKind.RunOther && seg.OtherChild?.Name == W.lastRenderedPageBreak);
+
         /// <summary>A zero-width marker that is no diff token: a bookmark or comment range endpoint, a comment
-        /// reference, or a proofing mark.</summary>
+        /// reference, a proofing mark or a rendered page break.</summary>
         private static bool IsAttachableMarker(Segment seg) =>
             seg.IsZeroWidth && seg.Kind != SegmentKind.Container &&
-            ((seg.AlwaysKeep && !IsFieldChar(seg) && !IsInstruction(seg)) ||
-             (seg.Kind == SegmentKind.ZeroWidth && seg.Element.Name == W.proofErr));
+            ((seg.AlwaysKeep && !IsFieldChar(seg) && !IsInstruction(seg)) || IsLayoutMark(seg));
 
         private static bool MayBeZeroWidthToken(Segment seg) =>
-            seg.IsZeroWidth && !seg.AlwaysKeep && !IsEmptyRun(seg) &&
-            !(seg.Kind == SegmentKind.ZeroWidth && seg.Element.Name == W.proofErr);
+            seg.IsZeroWidth && !seg.AlwaysKeep && !IsEmptyRun(seg) && !IsLayoutMark(seg);
 
-        /// <summary>Keep the slices of this model from emitting a field character: it is emitted on its own
-        /// (<see cref="EmitFieldCharacter"/>), or the other side's copy stands in for it.</summary>
-        public void WithholdFieldCharacter(FieldCharacter fieldCharacter) =>
-            _claimedZeroWidth.UnionWith(fieldCharacter.Members);
+        /// <summary>Keep the slices of this model from emitting these source elements of a field character: they
+        /// are emitted on their own (<see cref="EmitFieldCharacter"/>), or the other side's copy stands in for
+        /// them.</summary>
+        public void WithholdFieldCharacter(IEnumerable<XElement> members) => _claimedZeroWidth.UnionWith(members);
 
-        /// <summary>The run-level elements of one field character, bare, inside clones of the containers (a
-        /// hyperlink) that hold it in the source.</summary>
-        public List<XElement> EmitFieldCharacter(FieldCharacter fieldCharacter) =>
-            Scan(0, 0, false, false, false, null, null, fieldCharacter.Members.ToHashSet());
+        /// <summary>The run-level elements of a field character's <paramref name="members"/>, bare, in source order,
+        /// inside clones of the containers (a hyperlink) that hold them in the source.</summary>
+        public List<XElement> EmitFieldCharacter(IReadOnlyCollection<XElement> members) =>
+            Scan(0, 0, false, false, false, null, null, members as ISet<XElement> ?? members.ToHashSet());
 
         private List<XElement> Scan(int start, int end, bool includeStartZeroWidth, bool includeEndZeroWidth,
             bool nextOwnsEndZeroWidth, ISet<string>? deferOnlyKeys, ISet<string>? claimOnlyKeys,
