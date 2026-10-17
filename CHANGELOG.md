@@ -250,7 +250,7 @@ All notable changes to this project will be documented in this file.
   now written in points from the exact twip value (`595.3pt 841.9pt`, `70.85pt`). The values change
   unit in the CSS (`in` to `pt`) but not size, beyond the removed rounding. A tab advance that ran out
   of tab stops now falls back to half an inch, as intended, instead of 720 inches. The page-geometry
-  `data-*` attributes the paginator reads still carry 0.1pt.
+  `data-*` attributes the paginator reads were left at 0.1pt here; issue #1164 makes them exact.
 - The page-geometry attributes the paginated view lays every page out from now carry exact points
   (issue #1164). `data-page-width`, `data-page-height`, `data-content-*`, `data-margin-*`,
   `data-header-height`, `data-footer-height` and `data-col-gap` were written to one decimal, so a

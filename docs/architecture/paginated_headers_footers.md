@@ -213,8 +213,9 @@ Add header/footer height to section data attributes:
 
 ```csharp
 // In CreateSectionDivs(), when pagination enabled
-div.Add(new XAttribute("data-header-height", dims.HeaderPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-div.Add(new XAttribute("data-footer-height", dims.FooterPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+// Exact points, like every page-geometry attribute (issue #1164)
+div.Add(new XAttribute("data-header-height", PageGeometryValue(dims.HeaderPt)));
+div.Add(new XAttribute("data-footer-height", PageGeometryValue(dims.FooterPt)));
 ```
 
 #### 2. Header/Footer Registry
