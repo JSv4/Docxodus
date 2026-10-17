@@ -494,8 +494,10 @@ internal static partial class IrMarkupRenderer
                 // when a literal docDefaults delta is the only safe presentation difference. Right-only
                 // styles are copied in. Numbering keeps the existing missing-copy treatment (numId
                 // collisions are remapped there, not overwritten).
+                var styleIdRemap = new StyleIdRemap();
                 var rightImportedStyles = TrackStyleDefinitionChanges(
-                    wDoc, wDocRight, state, insertedStyleNormalization, leftHadTheme, docDefaultsStyleProjection);
+                    wDoc, wDocRight, state, insertedStyleNormalization, leftHadTheme, docDefaultsStyleProjection,
+                    styleIdRemap);
                 // Equal blocks and archived pPr values are cloned verbatim, so neither path passes
                 // through the paired-paragraph style guard. Once the final styles part is known,
                 // discard only paragraph-style references which cannot resolve there.
@@ -516,12 +518,15 @@ internal static partial class IrMarkupRenderer
                 // abstractNum would make LibreOffice (which keys list counters by abstractNumId)
                 // CONTINUE numbering across two genuinely different lists where Word RESTARTS.
                 // Definitions nothing in the output references keep the legacy dedup treatment.
+                var numberingBeforeCopy = StyleIdRemap.ChildrenSnapshot(main.NumberingDefinitionsPart);
                 var numIdMap = PackageMerge.CopyMissingNumberingFromOneDocToAnother(
                     wDocRight, wDoc, CollectAlignedNumIdPairs(script, state),
                     CollectRightNumberingUsage(wDocRight.MainDocumentPart, rightImportedStyles));
                 RebindRightNumberingReferences(main, numIdMap, state);
                 RebindRightImportedStyleNumberingReferences(
                     main.StyleDefinitionsPart, rightImportedStyles, numIdMap);
+                // Right numbering levels copied in may name a right style imported under a fresh id.
+                styleIdRemap.ApplyToChildrenAddedSince(main.NumberingDefinitionsPart, numberingBeforeCopy);
                 // Word-parity repair: a body numPr referencing a numId with NO definition (tool-made
                 // corpus inputs ship this) renders as a plain paragraph in LibreOffice, while Word
                 // synthesizes a decimal multilevel definition on open — its compare oracle carries
@@ -7394,10 +7399,10 @@ internal static partial class IrMarkupRenderer
             if (!TryAddRightParagraphStyleChain(styleId, stylesById, usedStyleIds))
                 return false;
 
-        // The general style merger matches by (type, styleId), but styleId itself is package-global.
-        // A right paragraph style that collides with any LEFT type would be appended alongside the
-        // left definition. Decline the exceptional projection rather than making that ambiguity
-        // carry a retained default or synthesized property revisions.
+        // styleId is package-global. A right paragraph style whose id any LEFT style holds is either
+        // tracked against that style or, when the left style has another type, moved to a fresh id
+        // (issue #1184). Decline the exceptional projection rather than making either case carry a
+        // retained default or synthesized property revisions.
         var leftStyleIds = leftStylesRoot.Elements(W.style)
             .Select(style => (string?)style.Attribute(W.styleId))
             .Where(styleId => !string.IsNullOrEmpty(styleId))
@@ -7504,7 +7509,7 @@ internal static partial class IrMarkupRenderer
                 return false;
         }
 
-        foreach (var part in StyleSafetyStoryParts(main))
+        foreach (var part in StyleIdCollisions.StoryParts(main))
         {
             var root = part.GetXDocument().Root;
             if (root is null)
@@ -7543,21 +7548,6 @@ internal static partial class IrMarkupRenderer
         }
     }
 
-    private static IEnumerable<OpenXmlPart> StyleSafetyStoryParts(MainDocumentPart main)
-    {
-        yield return main;
-        foreach (var header in main.HeaderParts)
-            yield return header;
-        foreach (var footer in main.FooterParts)
-            yield return footer;
-        if (main.FootnotesPart is not null)
-            yield return main.FootnotesPart;
-        if (main.EndnotesPart is not null)
-            yield return main.EndnotesPart;
-        if (main.WordprocessingCommentsPart is not null)
-            yield return main.WordprocessingCommentsPart;
-    }
-
     private static bool IsOn(string? value) =>
         string.Equals(value, "1", StringComparison.Ordinal) ||
         string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
@@ -7577,9 +7567,11 @@ internal static partial class IrMarkupRenderer
     private static HashSet<StyleIdentity> TrackStyleDefinitionChanges(
         WordprocessingDocument wDoc, WordprocessingDocument wDocRight, RenderState state,
         InsertedStyleNormalization? insertedStyleNormalization, bool leftHadTheme,
-        DocDefaultsStyleProjection? docDefaultsStyleProjection)
+        DocDefaultsStyleProjection? docDefaultsStyleProjection, StyleIdRemap styleIdRemap)
     {
         var rightImportedStyles = new HashSet<StyleIdentity>();
+        var crossTypeImports = new List<(XElement Style, string Type, string Id)>();
+        var importedStyles = new List<XElement>();
         var importedParagraphStyles = new List<(XElement Style, string Id)>();
         if (wDoc.MainDocumentPart?.StyleDefinitionsPart is not { } leftStyles ||
             wDocRight.MainDocumentPart?.StyleDefinitionsPart is not { } rightStyles)
@@ -7591,28 +7583,41 @@ internal static partial class IrMarkupRenderer
         var leftOriginalRoot = new XElement(root);   // frozen snapshot for left-effective resolution
         var changedStyleParents = rightRoot.Elements(W.style).Where(rightStyle =>
         {
-            var leftStyle = leftOriginalRoot.Elements(W.style).FirstOrDefault(style =>
-                (string?)style.Attribute(W.type) == (string?)rightStyle.Attribute(W.type) &&
-                (string?)style.Attribute(W.styleId) == (string?)rightStyle.Attribute(W.styleId));
+            var leftStyle = StyleIdCollisions.FindStyle(leftOriginalRoot,
+                StyleIdCollisions.TypeOf(rightStyle), (string?)rightStyle.Attribute(W.styleId));
             return leftStyle is not null &&
                 (string?)leftStyle.Element(W.basedOn)?.Attribute(W.val) !=
                 (string?)rightStyle.Element(W.basedOn)?.Attribute(W.val);
-        }).Select(style => new StyleIdentity((string?)style.Attribute(W.type) ?? "",
+        }).Select(style => new StyleIdentity(StyleIdCollisions.TypeOf(style),
             (string?)style.Attribute(W.styleId) ?? "")).ToHashSet();
         var stockDocDefaults = insertedStyleNormalization is null
             ? null
             : XElement.Parse(leftHadTheme ? WordStockDocDefaults.ClassicXml : WordStockDocDefaults.ModernXml);
 
+        // Right styles whose id a left style of another type holds, and that something entering the output
+        // uses (issue #1184); the rest of them are left out, as Word's compare does.
+        var usedCrossTypeStyles = StyleIdCollisions.UsedCollidingStyles(leftOriginalRoot, rightRoot,
+            wDocRight.MainDocumentPart!.NumberingDefinitionsPart?.GetXDocument().Root,
+            StyleIdCollisions.StoryRoots(wDoc.MainDocumentPart!));
+
         foreach (var rightStyle in rightRoot.Elements(W.style))
         {
-            var type = (string?)rightStyle.Attribute(W.type);
+            // A style without w:type is a paragraph style; every same-type lookup below uses that default.
+            var type = StyleIdCollisions.TypeOf(rightStyle);
             var styleId = (string?)rightStyle.Attribute(W.styleId);
-            var leftStyle = root.Elements(W.style).FirstOrDefault(st =>
-                (string?)st.Attribute(W.type) == type &&
-                (string?)st.Attribute(W.styleId) == styleId);
+            var leftStyle = StyleIdCollisions.FindStyle(root, type, styleId);
             if (leftStyle is null)
             {
+                // The id is taken by a left style of another type: the left style keeps it. A used right style
+                // is imported here under its own id, so the type-qualified lookups below find it, and moved to
+                // a fresh id once every style is final.
+                bool crossType = StyleIdCollisions.IdHeldByAnotherType(root, type, styleId);
+                if (crossType && !usedCrossTypeStyles.Contains(rightStyle))
+                    continue;
                 var cloned = new XElement(rightStyle);
+                importedStyles.Add(cloned);
+                if (crossType)
+                    crossTypeImports.Add((cloned, type, styleId!));
                 bool usedInsertedParagraphStyle = styleId is not null && type == "paragraph" &&
                     insertedStyleNormalization is not null &&
                     insertedStyleNormalization.Uses(styleId);
@@ -7640,7 +7645,7 @@ internal static partial class IrMarkupRenderer
                         importedParagraphStyles.Add((cloned, styleId));
                 }
                 root.Add(cloned);
-                if (type is not null && styleId is not null)
+                if (styleId is not null)
                     rightImportedStyles.Add(new StyleIdentity(type, styleId));
                 continue;
             }
@@ -7729,7 +7734,20 @@ internal static partial class IrMarkupRenderer
         if (state.ImplicitParagraphStyle is { } implicitStyle)
             root.Add(new XElement(implicitStyle));
 
+        foreach (var (style, type, id) in crossTypeImports)
+        {
+            var freshId = StyleIdCollisions.FreshId(id, new[] { root, rightRoot }, styleIdRemap.FreshIds);
+            style.SetAttributeValue(W.styleId, freshId);
+            styleIdRemap.Add(type, id, freshId);
+            // Right-side lookups (numbering usage) know the style by its right id, output-side ones
+            // (numbering rebind) by the fresh one.
+            rightImportedStyles.Add(new StyleIdentity(type, freshId));
+        }
+        // Only the copied right styles: a left style's own references stay as the left wrote them.
+        foreach (var imported in importedStyles)
+            styleIdRemap.Apply(imported);
         leftStyles.PutXDocument();
+        styleIdRemap.Apply(StyleIdCollisions.StoryParts(wDoc.MainDocumentPart!));
         return rightImportedStyles;
     }
 
@@ -7744,8 +7762,7 @@ internal static partial class IrMarkupRenderer
         {
             if (changedParents.Contains(new StyleIdentity(type, id)))
                 return true;
-            var style = root.Elements(W.style).FirstOrDefault(element =>
-                (string?)element.Attribute(W.type) == type && (string?)element.Attribute(W.styleId) == id);
+            var style = StyleIdCollisions.FindStyle(root, type, id);
             id = (string?)style?.Element(W.basedOn)?.Attribute(W.val);
         }
         return false;
@@ -7935,8 +7952,7 @@ internal static partial class IrMarkupRenderer
         var current = style;
         while ((string?)current.Element(W.basedOn)?.Attribute(W.val) is { } parentId && seen.Add(parentId))
         {
-            var parent = outputRoot.Elements(W.style).FirstOrDefault(st =>
-                (string?)st.Attribute(W.type) == "paragraph" && (string?)st.Attribute(W.styleId) == parentId);
+            var parent = StyleIdCollisions.FindStyle(outputRoot, "paragraph", parentId);
             if (parent is null)
                 yield break;
             if (parent.Element(W.pPr) is { } pPr)
@@ -7950,13 +7966,11 @@ internal static partial class IrMarkupRenderer
     {
         int depth = 0;
         var seen = new HashSet<string>(StringComparer.Ordinal) { styleId };
-        var current = outputRoot.Elements(W.style).FirstOrDefault(st =>
-            (string?)st.Attribute(W.type) == "paragraph" && (string?)st.Attribute(W.styleId) == styleId);
+        var current = StyleIdCollisions.FindStyle(outputRoot, "paragraph", styleId);
         while (current is not null && (string?)current.Element(W.basedOn)?.Attribute(W.val) is { } parentId && seen.Add(parentId))
         {
             depth++;
-            current = outputRoot.Elements(W.style).FirstOrDefault(st =>
-                (string?)st.Attribute(W.type) == "paragraph" && (string?)st.Attribute(W.styleId) == parentId);
+            current = StyleIdCollisions.FindStyle(outputRoot, "paragraph", parentId);
         }
         return depth;
     }
@@ -8877,10 +8891,9 @@ internal static partial class IrMarkupRenderer
         if (stylesRoot is not null)
             foreach (var style in stylesRoot.Elements(W.style))
             {
-                var type = (string?)style.Attribute(W.type);
+                var type = StyleIdCollisions.TypeOf(style);
                 var styleId = (string?)style.Attribute(W.styleId);
-                if (type is null || styleId is null ||
-                    !rightImportedStyles.Contains(new StyleIdentity(type, styleId)))
+                if (styleId is null || !rightImportedStyles.Contains(new StyleIdentity(type, styleId)))
                     continue;
                 foreach (var numIdEl in style.Descendants(W.numPr).Select(numPr => numPr.Element(W.numId)))
                     if (numIdEl is not null && int.TryParse((string?)numIdEl.Attribute(W.val), out var id))
@@ -8910,10 +8923,9 @@ internal static partial class IrMarkupRenderer
         var changed = false;
         foreach (var style in root.Elements(W.style))
         {
-            var type = (string?)style.Attribute(W.type);
+            var type = StyleIdCollisions.TypeOf(style);
             var styleId = (string?)style.Attribute(W.styleId);
-            if (type is null || styleId is null ||
-                !rightImportedStyles.Contains(new StyleIdentity(type, styleId)))
+            if (styleId is null || !rightImportedStyles.Contains(new StyleIdentity(type, styleId)))
                 continue;
 
             // A style can carry paragraph properties directly or in a table-style conditional
@@ -9057,9 +9069,7 @@ internal static partial class IrMarkupRenderer
         var currentId = styleId;
         while (currentId is not null && seen.Add(currentId))
         {
-            var style = stylesRoot.Elements(W.style).FirstOrDefault(st =>
-                (string?)st.Attribute(W.type) == type &&
-                (string?)st.Attribute(W.styleId) == currentId);
+            var style = StyleIdCollisions.FindStyle(stylesRoot, type, currentId);
             if (style is null)
                 break;
             chain.Add(style);

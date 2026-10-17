@@ -172,15 +172,22 @@ internal static class IrCompositeMarkupRenderer
                 // Same loop merges each reviewer's right-only COMMENT definitions (+ commentsExtended/commentsIds
                 // threading) into the base-based comments part — comment markers are AlwaysKeep, so they ride the
                 // composite token diff exactly as in two-way Compare and must be reconciled the same way.
+                var styleIdRemap = new StyleIdRemap();
                 foreach (var reviewer in reviewers)
                 {
                     using var revStream = new OpenXmlMemoryStreamDocument(reviewer.Doc);
                     using var wDocRev = revStream.GetWordprocessingDocument();
                     if (main.StyleDefinitionsPart != null &&
                         wDocRev.MainDocumentPart?.StyleDefinitionsPart != null)
-                        PackageMerge.CopyMissingStylesFromOneDocToAnother(wDocRev, wDoc);
+                        PackageMerge.CopyMissingStylesFromOneDocToAnother(wDocRev, wDoc, styleIdRemap);
+                    // The reviewer's numbering levels and comments, merged after its styles, may name a style
+                    // copied under a fresh id (issue #1184).
+                    var numberingBeforeCopy = StyleIdRemap.ChildrenSnapshot(main.NumberingDefinitionsPart);
                     PackageMerge.CopyMissingNumberingFromOneDocToAnother(wDocRev, wDoc);
+                    styleIdRemap.ApplyToChildrenAddedSince(main.NumberingDefinitionsPart, numberingBeforeCopy);
+                    var commentsBeforeMerge = StyleIdRemap.ChildrenSnapshot(main.WordprocessingCommentsPart);
                     IrMarkupRenderer.MergeRightCommentDefinitions(main, wDocRev.MainDocumentPart, streamDoc, revStream);
+                    styleIdRemap.ApplyToChildrenAddedSince(main.WordprocessingCommentsPart, commentsBeforeMerge);
                 }
 
                 // Reconcile the assembled body's comment markers (unique ids, 1:1 range pairing, exactly-one
