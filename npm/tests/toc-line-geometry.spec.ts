@@ -92,21 +92,25 @@ async function renderToc(page: import('@playwright/test').Page) {
 
     // A one-line paragraph with no auto-spacing multiplier gives the font's NATIVE line box, which
     // is the base the OOXML multiple is applied to. The heading is a different size, so measure the
-    // base from a probe at the entry's own size instead of hard-coding a font metric.
+    // base from a probe of the entry's own font instead of hard-coding a font metric. The probe is
+    // laid out at 1000px and scaled down: Chromium rounds a `normal` line box to a whole pixel,
+    // and the paginated view lays lines out at the font's unrounded natural height (issue #1151;
+    // for Arial-metric fonts the rounding loses most of a pixel, Word does not).
     const probe = document.createElement('p');
-    probe.style.cssText = 'line-height: normal; margin: 0; position: absolute; visibility: hidden;';
+    probe.style.cssText = 'line-height: normal; margin: 0; position: absolute; visibility: hidden; white-space: nowrap;';
     probe.textContent = 'Probe';
     const entryRun = pageBox.querySelector('p:nth-of-type(2) span') as HTMLElement;
     const runStyle = getComputedStyle(entryRun);
     // Copy the font WITHOUT the `font` shorthand: that shorthand carries line-height, which would
     // hand the probe the very multiplied value it is supposed to provide the base for.
     probe.style.fontFamily = runStyle.fontFamily;
-    probe.style.fontSize = runStyle.fontSize;
+    const PROBE_PX = 1000;
+    probe.style.fontSize = `${PROBE_PX}px`;
     probe.style.fontWeight = runStyle.fontWeight;
     probe.style.fontStyle = runStyle.fontStyle;
     probe.style.lineHeight = 'normal';
     pageBox.appendChild(probe);
-    const nativeLineBox = probe.getBoundingClientRect().height;
+    const nativeLineBox = probe.getBoundingClientRect().height / PROBE_PX * parseFloat(runStyle.fontSize);
     probe.remove();
 
     const ordinaryParagraph = paragraphs.find(p =>
