@@ -439,7 +439,10 @@ All notable changes to this project will be documented in this file.
   on the next page when that page's band can hold it, rather than being clipped beside the
   citation; one taller than any band is still clipped beside it. A page that starts with a
   page-break-before paragraph now measures its carried note before placing that paragraph, so a
-  keep-with-next chain there no longer leaves its heading alone at the page's foot.
+  keep-with-next chain there no longer leaves its heading alone at the page's foot. The shape issue
+  #1179 lengthened to three pages (a table citing a note too tall for the room left, then a
+  paragraph citing a short note) takes two again: the deferred note now starts on page 2 with room
+  for both notes.
 - A paginated footnote that continues onto the next page now stays last on its page (issue #1179).
   The paginator could start a later, whole note below the split one: a note cited after it on the
   same page, a note deferred to a page whose carried continuation runs on again, or a note cited
