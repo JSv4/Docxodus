@@ -163,6 +163,29 @@ All notable changes to this project will be documented in this file.
   `data-field` / `data-field-format` marker as the equivalent complex field, so the paginator
   substitutes each page's number. As for complex fields, the substituted result takes the field's
   formatting rather than the cached result run's (see `docs/ooxml_corner_cases.md`).
+- Paginated documents with many long footnotes now take as many pages as in LibreOffice (issue #1151).
+  The NVCA model charter took 51 pages in the paginated view against LibreOffice's 48; it now takes
+  49. The paginated editor, which never splits a paragraph, takes 54 (was 53).
+  Three causes, each fixed where it arises:
+  - A note that did not fit beside its citation used to start on the next page while the citing
+    line stayed behind. Deferred notes piled up into pages holding nothing but notes. The citing
+    line now moves, whole, to the page where its note begins. The paragraph is split above that
+    line, or moved whole when it keeps its lines together. A table, a paragraph kept with the
+    heading before it, and the paginated editor (which never splits a paragraph) still defer
+    the note.
+  - Paragraphs could not be split across pages if they cited a note, were written as a heading
+    (any paragraph whose style has an outline level, such as the numbered clauses of a legal
+    document), or opened with a list number. Notes that open with a tab after their number could
+    not be split either. All of these now split like plain paragraphs, keeping the number and the
+    tab whole on the first piece.
+  - The converter dropped the spacing after of consecutive paragraphs in one numbered list.
+    LibreOffice keeps it, and the only markup that removes such spacing, `w:contextualSpacing`,
+    is not set, so the spacing is now kept.
+
+  The paginated view and editor also lay single-spaced lines out at the font's exact height, as the
+  PDF export already did. Chromium rounds them to a whole pixel, so 11pt Times New Roman advanced
+  12.75pt a line instead of 12.65pt. The read-only paginated view now also places glyphs on Word's
+  baseline, as the export does (issue #942); the editor does not.
 - Table row heights keep twip precision (issue #1121). The converter wrote `w:trHeight` as CSS inches
   rounded to 0.01in, so a 55pt row became 54.72pt and the error accumulated down the table, and
   25.075pt and 25.1pt rows both became 25.2pt. Heights are now written in points from the exact twip

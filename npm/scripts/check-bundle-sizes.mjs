@@ -12,7 +12,7 @@ const budgetsKiB = {
   'embed.bundle.js': 135,
   'embed.iife.js': 135,
   'editor.bundle.js': 112,
-  'pagination.bundle.js': 20,
+  'pagination.bundle.js': 23,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,

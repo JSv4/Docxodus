@@ -2123,7 +2123,14 @@ with one decimal, so `w:line="253"` (12.65 pt) rendered as 12.7 pt. They now kee
 point (`{0:0.0#}pt`). The paginated export now runs `applyUnroundedNormalLineHeights`
 (`npm/src/line-metrics.ts`) before pagination. It gives every element whose computed line height is
 `normal` an explicit height for its own font, measured at 1000 px, where pixel rounding is negligible.
-The converter's output is unchanged, and so is the editor's paginated view. Word's baseline placement
+The converter's output is unchanged. Since issue #1151 the paginator itself runs the same pass on its
+staging tree, so the paginated view and the paginated editor lay single-spaced lines out at the same
+unrounded pitch as the export; after the export's earlier pass no line height is `normal`, so the
+paginator's pass changes nothing there. The paginated editor runs it again on each block it renders
+afresh after an edit (`wireBlock` in `npm/src/editor.ts`), so an edited paragraph keeps the page's
+pitch. For the 11pt Times New Roman body of the NVCA model charter that is 12.65pt a line instead of
+12.75pt, and 11.50pt instead of 12pt for its 10pt notes (Times New Roman's `hhea` height is
+2355/2048 = 1.1499 em; LibreOffice advances 12.65pt and 11.55pt). Word's baseline placement
 for `auto` multiples (extra leading below the text, not split around it) is the next section.
 Tests: `npm/tests/export-line-pitch.spec.ts`.
 
@@ -2173,6 +2180,12 @@ values are measured in the DOM with Chromium placing baselines on whole CSS pixe
   | 12 pt Arial / Liberation Sans | 83.28 | 82.50 | 83.25 |
 
   `alignBaselinesToWord` (`npm/src/line-metrics.ts`) runs in the export once the page tree is final.
+  Since issue #1151 the read-only paginated view (`paginateHtml`, the React viewer) runs it too, at
+  the end of pagination (`PaginationOptions.alignBaselinesToWord`); the paginated editor does not,
+  since text typed into a moved box would not move with it. Once the view's lines took the font's
+  unrounded height (#1151), Chromium's whole-pixel baseline rounding fell differently and moved
+  some first lines a pixel; on the seven corpus cases with a Word reference, the aligned view's ink
+  extents match Word's or come within one pixel of them.
   For each paragraph whose line height is its font's natural height it computes Word's offset, *L* − *D*
   (*D* read from the canvas at 1000 px), measures Chromium's in a probe shaped like the paragraph's first
   line, and moves each direct inline child by the difference with relative positioning, so no line box
@@ -3052,12 +3065,124 @@ may take at most 95% of the body area. The body keeps a twentieth even on a page
 |---|---|---|---|---|
 | Citing page of the last body block | Not yet captured | ≤ 95% of body, less the body used | ≤ 60% | ≤ 95%, less the body used |
 | Note-only continuation page | Not yet captured | ≤ 95% of body | ≤ 60% (five pages for a 90-line note) | ≤ 95% (three pages) |
-| Body text still to place | Not yet captured | Not measured | ≤ 60% | ≤ 60% (unchanged) |
+| Body text still to place | Not yet captured | ≤ 95%: about 94% on page 5 of `TestFiles/NVCA-Model-COI.docx`, whose body continues on page 6 (measured for issue #1151) | ≤ 60% | ≤ 60% (unchanged) |
 
 Docxodus applies the 95% limit through `noteBandLimit` and `MAX_EXHAUSTED_BODY_FOOTNOTE_AREA_RATIO`
 in `npm/src/pagination.ts`, only once every body block is placed. The 60% cap that protects body
-text still waiting for the page is unchanged. Word's own limit needs a Word capture before either
-renderer's value is treated as Word behaviour.
+text still waiting for the page is unchanged, although LibreOffice lets notes take up to 95% there
+too. Raising it to 95% leaves the NVCA charter's page count unchanged once its notes begin beside
+their citations (issue #1151), and it changes the established layout of several paginator cases,
+so it is left for its own change. Word's own limit needs a Word capture before either renderer's
+value is treated as Word behaviour.
+
+## Footnotes: a note begins on the page that cites it (issue #1151)
+
+**Status:** Docxodus is within one page of LibreOffice on the NVCA model charter; Word not yet captured (October 2026)
+
+A footnote whose citation sits near the bottom of a page may not fit in what is left of it. A renderer
+can move the citing line to the next page, so that the note begins beside it, or keep the line and
+start the note on the next page instead. Reproducer: `TestFiles/NVCA-Model-COI.docx`, 94 notes,
+many of them longer than a third of a page, on 11pt Times New Roman body text.
+
+| | LibreOffice 25.8.7.3 | Docxodus before #1151 | Docxodus after |
+|---|---|---|---|
+| Notes that begin on a later page than their citation | 1 of 94 | 23 | 0 |
+| Pages holding notes and no body text | 0 | 2 (pages 6, 7) | 0 |
+| Paginated view, total pages | 48 | 51 | 49 |
+| Paginated editor (never splits a paragraph), total pages | — | 53 | 54 |
+
+Measured with #1130's 6pt spacing between notes in place. Without it these changes gave 48 pages,
+LibreOffice's count. LibreOffice lays out the same 6pt gaps, so they do not account for the
+remaining page by themselves. The pages first part around pages 18–21: Docxodus carries a few lines
+of a note onto the next page where LibreOffice has finished it, and from there trails it by up to a
+page. That drift is not yet located.
+
+LibreOffice's one exception is note 4. The first line of the "Fourth" paragraph cites it at the foot
+of page 4, the notes already there fill the page, and LibreOffice keeps the line on page 4 and begins
+the note on page 5. Docxodus moves that line to page 5, as it does for every other citation. Keeping
+a note with its citation is the aim here; it has not been checked against a Word reference.
+
+**What Docxodus did.** The paginator placed a paragraph whose lines fit and then, when one of its
+notes could not start in the space left, deferred the whole note to the next page while the citation
+stayed behind. The next page received the deferred notes before its own, ran out of room in turn,
+and deferred more, until a page held nothing but notes. Two limits made this common:
+
+- A paragraph that cites a note could not be split across pages at all, nor could a paragraph
+  written as `h1`–`h6` (any Word paragraph whose style has an outline level, which in this charter
+  is most numbered clauses), nor one that opens with a list number. Such a paragraph moved whole or
+  not at all.
+- A note paragraph that opens with a tab after its number (the FootnoteText style's
+  `<w:tab w:val="left" w:pos="360"/>`, which 94 of the charter's notes use) could not be split
+  either, so such a note either fitted whole or did not start.
+
+**Fix.** `npm/src/pagination.ts`:
+
+- `notesCanStartOnPage` answers whether a set of new notes can begin in the note band left beside
+  a given amount of body: each fits whole except the last, which may split if its first line fits.
+  When a block's notes cannot all start, the paginator splits the paragraph above the line whose
+  citation fails (`tryFragmentParagraph`: a note-aware split breaks only where a visual line
+  starts, so the citing line moves whole, with every citation on it), or, when the paragraph
+  cannot be split because it keeps its lines together, moves it whole to the next page. The note
+  is still deferred, as before, for a block that already starts its page, for a table (moving it
+  whole would leave much of the page empty; splitting it at the citing row is not attempted), for
+  a paragraph that a keep-with-next block before it keeps with (moving it would strand that block
+  at the foot of the page), and in the paginated editor, which splits no paragraph: moving each
+  citing paragraph whole there would leave more of every page empty than Word's split does. The
+  editor's count rises by one page, from 53 to 54.
+- `canFragmentParagraph` admits paragraphs written as `h1`–`h6` and paragraphs that cite notes; a
+  head's notes are placed with the head.
+- `leadingAtomicBoxes` lets a paragraph that opens with a list number, a note number or an empty
+  tab box be split; no split point falls inside those boxes, so they stay whole with the first
+  fragment.
+- A paragraph is split for being too tall only when its own lines do not fit. When it is its notes
+  that do not fit, the notes are split instead (earlier, every split left a paragraph that still
+  could not take its notes whole, and it shrank word by word).
+- Moving a citing line is worthwhile when a fresh page offers the note more room than is free on
+  this one, which is the case when an earlier note's continuation already fills this page's note
+  area. The test compares that free space, not the size of the area.
+- The note cap judges only the notes a block adds. A block that cites nothing was refused once a
+  carried continuation filled the capped area, so the page kept its notes and lost its body text
+  (this also happened before #1151).
+
+Tests: `npm/tests/pagination-note-citation-placement.spec.ts`.
+
+## Paragraph spacing: consecutive numbered paragraphs keep their spacing after (issue #1151)
+
+**Status:** Docxodus matches LibreOffice (October 2026)
+
+```xml
+<w:style w:type="paragraph" w:styleId="Heading2">
+  <w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="4"/></w:numPr><w:spacing w:after="240"/></w:pPr>
+</w:style>
+<!-- three consecutive paragraphs in this style: FIRST, SECOND, THIRD -->
+```
+
+| Gap between FIRST and SECOND, NVCA model charter page 4 | |
+|---|---|
+| LibreOffice 25.8.7.3 | 24.7pt (one 12.65pt line and 12pt of spacing after) |
+| Docxodus before #1151 | 12.5pt (no spacing) |
+| Docxodus after | 24.64pt |
+
+The markup's only property for removing the spacing between two paragraphs is
+`w:contextualSpacing`, which applies between paragraphs of the same style (Word's List Paragraph
+style sets it, which is why ordinary bulleted lists are tight). Nothing in these paragraphs sets
+it, and LibreOffice keeps the spacing; Word has not been checked against a reference for this
+document. The converter, following the original OpenXmlPowerTools behaviour, also
+dropped the spacing after of every paragraph but the last in a run of paragraphs from one numbered
+list. A numbered legal document lost its spacing between clauses: in the NVCA charter, 1. → 2.,
+FIRST → SECOND → THIRD, "General" → "Voting", and the space after the "A. COMMON STOCK" heading.
+
+**Fix.** `ApplyContextualSpacing` (formerly `GroupAndVerticallySpaceNumberedParagraphs`) in
+`Docxodus/WmlToHtmlConverter.cs` groups paragraphs only by `w:contextualSpacing` and style. Numbering
+no longer suppresses spacing. Restoring the spacing added two pages to the charter's paginated view
+(measured before #1130),
+height LibreOffice also lays out.
+
+**Remaining gap.** LibreOffice also tightens list items whose spacing is `w:beforeAutospacing` /
+`w:afterAutospacing` (HTML-style automatic spacing). Docxodus does not model automatic spacing for
+list items; this predates #1151.
+
+Tests: `Docxodus.Tests/NumberedParagraphSpacingTests.cs`.
 
 ## Footnotes: the note number is a run of the first paragraph, and spacing after stops at the margin (issue #1130)
 

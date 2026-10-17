@@ -736,6 +736,8 @@ export function usePagination(
         cssPrefix,
         fragmentParagraphs,
         layoutToken,
+        // A read-only viewer, like paginateHtml.
+        alignBaselinesToWord: true,
       };
       const engine = new PaginationEngine(staging, pageContainer, engineOptions);
       const paginationResult = engine.paginate();
