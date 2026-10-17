@@ -521,6 +521,40 @@ public class BlockWrapperNestedDiffTests
         AssertNoNewValidationErrors(redline, original, first, second);
     }
 
+    /// <summary>A consolidate conflict: the comment opens in wrapper A, which both reviewers replace, and closes in
+    /// wrapper B, which only the first reviewer replaces; a leading wrapper both replace the same way puts the
+    /// second reviewer's copy of A first. The first reviewer's copy of B must pair with that reviewer's own copy of
+    /// A, so the inserted comment whose end and reference sit in B opens in the first reviewer's A.</summary>
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Consolidate_ConflictingCopiesOfTheOpeningWrapper_PairEachReviewersOwnCopies(Wrapper kind)
+    {
+        string A(string tag, string word) => Wrap(kind, $"<w:p>{Run($"In A {word}.")}{Start}</w:p>", tag);
+        string B(string tag, string word) => Wrap(kind, $"<w:p>{Run($"In B {word}.")}{End}{ReferenceRun}</w:p>", tag);
+        string Prefix(bool revised) => Wrap(kind, P(revised ? "Prefix new." : "Prefix old."), revised ? "X1" : "X0");
+        WmlDocument Document(bool revised, string body) => IrTestDocuments.WithComment("Ann", "A", "2026-01-01T00:00:00Z",
+            CommentText, Prefix(revised) + body + P(Tail));
+        var original = Document(false, A("A0", "zero") + B("B0", "zero"));
+        var first = Document(true, A("A1", "one") + B("B1", "one"));
+        var second = Document(true, A("A2", "two") + B("B0", "zero"));
+
+        var redline = DocxCompare.Consolidate(original, new[]
+        {
+            new DocxDiffReviewer { Document = first, Author = "First" },
+            new DocxDiffReviewer { Document = second, Author = "Second" },
+        });
+
+        AssertCommentMarkersWellFormed(redline.DocumentByteArray);
+        AssertNoNewValidationErrors(redline, original, first, second);
+        var body = Body(redline);
+        string TextOf(XElement e) => string.Concat(e.Ancestors(WrapperName(kind)).First().Descendants()
+            .Where(t => t.Name == W.t || t.Name == W.delText).Select(t => t.Value));
+        var reference = Assert.Single(body.Descendants(W.commentReference), r => TextOf(r) == "In B one.");
+        var start = Assert.Single(body.Descendants(W.commentRangeStart), m => (string?)m.Attribute(W.id) == (string?)reference.Attribute(W.id));
+        Assert.Equal("In A one.", TextOf(start));
+    }
+
     /// <summary>The comparison drew the comment's outside start twice — bare, and again in a deletion right after
     /// it (an edit boundary) — before a wrapper replaced whole. Each view keeps exactly one start: the bare one serves
     /// both copies, so the deleted duplicate is dropped rather than left as a second start of the reject-side

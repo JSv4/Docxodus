@@ -100,7 +100,8 @@ All notable changes to this project will be documented in this file.
   The same clean-up now also tells apart the inserted copies two consolidate reviewers make when both
   replace the same wrapper, and gives the comment a separate id in each (it repeated the comment's
   markers under one id). Copies are told apart by how many times a marker repeats in one view, not by
-  reviewer name, so two reviewers sharing a name (or both unnamed) are handled too, and a comment
+  reviewer name, so two reviewers sharing a name (or both unnamed) are handled too; a name only decides
+  which reviewer's copy a marker joins when several could take it. A comment
   whose range opens in one wrapper and closes in another, each replaced by a different reviewer,
   stays one comment in each view. The copies are numbered above every comment id in the document, so
   a copy no longer takes the id of an undefined comment whose markers are still in the body.

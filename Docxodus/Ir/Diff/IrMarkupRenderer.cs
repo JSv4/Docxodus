@@ -4157,8 +4157,9 @@ internal static partial class IrMarkupRenderer
     /// references mean two reviewers each replaced the wrapper holding it — and markers of copies of DIFFERENT
     /// wrappers in one view (a range opening in one replaced wrapper and closing in another) belong to one copy.
     /// Each occurrence of that most repeated kind seeds a copy; every other marker joins the copy seeded in the
-    /// same wrapper copy element, else the first copy of its view still lacking its kind. No author is consulted:
-    /// two reviewers may share one.
+    /// same wrapper copy element, else a copy of its view still lacking its kind — preferring one whose wrapper copy
+    /// carries the same revision author, then the first in document order. The author never decides how many
+    /// copies there are (two reviewers may share one); it only breaks that tie.
     /// </summary>
     private static List<(RevKind View, List<XElement> Markers)> CopyClusters(IEnumerable<XElement> markers)
     {
@@ -4180,6 +4181,15 @@ internal static partial class IrMarkupRenderer
             {
                 bool Lacks((RevKind View, XElement Seed, List<XElement> Markers) c) => c.Markers.All(m => m.Name != p.Marker.Name);
                 var home = own.FirstOrDefault(c => ReferenceEquals(c.Seed, p.Copy) && Lacks(c));
+                if (home.Markers == null)
+                {
+                    // Several copies may lack the kind (a conflict: copies of another wrapper, by reviewers who did
+                    // not all replace this one). The copy count stays the repetition rule's; the revision author
+                    // only breaks the tie, so a reviewer's copy of one wrapper pairs with that reviewer's copy of
+                    // the other, before document order decides.
+                    var author = EnvelopeAuthor(WrapperCopyEnvelope(p.Copy));
+                    home = own.FirstOrDefault(c => Lacks(c) && EnvelopeAuthor(WrapperCopyEnvelope(c.Seed)) == author);
+                }
                 if (home.Markers == null)
                     home = own.FirstOrDefault(Lacks);
                 (home.Markers ?? own[0].Markers).Add(p.Marker);
