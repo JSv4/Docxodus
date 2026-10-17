@@ -813,7 +813,7 @@ internal static class IrReader
                 if (markers && spanningField)
                     return;
                 if (child.Name == W + "p")
-                    spanningField |= UnmatchedFieldCharacters(child).Count != 0;
+                    spanningField |= UnmatchedFieldCharacterTypes(child).Any();
                 else if (IsDroppedParagraphChild(child.Name))
                     markers = true;
                 else if (child.Name == W + "tbl" || child.Name == W + "tr")
@@ -1088,9 +1088,12 @@ internal static class IrReader
     /// spanning field on both sides must not turn every text edit in that paragraph into a whole-paragraph
     /// replacement. Field characters in a textbox belong to the textbox's own paragraphs.</para>
     /// </summary>
-    private static List<string> UnmatchedFieldCharacters(XElement paragraph)
+    private static List<string> UnmatchedFieldCharacters(XElement paragraph) => UnmatchedFieldCharacterTypes(paragraph).ToList();
+
+    /// <summary>The walk behind <see cref="UnmatchedFieldCharacters"/>, lazily, so a caller that only asks whether
+    /// there is one stops at the first.</summary>
+    private static IEnumerable<string> UnmatchedFieldCharacterTypes(XElement paragraph)
     {
-        var unmatched = new List<string>();
         var depth = 0;
         foreach (var fldChar in paragraph.Descendants(W + "fldChar"))
         {
@@ -1103,19 +1106,18 @@ internal static class IrReader
                     break;
                 case "separate":
                     if (depth == 0)
-                        unmatched.Add("separate");
+                        yield return "separate";
                     break;
                 case "end":
                     if (depth == 0)
-                        unmatched.Add("end");
+                        yield return "end";
                     else
                         depth--;
                     break;
             }
         }
         for (var i = 0; i < depth; i++)
-            unmatched.Add("begin");
-        return unmatched;
+            yield return "begin";
     }
 
     /// <summary>

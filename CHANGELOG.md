@@ -64,14 +64,18 @@ All notable changes to this project will be documented in this file.
   old properties) keep the original's id, so rejecting restores them unchanged. What Word does in the
   referenced case is not yet verified (see `docs/ooxml_corner_cases.md`).
 
-- A paragraph that closes one complex field and opens another, both spanning paragraphs, now counts as
-  holding a paragraph-spanning field (issue #1166). Its begin and end characters were netted against each
-  other, so a content control or `w:customXml` wrapper whose paragraphs held such a field was diffed in
-  place instead of replaced whole like every other wrapper with a field spanning its paragraphs. The
-  redline's field clean-up also skipped every field in a paragraph after an `end` closing a field from an
-  earlier paragraph, so such a field's characters could be left inside an insertion or deletion while its
-  result was unchanged. Both now count a paragraph's field characters the same way: an `end` or `separate`
-  with no `begin` before it in the paragraph, and each `begin` left open.
+- A content control or block `w:customXml` wrapper is again replaced whole when one of its paragraphs
+  closes a complex field opened before it and opens another that closes after it (issue #1166). The
+  wrapper scan netted the paragraph's begin and end characters against each other, saw no spanning field
+  and diffed the wrapper in place, bypassing the whole-replacement fallback every other wrapper with a
+  field spanning its paragraphs takes. It now counts the characters that belong to a field opened or
+  closed in another paragraph, as the paragraph diff does. With `PreserveInputRevisions`, accepting a
+  comparison no longer brings back a field without a result (an index entry `XE` or a `TC` field) that the
+  revised document's own tracked change deleted: the redline's field clean-up lifted such a field out of
+  its deletion, and it now leaves a field whose characters all sit in one deletion or insertion there. The
+  clean-up also no longer stops grouping a paragraph's fields after an `end` that closes a field from an
+  earlier paragraph; on its own that has no visible effect on a default comparison, whose field characters
+  the paragraph renderer already places unmarked.
 - A comparison no longer doubles or drops a complex field's characters when the field's cached result
   changes next to another edit, or when a paragraph holding the end of a field opened in an earlier
   paragraph is edited just before that end (issue #1165). Deleting the word before a field while its

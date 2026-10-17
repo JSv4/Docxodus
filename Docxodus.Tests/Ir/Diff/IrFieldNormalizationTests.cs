@@ -1,6 +1,11 @@
+using System.IO;
 using System.Linq;
+using System.Text;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Internal;
 using Docxodus.Ir.Diff;
+using Docxodus.Tests.Ir;
 using Xunit;
 
 namespace Docxodus.Tests.Ir.Diff;
@@ -8,7 +13,8 @@ namespace Docxodus.Tests.Ir.Diff;
 /// <summary>
 /// The redline's field-context pass (<c>IrMarkupRenderer.NormalizeFieldsInRoot</c>) groups each paragraph's
 /// fields by their characters. An <c>end</c> that closes a field opened in an earlier paragraph belongs to no
-/// field of this one (issue #1166).
+/// field of this one (issue #1166), and a field with no result whose characters all sit in one revision is
+/// that revision's field.
 /// </summary>
 public class IrFieldNormalizationTests
 {
@@ -19,6 +25,8 @@ public class IrFieldNormalizationTests
     private static XElement Text(string text) => Run(new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), text));
     private static XElement Inserted(XElement run) =>
         new(W.ins, new XAttribute(W.id, "1"), new XAttribute(W.author, "A"), run);
+    private static XElement Deleted(XElement run) =>
+        new(W.del, new XAttribute(W.id, "2"), new XAttribute(W.author, "A"), run);
 
     private static XElement Document(params object[] paragraphContent) =>
         new(W.document, new XAttribute(XNamespace.Xmlns + "w", Ns.NamespaceName),
@@ -45,14 +53,97 @@ public class IrFieldNormalizationTests
             root.Descendants(W.fldChar).Select(f => (string?)f.Attribute(W.fldCharType)));
     }
 
-    /// <summary>The field opened before the paragraph stays as it is: its end is not grouped with anything.</summary>
+    /// <summary>The end of a field opened before the paragraph is grouped with nothing: the field after it is
+    /// re-homed while the stray end keeps its own insertion.</summary>
     [Fact]
-    public void NormalizeFieldsInRoot_InsertedEndFromAnEarlierParagraph_StaysInserted()
+    public void NormalizeFieldsInRoot_InsertedEndFromAnEarlierParagraph_StaysInsertedWhileTheNextFieldIsLifted()
     {
-        var root = Document(Text("Second line"), Inserted(FieldChar("end")));
+        var root = Document(
+            Text("Second line"),
+            Inserted(FieldChar("end")),
+            Text(" text "),
+            Inserted(FieldChar("begin")),
+            Inserted(Run(new XElement(W.instrText, " PAGE "))),
+            Inserted(FieldChar("separate")),
+            Text("3"),
+            Inserted(FieldChar("end")));
+
+        Assert.True(IrMarkupRenderer.NormalizeFieldsInRoot(root));
+
+        var stillInserted = Assert.Single(root.Descendants(W.ins).Descendants(W.fldChar));
+        Assert.Same(root.Descendants(W.fldChar).First(), stillInserted);
+    }
+
+    /// <summary>A field with no result (an index entry) whose characters all sit in one deletion is a deleted
+    /// field: it is not lifted out, also after an end from an earlier paragraph.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NormalizeFieldsInRoot_ResultlessFieldWhollyDeleted_StaysDeleted(bool afterAnEndFromAnEarlierParagraph)
+    {
+        var root = Document(
+            afterAnEndFromAnEarlierParagraph ? FieldChar("end") : Text(""),
+            Text("Hello "),
+            Deleted(FieldChar("begin")),
+            Deleted(Run(new XElement(W.delInstrText, " XE \"foo\" "))),
+            Deleted(FieldChar("end")),
+            Text("world"));
 
         Assert.False(IrMarkupRenderer.NormalizeFieldsInRoot(root));
 
-        Assert.Single(root.Descendants(W.ins).Descendants(W.fldChar));
+        Assert.Equal(2, root.Descendants(W.del).Descendants(W.fldChar).Count());
+        Assert.Single(root.Descendants(W.delInstrText));
+    }
+
+    // ---- through the comparison, keeping the inputs' own revisions -----------------------------
+
+    private static string R(string text) => $"<w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r>";
+    private static string F(string type) => $"<w:r><w:fldChar w:fldCharType=\"{type}\"/></w:r>";
+    private static string DeletedIndexEntry =>
+        "<w:del w:id=\"901\" w:author=\"Other\" w:date=\"2020-01-01T00:00:00Z\">" + F("begin") +
+        "<w:r><w:delInstrText xml:space=\"preserve\"> XE \"foo\" </w:delInstrText></w:r>" + F("end") + "</w:del>";
+    private const string OpensField =
+        "<w:p><w:r><w:t xml:space=\"preserve\">Intro </w:t></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>" +
+        "<w:r><w:instrText xml:space=\"preserve\"> REF a \\h </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>" +
+        "<w:r><w:t xml:space=\"preserve\">refres </w:t></w:r></w:p>";
+
+    /// <summary>The revised document carries an index-entry field its own tracked change deleted, and the
+    /// comparison keeps the inputs' revisions: accepting the redline must not bring the deleted field back,
+    /// also in a paragraph that first closes a field opened in the paragraph before it.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Compare_PreservingAnInputDeletionOfAResultlessField_AcceptKeepsItDeleted(bool afterAnEndFromAnEarlierParagraph)
+    {
+        var prefix = afterAnEndFromAnEarlierParagraph ? OpensField : "";
+        var lead = afterAnEndFromAnEarlierParagraph ? R("Second ") + F("end") + R(" hello ") : R("Hello ");
+        var original = IrTestDocuments.FromBodyXml(prefix + "<w:p>" + lead + R("world") + "</w:p>" +
+            "<w:p><w:r><w:t>Other paragraph</w:t></w:r></w:p>");
+        var revised = IrTestDocuments.FromBodyXml(prefix + "<w:p>" + lead + DeletedIndexEntry + R("world") + "</w:p>" +
+            "<w:p><w:r><w:t>Other paragraph changed</w:t></w:r></w:p>");
+
+        var redline = DocxCompare.Compare(original, revised, new DocxDiffSettings { PreserveInputRevisions = true });
+
+        Assert.Equal(Shape(DocxDiffOps.AcceptRevisions(revised.DocumentByteArray)),
+            Shape(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray)));
+    }
+
+    private static string Shape(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var sb = new StringBuilder();
+        foreach (var e in document.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!.Descendants())
+        {
+            if (e.Name == W.t)
+                sb.Append(e.Value);
+            else if (e.Name == W.fldChar)
+                sb.Append('{').Append((string?)e.Attribute(W.fldCharType)).Append('}');
+            else if (e.Name == W.instrText)
+                sb.Append('<').Append(e.Value).Append('>');
+            else if (e.Name == W.p)
+                sb.Append('¶');
+        }
+        return sb.ToString();
     }
 }

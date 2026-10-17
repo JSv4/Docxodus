@@ -1508,12 +1508,17 @@ public class BlockWrapperNestedDiffTests
     }
 
     [Fact]
-    public void Compare_EditInAParagraphClosingOneFieldAndOpeningAnother_KeepsEveryFieldBalanced()
+    public void Compare_EditInAParagraphClosingOneFieldAndOpeningAnother_ReplacesTheControlWholeKeepingEveryFieldBalanced()
     {
         var original = Doc(ClosesOneFieldAndOpensAnother("middle"));
         var revised = Doc(ClosesOneFieldAndOpensAnother("middle edited"));
 
-        AssertFieldsSurviveRoundTrip(original, revised, DocxCompare.Compare(original, revised), "issue 1166");
+        var redline = DocxCompare.Compare(original, revised);
+
+        AssertFieldsSurviveRoundTrip(original, revised, redline, "issue 1166");
+        // The control is replaced whole (a deleted and an inserted copy), the fallback for a field spanning its
+        // paragraphs, not diffed in place.
+        Assert.Equal(2, Body(redline).Descendants(W.sdt).Count());
     }
 
     /// <summary>A Word-authored document whose block content control holds a heading, a prose paragraph, a

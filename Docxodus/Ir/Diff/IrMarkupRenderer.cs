@@ -5035,6 +5035,12 @@ internal static partial class IrMarkupRenderer
                 bool anyResultIns = result.Any(r => r.Ancestors(W.ins).Any());
                 bool anyResultBare = result.Any(IsBareRun);
                 bool toBare = anyResultBare || !(anyResultDel ^ anyResultIns); // bare, no result, or mixed → bare
+                // A field with no result (an index entry, a TC field) whose characters all sit in one deletion or
+                // all in one insertion is that revision's field (the input's own tracked change, kept by
+                // PreserveInputRevisions): lifting it would keep it in the view that dropped it.
+                if (result.Count == 0 &&
+                    (plumbing.All(r => r.Ancestors(W.del).Any()) || plumbing.All(r => r.Ancestors(W.ins).Any())))
+                    toBare = false;
                 if (!toBare)
                     continue; // wholly deleted/inserted field: plumbing already toggles with it
                 foreach (var pr in plumbing)
