@@ -23,12 +23,13 @@ internal static partial class IrMarkupRenderer
         e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd ||
         e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd;
 
-    /// <summary>A bookmark marker in a revision wrapper written directly into a block stream: a marker the block
-    /// placement (or a replaced wrapper's copy) gave to one document's view only.</summary>
+    /// <summary>A bookmark or comment-range marker in a revision wrapper written directly into a block stream: a
+    /// marker the block placement (or a replaced wrapper's copy) gave to one document's view only.</summary>
     private static bool IsBlockLevelRevisionMarker(XElement marker) =>
         marker.Parent is { } wrapper && (wrapper.Name == W.ins || wrapper.Name == W.del) &&
         wrapper.Parent is { } stream && (stream.Name == W.body || stream.Name == W.tc ||
-            stream.Name == W.sdtContent || stream.Name == W.customXml);
+            stream.Name == W.sdtContent || stream.Name == W.customXml || stream.Name == W.hdr || stream.Name == W.ftr ||
+            stream.Name == W.footnote || stream.Name == W.endnote);
 
     /// <summary>Where the block-level markers of one block stream go, relative to its ops (see
     /// <see cref="PlanBlockLevelMarkers"/>). Every list holds rendered elements: a bare clone, or a clone in a
@@ -377,6 +378,91 @@ internal static partial class IrMarkupRenderer
             }
         }
         return true;
+    }
+
+    /// <summary>
+    /// Whether two block containers the IR found equal differ in their block-level markers: the bookmarks and
+    /// comment ranges each block stream inside holds between its blocks, at each block boundary. A container is a
+    /// story root (header, footer, note), a cell or custom-XML wrapper (each its own stream), a table (its cells)
+    /// or a content control (its content); nested tables and wrappers are compared the same way. Equal containers
+    /// have the same blocks, so the streams line up; markers are compared as <see cref="MergeMarkers"/> matches
+    /// them. A missing container differs from nothing (issues #1174, #1175).
+    /// </summary>
+    internal static bool BlockLevelMarkersDiffer(XElement? left, XElement? right,
+        IrDocument? leftDocument = null, IrDocument? rightDocument = null)
+    {
+        if (left is null || right is null || !HasStreamMarker(left) && !HasStreamMarker(right))
+            return false;
+        // The comment identities are read only now that a marker between blocks is known to exist.
+        var (leftComments, rightComments) = (leftDocument is null ? null : CommentIdentities(leftDocument),
+            rightDocument is null ? null : CommentIdentities(rightDocument));
+        return !ContainerSignature(left, leftComments).SequenceEqual(ContainerSignature(right, rightComments), StringComparer.Ordinal);
+
+        // Most containers hold no marker in a block stream: tell that without building signatures.
+        static bool HasStreamMarker(XElement container) =>
+            container.DescendantsAndSelf().Any(e => IsBlockLevelMarker(e) && e.Parent is { } p && p.Name != W.p &&
+                (p == container || p.Name == W.tc || p.Name == W.sdtContent || p.Name == W.customXml));
+
+        static IEnumerable<string> ContainerSignature(XElement container, IReadOnlyDictionary<string, string>? comments)
+        {
+            if (container.Name == W.tbl)
+                return container.Elements(W.tr).SelectMany(tr => tr.Elements(W.tc))
+                    .SelectMany(tc => StreamSignature(tc, comments).Prepend("["));
+            if (container.Name == W.sdt)
+                return BlockWrapperContent(container) is { } content ? StreamSignature(content, comments) : Enumerable.Empty<string>();
+            return StreamSignature(container, comments);
+        }
+
+        // A comment is matched by what it says, not its id: the revised document may number the same comment
+        // differently (another comment added before it), which is no change here.
+        static string Key(XElement marker, IReadOnlyDictionary<string, string>? comments) =>
+            (marker.Name == W.commentRangeStart || marker.Name == W.commentRangeEnd) &&
+            comments is not null && (string?)marker.Attribute(W.id) is { } id && comments.TryGetValue(id, out var identity)
+                ? marker.Name.LocalName + "\u0000c\u0000" + identity
+                : MarkerKey(marker);
+
+        // A stream's markers and block boundaries, depth first; a nested container is bracketed so its markers
+        // never line up with the outer stream's.
+        static IEnumerable<string> StreamSignature(XElement stream, IReadOnlyDictionary<string, string>? comments)
+        {
+            foreach (var child in stream.Elements())
+            {
+                if (IsBlockLevelMarker(child))
+                {
+                    yield return Key(child, comments);
+                    continue;
+                }
+                if (!IsBlockContent(child))
+                    continue;
+                yield return "|";
+                if (child.Name == W.p)
+                    continue;
+                yield return "(";
+                foreach (var token in ContainerSignature(child, comments))
+                    yield return token;
+                yield return ")";
+            }
+        }
+    }
+
+    /// <summary>Each comment of <paramref name="document"/> by id, as what identifies it across documents: its author,
+    /// date and text. Empty when the IR kept no source for the comments part. Built once per document.</summary>
+    internal static IReadOnlyDictionary<string, string> CommentIdentities(IrDocument document) =>
+        CommentIdentityMaps.GetValue(document, BuildCommentIdentities);
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IrDocument, IReadOnlyDictionary<string, string>>
+        CommentIdentityMaps = new();
+
+    private static IReadOnlyDictionary<string, string> BuildCommentIdentities(IrDocument document)
+    {
+        var identities = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (document.Comments.PartUri is not { } uri || !document.Sources.TryGetValue(uri, out var source) || source.Root is null)
+            return identities;
+        foreach (var comment in source.Root.Elements(W.comment))
+            if ((string?)comment.Attribute(W.id) is { } id)
+                identities.TryAdd(id, (string?)comment.Attribute(W.author) + "\u0000" + (string?)comment.Attribute(W.date) + "\u0000" +
+                    string.Concat(comment.Descendants(W.t).Select(t => t.Value)));
+        return identities;
     }
 
     /// <summary>Whether <paramref name="container"/> (itself included) holds a marker directly in a block stream
