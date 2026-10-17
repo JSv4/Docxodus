@@ -86,12 +86,21 @@ All notable changes to this project will be documented in this file.
   paragraph after it keeps only half a range in each view. For `w:sdt` both behave as before; for
   `w:customXml` they used to keep each copy's markers in full under one duplicated id, so the
   redline is now well formed but these two shapes lose the range or the reference's place instead.
-- A comparison that splits a comment into a deleted-view and an inserted-view copy no longer gives the
-  copy a `w14:paraId` that a body paragraph already uses (issue #1170). The copy's paragraph ids were
-  numbered on from the largest id in the comments part alone, but a paragraph id must be unique across
-  the whole package, so the copy could share one with a paragraph in the body, a header, a footer or a
-  note, which Word may treat as damage or use to mis-thread the comment. The copies now take their ids
-  from the same package-wide allocator that comment authoring in `DocxSession` uses.
+- A comparison's redline no longer repeats a paragraph id (`w14:paraId`) or writes one outside the range
+  the schema allows (issue #1170). A paragraph id must be unique across the whole package and lie between
+  1 and 7FFFFFFF; Word keys comment threading on it and may treat a repeat as damage. Three cases repeated
+  one: a comment the comparison splits into a deleted-view and an inserted-view copy numbered the copy's
+  ids on from the comments part alone, so they could match a paragraph in the body, a header, a footer, a
+  note or the glossary; a paragraph or content control replaced whole kept the source's ids in both its
+  deleted and its inserted copy; and a comment the revised document added kept its own id even when the
+  original used it for another paragraph or comment. Copies now take ids from the package-wide allocator
+  that comment authoring in `DocxSession` uses, an added comment that collides gets a fresh id with its
+  threading entries following it, and a last pass renames any paragraph id still repeated. This holds for
+  `DocxDiff.Compare`, `DocxCompare.Compare` and `Consolidate`. The allocator now also reads the glossary
+  document and stays below 80000000 (falling back to the lowest free value when one past the largest is
+  out of range), and new comment durable ids stay below 7FFFFFFF; this applies to `DocxSession` comment
+  authoring and content-control cloning too. `w14:textId` is unchanged: it hashes a paragraph's text, so
+  equal text shares it by design.
 - A comparison no longer breaks a field that spans paragraphs, such as a Word table of contents without its
   content control (issue #1156). Such a field opens in its first entry paragraph and closes paragraphs later,
   and field characters take up no room in the text the comparison lines up, so when the entry holding the

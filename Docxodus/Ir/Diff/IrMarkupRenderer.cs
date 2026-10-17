@@ -616,6 +616,11 @@ internal static partial class IrMarkupRenderer
                 // It adds no names, so it needs no declarations; after the namespace pass so that pass
                 // sees only the parts the render loaded, not the story parts this one reads.
                 DrawingIds.MakeUnique(wDoc);
+
+                // Paragraph ids likewise: a paragraph replaced whole keeps the source paraId in both its deleted and
+                // its inserted copy, and merged comments bring ids from another package. Last, after every pass that
+                // clones or mints one (issue #1170).
+                ParagraphIds.MakeUnique(wDoc);
             }
             var rendered = streamDoc.GetModifiedWmlDocument();
             return settings.NormalizeRevisionAuthors
@@ -3748,6 +3753,16 @@ internal static partial class IrMarkupRenderer
         var outputComments = main.WordprocessingCommentsPart!;
         var addedDefinitions = new List<XElement>(toAdd.Count);
         var addedParaIds = new HashSet<string>();
+        // The paraIds the output's comments are already keyed on — their definitions' and the threading
+        // entries'. A right-added definition reusing one (it numbered a different comment in the other
+        // package) takes a fresh package-wide id, and its threading entries follow it below, so it never
+        // shares a key with a left comment (issue #1170).
+        var commentKeys = new HashSet<string>(
+            outRoot.Descendants().Attributes(W14ns + "paraId").Select(a => a.Value)
+                .Concat(Internal.CommentOps.ThreadingParaIds(main)),
+            StringComparer.OrdinalIgnoreCase);
+        var renamedParaIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        Internal.CommentOps.ParaIdAllocator? paraIds = null;
         foreach (var def in toAdd)
         {
             // Keep the live clone: relationship import rewrites its r:embed/r:id attributes in place.
@@ -3756,8 +3771,18 @@ internal static partial class IrMarkupRenderer
             var clone = new XElement(def);
             outRoot.Add(clone);
             addedDefinitions.Add(clone);
-            foreach (var pid in def.Descendants().Attributes((W14ns + "paraId")))
-                if ((string?)pid is { Length: > 0 } v) addedParaIds.Add(v);
+            foreach (var pid in clone.Descendants().Attributes(W14ns + "paraId"))
+            {
+                if (pid.Value.Length == 0)
+                    continue;
+                addedParaIds.Add(pid.Value);
+                if (commentKeys.Add(pid.Value))
+                    continue;
+                var fresh = (paraIds ??= new Internal.CommentOps.ParaIdAllocator(main)).Next();
+                renamedParaIds[pid.Value] = fresh;
+                commentKeys.Add(fresh);
+                pid.Value = fresh;
+            }
         }
 
         // Import relationships against their OWNERS: both r:embed media and w:hyperlink r:ids in a
@@ -3786,24 +3811,26 @@ internal static partial class IrMarkupRenderer
                     main.WordprocessingCommentsExPart
                         ?? main.AddDeterministicPart<WordprocessingCommentsExPart>("rIdCommentsEx"),
                     rightMain.WordprocessingCommentsExPart,
-                    W15ns + "commentsEx", W15ns + "commentEx", W15ns + "paraId", addedParaIds,
+                    W15ns + "commentsEx", W15ns + "commentEx", W15ns + "paraId", addedParaIds, renamedParaIds,
                     $"<w15:commentsEx xmlns:w=\"{W.w.NamespaceName}\" xmlns:w15=\"{W15ns.NamespaceName}\"/>");
             if (rightMain.WordprocessingCommentsIdsPart != null)
                 MergeRightThreadingEntries(
                     main.WordprocessingCommentsIdsPart
                         ?? main.AddDeterministicPart<WordprocessingCommentsIdsPart>("rIdCommentsIds"),
                     rightMain.WordprocessingCommentsIdsPart,
-                    W16cidNs + "commentsIds", W16cidNs + "commentId", W16cidNs + "paraId", addedParaIds,
+                    W16cidNs + "commentsIds", W16cidNs + "commentId", W16cidNs + "paraId", addedParaIds, renamedParaIds,
                     $"<w16cid:commentsIds xmlns:w=\"{W.w.NamespaceName}\" xmlns:w16cid=\"{W16cidNs.NamespaceName}\"/>");
         }
     }
 
     /// <summary>Copy every entry of <paramref name="rightPart"/> whose paraId attribute is in
     /// <paramref name="paraIds"/> into <paramref name="outPart"/> (seeded from <paramref name="seedXml"/> when
-    /// empty), skipping paraIds already present. Shared by the <c>commentsExtended</c> + <c>commentsIds</c>
-    /// threading merges.</summary>
+    /// empty), under the fresh paraId <paramref name="renamed"/> gave its definition, if any (a
+    /// <c>w15:paraIdParent</c> naming a renamed definition follows it too), skipping paraIds already present.
+    /// Shared by the <c>commentsExtended</c> + <c>commentsIds</c> threading merges.</summary>
     private static void MergeRightThreadingEntries(OpenXmlPart outPart, OpenXmlPart? rightPart,
-        XName rootName, XName entryName, XName paraIdAttr, HashSet<string> paraIds, string seedXml)
+        XName rootName, XName entryName, XName paraIdAttr, HashSet<string> paraIds,
+        IReadOnlyDictionary<string, string> renamed, string seedXml)
     {
         var rightRoot = rightPart?.GetXDocument().Root;
         if (rightRoot == null)
@@ -3811,10 +3838,18 @@ internal static partial class IrMarkupRenderer
         var outRoot = EnsurePartRoot(outPart, seedXml);
         var present = outRoot.Elements(entryName).Select(e => (string?)e.Attribute(paraIdAttr)).ToHashSet();
         bool changed = false;
-        foreach (var entry in rightRoot.Elements(entryName)
-                     .Where(e => (string?)e.Attribute(paraIdAttr) is { } p && paraIds.Contains(p) && !present.Contains(p)))
+        foreach (var entry in rightRoot.Elements(entryName))
         {
-            outRoot.Add(new XElement(entry));
+            if ((string?)entry.Attribute(paraIdAttr) is not { } original || !paraIds.Contains(original))
+                continue;
+            var key = renamed.TryGetValue(original, out var fresh) ? fresh : original;
+            if (!present.Add(key))
+                continue;
+            var copy = new XElement(entry);
+            copy.SetAttributeValue(paraIdAttr, key);
+            if ((string?)copy.Attribute(W15ns + "paraIdParent") is { } parent && renamed.TryGetValue(parent, out var freshParent))
+                copy.SetAttributeValue(W15ns + "paraIdParent", freshParent);
+            outRoot.Add(copy);
             changed = true;
         }
         if (changed)

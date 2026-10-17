@@ -215,6 +215,11 @@ internal static class IrCompositeMarkupRenderer
                 // Drawings from the base and every reviewer share the story parts — the two-way renderer's
                 // drawing id pass (issue #860), after the namespace pass for the same reason.
                 DrawingIds.MakeUnique(wDoc);
+
+                // Paragraph ids likewise: a paragraph replaced whole keeps the source paraId in both its deleted and
+                // its inserted copy, and merged comments bring ids from another package. Last, after every pass that
+                // clones or mints one (issue #1170).
+                ParagraphIds.MakeUnique(wDoc);
             }
             return streamDoc.GetModifiedWmlDocument();
         }
