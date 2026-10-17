@@ -774,6 +774,20 @@ namespace Docxodus
             name == W.customXmlMoveToRangeStart ||
             name == W.customXmlMoveToRangeEnd;
 
+        /// <summary>
+        /// Whether a <c>w:ins</c>/<c>w:del</c> under <paramref name="parent"/> (its nearest ancestor other than a
+        /// content control or smart tag) is a run-level revision that reject reverses. Besides a paragraph and the
+        /// run containers inside one, that is a block stream: a revision wrapper written between blocks holds
+        /// run-level markup such as a bookmark or comment-range marker (issue #1149), and a block
+        /// <c>w:customXml</c> (one outside any paragraph) is a block stream too.
+        /// </summary>
+        private static bool IsRunLevelRevisionParent(XElement? parent) =>
+            parent is not null &&
+            (parent.Name == W.p || parent.Name == W.hyperlink || parent.Name == W.fldSimple ||
+             parent.Name == W.dir || parent.Name == W.bdo ||
+             (parent.Name == W.customXml && !parent.Ancestors(W.p).Any()) ||
+             W.BlockLevelContentContainers.Contains(parent.Name));
+
         private static object? ReverseRevisionsTransform(XNode? node, ReverseRevisionsInfo rri)
         {
             var element = node as XElement;
@@ -803,9 +817,7 @@ namespace Docxodus
 #endif
                 // Hyperlinks and simple fields own their content revisions inside the
                 // container. Reject restores those runs by reversing w:del → w:ins.
-                if (element.Name == W.del &&
-                    (parent?.Name == W.p || parent?.Name == W.hyperlink || parent?.Name == W.fldSimple
-                     || parent?.Name == W.dir || parent?.Name == W.bdo))
+                if (element.Name == W.del && IsRunLevelRevisionParent(parent))
                 {
                     return new XElement(W.ins,
                         element.Nodes().Select(n => ReverseRevisionsTransform(n, rri)));
@@ -884,9 +896,7 @@ namespace Docxodus
     </w:p>
 #endif
                 // Symmetric handling for inserted paragraph, hyperlink and field runs.
-                if (element.Name == W.ins &&
-                    (parent?.Name == W.p || parent?.Name == W.hyperlink || parent?.Name == W.fldSimple
-                     || parent?.Name == W.dir || parent?.Name == W.bdo))
+                if (element.Name == W.ins && IsRunLevelRevisionParent(parent))
                 {
                     var newRri = new ReverseRevisionsInfo() { InInsert = true };
                     return new XElement(W.del,
@@ -2688,6 +2698,21 @@ namespace Docxodus
                         GroupingInfo = gi,
                     });
 
+                    // The stream above holds only blocks. A bookmark or comment-range marker written between
+                    // blocks (a sibling of w:p, legal OOXML; issue #1149) is not one, so each such child goes
+                    // back in front of the block it preceded, and those after the last block at the end.
+                    var (looseBefore, looseTrailing) = LooseChildrenOfBlockStream(element);
+                    IEnumerable<object?> Loose(XElement block) =>
+                        looseBefore.TryGetValue(block, out var loose)
+                            ? loose.Select(AcceptDeletedAndMoveFromParagraphMarksTransform)
+                            : Enumerable.Empty<object?>();
+                    // The block's own output, after the loose children in front of it; just the block when it has
+                    // none, which is every block of a stream with no loose child.
+                    IEnumerable<object?> LooseThen(XElement block, object? output) =>
+                        looseBefore.TryGetValue(block, out var loose)
+                            ? loose.Select(AcceptDeletedAndMoveFromParagraphMarksTransform).Append(output)
+                            : new[] { output };
+
                     var groupedParagraphs = zipped
                         .GroupAdjacent(z => z.GroupingInfo.GroupingKey);
 
@@ -2708,12 +2733,35 @@ namespace Docxodus
                                     .ToList();
                                 var tableMembers = g
                                     .Where(z => z.BlockLevelContent.ThisBlockContentElement!.Name == W.tbl)
-                                    .Select(z => (object)new XElement(
+                                    .SelectMany(z => LooseThen(z.BlockLevelContent.ThisBlockContentElement!, new XElement(
                                         z.BlockLevelContent.ThisBlockContentElement!.Name,
                                         z.BlockLevelContent.ThisBlockContentElement!.Attributes(),
                                         z.BlockLevelContent.ThisBlockContentElement!.Nodes()
-                                            .Select(n => AcceptDeletedAndMoveFromParagraphMarksTransform(n))))
+                                            .Select(n => AcceptDeletedAndMoveFromParagraphMarksTransform(n)))))
+                                    .Cast<object>()
                                     .ToList();
+                                // A marker before the first coalesced paragraph stays in front of it, and so does
+                                // one that only deleted content precedes, which accepting removes. Any other marker
+                                // between two members sits between their contents inside the coalesced paragraph.
+                                var leadingLoose = new List<object?>();
+                                var innerLoose = new List<object?>[paragraphMembers.Count];
+                                bool onlyDeletedBefore = true;
+                                for (int k = 0; looseBefore.Count > 0 && k < paragraphMembers.Count; k++)
+                                {
+                                    var member = paragraphMembers[k].BlockLevelContent.ThisBlockContentElement!;
+                                    var loose = Loose(member).ToList();
+                                    if (onlyDeletedBefore)
+                                        leadingLoose.AddRange(loose);
+                                    else
+                                    {
+                                        // Only paragraph content goes inside; anything a paragraph cannot hold
+                                        // (w:altChunk) stays in front of the merged paragraph.
+                                        innerLoose[k] = loose.Where(IsParagraphContent).ToList();
+                                        leadingLoose.AddRange(loose.Where(l => !IsParagraphContent(l)));
+                                    }
+                                    onlyDeletedBefore &= AllParaContentIsDeleted(member);
+                                }
+                                tableMembers.InsertRange(0, leadingLoose.OfType<object>());
 
                                 XElement newParagraph = new XElement(W.p,
 #if false
@@ -2730,7 +2778,11 @@ namespace Docxodus
                                     // which diffs the rendered DOM against ListBlocks.
                                     paragraphMembers.Last().BlockLevelContent.ThisBlockContentElement!.Attributes(),
                                     paragraphMembers.Last().BlockLevelContent.ThisBlockContentElement!.Elements(W.pPr),
-                                    paragraphMembers.Select(z => CollapseParagraphTransform(z.BlockLevelContent.ThisBlockContentElement!)));
+                                    paragraphMembers.Select((z, k) => new[]
+                                    {
+                                        innerLoose[k],
+                                        CollapseParagraphTransform(z.BlockLevelContent.ThisBlockContentElement!),
+                                    }));
 
                                 // if this contains the last paragraph in the document, and if there is no content,
                                 // and if the paragraph mark is deleted, then nuke the paragraph.
@@ -2741,7 +2793,11 @@ namespace Docxodus
                                      g.Last().BlockLevelContent.NextBlockContentElement?.Name == W.tbl ||
                                      g.Last().BlockLevelContent.NextBlockContentElement?.Name == W.sdt ||
                                      g.Last().BlockLevelContent.NextBlockContentElement?.Name == W.customXml))
+                                {
+                                    // The paragraph goes, but a marker between its coalesced members does not.
+                                    tableMembers.AddRange(innerLoose.Where(l => l is not null).SelectMany(l => l!).OfType<object>());
                                     return tableMembers.Count > 0 ? (object)tableMembers : null;
+                                }
 
                                 if (tableMembers.Count == 0)
                                     return (object)newParagraph;
@@ -2750,21 +2806,21 @@ namespace Docxodus
                             }
                             else
                             {
-                                return g.Select(z =>
-                                {
-                                    // A block custom-XML wrapper is a block container itself: transform the
-                                    // wrapper, not just its children, so its paragraph marks are processed
-                                    // inside it and its w:customXmlPr is kept.
-                                    if (z.BlockLevelContent.ThisBlockContentElement!.Name == W.customXml)
-                                        return (XElement)AcceptDeletedAndMoveFromParagraphMarksTransform(
-                                            z.BlockLevelContent.ThisBlockContentElement!)!;
-                                    var newEle = new XElement(z.BlockLevelContent.ThisBlockContentElement!.Name,
-                                        z.BlockLevelContent.ThisBlockContentElement!.Attributes(),
-                                        z.BlockLevelContent.ThisBlockContentElement!.Nodes().Select(n => AcceptDeletedAndMoveFromParagraphMarksTransform(n)));
-                                    return newEle;
-                                });
+                                // A block custom-XML wrapper is a block container itself: transform the
+                                // wrapper, not just its children, so its paragraph marks are processed
+                                // inside it and its w:customXmlPr is kept.
+                                static object? Output(XElement block) => block.Name == W.customXml
+                                    ? AcceptDeletedAndMoveFromParagraphMarksTransform(block)
+                                    : new XElement(block.Name,
+                                        block.Attributes(),
+                                        block.Nodes().Select(n => AcceptDeletedAndMoveFromParagraphMarksTransform(n)));
+                                if (looseBefore.Count == 0)
+                                    return g.Select(z => Output(z.BlockLevelContent.ThisBlockContentElement!));
+                                return g.SelectMany(z => LooseThen(z.BlockLevelContent.ThisBlockContentElement!,
+                                    Output(z.BlockLevelContent.ThisBlockContentElement!)));
                             }
                         }),
+                        looseTrailing.Select(AcceptDeletedAndMoveFromParagraphMarksTransform),
                         bodySectPr);
 
                     return newBlockLevelContentContainer;
@@ -2776,6 +2832,63 @@ namespace Docxodus
                     element.Nodes().Select(n => AcceptDeletedAndMoveFromParagraphMarksTransform(n)));
             }
             return node;
+        }
+
+        /// <summary>
+        /// The children of a block stream (<paramref name="container"/>: a body, cell, note, header, footer, or
+        /// block wrapper's content) that are neither a block nor hold one — a bookmark or comment-range marker
+        /// between paragraphs, or a revision wrapper around one — keyed by the first block that follows each, and
+        /// the ones after the last block. The container's own properties (<c>w:tcPr</c>, <c>w:customXmlPr</c>) and
+        /// the body's final <c>w:sectPr</c> are not among them: the rebuild places those itself.
+        /// </summary>
+        private static readonly Dictionary<XElement, List<XElement>> NoLooseChildren = new();
+        private static readonly List<XElement> NoTrailingChildren = new();
+
+        /// <summary>Whether a block stream's loose child may sit inside a paragraph (<c>CT_P</c> content: range
+        /// markers, revision wrappers, permission and proofing marks, math), so a paragraph merged across it on
+        /// accept can hold it. A <c>w:altChunk</c> cannot.</summary>
+        private static bool IsParagraphContent(object? loose) =>
+            loose is XElement e &&
+            (e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd || e.Name == W.commentRangeStart ||
+             e.Name == W.commentRangeEnd || e.Name == W.permStart || e.Name == W.permEnd || e.Name == W.proofErr ||
+             e.Name == W.ins || e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveTo ||
+             e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd || e.Name == W.moveToRangeStart ||
+             e.Name == W.moveToRangeEnd || e.Name == W.customXmlInsRangeStart || e.Name == W.customXmlInsRangeEnd ||
+             e.Name == W.customXmlDelRangeStart || e.Name == W.customXmlDelRangeEnd ||
+             e.Name == W.customXmlMoveFromRangeStart || e.Name == W.customXmlMoveFromRangeEnd ||
+             e.Name == W.customXmlMoveToRangeStart || e.Name == W.customXmlMoveToRangeEnd ||
+             e.Name == M.oMath || e.Name == M.oMathPara);
+
+        private static (Dictionary<XElement, List<XElement>> Before, List<XElement> Trailing) LooseChildrenOfBlockStream(
+            XElement container)
+        {
+            Dictionary<XElement, List<XElement>>? before = null;
+            List<XElement>? pending = null;
+            foreach (var child in container.Elements())
+            {
+                if (child.Name == W.p || child.Name == W.tbl || child.Name == W.tcPr || child.Name == W.customXmlPr ||
+                    (child.Name == W.sectPr && container.Name == W.body))
+                {
+                    if (pending is not null && (child.Name == W.p || child.Name == W.tbl))
+                    {
+                        (before ??= new())[child] = pending;
+                        pending = null;
+                    }
+                    continue;
+                }
+                var block = child.DescendantsAndSelf().FirstOrDefault(e => IsBlockContentElement(e, container));
+                if (block is null)
+                {
+                    (pending ??= new()).Add(child);
+                    continue;
+                }
+                if (pending is not null)
+                {
+                    (before ??= new())[block] = pending;
+                    pending = null;
+                }
+            }
+            return (before ?? NoLooseChildren, pending ?? NoTrailingChildren);
         }
 
         /// <summary>

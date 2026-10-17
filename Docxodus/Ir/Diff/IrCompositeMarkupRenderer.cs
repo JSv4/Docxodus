@@ -91,9 +91,20 @@ internal static class IrCompositeMarkupRenderer
         // by RightSourceId so each reviewer's media-bearing clones import from that reviewer's package.
         var state = new IrMarkupRenderer.RenderState(baseIr, baseIr, settings) { IsComposite = true };
 
+        // Bookmarks and comment ranges between body blocks go back around the blocks they bracket: the base's
+        // where the base has them, each reviewer's where that reviewer has them (issue #1149).
+        var authors = reviewers.Select(r => r.Author).ToList();
+        var bodyMarkers = IrMarkupRenderer.PlanCompositeBlockLevelMarkers(script.Operations, baseIr, reviewerIrs,
+            script.ReviewerBodyOps?.Select(o => (IReadOnlyList<IrEditOp>)o).ToList(), authors, state);
         var bodyBlocks = new List<XElement>();
-        foreach (var op in script.Operations)
-            EmitCompositeOp(op, baseIr, reviewerIrs, state, bodyBlocks);
+        for (int i = 0; i < script.Operations.Count; i++)
+        {
+            if (bodyMarkers?.GetValueOrDefault(i) is { } before)
+                bodyBlocks.AddRange(before);
+            EmitCompositeOp(script.Operations[i], baseIr, reviewerIrs, state, bodyBlocks);
+        }
+        if (bodyMarkers?.GetValueOrDefault(script.Operations.Count) is { } trailing)
+            bodyBlocks.AddRange(trailing);
 
         // SimplifyMoveMarkup post-pass (mirrors the two-way renderer): rewrite native move markup to del/ins.
         if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
@@ -406,10 +417,22 @@ internal static class IrCompositeMarkupRenderer
                 root.Add(noteEl);
             }
 
-            // Render the composed ops with the SAME per-op reviewer sourcing the body uses.
+            // Render the composed ops with the SAME per-op reviewer sourcing the body uses. A base note's
+            // bookmarks and comment ranges between blocks stay where the base has them (issue #1149).
+            var noteMarkers = diff.BaseNoteId is null ? null
+                : IrMarkupRenderer.PlanCompositeBlockLevelMarkers(diff.Ops, baseIr, reviewerIrs, null,
+                    Array.Empty<string>(), state);
+            if (noteMarkers is not null)
+                noteEl.Elements().Where(IrMarkupRenderer.IsBlockLevelMarker).Remove();
             var noteBlocks = new List<XElement>();
-            foreach (var op in diff.Ops)
-                RenderOneCompositeBlock(op, baseIr, reviewerIrs, state, noteBlocks);
+            for (int i = 0; i < diff.Ops.Count; i++)
+            {
+                if (noteMarkers?.GetValueOrDefault(i) is { } before)
+                    noteBlocks.AddRange(before);
+                RenderOneCompositeBlock(diff.Ops[i], baseIr, reviewerIrs, state, noteBlocks);
+            }
+            if (noteMarkers?.GetValueOrDefault(diff.Ops.Count) is { } trailing)
+                noteBlocks.AddRange(trailing);
             if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
                 foreach (var b in noteBlocks)
                     IrMarkupRenderer.SimplifyMoveMarkup(b);

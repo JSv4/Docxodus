@@ -767,6 +767,65 @@ diff defect (it appears identically when validating the input).
 `DocxDiffBookmarkRealDocTests.cs` (real NVCA COI/SPA), and the `bkmk-struct` column + `lo/lo_bookmark_check.py`
 oracle in `tools/diffharness`.
 
+
+---
+
+## Bookmarks and comment ranges between blocks (siblings of `w:p`)
+
+### Symptom
+
+A `w:bookmarkStart`/`w:bookmarkEnd` (or `w:commentRangeStart`/`End`) written directly in the body, a table cell
+or a block wrapper's content vanished from a `DocxCompare`/`DocxDiff` redline, and `RevisionProcessor` accept
+and reject removed it even from a revision-free document (issue #1149). Word writes a bookmark that spans whole
+paragraphs, or a table, this way; the WmlComparer-era fixture `TestFiles/WC/WC-BodyBookmarks-After.docx` has 916
+such markers.
+
+### Minimal reproducer
+
+```xml
+<w:body>
+  <w:bookmarkStart w:id="7" w:name="Article"/>
+  <w:p><w:r><w:t>Alpha</w:t></w:r></w:p>
+  <w:p><w:r><w:t>Bravo monthly</w:t></w:r></w:p>   <!-- revised: "Bravo weekly" -->
+  <w:bookmarkEnd w:id="7"/>
+</w:body>
+```
+
+### The corner case
+
+The schema allows the range markers (`EG_RangeMarkupElements`) and the run-level revision wrappers `w:ins`/
+`w:del` (`EG_RunLevelElements`) directly in every block stream: `CT_Body`, `CT_Tc`, `CT_SdtContentBlock`,
+`CT_CustomXmlBlock`, notes, headers and footers. So a marker one document has between blocks can be tracked
+right where it sits, `<w:ins ...><w:bookmarkStart .../></w:ins>` as a sibling of `w:p`, and the Open XML SDK
+validator accepts that. Accept unwraps such a `w:ins` and drops such a `w:del`; reject does the reverse.
+
+| Behaviour | Word | LibreOffice 25.8 | Docxodus |
+|-----------|------|------------------|----------|
+| Loads a body-level bookmark | yes (Word writes this shape) | yes (counted as a bookmark) | yes |
+| Loads a body-level or cell-level `w:ins`/`w:del` around a bookmark | yes: opens with no repair prompt and lists the bookmark | yes, as a plain bookmark | writes it for a one-sided marker |
+| Accept all / reject all removes a tracked bookmark | no: after Reject All Changes both the deleted-side and the inserted-side bookmark are still listed | no: LibreOffice keeps the bookmark either way, and does the same for a `w:ins`-wrapped bookmark inside a paragraph | yes (`RevisionProcessor`) |
+| Accept/reject of a revision-free document keeps a body-level bookmark | not verified | yes | yes since #1149 (before: dropped) |
+
+LibreOffice was checked with `tools/diffharness/lo/lo_bookmark_check.py` (every bookmark loads, every `REF`
+resolves) and with `.uno:AcceptAllTrackedChanges`/`.uno:RejectAllTrackedChanges` on the redlines. Its bookmarks
+are not revision-aware, so a one-sided bookmark survives both of its resolutions; that is not specific to
+block-level markers. Word behaves the same way: it opened a redline with a deleted bookmark tracked directly in
+the body and an inserted one tracked directly in a table cell without complaint, kept both through Reject All
+Changes, and opened a three-reviewer consolidated redline of the same shape. Neither application loses a
+bookmark Docxodus tracks this way; only Docxodus's own accept and reject resolve it per side.
+
+### Docxodus code
+
+- `RevisionProcessor.AcceptDeletedAndMoveFromParagraphMarksTransform` rebuilt each block stream from its
+  paragraphs and tables only, dropping every other child. It now keeps them (`LooseChildrenOfBlockStream`) in
+  front of the block they preceded; a marker between paragraphs that a deleted paragraph mark merges goes inside
+  the merged paragraph, unless only deleted content precedes it.
+- `RevisionProcessor.ReverseRevisionsTransform` reversed a `w:ins`/`w:del` only under a paragraph or run
+  container; a block stream (`IsRunLevelRevisionParent`) now counts too.
+- The IR still leaves the markers out (rule N3). `IrMarkupRenderer.PlanBlockLevelMarkers` and
+  `PlanCompositeBlockLevelMarkers` put them back; see *Block-level markers* in
+  `docs/architecture/ir_diff_engine.md`.
+
 ---
 
 ## DocxDiff: `PreAcceptInputRevisions` accept-all flattens prior authorship
