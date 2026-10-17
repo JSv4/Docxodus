@@ -4069,6 +4069,19 @@ export class PaginationEngine {
           currentContinuationLimit = limit;
           currentContinuation = partition.current;
           nextPageContinuation = partition.overflow ?? null;
+          if (!nextPageContinuation) {
+            // The carried note now ends on this page, so the notes deferred behind it may follow
+            // it here again, in order, as far as they fit (issue #1179).
+            const width = dimensionsFor().contentWidth;
+            while (deferredFootnoteIds.length > 0) {
+              const candidateIds = [...currentFootnoteIds, deferredFootnoteIds[0]];
+              const candidateHeight = this.measureFootnotesHeight(
+                candidateIds, width, currentContinuation, currentPartialFootnotes);
+              if (candidateHeight + FOOTNOTE_MEASUREMENT_GUARD_PT > limit) break;
+              currentFootnoteIds = candidateIds;
+              deferredFootnoteIds.shift();
+            }
+          }
         }
       }
       // Pages without a carried continuation are charged here. Continuation
@@ -4113,11 +4126,6 @@ export class PaginationEngine {
         const fittingIds: string[] = [];
         for (let index = 0; index < currentFootnoteIds.length; index++) {
           const footnoteId = currentFootnoteIds[index];
-          // The carried note continues past this page too, so it stays last here (issue #1179).
-          if (nextPageContinuation) {
-            deferredFootnoteIds.push(...currentFootnoteIds.slice(index));
-            break;
-          }
           const candidateIds = [...fittingIds, footnoteId];
           const candidateHeight = this.measureFootnotesHeight(
             candidateIds, ownedDimensions.contentWidth, pageContinuation);

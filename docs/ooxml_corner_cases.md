@@ -3302,6 +3302,23 @@ A header row (`w:tblHeader`) repeats at the top of each page the table continues
 `w:hRule` (reported for Word in issue #1171; not yet measured here). Docxodus repeated no header row,
 whatever its rule, before that issue.
 
+## Footnotes: a continued note stays last, and notes keep their order (issue #1179)
+
+Five shapes, Letter page, 12pt body, single-line note paragraphs (Word reference PDFs, LibreOffice
+25.8.7.3):
+
+| Case | Shape | Word | LibreOffice |
+|---|---|---|---|
+| A | `cites A` (90-line note 1), `cites B` (1-line note 2), 30 body lines | note 1 splits on p1; `cites B` moves to p2, note 2 follows note 1's end there | same |
+| B | `cites A` (150-line note), page break, `cites B`, `cites C` (1-line notes) | p2 holds only note 1's continuation, no body; `cites B` and `cites C` open p3, where note 1 ends and notes 2, 3 follow in order | `cites B` alone on p2 beside the continuation; notes 2, 3 on p4 after note 1 ends |
+| C | `cites A` (220-line note), then eight citing lines with plain lines between | p2-p4 hold only the continuation; body resumes on p5, where note 1 ends, and notes 2-9 follow in order | one citing line per continuation page; notes 2-9 after note 1's end |
+| D | 40 filler lines, a paragraph citing a 20-line keep-lines note, `cites B` | the citing line moves to p2 with its note | same |
+| E | 40 filler lines, a one-row table citing that note, `cites B` | the table moves to p2 with its note and `cites B` | the table stays on p1; note 1 and note 2 go to p2, in order |
+
+Both keep a continued note last on its page and every note in citation order. Where they differ,
+Word gives a page whose carried note runs on to the next page entirely to that note (B, C); see the
+note-area entry for issue #1178.
+
 ## Contributing
 
 When adding new corner cases to this document:

@@ -406,10 +406,14 @@ All notable changes to this project will be documented in this file.
 - A paginated footnote that continues onto the next page now stays last on its page (issue #1179).
   The paginator could start a later, whole note below the split one: a note cited after it on the
   same page, a note deferred to a page whose carried continuation runs on again, or a note cited
-  beside such a continuation, which could also overtake an earlier deferred note. Word keeps a
-  continued note last on its page and its notes in citation order, so once a note on a page
-  continues, or a note cited there has been deferred, later notes start on the next page, below the
-  continuation and after the deferred notes.
+  beside such a continuation, which could also overtake an earlier deferred note. Word reference
+  PDFs and LibreOffice keep a continued note last on its page and notes in citation order, so once a
+  note on a page continues, or a note cited there has been deferred, later notes start on the next
+  page, below the continuation and after the deferred notes. When the last body page lets a carried
+  note end after all, the notes deferred behind it join it there again. One shape takes a page more:
+  a table citing a note too tall for the room left, followed by a paragraph citing a short note, now
+  lays out on three pages instead of two, because the short note no longer overtakes the deferred
+  one (LibreOffice lays it out the same way).
 - In the PDF export, a paragraph border on content that an exact-height table row hides is now hidden
   with it (issue #1171). Exactly sized paragraph borders are painted as shapes over the page, which
   did not inherit the row's clip, so the border of a paragraph cut by the row still showed below it.
