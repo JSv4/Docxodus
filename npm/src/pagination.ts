@@ -352,16 +352,15 @@ export interface PaginationOptions {
   layoutToken?: { documentVersion: number; rendererFingerprint: string };
 }
 
-// Default letter size in points (612 x 792 = 8.5" x 11")
-// Maximum percentage of content height that footnotes can occupy
-// This allows footnotes to expand upward into body content space when needed
-// The cap only protects body text still waiting for the page: once the body is exhausted, notes
-// are budgeted from the space actually left (issue #1119).
-const MAX_FOOTNOTE_AREA_RATIO = 0.6; // 60% of content height
-// Even with no body text left, the note area (separator included) never takes the whole body band:
-// the body keeps a twentieth of it. Measured from LibreOffice 25.8.7.3 across body heights of
-// 468-1008pt and note lines of 4pt and 18pt (docs/ooxml_corner_cases.md, issue #1119).
-const MAX_EXHAUSTED_BODY_FOOTNOTE_AREA_RATIO = 0.95;
+// The share of the body band the note area (separator included) may take while body text remains.
+// Word reference PDFs show none held back (issue #1178): a note takes everything below the line
+// that cites it, and a carried note that does not end on a page takes that whole page. The 60% this
+// used to be reserved room for body text that Word does not reserve.
+const MAX_FOOTNOTE_AREA_RATIO = 1;
+// The same share once every body block is placed: notes are budgeted from the space actually left
+// (issue #1119), up to the whole band. LibreOffice 25.8.7.3 keeps a twentieth of the band for the
+// body even then; Word does not (docs/ooxml_corner_cases.md).
+const MAX_EXHAUSTED_BODY_FOOTNOTE_AREA_RATIO = 1;
 // Hidden measurement and final absolutely-positioned note bands differ by sub-pixel border/margin
 // rounding in Chromium. Reserve a small physical-unit guard so the last baseline stays visible.
 const FOOTNOTE_MEASUREMENT_GUARD_PT = 2;
@@ -3961,6 +3960,8 @@ export class PaginationEngine {
     // Track any new continuation that will carry to next page
     let nextPageContinuation: FootnoteContinuation | null = null;
     let currentContinuationPartitioned = false;
+    // Set when the carried continuation does not end on this page: the page is the note's alone.
+    let continuationRunsOn = false;
     let currentPageAdmitted = false;
     /**
      * Whole notes that could not be started on this page and must render on the next one.
@@ -4026,6 +4027,7 @@ export class PaginationEngine {
         ownedDimensions.contentWidth,
       );
       currentContinuation = partition.current;
+      continuationRunsOn = partition.overflow !== null;
       if (partition.overflow) {
         nextPageContinuation = partition.overflow;
         // The carried note continues again, so it stays last here: notes deferred to this page
@@ -4220,6 +4222,7 @@ export class PaginationEngine {
       currentContinuation = nextPageContinuation;
       nextPageContinuation = null;
       currentContinuationPartitioned = false;
+      continuationRunsOn = false;
       currentPageAdmitted = false;
 
       // Notes that never got started land at the top of the new page's note area. They are
@@ -4271,6 +4274,15 @@ export class PaginationEngine {
       }
 
       prepareCurrentContinuation();
+
+      // A carried note that does not end on this page fills it: Word reference PDFs show such a
+      // page holding the note alone, and body text, with any new citation, resumes on the page
+      // where the note ends (issue #1178).
+      if (continuationRunsOn && currentContent.length === 0) {
+        finishPage(block.sectionIndex);
+        i--;
+        continue;
+      }
 
       if (currentFootnoteHeight > 0) {
         const ownerDimensions = dimensionsFor();
@@ -4331,9 +4343,12 @@ export class PaginationEngine {
         continue;
       }
 
-      // Handle page break before
+      // Handle page break before. The block then starts over on the fresh page, so that page's
+      // carried note is partitioned before any placement decision reads its height.
       if (block.pageBreakBefore && currentContent.length > 0) {
         finishPage(block.sectionIndex);
+        i--;
+        continue;
       }
 
       // A series of keep-with-next blocks is one indivisible placement unit
@@ -4641,17 +4656,27 @@ export class PaginationEngine {
             } else {
               // Footnote needs to be split - use all available expanded space
               if (spaceLeftForFootnotes > MIN_FOOTNOTE_START_PT) {
-                const { fits, overflow } = this.splitFootnoteToFit(
+                const payload = {
+                  footnoteIds: currentFootnoteIds,
+                  continuation: currentContinuation,
+                  partialFootnotes: currentPartialFootnotes,
+                };
+                let { fits, overflow } = this.splitFootnoteToFit(
                   footnote,
                   availableForFootnotes,
                   blockDimensions.contentWidth,
                   deferralCannotHelp,
-                  {
-                    footnoteIds: currentFootnoteIds,
-                    continuation: currentContinuation,
-                    partialFootnotes: currentPartialFootnotes,
-                  },
+                  payload,
                 );
+                // Deferring helps only a note whose first part a fresh page's band can hold: an
+                // indivisible part taller than any band keeps the clipped fallback here, beside its
+                // citation, rather than moving to a page of its own.
+                if (fits.length === 0 && !deferralCannotHelp
+                  && this.splitFootnoteToFit(footnote, nextPageMaxFootnoteArea,
+                    blockDimensions.contentWidth).fits.length === 0) {
+                  ({ fits, overflow } = this.splitFootnoteToFit(
+                    footnote, availableForFootnotes, blockDimensions.contentWidth, true, payload));
+                }
 
                 if (fits.length > 0) {
                   // Add partial footnote to current page

@@ -428,6 +428,18 @@ All notable changes to this project will be documented in this file.
   or starts with a page break, one with a `thead`, `tfoot` or several row groups, or one holding a
   nested table or a footnote; and header rows whose vertical merge runs on into the body rows are
   not repeated.
+- Paginated footnotes may now take the whole page, as Word reference PDFs show (issue #1178). The
+  paginator capped the note area at 60% of the body band while body text remained, and at 95% once
+  it was placed (the share LibreOffice 25.8.7.3 allows). Word holds no room back: a note takes
+  everything below the line that cites it, and a carried note that does not end on a page takes
+  that page alone; body text, with any new citation, resumes on the page where the note ends.
+  Both now hold in the paginated view and the PDF export. On a Letter page whose first line cites
+  a 90-line note, page 1 now shows that line and 54 lines of the note, as Word does (it showed 19
+  body lines beside 33 note lines). A note too tall to start beside its citation now starts whole
+  on the next page when that page's band can hold it, rather than being clipped beside the
+  citation; one taller than any band is still clipped beside it. A page that starts with a
+  page-break-before paragraph now measures its carried note before placing that paragraph, so a
+  keep-with-next chain there no longer leaves its heading alone at the page's foot.
 - A paginated footnote that continues onto the next page now stays last on its page (issue #1179).
   The paginator could start a later, whole note below the split one: a note cited after it on the
   same page, a note deferred to a page whose carried continuation runs on again, or a note cited

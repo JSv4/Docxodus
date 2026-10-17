@@ -139,22 +139,23 @@ test.describe('A continued note stays last on its page', () => {
       keptNote('1', 8, 4) + note('2', 1)));
 
     expectContinuedNotesLast(layout);
-    // Note 2 starts on the page where note 1 ends.
-    expect(layout.notes[layout.notePage['2'] - 1]).toEqual(['1c', '2']);
+    // Note 2 starts no earlier than the page where note 1 ends.
+    const noteOneEnds = layout.notes.reduce((last, items, index) =>
+      (items.includes('1') || items.includes('1c') ? index + 1 : last), 0);
+    expect(layout.notePage['2']).toBeGreaterThanOrEqual(noteOneEnds);
   });
 
   test('notes cited beside a carried continuation keep their order behind it', async ({ page }) => {
-    // Note 1 carries over three pages. Page 2 opens with `cites B`; `cites C` moves on with the
-    // continuation, as a citing line does when its note cannot start beside it. Neither note may
-    // start before note 1 ends, and note 3 may not overtake note 2. (This is LibreOffice's layout of
-    // the shape; in the Word reference PDF page 2 holds the continuation alone.)
+    // Note 1 carries over three pages. Page 2 cannot hold the rest of it, so, as in the Word
+    // reference PDF of this shape, it holds the note alone, and `cites B` and `cites C` open page 3,
+    // where note 1 ends and notes 2 and 3 follow it in order (issue #1178).
     const layout = await paginate(page, staging(
       `<p>cites A${reference('1')}</p><div data-page-break="true"></div>`
         + `<p>cites B${reference('2')}</p><p>cites C${reference('3')}</p>`,
       note('1', 40) + note('2', 1) + note('3', 1)));
 
     expectContinuedNotesLast(layout);
-    expect(layout.body.map((blocks) => blocks.join(' '))).toEqual(['cites A1', 'cites B2', 'cites C3', '']);
+    expect(layout.body.map((blocks) => blocks.join(' '))).toEqual(['cites A1', '', 'cites B2 cites C3']);
     expect(layout.notes[layout.notes.length - 1]).toEqual(['1c', '2', '3']);
   });
 

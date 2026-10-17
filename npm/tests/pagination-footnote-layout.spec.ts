@@ -717,10 +717,10 @@ test.describe('Paginated footnote layout', () => {
     expect(result.lines[1]).toBeLessThanOrEqual(28);
   });
 
-  test('a carried note gains the space on the last body page once the body is placed', async ({ page }) => {
-    // Issue #1119: the note continues onto page 2, which also receives the last (short) body
-    // block. Page 2 was partitioned at 60% while that block was pending; once it is placed the
-    // note takes what the page actually has left.
+  test('a carried note that runs on takes its page, and ends beside the body that follows', async ({ page }) => {
+    // Issue #1178: the 60-line note fills page 1 below its citing line and runs on. Page 2 cannot
+    // hold the rest, so, as in Word reference PDFs, it holds the note alone; the body resumes on
+    // the page where the note ends.
     await page.setContent(stagingHtml(15, 1, 60));
     await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
     const result = await page.evaluate(
@@ -744,10 +744,12 @@ test.describe('Paginated footnote layout', () => {
     expect(result.lost).toEqual([]);
     expect(result.clipped).toEqual([]);
     expect(result.lines.reduce((sum: number, count: number) => sum + count, 0)).toBe(60);
-    const lastBodyPage = result.body.findLastIndex((count: number) => count > 0);
-    expect(lastBodyPage).toBeGreaterThan(0);
-    // 60% of a 300pt band holds 17 ten-point lines with the separator; more means re-partitioned.
-    expect(result.lines[lastBodyPage]).toBeGreaterThan(17);
+    expect(result.body[0]).toBe(1);
+    expect(result.body[1]).toBe(0);
+    const lastNotePage = result.lines.findLastIndex((count: number) => count > 0);
+    expect(lastNotePage).toBe(2);
+    expect(result.body[lastNotePage]).toBeGreaterThan(0);
+    expect(result.body.reduce((sum: number, count: number) => sum + count, 0)).toBe(15);
   });
 
   test('exact-spaced note lines and their number sit on Word\'s exact baseline', async ({ page }) => {

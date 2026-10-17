@@ -3302,6 +3302,31 @@ A header row (`w:tblHeader`) repeats at the top of each page the table continues
 `w:hRule` (reported for Word in issue #1171; not yet measured here). Docxodus repeated no header row,
 whatever its rule, before that issue.
 
+## Footnotes: how much of a page the note area takes (issue #1178)
+
+Four shapes, Letter page, 1in margins (648pt of body), Times New Roman 12pt single-spaced body
+(13.75pt line pitch), 10pt single-spaced footnote text (11.5pt pitch), one line per note paragraph
+unless stated:
+
+| Shape | Word reference PDFs, page 1 / page 2 | LibreOffice 25.8.7.3, page 1 / page 2 | Docxodus at 60% (before) |
+|---|---|---|---|
+| a: line 1 cites a 90-line note, then 60 body lines | 1 body line, note lines from y 110.5 to 720.1 (the bottom margin) / 15 body lines, the note's last 37 lines | 2 body lines, 52 note lines / 14 body lines, 38 note lines | 19 body lines, 33 note lines |
+| b: 20 body lines, line 21 cites the 90-line note | 21 body lines, 29 note lines / **no body**, 55 note lines from y 87.9 to 720.1; body resumes on p3 beside the note's last 6 lines | 21 / 2 body lines, 52 note lines | 21 / 19 body lines |
+| c: lines 1-40 each cite a 4-line note | 11 body lines, notes to 720.1 / 10 body lines | 11 / 10 | 8 / 8 |
+| d: line 1 cites one 70-line wrapping paragraph | 1 body line / 22 body lines | 2 / 21 | 19 / 19 |
+
+Word holds no share of the band back for body text. A note takes everything below the line that
+cites it; a carried note that does not end on a page takes the page alone (b, page 2), and the
+body resumes on the page where it ends. A keep-with-next heading follows the same rule: when the
+carried note ends on a page without room for the heading and its paragraph, the note keeps the page
+and the chain opens the next one (Word reference PDFs of three such shapes; LibreOffice leaves the
+heading alone at the foot instead). LibreOffice keeps some body beside a running note and holds a
+twentieth of the band for the body once the body is placed (issue #1119).
+
+`MAX_FOOTNOTE_AREA_RATIO` and `MAX_EXHAUSTED_BODY_FOOTNOTE_AREA_RATIO` in `npm/src/pagination.ts`
+are now 1, and a page whose carried continuation does not end on it is finished before any body
+block is placed on it.
+
 ## Footnotes: a continued note stays last, and notes keep their order (issue #1179)
 
 Five shapes, Letter page, 12pt body, single-line note paragraphs except in D and E, whose note 1 is

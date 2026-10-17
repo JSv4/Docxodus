@@ -116,20 +116,15 @@ test.describe('Pagination keep-with-next chains', () => {
 
     expect(result.content).toEqual([
       ['lead1'],
-      ['heading', 'body'],
       [],
+      ['heading', 'body'],
     ]);
-    // The note is 3 x 30pt against a 60pt band (60% of a 100pt body), and the band carries
-    // the separator: one paragraph measures 40.5pt and two measure 70.5pt, so exactly one
-    // paragraph fits per page and the tail needs a third note area. The chain placement is
-    // what this test pins; the note simply keeps flowing under it rather than being clipped.
-    //
-    // The carried tail is partitioned to its own band before the page's body is filled, so
-    // page two reserves the one paragraph it can show (40.5pt) rather than the whole 70.5pt
-    // remainder. The chain therefore fits under it, which is what "a page whose notes are
-    // capped still fills its remaining body space" requires: reserving the unshowable
-    // remainder used to leave that page's body empty for no visible gain.
-    expect(result.footnotePages).toEqual([true, true, true]);
+    // The note is 3 x 30pt and the band carries the separator: one paragraph measures 40.5pt and
+    // two 70.5pt. Page 1 shows the first beside `lead`. Page 2 opens with the 70.5pt tail, which
+    // ends there but leaves 29.5pt, too little for the 50pt chain the page break starts; as in
+    // Word reference PDFs, the tail keeps the page and the chain opens page 3 whole rather than
+    // leaving `heading` alone at page 2's foot (issue #1178).
+    expect(result.footnotePages).toEqual([true, true, false]);
   });
 
   test('does not force a chain onto a fresh page without room for its pending continuation', async ({ page }) => {
