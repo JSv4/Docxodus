@@ -240,11 +240,9 @@ public class BlockWrapperNestedDiffTests
         AssertEachWrapperCopyHasItsOwnComment(DocxDiffOps.RejectRevisions(redline.DocumentByteArray), kind, copies: 1, rangeKept: false);
     }
 
-    /// <summary>A comment that opens in a paragraph before the replaced wrapper and closes inside it keeps one
-    /// comment: the collapse that serves its shared start is not undone by splitting the deleted copy's
-    /// reference off under a fresh id, so rejecting restores the original with the reference and the range on
-    /// the same comment. (Accepting still leaves the reference before the wrapper, as it did before #1157: no
-    /// single set of markers can serve both copies of the wrapper.)</summary>
+    /// <summary>A comment that opens in a paragraph before the replaced wrapper and closes inside it: rejecting
+    /// restores the original with the reference and the range on the same comment. (Issue #1167's tests below
+    /// check both views and every marker's place.)</summary>
     [Theory]
     [InlineData(Wrapper.CustomXml)]
     [InlineData(Wrapper.ContentControl)]
@@ -264,6 +262,215 @@ public class BlockWrapperNestedDiffTests
         var start = Assert.Single(rejected.Descendants(W.commentRangeStart));
         var reference = Assert.Single(rejected.Descendants(W.commentReference));
         Assert.Equal((string?)start.Attribute(W.id), (string?)reference.Attribute(W.id));
+    }
+
+    // ---- issue #1167: a comment with one marker outside a wrapper that is replaced whole ---------------
+
+    /// <summary>Where the comment's markers sit relative to the replaced wrapper.</summary>
+    public enum StraddlePlace
+    {
+        /// <summary>The range opens in a paragraph before the wrapper; its end and reference are inside.</summary>
+        OpensBefore,
+
+        /// <summary>As <see cref="OpensBefore"/>, but the opening paragraph is inside an earlier, unchanged
+        /// wrapper.</summary>
+        OpensInAnEarlierWrapper,
+
+        /// <summary>The range is wholly inside the wrapper; its reference is in a paragraph after it.</summary>
+        ReferencedAfter,
+
+        /// <summary>As <see cref="ReferencedAfter"/>, but the reference shares its run with the paragraph's
+        /// text.</summary>
+        ReferencedAfterInATextRun,
+    }
+
+    /// <summary>What makes the comparison replace the wrapper whole.</summary>
+    public enum ReplacedBecause
+    {
+        /// <summary>The wrapper's own markup changes (its tag or custom-XML attribute); every comment marker
+        /// sits inside a paragraph.</summary>
+        WrapperMarkupChanged,
+
+        /// <summary>The wrapper's markup is unchanged but the comment's marker inside it sits between blocks
+        /// (issue #1143).</summary>
+        MarkerBetweenBlocks,
+    }
+
+    public static IEnumerable<object[]> StraddlingCommentCases() =>
+        from kind in new[] { Wrapper.CustomXml, Wrapper.ContentControl }
+        from place in Enum.GetValues<StraddlePlace>()
+        from because in Enum.GetValues<ReplacedBecause>()
+        select new object[] { kind, place, because };
+
+    private const string Start = "<w:commentRangeStart w:id=\"0\"/>";
+    private const string End = "<w:commentRangeEnd w:id=\"0\"/>";
+    private const string ReferenceRun = "<w:r><w:commentReference w:id=\"0\"/></w:r>";
+
+    private static string Run(string text) => $"<w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r>";
+
+    /// <summary>A document whose one comment straddles the edge of a wrapper, per <paramref name="place"/>.</summary>
+    private static WmlDocument StraddlingComment(Wrapper kind, StraddlePlace place, ReplacedBecause because, bool revised)
+    {
+        var bravo = revised ? BravoEdited : Bravo;
+        var id = revised && because == ReplacedBecause.WrapperMarkupChanged ? "a2" : "a1";
+        bool between = because == ReplacedBecause.MarkerBetweenBlocks;
+        string body = place switch
+        {
+            StraddlePlace.OpensBefore or StraddlePlace.OpensInAnEarlierWrapper =>
+                (place == StraddlePlace.OpensBefore
+                    ? $"<w:p>{Run("Before the wrapper.")}{Start}</w:p>"
+                    : Wrap(kind, $"<w:p>{Run("Before the wrapper.")}{Start}</w:p>", id: "earlier"))
+                + Wrap(kind, P(Alpha) + P(bravo) + (between
+                    ? End + $"<w:p>{ReferenceRun}</w:p>"
+                    : $"<w:p>{Run(Charlie)}{End}{ReferenceRun}</w:p>"), id)
+                + P(Tail),
+            _ =>
+                Wrap(kind, (between
+                    ? Start + P(Alpha) + P(bravo) + P(Charlie) + End
+                    : $"<w:p>{Start}{Run(Alpha)}</w:p>" + P(bravo) + $"<w:p>{Run(Charlie)}{End}</w:p>"), id)
+                + (place == StraddlePlace.ReferencedAfter
+                    ? $"<w:p>{ReferenceRun}{Run(Tail)}</w:p>"
+                    : $"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">Lead </w:t><w:commentReference w:id=\"0\"/>"
+                      + $"<w:t xml:space=\"preserve\">{Tail}</w:t></w:r></w:p>"),
+        };
+        return IrTestDocuments.WithComment("Ann", "A", "2026-01-01T00:00:00Z", CommentText, body);
+    }
+
+    /// <summary>The comparison replaces the wrapper whole, so the redline holds a deleted and an inserted copy of
+    /// it but the comment's marker outside the wrapper exists once. That marker must serve each view: accepting
+    /// yields the revised document and rejecting the original, with the reference and both range ends where
+    /// they were (range markers between blocks excepted, which accepting and rejecting drop, issue #1149). The
+    /// redline itself holds one complete comment per view, each under its own id and resolving to the
+    /// comment's text.</summary>
+    [Theory]
+    [MemberData(nameof(StraddlingCommentCases))]
+    public void Compare_CommentStraddlingAReplacedWrapper_AcceptAndRejectKeepEveryMarkerInPlace(
+        Wrapper kind, StraddlePlace place, ReplacedBecause because)
+    {
+        var left = StraddlingComment(kind, place, because, revised: false);
+        var right = StraddlingComment(kind, place, because, revised: true);
+
+        var redline = DocxDiff.Compare(left, right);
+
+        var redlineBody = Body(redline);
+        Assert.Equal(place == StraddlePlace.OpensInAnEarlierWrapper ? 3 : 2, redlineBody.Descendants(WrapperName(kind)).Count());
+        // The text outside the wrapper is unchanged, so only the comment's markers there may toggle with a view.
+        var outsideParagraphs = redlineBody.Descendants(W.p).Where(p => p.Descendants().Any(e =>
+            (e.Name == W.t || e.Name == W.delText) && (e.Value.Contains("Before the wrapper") || e.Value.Contains(Tail)))).ToList();
+        Assert.Equal(place is StraddlePlace.OpensBefore or StraddlePlace.OpensInAnEarlierWrapper ? 2 : 1, outsideParagraphs.Count);
+        foreach (var outside in outsideParagraphs)
+            Assert.DoesNotContain(outside.Descendants(), e => e.Name == W.delText
+                || (e.Name == W.t && e.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del)));
+        AssertRoundTrip(left, right, redline);
+        var accepted = DocxDiffOps.AcceptRevisions(redline.DocumentByteArray);
+        var rejected = DocxDiffOps.RejectRevisions(redline.DocumentByteArray);
+        Assert.Equal(CommentPlacement(right.DocumentByteArray), CommentPlacement(accepted));
+        Assert.Equal(CommentPlacement(left.DocumentByteArray), CommentPlacement(rejected));
+        AssertOneCompleteCommentPerId(redline.DocumentByteArray, comments: 2);
+        AssertOneCompleteCommentPerId(accepted, comments: 1, rangeKept: !because.Equals(ReplacedBecause.MarkerBetweenBlocks));
+        AssertOneCompleteCommentPerId(rejected, comments: 1, rangeKept: !because.Equals(ReplacedBecause.MarkerBetweenBlocks));
+        AssertNoNewValidationErrors(redline, left, right);
+    }
+
+    /// <summary>A threaded comment and its reply both open before a wrapper replaced whole and close inside it.
+    /// Each view keeps its own thread: the deleted view's reply answers the deleted view's parent, and the
+    /// clones take fresh paraIds and durable ids.</summary>
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Compare_ThreadStraddlingAReplacedWrapper_EachViewKeepsItsOwnThread(Wrapper kind)
+    {
+        WmlDocument Document(string bravo, string id) => ThreadedDocument(
+            $"<w:p>{Run("Before the wrapper.")}<w:commentRangeStart w:id=\"0\"/><w:commentRangeStart w:id=\"1\"/></w:p>"
+            + Wrap(kind, P(Alpha) + P(bravo) + $"<w:p>{Run(Charlie)}<w:commentRangeEnd w:id=\"0\"/><w:commentRangeEnd w:id=\"1\"/>"
+                + "<w:r><w:commentReference w:id=\"0\"/></w:r><w:r><w:commentReference w:id=\"1\"/></w:r></w:p>", id)
+            + P(Tail));
+        var left = Document(Bravo, "a1");
+        var right = Document(BravoEdited, "a2");
+
+        var redline = DocxDiff.Compare(left, right);
+
+        AssertRoundTrip(left, right, redline);
+        AssertThreadingIdsUnique(redline.DocumentByteArray);
+        AssertEachReferencedReplyAnswersAReferencedParent(redline.DocumentByteArray, threads: 2);
+        AssertEachReferencedReplyAnswersAReferencedParent(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray), threads: 1);
+        AssertEachReferencedReplyAnswersAReferencedParent(DocxDiffOps.RejectRevisions(redline.DocumentByteArray), threads: 1);
+    }
+
+    /// <summary>Each paragraph of the body (and each comment marker between blocks) as one line: its wrapper depth,
+    /// then its text runs and comment markers in order. A marker names the comment by the order the comment first
+    /// appears in and adds "?" when its id resolves to no definition reading <see cref="CommentText"/>, so two
+    /// documents compare equal when their comments sit in the same places, whatever their ids.</summary>
+    private static string CommentPlacement(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var main = document.MainDocumentPart!;
+        var texts = main.WordprocessingCommentsPart?.GetXDocument().Root?.Elements(W.comment)
+            .ToDictionary(c => (string)c.Attribute(W.id)!, c => string.Concat(c.Descendants(W.t).Select(t => t.Value)))
+            ?? new Dictionary<string, string>();
+        var ordinal = new Dictionary<string, int>(StringComparer.Ordinal);
+        string Marker(XElement e)
+        {
+            var id = (string)e.Attribute(W.id)!;
+            if (!ordinal.TryGetValue(id, out var n))
+                ordinal[id] = n = ordinal.Count;
+            var kind = e.Name == W.commentRangeStart ? "start" : e.Name == W.commentRangeEnd ? "end" : "ref";
+            return $"[{kind} {n}{(texts.TryGetValue(id, out var text) && text == CommentText ? "" : "?")}]";
+        }
+        static bool IsMarker(XElement e) =>
+            e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference;
+        int Depth(XElement e) => e.Ancestors().Count(a => a.Name == W.sdt || a.Name == W.customXml);
+
+        var sb = new StringBuilder();
+        var body = main.GetXDocument().Root!.Element(W.body)!;
+        foreach (var e in body.Descendants())
+        {
+            if (e.Name == W.p)
+            {
+                sb.Append(Depth(e)).Append(' ');
+                foreach (var d in e.Descendants())
+                {
+                    if (d.Name == W.t)
+                        sb.Append(d.Value);
+                    else if (IsMarker(d))
+                        sb.Append(Marker(d));
+                }
+                sb.Append('\n');
+            }
+            else if (IsMarker(e) && !e.Ancestors(W.p).Any())
+            {
+                sb.Append(Depth(e)).Append(" between ").Append(Marker(e)).Append('\n');
+            }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>The body references <paramref name="comments"/> distinct comments, each resolving to a definition
+    /// reading <see cref="CommentText"/>, and every range marker belongs to one of them; each referenced comment
+    /// has exactly one range start and one range end (at most one of each when not <paramref name="rangeKept"/>).</summary>
+    private static void AssertOneCompleteCommentPerId(byte[] bytes, int comments, bool rangeKept = true)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var main = document.MainDocumentPart!;
+        var body = main.GetXDocument().Root!.Element(W.body)!;
+        var definitions = main.WordprocessingCommentsPart!.GetXDocument().Root!.Elements(W.comment)
+            .ToDictionary(c => (string)c.Attribute(W.id)!, c => string.Concat(c.Descendants(W.t).Select(t => t.Value)));
+        var references = body.Descendants(W.commentReference).Select(r => (string)r.Attribute(W.id)!).ToList();
+        Assert.Equal(comments, references.Count);
+        Assert.Equal(comments, references.Distinct().Count());
+        foreach (var id in references)
+        {
+            Assert.Equal(CommentText, definitions[id]);
+            foreach (var name in new[] { W.commentRangeStart, W.commentRangeEnd })
+            {
+                var count = body.Descendants(name).Count(m => (string?)m.Attribute(W.id) == id);
+                Assert.True(rangeKept ? count == 1 : count <= 1, $"comment {id} has {count} {name.LocalName} markers");
+            }
+        }
+        Assert.All(body.Descendants().Where(e => e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd),
+            m => Assert.Contains((string)m.Attribute(W.id)!, references));
     }
 
     private const string CommentText = "Check this clause.";

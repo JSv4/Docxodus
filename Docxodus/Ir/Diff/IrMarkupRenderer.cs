@@ -3923,7 +3923,6 @@ internal static partial class IrMarkupRenderer
         var commentsPart = main.WordprocessingCommentsPart;
 
         static string? IdOf(XElement e) => (string?)e.Attribute(W.id);
-        static bool IsBare(XElement e) => !e.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del);
         static bool InBothViews(XElement e) => CommentMarkerView(e) == null;
         List<XElement> Markers() => body.Descendants()
             .Where(e => (e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference)
@@ -3949,23 +3948,16 @@ internal static partial class IrMarkupRenderer
             var all = MarkersWithId(id);
             if (!all.Any(InBothViews))
                 continue; // every marker toggles with a revision (rewritten anchor, replaced wrapper) → (B)
+            if (SplitAcrossReplacedWrapperCopies(all, state))
+            {
+                changed = true; // every marker is one-sided now → (B) gives the deleted view its own comment
+                continue;
+            }
             collapsed.Add(id);
             foreach (var kind in new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference })
             {
                 var kinds = all.Where(m => m.Name == kind).ToList();
-                if (kinds.Count == 0)
-                    continue;
-                // Pick the survivor by POSITION so the collapsed range ENCLOSES the surviving content on BOTH
-                // sides, then lift it bare: the commentRangeStart must precede both the w:del and the w:ins (the
-                // leftmost copy in document order), the commentRangeEnd must follow both (the RIGHTMOST copy).
-                // Keeping a del-side end — even a BARE one that happens to sit before the deleted run — would
-                // leave the inserted (accept) / deleted (reject) content OUTSIDE the range, bracketing nothing for
-                // a wholly-rewritten or wholly-deleted anchor. Position is what matters; the lift is a no-op when
-                // the survivor is already bare. The reference is zero-width: either copy resolves the same.
-                var keep = kind == W.commentRangeEnd ? kinds[kinds.Count - 1] : kinds[0];
-                foreach (var m in kinds)
-                    if (!ReferenceEquals(m, keep)) { RemoveCommentMarker(m); changed = true; }
-                if (!IsBare(keep) && LiftCommentMarkerBare(keep))
+                if (kinds.Count > 0 && CollapseToSurvivor(kinds) is { Changed: true })
                     changed = true;
             }
         }
@@ -4145,6 +4137,105 @@ internal static partial class IrMarkupRenderer
     }
 
     /// <summary>
+    /// Collapse one marker kind of a comment to a single bare survivor (phase A of <see cref="NormalizeComments"/>).
+    /// The survivor is picked by POSITION so the collapsed range ENCLOSES the surviving content on BOTH sides, then
+    /// lifted bare: the <c>commentRangeStart</c> must precede both the <c>w:del</c> and the <c>w:ins</c> (the
+    /// leftmost copy in document order), the <c>commentRangeEnd</c> must follow both (the RIGHTMOST copy). Keeping
+    /// a del-side end — even a BARE one that happens to sit before the deleted run — would leave the inserted
+    /// (accept) / deleted (reject) content OUTSIDE the range, bracketing nothing for a wholly-rewritten or
+    /// wholly-deleted anchor. Position is what matters; the lift is a no-op when the survivor is already bare. The
+    /// reference is zero-width: either copy resolves the same.
+    /// </summary>
+    private static (XElement Survivor, bool Changed) CollapseToSurvivor(List<XElement> sameKind)
+    {
+        var keep = SurvivorOf(sameKind);
+        bool changed = false;
+        foreach (var m in sameKind)
+            if (!ReferenceEquals(m, keep)) { RemoveCommentMarker(m); changed = true; }
+        if (keep.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del) && LiftCommentMarkerBare(keep))
+            changed = true;
+        return (keep, changed);
+    }
+
+    private static XElement SurvivorOf(List<XElement> sameKind) =>
+        sameKind[0].Name == W.commentRangeEnd ? sameKind[sameKind.Count - 1] : sameKind[0];
+
+    /// <summary>
+    /// Issue #1167: a common comment that straddles the edge of a block wrapper replaced whole — it opens in a
+    /// paragraph before the wrapper and closes inside it, or its range lies inside the wrapper and its reference
+    /// in a paragraph after it. The markers inside the wrapper exist once in each copy (the deleted copy's for
+    /// reject, the inserted copy's for accept), but the marker outside exists once for both views, so no single
+    /// set of markers can serve both: collapsing them as phase A does would leave one view's comment half inside
+    /// the other copy. Instead the outside marker is given a copy per view — the original wrapped in
+    /// <c>w:del</c>, an identical marker wrapped in <c>w:ins</c> beside it — so every marker of the comment
+    /// becomes one-sided and phase B gives the deleted view a comment of its own (fresh id, cloned definition),
+    /// exactly as for a comment wholly inside a replaced wrapper (issue #1157).
+    /// </summary>
+    /// <remarks>
+    /// Applies only when each marker kind of the comment is either wholly outside every replaced wrapper copy
+    /// (with a survivor of both views, collapsed first as phase A would) or wholly inside replaced copies, with
+    /// one in a deleted and one in an inserted copy; and when the outside markers sit in a paragraph, where a
+    /// run-level <c>w:del</c>/<c>w:ins</c> may hold them. Anything else returns false and is collapsed as before.
+    /// </remarks>
+    private static bool SplitAcrossReplacedWrapperCopies(List<XElement> markers, RenderState state)
+    {
+        bool anySplit = false;
+        var shared = new List<List<XElement>>();
+        foreach (var sameKind in markers.GroupBy(m => m.Name).Select(g => g.ToList()))
+        {
+            var views = sameKind.Select(ReplacedWrapperCopyView).ToList();
+            if (views.All(v => v == null))
+            {
+                if (!sameKind.Any(m => CommentMarkerView(m) == null))
+                    return false;
+                shared.Add(sameKind);
+                continue;
+            }
+            if (views.Any(v => v == null) || !views.Contains(RevKind.Del) || !views.Contains(RevKind.Ins))
+                return false;
+            anySplit = true;
+        }
+        if (!anySplit || shared.Count == 0 || shared.Any(k => !SurvivorOf(k).Ancestors(W.p).Any()))
+            return false;
+
+        foreach (var sameKind in shared)
+        {
+            var keep = CollapseToSurvivor(sameKind).Survivor;
+            var target = keep.Name == W.commentReference ? IsolateReferenceRun(keep) : keep;
+            var copy = new XElement(target);
+            target.AddAfterSelf(copy);
+            WrapMarkerInRevision(keep, RevKind.Del, state);
+            WrapMarkerInRevision(copy.Name == W.r ? copy.Element(W.commentReference)! : copy, RevKind.Ins, state);
+        }
+        return true;
+    }
+
+    /// <summary>Give a <c>w:commentReference</c> a run of its own (keeping the host run's properties) by splitting
+    /// any other content of its run into runs before and after it, and return that run.</summary>
+    private static XElement IsolateReferenceRun(XElement reference)
+    {
+        var run = reference.Parent!;
+        var content = run.Elements().Where(e => e.Name != W.rPr).ToList();
+        if (content.Count == 1)
+            return run;
+        var rPr = run.Element(W.rPr);
+        int at = content.IndexOf(reference);
+        foreach (var e in content)
+            e.Remove();
+        XElement Piece(IEnumerable<XElement> children) =>
+            new(W.r, run.Attributes(), rPr == null ? null : new XElement(rPr), children);
+        var own = Piece(new[] { reference });
+        var pieces = new List<XElement>();
+        if (at > 0)
+            pieces.Add(Piece(content.Take(at)));
+        pieces.Add(own);
+        if (at < content.Count - 1)
+            pieces.Add(Piece(content.Skip(at + 1)));
+        run.ReplaceWith(pieces);
+        return own;
+    }
+
+    /// <summary>
     /// The one revision view a comment marker toggles with — <see cref="RevKind.Del"/> when only reject keeps
     /// it, <see cref="RevKind.Ins"/> when only accept does — or null when it survives both. The nearest
     /// tracked context decides: a <c>w:del</c>/<c>w:ins</c> wrapper around it, or a block wrapper
@@ -4160,11 +4251,26 @@ internal static partial class IrMarkupRenderer
                 return RevKind.Del;
             if (a.Name == W.ins)
                 return RevKind.Ins;
-            var content = a.Name == W.sdt ? a.Element(W.sdtContent) : a.Name == W.customXml ? a : null;
-            if (content != null && Internal.StructuredRevisionOps.TrackedWrapperIsDeleted(content) is { } deleted)
-                return deleted ? RevKind.Del : RevKind.Ins;
+            if (WholeWrapperCopyView(a) is { } view)
+                return view;
         }
         return null;
+    }
+
+    /// <summary>The view of the nearest block wrapper around <paramref name="marker"/> that is emitted as a whole
+    /// deleted or inserted copy, or null when no such wrapper encloses it (run-level <c>w:ins</c>/<c>w:del</c>
+    /// are not consulted).</summary>
+    private static RevKind? ReplacedWrapperCopyView(XElement marker) =>
+        marker.Ancestors().Select(WholeWrapperCopyView).FirstOrDefault(v => v != null);
+
+    /// <summary>The view of <paramref name="element"/> when it is a <c>w:sdt</c>/<c>w:customXml</c> emitted as a
+    /// whole deleted or inserted copy; otherwise null.</summary>
+    private static RevKind? WholeWrapperCopyView(XElement element)
+    {
+        var content = element.Name == W.sdt ? element.Element(W.sdtContent) : element.Name == W.customXml ? element : null;
+        return content != null && Internal.StructuredRevisionOps.TrackedWrapperIsDeleted(content) is { } deleted
+            ? deleted ? RevKind.Del : RevKind.Ins
+            : null;
     }
 
     /// <summary>True iff the comment marker sits at the paragraph/body run level (its ancestors up to the
