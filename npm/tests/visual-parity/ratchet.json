@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "description": "Per-case visual-parity regression ratchet (issue #395). Numbers only. The scheduled run fails when any case gets worse than recorded beyond `tolerance`. Refresh this file deliberately in the PR that changes rendering, so improvements and accepted regressions are reviewed in the diff. See npm/tests/visual-parity/README.md. PROVENANCE: `sourceCommit` is the issue-#955 branch as measured in CI on the pinned reference environment (visual-parity run 37715886650, update_record), before the branch was squash-merged; after the merge it is not an ancestor of main, but main's rendering code at the merge is that tree's. The only change from the previous record (run 37552073014, #950) is the footnote case, an accepted drop approved by the maintainer: #955 makes a note's lines its FootnoteText paragraph's own, which moves the note text onto Word's baseline and the separator rule down onto the converter's documented model of Word (the baseline of an empty line above the first note). LibreOffice draws its rule higher; the old rule sat within the ink tolerance of it only because an oversized note strut pushed it up, so ink F1 against LibreOffice falls while the page moves toward Word.",
-  "recordedAt": "2026-10-08",
-  "sourceCommit": "a42fa5f70b170689656ec49d2b69611f6ac3eb13",
+  "description": "Per-case visual-parity regression ratchet (issue #395). Numbers only. The scheduled run fails when any case gets worse than recorded beyond `tolerance`. Refresh this file deliberately in the PR that changes rendering, so improvements and accepted regressions are reviewed in the diff. See npm/tests/visual-parity/README.md. PROVENANCE: built with buildRecord from the summary.json of visual-parity run 38988464367 (ratchet=false), which measured `sourceCommit` on the pinned reference environment from a clean tree. Refreshed for issue #1151 (paginated lines at the font's unrounded height, Word baselines in the read-only view, notes placed on their citing page, spacing kept between numbered paragraphs). Improved: two-column-section, wrapped-image-tight, legal-contract, endnote, footnote, merged-table, fields-and-tabs. Accepted drops, approved by the maintainer and without a Word reference: wrapped-image-square (the unrounded pitch puts a fifth line beside the square-wrapped image), inline-image and tracked-deletion (Word-baseline alignment moves a line by a pixel).",
+  "recordedAt": "2026-10-17",
+  "sourceCommit": "445d0a7273715c84d553b7028d5610c3356b21db",
   "environment": {
     "libreoffice": "25.8",
     "chromium": "143",
@@ -66,8 +66,8 @@
         "libreoffice": 1
       },
       "severity": "severe",
-      "ssim": 0.81438,
-      "worstInkF1": 0.9249
+      "ssim": 0.84804,
+      "worstInkF1": 0.93887
     },
     {
       "id": "fields-and-tabs",
@@ -77,7 +77,7 @@
         "libreoffice": 1
       },
       "severity": "minor",
-      "ssim": 0.96742,
+      "ssim": 0.97329,
       "worstInkF1": 1
     },
     {
@@ -88,8 +88,8 @@
         "libreoffice": 1
       },
       "severity": "minor",
-      "ssim": 0.9947,
-      "worstInkF1": 0.90757
+      "ssim": 0.99693,
+      "worstInkF1": 0.91487
     },
     {
       "id": "inline-image",
@@ -99,8 +99,8 @@
         "libreoffice": 1
       },
       "severity": "major",
-      "ssim": 0.93503,
-      "worstInkF1": 0.85545
+      "ssim": 0.93326,
+      "worstInkF1": 0.81096
     },
     {
       "id": "landscape-section",
@@ -110,8 +110,8 @@
         "libreoffice": 1
       },
       "severity": "major",
-      "ssim": 0.94868,
-      "worstInkF1": 0.95614
+      "ssim": 0.94878,
+      "worstInkF1": 0.95533
     },
     {
       "id": "legal-contract",
@@ -121,8 +121,8 @@
         "libreoffice": 3
       },
       "severity": "severe",
-      "ssim": 0.73002,
-      "worstInkF1": 0.66348
+      "ssim": 0.85463,
+      "worstInkF1": 0.88477
     },
     {
       "id": "merged-table",
@@ -132,7 +132,7 @@
         "libreoffice": 1
       },
       "severity": "minor",
-      "ssim": 0.96348,
+      "ssim": 0.97845,
       "worstInkF1": 1
     },
     {
@@ -143,7 +143,7 @@
         "libreoffice": 6
       },
       "severity": "close",
-      "ssim": 0.99944,
+      "ssim": 0.99986,
       "worstInkF1": 1
     },
     {
@@ -165,7 +165,7 @@
         "libreoffice": 1
       },
       "severity": "close",
-      "ssim": 0.99928,
+      "ssim": 0.99911,
       "worstInkF1": 1
     },
     {
@@ -176,7 +176,7 @@
         "libreoffice": 5
       },
       "severity": "severe",
-      "ssim": 0.99875,
+      "ssim": 0.99868,
       "worstInkF1": 0.10495
     },
     {
@@ -198,7 +198,7 @@
         "libreoffice": 1
       },
       "severity": "close",
-      "ssim": 0.99724,
+      "ssim": 0.99708,
       "worstInkF1": 0.9677
     },
     {
@@ -208,9 +208,9 @@
         "docxodus": 1,
         "libreoffice": 1
       },
-      "severity": "close",
-      "ssim": 0.98072,
-      "worstInkF1": 0.99667
+      "severity": "minor",
+      "ssim": 0.97637,
+      "worstInkF1": 0.99653
     },
     {
       "id": "two-column-section",
@@ -219,9 +219,9 @@
         "docxodus": 1,
         "libreoffice": 1
       },
-      "severity": "severe",
-      "ssim": 0.70903,
-      "worstInkF1": 0.45891
+      "severity": "major",
+      "ssim": 0.88621,
+      "worstInkF1": 0.87828
     },
     {
       "id": "wrapped-image-square",
@@ -231,8 +231,8 @@
         "libreoffice": 1
       },
       "severity": "severe",
-      "ssim": 0.75878,
-      "worstInkF1": 0.55419
+      "ssim": 0.7475,
+      "worstInkF1": 0.43924
     },
     {
       "id": "wrapped-image-tight",
@@ -241,9 +241,9 @@
         "docxodus": 1,
         "libreoffice": 1
       },
-      "severity": "severe",
-      "ssim": 0.84395,
-      "worstInkF1": 0.94849
+      "severity": "major",
+      "ssim": 0.85542,
+      "worstInkF1": 0.96655
     }
   ]
 }
