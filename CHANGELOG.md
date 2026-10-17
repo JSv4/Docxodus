@@ -96,11 +96,14 @@ All notable changes to this project will be documented in this file.
   were; a threaded reply follows its parent into each view. This holds when the revision also edits
   the text right beside the outside marker (each copy keeps the marker its own view shows). When the
   outside reference shares a run with text, the reference is moved into a run of its own so the text
-  is not marked as changed, and every copied run property change gets a revision id of its own. The same clean-up now also gives a
-  comment a separate id in each reviewer's copy when two reviewers of a consolidate both replace the
-  wrapper (it repeated the comment's markers under one id), and numbers the copies above every comment
-  id in the document, so a copy no longer takes the id of an undefined comment whose markers are
-  still in the body.
+  is not marked as changed, and every copied run property change gets a revision id of its own.
+  The same clean-up now also tells apart the inserted copies two consolidate reviewers make when both
+  replace the same wrapper, and gives the comment a separate id in each (it repeated the comment's
+  markers under one id). Copies are told apart by how many times a marker repeats in one view, not by
+  reviewer name, so two reviewers sharing a name (or both unnamed) are handled too, and a comment
+  whose range opens in one wrapper and closes in another, each replaced by a different reviewer,
+  stays one comment in each view. The copies are numbered above every comment id in the document, so
+  a copy no longer takes the id of an undefined comment whose markers are still in the body.
 - A comparison's redline no longer repeats a paragraph id (`w14:paraId`) or writes one outside the range
   the schema allows (issue #1170). A paragraph id must be unique across the whole package and lie between
   1 and 7FFFFFFF; Word keys comment threading on it and may treat a repeat as damage. Three cases repeated

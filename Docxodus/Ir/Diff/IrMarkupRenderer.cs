@@ -4152,42 +4152,73 @@ internal static partial class IrMarkupRenderer
     }
 
     /// <summary>
+    /// The copies of one comment that the markers inside whole-replaced wrapper copies form, per view (views in the
+    /// order they first occur, copies in document order of their seeds; markers must come in document order). A view holds as many copies as its most repeated marker kind has markers there — two inserted
+    /// references mean two reviewers each replaced the wrapper holding it — and markers of copies of DIFFERENT
+    /// wrappers in one view (a range opening in one replaced wrapper and closing in another) belong to one copy.
+    /// Each occurrence of that most repeated kind seeds a copy; every other marker joins the copy seeded in the
+    /// same wrapper copy element, else the first copy of its view still lacking its kind. No author is consulted:
+    /// two reviewers may share one.
+    /// </summary>
+    private static List<(RevKind View, List<XElement> Markers)> CopyClusters(IEnumerable<XElement> markers)
+    {
+        var placed = markers
+            .Select(m => (Marker: m, Copy: ReplacedWrapperCopy(m)))
+            .Where(p => p.Copy != null)
+            .Select(p => (p.Marker, Copy: p.Copy!, View: WholeWrapperCopyView(p.Copy!)!.Value))
+            .ToList();
+        var clusters = new List<(RevKind View, XElement Seed, List<XElement> Markers)>();
+        foreach (var view in placed.Select(p => p.View).Distinct().ToList())
+        {
+            var inView = placed.Where(p => p.View == view).ToList();
+            var seedKind = inView.GroupBy(p => p.Marker.Name).OrderByDescending(g => g.Count())
+                .ThenBy(g => KindOrder(g.Key)).First().Key;
+            var own = new List<(RevKind View, XElement Seed, List<XElement> Markers)>();
+            foreach (var seed in inView.Where(p => p.Marker.Name == seedKind))
+                own.Add((view, seed.Copy, new List<XElement> { seed.Marker }));
+            foreach (var p in inView.Where(p => p.Marker.Name != seedKind))
+            {
+                bool Lacks((RevKind View, XElement Seed, List<XElement> Markers) c) => c.Markers.All(m => m.Name != p.Marker.Name);
+                var home = own.FirstOrDefault(c => ReferenceEquals(c.Seed, p.Copy) && Lacks(c));
+                if (home.Markers == null)
+                    home = own.FirstOrDefault(Lacks);
+                (home.Markers ?? own[0].Markers).Add(p.Marker);
+            }
+            clusters.AddRange(own);
+        }
+        return clusters.Select(c => (c.View, c.Markers)).ToList();
+    }
+
+    private static int KindOrder(XName kind) =>
+        kind == W.commentRangeStart ? 0 : kind == W.commentRangeEnd ? 1 : 2;
+
+    /// <summary>
     /// Partition one comment's one-sided markers (phase B of <see cref="NormalizeComments"/>) into the copies of
-    /// the comment each view holds, in document order. A marker belongs to its revision view; within a view, a
-    /// marker inside a block wrapper emitted as a whole copy belongs to the copy's author (in a consolidate, each
-    /// reviewer who replaced the wrapper adds a copy), and a run-level marker whose <c>w:ins</c>/<c>w:del</c>
-    /// author is one of those joins that author's copy. Every other marker of the view — all of them when the
-    /// view holds one copy, as in a two-way comparison — joins the view's first copy. Returns no copies when any
-    /// marker survives both views.
+    /// the comment the views hold: the <see cref="CopyClusters"/> of its markers inside whole-replaced wrapper
+    /// copies, joined by each other marker of the view (a run-level <c>w:ins</c>/<c>w:del</c> marker, or a twin
+    /// phase A made of a marker outside the wrapper) in document order — the first copy of its view still lacking
+    /// its kind, else the view's first copy. A view with no wrapper copy holds one copy of everything. Returns no
+    /// copies when any marker survives both views.
     /// </summary>
     private static List<(RevKind View, List<XElement> Markers)> CommentViewCopies(List<XElement> markers)
     {
-        var copies = new List<(RevKind View, string? Author, List<XElement> Markers)>();
-        var placed = new List<(XElement Marker, RevKind View, string? Author)>();
-        foreach (var m in markers)
+        if (markers.Any(m => CommentMarkerView(m) == null))
+            return new();
+        var copies = CopyClusters(markers);
+        foreach (var m in markers.Where(m => ReplacedWrapperCopy(m) == null))
         {
-            if (CommentMarkerView(m) is not { } view)
-                return new();
-            string? author = ReplacedWrapperCopy(m) is { } copy ? EnvelopeAuthor(WrapperCopyEnvelope(copy)) : null;
-            placed.Add((m, view, author));
-            if (author != null && !copies.Any(c => c.View == view && c.Author == author))
-                copies.Add((view, author, new List<XElement>()));
-        }
-        foreach (var (m, view, wrapperAuthor) in placed)
-        {
-            var author = wrapperAuthor
-                ?? (string?)m.Ancestors().FirstOrDefault(a => a.Name == W.ins || a.Name == W.del)?.Attribute(W.author);
-            int at = copies.FindIndex(c => c.View == view && c.Author == author);
+            var view = CommentMarkerView(m)!.Value;
+            int at = copies.FindIndex(c => c.View == view && c.Markers.All(x => x.Name != m.Name));
             if (at < 0)
                 at = copies.FindIndex(c => c.View == view);
             if (at < 0)
             {
-                copies.Add((view, null, new List<XElement>()));
+                copies.Add((view, new List<XElement>()));
                 at = copies.Count - 1;
             }
             copies[at].Markers.Add(m);
         }
-        return copies.Select(c => (c.View, c.Markers)).ToList();
+        return copies;
     }
 
     /// <summary>
@@ -4233,7 +4264,7 @@ internal static partial class IrMarkupRenderer
     private static bool SplitAcrossReplacedWrapperCopies(List<XElement> markers, RenderState state)
     {
         var shared = new List<List<XElement>>();
-        var copies = new List<(RevKind View, XElement? Envelope)>();
+        var inside = new List<XElement>();
         foreach (var sameKind in markers.GroupBy(m => m.Name).Select(g => g.ToList()))
         {
             var views = sameKind.Select(m => ReplacedWrapperCopy(m) is { } copy ? WholeWrapperCopyView(copy) : null).ToList();
@@ -4246,15 +4277,11 @@ internal static partial class IrMarkupRenderer
             }
             if (views.Any(v => v == null) || !views.Contains(RevKind.Del) || !views.Contains(RevKind.Ins))
                 return false;
-            foreach (var m in sameKind)
-            {
-                var copy = ReplacedWrapperCopy(m)!;
-                var envelope = WrapperCopyEnvelope(copy);
-                var view = WholeWrapperCopyView(copy)!.Value;
-                if (!copies.Any(c => c.View == view && EnvelopeAuthor(c.Envelope) == EnvelopeAuthor(envelope)))
-                    copies.Add((view, envelope));
-            }
+            inside.AddRange(sameKind);
         }
+        var copies = CopyClusters(markers.Where(inside.Contains))
+            .Select(c => (c.View, Envelope: WrapperCopyEnvelope(ReplacedWrapperCopy(c.Markers[0])!)))
+            .ToList();
         if (copies.Count == 0 || shared.Count == 0)
             return false;
 
