@@ -106,6 +106,44 @@ public class RevisionProcessorRevisionContainerTests
         Assert.Equal("added", TextOf(Accept(bodyXml)));
     }
 
+    [Fact]
+    public void Reject_DeletionInsideMovedText_RestoresItAtTheMoveSource()
+    {
+        // Moved text whose move source also holds a deletion: reject puts the text back at the source,
+        // deletion included, and removes it (with the insertion inside it) from the destination.
+        var bodyXml =
+            "<w:p><w:r><w:t xml:space=\"preserve\">A </w:t></w:r>" +
+            $"<w:moveFromRangeStart w:id=\"10\" {Stamp} w:name=\"move1\"/><w:moveFrom w:id=\"11\" {Stamp}>" +
+            "<w:r><w:t xml:space=\"preserve\">mv </w:t></w:r>" + Del("<w:r><w:delText>gone</w:delText></w:r>") +
+            "</w:moveFrom><w:moveFromRangeEnd w:id=\"10\"/><w:r><w:t xml:space=\"preserve\"> B</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t xml:space=\"preserve\">C </w:t></w:r>" +
+            $"<w:moveToRangeStart w:id=\"12\" {Stamp} w:name=\"move1\"/><w:moveTo w:id=\"13\" {Stamp}>" +
+            "<w:r><w:t xml:space=\"preserve\">mv </w:t></w:r>" + Ins("<w:r><w:t>new</w:t></w:r>") +
+            "</w:moveTo><w:moveToRangeEnd w:id=\"12\"/><w:r><w:t xml:space=\"preserve\"> D</w:t></w:r></w:p>";
+
+        Assert.Equal(new[] { "A mv gone B", "C  D" }, ParagraphTexts(Reject(bodyXml)));
+        Assert.Equal(new[] { "A  B", "C mv new D" }, ParagraphTexts(Accept(bodyXml)));
+    }
+
+    [Theory]
+    [InlineData("RA001-Tracked-Revisions-01.docx")]
+    [InlineData("RA001-Tracked-Revisions-02.docx")]
+    public void Reject_WordDocumentWithDeletionsInsideMovedText_RestoresTheMovedTable(string fixture)
+    {
+        // A real Word document whose moved-away heading and table hold deletions of their own.
+        var document = new WmlDocument(Path.Combine("../../../../TestFiles/", fixture));
+
+        var texts = ParagraphTexts(BodyOf(RevisionProcessor.RejectRevisions(document)));
+
+        Assert.Contains("Order of injection:", texts);
+        Assert.Contains("Name of the preparations", texts);
+        Assert.Contains("System suitability solution", texts);
+    }
+
+    private static List<string> ParagraphTexts(XElement body) =>
+        body.Descendants(W.p).Select(p => string.Concat(p.Descendants(W.t).Select(t => t.Value)))
+            .Where(text => text.Length > 0).ToList();
+
     private static string TextOf(XElement body) =>
         string.Concat(body.Descendants()
             .Where(e => e.Name == W.t || e.Name == W.delText || e.Name == M + "t")
