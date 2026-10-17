@@ -344,7 +344,9 @@ All notable changes to this project will be documented in this file.
   PageMap fragment instead of failing the layout, and a citation of it reads `anchor_not_mapped`.
   Content any other clip hides whole still fails, because there it was lost by the layout. In the
   PDF the paragraph is clipped like the rest of the row, and its text is in the text layer, as
-  issue #1140 does for a cut line.
+  issue #1140 does for a cut line, except where a header or footer band, or the body band, also
+  clips the row: that clip can still cut the hidden text's glyphs into fragments. A row no taller
+  than its borders and padding, which shows none of its text, no longer fails the export either.
 
 ## [13.0.0] - 2026-10-12
 

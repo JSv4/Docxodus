@@ -16,6 +16,8 @@ export interface ExactRowOptions {
   clippedParagraphs?: number;
   /** A bottom paragraph border (red, `w:sz="8"`) on every paragraph of the clipped cell. */
   borders?: boolean;
+  /** The first body row's exact height in twips; 300 holds one 11pt line. */
+  firstRowTwips?: number;
 }
 
 const paragraph = (text: string, border = false) =>
@@ -29,7 +31,7 @@ const number = (index: number) => String(index).padStart(2, '0');
 export const CLIPPED_WORDS = ['Alder', 'Birch', 'Cedar', 'Damson', 'Elder'];
 
 export function generateExactRowDocx(options: ExactRowOptions = {}): Uint8Array {
-  const { bodyRows = 3, headerRule, clippedParagraphs = 1, borders = false } = options;
+  const { bodyRows = 3, headerRule, clippedParagraphs = 1, borders = false, firstRowTwips = 300 } = options;
   const rows: string[] = [];
   if (headerRule)
     rows.push(row('400', headerRule, cell(paragraph('Heading Ledger')) + cell(paragraph('Heading Value')), true));
@@ -37,9 +39,9 @@ export function generateExactRowDocx(options: ExactRowOptions = {}): Uint8Array 
     const first = index === 1
       ? CLIPPED_WORDS.slice(0, clippedParagraphs).map(word => paragraph(`${word} clipped cell line.`, borders)).join('')
       : paragraph(`Row${number(index)} ledger entry.`);
-    // The first body row is one line high (300 twips holds a single 11pt line), so its later paragraphs
-    // fall outside it; other rows have room for their single line.
-    rows.push(row(index === 1 ? '300' : '400', 'exact', cell(first) + cell(paragraph(`Value${number(index)} entry.`))));
+    // The first body row is one line high by default, so its later paragraphs fall outside it; other
+    // rows have room for their single line.
+    rows.push(row(index === 1 ? String(firstRowTwips) : '400', 'exact', cell(first) + cell(paragraph(`Value${number(index)} entry.`))));
   }
   const borderXml = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']
     .map(side => `<w:${side} w:val="single" w:sz="4" w:color="444444"/>`).join('');

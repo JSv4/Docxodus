@@ -17,6 +17,8 @@ interface Result {
   paragraphs: Array<{ anchor: string; text: string }>;
   mapped: string[];
   registration: { success: boolean } | null;
+  /** Each cell paragraph's citation availability, through GetPageCitation. */
+  citations: Record<string, { availability: string; unavailableReason?: string }>;
 }
 
 async function paginate(page: Page, bytes: Uint8Array): Promise<Result> {
@@ -48,14 +50,17 @@ async function paginate(page: Page, bytes: Uint8Array): Promise<Result> {
       const bridge = D.DocxSessionBridge;
       const handle = bridge.OpenSession(bin, '');
       let registration;
+      const citations: Record<string, { availability: string; unavailableReason?: string }> = {};
       try {
         registration = JSON.parse(bridge.RegisterPageMap(handle, JSON.stringify(pageMap), 'exact-row'));
+        const request = JSON.stringify({ documentVersion: 0, rendererFingerprint: 'exact-row' });
+        for (const { anchor } of paragraphs) citations[anchor] = JSON.parse(bridge.GetPageCitation(handle, anchor, request));
       } finally {
         bridge.CloseSession(handle);
       }
-      return { error: null, paragraphs, mapped: pageMap.fragments.map((f: any) => f.anchorId), registration };
+      return { error: null, paragraphs, mapped: pageMap.fragments.map((f: any) => f.anchorId), registration, citations };
     } catch (error) {
-      return { error: String(error), paragraphs, mapped: [], registration: null };
+      return { error: String(error), paragraphs, mapped: [], registration: null, citations: {} };
     }
   }, Array.from(bytes));
 }
@@ -70,6 +75,9 @@ test('a paragraph an exact-height row hides whole has no fragment and does not f
   expect(result.mapped).toContain(anchorOf('Alder'));
   expect(result.mapped).toContain(anchorOf('Birch'));
   expect(result.mapped).not.toContain(anchorOf('Cedar'));
+  // A citation of the hidden paragraph is unavailable for that reason; its neighbours cite normally.
+  expect(result.citations[anchorOf('Cedar')]).toMatchObject({ availability: 'unavailable', unavailableReason: 'anchor_not_mapped' });
+  expect(result.citations[anchorOf('Alder')].availability).toBe('available');
 });
 
 /** Synthetic staging for one section; `body` is its content. */

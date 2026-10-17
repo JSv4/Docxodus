@@ -44,3 +44,17 @@ test('a row that hides a whole paragraph exports, clipped like any other overflo
   for (const word of ['Alder', 'Birch', 'Cedar', 'Value01', 'Row02', 'Closing']) expect(text).toContain(word);
   expect(text.indexOf('Cedar')).toBeGreaterThan(text.indexOf('Birch'));
 });
+
+test('a zero-height exact row exports, showing none of its text (issue #1168)', async ({ browser }, testInfo) => {
+  test.setTimeout(120_000);
+  // Every paragraph of the row is hidden whole, and its clip box has no height at all.
+  const bytes = generateExactRowDocx({ clippedParagraphs: 2, firstRowTwips: 0 });
+  const actual = await renderDocxArtifacts(bytes, { browser, ...options });
+  writeFileSync(testInfo.outputPath('zero-height.docx'), bytes);
+  writeFileSync(testInfo.outputPath('zero-height.pdf'), actual.pdf!);
+
+  expect(actual.pageCount).toBe(1);
+  const text = (await pageTexts(actual.pdf!)).join(' ');
+  for (const word of ['Value02', 'Row02', 'Closing']) expect(text).toContain(word);
+  expect(text).not.toContain('Alder');
+});

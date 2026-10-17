@@ -31,7 +31,8 @@
  * clip, but a PDF rasterizer can still tint the pixel row the clip edge crosses where a hidden glyph's
  * top touches that row (anti-aliased coverage, hinting). See docs/architecture/standalone_paginated_export.md.
  *
- * Left alone: a clip box that hides no glyph (see `hidesText`), and one holding an absolutely or fixed
+ * Left alone: a clip box of no height or width (it shows nothing), one that hides no glyph (see
+ * `hidesText`), and one holding an absolutely or fixed
  * positioned element, for which the `foreignObject` would become the containing block and move it.
  */
 
@@ -138,6 +139,9 @@ export function preserveClippedExactRowText(root: HTMLElement): number {
     if (!page || !parent || !hidesText(clip, view) || holdsOutOfFlowPositioned(clip, view)) continue;
     const pageRect = page.getBoundingClientRect();
     const box = clip.getBoundingClientRect();
+    // A row no taller than its borders and padding shows none of its text (LibreOffice draws none
+    // either), and an SVG root of no height cannot be printed (issue #1168).
+    if (!(box.width > 0) || !(box.height > 0)) continue;
     const left = box.left - pageRect.left;
     const top = box.top - pageRect.top;
     // The SVG root's origin: the whole pixel at or before the clip box.
