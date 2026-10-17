@@ -3858,7 +3858,8 @@ internal static partial class IrMarkupRenderer
     /// <item><b>(B) dedup.</b> A comment whose markers all toggle with a revision, some with the deleted view and
     /// some with the inserted one (a wholly rewritten anchor, a comment in a whole-block-bailed table/opaque, or
     /// one between the blocks of a block wrapper replaced whole — issue #1157), has no survivor of both views:
-    /// give the DELETED copy a fresh id + a cloned definition (paraId-stripped so threading never collides).
+    /// give the DELETED copy a fresh id + a cloned definition whose <c>w14:paraId</c>s are freshly minted package-wide,
+    /// so neither threading nor any body, header, footer or note paragraph shares one (issue #1170).
     /// Accept ≡ right comment, reject ≡ left comment.</item>
     /// <item><b>(C) pair + resolve.</b> Drop any marker/reference whose id has no definition; re-close an
     /// orphaned start with a synthetic zero-width end in the start's own context; drop an orphaned end.</item>
@@ -3957,7 +3958,9 @@ internal static partial class IrMarkupRenderer
                 int nextId = commentsRoot.Elements(W.comment)
                     .Select(c => int.TryParse((string?)c.Attribute(W.id), out var v) ? v : -1)
                     .DefaultIfEmpty(-1).Max() + 1;
-                int nextParaId = MaxParaId(commentsRoot) + 1;
+                // A paraId is unique across the whole package (body, headers, footers, notes, comments and the
+                // threading parts), so the clones draw from the package-wide allocator (issue #1170).
+                var paraIds = new Internal.CommentOps.ParaIdAllocator(main);
                 var freshParaIds = new Dictionary<string, string>(StringComparer.Ordinal);
                 foreach (var oldId in duplicated)
                 {
@@ -3973,7 +3976,7 @@ internal static partial class IrMarkupRenderer
                         // threading entries are cloned below, once every clone's fresh paraId is known.
                         foreach (var pAttr in copy.Descendants().Attributes(W14ns + "paraId").ToList())
                         {
-                            var freshPara = (nextParaId++).ToString("X8");
+                            var freshPara = paraIds.Next();
                             freshParaIds[(string)pAttr] = freshPara;
                             pAttr.Value = freshPara;
                         }
@@ -4187,17 +4190,6 @@ internal static partial class IrMarkupRenderer
         if (!parent.Elements().Any())
             parent.Remove();
         return true;
-    }
-
-    /// <summary>The largest 8-hex <c>w14:paraId</c> present on any comment-definition paragraph (so a freshly
-    /// allocated clone paraId collides with none).</summary>
-    private static int MaxParaId(XElement commentsRoot)
-    {
-        int max = 0;
-        foreach (var v in commentsRoot.Descendants().Attributes(W14ns + "paraId").Select(a => (string)a))
-            if (int.TryParse(v, System.Globalization.NumberStyles.HexNumber, null, out var n) && n > max)
-                max = n;
-        return max;
     }
 
     /// <summary>Carry the dedup clones' threading metadata: for each original paraId in

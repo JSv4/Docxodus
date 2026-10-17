@@ -86,6 +86,12 @@ All notable changes to this project will be documented in this file.
   paragraph after it keeps only half a range in each view. For `w:sdt` both behave as before; for
   `w:customXml` they used to keep each copy's markers in full under one duplicated id, so the
   redline is now well formed but these two shapes lose the range or the reference's place instead.
+- A comparison that splits a comment into a deleted-view and an inserted-view copy no longer gives the
+  copy a `w14:paraId` that a body paragraph already uses (issue #1170). The copy's paragraph ids were
+  numbered on from the largest id in the comments part alone, but a paragraph id must be unique across
+  the whole package, so the copy could share one with a paragraph in the body, a header, a footer or a
+  note, which Word may treat as damage or use to mis-thread the comment. The copies now take their ids
+  from the same package-wide allocator that comment authoring in `DocxSession` uses.
 - A comparison no longer breaks a field that spans paragraphs, such as a Word table of contents without its
   content control (issue #1156). Such a field opens in its first entry paragraph and closes paragraphs later,
   and field characters take up no room in the text the comparison lines up, so when the entry holding the
