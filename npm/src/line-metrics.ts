@@ -44,13 +44,16 @@ function probeCharacters(element: Element): string[] {
   return Array.from(characters);
 }
 
+/** The font properties a line-height probe copies from an element's computed style. */
+type ProbeFont = Pick<CSSStyleDeclaration, "fontStyle" | "fontWeight" | "fontStretch" | "fontFamily">;
+
 /**
  * A cached measure of a font's natural line height as a fraction of its size, probed at
  * {@link PROBE_FONT_SIZE_PX} with the given text.
  */
-function naturalLineHeightRatios(document: Document): (style: CSSStyleDeclaration, text: string) => number {
+function naturalLineHeightRatios(document: Document): (style: ProbeFont, text: string) => number {
   const ratios = new Map<string, number>();
-  const ratio = (style: CSSStyleDeclaration, text: string): number => {
+  const ratio = (style: ProbeFont, text: string): number => {
     const key = `${style.fontStyle}|${style.fontWeight}|${style.fontStretch}|${style.fontFamily}|${text}`;
     let ratio = ratios.get(key);
     if (ratio === undefined) {
@@ -75,53 +78,6 @@ function naturalLineHeightRatios(document: Document): (style: CSSStyleDeclaratio
 }
 
 /**
- * How far a `normal` line of `style`'s font reaches above and below its baseline, as fractions of
- * the font size, for Latin text plus `characters`. The fonts on one line share its baseline, so
- * the line reaches as far up and down as the furthest of them. Each character is measured beside
- * the Latin probe on its own and cached: text varies far more than the characters in it (smart
- * quotes, dashes, section signs), and every new probe forces a layout.
- */
-type ProbeFont = Pick<CSSStyleDeclaration, "fontStyle" | "fontWeight" | "fontStretch" | "fontFamily">;
-
-function naturalLineExtents(document: Document): (style: ProbeFont, characters: string[]) => number {
-  const extents = new Map<string, { above: number; below: number }>();
-  const measure = (style: ProbeFont, text: string) => {
-    const key = `${style.fontStyle}|${style.fontWeight}|${style.fontStretch}|${style.fontFamily}|${text}`;
-    let extent = extents.get(key);
-    if (extent === undefined) {
-      const probe = document.createElement("span");
-      probe.setAttribute("aria-hidden", "true");
-      probe.style.cssText = "position:absolute;left:-100000px;top:0;visibility:hidden;"
-        + "display:inline-block;white-space:nowrap;line-height:normal;margin:0;padding:0;border:0;";
-      probe.style.fontFamily = style.fontFamily;
-      probe.style.fontStyle = style.fontStyle;
-      probe.style.fontWeight = style.fontWeight;
-      probe.style.fontStretch = style.fontStretch;
-      probe.style.fontSize = `${PROBE_FONT_SIZE_PX}px`;
-      const marker = document.createElement("span");
-      marker.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline;margin:0;padding:0;border:0;";
-      probe.append(marker, text);
-      (document.body ?? document.documentElement).appendChild(probe);
-      const box = probe.getBoundingClientRect();
-      const baseline = marker.getBoundingClientRect().bottom - box.top;
-      extent = { above: baseline / PROBE_FONT_SIZE_PX, below: (box.height - baseline) / PROBE_FONT_SIZE_PX };
-      probe.remove();
-      extents.set(key, extent);
-    }
-    return extent;
-  };
-  return (style, characters) => {
-    let { above, below } = measure(style, LATIN_PROBE);
-    for (const character of characters) {
-      const extent = measure(style, LATIN_PROBE + character);
-      above = Math.max(above, extent.above);
-      below = Math.max(below, extent.below);
-    }
-    return above + below;
-  };
-}
-
-/**
  * Give every element under `root` whose computed `line-height` is `normal` an explicit line height
  * equal to its own font's unrounded natural line height (including any fallback font its own text
  * needs). Elements are collected before any is
@@ -136,7 +92,7 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
   const document = root.ownerDocument;
   const view = document.defaultView;
   if (!view) return 0;
-  const ratioFor = naturalLineExtents(document);
+  const ratioFor = naturalLineHeightRatios(document);
 
   // Read every style before probing: each probe changes the document, so a style read after one
   // recomputes the styles of the whole tree.
@@ -153,7 +109,9 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
   }
   const targets: Array<{ element: HTMLElement; lineHeight: number }> = [];
   for (const { element, font, fontSize, characters } of candidates) {
-    const ratio = ratioFor(font, characters);
+    // Fallback fonts are chosen per run of text, so the characters are probed together, as they
+    // are laid out; a character probed alone can fall back to a different font.
+    const ratio = ratioFor(font, LATIN_PROBE + [...characters].sort().join(""));
     if (ratio > 0) targets.push({ element, lineHeight: ratio * fontSize });
   }
   for (const { element, lineHeight } of targets) {
