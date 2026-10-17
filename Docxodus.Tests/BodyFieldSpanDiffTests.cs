@@ -428,6 +428,115 @@ public class BodyFieldSpanDiffTests
             t => t.Value == "Second line");
     }
 
+    /// <summary>Markers that share a field character's position (issue #1165 review): Word's caption bookmark
+    /// around <c>Figure {SEQ}</c>, a comment around a field, a bookmark around the field's result, and markers
+    /// between a field's begin and its instruction. Each stays on its side of the field character in both views,
+    /// and the field keeps one copy of each character.</summary>
+    public static IEnumerable<object[]> MarkersBesideFieldCharacters() => new[]
+    {
+        new object[] { "caption bookmark around a renumbered SEQ field",
+            Para(BookmarkStart("_Ref1"), R("Figure "), Field("SEQ Figure \\* ARABIC", "1"), BookmarkEnd, R(": Revenue")),
+            Para(BookmarkStart("_Ref1"), R("Figure "), Field("SEQ Figure \\* ARABIC", "2"), BookmarkEnd, R(": Revenue")) },
+        new object[] { "bookmark around a field, the word before it deleted",
+            Para(R("Alpha beta "), BookmarkStart("bk"), Field("PAGE", "1"), BookmarkEnd, R(" z")),
+            Para(R("Alpha "), BookmarkStart("bk"), Field("PAGE", "7"), BookmarkEnd, R(" z")) },
+        new object[] { "bookmark around the field's result",
+            Para(R("Alpha beta "), BeginChar, Instruction("PAGE"), SeparateChar, BookmarkStart("bk"), R("1"), BookmarkEnd, EndChar),
+            Para(R("Alpha "), BeginChar, Instruction("PAGE"), SeparateChar, BookmarkStart("bk"), R("7"), BookmarkEnd, EndChar) },
+        new object[] { "comment around a field",
+            Para(R("Alpha beta "), CommentStart, Field("PAGE", "1"), CommentEnd, CommentReference),
+            Para(R("Alpha "), CommentStart, Field("PAGE", "7"), CommentEnd, CommentReference) },
+        new object[] { "bookmark between a field's begin and its instruction",
+            Para(R("Alpha beta "), BeginChar, BookmarkStart("bk"), Instruction("PAGE"), SeparateChar, R("1"), EndChar, BookmarkEnd),
+            Para(R("Alpha "), BeginChar, BookmarkStart("bk"), Instruction("PAGE"), SeparateChar, R("7"), EndChar, BookmarkEnd) },
+        new object[] { "proofing marks inside a field's instruction",
+            Para(R("Alpha beta "), BeginChar, ProofErr("spellStart"), Instruction("PAGEREF"), ProofErr("spellEnd"), Instruction("x \\h"), SeparateChar, R("1"), EndChar),
+            Para(R("Alpha "), BeginChar, ProofErr("spellStart"), Instruction("PAGEREF"), ProofErr("spellEnd"), Instruction("x \\h"), SeparateChar, R("7"), EndChar) },
+    };
+
+    private static string ProofErr(string type) => $"<w:proofErr w:type=\"{type}\"/>";
+
+    [Theory]
+    [MemberData(nameof(MarkersBesideFieldCharacters))]
+    public void Compare_MarkerBesideAFieldCharacter_StaysOnItsSideInBothViews(string name, string left, string right)
+    {
+        var original = MarkerDoc(left);
+        var revised = MarkerDoc(right);
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        AssertShapesSurviveRoundTrip(original, revised, redline, name, markers: true);
+        AssertFieldCharacterCounts(original, revised, redline);
+        AssertFieldCharactersBare(redline, expectedCount: 3);
+    }
+
+    /// <summary>A consolidate with one reviewer draws the same pair: the field characters stay single and bare.</summary>
+    [Theory]
+    [MemberData(nameof(FieldResultChangedNextToAnEdit))]
+    public void Consolidate_OneReviewerChangesAFieldResultNextToAnEdit_KeepsEachSidesFieldCharacters(string name, string left, string right)
+    {
+        var original = MarkerDoc(left);
+        var revised = MarkerDoc(right);
+
+        var redline = DocxCompare.Consolidate(original,
+            [new DocxDiffReviewer { Document = revised, Author = "One" }]);
+
+        AssertShapesSurviveRoundTrip(original, revised, redline, name, markers: false);
+        AssertFieldCharactersBare(redline, expectedCount: 3);
+    }
+
+    /// <summary>A field nested in another field's code whose result changes (<c>{= {PAGE} - 1}</c>): the nested
+    /// field's old and new results stay a deletion and an insertion, so each view reads its own page number and
+    /// neither reads both.</summary>
+    [Theory]
+    [InlineData("nested result changed", "Page ")]
+    [InlineData("nested result changed, the word before the field deleted", "Page number ")]
+    public void Compare_FieldNestedInAFieldCode_KeepsEachViewsNestedResult(string name, string leftPrefix)
+    {
+        static string Formula(string prefix, string page, string result) => Para(R(prefix), BeginChar, Instruction("="),
+            Field("PAGE", page), Instruction("- 1"), SeparateChar, R(result), EndChar);
+        var original = MarkerDoc(Formula(leftPrefix, "5", "4"));
+        var revised = MarkerDoc(Formula("Page ", "6", "5"));
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        var accepted = Paragraphs(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray))[0];
+        var rejected = Paragraphs(DocxDiffOps.RejectRevisions(redline.DocumentByteArray))[0];
+        Assert.True(accepted.Contains("BEGIN [PAGE] SEPARATE \"6\" END", StringComparison.Ordinal), $"accept, {name}: {accepted}");
+        Assert.True(rejected.Contains("BEGIN [PAGE] SEPARATE \"5\" END", StringComparison.Ordinal), $"reject, {name}: {rejected}");
+    }
+
+    /// <summary>The same field result change next to a deleted word, in a header and in a footnote: those stories
+    /// are diffed by the same paragraph renderer.</summary>
+    [Theory]
+    [InlineData("header")]
+    [InlineData("footnote")]
+    public void Compare_FieldResultChangedNextToAnEditInAnotherStory_KeepsEachSidesFieldCharacters(string story)
+    {
+        WmlDocument Make(string paragraph) => story == "header"
+            ? IrTestDocuments.FromBodyAndHeaderXml(P("Body"), "<w:p>" + paragraph + "</w:p>")
+            : IrTestDocuments.FromBodyXmlWithFootnoteParagraph(Para(R("Body"), "<w:r><w:footnoteReference w:id=\"1\"/></w:r>"), paragraph);
+        var original = Make(R("Alpha beta ") + Field("PAGE", "1"));
+        var revised = Make(R("Alpha ") + Field("PAGE", "7"));
+
+        var redline = DocxCompare.Compare(original, revised).DocumentByteArray;
+
+        Assert.Equal(StoryParagraphs(revised.DocumentByteArray, story), StoryParagraphs(DocxDiffOps.AcceptRevisions(redline), story));
+        Assert.Equal(StoryParagraphs(original.DocumentByteArray, story), StoryParagraphs(DocxDiffOps.RejectRevisions(redline), story));
+        Assert.Equal(new[] { "\"Alpha beta \" BEGIN [PAGE] SEPARATE \"1\" END" }, StoryParagraphs(original.DocumentByteArray, story));
+    }
+
+    private static List<string> StoryParagraphs(byte[] bytes, string story)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var main = document.MainDocumentPart!;
+        var root = story == "header"
+            ? main.HeaderParts.Single().GetXDocument().Root!
+            : main.FootnotesPart!.GetXDocument().Root!.Elements(W.footnote).Single(f => f.Attribute(W.type) is null);
+        return ParagraphsOf(root, markers: false);
+    }
+
     // ---- assertions ---------------------------------------------------------------------------
 
     /// <summary>The redline adds no validation error, and accepting / rejecting it leaves each paragraph with the
@@ -479,10 +588,11 @@ public class BodyFieldSpanDiffTests
     /// <summary>Each body paragraph as the sequence of its field characters, instructions, tabs and text runs
     /// (adjacent text joined), in document order. With <paramref name="markers"/>, bookmark endpoints (by name),
     /// comment range endpoints and comment references are included too.</summary>
-    private static List<string> Paragraphs(byte[] bytes, bool markers = false)
+    private static List<string> Paragraphs(byte[] bytes, bool markers = false) => ParagraphsOf(Body(bytes), markers);
+
+    private static List<string> ParagraphsOf(XElement body, bool markers)
     {
         var result = new List<string>();
-        var body = Body(bytes);
         var bookmarkNames = body.Descendants(W.bookmarkStart)
             .ToDictionary(b => (string?)b.Attribute(W.id) ?? "", b => (string?)b.Attribute(W.name) ?? "");
         foreach (var p in body.Descendants(W.p))
