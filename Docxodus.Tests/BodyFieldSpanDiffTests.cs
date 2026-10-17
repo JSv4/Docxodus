@@ -460,12 +460,6 @@ public class BodyFieldSpanDiffTests
     /// its side of the character.</summary>
     public static IEnumerable<object[]> OneSidedMarkersBesideFieldCharacters() => new[]
     {
-        new object[] { "_GoBack before the field, original only",
-            Para(R("Alpha beta "), BookmarkStart("_GoBack"), BookmarkEnd, Field("PAGE", "1")),
-            Para(R("Alpha "), Field("PAGE", "7")) },
-        new object[] { "_GoBack after the field, revision only",
-            Para(R("Alpha beta "), Field("PAGE", "1"), R(" z")),
-            Para(R("Alpha "), Field("PAGE", "7"), BookmarkStart("_GoBack"), BookmarkEnd, R(" z")) },
         new object[] { "proofing mark before the field, original only",
             Para(R("Alpha beta "), ProofErr("gramStart"), Field("PAGE", "1")),
             Para(R("Alpha "), Field("PAGE", "7")) },
@@ -481,10 +475,64 @@ public class BodyFieldSpanDiffTests
         new object[] { "comment around the field, original only",
             Para(R("Alpha beta "), CommentStart, Field("PAGE", "1"), CommentEnd, CommentReference, R(" z")),
             Para(R("Alpha "), Field("PAGE", "7"), R(" z")) },
+        new object[] { "bookmark added around the field inside a contents entry's hyperlink",
+            Para(Link(R("Scope of work"), Tab, Field("PAGEREF _Toc1 \\h", "1"))),
+            Para(Link(R("Scope"), Tab, BookmarkStart("bk"), Field("PAGEREF _Toc1 \\h", "7"), BookmarkEnd)) },
+        new object[] { "bookmark removed from around the field inside a contents entry's hyperlink",
+            Para(Link(R("Scope of work"), Tab, BookmarkStart("bk"), Field("PAGEREF _Toc1 \\h", "1"), BookmarkEnd)),
+            Para(Link(R("Scope"), Tab, Field("PAGEREF _Toc1 \\h", "7"))) },
+        new object[] { "one-sided bookmark between two shared ones",
+            Para(R("Alpha beta "), Bm("a", "1"), Bm("b", "2"), Bm("c", "3"), Field("PAGE", "1"), BmE("1"), BmE("2"), BmE("3")),
+            Para(R("Alpha "), Bm("a", "1"), Bm("c", "3"), Field("PAGE", "7"), BmE("1"), BmE("3")) },
         new object[] { "rendered page break between a field's begin and its instruction",
             Para(R("Alpha beta "), BeginChar, "<w:r><w:lastRenderedPageBreak/></w:r>", Instruction("PAGE"), SeparateChar, R("1"), EndChar),
             Para(R("Alpha "), BeginChar, "<w:r><w:lastRenderedPageBreak/></w:r>", Instruction("PAGE"), SeparateChar, R("7"), EndChar) },
     };
+
+    /// <summary>Word's <c>_GoBack</c> bookmark (the last edit position, no content) beside a field character on
+    /// one side only: the field is still placed once, and the bookmark is dropped rather than drawn as a tracked
+    /// insertion or deletion of an empty bookmark, as the unchanged spans drop it.</summary>
+    [Theory]
+    [InlineData("before the field, original only", false)]
+    [InlineData("after the field, revision only", true)]
+    [InlineData("inside a contents entry's hyperlink, original only", false)]
+    public void Compare_OneSidedGoBackBesideAFieldCharacter_IsDroppedAndTheFieldKept(string name, bool revisionHasIt)
+    {
+        const string GoBack = "<w:bookmarkStart w:id=\"1\" w:name=\"_GoBack\"/><w:bookmarkEnd w:id=\"1\"/>";
+        string Paragraph(string text, string page, bool withGoBack) => name.Contains("hyperlink", StringComparison.Ordinal)
+            ? Para(Link(R(text), Tab, withGoBack ? GoBack : "", Field("PAGEREF _Toc1 \\h", page)))
+            : name.StartsWith("before", StringComparison.Ordinal)
+                ? Para(R(text), withGoBack ? GoBack : "", Field("PAGE", page))
+                : Para(R(text), Field("PAGE", page), withGoBack ? GoBack : "", R(" z"));
+        var original = MarkerDoc(Paragraph("Alpha beta ", "1", !revisionHasIt));
+        var revised = MarkerDoc(Paragraph("Alpha ", "7", revisionHasIt));
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        AssertShapesSurviveRoundTrip(original, revised, redline, name, markers: false);
+        AssertFieldCharacterCounts(original, revised, redline);
+        AssertFieldCharactersBare(redline, expectedCount: 3);
+        Assert.DoesNotContain(Body(redline.DocumentByteArray).Descendants(W.bookmarkStart), b => (string?)b.Attribute(W.name) == "_GoBack");
+    }
+
+    /// <summary>A rendered page break (a layout cache Word rewrites on save) inside a field code on one side only
+    /// is dropped with the field placed once: drawn as a deletion it would be lifted back out with the code.</summary>
+    [Fact]
+    public void Compare_OneSidedRenderedPageBreakInAFieldCode_IsDroppedAndTheFieldKept()
+    {
+        var original = MarkerDoc(Para(R("Alpha beta "), BeginChar, "<w:r><w:lastRenderedPageBreak/></w:r>", Instruction("PAGE"),
+            SeparateChar, R("1"), EndChar));
+        var revised = MarkerDoc(Para(R("Alpha "), BeginChar, Instruction("PAGE"), SeparateChar, R("7"), EndChar));
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        AssertShapesSurviveRoundTrip(original, revised, redline, "rendered page break", markers: false);
+        AssertFieldCharactersBare(redline, expectedCount: 3);
+        Assert.Empty(Body(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray)).Descendants(W.lastRenderedPageBreak));
+    }
+
+    private static string Link(params string[] content) =>
+        "<w:hyperlink w:anchor=\"_Toc1\" w:history=\"1\">" + string.Concat(content) + "</w:hyperlink>";
 
     [Theory]
     [MemberData(nameof(OneSidedMarkersBesideFieldCharacters))]
@@ -501,6 +549,8 @@ public class BodyFieldSpanDiffTests
     }
 
     private static string ProofErr(string type) => $"<w:proofErr w:type=\"{type}\"/>";
+    private static string Bm(string name, string id) => $"<w:bookmarkStart w:id=\"{id}\" w:name=\"{name}\"/>";
+    private static string BmE(string id) => $"<w:bookmarkEnd w:id=\"{id}\"/>";
 
     [Theory]
     [MemberData(nameof(MarkersBesideFieldCharacters))]
@@ -529,6 +579,24 @@ public class BodyFieldSpanDiffTests
 
         AssertShapesSurviveRoundTrip(original, revised, redline, name, markers: false);
         AssertFieldCharactersBare(redline, expectedCount: 3);
+    }
+
+    /// <summary>A field nested in another field's result (<c>{REF x: p {PAGE}}</c>) whose result changes next to a
+    /// deleted word: the nested field's code is one token the unchanged span before it keeps in place, so the outer
+    /// field is still placed and each character appears once in both views.</summary>
+    [Fact]
+    public void Compare_FieldNestedInAFieldResult_KeepsEachSidesFieldCharacters()
+    {
+        static string Nested(string prefix, string page) => Para(R(prefix), BeginChar, Instruction("REF x \\h"), SeparateChar,
+            R("p "), Field("PAGE", page), EndChar);
+        var original = MarkerDoc(Nested("Alpha beta ", "1"));
+        var revised = MarkerDoc(Nested("Alpha ", "7"));
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        AssertShapesSurviveRoundTrip(original, revised, redline, "field nested in a field's result", markers: false);
+        AssertFieldCharacterCounts(original, revised, redline);
+        AssertFieldCharactersBare(redline, expectedCount: 6);
     }
 
     /// <summary>A field nested in another field's code whose result changes (<c>{= {PAGE} - 1}</c>): the nested
