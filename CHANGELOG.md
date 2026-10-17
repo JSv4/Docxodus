@@ -428,6 +428,14 @@ All notable changes to this project will be documented in this file.
   or starts with a page break, one with a `thead`, `tfoot` or several row groups, or one holding a
   nested table or a footnote; and header rows whose vertical merge runs on into the body rows are
   not repeated.
+- A keep-with-next heading is no longer stranded at a page's foot by a footnote continuation still
+  to be placed (issue #1180). To decide whether the heading and its paragraph could move to the next
+  page together, the paginator counted the whole continuation against that page, and the chain's
+  notes in full. The move was refused, the heading fitted where it was and its paragraph opened the
+  next page. Word reference PDFs show the carried note either leaving the chain its room on the next
+  page or keeping that page, the chain opening the page after; so the move now depends only on the
+  chain fitting a page with room for its notes to start, and a moved chain is judged again beside
+  the next page's carried note, moving on once more when that note keeps the page.
 - Paginated footnotes may now take the whole page, as Word reference PDFs show (issue #1178). The
   paginator capped the note area at 60% of the body band while body text remained, and at 95% once
   it was placed (the share LibreOffice 25.8.7.3 allows). Word holds no room back: a note takes

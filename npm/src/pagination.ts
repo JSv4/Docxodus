@@ -4433,10 +4433,13 @@ export class PaginationEngine {
               blockDimensions.contentWidth,
               currentContinuation
             );
-            additionalChainFootnoteHeight = Math.max(
+            // A note need only start beside the line that cites it; the rest may run on. The
+            // chain is judged by the room its notes need to start, here and on a fresh page alike,
+            // so a chain that fits a fresh page also fits once it gets there.
+            additionalChainFootnoteHeight = Math.min(MIN_FOOTNOTE_START_PT, Math.max(
               0,
               totalChainFootnoteHeight - currentFootnoteHeight
-            );
+            ));
           }
 
           const currentChainHeight =
@@ -4466,20 +4469,25 @@ export class PaginationEngine {
               true,
               pageInSection(block.sectionIndex, pageNumber + 1)
             );
-            // finishPage transfers this continuation to the new page's
-            // currentContinuation state, so include it in the destination
-            // page's footnote reservation before deciding to move the chain.
-            const freshChainFootnoteHeight = this.measureFootnotesHeight(
+            // Whether the chain can fit a page at all, its own notes included. A carried note on
+            // the next page does not count against it: Word reference PDFs show that note either
+            // leaving the chain its room or keeping the page, the chain opening the page after
+            // (issue #1180). Counting the note refused the move, and the chain's first block was
+            // left alone at this page's foot.
+            const freshChainFootnoteHeight = Math.min(MIN_FOOTNOTE_START_PT, this.measureFootnotesHeight(
               newChainFootnoteIds,
               blockDimensions.contentWidth,
-              nextPageContinuation
-            );
+            ));
 
             if (
               freshChainBodyHeight + freshChainFootnoteHeight <=
               nextPageBands.bodyHeight
             ) {
+              // Start the chain over on the fresh page, so that page's carried note is
+              // partitioned first and the chain is judged again beside it.
               finishPage(block.sectionIndex);
+              i--;
+              continue;
             }
           }
         }
