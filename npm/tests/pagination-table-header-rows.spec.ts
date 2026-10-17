@@ -10,15 +10,15 @@ import { generateExactRowDocx, type ExactRowOptions } from './docx-exact-row-fix
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-async function paginate(page: Page, options: ExactRowOptions) {
+async function paginate(page: Page, options: ExactRowOptions, commentRenderMode = 0) {
   await page.goto('/test-harness.html');
   await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 30000 });
   await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
-  return page.evaluate((input) => {
+  return page.evaluate(({ input, commentRenderMode }) => {
     const D = (window as any).Docxodus;
     const bin = new Uint8Array(input);
     const html: string = D.DocumentConverter.ConvertDocxToHtmlComplete(
-      bin, 'Document', 'docx-', false, '', 0, 'comment-',
+      bin, 'Document', 'docx-', false, '', commentRenderMode, 'comment-',
       /* paginationMode */ 1, 1, 'page-', false, 0, 'annot-',
       false, false, false, false, false, false, null, /* stampAnchors */ true,
     );
@@ -58,8 +58,12 @@ async function paginate(page: Page, options: ExactRowOptions) {
         .filter((fragment: any) => fragment.anchorId === headerAnchor)
         .map((fragment: any) => fragment.pageNumber),
       registration,
+      marginComments: Array.from(container.querySelectorAll<HTMLElement>('.page-box')).map((box) =>
+        box.querySelectorAll('.page-comment-margin [data-comment-id]').length),
+      commentMarks: Array.from(container.querySelectorAll<HTMLElement>('.page-box')).map((box) =>
+        box.querySelectorAll('.page-content a[id^="comment-ref-"]').length),
     };
-  }, Array.from(generateExactRowDocx(options)));
+  }, { input: Array.from(generateExactRowDocx(options)), commentRenderMode });
 }
 
 for (const rule of ['exact', 'atLeast'] as const) {
@@ -88,4 +92,17 @@ test('a table without a header row does not repeat its first row', async ({ page
   expect(result.pages.length).toBeGreaterThan(1);
   expect(result.pages.flat().filter((text) => text.startsWith('Alder'))).toHaveLength(1);
   expect(result.pages[1][0]).toMatch(/^Row\d\d ledger entry\.$/);
+});
+
+test('a comment in a header row is shown once, on the page that holds the row itself', async ({ page }) => {
+  // Margin comments: the copies that open later pages carry neither the comment nor its mark.
+  const result = await paginate(page, { headerRule: 'exact', bodyRows: 70, headerComment: true }, 2);
+
+  expect(result.pages.length).toBeGreaterThan(1);
+  // The first page's row carries the comment's mark ("Heading Ledger[7]").
+  for (const rows of result.pages) expect(rows[0]).toMatch(/^Heading Ledger/);
+  const once = result.pages.map((_, index) => (index === 0 ? 1 : 0));
+  expect(result.commentMarks).toEqual(once);
+  expect(result.marginComments.map((count) => Math.min(count, 1))).toEqual(once);
+  expect(result.registration?.success, JSON.stringify(result.registration)).toBe(true);
 });

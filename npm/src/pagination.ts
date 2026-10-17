@@ -2016,11 +2016,11 @@ export class PaginationEngine {
 
     const bodyClone = body.cloneNode(false) as HTMLTableSectionElement;
     for (const row of repeatedRows) {
-      // A presentation copy: the original row stays the editor anchor and any bookmark's target.
+      // A presentation copy: the original row stays the editor anchor, the bookmark target and
+      // the comment, so a comment in a header row is shown once, on the first page.
       const repeat = row.cloneNode(true) as HTMLTableRowElement;
+      this.makePresentationCopyInert(repeat, true);
       repeat.dataset.docxRepeatedHeaderRow = "true";
-      this.makeClonedStoryInert(repeat);
-      for (const element of [repeat, ...Array.from(repeat.querySelectorAll("[id]"))]) element.removeAttribute("id");
       bodyClone.appendChild(repeat);
     }
     for (const row of rows) {
@@ -3047,15 +3047,34 @@ export class PaginationEngine {
     }
 
     const clone = source.cloneNode(true) as HTMLElement;
-    for (const element of [clone, ...Array.from(clone.querySelectorAll<HTMLElement>("*"))]) {
+    this.makePresentationCopyInert(clone, false);
+    container.appendChild(clone);
+  }
+
+  /**
+   * Strip every identity from a copy the paginator paints again: element ids and anchor names,
+   * editor anchors, note, comment and annotation ids, and internal links, so the copy is not a
+   * second bookmark target, comment, note citation or annotation and cannot be edited.
+   * `keepSourceAnchors` keeps the canonical source identity, for a copy (a repeated table header
+   * row) that the PageMap maps as one more fragment of its source.
+   */
+  private makePresentationCopyInert(root: HTMLElement, keepSourceAnchors: boolean): void {
+    // A comment's reference mark (`[1]`) is the comment's presentation, not document text: the
+    // original shows it once. The converter names every mark `comment-ref-<id>`.
+    for (const mark of Array.from(root.querySelectorAll('a[id^="comment-ref-"]'))) mark.remove();
+    for (const element of [root, ...Array.from(root.querySelectorAll<HTMLElement>("*"))]) {
       element.removeAttribute("id");
       element.removeAttribute("data-anchor");
       element.removeAttribute("data-committed-text");
-      element.removeAttribute("data-source-anchor-id");
-      element.removeAttribute("data-page-fragment-id");
-      element.removeAttribute("data-fragment-index");
+      // Only the copied content's own identity is kept: an inline comment's story is not copied.
+      if (!keepSourceAnchors || this.storyForCanonicalAnchor(element.dataset.sourceAnchorId ?? "") === "comment") {
+        element.removeAttribute("data-source-anchor-id");
+        element.removeAttribute("data-page-fragment-id");
+        element.removeAttribute("data-fragment-index");
+      }
       element.removeAttribute("data-footnote-id");
       element.removeAttribute("data-comment-id");
+      element.removeAttribute("data-annotation-id");
       element.removeAttribute("name");
       if (element instanceof this.view.HTMLAnchorElement
           && element.getAttribute("href")?.startsWith("#")) {
@@ -3063,7 +3082,6 @@ export class PaginationEngine {
       }
       element.setAttribute("contenteditable", "false");
     }
-    container.appendChild(clone);
   }
 
   /** Parses the hidden source notes used to render paginated margin comments. */

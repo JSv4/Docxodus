@@ -38,6 +38,23 @@
 
 /** The converter's clip box around an exact-height row cell's content (`ClipExactRowCells`). */
 export const EXACT_ROW_CELL = 'div[data-docx-exact-row-cell="true"]';
+/**
+ * The vertical span, in client coordinates, that every exact-height row cell enclosing `element`
+ * shows, or null when none does. An exact row clips by its height only: Word draws what lies
+ * beside the text, such as a paragraph's left and right borders in the cell margin, in full.
+ */
+export function exactRowClipSpan(element: Element): { top: number; bottom: number } | null {
+  let top = -Infinity;
+  let bottom = Infinity;
+  for (let clip = element.parentElement?.closest(EXACT_ROW_CELL); clip;
+    clip = clip.parentElement?.closest(EXACT_ROW_CELL)) {
+    const box = clip.getBoundingClientRect();
+    top = Math.max(top, box.top);
+    bottom = Math.min(bottom, box.bottom);
+  }
+  return top === -Infinity ? null : { top, bottom };
+}
+
 /** Marks the SVG root that now holds an exact-row cell's clipped content. */
 const EXACT_ROW_TEXT_ATTRIBUTE = 'data-docx-exact-row-text';
 const SVG_NS = 'http://www.w3.org/2000/svg';

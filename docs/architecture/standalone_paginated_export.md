@@ -500,10 +500,12 @@ the export swaps those CSS borders for padding of the declared width, keeping th
 place; after the page tree is final it draws the sides as SVG rectangles or dashed lines (keeping the
 dash rhythm of the one-pixel CSS border) from each page box's origin, which the printer does not snap.
 Those shapes sit over the page rather than inside the paragraph's ancestors, so they do not inherit
-the clips the paragraph is drawn under. Each side is therefore trimmed to the part of the paragraph
-the page shows, as `measureRenderedSource` reports it (the same visible box the PageMap uses), and a
-side wholly outside it is not drawn: a border of content an exact-height row hides is hidden with it
-(issue #1171). A paragraph nothing clips is painted exactly as before.
+the clips the paragraph is drawn under. Each side is therefore trimmed to the vertical span of the
+exact-height row cells around the paragraph (`exactRowClipSpan` in `exact-row-text.ts`), and a side
+wholly outside it is not drawn: a border of content an exact row hides is hidden with it (issue
+#1171). Only the row's height clips: Word draws left and right borders in the cell margin, beside
+the text, so the cell's horizontal overflow clip does not trim them. A paragraph no exact row cuts
+is painted exactly as before.
 
 ### Text clipped by exact-height rows (issue #1140)
 

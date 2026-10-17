@@ -121,3 +121,44 @@ test('a paragraph border the exact-height row hides is clipped with the row (iss
   expect([...redRows].some(y => y >= row.top && y < row.bottom), JSON.stringify({ row, red: [...redRows] })).toBe(true);
   expect([...redRows].filter(y => y < row.top - 1 || y >= row.bottom + 1)).toEqual([]);
 });
+
+/** The overlay shapes the export paints for the boxed (green) paragraph, and its exact row's span. */
+async function boxShapes(page: import('@playwright/test').Page, html: string) {
+  await page.setViewportSize({ width: 1000, height: 1200 });
+  await page.setContent(html);
+  return page.evaluate(() => {
+    const box = document.querySelector('.page-box')!.getBoundingClientRect();
+    const row = document.querySelector('.page-box tr')!.getBoundingClientRect();
+    const text = document.querySelector('[data-docx-exact-row-cell] p, [data-docx-exact-row-cell]')!.getBoundingClientRect();
+    return {
+      row: { top: row.top - box.top, bottom: row.bottom - box.top },
+      textLeft: text.left - box.left,
+      shapes: Array.from(document.querySelectorAll('.page-box > svg > rect'))
+        .filter(shape => shape.getAttribute('fill') === 'rgb(0, 170, 0)')
+        .map(shape => ({ x: Number(shape.getAttribute('x')), y: Number(shape.getAttribute('y')),
+          width: Number(shape.getAttribute('width')), height: Number(shape.getAttribute('height')) })),
+    };
+  });
+}
+
+test('an exact row clips paragraph borders by its height only, not beside the text (issue #1171)', async ({ browser, page }) => {
+  test.setTimeout(120_000);
+  // The row holds the boxed paragraph whole: all four sides show, the left one in the cell margin.
+  const fits = await renderDocxArtifacts(generateExactRowDocx({ box: true, firstRowTwips: 900 }),
+    { browser, ...options, outputs: ['html'] });
+  const whole = await boxShapes(page, fits.html!);
+  expect(whole.shapes).toHaveLength(4);
+  expect(Math.min(...whole.shapes.map(shape => shape.x))).toBeLessThan(whole.textLeft);
+
+  // A one-line row cuts the box: its bottom side is hidden, and the sides stop at the row's foot.
+  const cut = await renderDocxArtifacts(generateExactRowDocx({ box: true }), { browser, ...options, outputs: ['html'] });
+  const trimmed = await boxShapes(page, cut.html!);
+  expect(trimmed.shapes).toHaveLength(3);
+  for (const shape of trimmed.shapes) {
+    expect(shape.y).toBeGreaterThanOrEqual(trimmed.row.top - 1);
+    expect(shape.y + shape.height).toBeLessThanOrEqual(trimmed.row.bottom + 1);
+  }
+  const sides = trimmed.shapes.filter(shape => shape.height > shape.width);
+  expect(sides).toHaveLength(2);
+  expect(Math.min(...sides.map(shape => shape.x))).toBeLessThan(trimmed.textLeft);
+});

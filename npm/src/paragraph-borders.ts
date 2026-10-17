@@ -11,12 +11,13 @@
  * does not snap. Omitted-size borders and other border styles keep their CSS rendering.
  *
  * The shapes are drawn over the page, outside the paragraph's own ancestors, so they do not inherit
- * the clips the paragraph sits under. Each side is trimmed to what the page shows of the paragraph,
- * as `measureRenderedSource` reports it: an exact-height table row hides the borders of the content
- * it hides, as Word does (issue #1171).
+ * the clips the paragraph sits under. An exact-height table row hides the borders of the content it
+ * hides, as Word does (issue #1171), so each side is trimmed to the vertical span of the exact-row
+ * cells around the paragraph. The row clips by height only: a left or right border in the cell
+ * margin, beside the text, is drawn in full.
  */
 
-import { measureRenderedSource } from "./pagination.js";
+import { exactRowClipSpan } from "./exact-row-text.js";
 
 const EXACT = "data-docx-exact-border";
 const PAINT = "data-docx-border-paint";
@@ -70,8 +71,6 @@ export function prepareParagraphBorders(root: HTMLElement): number {
 /** Paint prepared borders on the final page tree. Layout and the PageMap do not change here. */
 export function paintParagraphBorders(container: HTMLElement, pageBoxSelector = ".page-box"): number {
   const document = container.ownerDocument;
-  const view = document.defaultView;
-  if (!view) return 0;
   let painted = 0;
   const overlays = new Map<HTMLElement, SVGSVGElement>();
   const overlayFor = (page: HTMLElement): SVGSVGElement => {
@@ -104,36 +103,27 @@ export function paintParagraphBorders(container: HTMLElement, pageBoxSelector = 
     const top = (box.top - pageRect.top) / scale;
     const width = box.width / scale;
     const height = box.height / scale;
-    // The part of the paragraph the page shows, in the overlay's coordinates; null when all of it shows.
-    const { visible } = measureRenderedSource(view, element, page, pageRect);
-    const clip = visible.left <= box.left && visible.top <= box.top
-      && visible.right >= box.right && visible.bottom >= box.bottom
+    // The vertical span the paragraph's exact rows show, in the overlay's coordinates; null when
+    // no exact row cuts it.
+    const span = exactRowClipSpan(element);
+    const clip = !span || (span.top <= box.top && span.bottom >= box.bottom)
       ? null
-      : {
-        left: (visible.left - pageRect.left) / scale,
-        top: (visible.top - pageRect.top) / scale,
-        right: (visible.right - pageRect.left) / scale,
-        bottom: (visible.bottom - pageRect.top) / scale,
-      };
+      : { top: (span.top - pageRect.top) / scale, bottom: (span.bottom - pageRect.top) / scale };
     let paintedSides = 0;
     for (const { side, style, color, width: stroke } of sides) {
       const horizontal = side === "top" || side === "bottom";
-      let x = side === "right" ? left + width - stroke : left;
+      const x = side === "right" ? left + width - stroke : left;
       let y = side === "bottom" ? top + height - stroke : top;
-      let w = horizontal ? width : stroke;
+      const w = horizontal ? width : stroke;
       let h = horizontal ? stroke : height;
-      // How far the trimmed side starts into the untrimmed one, so a dashed side keeps its rhythm.
+      // How far a trimmed side starts into the untrimmed one, so a dashed side keeps its rhythm.
       let phase = 0;
       if (clip) {
-        const x0 = Math.max(x, clip.left);
         const y0 = Math.max(y, clip.top);
-        const x1 = Math.min(x + w, clip.right);
         const y1 = Math.min(y + h, clip.bottom);
-        if (!(x1 > x0) || !(y1 > y0)) continue;
-        phase = horizontal ? x0 - x : y0 - y;
-        x = x0;
+        if (!(y1 > y0)) continue;
+        if (!horizontal) phase = y0 - y;
         y = y0;
-        w = x1 - x0;
         h = y1 - y0;
       }
       const svg = overlayFor(page);
