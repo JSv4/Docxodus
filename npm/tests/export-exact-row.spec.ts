@@ -61,3 +61,14 @@ for (const tableBorders of [true, false]) {
     expect(text).not.toContain('Alder');
   });
 }
+
+test('a table made only of a borderless zero-height exact row exports (issue #1168)', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const actual = await renderDocxArtifacts(
+    generateExactRowDocx({ bodyRows: 1, firstRowTwips: 0, tableBorders: false }), { browser, ...options });
+
+  expect(actual.pageCount).toBe(1);
+  const text = (await pageTexts(actual.pdf!)).join(' ');
+  expect(text).toContain('Closing');
+  expect(text).not.toContain('Alder');
+});

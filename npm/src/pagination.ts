@@ -546,11 +546,25 @@ export const HOSTS_PROMOTED_DRAWING_ATTRIBUTE = "data-docx-hosts-promoted-drawin
  */
 function clippedAwayByExactRow(element: HTMLElement, rect: DOMRect): boolean {
   if (!(rect.width > 0 && rect.height > 0)) {
-    // A row whose exact height is no more than its borders and padding, and its cells, have no
-    // height of their own: the row shows nothing, and its clip box has no height either.
-    if (!["tr", "td", "th"].includes(element.localName)) return false;
-    const clip = element.querySelector<HTMLElement>(EXACT_ROW_CELL);
-    return clip !== null && !(clip.getBoundingClientRect().height > 0);
+    // A row whose exact height is no more than its borders and padding, its cells, and a table
+    // made only of such rows have no height of their own: they show nothing, and the rows' clip
+    // boxes have no height either. Only the element's own cells and rows count, not a nested
+    // table's.
+    const zeroHeightClip = (cell: Element) => {
+      const clip = cell.querySelector(`:scope > ${EXACT_ROW_CELL}`);
+      return clip !== null && !(clip.getBoundingClientRect().height > 0);
+    };
+    const zeroHeightRow = (row: HTMLTableRowElement) => {
+      const cells = Array.from(row.cells);
+      return cells.length > 0 && cells.some(zeroHeightClip);
+    };
+    if (element.localName === "tr") return zeroHeightRow(element as HTMLTableRowElement);
+    if (element.localName === "td" || element.localName === "th") return zeroHeightClip(element);
+    if (element.localName === "table") {
+      const rows = Array.from((element as HTMLTableElement).rows);
+      return rows.length > 0 && rows.every(zeroHeightRow);
+    }
+    return false;
   }
   // Every enclosing exact row clips: a nested table's row can itself lie below its outer row.
   for (let clip = element.parentElement?.closest<HTMLElement>(EXACT_ROW_CELL); clip;

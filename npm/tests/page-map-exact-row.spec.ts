@@ -119,6 +119,36 @@ test('a paragraph a nested exact row lies below its outer exact row has no fragm
   expect(result.mapped).not.toContain('p:body:inner');
 });
 
+/** A borderless table whose rows are `rows`; `zeroExact` rows carry the converter's zero-height clip. */
+function zeroTable(id: string, rows: Array<'zeroExact' | 'empty'>): string {
+  const row = (kind: string, index: number) => `<tr data-source-anchor-id="tr:body:${id}${index}">`
+    + `<td data-source-anchor-id="tc:body:${id}${index}" style="padding:0">`
+    + (kind === 'zeroExact'
+      ? `<div data-docx-exact-row-cell="true" style="height:0;overflow:hidden">`
+        + `<p data-source-anchor-id="p:body:${id}${index}" style="margin:0">hidden</p></div>`
+      : '')
+    + '</td></tr>';
+  return `<table data-source-anchor-id="tbl:body:${id}" style="border-collapse:collapse;border-spacing:0">`
+    + `${rows.map(row).join('')}</table>`;
+}
+
+test('a table made only of zero-height exact rows has no fragment either', async ({ page }) => {
+  const result = await paginateSynthetic(page, section(
+    `${zeroTable('z', ['zeroExact'])}<p data-source-anchor-id="p:body:after" style="margin:0">after</p>`));
+
+  expect(result.error).toBe('');
+  expect(result.mapped).toEqual(['p:body:after']);
+});
+
+for (const [name, rows] of [['no exact row', ['empty']], ['an exact row beside an empty one', ['zeroExact', 'empty']]] as const) {
+  test(`a table of no height with ${name} still fails the map`, async ({ page }) => {
+    const result = await paginateSynthetic(page, section(
+      `${zeroTable('g', [...rows])}<p data-source-anchor-id="p:body:after" style="margin:0">after</p>`));
+
+    expect(result.error).toContain('source anchor tbl:body:g has no measurable fragment');
+  });
+}
+
 test('content any other clip hides whole still fails the map', async ({ page }) => {
   const result = await paginateSynthetic(page, section(`
     <div data-source-anchor-id="tbl:body:box" style="height:12pt;overflow:hidden;margin:0">

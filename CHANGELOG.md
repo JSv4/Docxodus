@@ -347,7 +347,7 @@ All notable changes to this project will be documented in this file.
   issue #1140 does for a cut line, except where a header or footer band, or the body band, also
   clips the row: that clip can still cut the hidden text's glyphs into fragments. A row no taller
   than its borders and padding, which shows none of its text, no longer fails the export either,
-  with or without borders.
+  with or without borders, nor does a table made only of such rows.
 
 ## [13.0.0] - 2026-10-12
 
