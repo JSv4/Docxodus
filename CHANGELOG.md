@@ -251,6 +251,13 @@ All notable changes to this project will be documented in this file.
   unit in the CSS (`in` to `pt`) but not size, beyond the removed rounding. A tab advance that ran out
   of tab stops now falls back to half an inch, as intended, instead of 720 inches. The page-geometry
   `data-*` attributes the paginator reads still carry 0.1pt.
+- The page-geometry attributes the paginated view lays every page out from now carry exact points
+  (issue #1164). `data-page-width`, `data-page-height`, `data-content-*`, `data-margin-*`,
+  `data-header-height`, `data-footer-height` and `data-col-gap` were written to one decimal, so a
+  1417-twip margin (70.85pt) arrived as 70.8pt and each page's text column sat up to 0.05pt off what
+  the document declares. They now carry the same exact value as the `@page` rules (`70.85`, `453.55`;
+  a margin authored in millimetres keeps four decimals, `70.8661`), and keep the one-decimal form for
+  whole points (`612.0`).
 - Consecutive bordered paragraphs that mix text directions no longer share one border box when their
   start and end indents differ (issue #1155). The converter joined paragraphs with the same borders
   and indents into one box, but a right-to-left paragraph mirrors its box (its start indent is on the

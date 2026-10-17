@@ -6923,16 +6923,18 @@ namespace Docxodus
 
                     if (dims != null)
                     {
-                        div.Add(new XAttribute("data-page-width", dims.PageWidthPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                        div.Add(new XAttribute("data-page-height", dims.PageHeightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                        div.Add(new XAttribute("data-content-width", dims.ContentWidthPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                        div.Add(new XAttribute("data-content-height", dims.ContentHeightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                        div.Add(new XAttribute("data-margin-top", dims.MarginTopPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                        div.Add(new XAttribute("data-margin-right", dims.MarginRightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                        div.Add(new XAttribute("data-margin-bottom", dims.MarginBottomPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                        div.Add(new XAttribute("data-margin-left", dims.MarginLeftPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                        div.Add(new XAttribute("data-header-height", dims.HeaderPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                        div.Add(new XAttribute("data-footer-height", dims.FooterPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        // Exact points (issue #1164): one decimal turned a 1417-twip margin (70.85pt) into 70.8 or
+                        // 70.9pt, and the paginator lays every page out from these values.
+                        div.Add(new XAttribute("data-page-width", PageGeometryValue(dims.PageWidthPt)));
+                        div.Add(new XAttribute("data-page-height", PageGeometryValue(dims.PageHeightPt)));
+                        div.Add(new XAttribute("data-content-width", PageGeometryValue(dims.ContentWidthPt)));
+                        div.Add(new XAttribute("data-content-height", PageGeometryValue(dims.ContentHeightPt)));
+                        div.Add(new XAttribute("data-margin-top", PageGeometryValue(dims.MarginTopPt)));
+                        div.Add(new XAttribute("data-margin-right", PageGeometryValue(dims.MarginRightPt)));
+                        div.Add(new XAttribute("data-margin-bottom", PageGeometryValue(dims.MarginBottomPt)));
+                        div.Add(new XAttribute("data-margin-left", PageGeometryValue(dims.MarginLeftPt)));
+                        div.Add(new XAttribute("data-header-height", PageGeometryValue(dims.HeaderPt)));
+                        div.Add(new XAttribute("data-footer-height", PageGeometryValue(dims.FooterPt)));
                     }
 
                     // The section's start type (w:type). The paginated view needs it to know a
@@ -6957,7 +6959,7 @@ namespace Docxodus
                     {
                         // colsNum > 1 above is only possible when cols is non-null.
                         var colGapPt = ((int?)cols!.Attribute(W.space) ?? 720) / 20m;
-                        var colGap = colGapPt.ToString("F1", NumberFormatInfo.InvariantInfo);
+                        var colGap = PageGeometryValue(colGapPt);
                         div.Add(new XAttribute("data-cols", colsNum));
                         div.Add(new XAttribute("data-col-gap", colGap));
                         div.Add(new XAttribute("style",
@@ -10245,6 +10247,15 @@ namespace Docxodus
         /// <summary>A page dimension or margin, measured in points, as CSS points. Page geometry keeps twip
         /// precision: hundredths of an inch made A4 about a quarter point short (issue #1153).</summary>
         private static string PageLengthCss(double points) => PointsCss((decimal)points);
+
+        /// <summary>A page dimension or margin, measured in points, as a section's page-geometry data attribute
+        /// (issue #1164): the exact points <see cref="PageLengthCss"/> writes, at the same four decimals (a
+        /// twip value needs two, a margin authored in another unit can need more), as a bare number that keeps
+        /// at least one decimal (<c>612.0</c>, <c>70.85</c>), the attribute's established form.</summary>
+        private static string PageGeometryValue(double points) => PageGeometryValue((decimal)points);
+
+        private static string PageGeometryValue(decimal points) =>
+            Math.Round(points, 4).ToString("0.0###", NumberFormatInfo.InvariantInfo);
 
         /// <summary>
         /// The <c>pt:TabWidth</c> value for an advance of <paramref name="twips"/>, in inches. Six decimals keep
