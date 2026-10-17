@@ -213,6 +213,27 @@ public class BodyFieldSpanDiffTests
         AssertFieldsSurviveRoundTrip(original, revised, DocxCompare.Compare(original, revised), name);
     }
 
+    /// <summary>Word's table of contents with its first entry's page number changed (issue #1165): that entry also
+    /// opens the table-of-contents field. The PAGEREF field's characters stay unchanged in the redline.</summary>
+    [Theory]
+    [InlineData(FieldEnd.OwnParagraph)]
+    [InlineData(FieldEnd.LastEntry)]
+    public void Compare_WordAuthoredContentsFirstEntryPageChanged_KeepsTheEntrysFieldCharactersUnchanged(FieldEnd end)
+    {
+        static XElement PageNumber(XElement entry) => entry.Descendants(W.hyperlink).Single().Elements(W.r)
+            .Last(r => r.Element(W.t) is { } t && t.Value.Trim().Length > 0).Element(W.t)!;
+        var original = WordContentsAtBodyLevel(end);
+        var revised = WordContentsAtBodyLevel(end, entries => PageNumber(entries[0]).Value = "99");
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        AssertFieldsSurviveRoundTrip(original, revised, redline, "first entry page changed");
+        AssertFieldCharacterCounts(original, revised, redline);
+        var entry = Body(redline.DocumentByteArray).Elements(W.p).First(p => p.Descendants(W.instrText).Any(i => i.Value.Contains("PAGEREF", StringComparison.Ordinal)));
+        Assert.Contains(entry.Descendants(W.ins).Descendants(W.t), t => t.Value == "99");
+        Assert.All(entry.Descendants(W.fldChar), f => Assert.DoesNotContain(f.Ancestors(), a => a.Name == W.ins || a.Name == W.del));
+    }
+
     /// <summary>Removes an entry paragraph; a field character that closed the table of contents inside it moves to
     /// the end of the entry before it, which is what Word does when the last entry is deleted.</summary>
     private static void RemoveEntryKeepingFieldEnd(XElement entry, XElement previous)
@@ -329,6 +350,84 @@ public class BodyFieldSpanDiffTests
         AssertShapesSurviveRoundTrip(original, revised, DocxCompare.Compare(original, revised), name, markers: false);
     }
 
+    // ---- field characters both documents carry (issue #1165) ---------------------------------
+
+    private const string BeginChar = "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>";
+    private const string SeparateChar = "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>";
+    private const string EndChar = "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+    private static string Instruction(string instruction) =>
+        $"<w:r><w:instrText xml:space=\"preserve\"> {instruction} </w:instrText></w:r>";
+
+    /// <summary>A field's cached result changes next to an edit that ends or starts where the field's characters
+    /// sit. The original's and the revision's copies of each character are one character both views keep.</summary>
+    public static IEnumerable<object[]> FieldResultChangedNextToAnEdit() => new[]
+    {
+        new object[] { "result changed, the word before it deleted",
+            Para(R("Alpha beta "), Field("PAGE", "1")), Para(R("Alpha "), Field("PAGE", "7")) },
+        new object[] { "PAGEREF result changed as the paragraph's last content",
+            Para(R("Alpha "), Field("PAGEREF x \\h", "1")), Para(R("Alpha "), Field("PAGEREF x \\h", "7")) },
+        new object[] { "result changed after a tab",
+            Para(R("Alpha"), Tab, Field("PAGEREF x \\h", "1")), Para(R("Alpha"), Tab, Field("PAGEREF x \\h", "7")) },
+    };
+
+    [Theory]
+    [MemberData(nameof(FieldResultChangedNextToAnEdit))]
+    public void Compare_FieldResultChangedNextToAnEdit_EmitsEachFieldCharacterOnceAndBare(string name, string left, string right)
+    {
+        var original = MarkerDoc(left);
+        var revised = MarkerDoc(right);
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        AssertShapesSurviveRoundTrip(original, revised, redline, name, markers: false);
+        AssertFieldCharacterCounts(original, revised, redline);
+        AssertFieldCharactersBare(redline, expectedCount: 3);
+    }
+
+    /// <summary>A table-of-contents entry whose page number changes: the PAGEREF's end character sits where both
+    /// the deleted and the inserted number end, and the entry also opens the table-of-contents field.</summary>
+    [Theory]
+    [InlineData(FieldEnd.OwnParagraph, "first entry page changed")]
+    [InlineData(FieldEnd.LastEntry, "first entry page changed")]
+    [InlineData(FieldEnd.OwnParagraph, "first entry text and page changed")]
+    [InlineData(FieldEnd.LastEntry, "first entry text and page changed")]
+    public void Compare_ContentsEntryPageNumberChanged_AcceptAndRejectKeepEachSidesFieldCharacters(FieldEnd end, string name)
+    {
+        string[] three = { "Scope", "Term", "Fees" };
+        var original = Doc(end, three);
+        var revised = Doc(end, name == "first entry page changed"
+            ? new[] { "Scope|7", "Term", "Fees" }
+            : new[] { "Scope and purpose|7", "Term", "Fees" });
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        AssertFieldsSurviveRoundTrip(original, revised, redline, name);
+        AssertFieldCharacterCounts(original, revised, redline);
+    }
+
+    /// <summary>A field opens in the first paragraph and closes in the second, which is edited just before the
+    /// field's end character. The end character stays in the second paragraph in both views, once.</summary>
+    [Theory]
+    [InlineData("text appended before the end", "Second line", "Second line today")]
+    [InlineData("text trimmed before the end", "Second line extended", "Second line")]
+    public void Compare_EditBeforeTheEndOfAFieldOpenedInThePreviousParagraph_KeepsTheEndInBothViews(
+        string name, string leftText, string rightText)
+    {
+        static string Spanning(string second) =>
+            Para(BeginChar, Instruction("REF x \\h"), SeparateChar, R("First line")) + Para(R(second), EndChar);
+        var original = MarkerDoc(Spanning(leftText));
+        var revised = MarkerDoc(Spanning(rightText));
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        AssertFieldsSurviveRoundTrip(original, revised, redline, name);
+        AssertFieldCharacterCounts(original, revised, redline);
+        AssertFieldCharactersBare(redline, expectedCount: 3);
+        // The edit stays a fine one: the unchanged words of the second paragraph are not revised.
+        Assert.Contains(Body(redline.DocumentByteArray).Elements(W.p).ElementAt(1).Elements(W.r).SelectMany(r => r.Elements(W.t)),
+            t => t.Value == "Second line");
+    }
+
     // ---- assertions ---------------------------------------------------------------------------
 
     /// <summary>The redline adds no validation error, and accepting / rejecting it leaves each paragraph with the
@@ -343,6 +442,31 @@ public class BodyFieldSpanDiffTests
             + FieldShapeMismatch(DocxDiffOps.RejectRevisions(redline.DocumentByteArray), original.DocumentByteArray, "reject, " + name, markers);
         Assert.True(failures.Length == 0, failures);
         AssertNoNewValidationErrors(redline, original, revised);
+    }
+
+    /// <summary>Accepting the redline leaves exactly the revised document's begin, separate and end characters,
+    /// rejecting it exactly the original's.</summary>
+    private static void AssertFieldCharacterCounts(WmlDocument original, WmlDocument revised, WmlDocument redline)
+    {
+        Assert.Equal(FieldCharacterCounts(revised.DocumentByteArray),
+            FieldCharacterCounts(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray)));
+        Assert.Equal(FieldCharacterCounts(original.DocumentByteArray),
+            FieldCharacterCounts(DocxDiffOps.RejectRevisions(redline.DocumentByteArray)));
+    }
+
+    private static (int Begin, int Separate, int End) FieldCharacterCounts(byte[] bytes)
+    {
+        var types = Body(bytes).Descendants(W.fldChar).Select(f => (string?)f.Attribute(W.fldCharType)).ToList();
+        return (types.Count(t => t == "begin"), types.Count(t => t == "separate"), types.Count(t => t == "end"));
+    }
+
+    /// <summary>The redline carries one copy of each field character, outside every insertion and deletion: a
+    /// character both documents carry is unchanged.</summary>
+    private static void AssertFieldCharactersBare(WmlDocument redline, int expectedCount)
+    {
+        var fieldCharacters = Body(redline.DocumentByteArray).Descendants(W.fldChar).ToList();
+        Assert.Equal(expectedCount, fieldCharacters.Count);
+        Assert.All(fieldCharacters, f => Assert.DoesNotContain(f.Ancestors(), a => a.Name == W.ins || a.Name == W.del));
     }
 
     private static string FieldShapeMismatch(byte[] actual, byte[] expected, string because, bool markers)
