@@ -65,13 +65,14 @@ public class PageMarginUnitTests
     }
 
     [Fact]
-    public void MillimeterMarginRetainsPrecisionBeforeExistingHtmlFormatting()
+    public void MillimeterMarginRetainsPrecisionInHtmlGeometry()
     {
         var doc = AuthoredDocument("1440", "720", left: "25mm");
         var section = WmlToHtmlConverter.GetDocumentMetadata(doc).Sections.Single();
         Assert.Equal(25.0 * 72 / 25.4, section.MarginLeftPt, precision: 10);
         var html = WmlToHtmlConverter.ConvertToHtml(doc, new WmlToHtmlConverterSettings());
-        Assert.Contains(html.Descendants().Attributes("data-margin-left"), a => a.Value == "70.9");
+        // The geometry attribute carries the four decimals the page CSS does (issue #1164), not one.
+        Assert.Contains(html.Descendants().Attributes("data-margin-left"), a => a.Value == "70.8661");
     }
 
     [Fact]

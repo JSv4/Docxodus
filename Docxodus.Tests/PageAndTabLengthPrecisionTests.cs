@@ -120,4 +120,54 @@ public class PageAndTabLengthPrecisionTests
         var segment = Assert.Single(html.Descendants(), e => Style(e).Contains("display: inline-flex"));
         Assert.Contains("width: 70.85pt", Style(segment));
     }
+
+    private static XElement Section(WmlDocument doc) => Assert.Single(
+        WmlToHtmlConverter.ConvertToHtml(doc, new WmlToHtmlConverterSettings { RenderPagination = PaginationMode.Paginated })
+            .Descendants(),
+        e => e.Attribute("data-section-index") != null);
+
+    [Fact]
+    public void SectionGeometryAttributes_CarryExactPoints()
+    {
+        // The paginator lays each page out from these attributes (issue #1164). One decimal wrote the
+        // 1417-twip top margin (70.85pt) as 70.8pt and the 1701-twip left margin (85.05pt) as 85.1pt.
+        var section = Section(Document(Paragraph, A4));
+
+        string Value(string name) => (string)section.Attribute(name)!;
+        Assert.Equal("595.3", Value("data-page-width"));
+        Assert.Equal("841.9", Value("data-page-height"));
+        Assert.Equal("70.85", Value("data-margin-top"));
+        Assert.Equal("56.7", Value("data-margin-right"));
+        Assert.Equal("56.7", Value("data-margin-bottom"));
+        Assert.Equal("85.05", Value("data-margin-left"));
+        Assert.Equal("453.55", Value("data-content-width"));
+        Assert.Equal("714.35", Value("data-content-height"));
+        Assert.Equal("35.4", Value("data-header-height"));
+        Assert.Equal("35.4", Value("data-footer-height"));
+    }
+
+    [Fact]
+    public void SectionGeometryAttributes_KeepTheirOneDecimalFormForWholePoints()
+    {
+        var section = Section(Document(Paragraph,
+            "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/>" +
+            "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"0\" w:gutter=\"0\"/></w:sectPr>"));
+
+        Assert.Equal("612.0", (string)section.Attribute("data-page-width")!);
+        Assert.Equal("468.0", (string)section.Attribute("data-content-width")!);
+        Assert.Equal("0.0", (string)section.Attribute("data-footer-height")!);
+    }
+
+    [Fact]
+    public void SectionColumnGap_CarriesExactPoints()
+    {
+        // A 425-twip column gap is 21.25pt; one decimal made it 21.2pt.
+        var section = Section(Document(Paragraph,
+            "<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/>" +
+            "<w:pgMar w:top=\"1417\" w:right=\"1134\" w:bottom=\"1134\" w:left=\"1701\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/>" +
+            "<w:cols w:num=\"2\" w:space=\"425\"/></w:sectPr>"));
+
+        Assert.Equal("21.25", (string)section.Attribute("data-col-gap")!);
+        Assert.Contains("column-gap: 21.25pt;", (string)section.Attribute("style")!);
+    }
 }
