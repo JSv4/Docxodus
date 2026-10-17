@@ -352,6 +352,37 @@ public class DocxDiffParagraphIdTests
         Assert.Equal("00000001", (string?)entry.Attribute(XName.Get("paraIdParent", W15Ns)));
     }
 
+    /// <summary>The revision adds a comment whose durable id, in its own package, is the one the original gives
+    /// comment 0. The merged entry takes a fresh durable id, so no two comments share one.</summary>
+    [Fact]
+    public void AddedComment_DurableIdHeldByAnOriginalComment_TakesAFreshOne()
+    {
+        const string Anchored = "<w:p><w:commentRangeStart w:id=\"0\"/><w:commentRangeStart w:id=\"1\"/><w:r><w:t>Alpha</w:t></w:r>"
+            + "<w:commentRangeEnd w:id=\"0\"/><w:commentRangeEnd w:id=\"1\"/><w:r><w:commentReference w:id=\"0\"/></w:r>"
+            + "<w:r><w:commentReference w:id=\"1\"/></w:r></w:p>";
+        const string Added = "<w:comment w:id=\"5\" w:author=\"Ann\" w:initials=\"A\" w:date=\"2026-01-01T00:00:00Z\"><w:p w14:paraId=\"00000005\"><w:r><w:t>New remark.</w:t></w:r></w:p></w:comment>";
+        var left = Build(Anchored + P("Tail"));
+        var right = Build(Anchored + "<w:p><w:commentRangeStart w:id=\"5\"/><w:r><w:t>Tail</w:t></w:r><w:commentRangeEnd w:id=\"5\"/><w:r><w:commentReference w:id=\"5\"/></w:r></w:p>",
+            comments: ThreadedComments + Added,
+            commentsEx: ThreadedCommentsEx + "<w15:commentEx w15:paraId=\"00000005\" w15:done=\"0\"/>",
+            commentIds: ThreadedCommentIds + "<w16cid:commentId w16cid:paraId=\"00000005\" w16cid:durableId=\"11111111\"/>");
+
+        var redline = DocxCompare.Compare(left, right);
+
+        using var stream = new MemoryStream(redline.DocumentByteArray);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var entries = document.MainDocumentPart!.WordprocessingCommentsIdsPart!.GetXDocument().Root!
+            .Elements(XName.Get("commentId", W16CidNs)).ToList();
+        var durableIds = entries.Select(e => (string)e.Attribute(XName.Get("durableId", W16CidNs))!).ToList();
+        Assert.True(durableIds.Count == durableIds.Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            $"duplicate durable id: {string.Join(", ", durableIds)}");
+        var added = Assert.Single(entries, e => (string?)e.Attribute(XName.Get("paraId", W16CidNs)) == "00000005");
+        Assert.NotEqual("11111111", (string?)added.Attribute(XName.Get("durableId", W16CidNs)));
+        Assert.Equal("11111111", (string?)entries.Single(e => (string?)e.Attribute(XName.Get("paraId", W16CidNs)) == "00000001")
+            .Attribute(XName.Get("durableId", W16CidNs)));
+        AssertThreadingFollowsTheDefinitions(redline.DocumentByteArray);
+    }
+
     private static XElement Body(WmlDocument document)
     {
         using var stream = new MemoryStream(document.DocumentByteArray);

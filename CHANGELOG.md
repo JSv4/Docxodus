@@ -99,8 +99,9 @@ All notable changes to this project will be documented in this file.
   `DocxDiff.Compare`, `DocxCompare.Compare` and `Consolidate`. The allocator now also reads the glossary
   document and stays below 80000000 (falling back to the lowest free value when one past the largest is
   out of range), and new comment durable ids stay below 7FFFFFFF; this applies to `DocxSession` comment
-  authoring and content-control cloning too. `w14:textId` is unchanged: it hashes a paragraph's text, so
-  equal text shares it by design.
+  authoring and content-control cloning too. A comment the revised document added whose durable id
+  (`w16cid:durableId`) the original already uses now takes a fresh one. `w14:textId` is unchanged: it is a
+  version identifier for a paragraph's text, not an identity, so paragraphs may share one.
 - A comparison no longer breaks a field that spans paragraphs, such as a Word table of contents without its
   content control (issue #1156). Such a field opens in its first entry paragraph and closes paragraphs later,
   and field characters take up no room in the text the comparison lines up, so when the entry holding the

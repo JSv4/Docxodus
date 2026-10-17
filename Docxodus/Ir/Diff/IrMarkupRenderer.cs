@@ -3826,7 +3826,8 @@ internal static partial class IrMarkupRenderer
     /// <summary>Copy every entry of <paramref name="rightPart"/> whose paraId attribute is in
     /// <paramref name="paraIds"/> into <paramref name="outPart"/> (seeded from <paramref name="seedXml"/> when
     /// empty), under the fresh paraId <paramref name="renamed"/> gave its definition, if any (a
-    /// <c>w15:paraIdParent</c> naming a renamed definition follows it too), skipping paraIds already present.
+    /// <c>w15:paraIdParent</c> naming a renamed definition follows it too), skipping paraIds already present and
+    /// giving a <c>w16cid:durableId</c> the output already uses a fresh value.
     /// Shared by the <c>commentsExtended</c> + <c>commentsIds</c> threading merges.</summary>
     private static void MergeRightThreadingEntries(OpenXmlPart outPart, OpenXmlPart? rightPart,
         XName rootName, XName entryName, XName paraIdAttr, HashSet<string> paraIds,
@@ -3837,6 +3838,8 @@ internal static partial class IrMarkupRenderer
             return;
         var outRoot = EnsurePartRoot(outPart, seedXml);
         var present = outRoot.Elements(entryName).Select(e => (string?)e.Attribute(paraIdAttr)).ToHashSet();
+        var durableIds = outRoot.Elements(entryName).Select(e => (string?)e.Attribute(W16cidNs + "durableId"))
+            .Where(d => d != null).Select(d => d!).ToHashSet(StringComparer.OrdinalIgnoreCase);
         bool changed = false;
         foreach (var entry in rightRoot.Elements(entryName))
         {
@@ -3849,6 +3852,14 @@ internal static partial class IrMarkupRenderer
             copy.SetAttributeValue(paraIdAttr, key);
             if ((string?)copy.Attribute(W15ns + "paraIdParent") is { } parent && renamed.TryGetValue(parent, out var freshParent))
                 copy.SetAttributeValue(W15ns + "paraIdParent", freshParent);
+            // A durable id names one comment across the package too: one the original already uses (the other
+            // package numbered a different comment with it) is replaced by a fresh one.
+            if ((string?)copy.Attribute(W16cidNs + "durableId") is { } durable && !durableIds.Add(durable))
+            {
+                var freshDurable = Internal.CommentOps.NextDurableId(outRoot);
+                copy.SetAttributeValue(W16cidNs + "durableId", freshDurable);
+                durableIds.Add(freshDurable);
+            }
             outRoot.Add(copy);
             changed = true;
         }
