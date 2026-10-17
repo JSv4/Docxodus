@@ -795,8 +795,10 @@ internal static class IrReader
 
     /// <summary>One pass over a wrapper's <paramref name="content"/> for what an in-place diff of its blocks
     /// could not carry: a marker <see cref="IsDroppedParagraphChild"/> drops at block level
-    /// (<see cref="IrSdtBlock.HasBlockLevelMarkers"/>) and a paragraph that opens or closes more fields than
-    /// it closes or opens (<see cref="IrSdtBlock.HasParagraphSpanningField"/>). Tables are scanned through to
+    /// (<see cref="IrSdtBlock.HasBlockLevelMarkers"/>) and a paragraph with a field character of a field
+    /// opened or closed in another paragraph (<see cref="UnmatchedFieldCharacters"/>,
+    /// <see cref="IrSdtBlock.HasParagraphSpanningField"/>). A paragraph that closes one such field and opens
+    /// another counts, though its begins and ends net to zero (issue #1166). Tables are scanned through to
     /// their cells. A nested wrapper around blocks is not entered: it is one child of this wrapper, with
     /// flags of its own, and is kept or replaced as a whole. A wrapper around table rows or cells is read
     /// through, as the table reader reads it.</summary>
@@ -811,7 +813,7 @@ internal static class IrReader
                 if (markers && spanningField)
                     return;
                 if (child.Name == W + "p")
-                    spanningField |= FieldNesting(child) != 0;
+                    spanningField |= UnmatchedFieldCharacters(child).Count != 0;
                 else if (IsDroppedParagraphChild(child.Name))
                     markers = true;
                 else if (child.Name == W + "tbl" || child.Name == W + "tr")
@@ -824,22 +826,6 @@ internal static class IrReader
         }
         Scan(content, inTable: false);
         return (markers, spanningField);
-    }
-
-    /// <summary>Field begin characters minus field end characters anywhere in <paramref name="paragraph"/>:
-    /// non-zero when a complex field spans into or out of it.</summary>
-    private static int FieldNesting(XElement paragraph)
-    {
-        var nesting = 0;
-        foreach (var fldChar in paragraph.Descendants(W + "fldChar"))
-        {
-            var type = (string?)fldChar.Attribute(W + "fldCharType");
-            if (type == "begin")
-                nesting++;
-            else if (type == "end")
-                nesting--;
-        }
-        return nesting;
     }
 
     private static string Unid(XElement el) => (string?)el.Attribute(PtOpenXml.Unid) ?? "";

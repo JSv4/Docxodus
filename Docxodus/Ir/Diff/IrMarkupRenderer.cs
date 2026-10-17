@@ -4975,7 +4975,7 @@ internal static partial class IrMarkupRenderer
         }
     }
 
-    private static bool NormalizeFieldsInRoot(XElement root)
+    internal static bool NormalizeFieldsInRoot(XElement root)
     {
         static bool IsBareRun(XElement r) => !r.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del);
 
@@ -5012,7 +5012,12 @@ internal static partial class IrMarkupRenderer
                 }
                 else if (ty == "end")
                 {
-                    if (depth >= 1) cur?.Plumbing.Add(r);
+                    // An end with no begin before it in the paragraph closes a field opened in an earlier one
+                    // (IrReader.UnmatchedFieldCharacters): it belongs to no field grouped here, and a field after
+                    // it in the paragraph still opens at depth 0 (issue #1166).
+                    if (depth == 0)
+                        continue;
+                    cur?.Plumbing.Add(r);
                     depth--;
                     if (depth == 0) { cur = null; afterSeparate = false; }
                 }
