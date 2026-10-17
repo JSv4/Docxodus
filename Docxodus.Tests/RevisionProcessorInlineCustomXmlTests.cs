@@ -131,6 +131,26 @@ public class RevisionProcessorInlineCustomXmlTests
         Assert.Equal("first second", Assert.Single(body.Elements(W.p)).Value);
     }
 
+    [Fact]
+    public void Reject_InlineCustomXmlInsertedWithItsContent_IsRemoved()
+    {
+        // Word marks an inserted custom-XML element with an insert range around each of its two tags.
+        var bodyXml = "<w:p><w:r><w:t xml:space=\"preserve\">A </w:t></w:r>" +
+            $"<w:customXmlInsRangeStart w:id=\"10\" {Stamp}/>" +
+            "<w:customXml w:uri=\"urn:test\" w:element=\"term\"><w:customXmlInsRangeEnd w:id=\"10\"/>" +
+            $"<w:ins w:id=\"1\" {Stamp}><w:r><w:t>added</w:t></w:r></w:ins>" +
+            $"<w:customXmlInsRangeStart w:id=\"11\" {Stamp}/></w:customXml><w:customXmlInsRangeEnd w:id=\"11\"/>" +
+            "<w:r><w:t xml:space=\"preserve\"> Z</w:t></w:r></w:p>";
+
+        var rejected = BodyOf(RevisionProcessor.RejectRevisions(Build(bodyXml)));
+        var accepted = BodyOf(RevisionProcessor.AcceptRevisions(Build(bodyXml)));
+
+        Assert.Equal("A  Z", TextOf(rejected));
+        Assert.Empty(rejected.Descendants(W.customXml));
+        Assert.Equal("A added Z", TextOf(accepted));
+        Assert.Single(accepted.Descendants(W.customXml));
+    }
+
     private static string TextOf(XElement body) =>
         string.Concat(body.Descendants().Where(e => e.Name == W.t || e.Name == W.delText).Select(e => e.Value));
 

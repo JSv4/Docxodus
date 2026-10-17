@@ -776,17 +776,19 @@ namespace Docxodus
 
         /// <summary>
         /// Whether a <c>w:ins</c>/<c>w:del</c> under <paramref name="parent"/> (its nearest ancestor other than a
-        /// content control or smart tag) is a run-level revision that reject reverses. Besides a paragraph and the
-        /// run containers inside one, that is a block stream: a revision wrapper written between blocks holds
-        /// run-level markup such as a bookmark or comment-range marker (issue #1149). A <c>w:customXml</c> at
-        /// any level is a container whose revisions reject reverses: a block one is a block stream, and an
-        /// inline one (inside a paragraph) is a run container like a hyperlink (issue #1176).
+        /// content control or smart tag) wraps content that reject restores or removes, as opposed to marking a
+        /// property. Every container the schema lets hold a revision wrapper qualifies: a paragraph and the run
+        /// containers in it (hyperlink, simple field, bidirectional run, inline custom XML), a block stream
+        /// (body, cell, note, block custom XML; issue #1149), a table or row holding run-level markup between its
+        /// rows or cells, math (<c>m:oMath</c>, <c>m:e</c>, <c>m:r</c>, …) and ruby (<c>w:rt</c>,
+        /// <c>w:rubyBase</c>). So the test lists the exceptions instead (issue #1176): the property sets in
+        /// which an empty <c>w:ins</c>/<c>w:del</c> marks an inserted or deleted paragraph mark (<c>w:rPr</c>),
+        /// row (<c>w:trPr</c>), numbering (<c>w:numPr</c>) or math control character (<c>m:ctrlPr</c>), each of
+        /// which reject handles on its own.
         /// </summary>
-        private static bool IsRunLevelRevisionParent(XElement? parent) =>
+        private static bool IsContentRevisionParent(XElement? parent) =>
             parent is not null &&
-            (parent.Name == W.p || parent.Name == W.hyperlink || parent.Name == W.fldSimple ||
-             parent.Name == W.dir || parent.Name == W.bdo || parent.Name == W.customXml ||
-             W.BlockLevelContentContainers.Contains(parent.Name));
+            parent.Name != W.rPr && parent.Name != W.trPr && parent.Name != W.numPr && parent.Name != M.ctrlPr;
 
         private static object? ReverseRevisionsTransform(XNode? node, ReverseRevisionsInfo rri)
         {
@@ -815,9 +817,9 @@ namespace Docxodus
       </w:r>
     </w:p>
 #endif
-                // Hyperlinks and simple fields own their content revisions inside the
-                // container. Reject restores those runs by reversing w:del → w:ins.
-                if (element.Name == W.del && IsRunLevelRevisionParent(parent))
+                // A deleted run in any content container (paragraph, hyperlink, field, custom XML, math,
+                // ruby, block stream, table or row): reject restores it by reversing w:del → w:ins.
+                if (element.Name == W.del && IsContentRevisionParent(parent))
                 {
                     return new XElement(W.ins,
                         element.Nodes().Select(n => ReverseRevisionsTransform(n, rri)));
@@ -895,8 +897,8 @@ namespace Docxodus
       </w:r>
     </w:p>
 #endif
-                // Symmetric handling for inserted paragraph, hyperlink and field runs.
-                if (element.Name == W.ins && IsRunLevelRevisionParent(parent))
+                // Symmetric handling for inserted content in any content container.
+                if (element.Name == W.ins && IsContentRevisionParent(parent))
                 {
                     var newRri = new ReverseRevisionsInfo() { InInsert = true };
                     return new XElement(W.del,
@@ -1002,7 +1004,7 @@ namespace Docxodus
                 }
 
                 ////////////////////////////////////////////////////////////////////////////////////
-                // Deleted math control character
+                // Deleted math run: reversed by the content-revision rule above (m:r holds the w:del)
 #if false
     <w:p w:rsidR="007F4E48" w:rsidRDefault="00C9403B">
       <m:oMathPara>
@@ -1028,15 +1030,8 @@ namespace Docxodus
             <m:t>π</m:t>
           </m:r>
 #endif
-                if (element.Name == W.del &&
-                    parent?.Name == M.r)
-                {
-                    return new XElement(W.ins,
-                        element.Nodes().Select(n => ReverseRevisionsTransform(n, rri)));
-                }
-
                 ////////////////////////////////////////////////////////////////////////////////////
-                // Inserted math control character
+                // Inserted math run: reversed by the content-revision rule above
 #if false
     <w:p w:rsidR="007F4E48" w:rsidRDefault="00C9403B">
       <m:oMathPara>
@@ -1062,13 +1057,6 @@ namespace Docxodus
             <m:t>π</m:t>
           </m:r>
 #endif
-                if (element.Name == W.ins &&
-                    parent?.Name == M.r)
-                {
-                    return new XElement(W.del,
-                        element.Nodes().Select(n => ReverseRevisionsTransform(n, rri)));
-                }
-
                 ////////////////////////////////////////////////////////////////////////////////////
                 // Deleted / inserted math control character. The mark sits in the owning object's
                 // property set (m:f/m:fPr/m:ctrlPr, m:rad/m:radPr/m:ctrlPr, …) and the object's

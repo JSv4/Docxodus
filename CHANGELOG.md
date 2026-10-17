@@ -33,12 +33,17 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Rejecting revisions now reverses an insertion or deletion inside an inline (run-level) `w:customXml`
-  element (issue #1176). Reject works by turning each insertion into a deletion and each deletion into
-  an insertion, then accepting; that turn-around covered paragraphs, hyperlinks, simple fields,
-  bidirectional runs and block-level custom XML, but skipped revisions whose nearest container was an
-  inline custom-XML element. Rejecting therefore kept the inserted text there and dropped the original
-  text. Two accept-side gaps for the same element are fixed with it: a hyperlink or simple field whose
+- Rejecting revisions now reverses an insertion or deletion in every container that can hold one (issue
+  #1176). Reject works by turning each insertion into a deletion and each deletion into an insertion,
+  then accepting. Which revisions it turned around was a list of containers: paragraphs, hyperlinks,
+  simple fields, bidirectional runs, block-level containers (body, cells, text boxes, notes, headers and
+  footers), block-level custom XML, and math runs. A revision anywhere else, such as inside an inline
+  (run-level) `w:customXml` element, directly in math (`m:oMath`, or the `m:e` of a radical or other
+  math object), in ruby base or guide text, or between a table's rows or a row's cells, was left as
+  it was, so rejecting kept the inserted content there and dropped the original content. Reject now
+  turns around every `w:ins`/`w:del` except the property marks that record an inserted or deleted
+  paragraph mark, table row, numbering or math control character, which it already handles on their
+  own. Two accept-side gaps for inline custom XML are fixed with it: a hyperlink or simple field whose
   runs all sit inside an inline custom-XML element was removed on accept (and so on reject) as if it
   were empty, even with no revisions in it, and accepting or rejecting a paragraph-mark revision on a
   paragraph whose content sits in an inline custom-XML element threw "Internal error 20".
