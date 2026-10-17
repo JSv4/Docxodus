@@ -9,7 +9,14 @@
  * exactly. After the page tree is final, `paintParagraphBorders` draws the recorded sides as
  * vector shapes from each page box's origin, which is the only coordinate space the PDF printer
  * does not snap. Omitted-size borders and other border styles keep their CSS rendering.
+ *
+ * The shapes are drawn over the page, outside the paragraph's own ancestors, so they do not inherit
+ * the clips the paragraph sits under. Each side is trimmed to what the page shows of the paragraph,
+ * as `measureRenderedSource` reports it: an exact-height table row hides the borders of the content
+ * it hides, as Word does (issue #1171).
  */
+
+import { measureRenderedSource } from "./pagination.js";
 
 const EXACT = "data-docx-exact-border";
 const PAINT = "data-docx-border-paint";
@@ -63,8 +70,23 @@ export function prepareParagraphBorders(root: HTMLElement): number {
 /** Paint prepared borders on the final page tree. Layout and the PageMap do not change here. */
 export function paintParagraphBorders(container: HTMLElement, pageBoxSelector = ".page-box"): number {
   const document = container.ownerDocument;
+  const view = document.defaultView;
+  if (!view) return 0;
   let painted = 0;
   const overlays = new Map<HTMLElement, SVGSVGElement>();
+  const overlayFor = (page: HTMLElement): SVGSVGElement => {
+    let svg = overlays.get(page);
+    if (!svg) {
+      svg = document.createElementNS(SVG_NS, "svg");
+      svg.setAttribute("aria-hidden", "true");
+      svg.setAttribute("width", String(page.offsetWidth));
+      svg.setAttribute("height", String(page.offsetHeight));
+      svg.style.cssText = "position:absolute;left:0;top:0;overflow:visible;pointer-events:none;z-index:1";
+      page.append(svg);
+      overlays.set(page, svg);
+    }
+    return svg;
+  };
   for (const element of Array.from(container.querySelectorAll<HTMLElement>(`[${PAINT}]`))) {
     const page = element.closest<HTMLElement>(pageBoxSelector);
     if (!page) continue;
@@ -78,26 +100,43 @@ export function paintParagraphBorders(container: HTMLElement, pageBoxSelector = 
     const scale = page.offsetWidth > 0 ? pageRect.width / page.offsetWidth : 1;
     const box = element.getBoundingClientRect();
     if (!(box.width > 0) || !(box.height > 0) || !(scale > 0)) continue;
-    let svg = overlays.get(page);
-    if (!svg) {
-      svg = document.createElementNS(SVG_NS, "svg");
-      svg.setAttribute("aria-hidden", "true");
-      svg.setAttribute("width", String(page.offsetWidth));
-      svg.setAttribute("height", String(page.offsetHeight));
-      svg.style.cssText = "position:absolute;left:0;top:0;overflow:visible;pointer-events:none;z-index:1";
-      page.append(svg);
-      overlays.set(page, svg);
-    }
     const left = (box.left - pageRect.left) / scale;
     const top = (box.top - pageRect.top) / scale;
     const width = box.width / scale;
     const height = box.height / scale;
+    // The part of the paragraph the page shows, in the overlay's coordinates; null when all of it shows.
+    const { visible } = measureRenderedSource(view, element, page, pageRect);
+    const clip = visible.left <= box.left && visible.top <= box.top
+      && visible.right >= box.right && visible.bottom >= box.bottom
+      ? null
+      : {
+        left: (visible.left - pageRect.left) / scale,
+        top: (visible.top - pageRect.top) / scale,
+        right: (visible.right - pageRect.left) / scale,
+        bottom: (visible.bottom - pageRect.top) / scale,
+      };
+    let paintedSides = 0;
     for (const { side, style, color, width: stroke } of sides) {
       const horizontal = side === "top" || side === "bottom";
-      const x = side === "right" ? left + width - stroke : left;
-      const y = side === "bottom" ? top + height - stroke : top;
-      const w = horizontal ? width : stroke;
-      const h = horizontal ? stroke : height;
+      let x = side === "right" ? left + width - stroke : left;
+      let y = side === "bottom" ? top + height - stroke : top;
+      let w = horizontal ? width : stroke;
+      let h = horizontal ? stroke : height;
+      // How far the trimmed side starts into the untrimmed one, so a dashed side keeps its rhythm.
+      let phase = 0;
+      if (clip) {
+        const x0 = Math.max(x, clip.left);
+        const y0 = Math.max(y, clip.top);
+        const x1 = Math.min(x + w, clip.right);
+        const y1 = Math.min(y + h, clip.bottom);
+        if (!(x1 > x0) || !(y1 > y0)) continue;
+        phase = horizontal ? x0 - x : y0 - y;
+        x = x0;
+        y = y0;
+        w = x1 - x0;
+        h = y1 - y0;
+      }
+      const svg = overlayFor(page);
       if (style === "solid") {
         const rect = document.createElementNS(SVG_NS, "rect");
         for (const [name, value] of [["x", x], ["y", y], ["width", w], ["height", h]] as const)
@@ -115,13 +154,16 @@ export function paintParagraphBorders(container: HTMLElement, pageBoxSelector = 
         line.setAttribute("x2", String(horizontal ? x + w : cx));
         line.setAttribute("y2", String(horizontal ? cy : y + h));
         line.setAttribute("stroke", color);
-        line.setAttribute("stroke-width", String(stroke));
+        // A side the clip cuts across keeps only the stroke's visible part.
+        line.setAttribute("stroke-width", String(horizontal ? h : w));
         const rhythm = Math.max(1, stroke);
         line.setAttribute("stroke-dasharray", `${3 * rhythm} ${2 * rhythm}`);
+        if (phase > 0) line.setAttribute("stroke-dashoffset", String(phase));
         svg.append(line);
       }
+      paintedSides++;
     }
-    painted++;
+    if (paintedSides > 0) painted++;
   }
   return painted;
 }

@@ -78,7 +78,9 @@ final preprocessed `XElement` trees immediately before HTML transformation.
 
 Pagination clones retain `data-source-anchor-id` and receive `data-page-number`,
 `data-fragment-index`, and `data-page-fragment-id`. Continuations and repeated headers, footers,
-and notes are presentation fragments: they do not duplicate the active `data-anchor`.
+and notes are presentation fragments: they do not duplicate the active `data-anchor`. So are the
+copies of a table's header rows (`w:tblHeader`) that open each page a split table continues on
+(`data-docx-repeated-header-row`, issue #1171): the row has one fragment per page it opens.
 
 ## Registration and invalidation
 

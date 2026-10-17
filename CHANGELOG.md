@@ -348,6 +348,20 @@ All notable changes to this project will be documented in this file.
   clips the row: that clip can still cut the hidden text's glyphs into fragments. A row no taller
   than its borders and padding, which shows none of its text, no longer fails the export either,
   with or without borders, nor does a table made only of such rows.
+- Table header rows (`w:tblHeader`) now repeat at the top of every page their table continues on, in
+  the paginated view and the PDF export, as Word repeats them whatever their height rule (issue
+  #1171). They were never repeated, whichever rule they had. The converter marks each header row
+  (`data-docx-header-row`), and when the paginator splits a table across pages it starts each
+  continuation with copies of the table's leading run of header rows. The copies are presentation
+  copies: the first page keeps the row's editor anchor, and the PageMap gets one fragment of the row
+  per page. When the copies would leave no room for the table's body rows on a page, the table
+  splits as before, without them. Only a table the paginator splits at row boundaries repeats its
+  header rows; one it cannot split that way (with a nested table or a footnote inside) still does not.
+- In the PDF export, a paragraph border on content that an exact-height table row hides is now hidden
+  with it (issue #1171). Exactly sized paragraph borders are painted as shapes over the page, which
+  did not inherit the row's clip, so the border of a paragraph cut by the row still showed below it.
+  Each side is now trimmed to the part of the paragraph the page shows, which is also how the rest
+  of the paragraph is clipped.
 
 ## [13.0.0] - 2026-10-12
 

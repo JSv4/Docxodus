@@ -6705,8 +6705,13 @@ namespace Docxodus
                 style.AddIfMissing("height",
                     string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", heightInPoints));
             }
+            // A header row (w:tblHeader) repeats at the top of every page its table continues on, whatever
+            // its height rule. The paginator does the repeating (issue #1171), so the row says it is one.
+            var tblHeader = element.Elements(W.trPr).Elements(W.tblHeader).FirstOrDefault();
             var htmlRow = new XElement(Xhtml.tr,
                 SourceAnchorIdentityAttribute(settings, element),
+                tblHeader != null && tblHeader.Attribute(W.val).ToBoolean() != false
+                    ? new XAttribute("data-docx-header-row", "true") : null,
                 cells);
             if (style.Any())
                 htmlRow.AddAnnotation(style);

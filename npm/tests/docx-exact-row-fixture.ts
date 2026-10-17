@@ -14,7 +14,11 @@ export interface ExactRowOptions {
    * second is cut and the third and later are hidden whole.
    */
   clippedParagraphs?: number;
-  /** A bottom paragraph border (red, `w:sz="8"`) on every paragraph of the clipped cell. */
+  /**
+   * Top and bottom paragraph borders (red, `w:sz="8"`) on every paragraph of the clipped cell. Word
+   * draws a run of paragraphs with the same borders as one bordered group: its top border lies inside
+   * the row, its bottom border below the last paragraph, where the row hides it.
+   */
   borders?: boolean;
   /** The first body row's exact height in twips; 300 holds one 11pt line. */
   firstRowTwips?: number;
@@ -23,7 +27,8 @@ export interface ExactRowOptions {
 }
 
 const paragraph = (text: string, border = false) =>
-  `<w:p><w:pPr>${border ? '<w:pBdr><w:bottom w:val="single" w:sz="8" w:space="1" w:color="FF0000"/></w:pBdr>' : ''}`
+  `<w:p><w:pPr>${border ? '<w:pBdr><w:top w:val="single" w:sz="8" w:space="1" w:color="FF0000"/>'
+    + '<w:bottom w:val="single" w:sz="8" w:space="1" w:color="FF0000"/></w:pBdr>' : ''}`
   + `<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
 const cell = (content: string) => `<w:tc><w:tcPr><w:tcW w:w="3600" w:type="dxa"/></w:tcPr>${content}</w:tc>`;
 const row = (height: string, rule: string, cells: string, header = false) =>

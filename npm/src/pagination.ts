@@ -1992,14 +1992,16 @@ export class PaginationEngine {
    * Builds a clone of a simple table wrapper containing a contiguous run of rows.
    * The caller supplies complete vertical-merge groups: no rowspan crosses a
    * fragment boundary. Nested tables and footnotes remain unsupported here.
-   * Horizontal merges (colspan) are confined to their own row.
+   * Horizontal merges (colspan) are confined to their own row. `repeatedRows` (the table's
+   * header rows, on a continuation) are copied in first, marked as repeats.
    */
   private createSimpleTableFragment(
     wrapper: HTMLElement,
     table: HTMLTableElement,
     body: HTMLTableSectionElement,
     rows: HTMLTableRowElement[],
-    retainAnchor: boolean
+    retainAnchor: boolean,
+    repeatedRows: HTMLTableRowElement[] = [],
   ): HTMLElement {
     const wrapperClone = wrapper.cloneNode(false) as HTMLElement;
     const tableClone = table.cloneNode(false) as HTMLTableElement;
@@ -2013,6 +2015,14 @@ export class PaginationEngine {
     }
 
     const bodyClone = body.cloneNode(false) as HTMLTableSectionElement;
+    for (const row of repeatedRows) {
+      // A presentation copy: the original row stays the editor anchor and any bookmark's target.
+      const repeat = row.cloneNode(true) as HTMLTableRowElement;
+      repeat.dataset.docxRepeatedHeaderRow = "true";
+      this.makeClonedStoryInert(repeat);
+      for (const element of [repeat, ...Array.from(repeat.querySelectorAll("[id]"))]) element.removeAttribute("id");
+      bodyClone.appendChild(repeat);
+    }
     for (const row of rows) {
       bodyClone.appendChild(row.cloneNode(true));
     }
@@ -2031,11 +2041,17 @@ export class PaginationEngine {
    * Splits an oversized, ordinary table at row boundaries. This only participates
    * in the existing oversized-block fallback; unsupported tables keep the previous
    * overflow behavior rather than risking broken table semantics.
+   *
+   * Word repeats a table's leading run of header rows (`w:tblHeader`) at the top of every page
+   * the table continues on, whatever their height rule (issue #1171), so each continuation
+   * starts with copies of them. When the copies leave no room to split the table, it splits as
+   * it did without them (`repeatHeaderRows` false).
    */
   private trySplitSimpleOversizedTable(
     block: MeasuredBlock,
     dims: PageDimensions,
-    sectionIndex: number
+    sectionIndex: number,
+    repeatHeaderRows = true,
   ): MeasuredBlock[] | null {
     const wrapper = block.element;
     if (
@@ -2091,6 +2107,16 @@ export class PaginationEngine {
       return null;
     }
 
+    // The header run must end at a safe boundary and leave body rows to carry.
+    let headerCount = 0;
+    while (repeatHeaderRows && headerCount < rows.length
+      && rows[headerCount].dataset.docxHeaderRow === "true") headerCount++;
+    if (headerCount === rows.length || !rowGroupEnds.includes(headerCount)) headerCount = 0;
+    const headerRows = rows.slice(0, headerCount);
+    const withoutRepeats = (): MeasuredBlock[] | null => headerCount > 0
+      ? this.trySplitSimpleOversizedTable(block, dims, sectionIndex, false)
+      : null;
+
     const groups: HTMLTableRowElement[][] = [];
     let start = 0;
     let boundaryIndex = 0;
@@ -2105,7 +2131,8 @@ export class PaginationEngine {
           table,
           body,
           rows.slice(start, candidateEnd),
-          start === 0
+          start === 0,
+          start === 0 ? [] : headerRows,
         );
         const measured = this.measureElement(candidate, dims, block.sectionIndex);
         if (measured.heightPt > maximumFragmentHeight) {
@@ -2116,9 +2143,10 @@ export class PaginationEngine {
       }
 
       // Even one complete row/merge group cannot fit. Preserve the established
-      // overflow fallback rather than clipping a row or cutting a merged cell.
-      if (end === start) {
-        return null;
+      // overflow fallback rather than clipping a row or cutting a merged cell. Header rows
+      // left alone at the foot of the first page do not count as its content.
+      if (end === start || (start === 0 && end <= headerCount)) {
+        return withoutRepeats();
       }
 
       groups.push(rows.slice(start, end));
@@ -2126,7 +2154,7 @@ export class PaginationEngine {
     }
 
     if (groups.length < 2) {
-      return null;
+      return withoutRepeats();
     }
 
     const fragments: MeasuredBlock[] = [];
@@ -2138,7 +2166,8 @@ export class PaginationEngine {
         table,
         body,
         groups[index],
-        isFirst
+        isFirst,
+        isFirst ? [] : headerRows,
       );
 
       // Keep the source's outer spacing only at the table's real boundaries.
@@ -2156,7 +2185,7 @@ export class PaginationEngine {
         measured.heightPt + measured.marginTopPt + measured.marginBottomPt >
         minimumContentHeight
       ) {
-        return null;
+        return withoutRepeats();
       }
 
       fragments.push({
