@@ -79,13 +79,32 @@ All notable changes to this project will be documented in this file.
   fresh durable ids instead of repeating the originals'. Range markers directly inside a block-level
   `w:customXml` wrapper are now reconciled too; they were skipped before and could leave two range
   ends with the same id (markers inside an inline `w:customXml` are still left as they are).
-  Two shapes remain broken (issue #1167), because one of the comment's markers lies outside the
-  replaced wrapper and so cannot belong to both copies: a comment that opens before the wrapper
-  (in a paragraph or in an earlier, unchanged wrapper) and closes inside it puts the reference
-  before the wrapper on accept, and a range wholly inside the wrapper whose reference sits in a
-  paragraph after it keeps only half a range in each view. For `w:sdt` both behave as before; for
-  `w:customXml` they used to keep each copy's markers in full under one duplicated id, so the
-  redline is now well formed but these two shapes lose the range or the reference's place instead.
+  A comment with one of its markers outside the replaced wrapper is covered by the next entry.
+- Accepting or rejecting a comparison now keeps a comment in place when one of its markers lies
+  outside a content control (`w:sdt`) or `w:customXml` wrapper that the comparison replaces whole
+  (issue #1167): a comment that opens before the wrapper (in a paragraph, between body blocks, or in
+  an earlier, unchanged wrapper) and closes inside it, or whose range opens inside the wrapper and
+  whose reference (and possibly its range end) lies after it. The redline holds a deleted and an
+  inserted copy of the wrapper but only one copy of the outside marker, and that one marker cannot
+  belong to both copies. For a content control the clean-up kept a single set of markers, so
+  accepting put the reference before the wrapper and in the second shape each view kept only half
+  the range; for a `w:customXml` wrapper the redline kept both copies' markers under one duplicated
+  comment id, which is not well formed. The outside marker now gets a copy per copy of the wrapper,
+  each marked deleted or inserted with that copy's author and date, and the comment is split into a
+  comment per copy the way a comment wholly inside a replaced wrapper already was. Accepting yields
+  the revised document and rejecting the original, with the reference and both range ends where they
+  were; a threaded reply follows its parent into each view. This holds when the revision also edits
+  the text right beside the outside marker (each copy keeps the marker its own view shows). When the
+  outside reference shares a run with text, the reference is moved into a run of its own so the text
+  is not marked as changed, and every copied run property change gets a revision id of its own.
+  The same clean-up now also tells apart the inserted copies two consolidate reviewers make when both
+  replace the same wrapper, and gives the comment a separate id in each (it repeated the comment's
+  markers under one id). Copies are told apart by how many times a marker repeats in one view, not by
+  reviewer name, so two reviewers sharing a name (or both unnamed) are handled too; a name only decides
+  which reviewer's copy a marker joins when several could take it. A comment
+  whose range opens in one wrapper and closes in another, each replaced by a different reviewer,
+  stays one comment in each view. The copies are numbered above every comment id in the document, so
+  a copy no longer takes the id of an undefined comment whose markers are still in the body.
 - A comparison's redline no longer repeats a paragraph id (`w14:paraId`) or writes one outside the range
   the schema allows (issue #1170). A paragraph id must be unique across the whole package and lie between
   1 and 7FFFFFFF; Word keys comment threading on it and may treat a repeat as damage. Three cases repeated

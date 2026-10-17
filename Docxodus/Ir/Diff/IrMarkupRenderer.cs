@@ -3923,7 +3923,6 @@ internal static partial class IrMarkupRenderer
         var commentsPart = main.WordprocessingCommentsPart;
 
         static string? IdOf(XElement e) => (string?)e.Attribute(W.id);
-        static bool IsBare(XElement e) => !e.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del);
         static bool InBothViews(XElement e) => CommentMarkerView(e) == null;
         List<XElement> Markers() => body.Descendants()
             .Where(e => (e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference)
@@ -3932,9 +3931,9 @@ internal static partial class IrMarkupRenderer
         bool changed = false;
 
         // One body scan, grouped by id in document order, serves (A) and (A2) instead of a rescan per id.
-        // Both passes only ever remove, re-parent or wrap a marker in place — never clone it or change its
-        // id — and each touches only its own id's markers, so a group stays in document order and needs
-        // only its detached members dropped (`StillInBody`) to equal a fresh scan.
+        // Both passes only remove, re-parent or wrap their own id's markers, never change an id, and add a
+        // marker only as a twin of one (A)'s straddling split has already finished with; so each group stays
+        // in document order and needs only its detached members dropped (`StillInBody`) to serve the passes.
         var markersById = Markers().Where(m => IdOf(m) != null).GroupBy(m => IdOf(m)!)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
         List<XElement> MarkersWithId(string id) => markersById[id].Where(StillInBody).ToList();
@@ -3947,25 +3946,18 @@ internal static partial class IrMarkupRenderer
             if (!(leftIds.Contains(id) && rightIds.Contains(id)))
                 continue; // right-added / left-deleted: keep its revision context
             var all = MarkersWithId(id);
+            if (SplitAcrossReplacedWrapperCopies(all, state))
+            {
+                changed = true; // every marker is one-sided now → (B) gives each copy its own comment
+                continue;
+            }
             if (!all.Any(InBothViews))
                 continue; // every marker toggles with a revision (rewritten anchor, replaced wrapper) → (B)
             collapsed.Add(id);
             foreach (var kind in new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference })
             {
                 var kinds = all.Where(m => m.Name == kind).ToList();
-                if (kinds.Count == 0)
-                    continue;
-                // Pick the survivor by POSITION so the collapsed range ENCLOSES the surviving content on BOTH
-                // sides, then lift it bare: the commentRangeStart must precede both the w:del and the w:ins (the
-                // leftmost copy in document order), the commentRangeEnd must follow both (the RIGHTMOST copy).
-                // Keeping a del-side end — even a BARE one that happens to sit before the deleted run — would
-                // leave the inserted (accept) / deleted (reject) content OUTSIDE the range, bracketing nothing for
-                // a wholly-rewritten or wholly-deleted anchor. Position is what matters; the lift is a no-op when
-                // the survivor is already bare. The reference is zero-width: either copy resolves the same.
-                var keep = kind == W.commentRangeEnd ? kinds[kinds.Count - 1] : kinds[0];
-                foreach (var m in kinds)
-                    if (!ReferenceEquals(m, keep)) { RemoveCommentMarker(m); changed = true; }
-                if (!IsBare(keep) && LiftCommentMarkerBare(keep))
+                if (kinds.Count > 0 && CollapseToSurvivor(kinds) is { Changed: true })
                     changed = true;
             }
         }
@@ -3989,47 +3981,62 @@ internal static partial class IrMarkupRenderer
             }
         }
 
-        // (B) Renumber/dedup remaining del∩ins duplicates → fresh id + cloned definition for the deleted copy.
+        // (B) A comment whose markers all toggle with a revision but sit in more than one copy of it (the deleted
+        //     and the inserted view; in a consolidate, each reviewer's inserted copy too) keeps its id on the first
+        //     inserted copy and gives every other copy a fresh id + a cloned definition.
         var commentsRoot = commentsPart?.GetXDocument().Root;
         if (commentsRoot != null)
         {
-            var markers = Markers();
-            var delIds = markers.Where(m => CommentMarkerView(m) == RevKind.Del).Select(IdOf).Where(i => i != null).ToHashSet();
-            var insIds = markers.Where(m => CommentMarkerView(m) == RevKind.Ins).Select(IdOf).Where(i => i != null).ToHashSet();
-            // A comment (A) collapsed is one comment by now: a survivor it kept inside a replaced wrapper's copy
-            // can still read as one-sided, but splitting it off under a fresh id would part it from the rest.
-            var duplicated = delIds.Where(i => insIds.Contains(i) && !collapsed.Contains(i!)).ToList();
-            if (duplicated.Count > 0)
+            var definitions = commentsRoot.Elements(W.comment)
+                .Where(c => (string?)c.Attribute(W.id) != null)
+                .GroupBy(c => (string)c.Attribute(W.id)!)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+            // Every marker is renamed at most once: the groups are fixed before any id changes.
+            var split = Markers().Where(m => IdOf(m) is { } i && !collapsed.Contains(i) && definitions.ContainsKey(i))
+                .GroupBy(m => IdOf(m)!)
+                .Select(g => (Id: g.Key, Copies: CommentViewCopies(g.ToList())))
+                .Where(c => c.Copies.Count > 1)
+                .ToList();
+            if (split.Count > 0)
             {
-                int nextId = commentsRoot.Elements(W.comment)
-                    .Select(c => int.TryParse((string?)c.Attribute(W.id), out var v) ? v : -1)
-                    .DefaultIfEmpty(-1).Max() + 1;
+                // Above every comment id in the package — definitions AND markers, so a fresh id never joins an
+                // undefined comment's markers still in the body.
+                int nextId = Internal.CommentOps.NextCommentId(main);
                 // A paraId is unique across the whole package (body, headers, footers, notes, comments and the
                 // threading parts), so the clones draw from the package-wide allocator (issue #1170).
                 var paraIds = new Internal.CommentOps.ParaIdAllocator(main);
-                var freshParaIds = new Dictionary<string, string>(StringComparer.Ordinal);
-                foreach (var oldId in duplicated)
+                // One paraId map per round of clones (the k-th extra copy of each comment), so a cloned reply's
+                // threading entry can point at its parent's clone from the same round.
+                var rounds = new List<Dictionary<string, string>>();
+                foreach (var (oldId, copies) in split)
                 {
-                    var newId = (nextId++).ToString();
-                    foreach (var m in markers.Where(m => IdOf(m) == oldId && CommentMarkerView(m) == RevKind.Del))
-                        m.SetAttributeValue(W.id, newId);
-                    var def = commentsRoot.Elements(W.comment).FirstOrDefault(c => (string?)c.Attribute(W.id) == oldId);
-                    if (def != null)
+                    int keeper = Math.Max(0, copies.FindIndex(c => c.View == RevKind.Ins));
+                    int round = 0;
+                    for (int k = 0; k < copies.Count; k++)
                     {
-                        var copy = new XElement(def);
+                        if (k == keeper)
+                            continue;
+                        var newId = (nextId++).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                        foreach (var m in copies[k].Markers)
+                            m.SetAttributeValue(W.id, newId);
+                        var copy = new XElement(definitions[oldId]);
                         copy.SetAttributeValue(W.id, newId);
+                        if (rounds.Count == round)
+                            rounds.Add(new Dictionary<string, string>(StringComparer.Ordinal));
                         // Give the clone its OWN w14:paraId(s) so it never duplicates a threading key; its
                         // threading entries are cloned below, once every clone's fresh paraId is known.
                         foreach (var pAttr in copy.Descendants().Attributes(W14ns + "paraId").ToList())
                         {
                             var freshPara = paraIds.Next();
-                            freshParaIds[(string)pAttr] = freshPara;
+                            rounds[round][(string)pAttr] = freshPara;
                             pAttr.Value = freshPara;
                         }
                         commentsRoot.Add(copy);
+                        round++;
                     }
                 }
-                CloneThreadingEntries(main, freshParaIds);
+                foreach (var freshParaIds in rounds)
+                    CloneThreadingEntries(main, freshParaIds);
                 commentsPart!.PutXDocument();
                 changed = true;
             }
@@ -4145,6 +4152,273 @@ internal static partial class IrMarkupRenderer
     }
 
     /// <summary>
+    /// The copies of one comment that the markers inside whole-replaced wrapper copies form, per view (views in the
+    /// order they first occur, copies in document order of their seeds; markers must come in document order). A view holds as many copies as its most repeated marker kind has markers there — two inserted
+    /// references mean two reviewers each replaced the wrapper holding it — and markers of copies of DIFFERENT
+    /// wrappers in one view (a range opening in one replaced wrapper and closing in another) belong to one copy.
+    /// Each occurrence of that most repeated kind seeds a copy; every other marker joins the copy seeded in the
+    /// same wrapper copy element, else a copy of its view still lacking its kind — preferring one whose wrapper copy
+    /// carries the same revision author, then the first in document order. The author never decides how many
+    /// copies there are (two reviewers may share one); it only breaks that tie.
+    /// </summary>
+    private static List<(RevKind View, List<XElement> Markers)> CopyClusters(IEnumerable<XElement> markers)
+    {
+        var placed = markers
+            .Select(m => (Marker: m, Copy: ReplacedWrapperCopy(m)))
+            .Where(p => p.Copy != null)
+            .Select(p => (p.Marker, Copy: p.Copy!, View: WholeWrapperCopyView(p.Copy!)!.Value))
+            .ToList();
+        var clusters = new List<(RevKind View, XElement Seed, List<XElement> Markers)>();
+        foreach (var view in placed.Select(p => p.View).Distinct().ToList())
+        {
+            var inView = placed.Where(p => p.View == view).ToList();
+            var seedKind = inView.GroupBy(p => p.Marker.Name).OrderByDescending(g => g.Count())
+                .ThenBy(g => KindOrder(g.Key)).First().Key;
+            var own = new List<(RevKind View, XElement Seed, List<XElement> Markers)>();
+            foreach (var seed in inView.Where(p => p.Marker.Name == seedKind))
+                own.Add((view, seed.Copy, new List<XElement> { seed.Marker }));
+            foreach (var p in inView.Where(p => p.Marker.Name != seedKind))
+            {
+                bool Lacks((RevKind View, XElement Seed, List<XElement> Markers) c) => c.Markers.All(m => m.Name != p.Marker.Name);
+                var home = own.FirstOrDefault(c => ReferenceEquals(c.Seed, p.Copy) && Lacks(c));
+                if (home.Markers == null)
+                {
+                    // Several copies may lack the kind (a conflict: copies of another wrapper, by reviewers who did
+                    // not all replace this one). The copy count stays the repetition rule's; the revision author
+                    // only breaks the tie, so a reviewer's copy of one wrapper pairs with that reviewer's copy of
+                    // the other, before document order decides.
+                    var author = EnvelopeAuthor(WrapperCopyEnvelope(p.Copy));
+                    home = own.FirstOrDefault(c => Lacks(c) && EnvelopeAuthor(WrapperCopyEnvelope(c.Seed)) == author);
+                }
+                if (home.Markers == null)
+                    home = own.FirstOrDefault(Lacks);
+                (home.Markers ?? own[0].Markers).Add(p.Marker);
+            }
+            clusters.AddRange(own);
+        }
+        return clusters.Select(c => (c.View, c.Markers)).ToList();
+    }
+
+    private static int KindOrder(XName kind) =>
+        kind == W.commentRangeStart ? 0 : kind == W.commentRangeEnd ? 1 : 2;
+
+    /// <summary>
+    /// Partition one comment's one-sided markers (phase B of <see cref="NormalizeComments"/>) into the copies of
+    /// the comment the views hold: the <see cref="CopyClusters"/> of its markers inside whole-replaced wrapper
+    /// copies, joined by each other marker of the view (a run-level <c>w:ins</c>/<c>w:del</c> marker, or a twin
+    /// phase A made of a marker outside the wrapper) in document order — the first copy of its view still lacking
+    /// its kind, else the view's first copy. A view with no wrapper copy holds one copy of everything. Returns no
+    /// copies when any marker survives both views.
+    /// </summary>
+    private static List<(RevKind View, List<XElement> Markers)> CommentViewCopies(List<XElement> markers)
+    {
+        if (markers.Any(m => CommentMarkerView(m) == null))
+            return new();
+        var copies = CopyClusters(markers);
+        foreach (var m in markers.Where(m => ReplacedWrapperCopy(m) == null))
+        {
+            var view = CommentMarkerView(m)!.Value;
+            int at = copies.FindIndex(c => c.View == view && c.Markers.All(x => x.Name != m.Name));
+            if (at < 0)
+                at = copies.FindIndex(c => c.View == view);
+            if (at < 0)
+            {
+                copies.Add((view, new List<XElement>()));
+                at = copies.Count - 1;
+            }
+            copies[at].Markers.Add(m);
+        }
+        return copies;
+    }
+
+    /// <summary>
+    /// Collapse one marker kind of a comment to a single bare survivor (phase A of <see cref="NormalizeComments"/>).
+    /// The survivor is picked by POSITION so the collapsed range ENCLOSES the surviving content on BOTH sides, then
+    /// lifted bare: the <c>commentRangeStart</c> must precede both the <c>w:del</c> and the <c>w:ins</c> (the
+    /// leftmost copy in document order), the <c>commentRangeEnd</c> must follow both (the RIGHTMOST copy). Keeping
+    /// a del-side end — even a BARE one that happens to sit before the deleted run — would leave the inserted
+    /// (accept) / deleted (reject) content OUTSIDE the range, bracketing nothing for a wholly-rewritten or
+    /// wholly-deleted anchor. Position is what matters; the lift is a no-op when the survivor is already bare. The
+    /// reference is zero-width: either copy resolves the same.
+    /// </summary>
+    private static (XElement Survivor, bool Changed) CollapseToSurvivor(List<XElement> sameKind)
+    {
+        var keep = SurvivorOf(sameKind);
+        bool changed = false;
+        foreach (var m in sameKind)
+            if (!ReferenceEquals(m, keep)) { RemoveCommentMarker(m); changed = true; }
+        if (keep.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del) && LiftCommentMarkerBare(keep))
+            changed = true;
+        return (keep, changed);
+    }
+
+    private static XElement SurvivorOf(List<XElement> sameKind) =>
+        sameKind[0].Name == W.commentRangeEnd ? sameKind[sameKind.Count - 1] : sameKind[0];
+
+    /// <summary>
+    /// Issue #1167: a common comment that straddles the edge of a block wrapper replaced whole — it opens before
+    /// the wrapper and closes inside it, or its range lies inside the wrapper and its reference after it. The
+    /// markers inside the wrapper exist once in each copy (the deleted copy's for reject, the inserted copy's for
+    /// accept), but the marker outside exists once for both views, so no single set of markers can serve both:
+    /// collapsing them as phase A does would leave one view's comment half inside the other copy. Instead the
+    /// outside marker is given a twin per copy — each wrapped in that copy's <c>w:del</c>/<c>w:ins</c>, under
+    /// the author and date of the copy's own revision — so every marker of the comment becomes one-sided and
+    /// phase B gives each copy a comment of its own, exactly as for a comment wholly inside a replaced wrapper
+    /// (issue #1157).
+    /// </summary>
+    /// <remarks>
+    /// Applies only when each marker kind of the comment is either wholly outside every replaced wrapper copy or
+    /// wholly inside replaced copies, with one in a deleted and one in an inserted copy, and both sorts occur.
+    /// Anything else returns false and goes on to phase A's collapse or phase B as before.
+    /// </remarks>
+    private static bool SplitAcrossReplacedWrapperCopies(List<XElement> markers, RenderState state)
+    {
+        var shared = new List<List<XElement>>();
+        var inside = new List<XElement>();
+        foreach (var sameKind in markers.GroupBy(m => m.Name).Select(g => g.ToList()))
+        {
+            var views = sameKind.Select(m => ReplacedWrapperCopy(m) is { } copy ? WholeWrapperCopyView(copy) : null).ToList();
+            if (views.All(v => v == null))
+            {
+                // Outside every replaced copy. The fine path may have drawn it in a w:ins/w:del of its own (an edit
+                // right beside it), or once in each.
+                shared.Add(sameKind);
+                continue;
+            }
+            if (views.Any(v => v == null) || !views.Contains(RevKind.Del) || !views.Contains(RevKind.Ins))
+                return false;
+            inside.AddRange(sameKind);
+        }
+        var copies = CopyClusters(markers.Where(inside.Contains))
+            .Select(c => (c.View, Envelope: WrapperCopyEnvelope(ReplacedWrapperCopy(c.Markers[0])!)))
+            .ToList();
+        if (copies.Count == 0 || shared.Count == 0)
+            return false;
+
+        foreach (var sameKind in shared)
+        {
+            // Each copy takes the marker its own view shows (the leftmost start, the rightmost end), falling back
+            // to the phase A survivor when its view shows none (the fine path drew the marker only inside the
+            // other view's insertion or deletion). Markers no copy takes are dropped.
+            var chosen = copies.Select(c =>
+            {
+                var visible = sameKind.Where(m => CommentMarkerView(m) is null || CommentMarkerView(m) == c.View).ToList();
+                return SurvivorOf(visible.Count > 0 ? visible : sameKind);
+            }).ToList();
+            foreach (var m in sameKind)
+                if (!chosen.Contains(m))
+                    RemoveCommentMarker(m);
+            foreach (var marker in chosen.Distinct().ToList())
+            {
+                var users = Enumerable.Range(0, copies.Count).Where(i => ReferenceEquals(chosen[i], marker)).ToList();
+                if (users.Count == 1 && CommentMarkerView(marker) == copies[users[0]].View)
+                    continue; // already drawn in that copy's view alone
+                if (marker.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del))
+                    LiftCommentMarkerBare(marker);
+                var target = marker.Name == W.commentReference ? IsolateReferenceRun(marker, state) : marker;
+                var anchor = target;
+                for (int u = 0; u < users.Count; u++)
+                {
+                    var twin = target;
+                    if (u > 0)
+                    {
+                        twin = FreshenRevisionIds(new XElement(target), state);
+                        anchor.AddAfterSelf(twin);
+                    }
+                    var (view, envelope) = copies[users[u]];
+                    var revision = WrapMarkerInRevision(twin.Name == W.r ? twin.Element(W.commentReference)! : twin, view,
+                        new object[]
+                        {
+                            new XAttribute(W.author, EnvelopeAuthor(envelope) ?? state.AuthorOverride ?? state.Settings.AuthorForRevisions),
+                            new XAttribute(W.id, state.NextId()),
+                            new XAttribute(W.date, (string?)envelope?.Attribute(W.date) ?? state.Settings.DateTimeForRevisions),
+                        });
+                    anchor = revision ?? anchor;
+                }
+            }
+        }
+        return true;
+    }
+
+    private static string? EnvelopeAuthor(XElement? envelope) => (string?)envelope?.Attribute(W.author);
+
+    /// <summary>The nearest block wrapper around <paramref name="marker"/> emitted as a whole deleted or inserted
+    /// copy, or null.</summary>
+    private static XElement? ReplacedWrapperCopy(XElement marker) =>
+        marker.Ancestors().FirstOrDefault(a => WholeWrapperCopyView(a) != null);
+
+    /// <summary>The <c>w:customXmlDelRangeStart</c>/<c>w:customXmlInsRangeStart</c> that opens the revision
+    /// range marking <paramref name="copy"/> as a whole deleted or inserted copy (it carries the copy's author and
+    /// date), or null when it cannot be found.</summary>
+    private static XElement? WrapperCopyEnvelope(XElement copy)
+    {
+        var content = copy.Name == W.sdt ? copy.Element(W.sdtContent) : copy;
+        var end = content?.Elements().FirstOrDefault(e => e.Name != W.customXmlPr);
+        if (end == null || (end.Name != W.customXmlDelRangeEnd && end.Name != W.customXmlInsRangeEnd))
+            return null;
+        var startName = end.Name == W.customXmlDelRangeEnd ? W.customXmlDelRangeStart : W.customXmlInsRangeStart;
+        var id = (string?)end.Attribute(W.id);
+        bool Opens(XElement s) => (string?)s.Attribute(W.id) == id;
+        return copy.ElementsBeforeSelf(startName).LastOrDefault(Opens)
+            ?? copy.AncestorsAndSelf().Last().Descendants(startName).FirstOrDefault(Opens);
+    }
+
+    /// <summary>Give every tracked-revision element in <paramref name="clone"/> (a run property change, say) a
+    /// fresh <c>w:id</c>, so a copy never repeats its original's revision ids; the two ends of a range keep one
+    /// shared fresh id. Returns <paramref name="clone"/>.</summary>
+    private static XElement FreshenRevisionIds(XElement clone, RenderState state)
+    {
+        var ranges = new Dictionary<(XName, string), string>();
+        foreach (var rev in clone.DescendantsAndSelf().Where(e => TrackedRevisionNames.Contains(e.Name)))
+        {
+            if (rev.Attribute(W.id) is not { } id)
+                continue;
+            var startName = PreservedRangeEnds.ContainsKey(rev.Name) ? rev.Name
+                : PreservedRangeStarts.TryGetValue(rev.Name, out var s) ? s : null;
+            if (startName == null)
+                id.Value = state.NextId().ToString(System.Globalization.CultureInfo.InvariantCulture);
+            else if (ranges.TryGetValue((startName, id.Value), out var shared))
+                id.Value = shared;
+            else
+                id.Value = ranges[(startName, id.Value)] = state.NextId().ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        return clone;
+    }
+
+    /// <summary>Give a <c>w:commentReference</c> a run of its own (keeping the host run's properties) by splitting
+    /// any other content of its run into runs before and after it, and return that run. Each split-off run's
+    /// properties are a copy, so their revision ids are made fresh.</summary>
+    private static XElement IsolateReferenceRun(XElement reference, RenderState state)
+    {
+        var run = reference.Parent!;
+        var content = run.Elements().Where(e => e.Name != W.rPr).ToList();
+        if (content.Count == 1)
+            return run;
+        var rPr = run.Element(W.rPr);
+        int at = content.IndexOf(reference);
+        foreach (var e in content)
+            e.Remove();
+        bool first = true;
+        XElement Piece(IEnumerable<XElement> children)
+        {
+            var piece = new XElement(W.r, run.Attributes(), rPr == null ? null : new XElement(rPr), children);
+            if (!first)
+                FreshenRevisionIds(piece, state);
+            first = false;
+            return piece;
+        }
+        var pieces = new List<XElement>();
+        if (at > 0)
+            pieces.Add(Piece(content.Take(at)));
+        var own = Piece(new[] { reference });
+        pieces.Add(own);
+        if (at < content.Count - 1)
+            pieces.Add(Piece(content.Skip(at + 1)));
+        run.ReplaceWith(pieces);
+        return own;
+    }
+
+    /// <summary>
     /// The one revision view a comment marker toggles with — <see cref="RevKind.Del"/> when only reject keeps
     /// it, <see cref="RevKind.Ins"/> when only accept does — or null when it survives both. The nearest
     /// tracked context decides: a <c>w:del</c>/<c>w:ins</c> wrapper around it, or a block wrapper
@@ -4160,11 +4434,26 @@ internal static partial class IrMarkupRenderer
                 return RevKind.Del;
             if (a.Name == W.ins)
                 return RevKind.Ins;
-            var content = a.Name == W.sdt ? a.Element(W.sdtContent) : a.Name == W.customXml ? a : null;
-            if (content != null && Internal.StructuredRevisionOps.TrackedWrapperIsDeleted(content) is { } deleted)
-                return deleted ? RevKind.Del : RevKind.Ins;
+            if (WholeWrapperCopyView(a) is { } view)
+                return view;
         }
         return null;
+    }
+
+    /// <summary>The view of the nearest block wrapper around <paramref name="marker"/> that is emitted as a whole
+    /// deleted or inserted copy, or null when no such wrapper encloses it (run-level <c>w:ins</c>/<c>w:del</c>
+    /// are not consulted).</summary>
+    private static RevKind? ReplacedWrapperCopyView(XElement marker) =>
+        marker.Ancestors().Select(WholeWrapperCopyView).FirstOrDefault(v => v != null);
+
+    /// <summary>The view of <paramref name="element"/> when it is a <c>w:sdt</c>/<c>w:customXml</c> emitted as a
+    /// whole deleted or inserted copy; otherwise null.</summary>
+    private static RevKind? WholeWrapperCopyView(XElement element)
+    {
+        var content = element.Name == W.sdt ? element.Element(W.sdtContent) : element.Name == W.customXml ? element : null;
+        return content != null && Internal.StructuredRevisionOps.TrackedWrapperIsDeleted(content) is { } deleted
+            ? deleted ? RevKind.Del : RevKind.Ins
+            : null;
     }
 
     /// <summary>True iff the comment marker sits at the paragraph/body run level (its ancestors up to the
@@ -4293,16 +4582,22 @@ internal static partial class IrMarkupRenderer
     /// revision side (a right-added or left-deleted comment or bookmark whose marker landed in equal content). The <c>commentReference</c>'s
     /// host <c>w:r</c> is wrapped (a marker element is wrapped directly); both are valid children of
     /// <c>w:ins</c>/<c>w:del</c>.</summary>
-    private static void WrapMarkerInRevision(XElement marker, RevKind kind, RenderState state)
+    private static void WrapMarkerInRevision(XElement marker, RevKind kind, RenderState state) =>
+        WrapMarkerInRevision(marker, kind, state.RevisionAttributes());
+
+    /// <summary>As <see cref="WrapMarkerInRevision(XElement, RevKind, RenderState)"/>, with the revision element's
+    /// attributes given; returns the new revision element, or null when the marker is detached.</summary>
+    private static XElement? WrapMarkerInRevision(XElement marker, RevKind kind, object[] revisionAttributes)
     {
         var target = marker;
         if (marker.Name == W.commentReference && marker.Parent?.Name == W.r)
             target = marker.Parent;
         if (target.Parent == null)
-            return;
-        var rev = new XElement(RevElementName(kind), state.RevisionAttributes());
+            return null;
+        var rev = new XElement(RevElementName(kind), revisionAttributes);
         target.ReplaceWith(rev);
         rev.Add(target);
+        return rev;
     }
 
     // ----------------------------------------------------------------- bookmark normalization
