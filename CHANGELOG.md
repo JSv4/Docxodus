@@ -33,6 +33,16 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Rejecting revisions now reverses an insertion or deletion inside an inline (run-level) `w:customXml`
+  element (issue #1176). Reject works by turning each insertion into a deletion and each deletion into
+  an insertion, then accepting; that turn-around covered paragraphs, hyperlinks, simple fields,
+  bidirectional runs and block-level custom XML, but skipped revisions whose nearest container was an
+  inline custom-XML element. Rejecting therefore kept the inserted text there and dropped the original
+  text. Two accept-side gaps for the same element are fixed with it: a hyperlink or simple field whose
+  runs all sit inside an inline custom-XML element was removed on accept (and so on reject) as if it
+  were empty, even with no revisions in it, and accepting or rejecting a paragraph-mark revision on a
+  paragraph whose content sits in an inline custom-XML element threw "Internal error 20".
+
 - A comparison or consolidation no longer writes two styles with the same `w:styleId` when the documents
   use one id for styles of different types, such as a paragraph style `DocID` in the original and a
   character style `DocID` in the revision (issue #1184). Style ids are unique across all types, so the

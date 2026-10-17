@@ -778,14 +778,14 @@ namespace Docxodus
         /// Whether a <c>w:ins</c>/<c>w:del</c> under <paramref name="parent"/> (its nearest ancestor other than a
         /// content control or smart tag) is a run-level revision that reject reverses. Besides a paragraph and the
         /// run containers inside one, that is a block stream: a revision wrapper written between blocks holds
-        /// run-level markup such as a bookmark or comment-range marker (issue #1149), and a block
-        /// <c>w:customXml</c> (one outside any paragraph) is a block stream too.
+        /// run-level markup such as a bookmark or comment-range marker (issue #1149). A <c>w:customXml</c> at
+        /// any level is a container whose revisions reject reverses: a block one is a block stream, and an
+        /// inline one (inside a paragraph) is a run container like a hyperlink (issue #1176).
         /// </summary>
         private static bool IsRunLevelRevisionParent(XElement? parent) =>
             parent is not null &&
             (parent.Name == W.p || parent.Name == W.hyperlink || parent.Name == W.fldSimple ||
-             parent.Name == W.dir || parent.Name == W.bdo ||
-             (parent.Name == W.customXml && !parent.Ancestors(W.p).Any()) ||
+             parent.Name == W.dir || parent.Name == W.bdo || parent.Name == W.customXml ||
              W.BlockLevelContentContainers.Contains(parent.Name));
 
         private static object? ReverseRevisionsTransform(XNode? node, ReverseRevisionsInfo rri)
@@ -1990,11 +1990,13 @@ namespace Docxodus
         /// decide whether an emptied <c>w:hyperlink</c> shell (all its runs deleted/inserted-then-collapsed)
         /// should survive. A hyperlink with only bookmark/proofErr/other zero-content markers, or nothing, is
         /// dropped. Conservative: any <c>w:r</c>, <c>w:smartTag</c>, <c>w:ins</c>, <c>w:del</c>, or nested
-        /// <c>w:hyperlink</c> child counts as content.</summary>
+        /// <c>w:hyperlink</c> child counts as content, and so does an inline <c>w:customXml</c> that itself
+        /// holds such content (issue #1176).</summary>
         private static bool HasRunContent(XElement element) =>
             element.Elements().Any(e =>
                 e.Name == W.r || e.Name == W.smartTag || e.Name == W.ins || e.Name == W.del ||
-                e.Name == W.hyperlink || e.Name == W.fldSimple || e.Name == W.sdt);
+                e.Name == W.hyperlink || e.Name == W.fldSimple || e.Name == W.sdt ||
+                (e.Name == W.customXml && HasRunContent(e)));
 
         private static object? AcceptAllOtherRevisionsTransform(XNode? node)
         {
@@ -2925,7 +2927,7 @@ namespace Docxodus
             return true;
         }
 
-        // dir, bdo, sdt, ins, moveTo, smartTag
+        // dir, bdo, sdt, ins, moveTo, smartTag, inline customXml
         private static object? CollapseTransform(XNode? node)
         {
             XElement? element = node as XElement;
@@ -2950,6 +2952,13 @@ namespace Docxodus
 
                 if (element.Name == W.sdt)
                     return element.Elements(W.sdtContent).Nodes().Select(n => CollapseTransform(n));
+
+                // An inline custom-XML element is a transparent run container too (issue #1176); left in
+                // place, IsRunContent cannot classify it. Its w:customXmlPr is not content.
+                if (element.Name == W.customXml)
+                    return element.Nodes()
+                        .Where(n => n is not XElement child || child.Name != W.customXmlPr)
+                        .Select(n => CollapseTransform(n));
 
                 if (element.Name == W.pPr)
                     return null;
