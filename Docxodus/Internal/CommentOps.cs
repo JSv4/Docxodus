@@ -288,8 +288,11 @@ internal static class CommentOps
     /// <summary>
     /// The single owner of package-unique <c>w14:paraId</c> minting. Word keys comment
     /// threading, coauthoring and revision identity off a paraId, so a value must be unique
-    /// across every part that can carry one — including the two paraId-keyed comment metadata
-    /// parts, whose entries outlive the paragraph they name.
+    /// across every part that can carry one — the body, headers, footers, notes, comments and the
+    /// glossary document — including the two paraId-keyed comment metadata parts, whose entries
+    /// outlive the paragraph they name. [MS-DOCX] also bounds a paraId to 1 ≤ value &lt; 0x80000000
+    /// (the validator's <c>MinExclusive</c>/<c>MaxExclusive</c>), so a package whose largest id is
+    /// already 7FFFFFFF gets the lowest free value instead of one past it.
     /// </summary>
     /// <remarks>
     /// A caller minting several ids for a subtree that is still <em>detached</em> from the
@@ -300,84 +303,102 @@ internal static class CommentOps
     /// </remarks>
     internal sealed class ParaIdAllocator
     {
-        private readonly List<string> _used;
+        /// <summary>Every valid <c>w14:paraId</c> is below this value.</summary>
+        internal const uint ExclusiveCeiling = 0x80000000;
 
-        internal ParaIdAllocator(MainDocumentPart main) => _used = CollectParaIds(main);
+        private readonly EightHexAllocator _ids;
 
-        internal string Next()
-        {
-            var value = NextEightHex(_used);
-            _used.Add(value);
-            return value;
-        }
+        internal ParaIdAllocator(MainDocumentPart main) =>
+            _ids = new EightHexAllocator(CollectParaIds(main), ExclusiveCeiling);
+
+        internal string Next() => _ids.Next();
     }
 
-    private static List<string> CollectParaIds(MainDocumentPart main)
+    private static IEnumerable<string> CollectParaIds(MainDocumentPart main)
     {
-        var values = new List<string>();
-        foreach (var part in ReferenceHostParts(main).Append<OpenXmlPart?>(main.WordprocessingCommentsPart))
+        foreach (var part in ReferenceHostParts(main)
+                     .Append<OpenXmlPart?>(main.WordprocessingCommentsPart)
+                     .Append(main.GlossaryDocumentPart))
         {
             var root = part?.GetXDocument().Root;
             if (root is null) continue;
-            values.AddRange(root.DescendantsAndSelf().Attributes(W14.paraId).Select(a => (string)a));
+            foreach (var attribute in root.DescendantsAndSelf().Attributes(W14.paraId))
+                yield return attribute.Value;
         }
-
-        var exRoot = main.WordprocessingCommentsExPart?.GetXDocument().Root;
-        if (exRoot is not null)
-        {
-            values.AddRange(exRoot.Elements(W15 + "commentEx")
-                .SelectMany(e => new[]
-                {
-                    (string?)e.Attribute(W15 + "paraId"),
-                    (string?)e.Attribute(W15 + "paraIdParent"),
-                })
-                .Where(v => !string.IsNullOrEmpty(v))
-                .Select(v => v!));
-        }
-        var idsRoot = main.WordprocessingCommentsIdsPart?.GetXDocument().Root;
-        if (idsRoot is not null)
-            values.AddRange(idsRoot.Elements(W16Cid + "commentId")
-                .Select(e => (string?)e.Attribute(W16Cid + "paraId"))
-                .Where(v => !string.IsNullOrEmpty(v)).Select(v => v!));
-
-        return values;
+        foreach (var value in ThreadingParaIds(main))
+            yield return value;
     }
 
-    /// <summary>A <c>w16cid:durableId</c> no entry of <paramref name="idsRoot"/> uses yet.</summary>
-    internal static string NextDurableId(XElement idsRoot) =>
-        NextEightHex(idsRoot.Elements(W16Cid + "commentId")
-            .Select(e => (string?)e.Attribute(W16Cid + "durableId"))
-            .Where(v => !string.IsNullOrEmpty(v)).Select(v => v!));
-
-    private static string NextEightHex(IEnumerable<string> values)
+    /// <summary>The paraIds the comment threading parts are keyed on: each <c>commentsExtended</c> entry's
+    /// <c>w15:paraId</c> and <c>w15:paraIdParent</c>, and each <c>commentsIds</c> entry's
+    /// <c>w16cid:paraId</c>.</summary>
+    internal static IEnumerable<string> ThreadingParaIds(MainDocumentPart main)
     {
-        var used = new HashSet<uint>();
-        uint max = 0;
-        foreach (var value in values)
+        var exRoot = main.WordprocessingCommentsExPart?.GetXDocument().Root;
+        if (exRoot is not null)
+            foreach (var entry in exRoot.Elements(W15 + "commentEx"))
+                foreach (var name in new[] { W15 + "paraId", W15 + "paraIdParent" })
+                    if ((string?)entry.Attribute(name) is { Length: > 0 } value)
+                        yield return value;
+        var idsRoot = main.WordprocessingCommentsIdsPart?.GetXDocument().Root;
+        if (idsRoot is not null)
+            foreach (var entry in idsRoot.Elements(W16Cid + "commentId"))
+                if ((string?)entry.Attribute(W16Cid + "paraId") is { Length: > 0 } value)
+                    yield return value;
+    }
+
+    /// <summary>
+    /// A <c>w16cid:durableId</c> no entry of <paramref name="idsRoot"/> uses yet. The validator puts
+    /// no bound on a durable id; minted values are kept below 0x7FFFFFFF all the same, so they also
+    /// satisfy a reader that holds durable ids to the signed 32-bit range.
+    /// </summary>
+    internal static string NextDurableId(XElement idsRoot) =>
+        new EightHexAllocator(
+            idsRoot.Elements(W16Cid + "commentId")
+                .Select(e => (string?)e.Attribute(W16Cid + "durableId"))
+                .Where(v => !string.IsNullOrEmpty(v)).Select(v => v!),
+            0x7FFFFFFF).Next();
+
+    /// <summary>
+    /// Mints eight-hex ids in <c>[1, ceiling)</c> that none of the seeded values, nor any id it minted
+    /// before, uses: one past the largest used value below the ceiling while that still fits, otherwise
+    /// the lowest free value. One set and two cursors, so each call is amortised constant time.
+    /// </summary>
+    private sealed class EightHexAllocator
+    {
+        private readonly HashSet<uint> _used = new();
+        private readonly uint _ceiling;
+        private uint _max;         // the largest used value below the ceiling (0 when none)
+        private uint _lowest = 1;  // every value in [1, _lowest) is used
+
+        internal EightHexAllocator(IEnumerable<string> values, uint exclusiveCeiling)
         {
-            if (value.Length != 8
-                || !uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var parsed))
-                continue;
-            used.Add(parsed);
-            if (parsed > max) max = parsed;
+            _ceiling = exclusiveCeiling;
+            foreach (var value in values)
+                if (value.Length == 8
+                    && uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var parsed)
+                    && _used.Add(parsed) && parsed < _ceiling && parsed > _max)
+                    _max = parsed;
         }
 
-        uint next;
-        if (max < uint.MaxValue)
+        internal string Next()
         {
-            next = max + 1;
-            if (next != 0 && !used.Contains(next))
-                return next.ToString("X8", CultureInfo.InvariantCulture);
+            uint next;
+            if (_max + 1 < _ceiling)
+            {
+                next = ++_max; // above every used value below the ceiling, so free
+            }
+            else
+            {
+                while (_lowest < _ceiling && _used.Contains(_lowest))
+                    _lowest++;
+                if (_lowest >= _ceiling)
+                    throw new InvalidOperationException("all eight-hex ids below the ceiling are allocated");
+                next = _lowest;
+            }
+            _used.Add(next);
+            return next.ToString("X8", CultureInfo.InvariantCulture);
         }
-
-        next = 1;
-        while (used.Contains(next))
-        {
-            if (next == uint.MaxValue)
-                throw new InvalidOperationException("all eight-hex comment metadata ids are allocated");
-            next++;
-        }
-        return next.ToString("X8", CultureInfo.InvariantCulture);
     }
 
     /// <summary>

@@ -616,6 +616,11 @@ internal static partial class IrMarkupRenderer
                 // It adds no names, so it needs no declarations; after the namespace pass so that pass
                 // sees only the parts the render loaded, not the story parts this one reads.
                 DrawingIds.MakeUnique(wDoc);
+
+                // Paragraph ids likewise: a paragraph replaced whole keeps the source paraId in both its deleted and
+                // its inserted copy, and merged comments bring ids from another package. Last, after every pass that
+                // clones or mints one (issue #1170).
+                ParagraphIds.MakeUnique(wDoc);
             }
             var rendered = streamDoc.GetModifiedWmlDocument();
             return settings.NormalizeRevisionAuthors
@@ -3748,6 +3753,16 @@ internal static partial class IrMarkupRenderer
         var outputComments = main.WordprocessingCommentsPart!;
         var addedDefinitions = new List<XElement>(toAdd.Count);
         var addedParaIds = new HashSet<string>();
+        // The paraIds the output's comments are already keyed on — their definitions' and the threading
+        // entries'. A right-added definition reusing one (it numbered a different comment in the other
+        // package) takes a fresh package-wide id, and its threading entries follow it below, so it never
+        // shares a key with a left comment (issue #1170).
+        var commentKeys = new HashSet<string>(
+            outRoot.Descendants().Attributes(W14ns + "paraId").Select(a => a.Value)
+                .Concat(Internal.CommentOps.ThreadingParaIds(main)),
+            StringComparer.OrdinalIgnoreCase);
+        var renamedParaIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        Internal.CommentOps.ParaIdAllocator? paraIds = null;
         foreach (var def in toAdd)
         {
             // Keep the live clone: relationship import rewrites its r:embed/r:id attributes in place.
@@ -3756,8 +3771,18 @@ internal static partial class IrMarkupRenderer
             var clone = new XElement(def);
             outRoot.Add(clone);
             addedDefinitions.Add(clone);
-            foreach (var pid in def.Descendants().Attributes((W14ns + "paraId")))
-                if ((string?)pid is { Length: > 0 } v) addedParaIds.Add(v);
+            foreach (var pid in clone.Descendants().Attributes(W14ns + "paraId"))
+            {
+                if (pid.Value.Length == 0)
+                    continue;
+                addedParaIds.Add(pid.Value);
+                if (commentKeys.Add(pid.Value))
+                    continue;
+                var fresh = (paraIds ??= new Internal.CommentOps.ParaIdAllocator(main)).Next();
+                renamedParaIds[pid.Value] = fresh;
+                commentKeys.Add(fresh);
+                pid.Value = fresh;
+            }
         }
 
         // Import relationships against their OWNERS: both r:embed media and w:hyperlink r:ids in a
@@ -3786,35 +3811,56 @@ internal static partial class IrMarkupRenderer
                     main.WordprocessingCommentsExPart
                         ?? main.AddDeterministicPart<WordprocessingCommentsExPart>("rIdCommentsEx"),
                     rightMain.WordprocessingCommentsExPart,
-                    W15ns + "commentsEx", W15ns + "commentEx", W15ns + "paraId", addedParaIds,
+                    W15ns + "commentsEx", W15ns + "commentEx", W15ns + "paraId", addedParaIds, renamedParaIds,
                     $"<w15:commentsEx xmlns:w=\"{W.w.NamespaceName}\" xmlns:w15=\"{W15ns.NamespaceName}\"/>");
             if (rightMain.WordprocessingCommentsIdsPart != null)
                 MergeRightThreadingEntries(
                     main.WordprocessingCommentsIdsPart
                         ?? main.AddDeterministicPart<WordprocessingCommentsIdsPart>("rIdCommentsIds"),
                     rightMain.WordprocessingCommentsIdsPart,
-                    W16cidNs + "commentsIds", W16cidNs + "commentId", W16cidNs + "paraId", addedParaIds,
+                    W16cidNs + "commentsIds", W16cidNs + "commentId", W16cidNs + "paraId", addedParaIds, renamedParaIds,
                     $"<w16cid:commentsIds xmlns:w=\"{W.w.NamespaceName}\" xmlns:w16cid=\"{W16cidNs.NamespaceName}\"/>");
         }
     }
 
     /// <summary>Copy every entry of <paramref name="rightPart"/> whose paraId attribute is in
     /// <paramref name="paraIds"/> into <paramref name="outPart"/> (seeded from <paramref name="seedXml"/> when
-    /// empty), skipping paraIds already present. Shared by the <c>commentsExtended</c> + <c>commentsIds</c>
-    /// threading merges.</summary>
+    /// empty), under the fresh paraId <paramref name="renamed"/> gave its definition, if any (a
+    /// <c>w15:paraIdParent</c> naming a renamed definition follows it too), skipping paraIds already present and
+    /// giving a <c>w16cid:durableId</c> the output already uses a fresh value.
+    /// Shared by the <c>commentsExtended</c> + <c>commentsIds</c> threading merges.</summary>
     private static void MergeRightThreadingEntries(OpenXmlPart outPart, OpenXmlPart? rightPart,
-        XName rootName, XName entryName, XName paraIdAttr, HashSet<string> paraIds, string seedXml)
+        XName rootName, XName entryName, XName paraIdAttr, HashSet<string> paraIds,
+        IReadOnlyDictionary<string, string> renamed, string seedXml)
     {
         var rightRoot = rightPart?.GetXDocument().Root;
         if (rightRoot == null)
             return;
         var outRoot = EnsurePartRoot(outPart, seedXml);
         var present = outRoot.Elements(entryName).Select(e => (string?)e.Attribute(paraIdAttr)).ToHashSet();
+        var durableIds = outRoot.Elements(entryName).Select(e => (string?)e.Attribute(W16cidNs + "durableId"))
+            .Where(d => d != null).Select(d => d!).ToHashSet(StringComparer.OrdinalIgnoreCase);
         bool changed = false;
-        foreach (var entry in rightRoot.Elements(entryName)
-                     .Where(e => (string?)e.Attribute(paraIdAttr) is { } p && paraIds.Contains(p) && !present.Contains(p)))
+        foreach (var entry in rightRoot.Elements(entryName))
         {
-            outRoot.Add(new XElement(entry));
+            if ((string?)entry.Attribute(paraIdAttr) is not { } original || !paraIds.Contains(original))
+                continue;
+            var key = renamed.TryGetValue(original, out var fresh) ? fresh : original;
+            if (!present.Add(key))
+                continue;
+            var copy = new XElement(entry);
+            copy.SetAttributeValue(paraIdAttr, key);
+            if ((string?)copy.Attribute(W15ns + "paraIdParent") is { } parent && renamed.TryGetValue(parent, out var freshParent))
+                copy.SetAttributeValue(W15ns + "paraIdParent", freshParent);
+            // A durable id names one comment across the package too: one the original already uses (the other
+            // package numbered a different comment with it) is replaced by a fresh one.
+            if ((string?)copy.Attribute(W16cidNs + "durableId") is { } durable && !durableIds.Add(durable))
+            {
+                var freshDurable = Internal.CommentOps.NextDurableId(outRoot);
+                copy.SetAttributeValue(W16cidNs + "durableId", freshDurable);
+                durableIds.Add(freshDurable);
+            }
+            outRoot.Add(copy);
             changed = true;
         }
         if (changed)
@@ -3858,7 +3904,8 @@ internal static partial class IrMarkupRenderer
     /// <item><b>(B) dedup.</b> A comment whose markers all toggle with a revision, some with the deleted view and
     /// some with the inserted one (a wholly rewritten anchor, a comment in a whole-block-bailed table/opaque, or
     /// one between the blocks of a block wrapper replaced whole — issue #1157), has no survivor of both views:
-    /// give the DELETED copy a fresh id + a cloned definition (paraId-stripped so threading never collides).
+    /// give the DELETED copy a fresh id + a cloned definition whose <c>w14:paraId</c>s are freshly minted package-wide,
+    /// so neither threading nor any body, header, footer or note paragraph shares one (issue #1170).
     /// Accept ≡ right comment, reject ≡ left comment.</item>
     /// <item><b>(C) pair + resolve.</b> Drop any marker/reference whose id has no definition; re-close an
     /// orphaned start with a synthetic zero-width end in the start's own context; drop an orphaned end.</item>
@@ -3957,7 +4004,9 @@ internal static partial class IrMarkupRenderer
                 int nextId = commentsRoot.Elements(W.comment)
                     .Select(c => int.TryParse((string?)c.Attribute(W.id), out var v) ? v : -1)
                     .DefaultIfEmpty(-1).Max() + 1;
-                int nextParaId = MaxParaId(commentsRoot) + 1;
+                // A paraId is unique across the whole package (body, headers, footers, notes, comments and the
+                // threading parts), so the clones draw from the package-wide allocator (issue #1170).
+                var paraIds = new Internal.CommentOps.ParaIdAllocator(main);
                 var freshParaIds = new Dictionary<string, string>(StringComparer.Ordinal);
                 foreach (var oldId in duplicated)
                 {
@@ -3973,7 +4022,7 @@ internal static partial class IrMarkupRenderer
                         // threading entries are cloned below, once every clone's fresh paraId is known.
                         foreach (var pAttr in copy.Descendants().Attributes(W14ns + "paraId").ToList())
                         {
-                            var freshPara = (nextParaId++).ToString("X8");
+                            var freshPara = paraIds.Next();
                             freshParaIds[(string)pAttr] = freshPara;
                             pAttr.Value = freshPara;
                         }
@@ -4187,17 +4236,6 @@ internal static partial class IrMarkupRenderer
         if (!parent.Elements().Any())
             parent.Remove();
         return true;
-    }
-
-    /// <summary>The largest 8-hex <c>w14:paraId</c> present on any comment-definition paragraph (so a freshly
-    /// allocated clone paraId collides with none).</summary>
-    private static int MaxParaId(XElement commentsRoot)
-    {
-        int max = 0;
-        foreach (var v in commentsRoot.Descendants().Attributes(W14ns + "paraId").Select(a => (string)a))
-            if (int.TryParse(v, System.Globalization.NumberStyles.HexNumber, null, out var n) && n > max)
-                max = n;
-        return max;
     }
 
     /// <summary>Carry the dedup clones' threading metadata: for each original paraId in

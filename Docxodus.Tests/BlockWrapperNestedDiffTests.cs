@@ -407,6 +407,38 @@ public class BlockWrapperNestedDiffTests
         AssertEachReferencedReplyAnswersAReferencedParent(DocxDiffOps.RejectRevisions(redline.DocumentByteArray), threads: 1);
     }
 
+    /// <summary>Issue #1170: a <c>w14:paraId</c> is unique across the whole package, not just the comments part.
+    /// The body's closing paragraph already uses the paraIds one and two past the comments part's largest, so the
+    /// deleted copies' cloned definitions must take ids no body paragraph or threading entry holds.</summary>
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Compare_CommentClonesForAReplacedWrapper_TakeParaIdsUnusedAnywhereInThePackage(Wrapper kind)
+    {
+        const string TakenParaIds = $"<w:p xmlns:w14=\"{W14Ns}\" w14:paraId=\"00000003\"><w:r><w:t>{Tail}</w:t></w:r></w:p>"
+            + $"<w:p xmlns:w14=\"{W14Ns}\" w14:paraId=\"00000004\"><w:r><w:t>{Charlie}</w:t></w:r></w:p>";
+        WmlDocument Document(string bravo) => ThreadedDocument(Wrap(kind,
+            "<w:commentRangeStart w:id=\"0\"/><w:commentRangeStart w:id=\"1\"/>" + P(Alpha) + P(bravo)
+            + "<w:commentRangeEnd w:id=\"0\"/><w:commentRangeEnd w:id=\"1\"/>"
+            + "<w:p><w:r><w:commentReference w:id=\"0\"/></w:r><w:r><w:commentReference w:id=\"1\"/></w:r></w:p>") + TakenParaIds);
+        var left = Document(Bravo);
+        var right = Document(BravoEdited);
+
+        var redline = DocxDiff.Compare(left, right);
+
+        AssertRoundTrip(left, right, redline);
+        using var stream = new MemoryStream(redline.DocumentByteArray);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var main = document.MainDocumentPart!;
+        var definitions = main.WordprocessingCommentsPart!.GetXDocument().Root!;
+        Assert.Equal(4, definitions.Elements(W.comment).Count()); // the two comments and their deleted-view clones
+        var paraIds = main.GetXDocument().Root!.Descendants().Concat(definitions.Descendants())
+            .Attributes(XName.Get("paraId", W14Ns)).Select(a => a.Value).ToList();
+        Assert.Equal(6, paraIds.Count);
+        Assert.True(paraIds.Count == paraIds.Distinct().Count(), $"duplicate w14:paraId: {string.Join(", ", paraIds)}");
+        AssertThreadingIdsUnique(redline.DocumentByteArray);
+    }
+
     /// <summary>Comment ids, definition paraIds and durable ids are each unique in the package.</summary>
     private static void AssertThreadingIdsUnique(byte[] bytes)
     {
