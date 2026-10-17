@@ -95,7 +95,7 @@ internal static class IrCompositeMarkupRenderer
         // where the base has them, each reviewer's where that reviewer has them (issue #1149).
         var authors = reviewers.Select(r => r.Author).ToList();
         var bodyMarkers = IrMarkupRenderer.PlanCompositeBlockLevelMarkers(script.Operations, baseIr, reviewerIrs,
-            script.ReviewerBodyOps?.Select(o => (IReadOnlyList<IrEditOp>)o).ToList(), authors, state);
+            script.ReviewerComparisons?.Select(o => (IReadOnlyList<IrEditOp>)o.Operations).ToList(), authors, state);
         var bodyBlocks = new List<XElement>();
         for (int i = 0; i < script.Operations.Count; i++)
         {
@@ -164,7 +164,8 @@ internal static class IrCompositeMarkupRenderer
                 // output id space, apply the composed per-note diffs inside the footnotes/endnotes parts
                 // (creating reviewer-inserted definitions under fresh ids), then run the SAME body-order
                 // renumber + cross-kind nested-reference sweep the two-way renderer runs.
-                RenderCompositeNoteScopes(script, state, main, baseIr, reviewerIrs, settings);
+                ReconcileUnchangedCompositeNoteMarkers(script, main, baseIr, reviewerIrs, authors, state);
+                RenderCompositeNoteScopes(script, state, main, baseIr, reviewerIrs, authors, settings);
 
                 // Carry each reviewer's missing styles + numbering into the base-based package (continuity for
                 // right-only styles / legal numbering referenced by cloned content). Order is reviewer index;
@@ -288,6 +289,7 @@ internal static class IrCompositeMarkupRenderer
         MainDocumentPart main,
         IrDocument baseIr,
         IReadOnlyList<IrDocument> reviewerIrs,
+        IReadOnlyList<string> authors,
         IrDiffSettings settings)
     {
         if (script.NoteIdMaps is null && script.NoteOps is null)
@@ -344,10 +346,10 @@ internal static class IrCompositeMarkupRenderer
         {
             ApplyCompositeNoteDiffs(
                 noteOps.Where(n => n.Kind == IrNoteKind.Footnote).ToList(), isFootnote: true,
-                main, baseIr, reviewerIrs, state, freshIdByInserted, outputId, settings);
+                main, script, baseIr, reviewerIrs, authors, state, freshIdByInserted, outputId, settings);
             ApplyCompositeNoteDiffs(
                 noteOps.Where(n => n.Kind == IrNoteKind.Endnote).ToList(), isFootnote: false,
-                main, baseIr, reviewerIrs, state, freshIdByInserted, outputId, settings);
+                main, script, baseIr, reviewerIrs, authors, state, freshIdByInserted, outputId, settings);
         }
 
         // ---- 4. Body-order renumber + cross-kind nested-reference sweep (the two-way pipeline). ----
@@ -356,6 +358,113 @@ internal static class IrCompositeMarkupRenderer
         var endnoteRemap = IrMarkupRenderer.RenumberNoteIds(main, W.endnoteReference, W.endnote, W.endnotes,
             main.EndnotesPart, null);
         IrMarkupRenderer.RemapNestedNoteReferences(main, footnoteRemap, endnoteRemap);
+    }
+
+    /// <summary>
+    /// The output keeps the base's copy of every note no reviewer changed, so a reviewer's bookmark or comment
+    /// range between such a note's blocks (invisible to the IR, rule N3) was lost (issue #1175). Each such note is
+    /// reconciled against every reviewer's copy of it, as an equal container is
+    /// (<see cref="IrMarkupRenderer.ReconcileCompositeEqualContainerMarkers"/>): a reviewer's note is the one its
+    /// note-id map pairs with the base note, or the one with the same id when that reviewer's comparison changed
+    /// no note. Runs before the note diffs apply and renumber, while the output holds the base's ids.
+    /// </summary>
+    private static void ReconcileUnchangedCompositeNoteMarkers(
+        IrCompositeScript script, MainDocumentPart main, IrDocument baseIr, IReadOnlyList<IrDocument> reviewerIrs,
+        IReadOnlyList<string> authors, IrMarkupRenderer.RenderState state)
+    {
+        foreach (var (part, kind, noteName) in new (OpenXmlPart?, IrNoteKind, XName)[]
+                 {
+                     (main.FootnotesPart, IrNoteKind.Footnote, W.footnote),
+                     (main.EndnotesPart, IrNoteKind.Endnote, W.endnote),
+                 })
+        {
+            if (part?.GetXDocument().Root is not { } root)
+                continue;
+            var touched = (script.NoteOps ?? IrNodeList.Empty<IrCompositeNoteDiff>())
+                .Where(d => d.Kind == kind && d.BaseNoteId is not null).Select(d => d.BaseNoteId!)
+                .ToHashSet(StringComparer.Ordinal);
+            bool changed = false;
+            foreach (var note in root.Elements(noteName).ToList())
+            {
+                if ((string?)note.Attribute(W.id) is not { } id || touched.Contains(id) ||
+                    NoteShell(baseIr, kind, id) is not { } baseNote)
+                    continue;
+                var counterparts = new List<(int Reviewer, XElement Counterpart)>();
+                for (int r = 0; r < reviewerIrs.Count; r++)
+                    if (ReviewerNoteId(script, r, kind, id) is { } reviewerId && NoteShell(reviewerIrs[r], kind, reviewerId) is { } reviewerNote &&
+                        IrMarkupRenderer.BlockLevelMarkersDiffer(baseNote, reviewerNote))
+                        counterparts.Add((r, reviewerNote));
+                if (counterparts.Count == 0)
+                    continue;
+                IrMarkupRenderer.ReconcileCompositeEqualContainerMarkers(note, baseNote, counterparts, authors, state);
+                changed = true;
+            }
+            if (changed)
+                part.PutXDocument();
+        }
+    }
+
+    /// <summary>The id of reviewer <paramref name="reviewer"/>'s copy of base note <paramref name="baseId"/>: the
+    /// one its note-id map pairs with it, or the same id when the map leaves that id alone (an id absent from a
+    /// reviewer's map is identity, <see cref="IrReviewerNoteIdMap"/>). Null when the reviewer has no copy.</summary>
+    private static string? ReviewerNoteId(IrCompositeScript script, int reviewer, IrNoteKind kind, string baseId)
+    {
+        if (!NoteIdLookups.GetValue(script, BuildNoteIdLookup).TryGetValue((reviewer, kind), out var map))
+            return baseId;
+        if (map.ByBase.TryGetValue(baseId, out var mapped))
+            return mapped;
+        return map.ReviewerIds.Contains(baseId) ? null : baseId;
+    }
+
+    /// <summary>Each reviewer's note-id map by kind: base id → reviewer id, and every reviewer id the map names.</summary>
+    private static Dictionary<(int Reviewer, IrNoteKind Kind), (Dictionary<string, string> ByBase, HashSet<string> ReviewerIds)>
+        BuildNoteIdLookup(IrCompositeScript script)
+    {
+        var lookup = new Dictionary<(int, IrNoteKind), (Dictionary<string, string>, HashSet<string>)>();
+        foreach (var m in script.NoteIdMaps ?? IrNodeList.Empty<IrReviewerNoteIdMap>())
+        {
+            if (!lookup.TryGetValue((m.Reviewer, m.Kind), out var map))
+                lookup[(m.Reviewer, m.Kind)] = map = (new Dictionary<string, string>(StringComparer.Ordinal),
+                    new HashSet<string>(StringComparer.Ordinal));
+            if (m.BaseNoteId is { } baseId)
+                map.Item1.TryAdd(baseId, m.ReviewerNoteId);
+            map.Item2.Add(m.ReviewerNoteId);
+        }
+        return lookup;
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IrCompositeScript,
+        Dictionary<(int Reviewer, IrNoteKind Kind), (Dictionary<string, string> ByBase, HashSet<string> ReviewerIds)>>
+        NoteIdLookups = new();
+
+    /// <summary>Reviewer <paramref name="reviewer"/>'s own comparison of base note <paramref name="baseId"/>, for
+    /// placing that reviewer's markers between the note's blocks: the reviewer's note diff, or, for a note the
+    /// reviewer left equal but whose markers differ, equal ops pairing the two notes block for block; empty
+    /// otherwise.</summary>
+    private static IReadOnlyList<IrEditOp> ReviewerNoteOps(IrCompositeScript script, int reviewer, IrNoteKind kind,
+        string baseId, IrDocument baseIr, IrDocument reviewerIr)
+    {
+        if (script.ReviewerComparisons is not { } scripts || reviewer >= scripts.Count)
+            return Array.Empty<IrEditOp>();
+        if (scripts[reviewer].NoteOps?.FirstOrDefault(n => n.Kind == kind && n.LeftNoteId == baseId) is { } own)
+            return own.Ops;
+        var baseStore = kind == IrNoteKind.Footnote ? baseIr.Footnotes : baseIr.Endnotes;
+        var store = kind == IrNoteKind.Footnote ? reviewerIr.Footnotes : reviewerIr.Endnotes;
+        if (ReviewerNoteId(script, reviewer, kind, baseId) is not { } reviewerId ||
+            !baseStore.Notes.TryGetValue(baseId, out var baseNote) || !store.Notes.TryGetValue(reviewerId, out var note) ||
+            baseNote.Blocks.Count != note.Blocks.Count ||
+            !IrMarkupRenderer.BlockLevelMarkersDiffer(NoteShell(baseIr, kind, baseId), NoteShell(reviewerIr, kind, reviewerId)))
+            return Array.Empty<IrEditOp>();
+        return baseNote.Blocks.Zip(note.Blocks, (b, r) =>
+            new IrEditOp(IrEditOpKind.EqualBlock, b.Anchor.ToString(), r.Anchor.ToString(), null, null, null)).ToList();
+    }
+
+    /// <summary>The source <c>w:footnote</c>/<c>w:endnote</c> of note <paramref name="id"/> in
+    /// <paramref name="ir"/>: its first block's parent. Null for a note with no block or no source.</summary>
+    private static XElement? NoteShell(IrDocument ir, IrNoteKind kind, string id)
+    {
+        var store = kind == IrNoteKind.Footnote ? ir.Footnotes : ir.Endnotes;
+        return store.Notes.TryGetValue(id, out var scope) && scope.Blocks.Count > 0 ? scope.Blocks[0].Source.Element?.Parent : null;
     }
 
     /// <summary>The highest positive <c>w:id</c> across the output package's footnotes AND endnotes parts
@@ -386,7 +495,8 @@ internal static class IrCompositeMarkupRenderer
     /// </summary>
     private static void ApplyCompositeNoteDiffs(
         List<IrCompositeNoteDiff> diffs, bool isFootnote,
-        MainDocumentPart main, IrDocument baseIr, IReadOnlyList<IrDocument> reviewerIrs,
+        MainDocumentPart main, IrCompositeScript script, IrDocument baseIr, IReadOnlyList<IrDocument> reviewerIrs,
+        IReadOnlyList<string> authors,
         IrMarkupRenderer.RenderState state,
         IReadOnlyDictionary<(IrNoteKind Kind, int Reviewer, string ReviewerId), string> freshIdByInserted,
         IReadOnlyDictionary<(int Reviewer, IrNoteKind Kind, string ReviewerId), string> outputId,
@@ -423,17 +533,25 @@ internal static class IrCompositeMarkupRenderer
                     continue;
                 var shell = ReviewerNoteShell(reviewerIrs, diff.SourceReviewer, kind, revId);
                 noteEl = new XElement(noteName, shell?.Attributes());
-                foreach (var pre in shell?.Elements().Where(e => !IrMarkupRenderer.IsBlockContent(e)) ?? Enumerable.Empty<XElement>())
+                // The shell's bookmarks and comment ranges between blocks go among the blocks, below.
+                foreach (var pre in shell?.Elements().Where(e => !IrMarkupRenderer.IsBlockContent(e) &&
+                             !IrMarkupRenderer.IsBlockLevelMarker(e)) ?? Enumerable.Empty<XElement>())
                     noteEl.Add(IrMarkupRenderer.StripUnids(new XElement(pre)));
                 noteEl.SetAttributeValue(W.id, freshId);
                 root.Add(noteEl);
             }
 
             // Render the composed ops with the SAME per-op reviewer sourcing the body uses. A base note's
-            // bookmarks and comment ranges between blocks stay where the base has them (issue #1149).
-            var noteMarkers = diff.BaseNoteId is null ? null
-                : IrMarkupRenderer.PlanCompositeBlockLevelMarkers(diff.Ops, baseIr, reviewerIrs, null,
-                    Array.Empty<string>(), state);
+            // bookmarks and comment ranges between blocks stay where the base has them (issue #1149), and each
+            // reviewer's go in where that reviewer's comparison of the note puts them; an inserted note's are its
+            // reviewer's, inserted with its blocks: that note's ops are the reviewer's own comparison of the
+            // note (issue #1175).
+            var noteMarkers = IrMarkupRenderer.PlanCompositeBlockLevelMarkers(diff.Ops, baseIr, reviewerIrs,
+                Enumerable.Range(0, reviewerIrs.Count).Select(r => diff.BaseNoteId is { } noteId
+                    ? ReviewerNoteOps(script, r, kind, noteId, baseIr, reviewerIrs[r])
+                    : r == diff.SourceReviewer ? diff.Ops.Select(o => o.Op).ToList() : (IReadOnlyList<IrEditOp>)Array.Empty<IrEditOp>())
+                    .ToList(),
+                authors, state);
             if (noteMarkers is not null)
                 noteEl.Elements().Where(IrMarkupRenderer.IsBlockLevelMarker).Remove();
             var noteBlocks = new List<XElement>();
@@ -589,14 +707,32 @@ internal static class IrCompositeMarkupRenderer
 
         int emittedFrom = sink.Count;
         IrMarkupRenderer.RenderBlockOp(op, state, sink);
-        if (baseSourced && compositeOp.EqualReviewerBookmarks is { } reviewerBookmarks &&
-            sink.Count == emittedFrom + 1 && sink[emittedFrom].Name == W.p)
-            IrMarkupRenderer.CarryReviewerOnlyBookmarks(sink[emittedFrom], reviewerBookmarks, baseIr, reviewerIrs, state);
+        if (baseSourced && compositeOp.EqualReviewerBookmarks is { } reviewerBookmarks && sink.Count == emittedFrom + 1)
+        {
+            if (sink[emittedFrom].Name == W.p)
+                IrMarkupRenderer.CarryReviewerOnlyBookmarks(sink[emittedFrom], reviewerBookmarks, baseIr, reviewerIrs, state);
+            else if (IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr) is { } baseSource)
+                IrMarkupRenderer.ReconcileCompositeEqualContainerMarkers(sink[emittedFrom], baseSource,
+                    reviewerBookmarks.Where(b => b.Reviewer >= 0 && b.Reviewer < reviewerIrs.Count)
+                        .Select(b => (b.Reviewer, IrMarkupRenderer.SourceElement(b.Anchor, reviewerIrs[b.Reviewer])))
+                        .Where(c => c.Item2 is not null).Select(c => (c.Reviewer, c.Item2!)).ToList(),
+                    AuthorsByReviewer(reviewerBookmarks, reviewerIrs.Count), state);
+        }
 
         // Restore the shared state so a CELL recursion does not leak its per-op source into the surrounding
         // table-row render (the body loop reassigns these every op, so the restore is inert there).
         state.AuthorOverride = savedAuthor;
         state.RightSource = savedRightSource;
         state.RightSourceId = savedRightSourceId;
+    }
+
+    /// <summary>Each reviewer's author by reviewer index, from the entries that name them.</summary>
+    private static IReadOnlyList<string> AuthorsByReviewer(IEnumerable<IrEqualReviewerBookmarks> entries, int reviewers)
+    {
+        var authors = new string[reviewers];
+        foreach (var entry in entries)
+            if (entry.Reviewer >= 0 && entry.Reviewer < reviewers)
+                authors[entry.Reviewer] = entry.Author;
+        return authors;
     }
 }
