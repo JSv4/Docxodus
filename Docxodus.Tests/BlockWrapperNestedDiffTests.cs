@@ -272,9 +272,19 @@ public class BlockWrapperNestedDiffTests
         /// <summary>The range opens in a paragraph before the wrapper; its end and reference are inside.</summary>
         OpensBefore,
 
+        /// <summary>As <see cref="OpensBefore"/>, but the range opens between body blocks.</summary>
+        OpensBetweenBodyBlocks,
+
         /// <summary>As <see cref="OpensBefore"/>, but the opening paragraph is inside an earlier, unchanged
         /// wrapper.</summary>
         OpensInAnEarlierWrapper,
+
+        /// <summary>As <see cref="OpensBefore"/>, but the range opens between the blocks of an earlier,
+        /// unchanged wrapper.</summary>
+        OpensBetweenTheBlocksOfAnEarlierWrapper,
+
+        /// <summary>As <see cref="OpensBefore"/>, but the revision also edits the opening paragraph's text.</summary>
+        OpensInAnEditedParagraph,
 
         /// <summary>The range is wholly inside the wrapper; its reference is in a paragraph after it.</summary>
         ReferencedAfter,
@@ -282,6 +292,18 @@ public class BlockWrapperNestedDiffTests
         /// <summary>As <see cref="ReferencedAfter"/>, but the reference shares its run with the paragraph's
         /// text.</summary>
         ReferencedAfterInATextRun,
+
+        /// <summary>As <see cref="ReferencedAfter"/>, but the revision also edits a word of the referencing
+        /// paragraph (not the one next to the reference).</summary>
+        ReferencedAfterInAnEditedParagraph,
+
+        /// <summary>As <see cref="ReferencedAfterInATextRun"/>, but the revision makes that run bold, so it carries
+        /// a tracked formatting change.</summary>
+        ReferencedAfterInAFormatChangedRun,
+
+        /// <summary>The range opens inside the wrapper and closes between body blocks after it; its reference is
+        /// in the paragraph after that.</summary>
+        ClosesBetweenBodyBlocksAfter,
     }
 
     /// <summary>What makes the comparison replace the wrapper whole.</summary>
@@ -308,30 +330,44 @@ public class BlockWrapperNestedDiffTests
 
     private static string Run(string text) => $"<w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r>";
 
+    private const string BeforeText = "Before the wrapper.";
+
     /// <summary>A document whose one comment straddles the edge of a wrapper, per <paramref name="place"/>.</summary>
     private static WmlDocument StraddlingComment(Wrapper kind, StraddlePlace place, ReplacedBecause because, bool revised)
     {
         var bravo = revised ? BravoEdited : Bravo;
         var id = revised && because == ReplacedBecause.WrapperMarkupChanged ? "a2" : "a1";
         bool between = because == ReplacedBecause.MarkerBetweenBlocks;
+        string Replaced(string inner) => Wrap(kind, inner, id);
+        string ClosingInside() => P(Alpha) + P(bravo) + (between
+            ? End + $"<w:p>{ReferenceRun}</w:p>"
+            : $"<w:p>{Run(Charlie)}{End}{ReferenceRun}</w:p>");
+        string RangeInside() => between
+            ? Start + P(Alpha) + P(bravo) + P(Charlie) + End
+            : $"<w:p>{Start}{Run(Alpha)}</w:p>" + P(bravo) + $"<w:p>{Run(Charlie)}{End}</w:p>";
         string body = place switch
         {
-            StraddlePlace.OpensBefore or StraddlePlace.OpensInAnEarlierWrapper =>
-                (place == StraddlePlace.OpensBefore
-                    ? $"<w:p>{Run("Before the wrapper.")}{Start}</w:p>"
-                    : Wrap(kind, $"<w:p>{Run("Before the wrapper.")}{Start}</w:p>", id: "earlier"))
-                + Wrap(kind, P(Alpha) + P(bravo) + (between
-                    ? End + $"<w:p>{ReferenceRun}</w:p>"
-                    : $"<w:p>{Run(Charlie)}{End}{ReferenceRun}</w:p>"), id)
-                + P(Tail),
-            _ =>
-                Wrap(kind, (between
-                    ? Start + P(Alpha) + P(bravo) + P(Charlie) + End
-                    : $"<w:p>{Start}{Run(Alpha)}</w:p>" + P(bravo) + $"<w:p>{Run(Charlie)}{End}</w:p>"), id)
-                + (place == StraddlePlace.ReferencedAfter
-                    ? $"<w:p>{ReferenceRun}{Run(Tail)}</w:p>"
-                    : $"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">Lead </w:t><w:commentReference w:id=\"0\"/>"
-                      + $"<w:t xml:space=\"preserve\">{Tail}</w:t></w:r></w:p>"),
+            StraddlePlace.OpensBefore => $"<w:p>{Run(BeforeText)}{Start}</w:p>" + Replaced(ClosingInside()) + P(Tail),
+            StraddlePlace.OpensBetweenBodyBlocks => P(BeforeText) + Start + Replaced(ClosingInside()) + P(Tail),
+            StraddlePlace.OpensInAnEarlierWrapper =>
+                Wrap(kind, $"<w:p>{Run(BeforeText)}{Start}</w:p>", id: "earlier") + Replaced(ClosingInside()) + P(Tail),
+            StraddlePlace.OpensBetweenTheBlocksOfAnEarlierWrapper =>
+                Wrap(kind, P(BeforeText) + Start, id: "earlier") + Replaced(ClosingInside()) + P(Tail),
+            StraddlePlace.OpensInAnEditedParagraph =>
+                $"<w:p>{Run(revised ? "Before the amended wrapper." : BeforeText)}{Start}</w:p>" + Replaced(ClosingInside()) + P(Tail),
+            StraddlePlace.ReferencedAfter => Replaced(RangeInside()) + $"<w:p>{ReferenceRun}{Run(Tail)}</w:p>",
+            StraddlePlace.ReferencedAfterInATextRun => Replaced(RangeInside())
+                + "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">Lead </w:t><w:commentReference w:id=\"0\"/>"
+                + $"<w:t xml:space=\"preserve\">{Tail}</w:t></w:r></w:p>",
+            StraddlePlace.ReferencedAfterInAnEditedParagraph => Replaced(RangeInside())
+                + $"<w:p>{Run(revised ? "Lead blue words " : "Lead red words ")}{ReferenceRun}{Run(Tail)}</w:p>",
+            StraddlePlace.ReferencedAfterInAFormatChangedRun => Replaced(RangeInside())
+                + $"<w:p><w:r>{(revised ? "<w:rPr><w:b/></w:rPr>" : "")}<w:t xml:space=\"preserve\">Lead </w:t><w:commentReference w:id=\"0\"/>"
+                + $"<w:t xml:space=\"preserve\">{Tail}</w:t></w:r></w:p>",
+            _ => Replaced(between
+                    ? Start + P(Alpha) + P(bravo) + P(Charlie)
+                    : $"<w:p>{Start}{Run(Alpha)}</w:p>" + P(bravo) + P(Charlie))
+                + End + $"<w:p>{ReferenceRun}{Run(Tail)}</w:p>",
         };
         return IrTestDocuments.WithComment("Ann", "A", "2026-01-01T00:00:00Z", CommentText, body);
     }
@@ -353,14 +389,19 @@ public class BlockWrapperNestedDiffTests
         var redline = DocxDiff.Compare(left, right);
 
         var redlineBody = Body(redline);
-        Assert.Equal(place == StraddlePlace.OpensInAnEarlierWrapper ? 3 : 2, redlineBody.Descendants(WrapperName(kind)).Count());
-        // The text outside the wrapper is unchanged, so only the comment's markers there may toggle with a view.
-        var outsideParagraphs = redlineBody.Descendants(W.p).Where(p => p.Descendants().Any(e =>
-            (e.Name == W.t || e.Name == W.delText) && (e.Value.Contains("Before the wrapper") || e.Value.Contains(Tail)))).ToList();
-        Assert.Equal(place is StraddlePlace.OpensBefore or StraddlePlace.OpensInAnEarlierWrapper ? 2 : 1, outsideParagraphs.Count);
-        foreach (var outside in outsideParagraphs)
-            Assert.DoesNotContain(outside.Descendants(), e => e.Name == W.delText
-                || (e.Name == W.t && e.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del)));
+        bool earlierWrapper = place is StraddlePlace.OpensInAnEarlierWrapper or StraddlePlace.OpensBetweenTheBlocksOfAnEarlierWrapper;
+        Assert.Equal(earlierWrapper ? 3 : 2, redlineBody.Descendants(WrapperName(kind)).Count());
+        if (place is not (StraddlePlace.OpensInAnEditedParagraph or StraddlePlace.ReferencedAfterInAnEditedParagraph
+            or StraddlePlace.ReferencedAfterInAFormatChangedRun))
+        {
+            // The text outside the wrapper is unchanged, so only the comment's markers there may toggle with a view.
+            var outsideParagraphs = redlineBody.Descendants(W.p).Where(p => p.Descendants().Any(e =>
+                (e.Name == W.t || e.Name == W.delText) && (e.Value.Contains(BeforeText) || e.Value.Contains(Tail)))).ToList();
+            Assert.Equal(place.ToString().StartsWith("Opens", StringComparison.Ordinal) ? 2 : 1, outsideParagraphs.Count);
+            foreach (var outside in outsideParagraphs)
+                Assert.DoesNotContain(outside.Descendants(), e => e.Name == W.delText
+                    || (e.Name == W.t && e.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del)));
+        }
         AssertRoundTrip(left, right, redline);
         var accepted = DocxDiffOps.AcceptRevisions(redline.DocumentByteArray);
         var rejected = DocxDiffOps.RejectRevisions(redline.DocumentByteArray);
@@ -370,6 +411,120 @@ public class BlockWrapperNestedDiffTests
         AssertOneCompleteCommentPerId(accepted, comments: 1, rangeKept: !because.Equals(ReplacedBecause.MarkerBetweenBlocks));
         AssertOneCompleteCommentPerId(rejected, comments: 1, rangeKept: !because.Equals(ReplacedBecause.MarkerBetweenBlocks));
         AssertNoNewValidationErrors(redline, left, right);
+    }
+
+    /// <summary>In a consolidate, the twin <c>w:del</c>/<c>w:ins</c> around the comment's outside marker carry the
+    /// author and date of the wrapper copy each one pairs with — the reviewer's — not the renderer's default.</summary>
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Consolidate_CommentStraddlingAReplacedWrapper_MarksItsOutsideMarkerAsTheReviewers(Wrapper kind)
+    {
+        var left = StraddlingComment(kind, StraddlePlace.OpensBefore, ReplacedBecause.WrapperMarkupChanged, revised: false);
+        var right = StraddlingComment(kind, StraddlePlace.OpensBefore, ReplacedBecause.WrapperMarkupChanged, revised: true);
+
+        var redline = DocxCompare.Consolidate(left, new[] { new DocxDiffReviewer { Document = right, Author = "Reviewer" } });
+
+        var revisions = Body(redline).Descendants().Where(e => e.Name == W.ins || e.Name == W.del).ToList();
+        Assert.Contains(revisions, r => r.Descendants(W.commentRangeStart).Any());
+        Assert.All(revisions, r => Assert.Equal("Reviewer", (string?)r.Attribute(W.author)));
+        Assert.Equal(CommentPlacement(right.DocumentByteArray), CommentPlacement(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray)));
+        Assert.Equal(CommentPlacement(left.DocumentByteArray), CommentPlacement(DocxDiffOps.RejectRevisions(redline.DocumentByteArray)));
+        AssertNoNewValidationErrors(redline, left, right);
+    }
+
+    /// <summary>The comment opens before two wrappers and closes in the second. Both reviewers replace both: the
+    /// first wrapper identically, the second each in their own way, so the consolidated redline holds a deleted
+    /// copy of the second wrapper and an inserted copy per reviewer. Every copy's comment takes an id of its own:
+    /// no comment id has two range starts, ends or references, and each resolves to a definition.</summary>
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Consolidate_TwoReviewersReplaceTheWrapper_EachCopysCommentHasItsOwnId(Wrapper kind)
+    {
+        WmlDocument Document(string first, string second, string bravo) => IrTestDocuments.WithComment("Ann", "A",
+            "2026-01-01T00:00:00Z", CommentText,
+            $"<w:p>{Run(BeforeText)}{Start}</w:p>" + Wrap(kind, P(bravo), first)
+            + Wrap(kind, P(Alpha) + P(bravo) + $"<w:p>{Run(Charlie)}{End}{ReferenceRun}</w:p>", second) + P(Tail));
+        var original = Document("A1", "a1", Bravo);
+        var firstReviewer = Document("A2", "a2", BravoEdited);
+        var secondReviewer = Document("A2", "a3", Bravo.Replace("monthly", "daily"));
+
+        var redline = DocxCompare.Consolidate(original, new[]
+        {
+            new DocxDiffReviewer { Document = firstReviewer, Author = "First" },
+            new DocxDiffReviewer { Document = secondReviewer, Author = "Second" },
+        });
+
+        var copies = Body(redline).Descendants(WrapperName(kind)).Count(w => w.Descendants(W.commentReference).Any());
+        Assert.True(copies >= 3, $"expected a deleted and two inserted copies of the second wrapper, found {copies}");
+        AssertCommentMarkersWellFormed(redline.DocumentByteArray);
+        AssertNoNewValidationErrors(redline, original, firstReviewer, secondReviewer);
+    }
+
+    /// <summary>A second comment straddles the wrapper the same way but has no definition. Splitting the defined
+    /// comment must not hand its deleted copy the undefined comment's id, nor rename a marker twice.</summary>
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Compare_StraddlingCommentBesideAnUndefinedOne_KeepsTheirMarkersApart(Wrapper kind)
+    {
+        WmlDocument Document(bool revised) => IrTestDocuments.WithComment("Ann", "A", "2026-01-01T00:00:00Z", CommentText,
+            Wrap(kind, $"<w:p>{Start}<w:commentRangeStart w:id=\"1\"/>{Run(Alpha)}</w:p>" + P(revised ? BravoEdited : Bravo)
+                + $"<w:p>{Run(Charlie)}{End}<w:commentRangeEnd w:id=\"1\"/></w:p>", revised ? "a2" : "a1")
+            + $"<w:p>{ReferenceRun}<w:r><w:commentReference w:id=\"1\"/></w:r>{Run(Tail)}</w:p>");
+        var left = Document(false);
+        var right = Document(true);
+
+        var redline = DocxDiff.Compare(left, right);
+
+        AssertCommentMarkersWellFormed(redline.DocumentByteArray);
+        AssertOneCompleteCommentPerId(redline.DocumentByteArray, comments: 2);
+        AssertOneCompleteCommentPerId(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray), comments: 1);
+        AssertOneCompleteCommentPerId(DocxDiffOps.RejectRevisions(redline.DocumentByteArray), comments: 1);
+        AssertNoNewValidationErrors(redline, left, right);
+    }
+
+    /// <summary>The revision wraps (or unwraps) the paragraphs holding the comment's end and reference, so those
+    /// markers sit in a wrapper copy on one side only. The comment is not split across copies it does not have:
+    /// every view keeps one well-formed comment.</summary>
+    [Theory]
+    [InlineData(Wrapper.CustomXml, true)]
+    [InlineData(Wrapper.CustomXml, false)]
+    [InlineData(Wrapper.ContentControl, true)]
+    [InlineData(Wrapper.ContentControl, false)]
+    public void Compare_WrapperAddedOrRemovedAroundACommentsEnd_KeepsOneCommentPerView(Wrapper kind, bool added)
+    {
+        string Inner() => P(Alpha) + $"<w:p>{Run(Charlie)}{End}{ReferenceRun}</w:p>";
+        WmlDocument Document(bool wrapped) => IrTestDocuments.WithComment("Ann", "A", "2026-01-01T00:00:00Z", CommentText,
+            $"<w:p>{Run(BeforeText)}{Start}</w:p>" + (wrapped ? Wrap(kind, Inner()) : Inner()) + P(Tail));
+        var left = Document(!added);
+        var right = Document(added);
+
+        var redline = DocxDiff.Compare(left, right);
+
+        AssertCommentMarkersWellFormed(redline.DocumentByteArray);
+        AssertOneCompleteCommentPerId(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray), comments: 1);
+        AssertOneCompleteCommentPerId(DocxDiffOps.RejectRevisions(redline.DocumentByteArray), comments: 1);
+        AssertNoNewValidationErrors(redline, left, right);
+    }
+
+    /// <summary>No comment id has more than one range start, range end or reference in the body, and each one
+    /// resolves to a definition.</summary>
+    private static void AssertCommentMarkersWellFormed(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var main = document.MainDocumentPart!;
+        var body = main.GetXDocument().Root!.Element(W.body)!;
+        var defined = main.WordprocessingCommentsPart!.GetXDocument().Root!.Elements(W.comment)
+            .Select(c => (string)c.Attribute(W.id)!).ToHashSet();
+        foreach (var name in new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference })
+            foreach (var group in body.Descendants(name).GroupBy(m => (string)m.Attribute(W.id)!))
+            {
+                Assert.True(group.Count() == 1, $"comment {group.Key} has {group.Count()} {name.LocalName} markers");
+                Assert.Contains(group.Key, defined);
+            }
     }
 
     /// <summary>A threaded comment and its reply both open before a wrapper replaced whole and close inside it.
