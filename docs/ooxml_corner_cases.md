@@ -3427,3 +3427,56 @@ conditional regions and changes, unrelated tables, edited/nested/inserted tables
 removed declarations, logical margin axes, unchanged headers, combined document-default changes,
 accept/reject text and geometry, and Office 2019 validation. The implementation reuses the detached
 consumer sources introduced by the document-default fix rather than changing cached IR facts.
+
+### One style id used for styles of different types in a comparison (issue #1184)
+
+A `w:styleId` names one style across every type: two `w:style` elements may not share an id even when
+one is a paragraph style and the other a character style (the Open XML validator reports
+`Sem_UniqueAttributeValue` on `/word/styles.xml`). Two documents can still each use the same id for
+styles of different types:
+
+```xml
+<!-- original -->
+<w:style w:type="paragraph" w:customStyle="1" w:styleId="DocID"><w:name w:val="DocID"/>
+  <w:basedOn w:val="Normal"/><w:rPr><w:sz w:val="16"/></w:rPr></w:style>
+<!-- revised -->
+<w:style w:type="character" w:customStyle="1" w:styleId="DocID"><w:name w:val="DocID"/>
+  <w:rPr><w:b w:val="0"/><w:sz w:val="16"/></w:rPr></w:style>
+```
+
+| Revised document's `DocID` | Word's compare | Docxodus before | Docxodus after |
+|---|---|---|---|
+| Nothing in the revised document uses it | Keeps only the original's paragraph style; the character style is gone (seen in a real document pair) | Both styles under `DocID`: invalid package | Original's style only |
+| An inserted run uses it (`w:rStyle="DocID"`) | **Not yet verified** | Both styles under `DocID`: invalid package, and which one the run's reference names is ambiguous | Original's style keeps `DocID`; the revised style is copied as `DocID1` and the run names `DocID1` |
+
+LibreOffice's own document comparison was not tried for either row.
+
+**Analysis.** The comparison output keeps the original's styles part and copies in the revised styles it
+lacks. The copy matched a revised style to an original one by type *and* id, so a revised character style
+found no match and was copied in beside the paragraph style under the same id. Keying on the id alone
+fixes the validity; the remaining question is what the copied style should be called when inserted
+content still uses it. Dropping it would point the inserted run at a paragraph style, which a character
+reference cannot use, so the formatting would be lost. Docxodus copies it under the first free id
+`DocID1`, `DocID2`, …, and rewrites every reference that means it. Which style a reference means is read
+off the reference: `w:rStyle` names a character style, `w:pStyle` a paragraph style, `w:tblStyle` a table
+style, `w:numStyleLink`/`w:styleLink` a numbering style, `w:basedOn`/`w:next` a style of their own style's
+type, and `w:link` the paragraph/character partner. The original has no style of the revised type under
+the colliding id, so every reference of that type to that id came from the revised document. The copied
+style keeps its `w:name`, so the package carries two styles with the display name `DocID`; the validator
+accepts that, and how Word presents it is also unverified.
+
+"Uses" counts the output's stories (body, headers, footers, footnotes, endnotes, comments), the revised
+document's other styles (a `w:basedOn` or `w:link` naming it from a style that is copied in), and its
+numbering levels (`w:lvl/w:pStyle`). In a consolidation, where every reviewer's content is already in the
+output when styles are copied, each reviewer's own package decides whether its style is used.
+
+**Code.** `Internal/StyleIdCollisions.cs` (collision test, use test, fresh ids, and the reference
+rewrite `StyleIdRemap`), called from `IrMarkupRenderer.TrackStyleDefinitionChanges` (two-way compare) and
+`PackageMerge.CopyMissingStylesFromOneDocToAnother` (consolidate). Tests: `DocxDiffCrossTypeStyleIdTests`.
+
+**To settle the unverified row**, compare two documents in Word: an original whose paragraph style
+`DocID` is used by a kept paragraph, and a revision that defines `DocID` as a character style and inserts
+a paragraph whose run uses it (`w:rStyle="DocID"`); then the mirror case, an original character style used
+by a kept run and a revision inserting a paragraph with paragraph style `DocID`. Record whether Word drops,
+renames or merges the revised style, what the inserted run's or paragraph's style reference names, and
+whether `w:name` changes.
