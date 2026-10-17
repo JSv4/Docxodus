@@ -545,7 +545,13 @@ export const HOSTS_PROMOTED_DRAWING_ATTRIBUTE = "data-docx-hosts-promoted-drawin
  * a hidden source is content the layout lost, which PageMap completeness exists to catch.
  */
 function clippedAwayByExactRow(element: HTMLElement, rect: DOMRect): boolean {
-  if (!(rect.width > 0 && rect.height > 0)) return false;
+  if (!(rect.width > 0 && rect.height > 0)) {
+    // A row whose exact height is no more than its borders and padding, and its cells, have no
+    // height of their own: the row shows nothing, and its clip box has no height either.
+    if (!["tr", "td", "th"].includes(element.localName)) return false;
+    const clip = element.querySelector<HTMLElement>(EXACT_ROW_CELL);
+    return clip !== null && !(clip.getBoundingClientRect().height > 0);
+  }
   // Every enclosing exact row clips: a nested table's row can itself lie below its outer row.
   for (let clip = element.parentElement?.closest<HTMLElement>(EXACT_ROW_CELL); clip;
     clip = clip.parentElement?.closest<HTMLElement>(EXACT_ROW_CELL)) {

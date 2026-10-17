@@ -18,6 +18,8 @@ export interface ExactRowOptions {
   borders?: boolean;
   /** The first body row's exact height in twips; 300 holds one 11pt line. */
   firstRowTwips?: number;
+  /** Table borders (`w:tblBorders`); without them a zero-height row has no height at all. */
+  tableBorders?: boolean;
 }
 
 const paragraph = (text: string, border = false) =>
@@ -31,7 +33,8 @@ const number = (index: number) => String(index).padStart(2, '0');
 export const CLIPPED_WORDS = ['Alder', 'Birch', 'Cedar', 'Damson', 'Elder'];
 
 export function generateExactRowDocx(options: ExactRowOptions = {}): Uint8Array {
-  const { bodyRows = 3, headerRule, clippedParagraphs = 1, borders = false, firstRowTwips = 300 } = options;
+  const { bodyRows = 3, headerRule, clippedParagraphs = 1, borders = false, firstRowTwips = 300,
+    tableBorders = true } = options;
   const rows: string[] = [];
   if (headerRule)
     rows.push(row('400', headerRule, cell(paragraph('Heading Ledger')) + cell(paragraph('Heading Value')), true));
@@ -45,7 +48,7 @@ export function generateExactRowDocx(options: ExactRowOptions = {}): Uint8Array 
   }
   const borderXml = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']
     .map(side => `<w:${side} w:val="single" w:sz="4" w:color="444444"/>`).join('');
-  const body = `<w:tbl><w:tblPr><w:tblW w:w="7200" w:type="dxa"/><w:tblBorders>${borderXml}</w:tblBorders>`
+  const body = `<w:tbl><w:tblPr><w:tblW w:w="7200" w:type="dxa"/>${tableBorders ? `<w:tblBorders>${borderXml}</w:tblBorders>` : ''}`
     + `<w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid><w:gridCol w:w="3600"/><w:gridCol w:w="3600"/></w:tblGrid>`
     + `${rows.join('')}</w:tbl>${paragraph('Closing paragraph after the table.')}`;
   const parts = {
