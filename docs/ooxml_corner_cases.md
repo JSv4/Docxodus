@@ -3469,9 +3469,10 @@ occurs. So the rewrite skips content only the original holds, where rejecting mu
 original's reference unchanged: anything inside `w:del` or `w:moveFrom`, the archived old properties
 inside `w:rPrChange`/`w:pPrChange`/…, the properties of a paragraph whose mark is deleted, and the
 properties of a table whose every row is deleted. In the styles part and the numbering part only the
-definitions copied from the revised document are rewritten. Content both documents share (an unchanged
-run, a header kept as is) is written from the revised side and does follow the revised style, which is
-what the revised document meant by it. The copied style keeps its `w:name`, so the package carries two
+definitions copied from the revised document are rewritten. Content both documents share does follow the
+revised style, which is what the revised document meant by it: an unchanged run is written from the
+revised side, and a header or footer story the revision leaves unchanged is carried over from the
+original but reads the same in both documents, so its references are rewritten as well. The copied style keeps its `w:name`, so the package carries two
 styles with the display name `DocID`; the validator accepts that, and how Word presents it is also
 unverified.
 

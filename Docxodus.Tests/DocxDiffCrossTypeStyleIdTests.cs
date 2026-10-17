@@ -429,6 +429,108 @@ public class DocxDiffCrossTypeStyleIdTests
             (string?)s.Element(W + "name")?.Attribute(W + "val") == "ListLead");
     }
 
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_CollidingStyleUsedOnlyThroughAnotherCollidingStyle_IsCopiedWithIt(string engine)
+    {
+        // The original holds DocID and Other as paragraph styles. The revised Other (character) is based on the
+        // revised DocID (character), and only an inserted run uses Other: DocID is used through Other.
+        const string other =
+            "<w:style w:type=\"character\" w:customStyle=\"1\" w:styleId=\"Other\"><w:name w:val=\"Other\"/>" +
+            "<w:basedOn w:val=\"DocID\"/><w:rPr><w:i/></w:rPr></w:style>";
+        var left = Doc(P("Keep."), ParagraphDocId + ParagraphDocId.Replace("DocID", "Other"));
+        var right = Doc(P("Keep.") + $"<w:p>{StyledRun("Other", "New")}</w:p>", CharacterDocId + other);
+
+        var redline = Compare(engine, left, right);
+
+        AssertUniqueStyleIds(redline);
+        AssertNoNewValidationErrors(redline, left, right);
+        var styles = Styles(redline).ToList();
+        var copiedOther = Assert.Single(styles, s => StyleId(s) == "Other1");
+        Assert.Equal("character", (string?)copiedOther.Attribute(W + "type"));
+        Assert.Equal("DocID1", (string?)copiedOther.Element(W + "basedOn")?.Attribute(W + "val"));
+        Assert.Equal("character", (string?)Assert.Single(styles, s => StyleId(s) == "DocID1").Attribute(W + "type"));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_OriginalsInvalidReferenceOnAMergedParagraphsMark_KeepsItsId(string engine)
+    {
+        // The original's first paragraph mark names its paragraph style DocID through w:rStyle (invalid); the
+        // revision joins the two paragraphs, so that mark is deleted, and inserts a run using its character DocID.
+        var left = Doc(P("Alpha one two three four.", "<w:pPr><w:rPr><w:rStyle w:val=\"DocID\"/></w:rPr></w:pPr>") +
+            P("Beta five six seven eight."), ParagraphDocId);
+        var right = Doc(P("Alpha one two three four. Beta five six seven eight.") +
+            $"<w:p>{StyledRun("DocID", "Inserted run")}</w:p>", CharacterDocId);
+
+        var redline = Compare(engine, left, right);
+
+        AssertUniqueStyleIds(redline);
+        var rejectedMark = RevisionProcessor.RejectRevisions(redline);
+        var markStyle = Body(rejectedMark).Elements(W + "p").First().Element(W + "pPr")?.Element(W + "rPr")?.Element(W + "rStyle");
+        Assert.Equal("DocID", (string?)markStyle?.Attribute(W + "val"));
+        var accepted = Assert.Single(RunStyles(RevisionProcessor.AcceptRevisions(redline)));
+        Assert.Equal("character", (string?)Assert.Single(Styles(redline), s => StyleId(s) == accepted).Attribute(W + "type"));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_OriginalsInvalidReferenceOnAWhollyDeletedTable_KeepsItsId(string engine)
+    {
+        // The original's table names its paragraph style Grid through w:tblStyle (invalid) and is deleted; the
+        // revision adds another table in its table style Grid.
+        static string GridTable(string text) =>
+            "<w:tbl><w:tblPr><w:tblStyle w:val=\"Grid\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid>" +
+            $"<w:tr><w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc></w:tr></w:tbl>";
+        var left = Doc(P("Keep.") + GridTable("Quarterly revenue figures") + P("Tail paragraph stays."),
+            ParagraphDocId.Replace("DocID", "Grid"));
+        var right = Doc(P("Keep.") + P("Tail paragraph stays.") + GridTable("Staff holiday rota") + "<w:p/>",
+            "<w:style w:type=\"table\" w:styleId=\"Grid\"><w:name w:val=\"Grid\"/></w:style>");
+
+        var redline = Compare(engine, left, right);
+
+        AssertUniqueStyleIds(redline);
+        var tableStyles = (WmlDocument d) => Body(d).Descendants(W + "tblStyle").Select(e => (string?)e.Attribute(W + "val")).ToList();
+        Assert.Equal(new[] { "Grid" }, tableStyles(RevisionProcessor.RejectRevisions(redline)));
+        var accepted = Assert.Single(tableStyles(RevisionProcessor.AcceptRevisions(redline)));
+        Assert.Equal("table", (string?)Assert.Single(Styles(redline), s => StyleId(s) == accepted).Attribute(W + "type"));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_OriginalsNumberingLevelNamingTheId_KeepsItWhenTheRevisedNumberingFollowsTheFreshId(string engine)
+    {
+        // The original's own list level names ListLead through w:pStyle although its ListLead is a character
+        // style (invalid); the revised list level names the revised paragraph style ListLead.
+        static string Numbering(string format) =>
+            "<w:abstractNum w:abstractNumId=\"0\"><w:multiLevelType w:val=\"singleLevel\"/>" +
+            $"<w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"{format}\"/><w:pStyle w:val=\"ListLead\"/>" +
+            "<w:lvlText w:val=\"%1.\"/><w:lvlJc w:val=\"left\"/></w:lvl></w:abstractNum>" +
+            "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+        const string characterLead =
+            "<w:style w:type=\"character\" w:customStyle=\"1\" w:styleId=\"ListLead\"><w:name w:val=\"ListLead\"/>" +
+            "<w:rPr><w:b/></w:rPr></w:style>";
+        const string paragraphLead =
+            "<w:style w:type=\"paragraph\" w:customStyle=\"1\" w:styleId=\"ListLead\"><w:name w:val=\"ListLead\"/>" +
+            "<w:basedOn w:val=\"Normal\"/><w:pPr><w:numPr><w:numId w:val=\"1\"/></w:numPr></w:pPr></w:style>";
+        var left = IrTestDocuments.FromParts(P("The original paragraph.") + "<w:sectPr/>", Normal + characterLead,
+            numberingInnerXml: Numbering("upperRoman"));
+        var right = IrTestDocuments.FromParts(
+            P("The original paragraph.") + P("First item", "<w:pPr><w:pStyle w:val=\"ListLead\"/></w:pPr>") + "<w:sectPr/>",
+            Normal + paragraphLead, numberingInnerXml: Numbering("decimal"));
+
+        var redline = Compare(engine, left, right);
+
+        AssertUniqueStyleIds(redline);
+        var levels = Part(redline, "word/numbering.xml").Descendants(W + "lvl").ToList();
+        Assert.Equal("ListLead", (string?)Assert.Single(levels, l =>
+            (string?)l.Element(W + "numFmt")?.Attribute(W + "val") == "upperRoman").Element(W + "pStyle")?.Attribute(W + "val"));
+        var paragraphStyle = Assert.Single(ParagraphStyles(RevisionProcessor.AcceptRevisions(redline)));
+        Assert.NotEqual("ListLead", paragraphStyle);
+        Assert.Contains(levels, l => (string?)l.Element(W + "numFmt")?.Attribute(W + "val") == "decimal" &&
+            (string?)l.Element(W + "pStyle")?.Attribute(W + "val") == paragraphStyle);
+    }
+
     // ------------------------------------------------------------------------------ consolidation extras
 
     [Fact]
