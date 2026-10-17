@@ -3457,18 +3457,33 @@ found no match and was copied in beside the paragraph style under the same id. K
 fixes the validity; the remaining question is what the copied style should be called when inserted
 content still uses it. Dropping it would point the inserted run at a paragraph style, which a character
 reference cannot use, so the formatting would be lost. Docxodus copies it under the first free id
-`DocID1`, `DocID2`, …, and rewrites every reference that means it. Which style a reference means is read
+`DocID1`, `DocID2`, …, and rewrites the references that mean it. Which style a reference means is read
 off the reference: `w:rStyle` names a character style, `w:pStyle` a paragraph style, `w:tblStyle` a table
 style, `w:numStyleLink`/`w:styleLink` a numbering style, `w:basedOn`/`w:next` a style of their own style's
-type, and `w:link` the paragraph/character partner. The original has no style of the revised type under
-the colliding id, so every reference of that type to that id came from the revised document. The copied
-style keeps its `w:name`, so the package carries two styles with the display name `DocID`; the validator
-accepts that, and how Word presents it is also unverified.
+type, and `w:link` the paragraph/character partner. A `w:style` without `w:type` is a paragraph style, and
+the matching treats it as one.
 
-"Uses" counts the output's stories (body, headers, footers, footnotes, endnotes, comments), the revised
-document's other styles (a `w:basedOn` or `w:link` naming it from a style that is copied in), and its
-numbering levels (`w:lvl/w:pStyle`). In a consolidation, where every reviewer's content is already in the
-output when styles are copied, each reviewer's own package decides whether its style is used.
+A reference of the revised type to the colliding id cannot validly mean the original's style, but the
+original can still hold one: a run whose `w:rStyle` names the original's paragraph style is invalid, yet
+occurs. So the rewrite skips content only the original holds, where rejecting must give back the
+original's reference unchanged: anything inside `w:del` or `w:moveFrom`, the archived old properties
+inside `w:rPrChange`/`w:pPrChange`/…, the properties of a paragraph whose mark is deleted, and the
+properties of a table whose every row is deleted. In the styles part and the numbering part only the
+definitions copied from the revised document are rewritten. Content both documents share (an unchanged
+run, a header kept as is) is written from the revised side and does follow the revised style, which is
+what the revised document meant by it. The copied style keeps its `w:name`, so the package carries two
+styles with the display name `DocID`; the validator accepts that, and how Word presents it is also
+unverified.
+
+"Uses" counts only what enters the output: the stories that carry the revised content (body, headers,
+footers, footnotes, endnotes, comments), outside original-only content; the revised styles that are
+copied in (a `w:basedOn` or `w:link` from a revised style the output replaces with the original's does
+not count); and the revised numbering definitions those stories or copied styles reach through
+`w:numId` (`w:lvl/w:pStyle`). In a consolidation the output's body already holds every reviewer's
+changes when a reviewer's styles are copied, so a reference there cannot say which reviewer it came
+from; each reviewer's own package decides whether its style is used. That reviewer's numbering and
+comment definitions are merged after its styles, and the rewrite is applied to them as they arrive. When
+two reviewers both use a colliding style, the first reviewer's copy serves both, as for a same-type id.
 
 **Code.** `Internal/StyleIdCollisions.cs` (collision test, use test, fresh ids, and the reference
 rewrite `StyleIdRemap`), called from `IrMarkupRenderer.TrackStyleDefinitionChanges` (two-way compare) and

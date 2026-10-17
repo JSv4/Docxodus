@@ -38,13 +38,15 @@ All notable changes to this project will be documented in this file.
   character style `DocID` in the revision (issue #1184). Style ids are unique across all types, so the
   output failed Open XML validation (`Sem_UniqueAttributeValue` on `styles.xml`). Copying the revised
   document's styles matched them to the original's by type and id together, so the revised character
-  style found no match and was copied in beside the paragraph style. The original's style now keeps the
-  id. The revised style is left out when nothing uses it, as Word's compare does. When something does,
-  such as an inserted run's `w:rStyle`, another copied style's `w:basedOn` or `w:link`, or a copied
-  numbering level, it is copied under a fresh id (`DocID1`) and those references are rewritten to it; a
-  reference's own kind (`w:rStyle` names a character style, `w:pStyle` a paragraph style) tells which of
-  the two styles it means. What Word does in that referenced case is not yet verified (see
-  `docs/ooxml_corner_cases.md`).
+  style found no match and was copied in beside the paragraph style. The match now keys on the id, and
+  treats a style without `w:type` as the paragraph style it is. The original's style keeps the id. The
+  revised style is left out when nothing that enters the output uses it, as Word's compare does. When
+  something does, such as an inserted run's `w:rStyle`, a copied style's `w:basedOn` or `w:link`, or a
+  copied numbering level, it is copied under a fresh id (`DocID1`) and those references are rewritten to
+  it; a reference's own kind (`w:rStyle` names a character style, `w:pStyle` a paragraph style) tells
+  which of the two styles it means. References in content only the original holds (deleted runs, archived
+  old properties) keep the original's id, so rejecting restores them unchanged. What Word does in the
+  referenced case is not yet verified (see `docs/ooxml_corner_cases.md`).
 
 - Accepting a comparison that replaces a content control (`w:sdt`) or `w:customXml` wrapper whole no
   longer moves a comment's reference out of the wrapper (issue #1157). When a comment range sits

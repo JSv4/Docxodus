@@ -37,10 +37,15 @@ public class DocxDiffCrossTypeStyleIdTests
         "<w:style w:type=\"character\" w:customStyle=\"1\" w:styleId=\"DocID\"><w:name w:val=\"DocID\"/>" +
         "<w:rPr><w:b/><w:sz w:val=\"16\"/></w:rPr></w:style>";
 
-    public static TheoryData<string> Engines => new() { "DocxCompare", "DocxDiff" };
+    /// <summary>The two-way front door, the raw engine, and a one-reviewer consolidation (its own style copy).</summary>
+    public static TheoryData<string> Engines => new() { "DocxCompare", "DocxDiff", "Consolidate" };
 
-    private static WmlDocument Compare(string engine, WmlDocument left, WmlDocument right) =>
-        engine == "DocxCompare" ? DocxCompare.Compare(left, right) : DocxDiff.Compare(left, right);
+    private static WmlDocument Compare(string engine, WmlDocument left, WmlDocument right) => engine switch
+    {
+        "DocxCompare" => DocxCompare.Compare(left, right),
+        "DocxDiff" => DocxDiff.Compare(left, right),
+        _ => DocxCompare.Consolidate(left, new[] { new DocxDiffReviewer { Author = "Reviewer", Document = right } }),
+    };
 
     private static string P(string text, string pPr = "") =>
         $"<w:p>{pPr}<w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r></w:p>";
@@ -302,6 +307,147 @@ public class DocxDiffCrossTypeStyleIdTests
         Assert.Equal(new[] { StyleId(copied), StyleId(copied) }, RunStyles(consolidated));
     }
 
+    // ------------------------------------------------------------------------- a style without w:type
+
+    private const string UntypedDocId =
+        "<w:style w:customStyle=\"1\" w:styleId=\"DocID\"><w:name w:val=\"DocID\"/><w:rPr><w:sz w:val=\"16\"/></w:rPr></w:style>";
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_StyleWithoutATypeIsAParagraphStyle_AndMatchesTheOtherSidesParagraphStyle(string engine)
+    {
+        var untyped = Doc(P("The original paragraph."), UntypedDocId);
+        var typed = Doc(P("The revised paragraph."), ParagraphDocId);
+
+        foreach (var (left, right) in new[] { (untyped, typed), (typed, untyped) })
+        {
+            var redline = Compare(engine, left, right);
+
+            AssertUniqueStyleIds(redline);
+            AssertNoNewValidationErrors(redline, left, right);
+            Assert.Single(Styles(redline), s => StyleId(s) == "DocID");
+        }
+    }
+
+    // ---------------------------------------------------------------- references only the original holds
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_OriginalsInvalidReferenceInDeletedContent_DoesNotMakeTheRevisedStyleUsed(string engine)
+    {
+        // The original's deleted run names its paragraph style DocID through w:rStyle (invalid, but it happens).
+        // That is not a use of the revised character style DocID.
+        var left = Doc(P("Keep.") + $"<w:p>{StyledRun("DocID", "Gone text")}</w:p>", ParagraphDocId);
+        var right = Doc(P("Keep."), CharacterDocId);
+
+        var redline = Compare(engine, left, right);
+
+        AssertUniqueStyleIds(redline);
+        AssertNoCharacterStyleNamedDocId(redline);
+        Assert.Equal(new[] { "DocID" }, RunStyles(RevisionProcessor.RejectRevisions(redline)));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_OriginalsInvalidReferenceInDeletedContent_KeepsItsIdWhenTheRevisedStyleMoves(string engine)
+    {
+        // No text in common, so the original's run is wholly deleted and the revised one wholly inserted.
+        var left = Doc(P("Keep.") + $"<w:p>{StyledRun("DocID", "Gone")}</w:p>", ParagraphDocId);
+        var right = Doc(P("Keep.") + $"<w:p>{StyledRun("DocID", "Arrived")}</w:p>", CharacterDocId);
+
+        var redline = Compare(engine, left, right);
+
+        AssertUniqueStyleIds(redline);
+        AssertNoNewValidationErrors(redline, left, right);
+        Assert.Equal(new[] { "DocID" }, RunStyles(RevisionProcessor.RejectRevisions(redline)));
+        var accepted = Assert.Single(RunStyles(RevisionProcessor.AcceptRevisions(redline)));
+        Assert.Equal("character", (string?)Assert.Single(Styles(redline), s => StyleId(s) == accepted).Attribute(W + "type"));
+    }
+
+    [Fact]
+    public void Compare_OriginalsInvalidReferenceInAFormatChangeArchive_KeepsItsId()
+    {
+        // The run is kept with a formatting change, so the original's run properties are archived in
+        // w:rPrChange. The current w:rStyle is the revised document's and follows its style; the archived one
+        // is the original's and does not.
+        var left = Doc($"<w:p>{StyledRun("DocID", "Document 123")}</w:p>", ParagraphDocId);
+        var right = Doc("<w:p><w:r><w:rPr><w:rStyle w:val=\"DocID\"/><w:i/></w:rPr><w:t>Document 123</w:t></w:r></w:p>",
+            CharacterDocId);
+
+        var redline = DocxCompare.Compare(left, right);
+
+        AssertUniqueStyleIds(redline);
+        var archived = Body(redline).Descendants(W + "rPrChange").Descendants(W + "rStyle")
+            .Select(e => (string?)e.Attribute(W + "val")).ToList();
+        Assert.Equal(new[] { "DocID" }, archived);
+        Assert.Equal(new[] { "DocID" }, RunStyles(RevisionProcessor.RejectRevisions(redline)));
+        var accepted = Assert.Single(RunStyles(RevisionProcessor.AcceptRevisions(redline)));
+        Assert.Equal("character", (string?)Assert.Single(Styles(redline), s => StyleId(s) == accepted).Attribute(W + "type"));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_LinkFromARevisedStyleTheOutputDoesNotCopy_DoesNotMakeTheRevisedStyleUsed(string engine)
+    {
+        // The output keeps the original's Heading1, so the revised Heading1's w:link never enters it.
+        const string leftHeading = "<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/></w:style>";
+        const string rightHeading = "<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/>" +
+            "<w:link w:val=\"DocID\"/></w:style>";
+        var left = Doc(P("Same."), ParagraphDocId + leftHeading);
+        var right = Doc(P("Same, changed."), CharacterDocId + rightHeading);
+
+        var redline = Compare(engine, left, right);
+
+        AssertUniqueStyleIds(redline);
+        AssertNoCharacterStyleNamedDocId(redline);
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_NumberingLevelNoParagraphUses_DoesNotMakeTheRevisedStyleUsed(string engine)
+    {
+        // The revised numbering names its paragraph style ListLead, but no paragraph uses that list.
+        const string characterLead =
+            "<w:style w:type=\"character\" w:customStyle=\"1\" w:styleId=\"ListLead\"><w:name w:val=\"ListLead\"/>" +
+            "<w:rPr><w:b/></w:rPr></w:style>";
+        const string paragraphLead =
+            "<w:style w:type=\"paragraph\" w:customStyle=\"1\" w:styleId=\"ListLead\"><w:name w:val=\"ListLead\"/>" +
+            "<w:basedOn w:val=\"Normal\"/></w:style>";
+        const string numbering =
+            "<w:abstractNum w:abstractNumId=\"0\"><w:multiLevelType w:val=\"singleLevel\"/>" +
+            "<w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/><w:pStyle w:val=\"ListLead\"/>" +
+            "<w:lvlText w:val=\"%1.\"/><w:lvlJc w:val=\"left\"/></w:lvl></w:abstractNum>" +
+            "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+        var left = Doc(P("The original paragraph."), characterLead);
+        var right = IrTestDocuments.FromParts(P("The revised paragraph.") + "<w:sectPr/>", Normal + paragraphLead,
+            numberingInnerXml: numbering);
+
+        var redline = Compare(engine, left, right);
+
+        AssertUniqueStyleIds(redline);
+        Assert.DoesNotContain(Styles(redline), s => (string?)s.Attribute(W + "type") == "paragraph" &&
+            (string?)s.Element(W + "name")?.Attribute(W + "val") == "ListLead");
+    }
+
+    // ------------------------------------------------------------------------------ consolidation extras
+
+    [Fact]
+    public void Consolidate_ReviewerCommentUsingItsStyle_FollowsItToTheFreshId()
+    {
+        var baseDoc = Doc(P("The original paragraph."), ParagraphDocId);
+        var reviewer = WithComments(
+            Doc(P("The original paragraph.") + "<w:p><w:commentRangeStart w:id=\"7\"/><w:r><w:t>Added</w:t></w:r>" +
+                "<w:commentRangeEnd w:id=\"7\"/><w:r><w:commentReference w:id=\"7\"/></w:r></w:p>", CharacterDocId),
+            $"<w:comment w:id=\"7\" w:author=\"A\"><w:p>{StyledRun("DocID", "Comment text")}</w:p></w:comment>");
+
+        var consolidated = DocxCompare.Consolidate(baseDoc, new[] { new DocxDiffReviewer { Author = "A", Document = reviewer } });
+
+        AssertUniqueStyleIds(consolidated);
+        AssertNoNewValidationErrors(consolidated, baseDoc, reviewer);
+        var commentStyle = (string?)Assert.Single(Part(consolidated, "word/comments.xml").Descendants(W + "rStyle")).Attribute(W + "val");
+        Assert.Equal("character", (string?)Assert.Single(Styles(consolidated), s => StyleId(s) == commentStyle).Attribute(W + "type"));
+    }
+
     // ---------------------------------------------------------------------------------------- helpers
 
     private static XDocument Part(WmlDocument document, string path)
@@ -326,6 +472,20 @@ public class DocxDiffCrossTypeStyleIdTests
 
     private static List<string?> ParagraphStyles(WmlDocument document) =>
         Body(document).Descendants(W + "pStyle").Select(s => (string?)s.Attribute(W + "val")).ToList();
+
+    private static WmlDocument WithComments(WmlDocument document, string commentsInnerXml)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(document.DocumentByteArray);
+        using (var package = WordprocessingDocument.Open(stream, true))
+        {
+            var part = package.MainDocumentPart!.AddNewPart<WordprocessingCommentsPart>();
+            using var partStream = part.GetStream(FileMode.Create, FileAccess.Write);
+            using var writer = new StreamWriter(partStream);
+            writer.Write($"<w:comments xmlns:w=\"{W.NamespaceName}\">{commentsInnerXml}</w:comments>");
+        }
+        return new WmlDocument("commented.docx", stream.ToArray());
+    }
 
     /// <summary>The revised document's character style DocID was left out, under any id.</summary>
     private static void AssertNoCharacterStyleNamedDocId(WmlDocument document) =>

@@ -180,10 +180,14 @@ internal static class IrCompositeMarkupRenderer
                     if (main.StyleDefinitionsPart != null &&
                         wDocRev.MainDocumentPart?.StyleDefinitionsPart != null)
                         PackageMerge.CopyMissingStylesFromOneDocToAnother(wDocRev, wDoc, styleIdRemap);
+                    // The reviewer's numbering levels and comments, merged after its styles, may name a style
+                    // copied under a fresh id (issue #1184).
+                    var numberingBeforeCopy = StyleIdRemap.ChildrenSnapshot(main.NumberingDefinitionsPart);
                     PackageMerge.CopyMissingNumberingFromOneDocToAnother(wDocRev, wDoc);
-                    // Reviewer numbering levels copied in may name a style imported under a fresh id (#1184).
-                    styleIdRemap.Apply(new OpenXmlPart?[] { main.NumberingDefinitionsPart });
+                    styleIdRemap.ApplyToChildrenAddedSince(main.NumberingDefinitionsPart, numberingBeforeCopy);
+                    var commentsBeforeMerge = StyleIdRemap.ChildrenSnapshot(main.WordprocessingCommentsPart);
                     IrMarkupRenderer.MergeRightCommentDefinitions(main, wDocRev.MainDocumentPart, streamDoc, revStream);
+                    styleIdRemap.ApplyToChildrenAddedSince(main.WordprocessingCommentsPart, commentsBeforeMerge);
                 }
 
                 // Reconcile the assembled body's comment markers (unique ids, 1:1 range pairing, exactly-one

@@ -34,11 +34,12 @@ internal static class PackageMerge
     };
 
         /// <summary>Copies the styles of <paramref name="wDocFrom"/> that <paramref name="wDocTo"/> lacks into it.
-        /// A style whose id <paramref name="wDocTo"/> already uses for a style of another type is left out when
-        /// nothing in <paramref name="wDocFrom"/> uses it, and otherwise copied under a fresh id, the references to
-        /// it in <paramref name="wDocTo"/>'s stories and styles rewritten (issue #1184). <paramref name="styleIdRemap"/>
-        /// collects those fresh ids across sources, so the caller can rewrite numbering it copies from
-        /// <paramref name="wDocFrom"/> afterwards.</summary>
+        /// A style whose id <paramref name="wDocTo"/> already uses for a style of another type is left out unless
+        /// <paramref name="wDocFrom"/>'s stories, or its styles and numbering that enter the output, use it; a used
+        /// one is copied under a fresh id and the references to it in <paramref name="wDocTo"/>'s stories and in the
+        /// copied styles are rewritten (issue #1184). <paramref name="styleIdRemap"/> collects those fresh ids across
+        /// sources, so the caller can rewrite what it merges from <paramref name="wDocFrom"/> afterwards (numbering,
+        /// comments).</summary>
         internal static void CopyMissingStylesFromOneDocToAnother(
             WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo, StyleIdRemap styleIdRemap)
         {
@@ -46,40 +47,36 @@ internal static class PackageMerge
             var fromMain = wDocFrom.MainDocumentPart!;
             var toRoot = toMain.StyleDefinitionsPart!.GetXDocument().Root!;
             var fromRoot = fromMain.StyleDefinitionsPart!.GetXDocument().Root!;
+            // The destination's stories hold every source's content by now, so a use there cannot say which
+            // source's style it means; the source's own stories can.
+            var usedCrossType = StyleIdCollisions.UsedCollidingStyles(toRoot, fromRoot,
+                fromMain.NumberingDefinitionsPart?.GetXDocument().Root, StyleIdCollisions.StoryRoots(fromMain));
+            var copied = new List<XElement>();
             foreach (var style in fromRoot.Elements(W.style))
             {
-                var type = (string?)style.Attribute(W.type);
+                var type = StyleIdCollisions.TypeOf(style);
                 var styleId = (string?)style.Attribute(W.styleId);
-                var styleInRevDoc = toRoot
-                    .Elements(W.style)
-                    .FirstOrDefault(st => (string?)st.Attribute(W.type) == type &&
-                                          (string?)st.Attribute(W.styleId) == styleId);
-                if (styleInRevDoc != null)
+                if (StyleIdCollisions.FindStyle(toRoot, type, styleId) != null)
                     continue;
                 var cloned = new XElement(style);
                 cloned.Attribute(W._default)?.Remove();
                 if (StyleIdCollisions.IdHeldByAnotherType(toRoot, type, styleId))
                 {
-                    // An earlier source's style of this type and id was already copied under a fresh id, and the
-                    // content naming it follows that copy (first source wins, as for a same-type id).
-                    if (styleIdRemap.TryGetFreshId(type ?? "paragraph", styleId!, out _))
-                        continue;
-                    // Used by the source's own stories, styles or numbering: the destination's stories hold every
-                    // source's content by now, so a reference there cannot say which source's style it means.
-                    var scopes = StyleIdCollisions.StoryParts(fromMain).Select(part => part.GetXDocument().Root)
-                        .Append(fromRoot).Append(fromMain.NumberingDefinitionsPart?.GetXDocument().Root)
-                        .OfType<XElement>();
-                    if (!StyleIdCollisions.IsReferenced(scopes, type ?? "paragraph", styleId!, style))
+                    // Unused, or an earlier source's style of this type and id was already copied under a fresh
+                    // id and the content naming it follows that copy (first source wins, as for a same-type id).
+                    if (!usedCrossType.Contains(style) || styleIdRemap.Contains(type, styleId!))
                         continue;
                     var freshId = StyleIdCollisions.FreshId(styleId!, new[] { toRoot, fromRoot }, styleIdRemap.FreshIds);
                     cloned.SetAttributeValue(W.styleId, freshId);
-                    styleIdRemap.Add(type ?? "paragraph", styleId!, freshId);
+                    styleIdRemap.Add(type, styleId!, freshId);
                 }
                 toRoot.Add(cloned);
+                copied.Add(cloned);
             }
-            // The whole remap, earlier sources' fresh ids included: a later source's copied style or content that
-            // names a colliding id resolves to the first copy, as same-type ids already do.
-            styleIdRemap.Apply(toRoot);
+            // The whole remap, earlier sources' fresh ids included, over this source's copied styles only: the
+            // destination's own styles keep their references.
+            foreach (var style in copied)
+                styleIdRemap.Apply(style);
             toMain.StyleDefinitionsPart!.PutXDocument();
             styleIdRemap.Apply(StyleIdCollisions.StoryParts(toMain));
         }
