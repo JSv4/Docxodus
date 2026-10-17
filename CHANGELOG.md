@@ -403,6 +403,13 @@ All notable changes to this project will be documented in this file.
   or starts with a page break, one with a `thead`, `tfoot` or several row groups, or one holding a
   nested table or a footnote; and header rows whose vertical merge runs on into the body rows are
   not repeated.
+- A paginated footnote that continues onto the next page now stays last on its page (issue #1179).
+  The paginator could start a later, whole note below the split one: a note cited after it on the
+  same page, a note deferred to a page whose carried continuation runs on again, or a note cited
+  beside such a continuation, which could also overtake an earlier deferred note. Word keeps a
+  continued note last on its page and its notes in citation order, so once a note on a page
+  continues, or a note cited there has been deferred, later notes start on the next page, below the
+  continuation and after the deferred notes.
 - In the PDF export, a paragraph border on content that an exact-height table row hides is now hidden
   with it (issue #1171). Exactly sized paragraph borders are painted as shapes over the page, which
   did not inherit the row's clip, so the border of a paragraph cut by the row still showed below it.

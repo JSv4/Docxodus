@@ -4026,7 +4026,13 @@ export class PaginationEngine {
         ownedDimensions.contentWidth,
       );
       currentContinuation = partition.current;
-      if (partition.overflow) nextPageContinuation = partition.overflow;
+      if (partition.overflow) {
+        nextPageContinuation = partition.overflow;
+        // The carried note continues again, so it stays last here: notes deferred to this page
+        // move on with it (issue #1179).
+        deferredFootnoteIds = [...currentFootnoteIds, ...deferredFootnoteIds];
+        currentFootnoteIds = [];
+      }
       currentContinuationPartitioned = true;
       currentFootnoteHeight = this.measureFootnotesHeight(
         currentFootnoteIds,
@@ -4107,6 +4113,11 @@ export class PaginationEngine {
         const fittingIds: string[] = [];
         for (let index = 0; index < currentFootnoteIds.length; index++) {
           const footnoteId = currentFootnoteIds[index];
+          // The carried note continues past this page too, so it stays last here (issue #1179).
+          if (nextPageContinuation) {
+            deferredFootnoteIds.push(...currentFootnoteIds.slice(index));
+            break;
+          }
           const candidateIds = [...fittingIds, footnoteId];
           const candidateHeight = this.measureFootnotesHeight(
             candidateIds, ownedDimensions.contentWidth, pageContinuation);
@@ -4223,6 +4234,11 @@ export class PaginationEngine {
     const pageHasPayload = () => currentContent.length > 0
       || currentFootnoteIds.length > 0
       || (currentContinuation?.remainingElements.length ?? 0) > 0;
+    // Word keeps a continued note last on its page and its notes in citation order (issue #1179):
+    // once a note on this page continues onto the next, or a note cited here has been deferred
+    // to it, no later note starts on this page. Its notes start on the next page instead, below
+    // the continuation and after the deferred notes.
+    const laterNotesClosed = () => nextPageContinuation !== null || deferredFootnoteIds.length > 0;
 
     for (let i = 0; i < blocks.length; i++) {
       this.checkpoint();
@@ -4467,7 +4483,7 @@ export class PaginationEngine {
         const headIds = footnoteIds.filter((id) => !currentFootnoteIds.includes(id));
         return headIds.length === 0 || this.notesCanStartOnPage(headIds,
           noteBandWith(effectiveMarginTop + headHeightPt), blockDimensions.contentWidth,
-          notePayload, nextPageContinuation !== null, noteStartMemo);
+          notePayload, laterNotesClosed(), noteStartMemo);
       };
 
       // A paragraph that cannot fit as a whole may still have a simple text-only
@@ -4496,7 +4512,8 @@ export class PaginationEngine {
       if (
         blockSpace <= effectiveRemainingHeight
         && (newFootnoteIds.length === 0
-          || combinedFootnoteHeight + FOOTNOTE_MEASUREMENT_GUARD_PT <= maxFootnoteArea)
+          || (!laterNotesClosed()
+            && combinedFootnoteHeight + FOOTNOTE_MEASUREMENT_GUARD_PT <= maxFootnoteArea))
       ) {
         // Block fits with current footnote allocation
         markSectionPlaced(block.sectionIndex);
@@ -4538,7 +4555,7 @@ export class PaginationEngine {
             < freshBlockPageBodyHeight * MAX_FOOTNOTE_AREA_RATIO;
           if (this.fragmentParagraphs && turnHelps && !this.notesCanStartOnPage(newFootnoteIds,
             noteBandWith(blockSpaceWithoutFootnotes), blockDimensions.contentWidth, notePayload,
-            nextPageContinuation !== null, noteStartMemo)) {
+            laterNotesClosed(), noteStartMemo)) {
             const fragments = this.tryFragmentParagraph(
               block,
               blockDimensions,
@@ -4592,9 +4609,10 @@ export class PaginationEngine {
             const footnote = this.footnoteRegistry.get(footnoteId);
             if (!footnote) continue;
 
-            // One page can carry only one split tail. Once that slot is used,
-            // keep every later note in source order on the deferral queue.
-            if (nextPageContinuation) {
+            // One page can carry only one split tail, and it stays last. Once that slot is
+            // used, or an earlier note was deferred, keep every later note in source order
+            // on the deferral queue.
+            if (laterNotesClosed()) {
               deferredFootnoteIds.push(...newFootnoteIds.slice(noteIndex));
               break;
             }
