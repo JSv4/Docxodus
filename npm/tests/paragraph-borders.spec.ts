@@ -1,10 +1,17 @@
 import { expect, test, type Page } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { build } from 'esbuild';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const module = readFileSync(join(here, '../dist/paragraph-borders.js'), 'utf8');
+// Bundled, so the module's own imports (exact-row-text.js) resolve inside the inline script.
+let module = '';
+test.beforeAll(async () => {
+  const result = await build({
+    entryPoints: [join(here, '../src/paragraph-borders.ts')], bundle: true, format: 'esm', write: false,
+  });
+  module = result.outputFiles[0].text;
+});
 
 // Chromium lays boxes out in 1/64 CSS pixel units.
 const LAYOUT_UNIT = 1 / 64;

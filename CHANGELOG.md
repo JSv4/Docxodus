@@ -348,6 +348,25 @@ All notable changes to this project will be documented in this file.
   clips the row: that clip can still cut the hidden text's glyphs into fragments. A row no taller
   than its borders and padding, which shows none of its text, no longer fails the export either,
   with or without borders, nor does a table made only of such rows.
+- Table header rows (`w:tblHeader`) now repeat at the top of every page their table continues on, in
+  the paginated view and the PDF export, as Word repeats them whatever their height rule (issue
+  #1171). They were never repeated, whichever rule they had. The converter marks each header row
+  (`data-docx-header-row`), and when the paginator splits a table across pages it starts each
+  continuation with copies of the table's leading run of header rows. The copies are presentation
+  copies: the first page keeps the row's editor anchor, bookmark targets and comments (a comment in
+  a header row is shown, and its mark printed, once), and the PageMap gets one fragment of the row
+  per page. When the copies would leave no room for the body rows on some page, the whole table
+  splits as before, without them. Only a table the paginator splits at row boundaries repeats its
+  header rows. It does not split one that keeps with the next paragraph, keeps its lines together
+  or starts with a page break, one with a `thead`, `tfoot` or several row groups, or one holding a
+  nested table or a footnote; and header rows whose vertical merge runs on into the body rows are
+  not repeated.
+- In the PDF export, a paragraph border on content that an exact-height table row hides is now hidden
+  with it (issue #1171). Exactly sized paragraph borders are painted as shapes over the page, which
+  did not inherit the row's clip, so the border of a paragraph cut by the row still showed below it.
+  Each side is now trimmed to the vertical span of the exact-row cells around the paragraph, and a
+  side wholly outside it is not drawn. The row clips by height only, so left and right borders
+  drawn in the cell margin, beside the text, keep their full width.
 
 ## [13.0.0] - 2026-10-12
 

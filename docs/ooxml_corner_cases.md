@@ -3276,6 +3276,32 @@ boxes, so they cannot share one.
 (`BorderBoxIsMirrorSymmetric`), so grouping is otherwise unchanged. Word's grouping for this case has
 not been measured.
 
+## Exact-height rows: what the row hides (issues #1168, #1171)
+
+An exact row (`w:trHeight w:hRule="exact"`) is as tall as its height, whatever its cells hold. A cell
+can hide part of a line, a whole paragraph, and the border of a bordered group it cuts:
+
+```xml
+<w:tr><w:trPr><w:trHeight w:val="300" w:hRule="exact"/></w:trPr>
+  <w:tc><!-- three paragraphs sharing one w:pBdr top+bottom group; 15pt holds one 11pt line -->
+    <w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="8" w:space="1" w:color="FF0000"/>
+      <w:bottom w:val="single" w:sz="8" w:space="1" w:color="FF0000"/></w:pBdr></w:pPr>
+      <w:r><w:t>Alder clipped cell line.</w:t></w:r></w:p>
+    <!-- Birch …, Cedar … with the same w:pPr -->
+  </w:tc>
+</w:tr>
+```
+
+| | Alder (fits) | Birch (cut) | Cedar (hidden whole) | Group's bottom border (below the row) |
+|---|---|---|---|---|
+| LibreOffice 25.8.7.3 | drawn | clipped; whole in the text layer | not drawn; not in the text layer | not drawn |
+| Docxodus PDF export | drawn | clipped; whole in the text layer (#1140) | not drawn; in the text layer, after the visible text | not drawn (#1171; drawn below the row before) |
+| Word | not yet measured | | | |
+
+A header row (`w:tblHeader`) repeats at the top of each page the table continues on whatever its
+`w:hRule` (reported for Word in issue #1171; not yet measured here). Docxodus repeated no header row,
+whatever its rule, before that issue.
+
 ## Contributing
 
 When adding new corner cases to this document:
