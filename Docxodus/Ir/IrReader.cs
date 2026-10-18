@@ -1064,9 +1064,9 @@ internal static class IrReader
     {
         var fields = new List<XElement>();
         AppendFieldEnvelopeEntries(inlines, "", fields);
-        var unmatched = UnmatchedFieldCharacters(paragraph);
-        if (unmatched.Count > 0)
-            fields.Add(new XElement("spanningField", new XAttribute("unmatched", string.Join(" ", unmatched))));
+        if (UnmatchedFieldCharacterTypes(paragraph).Any())
+            fields.Add(new XElement("spanningField",
+                new XAttribute("unmatched", string.Join(" ", UnmatchedFieldCharacters(paragraph)))));
         return fields.Count == 0
             ? default
             : IrHasher.CanonicalHash(new XElement("fieldEnvelopes", fields), ctx.RelResolver);

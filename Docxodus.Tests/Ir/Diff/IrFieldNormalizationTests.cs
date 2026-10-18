@@ -128,6 +128,45 @@ public class IrFieldNormalizationTests
             Shape(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray)));
     }
 
+    private static string I(string instruction) =>
+        $"<w:r><w:instrText xml:space=\"preserve\"> {instruction} </w:instrText></w:r>";
+    private static string Para(string content) => "<w:p>" + content + "</w:p>";
+
+    /// <summary>The result-less fields: an index entry, a table-of-contents entry, and a field whose result is
+    /// empty.</summary>
+    private static string ResultlessField(string kind) => kind switch
+    {
+        "XE" => F("begin") + I("XE \"foo\"") + F("end"),
+        "TC" => F("begin") + I("TC \"Entry\" \\l 1") + F("end"),
+        _ => F("begin") + I("PAGE") + F("separate") + F("end"),
+    };
+
+    /// <summary>A default comparison whose redline draws a result-less field's paragraph as a deleted and an
+    /// inserted copy (the text on both sides of the field replaced, or the paragraph split right after it): each
+    /// view keeps one copy of the field, the field-context pass leaving both copies in their revisions.</summary>
+    [Theory]
+    [InlineData("XE", "text on both sides replaced")]
+    [InlineData("TC", "text on both sides replaced")]
+    [InlineData("empty-result PAGE", "text on both sides replaced")]
+    [InlineData("XE", "paragraph split right after the field")]
+    [InlineData("TC", "paragraph split right after the field")]
+    [InlineData("empty-result PAGE", "paragraph split right after the field")]
+    public void Compare_ResultlessFieldDrawnDeletedAndInserted_KeepsOneCopyInEachView(string kind, string edit)
+    {
+        var field = ResultlessField(kind);
+        var (left, right) = edit == "text on both sides replaced"
+            ? (Para(R("alpha ") + field + R("beta")), Para(R("gamma ") + field + R("delta")))
+            : (Para(R("First half of text ") + field + R("second half of text")),
+               Para(R("First half of text ") + field) + Para(R("second half of text")));
+        var original = IrTestDocuments.FromBodyXml(left);
+        var revised = IrTestDocuments.FromBodyXml(right);
+
+        var redline = DocxCompare.Compare(original, revised).DocumentByteArray;
+
+        Assert.Equal(Shape(revised.DocumentByteArray), Shape(DocxDiffOps.AcceptRevisions(redline)));
+        Assert.Equal(Shape(original.DocumentByteArray), Shape(DocxDiffOps.RejectRevisions(redline)));
+    }
+
     private static string Shape(byte[] bytes)
     {
         using var stream = new MemoryStream(bytes);

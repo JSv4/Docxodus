@@ -75,7 +75,10 @@ All notable changes to this project will be documented in this file.
   its deletion, and it now leaves a field whose characters all sit in one deletion or insertion there. The
   clean-up also no longer stops grouping a paragraph's fields after an `end` that closes a field from an
   earlier paragraph; on its own that has no visible effect on a default comparison, whose field characters
-  the paragraph renderer already places unmarked.
+  the paragraph renderer already places unmarked. The same rule fixes a default comparison that replaces
+  the text on both sides of an `XE`, `TC` or empty-result field (`alpha {XE}beta` to `gamma {XE}delta`),
+  or splits its paragraph right after it: accepting or rejecting the redline kept a second copy of the
+  field.
 - A comparison no longer doubles or drops a complex field's characters when the field's cached result
   changes next to another edit, or when a paragraph holding the end of a field opened in an earlier
   paragraph is edited just before that end (issue #1165). Deleting the word before a field while its
