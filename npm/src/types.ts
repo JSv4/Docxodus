@@ -2606,7 +2606,8 @@ export interface BookmarkInfo {
 /**
  * One native Word comment, in comments-part order — see {@link DocxSession.listComments}.
  * `anchorId` addresses the definition (kind `cmt`) for updateComment/removeComment;
- * `date` is the raw `w:date` attribute string; `text` is the flattened body.
+ * `date` is the matching valid extensible comment UTC timestamp, falling back to the raw
+ * `w:date` attribute string; `text` is the flattened body.
  * `parentAnchorId` and `resolved` are present when the comment has a
  * `commentsExtended.xml` entry; their absence distinguishes a legacy/flat comment from an
  * explicitly reopened one. `id` is the numeric `w:id` — the value rendered comment markup

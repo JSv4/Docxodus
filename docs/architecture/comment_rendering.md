@@ -63,6 +63,24 @@ The actual comment content is stored separately:
 </w:comments>
 ```
 
+### Modern comment timestamps
+
+`CommentDateResolver` joins the last comment paragraph's `w14:paraId` to
+`commentsIds.xml` (`w16cid:commentId/@w16cid:durableId`), then to
+`commentsExtensible.xml` (`w16cex:commentExtensible/@w16cex:dateUtc`).
+A matching valid timestamp supplies the instant for every rendered `data-date` and
+for `DocxSession.ListComments` (including the editor gutter). Offsets are normalized to UTC,
+fractional seconds are retained, and an omitted zone in `dateUtc` means UTC.
+Missing, invalid, unmatched or ambiguous metadata retains the original `w:date` fallback.
+Reading never rewrites the package. See Microsoft's
+[CT_CommentId](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/9c360cd7-653f-4d82-82be-7bda2488c0c1) and
+[CT_CommentExtensible](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/a7b57225-42e5-43e7-8d98-d90eabf3ca25).
+
+Margin and endnote captions use the UTC calendar day and include the year (`Sep 10, 2026`).
+Block conversion copies the extensible part along with comment IDs, so stateless and cached
+editor fragments resolve the same date as full conversion. A legacy timestamp's attribute
+is preserved verbatim even when its caption is formatted in UTC.
+
 ## Configuration
 
 ### WmlToHtmlConverterSettings
@@ -151,6 +169,7 @@ Before transformation, comments are loaded from the `WordprocessingCommentsPart`
 private static CommentTracker LoadComments(WordprocessingDocument wordDoc)
 {
     var tracker = new CommentTracker();
+    var dates = new Internal.CommentDateResolver(wordDoc.MainDocumentPart!);
     var commentsPart = wordDoc.MainDocumentPart?.WordprocessingCommentsPart;
 
     if (commentsPart != null)
@@ -162,7 +181,7 @@ private static CommentTracker LoadComments(WordprocessingDocument wordDoc)
             {
                 Id = (int)commentElement.Attribute(W.id),
                 Author = (string)commentElement.Attribute(W.author) ?? "",
-                Date = (string)commentElement.Attribute(W.date) ?? "",
+                Date = dates.Resolve(commentElement),
                 Initials = (string)commentElement.Attribute(W.initials) ?? "",
                 ContentParagraphs = commentElement.Elements(W.p).ToList()
             };
@@ -382,7 +401,7 @@ In margin mode, the entire document body is wrapped in a flexbox container with 
     <div class="comment-margin-note" id="comment-0" data-comment-id="0">
       <div class="comment-margin-note-header">
         <span class="comment-margin-author">John Doe</span>
-        <span class="comment-margin-date">Jan 15</span>
+        <span class="comment-margin-date">Jan 15, 2024</span>
         <a href="#comment-ref-0" class="comment-margin-backref">↩</a>
       </div>
       <div class="comment-margin-note-body">

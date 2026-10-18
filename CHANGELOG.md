@@ -59,6 +59,10 @@ All notable changes to this project will be documented in this file.
   and underline patterns and colors (issue #1220). Decorations with different patterns or colors
   use separate inline spans, including in browser/WASM and paginated output.
 
+- Comment rendering and comment listings use a matching valid modern UTC timestamp, with the
+  original legacy date as a fallback (issue #1228). Margin dates include the year, and cached
+  block rendering retains the metadata required to resolve the same instant.
+
 - Rejecting revisions now reverses an insertion or deletion in every container that can hold one (issue
   #1176). Reject works by turning each insertion into a deletion and each deletion into an insertion,
   then accepting. Which revisions it turned around was a list of containers: paragraphs, hyperlinks,
