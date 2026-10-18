@@ -201,6 +201,20 @@ All notable changes to this project will be documented in this file.
   region pairs exactly as it would without them, and each marker goes in front of the paragraph that holds its
   block's content (the folded paragraph, when that block was folded into another), so accepting and rejecting
   still put it back at its block boundary.
+- Comparing documents no longer loses a bookmark or comment range between the paragraphs of a header or footer
+  that is otherwise unchanged (issue #1174). The comparison aligns a story's blocks without such markers, so a
+  header whose only difference was one read as unchanged and kept the original's copy: accepting the redline
+  dropped the revised document's bookmark. Such a story is now rebuilt like any changed one, with the original's
+  markers as tracked deletions and the revised document's as tracked insertions at their block boundaries, for
+  each section the header or footer pairs with. Stories whose markers match are still left as they are. Such a
+  story now appears in the edit-script JSON's `headerFooterOps` with equal ops only; a full body replacement's
+  inserted-style projection treats it like an unchanged story. A header or footer the comparison rebuilds now
+  goes through the same comment clean-up as the body (right-only comment definitions merged in, unique ids,
+  paired ranges), so a comment range there no longer leaves a duplicate id or a reference to a comment the
+  output lacks. A comment both documents have whose range between blocks changed (its end moved one paragraph
+  on, say) now keeps each document's range in its own view, in the body too: the clean-up used to collapse the
+  two copies into one range, so rejecting gave the revised range. A header whose only difference is a comment's
+  id (the revised document numbers the same comment differently) is still left as it is.
 - Right-to-left bordered paragraphs (`w:bidi`) now draw their left and right borders outside the
   indented text, mirroring left-to-right paragraphs (issue #1129). The border wrapper put the
   paragraph's leading (start) indent on its left side, although a right-to-left paragraph's start is

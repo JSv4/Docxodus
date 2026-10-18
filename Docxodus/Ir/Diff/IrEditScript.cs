@@ -390,8 +390,9 @@ internal sealed record IrTableDiff(IrNodeList<IrRowOp> RowOps);
 /// per-story block diffs for the header and footer scopes — a capability the WmlComparer oracle LACKS
 /// (it ignores header/footer differences entirely); DocxDiff is strictly ahead here, mirroring Word
 /// Compare's own default-on "Headers and footers" granularity. Deterministic order: headers first
-/// (section ordinal ascending, then kind Default&lt;First&lt;Even), then footers likewise. Null when no
-/// story changed or <see cref="IrDiffSettings.CompareHeadersFooters"/> is false, so pre-campaign scripts
+/// (section ordinal ascending, then kind Default&lt;First&lt;Even), then footers likewise. A story whose blocks
+/// all match but whose bookmarks or comment ranges between blocks differ is listed with all-Equal ops (issue
+/// #1174). Null when no story changed or <see cref="IrDiffSettings.CompareHeadersFooters"/> is false, so pre-campaign scripts
 /// serialize byte-identically. Anchors live in the per-part <c>hdrN</c>/<c>ftrN</c> scopes.</para>
 /// </remarks>
 internal sealed record IrEditScript(

@@ -289,6 +289,19 @@ public class DocxDiffStyleProvenanceTests
             PackageValidation.AssertValid(styles, version);
     }
 
+    /// <summary>A default header whose root holds exactly <paramref name="innerXml"/>.</summary>
+    private static void AddHeader(MainDocumentPart main, Body body, string innerXml)
+    {
+        var header = main.AddNewPart<HeaderPart>();
+        using (var writer = new StreamWriter(header.GetStream(FileMode.Create, FileAccess.Write)))
+            writer.Write($"<w:hdr xmlns:w=\"{W.NamespaceName}\">{innerXml}</w:hdr>");
+        body.Append(new SectionProperties(new HeaderReference
+        {
+            Id = main.GetIdOfPart(header),
+            Type = HeaderFooterValues.Default,
+        }));
+    }
+
     private static void AddImplicitHeader(MainDocumentPart main, Body body)
     {
         var header = main.AddNewPart<HeaderPart>();
@@ -311,7 +324,8 @@ public class DocxDiffStyleProvenanceTests
         string? legacyBasedOn = null,
         string? conflictingCharacterStyleId = null,
         bool includeGlossary = false,
-        bool includeImplicitHeader = false)
+        bool includeImplicitHeader = false,
+        string? headerXml = null)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -334,6 +348,8 @@ public class DocxDiffStyleProvenanceTests
             body.Append(LeftParagraph("Cobalt marmot thimble."));
             if (includeImplicitHeader)
                 AddImplicitHeader(main, body);
+            if (headerXml is not null)
+                AddHeader(main, body, headerXml);
             main.Document = new Document(body);
 
             // Deliberately no w:docDefaults and no paragraph w:default="1".
@@ -367,7 +383,8 @@ public class DocxDiffStyleProvenanceTests
         string? orderedBasedOn = null,
         bool useExplicitStylesOnly = false,
         bool normalHasInputPropertyRevisions = false,
-        bool includeImplicitHeader = false)
+        bool includeImplicitHeader = false,
+        string? headerXml = null)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -403,6 +420,8 @@ public class DocxDiffStyleProvenanceTests
                 new Run(new RunProperties(new Caps()), new Text("Ivory lantern tundra."))));
             if (includeImplicitHeader)
                 AddImplicitHeader(main, body);
+            if (headerXml is not null)
+                AddHeader(main, body, headerXml);
             main.Document = new Document(body);
 
             var styles = main.AddNewPart<StyleDefinitionsPart>();
@@ -803,6 +822,26 @@ public class DocxDiffStyleProvenanceTests
 
         Assert.Null(normal.Attribute(W + "default"));
         Assert.Null(normal.Element(W + "pPr")?.Element(W + "pPrChange"));
+    }
+
+    [Fact]
+    public void FullReplacement_StillNormalizesInsertedStyles_WhenTheHeaderDiffersOnlyInABookmarkBetweenBlocks()
+    {
+        // The header's blocks all match; only a bookmark around them differs (issue #1174). Its story is rebuilt
+        // with equal blocks only, which cannot reach a right-only default style, so the body's special projection
+        // still applies, as it does when the headers are identical.
+        static string Legacy(string text) =>
+            $"<w:p><w:pPr><w:pStyle w:val=\"Legacy\"/></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>";
+        var plain = Legacy("Header alpha") + Legacy("Header bravo");
+        var bracketed = "<w:bookmarkStart w:id=\"5\" w:name=\"Hdr\"/>" + plain + "<w:bookmarkEnd w:id=\"5\"/>";
+
+        foreach (var (leftHeader, rightHeader) in new[] { (plain, plain), (plain, bracketed) })
+        {
+            var styles = StylesOf(DocxDiff.Compare(StylelessLeft(headerXml: leftHeader), ImportedStyleRight(headerXml: rightHeader)));
+            var imported = StyleOf(styles, "Imported");
+
+            Assert.Equal("240", (string?)imported.Element(W + "pPr")?.Element(W + "spacing")?.Attribute(W + "line"));
+        }
     }
 
     [Fact]
