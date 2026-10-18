@@ -4895,8 +4895,8 @@ export class PaginationEngine {
     for (const element of nodes) {
       element.removeAttribute("id");
       const href = element.getAttribute("href");
-      if (element instanceof this.view.HTMLAnchorElement && href?.startsWith("#")) {
-        if (/^#comment-ref--?[0-9]+$/.test(href)
+      if (element.localName === "a" && href?.startsWith("#")) {
+        if (element instanceof this.view.HTMLAnchorElement && /^#comment-ref--?[0-9]+$/.test(href)
             && Array.from(element.classList).some(name => name.endsWith("margin-backref"))
             && element.getAttribute("aria-disabled") !== "true") {
           this.commentReturnLinks.push({ link: element, href,

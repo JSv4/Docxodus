@@ -33,6 +33,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- SVG `href` fragment links in copied comment content retain their inert behavior alongside
+  ordinary copied links (follow-up to #1229). Only native HTML return labels are reactivated.
+
 - Standalone browser, Node and framed-host exports accept the converter's existing `additionalCss`
   option before pagination and bind nonempty styles to the render report and layout digest (#1230).
 
