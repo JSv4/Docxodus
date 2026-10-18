@@ -63,6 +63,16 @@ public class FormatChangeDescriptionTests
     }
 
     [Fact]
+    public void PreviousLanguage_DoesNotApplyCurrentRenderingRestrictions()
+    {
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("cedar-direction.docx", Fixture(
+            "<w:rtl w:val=\"0\"/>", "<w:rtl/>")),
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, RenderTrackedChanges = true,
+                RestrictToSupportedLanguages = true });
+        Assert.Contains("Cedar revision sample.", html.Value);
+    }
+
+    [Fact]
     public void GeneralFormattingAssembly_PreservesTheOriginalRevisionSnapshot()
     {
         using var stream = new MemoryStream();

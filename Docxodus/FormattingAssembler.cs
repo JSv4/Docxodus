@@ -2905,11 +2905,9 @@ namespace Docxodus
                     revision.Add(previous);
                 }
                 var resolvedPrevious = ResolveRunProperties(fai, wDoc, runOrPara, previous, tablerPr, currentRunProps);
-                // Font resolution also stamps run metadata. Use the same text on a detached run
-                // so the previous font cannot overwrite the current run's metadata.
-                var previousRun = new XElement(W.r, new XElement(W.t,
-                    runOrPara.Descendants(W.t).FirstOrDefault(t => t.Value.Length > 0)?.Value ?? ""));
-                AdjustFontAttributes(wDoc, previousRun, null, resolvedPrevious, settings);
+                // Historical properties need theme-font resolution, not current-run metadata
+                // or validation of a script that is no longer being rendered.
+                ResolveRunFonts(wDoc, resolvedPrevious);
                 resolvedPrevious.Name = W.rPr;
                 previous.ReplaceWith(resolvedPrevious);
             }
@@ -3542,8 +3540,7 @@ namespace Docxodus
             '\x06F9',
         };
 
-        private static void AdjustFontAttributes(WordprocessingDocument wDoc, XElement paraOrRun, XElement? pPr,
-            XElement? rPr, FormattingAssemblerSettings settings)
+        private static XElement? ResolveRunFonts(WordprocessingDocument wDoc, XElement? rPr)
         {
             XDocument? themeXDoc = null;
             var themePart = wDoc.MainDocumentPart!.ThemePart;
@@ -3562,7 +3559,7 @@ namespace Docxodus
             var rFonts = rPr?.Element(W.rFonts);
             if (rFonts == null)
             {
-                return;
+                return null;
             }
             var asciiTheme = (string?)rFonts.Attribute(W.asciiTheme);
             var hAnsiTheme = (string?)rFonts.Attribute(W.hAnsiTheme);
@@ -3648,6 +3645,16 @@ namespace Docxodus
             {
                 rFonts.SetAttributeValue(W.cs, cs);
             }
+
+            return rFonts;
+        }
+
+        private static void AdjustFontAttributes(WordprocessingDocument wDoc, XElement paraOrRun, XElement? pPr,
+            XElement? rPr, FormattingAssemblerSettings settings)
+        {
+            var rFonts = ResolveRunFonts(wDoc, rPr);
+            if (rFonts == null)
+                return;
 
             var firstTextNode = paraOrRun.Descendants(W.t).FirstOrDefault(t => t.Value.Length > 0);
             string str = " ";
