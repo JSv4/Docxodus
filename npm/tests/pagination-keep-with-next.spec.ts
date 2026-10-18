@@ -24,6 +24,23 @@ function section(blocks: string, footnoteRegistry = ''): string {
     <div id="container"></div>`;
 }
 
+/** A footnote whose paragraphs are `heights` points tall. */
+function note(id: string, number: string, heights: number[]): string {
+  return `
+    <div class="footnote-item" data-footnote-id="${id}">
+      <span class="footnote-number">${number}</span>
+      <div class="footnote-content">${heights.map((height, index) =>
+        `<p style="height: ${height}pt; margin: 0">${id}-${index}</p>`).join('')}</div>
+    </div>`;
+}
+
+/** Three 30pt paragraphs: one measures 40.5pt with the separator, the last two 73.5pt. */
+const threeParagraphNote = note('f1', '1', [30, 30, 30]);
+
+function registry(...notes: string[]): string {
+  return `<div id="pagination-footnote-registry">${notes.join('')}</div>`;
+}
+
 async function paginate(page: Page): Promise<string[][]> {
   await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
 
@@ -127,34 +144,68 @@ test.describe('Pagination keep-with-next chains', () => {
     expect(result.footnotePages).toEqual([true, true, false]);
   });
 
-  test('does not force a chain onto a fresh page without room for its pending continuation', async ({ page }) => {
+  test('a chain that a carried note leaves no room for waits for the page where it fits', async ({ page }) => {
     await page.setContent(section(
       `
         <p style="height: 20pt">lead<sup data-footnote-id="f1">1</sup></p>
         <p data-keep-with-next="true" style="height: 20pt">heading</p>
         <p style="height: 20pt">body</p>`,
-      `<div id="pagination-footnote-registry">
-        <div class="footnote-item" data-footnote-id="f1">
-          <span class="footnote-number">1</span>
-          <div class="footnote-content">
-            <p style="height: 30pt; margin: 0">first</p>
-            <p style="height: 30pt; margin: 0">second</p>
-            <p style="height: 30pt; margin: 0">third</p>
-          </div>
-        </div>
-      </div>`
+      registry(threeParagraphNote)
     ));
 
     const result = await paginateWithFootnoteInfo(page);
 
-    // The chain is placed greedily: `heading` stays with `lead`, `body` opens page 2. `body`
-    // is the last block, so once it is placed page 2's note band uses the space it actually
-    // leaves (issue #1119): its 20pt plus the 70.5pt continuation fit the 100pt band, and the
-    // tail no longer needs a note-only third page.
-    expect(result.content).toEqual([
-      ['lead1', 'heading'],
-      ['body'],
-    ]);
-    expect(result.footnotePages).toEqual([true, true]);
+    // `heading` would fit beside the first note paragraph on page 1, `body` would not. The 73.5pt
+    // tail opens page 2 and ends there, leaving 26.5pt, too little for the 40pt chain. As in Word
+    // reference PDFs, the tail keeps page 2 and the chain opens page 3 whole (issue #1180); the
+    // chain used to be refused the move because the whole tail was counted against page 2, and
+    // `heading` was left alone at page 1's foot.
+    expect(result.content).toEqual([['lead1'], [], ['heading', 'body']]);
+    expect(result.footnotePages).toEqual([true, true, false]);
+  });
+
+  for (const [name, blocks, notes, content, footnotePages] of [
+    // The issue's shape: the chain's paragraph cites a one-line note, which opens page 3 with it.
+    ['whose paragraph cites a note', `<h4 data-keep-with-next="true" style="height: 20pt; margin: 0">heading</h4>
+      <p style="height: 20pt">body<sup data-footnote-id="f2">2</sup></p>`, note('f2', '2', [10]),
+      [['lead1'], [], ['heading', 'body2']], [true, true, true]],
+    // A 45pt chain, not on any band boundary, and a block after it.
+    ['of 45pt', `<h4 data-keep-with-next="true" style="height: 20pt; margin: 0">heading</h4>
+      <p style="height: 25pt">body</p><p style="height: 20pt">after</p>`, '',
+      [['lead1'], [], ['heading', 'body', 'after']], [true, true, false]],
+    // The chain's paragraph cites a 60pt note: only the note's start must sit beside it, the rest
+    // runs on.
+    ['whose paragraph cites a long note', `<h4 data-keep-with-next="true" style="height: 20pt; margin: 0">heading</h4>
+      <p style="height: 20pt">body<sup data-footnote-id="f2">2</sup></p><p style="height: 20pt">after</p>`,
+      note('f2', '2', [20, 20, 20]),
+      [['lead1'], [], ['heading', 'body2'], ['after']], [true, true, true, true]],
+  ] as const) {
+    test(`a chain ${name} is not stranded beside a carried note (issue #1180)`, async ({ page }) => {
+      await page.setContent(section(
+        `<p style="height: 20pt">lead<sup data-footnote-id="f1">1</sup></p>${blocks}`,
+        registry(threeParagraphNote, notes)
+      ));
+
+      const result = await paginateWithFootnoteInfo(page);
+
+      expect(result.content).toEqual(content);
+      expect(result.footnotePages).toEqual(footnotePages);
+    });
+  }
+
+  test('a chain waits behind a carried note that runs on for pages', async ({ page }) => {
+    await page.setContent(section(
+      `
+        <p style="height: 20pt">lead<sup data-footnote-id="f1">1</sup></p>
+        <h4 data-keep-with-next="true" style="height: 20pt; margin: 0">heading</h4>
+        <p style="height: 20pt">body</p>`,
+      registry(note('f1', '1', [30, 30, 30, 30, 30, 30]))
+    ));
+
+    const result = await paginateWithFootnoteInfo(page);
+
+    // Pages 2 and 3 hold the note alone; the chain opens the page where it ends.
+    expect(result.content).toEqual([['lead1'], [], [], ['heading', 'body']]);
+    expect(result.footnotePages).toEqual([true, true, true, true]);
   });
 });
