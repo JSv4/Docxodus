@@ -606,6 +606,13 @@ for (const block of blocks) {
 }
 ```
 
+A keep-with-next chain uses the shared paragraph fragmenter for its final paragraph before moving
+the whole chain (#1182). Its prefix height uses the same collapsed margins as ordinary placement.
+Only citations in the retained prefix must start on that page; citations in the continuation move
+with it. A fresh-page feasibility check also admits a valid first fragment, so an oversized chain
+does not strand its heading. Existing keep-lines, explicit breaks, widow-control and disabled
+fragmentation retain their whole-paragraph behavior.
+
 ### Lazy Loading Compatibility
 
 This approach is designed for future lazy loading:
