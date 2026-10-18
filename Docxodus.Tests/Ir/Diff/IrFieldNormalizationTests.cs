@@ -2,6 +2,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus.Internal;
 using Docxodus.Ir.Diff;
@@ -131,6 +132,7 @@ public class IrFieldNormalizationTests
     private static string I(string instruction) =>
         $"<w:r><w:instrText xml:space=\"preserve\"> {instruction} </w:instrText></w:r>";
     private static string Para(string content) => "<w:p>" + content + "</w:p>";
+    private static string PageField(string result) => F("begin") + I("PAGE") + F("separate") + R(result) + F("end");
 
     /// <summary>The result-less fields: an index entry, a table-of-contents entry, and a field whose result is
     /// empty.</summary>
@@ -167,12 +169,132 @@ public class IrFieldNormalizationTests
         Assert.Equal(Shape(original.DocumentByteArray), Shape(DocxDiffOps.RejectRevisions(redline)));
     }
 
+    [Theory]
+    [InlineData("result", true, true)]
+    [InlineData("result", true, false)]
+    [InlineData("delete-prefix", true, true)]
+    [InlineData("delete-prefix", true, false)]
+    [InlineData("result", false, true)]
+    [InlineData("result", false, false)]
+    [InlineData("delete-prefix", false, true)]
+    [InlineData("delete-prefix", false, false)]
+    public void Consolidate_ReviewersEditingBesideAField_PreserveItsCharacters(string edit, bool field, bool frontDoor)
+    {
+        WmlDocument Document(string prefix, string result, string suffix) => IrTestDocuments.FromBodyXml(Para(
+            R(prefix) + (field ? PageField(result) : R(result)) + R(suffix)));
+        var original = Document("Alder birch ", "1", " tail");
+        var prefix = edit == "delete-prefix" ? "Alder " : "Alder birch ";
+        var result = edit == "result" ? "7" : "1";
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Author = "Cedar", Document = Document(prefix, result, " tail") },
+            new DocxDiffReviewer { Author = "Willow", Document = Document("Alder birch ", "1", " tail more") },
+        };
+        var redline = (frontDoor ? DocxCompare.Consolidate(original, reviewers)
+            : DocxDiff.Consolidate(original, reviewers)).DocumentByteArray;
+
+        AssertViews(redline, original, Document(prefix, result, " tail more"), reviewers.Select(reviewer => reviewer.Document).ToArray());
+    }
+
+    [Theory]
+    [InlineData("shared", false)]
+    [InlineData("shared", true)]
+    [InlineData("added", false)]
+    [InlineData("added", true)]
+    [InlineData("removed", false)]
+    [InlineData("removed", true)]
+    public void Consolidate_FieldBoundaryBookmarksKeepTheirViewAndOrder(string mode, bool table)
+    {
+        WmlDocument Document(bool bookmark, string result, string suffix)
+        {
+            var paragraph = Para(R("Alder birch ")
+                + (bookmark ? "<w:bookmarkStart w:id=\"5\" w:name=\"CedarRange\"/>" : "") + PageField(result)
+                + (bookmark ? "<w:bookmarkEnd w:id=\"5\"/>" : "") + R(suffix));
+            return IrTestDocuments.FromBodyXml(table
+                ? "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid><w:tr><w:tc>" + paragraph + "</w:tc></w:tr></w:tbl>"
+                : paragraph);
+        }
+        var original = Document(mode != "added", "1", " tail");
+        var reviewer = Document(mode != "removed", "7", " tail");
+        var other = Document(mode != "added", "1", " tail more");
+        var redline = DocxCompare.Consolidate(original, new[]
+        {
+            new DocxDiffReviewer { Author = "Cedar", Document = reviewer },
+            new DocxDiffReviewer { Author = "Willow", Document = other },
+        }).DocumentByteArray;
+        AssertViews(redline, original, Document(mode != "removed", "7", " tail more"), reviewer, other);
+    }
+
+    [Theory]
+    [InlineData("ordinary")]
+    [InlineData("nested-result")]
+    [InlineData("nested-hyperlink")]
+    [InlineData("adjacent")]
+    [InlineData("hyperlink")]
+    public void Consolidate_ThreeReviewersPreserveFieldsOrReportCarrierConflict(string kind)
+    {
+        WmlDocument Document(string prefix, string result, string suffix)
+        {
+            var field = kind switch
+            {
+                "nested-result" => F("begin") + I("REF Outer") + F("separate") + R("cedar ") + PageField(result) + R(" fir") + F("end"),
+                "nested-hyperlink" => F("begin") + I("HYPERLINK \"https://example.test/cedar\"") + F("separate") + R("cedar ") + PageField(result) + R(" fir") + F("end"),
+                "adjacent" => PageField(result) + R(" ") + PageField("2"),
+                "hyperlink" => "<w:hyperlink w:anchor=\"Target\">" + PageField(result) + "</w:hyperlink>",
+                _ => PageField(result),
+            };
+            return IrTestDocuments.FromBodyXml(Para(R(prefix) + field + R(suffix)));
+        }
+        var original = Document("Alder birch ", "1", " tail");
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Author = "Cedar", Document = Document("Alder birch ", "7", " tail") },
+            new DocxDiffReviewer { Author = "Willow", Document = Document("Alder birch ", "1", " tail more") },
+            new DocxDiffReviewer { Author = "Maple", Document = Document("Root Alder birch ", "1", " tail") },
+        };
+        var redline = DocxCompare.Consolidate(original, reviewers).DocumentByteArray;
+        // A HYPERLINK field is a structural carrier. Its changed cached result still takes the
+        // existing whole-paragraph conflict path; the field planner must not bypass that policy.
+        bool carrierConflict = kind == "nested-hyperlink";
+        AssertViews(redline, original, carrierConflict ? original : Document("Root Alder birch ", "7", " tail more"),
+            reviewers.Select(reviewer => reviewer.Document).ToArray());
+        var conflicts = DocxDiff.GetConflicts(original, reviewers);
+        if (carrierConflict)
+        {
+            Assert.Single(conflicts);
+            return;
+        }
+        Assert.Empty(conflicts);
+        using var stream = new MemoryStream(redline);
+        using var package = WordprocessingDocument.Open(stream, false);
+        var inserted = package.MainDocumentPart!.GetXDocument().Descendants(W.ins)
+            .GroupBy(e => (string?)e.Attribute(W.author) ?? "")
+            .ToDictionary(group => group.Key, group => string.Concat(group.SelectMany(e => e.Descendants(W.t)).Select(e => e.Value)));
+        Assert.Equal("7", inserted["Cedar"].Trim());
+        Assert.Equal("more", inserted["Willow"].Trim());
+        Assert.Equal("Root", inserted["Maple"].Trim());
+    }
+
+    private static void AssertViews(byte[] redline, WmlDocument original, WmlDocument expected, params WmlDocument[] reviewers)
+    {
+        var accepted = DocxDiffOps.AcceptRevisions(redline);
+        var rejected = DocxDiffOps.RejectRevisions(redline);
+        Assert.Equal(Shape(original.DocumentByteArray), Shape(rejected));
+        Assert.Equal(Shape(expected.DocumentByteArray), Shape(accepted));
+        foreach (var bytes in reviewers.Select(document => document.DocumentByteArray)
+            .Concat(new[] { original.DocumentByteArray, expected.DocumentByteArray, redline, accepted, rejected }))
+            PackageValidation.AssertValid(bytes, FileFormatVersions.Office2019);
+    }
+
     private static string Shape(byte[] bytes)
     {
         using var stream = new MemoryStream(bytes);
         using var document = WordprocessingDocument.Open(stream, false);
         var sb = new StringBuilder();
-        foreach (var e in document.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!.Descendants())
+        var body = document.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        var names = body.Descendants(W.bookmarkStart).GroupBy(e => (string?)e.Attribute(W.id) ?? "")
+            .ToDictionary(group => group.Key, group => (string?)group.First().Attribute(W.name) ?? "");
+        foreach (var e in body.Descendants())
         {
             if (e.Name == W.t)
                 sb.Append(e.Value);
@@ -182,6 +304,9 @@ public class IrFieldNormalizationTests
                 sb.Append('<').Append(e.Value).Append('>');
             else if (e.Name == W.p)
                 sb.Append('¶');
+            else if (e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd)
+                sb.Append('[').Append(e.Name.LocalName).Append(':')
+                    .Append(names.GetValueOrDefault((string?)e.Attribute(W.id) ?? "", "missing")).Append(']');
         }
         return sb.ToString();
     }

@@ -5956,7 +5956,7 @@ internal static partial class IrMarkupRenderer
         RenderState state,
         List<XElement> sink)
     {
-        var authored = op.AuthoredTokens
+        var authored = op.AuthoredTokens?.ToList()
             ?? throw new DocxodusException("RenderComposedParagraph requires op.AuthoredTokens.");
         string? baseAnchor = op.Op.LeftAnchor;
         var basePara = SourceElement(baseAnchor, baseIr);
@@ -5981,8 +5981,18 @@ internal static partial class IrMarkupRenderer
         if (op.SourceRightAnchors != null)
             foreach (var sra in op.SourceRightAnchors)
                 rightAnchorByReviewer[sra.Reviewer] = sra.Anchor;
-        var rightTokensCache = new Dictionary<int, IReadOnlyList<IrDiffToken>>();
-        var rightRunsCache = new Dictionary<int, SourceRunModel>();
+        var fieldSources = new Dictionary<int, FieldCharacterSource> { [-1] = new(leftTokens, leftRuns) };
+        foreach (var group in authored.Where(item => item.SourceReviewer >= 0).GroupBy(item => item.SourceReviewer))
+        {
+            int reviewer = group.Key;
+            string? anchor = rightAnchorByReviewer.TryGetValue(reviewer, out var value) ? value : null;
+            var tokens = ParagraphTokens(anchor, reviewerIrs[reviewer], state.Settings);
+            var paragraph = SourceElement(anchor, reviewerIrs[reviewer]);
+            var runs = new SourceRunModel(paragraph ?? new XElement(W.p));
+            fieldSources[reviewer] = new(tokens, runs, group.First().Author);
+        }
+        authored = SyncFieldCharacters(authored, item => item.Op, (item, tokenOp) => item with { Op = tokenOp },
+            item => item.SourceReviewer, leftTokens, leftRuns, fieldSources, out var fieldCharactersBefore);
 
         // Clone the BASE pPr (deterministic; composed edits are text-only).
         var newPara = new XElement(W.p);
@@ -5999,11 +6009,12 @@ internal static partial class IrMarkupRenderer
         var count = authored.Count;
         while (i < count)
         {
-            // Coalesce the maximal run of consecutive authored ops sharing (Author, SourceReviewer).
+            newPara.Add(EmitFieldCharacters(fieldCharactersBefore?[i], leftRuns, leftRuns, state, reviewerIrs, baseIr));
+            // Coalesce ops with the same author/source, stopping at a planned field boundary.
             int reviewer = authored[i].SourceReviewer;
             string author = authored[i].Author;
             int groupStart = i;
-            while (i < count &&
+            while (i < count && (i == groupStart || fieldCharactersBefore?[i] is null) &&
                    authored[i].SourceReviewer == reviewer &&
                    string.Equals(authored[i].Author, author, StringComparison.Ordinal))
                 i++;
@@ -6030,21 +6041,13 @@ internal static partial class IrMarkupRenderer
                 state.RightSource = reviewerIrs[reviewer];
                 state.RightSourceId = reviewer;
 
-                if (!rightTokensCache.TryGetValue(reviewer, out var rightTokens))
-                {
-                    string? ra = rightAnchorByReviewer.TryGetValue(reviewer, out var a) ? a : null;
-                    rightTokens = ParagraphTokens(ra, reviewerIrs[reviewer], state.Settings);
-                    rightTokensCache[reviewer] = rightTokens;
-                    var rightPara = SourceElement(ra, reviewerIrs[reviewer]);
-                    rightRunsCache[reviewer] = rightPara != null
-                        ? new SourceRunModel(rightPara)
-                        : new SourceRunModel(new XElement(W.p));
-                }
-                var rightRuns = rightRunsCache[reviewer];
+                var rightTokens = fieldSources[reviewer].Tokens;
+                var rightRuns = fieldSources[reviewer].Runs;
                 newPara.Add(BuildTokenOpContent(subDiff, leftTokens, rightTokens, leftRuns, rightRuns, state));
             }
         }
 
+        newPara.Add(EmitFieldCharacters(fieldCharactersBefore?[count], leftRuns, leftRuns, state, reviewerIrs, baseIr));
         state.AuthorOverride = savedAuthor;
         state.RightSource = savedRightSource;
         state.RightSourceId = savedRightSourceId;
@@ -6577,21 +6580,8 @@ internal static partial class IrMarkupRenderer
         if (syncFieldCharacters)
             ops = SyncFieldCharacters(ops, leftTokens, rightTokens, leftRuns, rightRuns, out fieldCharactersBefore);
 
-        void EmitFieldCharactersBefore(int opIndex)
-        {
-            if (fieldCharactersBefore?[opIndex] is not { } due)
-                return;
-            foreach (var placed in due)
-                foreach (var step in placed)
-                {
-                    var emitted = (step.FromLeft ? leftRuns : rightRuns).EmitFieldCharacter(step.Members);
-                    if (step.Kind is { } kind)
-                        foreach (var r in emitted)
-                            content.AddRange(WrapOneSidedMarker(r, kind, state));
-                    else
-                        content.AddRange(emitted);
-                }
-        }
+        void EmitFieldCharactersBefore(int opIndex) =>
+            content.AddRange(EmitFieldCharacters(fieldCharactersBefore?[opIndex], leftRuns, rightRuns, state));
 
         // An op slices the left source only when it draws left content: a deletion, or an Equal/FormatChanged span
         // whose raw text differs (drawn as del + ins). Any other Equal/FormatChanged span emits the right runs alone.
@@ -6776,6 +6766,8 @@ internal static partial class IrMarkupRenderer
         return CoalesceAdjacentHyperlinks(content);
     }
 
+    private sealed record FieldCharacterSource(IReadOnlyList<IrDiffToken> Tokens, SourceRunModel Runs, string? Author = null);
+
     /// <summary>
     /// Plan where each field character of a paired paragraph is emitted (issue #1165). A fine-rendered pair carries
     /// the same field characters on both sides (a field-structure difference replaces the paragraph whole), so the
@@ -6797,131 +6789,242 @@ internal static partial class IrMarkupRenderer
     private static List<IrTokenOp> SyncFieldCharacters(
         List<IrTokenOp> ops, IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
         SourceRunModel leftRuns, SourceRunModel rightRuns,
+        out List<List<FieldCharacterStep>>[]? emitBefore) =>
+        SyncFieldCharacters(ops, op => op, (_, op) => op, _ => 0, leftTokens, leftRuns,
+            new Dictionary<int, FieldCharacterSource> { [0] = new(rightTokens, rightRuns) }, out emitBefore);
+
+    // Every op keeps its source identity while the common field boundaries split and order it. A two-way
+    // paragraph has one right source; a composed paragraph has a base source and each contributing reviewer.
+    private static List<T> SyncFieldCharacters<T>(
+        List<T> entries, Func<T, IrTokenOp> operation, Func<T, IrTokenOp, T> replaceOperation,
+        Func<T, int> sourceOf, IReadOnlyList<IrDiffToken> leftTokens, SourceRunModel leftRuns,
+        IReadOnlyDictionary<int, FieldCharacterSource> sources,
         out List<List<FieldCharacterStep>>[]? emitBefore)
     {
         emitBefore = null;
         var left = leftRuns.FieldCharacters();
         if (left is null || left.Count == 0)
-            return ops;
-        var right = rightRuns.FieldCharacters();
-        if (right is null || left.Count != right.Count)
-            return ops;
-        // A field nested in another field's code (`= { PAGE } - 1`, `IF { MERGEFIELD } …`) leaves the whole paragraph
-        // to the ops: the reader does not model the nested field's characters and result as part of the outer
-        // code, so neither a nested character nor the outer field's own ones pair reliably, and placing some of
-        // them while the slices place the rest reorders the field code.
-        for (int k = 0; k < left.Count; k++)
-            if (left[k].Type != right[k].Type || left[k].InInstruction || right[k].InInstruction ||
-                left[k].Field != right[k].Field)
-                return ops;
+            return entries;
+        var right = new Dictionary<int, List<SourceRunModel.FieldCharacter>>();
+        foreach (var (source, model) in sources)
+        {
+            var characters = model.Runs.FieldCharacters();
+            if (characters is null || characters.Count != left.Count)
+                return entries;
+            for (int k = 0; k < left.Count; k++)
+                if (left[k].Type != characters[k].Type || left[k].InInstruction || characters[k].InInstruction ||
+                    left[k].Field != characters[k].Field)
+                    return entries;
+            right[source] = characters;
+        }
 
-        // The token index each character sits before on each side; (-1, -1) where it has no point both sides reach,
-        // and (-2, -2) where it lies strictly inside a span whose text is unchanged, which emits it once in place.
-        var points = new (int Left, int Right)[left.Count];
+        var leftPoints = left.Select(character => FieldCharacterTokenIndex(leftTokens, character)).ToArray();
+        var rightPoints = right.ToDictionary(pair => pair.Key,
+            pair => pair.Value.Select(character => FieldCharacterTokenIndex(sources[pair.Key].Tokens, character)).ToArray());
+        var status = new int[left.Count]; // -1: unplaceable; -2: held by unchanged text; 0: placed here.
+        var sole = sources.Count == 1 ? sources.Keys.First() : -1;
         for (int k = 0; k < left.Count; k++)
         {
-            int lt = FieldCharacterTokenIndex(leftTokens, left[k]);
-            int rt = FieldCharacterTokenIndex(rightTokens, right[k]);
-            if ((lt < 0 || rt < 0) && left[k].CoreSignature == right[k].CoreSignature &&
-                HeldInPlaceByUnchangedSpan(ops, leftTokens, rightTokens, left[k].Char, right[k].Char))
+            int lt = leftPoints[k];
+            if (sources.Count == 1 && (lt < 0 || rightPoints[sole][k] < 0) &&
+                left[k].CoreSignature == right[sole][k].CoreSignature &&
+                HeldInPlaceByUnchangedSpan(entries.Select(operation).ToList(), leftTokens, sources[sole].Tokens,
+                    left[k].Char, right[sole][k].Char))
             {
-                points[k] = (-2, -2);
+                status[k] = -2;
                 continue;
             }
-            // A one-sided marker would be drawn in a clone of its container of its own, and the pieces of a
-            // container nested in another (a hyperlink in a hyperlink, which the schema does not allow but documents
-            // carry) are not rejoined: accept would drop the clone, marker and all. Such a field is left to the ops.
             static string NestedMarkers(SourceRunModel.FieldCharacter c) => string.Join(" ",
                 c.Items.Where(item => item.Nested && !item.IsCore).Select(item => item.AfterFieldChar + item.Key));
-            bool onPath = lt >= 0 && rt >= 0 && left[k].CoreSignature == right[k].CoreSignature &&
-                NestedMarkers(left[k]) == NestedMarkers(right[k]);
+            bool onPath = lt >= 0 && right.All(pair => rightPoints[pair.Key][k] >= 0 &&
+                left[k].CoreSignature == pair.Value[k].CoreSignature &&
+                NestedMarkers(left[k]) == NestedMarkers(pair.Value[k]));
             bool held = false;
-            foreach (var op in ops)
+            foreach (var entry in entries)
             {
-                if (!onPath)
-                    break;
+                if (!onPath) break;
+                var op = operation(entry);
+                int source = sourceOf(entry), rt = rightPoints[source][k];
                 bool hasLeft = op.LeftEnd > op.LeftStart, hasRight = op.RightEnd > op.RightStart;
                 bool insideLeft = op.LeftStart < lt && lt < op.LeftEnd;
                 bool insideRight = op.RightStart < rt && rt < op.RightEnd;
                 if (hasLeft && hasRight)
                 {
-                    // A span over both sides passes the point only at the same offset into both, and one whose
-                    // text is unchanged keeps an interior character itself.
                     onPath = insideLeft || insideRight
                         ? insideLeft && insideRight && lt - op.LeftStart == rt - op.RightStart
                         : (op.LeftStart >= lt) == (op.RightStart >= rt);
-                    held |= onPath && insideLeft && KeepsTextUnchanged(op, leftTokens, rightTokens);
+                    held |= onPath && insideLeft && KeepsTextUnchanged(op, leftTokens, sources[source].Tokens);
                 }
                 else if (insideLeft || insideRight)
                     onPath = op.RelocationGroupId is null;
             }
-            points[k] = !onPath ? (-1, -1) : held ? (-2, -2) : (lt, rt);
+            status[k] = !onPath ? -1 : held ? -2 : 0;
         }
 
-        // A field is placed whole or not at all: placing some of its characters while the slices place the others
-        // tears it apart (a begin placed ahead of a separate a deletion still carries reads the deleted text as the
-        // result in both views).
-        // A character an unchanged span keeps in place is consistent with the placed ones around it.
-        var unplaceable = Enumerable.Range(0, left.Count).Where(k => points[k].Left == -1)
+        // Place a field whole or leave it to the existing slices; mixing ownership tears its envelope apart.
+        var unplaceable = Enumerable.Range(0, left.Count).Where(k => status[k] == -1)
             .Select(k => left[k].Field).ToHashSet();
-        var synced = new List<(int Left, int Right, int Index)>();
-        for (int k = 0; k < left.Count; k++)
-        {
-            if (points[k].Left == -2 || unplaceable.Contains(left[k].Field))
-                continue;
-            if (synced.Count > 0 && (points[k].Left < synced[^1].Left || points[k].Right < synced[^1].Right))
-                return ops;
-            synced.Add((points[k].Left, points[k].Right, k));
-        }
-        if (synced.Count == 0)
-            return ops;
+        var synced = Enumerable.Range(0, left.Count)
+            .Where(k => status[k] == 0 && !unplaceable.Contains(left[k].Field)).ToList();
+        if (synced.Count == 0) return entries;
+        for (int j = 1; j < synced.Count; j++)
+            if (leftPoints[synced[j]] < leftPoints[synced[j - 1]] ||
+                rightPoints.Values.Any(points => points[synced[j]] < points[synced[j - 1]]))
+                return entries;
 
-        var split = new List<IrTokenOp>();
-        foreach (var op in ops)
+        var split = new List<T>();
+        foreach (var entry in entries)
         {
+            var op = operation(entry);
             bool hasLeft = op.LeftEnd > op.LeftStart, hasRight = op.RightEnd > op.RightStart;
-            var cuts = synced
-                .Select(s => hasLeft ? s.Left - op.LeftStart : s.Right - op.RightStart)
+            var points = rightPoints[sourceOf(entry)];
+            var cuts = synced.Select(k => hasLeft ? leftPoints[k] - op.LeftStart : points[k] - op.RightStart)
                 .Where(offset => offset > 0 && offset < (hasLeft ? op.LeftLength : op.RightLength))
                 .Distinct().OrderBy(offset => offset).ToList();
             int from = 0;
             foreach (var to in cuts.Append(hasLeft ? op.LeftLength : op.RightLength))
             {
-                split.Add(cuts.Count == 0 ? op : op with
+                split.Add(cuts.Count == 0 ? entry : replaceOperation(entry, op with
                 {
                     LeftStart = hasLeft ? op.LeftStart + from : op.LeftStart,
                     LeftEnd = hasLeft ? op.LeftStart + to : op.LeftEnd,
                     RightStart = hasRight ? op.RightStart + from : op.RightStart,
                     RightEnd = hasRight ? op.RightStart + to : op.RightEnd,
-                });
+                }));
                 from = to;
             }
         }
-
-        // How many synced characters each op follows; a stable sort on it keeps each side's own order.
-        int Follows(IrTokenOp op) => synced.Count(s =>
-            op.LeftEnd > op.LeftStart ? op.LeftStart >= s.Left : op.RightStart >= s.Right);
-        var ordered = split.Select((op, index) => (Op: op, Index: index, Follows: Follows(op)))
+        int Follows(T entry)
+        {
+            var op = operation(entry);
+            return synced.Count(k => op.LeftEnd > op.LeftStart
+                ? op.LeftStart >= leftPoints[k] : op.RightStart >= rightPoints[sourceOf(entry)][k]);
+        }
+        var ordered = split.Select((entry, index) => (Entry: entry, Index: index, Follows: Follows(entry)))
             .OrderBy(entry => entry.Follows).ThenBy(entry => entry.Index).ToList();
-
         emitBefore = new List<List<FieldCharacterStep>>[ordered.Count + 1];
+        int emittedSource = sources.Count == 1 ? sole : -1;
         for (int j = 0; j < synced.Count; j++)
         {
+            int k = synced[j];
             int slot = ordered.FindIndex(entry => entry.Follows > j);
-            if (slot < 0)
-                slot = ordered.Count;
-            var placed = PlaceFieldCharacter(left[synced[j].Index], right[synced[j].Index]);
+            if (slot < 0) slot = ordered.Count;
+            var placed = sources.Count == 1
+                ? PlaceFieldCharacter(left[k], right[emittedSource][k]).Select(step => step with
+                    { Source = step.FromLeft ? leftRuns : sources[emittedSource].Runs }).ToList()
+                : PlaceComposedFieldCharacter(left[k], leftRuns,
+                    right.ToDictionary(pair => pair.Key, pair => pair.Value[k]), sources);
             (emitBefore[slot] ??= new()).Add(placed);
-            leftRuns.WithholdFieldCharacter(left[synced[j].Index].Members);
-            rightRuns.WithholdFieldCharacter(right[synced[j].Index].Members);
+            leftRuns.WithholdFieldCharacter(left[k].Members);
+            foreach (var (source, model) in sources)
+                model.Runs.WithholdFieldCharacter(right[source][k].Members);
         }
-        return ordered.Select(entry => entry.Op).ToList();
+        return ordered.Select(entry => entry.Entry).ToList();
+    }
+
+    private static IEnumerable<XElement> EmitFieldCharacters(List<List<FieldCharacterStep>>? due,
+        SourceRunModel leftRuns, SourceRunModel rightRuns, RenderState state,
+        IReadOnlyList<IrDocument>? reviewers = null, IrDocument? baseIr = null)
+    {
+        if (due is null) yield break;
+        foreach (var placed in due)
+            foreach (var step in placed)
+            {
+                var saved = (state.AuthorOverride, state.RightSource, state.RightSourceId);
+                if (step.Reviewer is { } reviewer && reviewers is not null && baseIr is not null)
+                {
+                    state.AuthorOverride = step.Author;
+                    state.RightSource = reviewer < 0 ? baseIr : reviewers[reviewer];
+                    state.RightSourceId = reviewer;
+                }
+                try
+                {
+                    foreach (var run in (step.Source ?? (step.FromLeft ? leftRuns : rightRuns)).EmitFieldCharacter(step.Members))
+                        if (step.Kind is { } kind)
+                        {
+                            foreach (var marked in WrapOneSidedMarker(run, kind, state)) yield return marked;
+                        }
+                        else yield return run;
+                }
+                finally
+                {
+                    (state.AuthorOverride, state.RightSource, state.RightSourceId) = saved;
+                }
+            }
+    }
+
+    // Each two-way placement supplies its marker deltas in source order. Merge those deltas around the
+    // base's shared field plumbing, retaining the reviewer on each insertion/deletion instead of emitting
+    // another begin/instruction/separate for every reviewer who touches the paragraph.
+    private static List<FieldCharacterStep> PlaceComposedFieldCharacter(
+        SourceRunModel.FieldCharacter left, SourceRunModel leftRuns,
+        IReadOnlyDictionary<int, SourceRunModel.FieldCharacter> right,
+        IReadOnlyDictionary<int, FieldCharacterSource> sources)
+    {
+        var removed = new Dictionary<XElement, int>();
+        var inserted = new Dictionary<int, List<FieldCharacterStep>>();
+        var additions = new HashSet<(int Slot, string Key, bool After, int Occurrence)>();
+        foreach (var (reviewer, character) in right.Where(pair => pair.Key >= 0))
+        {
+            int cursor = 0;
+            var pending = new List<(SourceRunModel.FieldCharacterItem Item, int Occurrence)>();
+            var occurrences = new Dictionary<string, int>();
+            void Flush(int slot)
+            {
+                foreach (var (item, occurrence) in pending)
+                    if (additions.Add((slot, item.Key, item.AfterFieldChar, occurrence)))
+                    {
+                        if (!inserted.TryGetValue(slot, out var at)) inserted[slot] = at = new();
+                        at.Add(new(false, new() { item.Element }, RevKind.Ins, sources[reviewer].Runs,
+                            sources[reviewer].Author, reviewer));
+                    }
+                pending.Clear();
+            }
+            foreach (var step in PlaceFieldCharacter(left, character))
+                foreach (var item in (step.FromLeft ? left : character).Items.Where(item => step.Members.Contains(item.Element)))
+                {
+                    if (step.Kind == RevKind.Ins)
+                    {
+                        int occurrence = occurrences.GetValueOrDefault(item.Key);
+                        occurrences[item.Key] = occurrence + 1;
+                        pending.Add((item, occurrence));
+                        continue;
+                    }
+                    int at = Enumerable.Range(cursor, left.Items.Count - cursor).FirstOrDefault(index =>
+                        step.FromLeft ? ReferenceEquals(left.Items[index].Element, item.Element)
+                            : left.Items[index].Key == item.Key && left.Items[index].AfterFieldChar == item.AfterFieldChar, -1);
+                    if (at < 0) continue; // A different segmentation of the unchanged instruction uses the base's runs.
+                    Flush(at);
+                    if (step.Kind == RevKind.Del) removed.TryAdd(left.Items[at].Element, reviewer);
+                    cursor = at + 1;
+                }
+            Flush(left.Items.Count);
+        }
+        var result = new List<FieldCharacterStep>();
+        void Add(FieldCharacterStep step)
+        {
+            if (result.Count > 0 && result[^1].Source == step.Source && result[^1].Kind == step.Kind &&
+                result[^1].Reviewer == step.Reviewer)
+                result[^1].Members.UnionWith(step.Members);
+            else result.Add(step);
+        }
+        for (int index = 0; index <= left.Items.Count; index++)
+        {
+            if (inserted.TryGetValue(index, out var at)) foreach (var step in at) Add(step);
+            if (index == left.Items.Count) break;
+            var item = left.Items[index];
+            bool deleted = removed.TryGetValue(item.Element, out int reviewer);
+            Add(new(true, new() { item.Element }, deleted ? RevKind.Del : null, leftRuns,
+                deleted ? sources[reviewer].Author : null, deleted ? reviewer : -1));
+        }
+        return result;
     }
 
     /// <summary>One step of what a placed field character emits, in order: source elements of one side, bare
     /// (<see cref="Kind"/> null: the revision's copy of the core and of the markers both sides carry) or as that
     /// side's own deletion or insertion (a marker only one side carries there).</summary>
-    private sealed record FieldCharacterStep(bool FromLeft, HashSet<XElement> Members, RevKind? Kind);
+    private sealed record FieldCharacterStep(bool FromLeft, HashSet<XElement> Members, RevKind? Kind,
+        SourceRunModel? Source = null, string? Author = null, int? Reviewer = null);
 
     /// <summary>The emission of one placed field character. Each side's elements before the <c>w:fldChar</c>, and
     /// those after it (its instruction runs and the markers after or among them), are matched in order by key (a
@@ -11376,6 +11479,24 @@ internal static partial class IrMarkupRenderer
         public List<FieldCharacter>? FieldCharacters()
         {
             var result = new List<FieldCharacter>();
+            // InlineWalker flattens nested fields into the outer result. Instruction runs after the
+            // outer separate therefore also have opaque zero-width tokens, unlike outer field code.
+            var resultInstructions = new HashSet<int>();
+            int depth = 0;
+            bool inResult = false;
+            for (int i = 0; i < _segments.Count; i++)
+            {
+                var segment = _segments[i];
+                if (IsFieldChar(segment))
+                    switch ((string?)segment.OtherChild!.Attribute(W.fldCharType))
+                    {
+                        case "begin": if (depth++ == 0) inResult = false; break;
+                        case "separate": if (depth == 1) inResult = true; break;
+                        case "end": if (depth > 0 && --depth == 0) inResult = false; break;
+                    }
+                else if (inResult && IsInstruction(segment)) resultInstructions.Add(i);
+            }
+            bool IsToken(int index) => MayBeZeroWidthToken(_segments[index]) || resultInstructions.Contains(index);
             var attached = new HashSet<int>();
             var open = new List<(bool Separated, int Field)>();
             int nextField = 0;
@@ -11435,14 +11556,14 @@ internal static partial class IrMarkupRenderer
                         open.RemoveAt(open.Count - 1);
                 }
 
-                int before = _segments.Take(first).Count(other => other.Start == seg.Start && MayBeZeroWidthToken(other));
+                int before = Enumerable.Range(0, first).Count(index => _segments[index].Start == seg.Start && IsToken(index));
                 result.Add(new FieldCharacter(type, seg.Start, before, 0, items, field, inInstruction));
                 i = last;
             }
             for (int k = 0; k < result.Count; k++)
             {
                 int at = result[k].Char;
-                result[k] = result[k] with { ZeroWidthAt = _segments.Count(seg => seg.Start == at && MayBeZeroWidthToken(seg)) };
+                result[k] = result[k] with { ZeroWidthAt = Enumerable.Range(0, _segments.Count).Count(index => _segments[index].Start == at && IsToken(index)) };
             }
             return result;
         }
