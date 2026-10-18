@@ -33,6 +33,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Formatting-revision descriptions compare current and previous effective run properties, so a
+  bold-only change no longer claims an inherited font or size changed (issue #1222). Previous
+  character styles and explicit off values are respected. Ordinary formatting assembly retains
+  its original revision snapshots.
+
 - Rejecting revisions now reverses an insertion or deletion in every container that can hold one (issue
   #1176). Reject works by turning each insertion into a deletion and each deletion into an insertion,
   then accepting. Which revisions it turned around was a list of containers: paragraphs, hyperlinks,

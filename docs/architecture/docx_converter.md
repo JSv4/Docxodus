@@ -632,3 +632,12 @@ html.Save("output.html", SaveOptions.DisableFormatting);
 - `OpenXmlPowerTools/FormattingAssembler.cs` - Style resolution
 - `OpenXmlPowerTools/FieldRetriever.cs` - Field code processing
 - `OpenXmlPowerTools/PtOpenXml.cs` - Custom annotation namespace
+
+## Formatting revision descriptions
+
+With tracked-change rendering enabled, formatting assembly resolves each run's previous `rPr`
+through the same default, paragraph, table and character-style rules as its current properties
+(issue #1222). An empty previous snapshot, including one removed by markup simplification, means
+inherited formatting. Descriptions compare those effective properties and honor explicit off
+values. The extra resolution is internal to HTML rendering; ordinary `FormattingAssembler`
+callers keep the original revision snapshots.
