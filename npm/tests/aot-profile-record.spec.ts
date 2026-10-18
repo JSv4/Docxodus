@@ -11,6 +11,7 @@
 // The profile is written once, when the write-at method (DocumentComparer.Warmup, armed
 // by test-harness.html?aotProfile=1) is first compiled, into INTERNAL.aotProfileData.
 import { test, expect } from '@playwright/test';
+import { cssCascadeFixture } from './docx-css-cascade-fixture.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -129,6 +130,15 @@ test.describe('AOT profile recording', () => {
         } finally { bridge.CloseSession(handle); }
       }, Array.from(commentDateFixture(modern)));
     }
+
+    // Exercise both CSS delimiter escapes and XML CDATA writing in the shared converter.
+    await page.evaluate(bytes => {
+      const html = (window as any).Docxodus.DocumentConverter.ConvertDocxToHtmlComplete(
+        new Uint8Array(bytes), 'Profile CSS', 'docx-', false,
+        'p > span {color:red} p::after {content:"</StYlE>A&B ]]>"}',
+        -1, 'comment-', 1, 1, 'page-', false, 0, 'annot-', false, false, false, true, true);
+      if (!html.includes('CDATA[')) throw new Error('Stylesheet raw-text path was not exercised');
+    }, Array.from(cssCascadeFixture()));
 
     const profile = await page.evaluate(() => {
       (window as any).Docxodus.DocumentComparer.Warmup();

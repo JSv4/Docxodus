@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 import { cssCascadeFixture } from './docx-css-cascade-fixture.js';
 
@@ -29,6 +29,9 @@ test('delivered stylesheet preserves child selectors in HTML and PDF', async ({ 
     expect(viewport.width).toBeCloseTo(612, 0); expect(viewport.height).toBeCloseTo(792, 0);
     const text = (await page.getTextContent()).items.filter(item => 'str' in item).map(item => item.str).join(' ');
     expect(text).toContain('Cedar cascade sample.'); expect(text).toContain('Plain control.');
+    const operations = await page.getOperatorList();
+    const fills = operations.argsArray.filter((_, index) => operations.fnArray[index] === OPS.setFillRGBColor).flat();
+    expect(fills).toContain('#ff0000'); expect(fills).toContain('#00ff00');
   } finally { await task.destroy(); }
   const page = await browser.newPage();
   try {
