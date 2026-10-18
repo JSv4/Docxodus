@@ -278,6 +278,11 @@ When adjacent cells have different borders, priority is determined by:
 <a href="#bookmarkName" style="color: inherit; text-decoration: none">link text</a>
 ```
 
+Hyperlink conversion preserves child containers and revision wrappers as well as direct runs,
+using the existing tab-layout path. Custom XML shares the content-control traversal: its metadata
+does not render, while its content flows through inline conversion or block border grouping. This
+applies to normal and paginated HTML (#1188).
+
 The anchor suppresses browser-default link presentation. Explicit Word run styling inside the link
 still wins in ordinary links. Cached `TOC` field results are the semantic exception: Word suppresses
 hyperlink color and underline there even when a run references the `Hyperlink` character style.
