@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- CSS child selectors, ampersands and comparison operators survive DOCX-to-HTML serialization
+  (issue #1230). The shared converter emits a CSS-commented CDATA section, preserving styles
+  for both HTML browsers and XML consumers, including custom `GeneralCss` and `AdditionalCss`.
+
 - Rejecting revisions now reverses an insertion or deletion in every container that can hold one (issue
   #1176). Reject works by turning each insertion into a deletion and each deletion into an insertion,
   then accepting. Which revisions it turned around was a list of containers: paragraphs, hyperlinks,
