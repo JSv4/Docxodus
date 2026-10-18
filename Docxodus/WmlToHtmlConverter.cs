@@ -4908,6 +4908,7 @@ namespace Docxodus
             if (commentsXDoc.Root == null)
                 return;
 
+            var dates = new Internal.CommentDateResolver(wordDoc.MainDocumentPart!);
             foreach (var comment in commentsXDoc.Root.Elements(W.comment))
             {
                 var id = (int?)comment.Attribute(W.id);
@@ -4918,7 +4919,7 @@ namespace Docxodus
                 {
                     Id = id.Value,
                     Author = (string?)comment.Attribute(W.author),
-                    Date = (string?)comment.Attribute(W.date),
+                    Date = dates.Resolve(comment),
                     Initials = (string?)comment.Attribute(W.initials),
                     SourceElement = comment,
                     ContentParagraphs = comment.Elements(W.p).ToList()
@@ -5403,7 +5404,7 @@ namespace Docxodus
             if (comment.Date != null)
             {
                 // Format date nicely
-                if (DateTime.TryParse(comment.Date, out var dt))
+                if (Internal.CommentDateResolver.TryParseUtc(comment.Date, out var dt))
                 {
                     header.Add(new XElement(Xhtml.span,
                         new XAttribute("class", prefix + "date"),
@@ -5569,11 +5570,11 @@ namespace Docxodus
             if (comment.Date != null)
             {
                 // Format date nicely
-                if (DateTime.TryParse(comment.Date, out var dt))
+                if (Internal.CommentDateResolver.TryParseUtc(comment.Date, out var dt))
                 {
                     header.Add(new XElement(Xhtml.span,
                         new XAttribute("class", prefix + "margin-date"),
-                        dt.ToString("MMM d")));
+                        dt.ToString("MMM d, yyyy")));
                 }
             }
 

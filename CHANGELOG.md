@@ -77,6 +77,10 @@ All notable changes to this project will be documented in this file.
   old properties) keep the original's id, so rejecting restores them unchanged. What Word does in the
   referenced case is not yet verified (see `docs/ooxml_corner_cases.md`).
 
+- Comment rendering and comment listings use a matching valid modern UTC timestamp, with the
+  original legacy date as a fallback (issue #1228). Margin dates include the year, and cached
+  block rendering retains the metadata required to resolve the same instant.
+
 - A content control or block `w:customXml` wrapper is again replaced whole when one of its paragraphs
   closes a complex field opened before it and opens another that closes after it (issue #1166). The
   wrapper scan netted the paragraph's begin and end characters against each other, saw no spanning field
