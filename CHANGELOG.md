@@ -37,6 +37,10 @@ All notable changes to this project will be documented in this file.
   paragraphs in paginated HTML and PDF export (#1203). Note numbers and back links stay inside
   their paragraphs.
 
+- DocumentBuilder keeps style IDs unique when sources use one ID for different style types
+  (#1186). Incoming styles and their references, including inherited styles and running stories,
+  are renamed together; styles with the same name are matched only within the same type.
+
 - SVG `href` fragment links in copied comment content retain their inert behavior alongside
   ordinary copied links (follow-up to #1229). Only native HTML return labels are reactivated.
 
