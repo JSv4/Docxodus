@@ -33,6 +33,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Compare and Consolidate now track bookmarks between table rows or cells at their original
+  boundaries (issue #1190). Accept restores the revised markers and reject restores the original
+  markers, including when another reviewer edits the table or inserts a row or column. Marker-only
+  reviews are retained when several other reviewers edit the same table.
+
 - SVG `href` fragment links in copied comment content retain their inert behavior alongside
   ordinary copied links (follow-up to #1229). Only native HTML return labels are reactivated.
 
