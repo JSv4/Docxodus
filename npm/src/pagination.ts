@@ -352,16 +352,14 @@ export interface PaginationOptions {
   layoutToken?: { documentVersion: number; rendererFingerprint: string };
 }
 
-// Default letter size in points (612 x 792 = 8.5" x 11")
-// Maximum percentage of content height that footnotes can occupy
-// This allows footnotes to expand upward into body content space when needed
-// The cap only protects body text still waiting for the page: once the body is exhausted, notes
-// are budgeted from the space actually left (issue #1119).
-const MAX_FOOTNOTE_AREA_RATIO = 0.6; // 60% of content height
-// Even with no body text left, the note area (separator included) never takes the whole body band:
-// the body keeps a twentieth of it. Measured from LibreOffice 25.8.7.3 across body heights of
-// 468-1008pt and note lines of 4pt and 18pt (docs/ooxml_corner_cases.md, issue #1119).
-const MAX_EXHAUSTED_BODY_FOOTNOTE_AREA_RATIO = 0.95;
+// The share of the body band the note area (separator included) may take while body text remains.
+// Word reference PDFs show none held back (issue #1178): a note takes everything below the line
+// that cites it, and a carried note that does not end on a page takes that whole page. The 60% this
+// used to be reserved room for body text that Word does not reserve.
+// The band never takes body text already placed on the page, before or after the last body block
+// (LibreOffice 25.8.7.3 keeps a twentieth of the band for the body once it is placed; Word does
+// not, docs/ooxml_corner_cases.md).
+const MAX_FOOTNOTE_AREA_RATIO = 1;
 // Hidden measurement and final absolutely-positioned note bands differ by sub-pixel border/margin
 // rounding in Chromium. Reserve a small physical-unit guard so the last baseline stays visible.
 const FOOTNOTE_MEASUREMENT_GUARD_PT = 2;
@@ -1996,14 +1994,14 @@ export class PaginationEngine {
    * header rows, on a continuation) are copied in first, marked as repeats.
    */
   private createSimpleTableFragment(
-    wrapper: HTMLElement,
+    wrapper: HTMLElement | null,
     table: HTMLTableElement,
     body: HTMLTableSectionElement,
     rows: HTMLTableRowElement[],
     retainAnchor: boolean,
     repeatedRows: HTMLTableRowElement[] = [],
   ): HTMLElement {
-    const wrapperClone = wrapper.cloneNode(false) as HTMLElement;
+    const wrapperClone = wrapper ? wrapper.cloneNode(false) as HTMLElement : null;
     const tableClone = table.cloneNode(false) as HTMLTableElement;
 
     // The eligibility gate permits only colgroups alongside the body. Keep each
@@ -2029,12 +2027,43 @@ export class PaginationEngine {
     tableClone.appendChild(bodyClone);
 
     if (!retainAnchor) {
-      wrapperClone.removeAttribute("data-anchor");
+      wrapperClone?.removeAttribute("data-anchor");
       tableClone.removeAttribute("data-anchor");
     }
 
+    if (!wrapperClone) return tableClone;
     wrapperClone.appendChild(tableClone);
     return wrapperClone;
+  }
+
+  /**
+   * The row counts after which a table may split: a boundary is safe only after every cell
+   * starting above it has ended. Overlapping merges in different columns extend the same
+   * indivisible group; HTML rowspan=0 extends through the remainder of the row section. The last
+   * entry is always `rows.length`.
+   */
+  private tableRowGroupEnds(rows: HTMLTableRowElement[]): number[] {
+    const ends: number[] = [];
+    let mergedEnd = 0;
+    for (let index = 0; index < rows.length; index++) {
+      this.checkpoint();
+      for (const cell of Array.from(rows[index].cells)) {
+        mergedEnd = Math.max(mergedEnd, cell.rowSpan === 0
+          ? rows.length : Math.min(rows.length, index + cell.rowSpan));
+      }
+      if (index + 1 >= mergedEnd) ends.push(index + 1);
+    }
+    return ends;
+  }
+
+  /**
+   * How many leading rows are the table's header rows (`w:tblHeader`), which a split repeats at
+   * the top of each continuation: the run must end at a safe boundary and leave rows to carry.
+   */
+  private leadingHeaderRowCount(rows: HTMLTableRowElement[], ends: number[]): number {
+    let count = 0;
+    while (count < rows.length && rows[count].dataset.docxHeaderRow === "true") count++;
+    return count === rows.length || !ends.includes(count) ? 0 : count;
   }
 
   /**
@@ -2085,19 +2114,7 @@ export class PaginationEngine {
     }
 
     const rows = Array.from(body.rows);
-    // A boundary is safe only after every cell starting above it has ended.
-    // Overlapping merges in different columns extend the same indivisible group.
-    // HTML rowspan=0 extends through the remainder of this row section.
-    const rowGroupEnds: number[] = [];
-    let mergedEnd = 0;
-    for (let index = 0; index < rows.length; index++) {
-      this.checkpoint();
-      for (const cell of Array.from(rows[index].cells)) {
-        mergedEnd = Math.max(mergedEnd, cell.rowSpan === 0
-          ? rows.length : Math.min(rows.length, index + cell.rowSpan));
-      }
-      if (index + 1 >= mergedEnd) rowGroupEnds.push(index + 1);
-    }
+    const rowGroupEnds = this.tableRowGroupEnds(rows);
     const minimumContentHeight = this.smallestEffectiveContentHeight(dims, sectionIndex);
     // Use the source's full vertical margins while forming groups. Continuation
     // fragments later clear their joining margins, so this conservative bound
@@ -2108,10 +2125,7 @@ export class PaginationEngine {
     }
 
     // The header run must end at a safe boundary and leave body rows to carry.
-    let headerCount = 0;
-    while (repeatHeaderRows && headerCount < rows.length
-      && rows[headerCount].dataset.docxHeaderRow === "true") headerCount++;
-    if (headerCount === rows.length || !rowGroupEnds.includes(headerCount)) headerCount = 0;
+    const headerCount = repeatHeaderRows ? this.leadingHeaderRowCount(rows, rowGroupEnds) : 0;
     const headerRows = rows.slice(0, headerCount);
     const withoutRepeats = (): MeasuredBlock[] | null => headerCount > 0
       ? this.trySplitSimpleOversizedTable(block, dims, sectionIndex, false)
@@ -3324,6 +3338,56 @@ export class PaginationEngine {
    * at least one element so an indivisible oversized paragraph follows the established
    * clipped fallback without trapping pagination in a loop.
    */
+  /**
+   * Split a table in a note between rows: the largest run of whole row groups (no vertical merge
+   * crosses the cut) that `fits`, and the rest. Word reference PDFs show a note's table split
+   * between pages at row boundaries like a body table (issue #1178). `element` is the table or a
+   * wrapper holding only it. Null when the table cannot be split, or when not even its first row
+   * group fits and `forceFirst` is false.
+   */
+  private splitNoteTableAtRows(
+    element: HTMLElement,
+    fits: (head: HTMLElement) => boolean,
+    forceFirst: boolean,
+  ): { head: HTMLElement; tail: HTMLElement } | null {
+    const table = element.localName === "table"
+      ? element as HTMLTableElement
+      : element.childElementCount === 1 && element.firstElementChild?.localName === "table"
+        ? element.firstElementChild as HTMLTableElement
+        : null;
+    if (!table || table.tBodies.length !== 1 || table.tHead || table.tFoot || table.querySelector("table")) {
+      return null;
+    }
+    const body = table.tBodies[0];
+    const rows = Array.from(body.rows);
+    const allEnds = this.tableRowGroupEnds(rows);
+    const headerRows = rows.slice(0, this.leadingHeaderRowCount(rows, allEnds));
+    // A cut inside or right after the header run would leave a page of header rows alone.
+    const ends = allEnds.filter((end) => end > headerRows.length && end < rows.length);
+    if (ends.length === 0) return null;
+    const wrapper = element === table ? null : element;
+    // The table's header rows open the continuation again, as on a body table's later pages.
+    const fragment = (from: number, to: number, first: boolean): HTMLElement =>
+      this.createSimpleTableFragment(wrapper, table, body, rows.slice(from, to), first,
+        first ? [] : headerRows);
+    let low = 0;
+    let high = ends.length - 1;
+    let best = -1;
+    while (low <= high) {
+      this.checkpoint();
+      const middle = Math.floor((low + high) / 2);
+      if (fits(fragment(0, ends[middle], true))) {
+        best = middle;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    if (best < 0 && !forceFirst) return null;
+    const cut = ends[Math.max(best, 0)];
+    return { head: fragment(0, cut, true), tail: fragment(cut, rows.length, false) };
+  }
+
   private splitContinuationForPage(
     continuation: FootnoteContinuation,
     availableHeightPt: number,
@@ -3403,6 +3467,14 @@ export class PaginationEngine {
             forceFirstOnNoFit: fitting.length === 0,
           });
         }
+        const tableSplit = split?.kind === "split" ? null : this.splitNoteTableAtRows(element, (head) => {
+          content.appendChild(head);
+          try {
+            return pxToPt(measureContainer.getBoundingClientRect().height) <= availableHeightPt;
+          } finally {
+            head.remove();
+          }
+        }, fitting.length === 0);
         if (split?.kind === "split") {
           if (sourcePosition) {
             split.head.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, sourcePosition);
@@ -3410,6 +3482,10 @@ export class PaginationEngine {
           }
           fitting.push(split.head);
           remaining = [split.tail, ...continuation.remainingElements.slice(index + 1)];
+        } else if (tableSplit) {
+          if (sourcePosition) tableSplit.tail.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, sourcePosition);
+          fitting.push(tableSplit.head);
+          remaining = [tableSplit.tail, ...continuation.remainingElements.slice(index + 1)];
         } else if (fitting.length === 0) {
           // A genuinely indivisible first element retains the established visible
           // clipped fallback, but only for itself. Its siblings continue later.
@@ -3629,7 +3705,20 @@ export class PaginationEngine {
             forceFirstOnNoFit: fits.length === 0 && forceProgress,
           })
           : null;
-        if (split?.kind === "split") {
+        const tableSplit = split ? null : this.splitNoteTableAtRows(child, (head) => {
+          measuredContent.appendChild(head);
+          try {
+            return pxToPt(measureContainer.getBoundingClientRect().height) <= availableHeightPt;
+          } finally {
+            head.remove();
+          }
+        }, fits.length === 0 && forceProgress);
+        if (tableSplit) {
+          fits.push(tableSplit.head);
+          tableSplit.tail.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, i === 0 ? "first" : "later");
+          overflow = [tableSplit.tail, ...children.slice(i + 1).map((element, offset) =>
+            this.cloneFootnoteElementForContinuation(element, i + 1 + offset))];
+        } else if (split?.kind === "split") {
           fits.push(split.head);
           split.tail.setAttribute(
             FOOTNOTE_SOURCE_POSITION_ATTR,
@@ -3961,6 +4050,8 @@ export class PaginationEngine {
     // Track any new continuation that will carry to next page
     let nextPageContinuation: FootnoteContinuation | null = null;
     let currentContinuationPartitioned = false;
+    // Set when the carried continuation does not end on this page: the page is the note's alone.
+    let continuationRunsOn = false;
     let currentPageAdmitted = false;
     /**
      * Whole notes that could not be started on this page and must render on the next one.
@@ -3976,16 +4067,10 @@ export class PaginationEngine {
     let deferredFootnoteIds: string[] = [];
     // Track partial footnotes for current page (footnotes that were split)
     let currentPartialFootnotes: PartialFootnote[] = [];
-    // Set once every body block is placed. From then on no body text needs the space the
-    // note cap reserves, so a page's notes may use everything its body does not.
-    let bodyExhausted = false;
-    // The band the carried continuation was partitioned for. A page partitioned while body
-    // blocks were still pending may become the last body page; it is re-partitioned then.
-    let currentContinuationLimit = 0;
-    const noteBandLimit = (bodyHeight: number) => bodyExhausted
-      ? Math.max(0, Math.min(bodyHeight * MAX_EXHAUSTED_BODY_FOOTNOTE_AREA_RATIO,
-        bodyHeight - (effectiveContentHeight - remainingHeight - prevMarginBottomPt)))
-      : bodyHeight * MAX_FOOTNOTE_AREA_RATIO;
+    // The note band a page offers: up to the cap, never over the body already placed on it.
+    // An indivisible note part taller than that is clipped in the band, leaving the body visible.
+    const noteBandLimit = (bodyHeight: number) => Math.max(0, Math.min(bodyHeight * MAX_FOOTNOTE_AREA_RATIO,
+      bodyHeight - (effectiveContentHeight - remainingHeight - prevMarginBottomPt)));
 
     const adoptEmptyPageOwner = (owner: number) => {
       pageSectionIndex = owner;
@@ -4019,13 +4104,13 @@ export class PaginationEngine {
         pageInSection(),
         displayedPageNumber(),
       );
-      currentContinuationLimit = noteBandLimit(pageBands.bodyHeight);
       const partition = this.splitContinuationForPage(
         currentContinuation!,
-        currentContinuationLimit,
+        noteBandLimit(pageBands.bodyHeight),
         ownedDimensions.contentWidth,
       );
       currentContinuation = partition.current;
+      continuationRunsOn = partition.overflow !== null;
       if (partition.overflow) {
         nextPageContinuation = partition.overflow;
         // The carried note continues again, so it stays last here: notes deferred to this page
@@ -4055,35 +4140,6 @@ export class PaginationEngine {
       }
 
       prepareCurrentContinuation();
-      if (bodyExhausted && currentContinuation && nextPageContinuation
-          && nextPageContinuation.footnoteId === currentContinuation.footnoteId) {
-        const ownedBands = this.getPageBands(dimensionsFor(), pageSectionIndex, pageInSection(), displayedPageNumber());
-        const limit = noteBandLimit(ownedBands.bodyHeight);
-        if (limit > currentContinuationLimit + 0.5) {
-          // This page was partitioned while body text still needed it. With the body now
-          // placed, rejoin the carried tail and give the note the space it actually has.
-          const partition = this.splitContinuationForPage({
-            ...currentContinuation,
-            remainingElements: [...currentContinuation.remainingElements, ...nextPageContinuation.remainingElements],
-          }, limit, dimensionsFor().contentWidth);
-          currentContinuationLimit = limit;
-          currentContinuation = partition.current;
-          nextPageContinuation = partition.overflow ?? null;
-          if (!nextPageContinuation) {
-            // The carried note now ends on this page, so the notes deferred behind it may follow
-            // it here again, in order, as far as they fit (issue #1179).
-            const width = dimensionsFor().contentWidth;
-            while (deferredFootnoteIds.length > 0) {
-              const candidateIds = [...currentFootnoteIds, deferredFootnoteIds[0]];
-              const candidateHeight = this.measureFootnotesHeight(
-                candidateIds, width, currentContinuation, currentPartialFootnotes);
-              if (candidateHeight + FOOTNOTE_MEASUREMENT_GUARD_PT > limit) break;
-              currentFootnoteIds = candidateIds;
-              deferredFootnoteIds.shift();
-            }
-          }
-        }
-      }
       // Pages without a carried continuation are charged here. Continuation
       // pages were charged before their page-owned partition above.
       admitCurrentPage();
@@ -4220,6 +4276,7 @@ export class PaginationEngine {
       currentContinuation = nextPageContinuation;
       nextPageContinuation = null;
       currentContinuationPartitioned = false;
+      continuationRunsOn = false;
       currentPageAdmitted = false;
 
       // Notes that never got started land at the top of the new page's note area. They are
@@ -4272,6 +4329,15 @@ export class PaginationEngine {
 
       prepareCurrentContinuation();
 
+      // A carried note that does not end on this page fills it: Word reference PDFs show such a
+      // page holding the note alone, and body text, with any new citation, resumes on the page
+      // where the note ends (issue #1178).
+      if (continuationRunsOn && currentContent.length === 0) {
+        finishPage(block.sectionIndex);
+        i--;
+        continue;
+      }
+
       if (currentFootnoteHeight > 0) {
         const ownerDimensions = dimensionsFor();
         const ownerBands = this.getPageBands(
@@ -4282,11 +4348,10 @@ export class PaginationEngine {
         );
         const ownerMaxFootnoteArea = ownerBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO;
         if (currentFootnoteHeight > ownerMaxFootnoteArea) {
-          // A queue of whole notes larger than the band does not entitle it to
-          // the whole page: the band is capped and the rest of the page still
-          // belongs to body text. Keep the notes that fit here, defer the rest,
-          // and only fall back to a note-owned page when not even one note fits
-          // — that case needs the splitting finishPage performs.
+          // A queue of whole notes deferred to this page that is taller than the
+          // band: keep the notes that fit here, defer the rest, and only fall back
+          // to a note-owned page when not even one note fits — that case needs the
+          // splitting finishPage performs.
           const fittingIds: string[] = [];
           let fittingHeight = 0;
           if ((currentContinuation?.remainingElements.length ?? 0) === 0
@@ -4331,9 +4396,12 @@ export class PaginationEngine {
         continue;
       }
 
-      // Handle page break before
+      // Handle page break before. The block then starts over on the fresh page, so that page's
+      // carried note is partitioned before any placement decision reads its height.
       if (block.pageBreakBefore && currentContent.length > 0) {
         finishPage(block.sectionIndex);
+        i--;
+        continue;
       }
 
       // A series of keep-with-next blocks is one indivisible placement unit
@@ -4470,11 +4538,7 @@ export class PaginationEngine {
 
       // Calculate maximum footnote area for this page (can expand into body content space)
       const bodyContentUsed = effectiveContentHeight - remainingHeight;
-      // The cap reserves room for body text that follows this block; with none left,
-      // the citing block's notes may use the rest of the page.
-      const maxFootnoteArea = effectiveContentHeight * (i < blocks.length - 1
-        ? MAX_FOOTNOTE_AREA_RATIO
-        : MAX_EXHAUSTED_BODY_FOOTNOTE_AREA_RATIO);
+      const maxFootnoteArea = effectiveContentHeight * MAX_FOOTNOTE_AREA_RATIO;
 
       // The note band left beside `bodyPt` more of body on this page, and whether a paragraph
       // head of that height can start every note it cites in it. Word begins a note on the page
@@ -4641,17 +4705,27 @@ export class PaginationEngine {
             } else {
               // Footnote needs to be split - use all available expanded space
               if (spaceLeftForFootnotes > MIN_FOOTNOTE_START_PT) {
-                const { fits, overflow } = this.splitFootnoteToFit(
+                const payload = {
+                  footnoteIds: currentFootnoteIds,
+                  continuation: currentContinuation,
+                  partialFootnotes: currentPartialFootnotes,
+                };
+                let { fits, overflow } = this.splitFootnoteToFit(
                   footnote,
                   availableForFootnotes,
                   blockDimensions.contentWidth,
                   deferralCannotHelp,
-                  {
-                    footnoteIds: currentFootnoteIds,
-                    continuation: currentContinuation,
-                    partialFootnotes: currentPartialFootnotes,
-                  },
+                  payload,
                 );
+                // Deferring helps only a note whose first part a fresh page's band can hold: an
+                // indivisible part taller than any band keeps the clipped fallback here, beside its
+                // citation, rather than moving to a page of its own.
+                if (fits.length === 0 && !deferralCannotHelp
+                  && this.splitFootnoteToFit(footnote, nextPageMaxFootnoteArea,
+                    blockDimensions.contentWidth).fits.length === 0) {
+                  ({ fits, overflow } = this.splitFootnoteToFit(
+                    footnote, availableForFootnotes, blockDimensions.contentWidth, true, payload));
+                }
 
                 if (fits.length > 0) {
                   // Add partial footnote to current page
@@ -4740,7 +4814,6 @@ export class PaginationEngine {
     }
 
     // Finish last page
-    bodyExhausted = true;
     finishPage();
 
     // A split created while finishing the final body page still needs a page substrate.
