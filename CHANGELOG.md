@@ -64,6 +64,25 @@ All notable changes to this project will be documented in this file.
   old properties) keep the original's id, so rejecting restores them unchanged. What Word does in the
   referenced case is not yet verified (see `docs/ooxml_corner_cases.md`).
 
+- A comparison no longer doubles or drops a complex field's characters when the field's cached result
+  changes next to another edit, or when a paragraph holding the end of a field opened in an earlier
+  paragraph is edited just before that end (issue #1165). Deleting the word before a field while its
+  result changed (`Alpha beta {PAGE 1}` to `Alpha {PAGE 7}`) gave the rejected document a second
+  `begin`, instruction and `separate`; a table-of-contents entry whose page number changed got a second
+  `end` once accepted and lost its place on reject; and appending to or trimming the text before such an
+  `end` lost it or doubled it on reject. Field characters both documents carry are now written once,
+  unmarked, at the place in the redline where both documents reach them, so accepting leaves exactly the
+  revised document's `begin`/`separate`/`end` characters and rejecting exactly the original's, in the
+  same place among the text. A bookmark, comment range or comment reference right next to a field
+  character moves with it, so a caption's bookmark still encloses its `SEQ` field and a bookmark around
+  a field's result stays around it; one only one document has there (a proofing mark, a bookmark or
+  comment added or removed, also inside a contents entry's hyperlink) is marked as inserted or deleted on
+  its side of the field, and Word's `_GoBack` bookmark or a rendered page break only one document has
+  there is dropped. Bookmarks both documents have beside a field in a different order keep the original
+  document's order. This applies to `DocxCompare.Compare`/`DocxDiff.Compare` in the body,
+  headers, footers and notes, and to a consolidate with one reviewer. A consolidate of two or more
+  reviewers can still double or drop a field character where one reviewer's edit meets another's, and a
+  paragraph with a field nested in another field's code (`{= {PAGE} - 1}`) is drawn as before.
 - Accepting a comparison that replaces a content control (`w:sdt`) or `w:customXml` wrapper whole no
   longer moves a comment's reference out of the wrapper (issue #1157). When a comment range sits
   between the wrapper's blocks, the redline holds a deleted and an inserted copy of the wrapper, each
