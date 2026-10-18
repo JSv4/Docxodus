@@ -355,8 +355,14 @@ lands, update the design's status and implementation pointers in the same change
   an environment effect and an unresolved hypothesis. Read historical issue resolutions and
   linked measurements, not just titles. A benchmark drop alone does not establish a profile rule.
 - **Update profiles with the fix.** For a confirmed difference, update the central policy and
-  both profiles' expected behavior together. Keep shared fixes shared; do not scatter profile-ID
-  checks through the renderer or encode a known bug as a compatibility preference.
+  both profiles' expected behavior together. The core owns the setting/default and emits browser
+  policy metadata; converter and TypeScript feature owners apply the relevant rules. Use a
+  switch or shared helper at that owner, not a separate policy per transport. Keep shared fixes
+  shared and do not encode a known bug as a compatibility preference.
+- **Carry one selection throughout a render.** Forward it through full and incremental HTML
+  conversion, bridges and clients. The paginator consumes the policy carried by that HTML;
+  switching profiles reconverts the source. Check legacy fallbacks and reject mismatches rather
+  than combining converted content and pagination from different profiles.
 - **Keep the evidence and regression current.** Update the corner-case measurements and profile
   ledger, add a fixture/control and target-specific assertions, and follow the fidelity-bench
   workflow. Record unmeasured behavior as pending rather than asserting Word/LibreOffice parity.

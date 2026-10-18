@@ -9,15 +9,29 @@ their later measurements and resolutions.
 
 ## Decision
 
-Own the profiles in Docxodus. Add one optional `layoutProfile` to the existing paginated
-rendering APIs, backed by one small policy resolver and the existing paginator. Start with
-the two measured footnote rules. Keep conversion, font resolution, line measurement, note
-splitting and artifact production shared.
+Own the profile selection and defaults in the C# HTML rendering core. Carry that one selection
+through the rendering facades and generated HTML to the TypeScript paginator. There are two
+places that implement behavior: C# for HTML/CSS decisions, and TypeScript for browser layout and
+pagination. Both consume the same selected policy. Start with the two measured footnote rules;
+keep the existing converter and paginator.
+
+```csharp
+var settings = new WmlToHtmlConverterSettings
+{
+    LayoutProfile = LayoutProfile.LibreOffice25_8V1,
+    RenderPagination = PaginationMode.Paginated,
+};
+var html = WmlToHtmlConverter.ConvertToHtml(document, settings);
+```
 
 ```ts
 type LayoutProfile = "word-generic-v1" | "libreoffice-25.8-v1";
 
-paginateHtml(html, container, { layoutProfile: "libreoffice-25.8-v1" });
+const html = await convertDocxToHtml(docx, {
+  paginationMode: PaginationMode.Paginated,
+  layoutProfile: "libreoffice-25.8-v1",
+});
+paginateHtml(html, container); // consumes the policy carried by this HTML
 
 await convertDocxToPdf(docx, {
   reviewProfile: "final",
@@ -40,15 +54,29 @@ In particular, `markupPresentation: "word"` is not a layout-profile switch.
 
 ## Smallest implementation
 
-### One owner, no second renderer
+### Core setting, two implementation sites
 
-Create `npm/src/layout-profiles.ts` with the public ID type, a single default, runtime validation
-and an internal immutable policy table. Resolve once when a render begins; pass the resolved
-policy into the existing `PaginationEngine`. Reject unknown IDs rather than falling back.
-The following is the initial internal shape, not another public options API:
+Add a public `LayoutProfile` enum and a small core resolver (for example
+`Docxodus/LayoutProfiles.cs`). It owns the canonical wire IDs, default and resolved policy values.
+Add the setting to `WmlToHtmlConverterSettings` and the facade's `HtmlConversionOptions`; include
+the legacy `HtmlConverterSettings` compatibility constructor. Resolve once per render, rejecting
+unknown IDs. Every transport forwards an omitted value or the selected ID; it does not invent a
+separate default.
+
+Feature owners may use a switch or a named policy value to select the measured behavior. Put a
+decision in the helper that owns the feature, and share it when several call sites need the same
+rule. A table-spacing difference belongs in the converter's table code; note-page allocation
+belongs in the paginator. There is no requirement to move either algorithm to the other language,
+and no separate renderer or branch per transport.
+
+For browser-owned rules, the core emits a small versioned policy descriptor with the HTML. For
+example, use one escaped `data-docx-layout-policy` JSON attribute on `#pagination-staging`, alongside
+the existing `data-footnote-layout-like-word8` metadata. The descriptor contains only the selected
+profile and the values needed by browser layout. Its initial shape is:
 
 ```ts
-interface LayoutPolicy {
+interface PaginationLayoutPolicy {
+  readonly schemaVersion: 1;
   readonly id: LayoutProfile;
   readonly maximumNoteBandFraction: number;
   readonly continuingNoteOwnsPage: boolean;
@@ -58,16 +86,23 @@ interface LayoutPolicy {
 // libreoffice-25.8-v1:  fraction 0.95, ownsPage false
 ```
 
-Only the resolver compares profile IDs. Layout code reads named policy values; callers cannot
-provide custom fractions or override individual rules. There is no plugin registry, new render
-backend, subclass tree or global setting. Separate engine instances can render different profiles.
+`npm/src/layout-profiles.ts` defines the public ID type and validates/reads this descriptor; it
+does not maintain another profile-to-policy table. `PaginationEngine` consumes the resolved values.
+Use the existing XML/JSON serializers to escape metadata, validate its schema and value types,
+and reject unknown versions. This needs no code generator, plugin registry or general policy
+language. Callers choose a profile, not custom fractions or independent feature toggles.
 
-Both initial rules belong to `npm/src/pagination.ts`, so **do not add a converter setting or
-thread an unused option through `WmlToHtmlConverter`, WASM, session operations, Python or MCP**.
-The existing source HTML can feed either profile. When a measured converter-owned difference is
-implemented later, introduce its setting through `HtmlConversionOps` and the normal ripple
-checklist. At that point, use one shared data contract or generated projection for the policies
-needed by both runtimes; do not copy a policy table into C# and TypeScript now.
+The initial behavioral branches are still in TypeScript, but the core setting is immediately used
+to select and emit their policy. Later converter-owned rules can use the same setting without a
+second public-API introduction. Emit profile identity on full flow HTML as well, and retain it on
+the finalized paginated artifact after staging is removed. Incremental fragment roots carry the
+profile ID so the editor can check that replacements match their host document.
+
+New output must always carry the resolved metadata. Keep existing unmarked HTML working through
+an explicit legacy-default viewer path, tested separately from profiled output. It cannot satisfy
+a request for a non-default profile or a profile-bound export report; reconvert with a supporting
+core in those cases. Malformed metadata is an error, not a reason to use the legacy fallback.
+Separate converter and paginator instances can render different profiles without global state.
 
 ### Two rules, applied consistently
 
@@ -103,23 +138,32 @@ establish LibreOffice compatibility.
 
 ### Public surfaces and switching
 
-Add the same optional selector to `PaginationOptions` and `PaginatedHtmlOptions`; the Node export
-types reuse that contract. Forward it through `paginateHtml`, React's viewer/hook, the paginated
-editor's existing options, and standalone HTML/PDF/batch export. Add `--layout-profile` to the
-export CLI. Re-export the type and default through the existing package entry points without
-pulling editor or Node dependencies into the browser export entry.
+Expose the same selection on native conversion, browser conversion/viewer/editor, Python and MCP
+rendering, standalone HTML/PDF export and delivery rendering. This follows the existing rendering
+option plumbing; it does not add a setting to unrelated document mutations or comparison options.
+Core ownership alone does not make the handwritten mappings forward a new property automatically:
 
-React must include the selector in its dependency arrays. The editor must retain it across
-edits, remounts and pagination toggles. Switching starts a full render from pristine staging
-content, or the editor's current session snapshot; it must not repaginate already fragmented
-page clones or revive stale pre-edit staging. Reuse existing render/remount entry points rather
-than adding an in-place policy mutation API. Snapshot the option before asynchronous export work.
+| Surface | Required forwarding |
+|---|---|
+| Core and facade | `WmlToHtmlConverterSettings`, legacy settings copy, `HtmlConversionOptions`, full/chrome conversion and `BuildBlockConverterSettings` |
+| WASM and npm | `DocumentConverter` and session render bridges; `ConversionOptions`, `needsCompleteConversion`, worker calls, and matching export declarations |
+| Incremental editor | `editorRenderProfile()`, its core parser, single/batch/range block renders and windowed mounts; never silently fall back to an older bridge that drops the selected profile |
+| Python and MCP | Rendering option types/serialization, host parsing and rendering tool schemas/dispatch; preserve the same selection in full and block previews |
+| CLI | Both native `docx2html` and Node export accept `--layout-profile` and use the core-defined IDs |
+| Export and delivery | `PaginatedHtmlOptions`/Node options, `conversionOptions()`, .NET host-renderer configuration, framed requests, reports and batch identities |
 
-The first release exposes selection on these JavaScript rendering surfaces. Native conversion
-remains profile-neutral; .NET delivery continues to request the default. Its render-report reader
-still needs the schema migration below. A later .NET delivery selector belongs on the host
-renderer configuration, with an explicitly versioned host request, rather than on every editing
-operation. An editor UI control is optional follow-up; the API switch is sufficient for this scope.
+For a low-level `paginateHtml(html, ...)` call, HTML is already converted: consume its descriptor.
+An optional `expectedLayoutProfile` can assert a match, but must not override it. An input setting
+that disagrees with the HTML requires reconversion, even while the only differing rules happen to
+be in TypeScript. This prevents a future hybrid of Word-converted tables and LibreOffice pagination.
+For a viewer given DOCX bytes, changing `layoutProfile` reconverts and then paginates.
+
+React must include the selector in conversion/render dependencies. The editor retains it across
+edits, remounts and pagination toggles, and forwards it on every incremental render. Switching
+reconverts the current source/session snapshot and repaginates; it does not mutate existing page
+clones or revive stale staging. Fragment profile mismatches trigger a fresh matching render.
+Snapshot the option before asynchronous work. An editor UI control is optional follow-up; the
+API switch is sufficient for this scope.
 
 ## Identity and compatibility
 
@@ -130,6 +174,9 @@ profiles happen to produce identical pixels for a particular document.
   and explicit Word defaults must produce identical identities. A profile change must change
   the layout digest and renderer fingerprint. Existing runtime/source/font digests retain their
   own meanings; exact reproduction still requires the renderer build and font environment.
+  Bind the canonical core-resolved descriptor as well as its ID, and verify it matches the
+  requested profile before layout/report publication. HTML metadata is provenance, not proof
+  that arbitrary caller-supplied HTML was actually produced by the claimed renderer.
   Version the changed layout material as `docxodus:layout-options:v2`; keep the old material
   definition for validating historical reports.
 - Record the resolved ID as `renderReport.options.layoutProfile` in both complete and failed
@@ -148,12 +195,14 @@ report versions according to the profile. This changes report identity even for 
 but does not change the default page layout. Release notes must distinguish those two facts.
 
 Migrate the browser/Node writers and validators, schema and schema tests, the .NET delivery reader,
-delivery identity checks, and benchmark consumers together. The .NET default-only reader must
-require `word-generic-v1`, not accept a report claiming another policy for its request. Preserve
+delivery identity checks, and benchmark consumers together. The .NET reader must require the
+requested resolved profile, not accept a report claiming another policy for its request. Preserve
 old-report validation through the old schema; do not silently interpret v2 as an explicitly
 selected v1 profile. Check the strict allowlists in `npm-export/src/index.ts` and `host.ts` rather
-than assuming a TypeScript property propagates over a wire. The initial framed host remains
-default-only and does not accept the new selector under its existing request version.
+than assuming a TypeScript property propagates over a wire. Add the selector to a versioned host
+request (v2); keep the frozen v1 definition and give unsupported peers a clear compatibility error.
+Include the choice in the .NET host renderer's `DescribeBatch` identity as well as the browser's
+layout digest. A default-only host is not sufficient for the initial cross-surface implementation.
 
 Profile versions describe intended behavior; renderer fingerprints identify implementations.
 A bug fix that makes an implementation conform to its recorded rule can keep the ID. A deliberate
@@ -215,10 +264,11 @@ Keep detailed measurements out of `CLAUDE.md`; it only directs agents here.
 
 ## Verification and benchmark integration
 
-Implement in reviewable increments: first extract the default policy with unchanged layout;
-then add and verify the LibreOffice footnote policy; then expose it through the rendering surfaces
-and migrate export identity. Do not advertise export support until its report/schema consumers
-are updated. Table citation and table indentation policies are separate follow-ups.
+Implement in reviewable increments: first add the core setting, facade forwarding and HTML
+descriptor with unchanged default geometry; then make the paginator consume it and verify the
+LibreOffice footnote policy; complete client/CLI/editor propagation and export identity migration
+before claiming cross-surface support. Table citation and table indentation policies remain
+separate follow-ups; their implementation can use the setting already present in both layers.
 
 The implementation acceptance checks are:
 
@@ -231,12 +281,18 @@ The implementation acceptance checks are:
    oversized parts, the last-body-page rejoin, note-only tails and source compatibility flags.
    Exercise fragmentation on/off where the branch depends on it. No lost/duplicated text, blank
    pages, overlap, or nontermination is an acceptable compatibility behavior.
-4. **Plumbing:** a selector change rerenders React/editor from current source; simultaneous
-   engines do not affect each other; unknown IDs fail consistently; Node/CLI selection reaches
-   the actual paginator. Plain documents without affected features keep the same geometry.
+4. **Plumbing:** native, WASM, Python/MCP, CLI and export requests produce the same selected
+   metadata. Full and incremental renders agree; a selector change reconverts React/editor from
+   current source; simultaneous engines are independent. Test `needsCompleteConversion`, legacy
+   bridge behavior, unmarked HTML and conversion/pagination profile mismatches. Unknown IDs or
+   descriptor versions fail consistently. Plain controls retain their geometry.
 5. **Identity:** a profile switch changes the digest/fingerprint even on an unaffected document;
    stale citations/maps are rejected by the consuming layer. Verify report v3, frozen-schema
-   compatibility, .NET default binding, and HTML/PDF/PageMap agreement from the same finalized tree.
+   compatibility, .NET requested-profile binding, and HTML/PDF/PageMap agreement from the same tree.
+
+Add a cross-language contract fixture that serializes the core's actual descriptors and feeds
+them to the TypeScript consumer. It must catch missing fields, changed wire IDs and a browser
+reinterpreting the core's values; a test that constructs its own parallel policy table is insufficient.
 
 Reuse `pagination-note-area`, `pagination-continued-note-last`, `pagination-note-table` and the
 export specs for these assertions. Parameterize the affected cases and a small set of shared
