@@ -66,9 +66,11 @@ public class BlockLevelMarkerDiffTests
     /// comment-range marker by kind and name (a bookmark end and a comment marker resolved to the bookmark's
     /// name or the comment's text, since ids are renumbered), and tables, cells and wrappers as nested groups.
     /// Markers inside paragraphs are left out: this is the layout at block boundaries.</summary>
-    private static string Layout(WmlDocument document)
+    private static string Layout(WmlDocument document) => StreamLayout(document, Body(document));
+
+    /// <summary>The block structure (see <see cref="Layout"/>) of any block stream: a body, header or footer.</summary>
+    private static string StreamLayout(WmlDocument document, XElement body)
     {
-        var body = Body(document);
         var bookmarkNames = body.Descendants(W + "bookmarkStart")
             .GroupBy(s => (string?)s.Attribute(W + "id") ?? "")
             .ToDictionary(g => g.Key, g => (string?)g.First().Attribute(W + "name") ?? "");
@@ -131,18 +133,32 @@ public class BlockLevelMarkerDiffTests
     /// <summary>Every validation error of <paramref name="redline"/> also occurs in one of the inputs, compared by
     /// description: the comparison introduced none. (A path-keyed comparison would flag an input's own error, such
     /// as the validator not knowing <c>w:customXml</c>'s attributes, again at a replaced wrapper's second copy.)</summary>
-    private static void AssertNoNewValidationErrors(WmlDocument redline, params WmlDocument[] inputs)
+    private static void AssertNoNewValidationErrors(WmlDocument redline, params WmlDocument[] inputs) =>
+        AssertNoNewValidationErrors(redline, description => description, inputs);
+
+    private static void AssertNoNewValidationErrors(WmlDocument redline, Func<string, string> normalize,
+        params WmlDocument[] inputs)
     {
-        static HashSet<string> Errors(WmlDocument document)
+        HashSet<string> Errors(WmlDocument document)
         {
             using var stream = new MemoryStream(document.DocumentByteArray);
             using var package = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, false);
             return new DocumentFormat.OpenXml.Validation.OpenXmlValidator(DocumentFormat.OpenXml.FileFormatVersions.Office2019)
-                .Validate(package).Select(e => e.Description).ToHashSet(StringComparer.Ordinal);
+                .Validate(package).Select(e => normalize(e.Description)).ToHashSet(StringComparer.Ordinal);
         }
         var known = inputs.SelectMany(Errors).ToHashSet(StringComparer.Ordinal);
         Assert.All(Errors(redline), e => Assert.Contains(e, known));
     }
+
+    /// <summary>The validator looks for a header's or footer's comments through a comments part related to that
+    /// story part, which Word never writes (comments live in the main part's), so it reports every comment marker in
+    /// a header as missing its comment. An input reports that for its own ids; a redline that gives one view's copy
+    /// a fresh id reports it for that id too. Compare those reports without the id.</summary>
+    private static string WithoutStoryCommentId(string description) =>
+        description.StartsWith("Element 'w:comment' referenced by", StringComparison.Ordinal) &&
+        description.Contains("does not exist in part 'WordprocessingCommentsPart'. The reference value is '", StringComparison.Ordinal)
+            ? System.Text.RegularExpressions.Regex.Replace(description, @"The reference value is '\d+'\.$", "The reference value is '#'.")
+            : description;
 
     // ------------------------------------------------------------- accept/reject of a revision-free document
 
@@ -677,6 +693,415 @@ public class BlockLevelMarkerDiffTests
         AssertRoundTrip(engine, left, right);
     }
 
+    // ------------------------------------------------------------------------------- headers and footers
+
+    private static WmlDocument HeaderFooterDoc(string headerContent, string footerContent, string body = "",
+        string? comments = null)
+    {
+        const string R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        string w = W.NamespaceName;
+        using var stream = new MemoryStream();
+        using (var package = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Create(stream,
+                   DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = package.AddMainDocumentPart();
+            main.AddNewPart<DocumentFormat.OpenXml.Packaging.StyleDefinitionsPart>().Styles = new DocumentFormat.OpenXml.Wordprocessing.Styles();
+            main.AddNewPart<DocumentFormat.OpenXml.Packaging.DocumentSettingsPart>().Settings = new DocumentFormat.OpenXml.Wordprocessing.Settings();
+            static void Write(DocumentFormat.OpenXml.Packaging.OpenXmlPart part, string xml)
+            {
+                using var writer = new StreamWriter(part.GetStream(FileMode.Create, FileAccess.Write));
+                writer.Write(xml);
+            }
+            if (comments is not null)
+                Write(main.AddNewPart<DocumentFormat.OpenXml.Packaging.WordprocessingCommentsPart>(),
+                    $"<w:comments xmlns:w=\"{w}\">{comments}</w:comments>");
+            Write(main.AddNewPart<DocumentFormat.OpenXml.Packaging.HeaderPart>("rIdHdr"), $"<w:hdr xmlns:w=\"{w}\">{headerContent}</w:hdr>");
+            Write(main.AddNewPart<DocumentFormat.OpenXml.Packaging.FooterPart>("rIdFtr"), $"<w:ftr xmlns:w=\"{w}\">{footerContent}</w:ftr>");
+            Write(main, $"<w:document xmlns:w=\"{w}\" xmlns:r=\"{R}\"><w:body>{(body.Length > 0 ? body : P("Body"))}" +
+                "<w:sectPr><w:headerReference w:type=\"default\" r:id=\"rIdHdr\"/><w:footerReference w:type=\"default\" r:id=\"rIdFtr\"/>" +
+                "<w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr></w:body></w:document>");
+        }
+        return new WmlDocument("header-footer.docx", stream.ToArray());
+    }
+
+    /// <summary>The block layout (see <see cref="Layout"/>) of the default header (or footer) of section
+    /// <paramref name="section"/> (the last one when null): the story its <c>w:sectPr</c> references, or the one
+    /// it inherits from an earlier section.</summary>
+    private static string StoryLayout(WmlDocument document, bool header, int? section = null) =>
+        StreamLayout(document, StoryRootOf(document, header, section));
+
+    /// <summary>The root of the default header (or footer) of section <paramref name="section"/> (see
+    /// <see cref="StoryLayout"/>).</summary>
+    private static XElement StoryRootOf(WmlDocument document, bool header, int? section = null)
+    {
+        using var stream = new MemoryStream(document.DocumentByteArray);
+        using var package = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, false);
+        var main = package.MainDocumentPart!;
+        var sections = Body(document).Descendants(W + "sectPr").ToList();
+        var reference = sections.Take((section ?? sections.Count - 1) + 1).Reverse()
+            .Select(sectPr => sectPr.Elements(W + (header ? "headerReference" : "footerReference"))
+                .FirstOrDefault(r => (string?)r.Attribute(W + "type") == "default"))
+            .First(r => r is not null)!;
+        var part = main.GetPartById((string)reference.Attribute(XNamespace.Get(
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships") + "id")!);
+        using var partStream = part.GetStream();
+        return XDocument.Load(partStream).Root!;
+    }
+
+    /// <summary>A two-section document with the given header parts (no footer); section <c>i</c> references
+    /// <c>headers[sectionHeaders[i]]</c> as its default header, or inherits the previous one when that is null.</summary>
+    private static WmlDocument SectionedHeaderDoc(string[] headers, int?[] sectionHeaders)
+    {
+        const string R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        string w = W.NamespaceName;
+        using var stream = new MemoryStream();
+        using (var package = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Create(stream,
+                   DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = package.AddMainDocumentPart();
+            main.AddNewPart<DocumentFormat.OpenXml.Packaging.StyleDefinitionsPart>().Styles = new DocumentFormat.OpenXml.Wordprocessing.Styles();
+            main.AddNewPart<DocumentFormat.OpenXml.Packaging.DocumentSettingsPart>().Settings = new DocumentFormat.OpenXml.Wordprocessing.Settings();
+            static void Write(DocumentFormat.OpenXml.Packaging.OpenXmlPart part, string xml)
+            {
+                using var writer = new StreamWriter(part.GetStream(FileMode.Create, FileAccess.Write));
+                writer.Write(xml);
+            }
+            for (int h = 0; h < headers.Length; h++)
+                Write(main.AddNewPart<DocumentFormat.OpenXml.Packaging.HeaderPart>($"rIdHdr{h}"), $"<w:hdr xmlns:w=\"{w}\">{headers[h]}</w:hdr>");
+            string SectPr(int? h) => "<w:sectPr>" + (h is { } i ? $"<w:headerReference w:type=\"default\" r:id=\"rIdHdr{i}\"/>" : "") +
+                "<w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr>";
+            var body = string.Concat(sectionHeaders.Take(sectionHeaders.Length - 1).Select((h, i) =>
+                    $"<w:p><w:pPr>{SectPr(h)}</w:pPr><w:r><w:t>Section {i}</w:t></w:r></w:p>")) +
+                P("Last section") + SectPr(sectionHeaders[^1]);
+            Write(main, $"<w:document xmlns:w=\"{w}\" xmlns:r=\"{R}\"><w:body>{body}</w:body></w:document>");
+        }
+        return new WmlDocument("sectioned-header.docx", stream.ToArray());
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_MarkerOnlyChange_InOneOfTwoSectionsSharingAHeader_FollowsEachSection(string engine)
+    {
+        // Both sections share one header in the original; the revised document gives the second section its own
+        // copy of it, which only adds a bookmark. The first section's story is unchanged.
+        var left = SectionedHeaderDoc(new[] { StoryWithoutBookmark }, new int?[] { 0, null });
+        var right = SectionedHeaderDoc(new[] { StoryWithoutBookmark, StoryWithBookmark }, new int?[] { 0, 1 });
+
+        var redline = Compare(engine, left, right);
+
+        var (accepted, rejected) = (Accept(redline), Reject(redline));
+        for (int section = 0; section < 2; section++)
+        {
+            Assert.Equal(StoryLayout(right, header: true, section), StoryLayout(accepted, header: true, section));
+            Assert.Equal(StoryLayout(left, header: true, section), StoryLayout(rejected, header: true, section));
+        }
+        Assert.NotEqual(StoryLayout(accepted, header: true, 0), StoryLayout(accepted, header: true, 1));
+        AssertNoNewValidationErrors(redline, left, right);
+    }
+
+    /// <summary>Accepting the redline gives the revised header and footer layout, rejecting it the original's.</summary>
+    private static void AssertStoryRoundTrip(string engine, WmlDocument left, WmlDocument right,
+        bool rejectKeepsReferences = true)
+    {
+        var redline = Compare(engine, left, right);
+        var (accepted, rejected) = (Accept(redline), Reject(redline));
+        foreach (var header in new[] { true, false })
+        {
+            Assert.Equal(StoryLayout(right, header), StoryLayout(accepted, header));
+            Assert.Equal(StoryLayout(left, header), StoryLayout(rejected, header));
+            // Each view keeps its own side's comment references, and every comment marker resolves.
+            Assert.Equal(CommentReferences(right, header), CommentReferences(accepted, header));
+            if (rejectKeepsReferences)
+                Assert.Equal(CommentReferences(left, header), CommentReferences(rejected, header));
+            foreach (var document in new[] { redline, accepted, rejected })
+                AssertStoryCommentMarkersResolve(document, header);
+        }
+        AssertNoNewValidationErrors(redline, WithoutStoryCommentId, left, right);
+    }
+
+    /// <summary>The text of each comment a story's comment references point at, in order.</summary>
+    private static List<string> CommentReferences(WmlDocument document, bool header)
+    {
+        var texts = CommentTexts(document);
+        return StoryRootOf(document, header).Descendants(W + "commentReference")
+            .Select(r => texts.GetValueOrDefault((string?)r.Attribute(W + "id") ?? "", "?")).ToList();
+    }
+
+    private static Dictionary<string, string> CommentTexts(WmlDocument document) =>
+        (Part(document, "word/comments.xml").Root?.Elements(W + "comment") ?? Enumerable.Empty<XElement>())
+            .GroupBy(c => (string?)c.Attribute(W + "id") ?? "")
+            .ToDictionary(g => g.Key, g => string.Concat(g.First().Descendants(W + "t").Select(t => t.Value)));
+
+    private static void AssertStoryCommentMarkersResolve(WmlDocument document, bool header)
+    {
+        var defined = CommentTexts(document);
+        Assert.All(StoryRootOf(document, header).Descendants()
+                .Where(e => e.Name == W + "commentRangeStart" || e.Name == W + "commentRangeEnd" || e.Name == W + "commentReference"),
+            m => Assert.Contains((string?)m.Attribute(W + "id") ?? "", defined.Keys));
+    }
+
+    private static readonly string StoryWithBookmark = P("Alpha") + Start("Story") + P("Bravo") + End();
+    private static readonly string StoryWithoutBookmark = P("Alpha") + P("Bravo");
+
+    public static TheoryData<string, string, string, string, string> MarkerOnlyStoryChanges()
+    {
+        var data = new TheoryData<string, string, string, string, string>();
+        foreach (var engine in new[] { "DocxCompare", "DocxDiff" })
+        {
+            // Header added, header removed, footer added, footer removed; then with the body edited too.
+            data.Add(engine, StoryWithoutBookmark, StoryWithBookmark, P("Footer"), P("Footer"));
+            data.Add(engine, StoryWithBookmark, StoryWithoutBookmark, P("Footer"), P("Footer"));
+            data.Add(engine, P("Header"), P("Header"), StoryWithoutBookmark, StoryWithBookmark);
+            data.Add(engine, P("Header"), P("Header"), StoryWithBookmark, StoryWithoutBookmark);
+            // A bookmark whose end moves to a later block boundary.
+            data.Add(engine, Start("Story") + P("Alpha") + End() + P("Bravo"), Start("Story") + P("Alpha") + P("Bravo") + End(),
+                P("Footer"), P("Footer"));
+            // Inside a table cell of an otherwise unchanged header.
+            data.Add(engine, Table(StoryWithoutBookmark), Table(StoryWithBookmark), P("Footer"), P("Footer"));
+        }
+        return data;
+    }
+
+    private static string HeaderComment(int id, string text) =>
+        $"<w:comment w:id=\"{id}\" w:author=\"A\" w:initials=\"A\" w:date=\"2026-01-01T00:00:00Z\"><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:comment>";
+
+    private static string CommentRef(int id) =>
+        $"<w:r><w:rPr><w:rStyle w:val=\"CommentReference\"/></w:rPr><w:commentReference w:id=\"{id}\"/></w:r>";
+
+    private static string CommentedStory(int id, bool endAfterBravo, string tail = "") =>
+        $"<w:commentRangeStart w:id=\"{id}\"/>" + P("Alpha") + (endAfterBravo ? "" : $"<w:commentRangeEnd w:id=\"{id}\"/>") +
+        $"<w:p><w:r><w:t>Bravo</w:t></w:r>{CommentRef(id)}</w:p>" + (endAfterBravo ? $"<w:commentRangeEnd w:id=\"{id}\"/>" : "") + tail;
+
+    public static TheoryData<string, string, string, string?, string?> CommentRangeStoryChanges()
+    {
+        var data = new TheoryData<string, string, string, string?, string?>();
+        var comment = HeaderComment(0, "Check");
+        foreach (var engine in new[] { "DocxCompare", "DocxDiff" })
+            foreach (var (leftTail, rightTail) in new[] { ("", ""), (P("Charlie one"), P("Charlie two")) })
+            {
+                // A comment range added around the header's paragraphs, then one removed: alone, then with a text
+                // edit elsewhere in the header.
+                data.Add(engine, P("Alpha") + P("Bravo") + leftTail, CommentedStory(0, endAfterBravo: false, rightTail), null, comment);
+                data.Add(engine, CommentedStory(0, endAfterBravo: false, leftTail), P("Alpha") + P("Bravo") + rightTail, comment, null);
+            }
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(CommentRangeStoryChanges))]
+    public void Compare_CommentRangeChange_InAHeader_FollowsEachSide(
+        string engine, string leftHeader, string rightHeader, string? leftComments, string? rightComments)
+    {
+        var left = HeaderFooterDoc(leftHeader, P("Footer"), comments: leftComments);
+        var right = HeaderFooterDoc(rightHeader, P("Footer"), comments: rightComments);
+
+        // A removed comment's reference sits inside a paragraph, which the header diff takes from the revised
+        // document whether that paragraph is equal or edited (the reader keeps no comment reference in a header's
+        // IR), so rejecting cannot restore it. When the header paragraph is edited, main loses it the same way; for
+        // a removal alone, main kept the whole original header instead, so accepting kept the comment. Its range
+        // between blocks follows each side.
+        AssertStoryRoundTrip(engine, left, right, rejectKeepsReferences: leftComments is null);
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_HeaderCommentRangeWhoseEndMoves_FollowsEachSide(string engine)
+    {
+        // The same comment with its end moved one paragraph on, alone and with a text edit elsewhere: each view
+        // keeps its own range rather than one range serving both.
+        var comments = HeaderComment(0, "Check");
+        foreach (var (leftTail, rightTail) in new[] { ("", ""), (P("Charlie one"), P("Charlie two")) })
+            AssertStoryRoundTrip(engine,
+                HeaderFooterDoc(CommentedStory(0, endAfterBravo: false, leftTail), P("Footer"), comments: comments),
+                HeaderFooterDoc(CommentedStory(0, endAfterBravo: true, rightTail), P("Footer"), comments: comments));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_BodyCommentRangeWhoseEndMoves_FollowsEachSide(string engine)
+    {
+        // The body counterpart: a comment both documents have whose end moves to a later block boundary.
+        var left = CommentDoc("<w:commentRangeStart w:id=\"0\"/>" + P("Alpha") + "<w:commentRangeEnd w:id=\"0\"/>" +
+            $"<w:p><w:r><w:t>Bravo</w:t></w:r>{CommentReference}</w:p>");
+        var right = CommentDoc("<w:commentRangeStart w:id=\"0\"/>" + P("Alpha") +
+            $"<w:p><w:r><w:t>Bravo</w:t></w:r>{CommentReference}</w:p>" + "<w:commentRangeEnd w:id=\"0\"/>");
+
+        AssertRoundTrip(engine, left, right);
+    }
+
+    private static WmlDocument BaseCommentDoc(string body) =>
+        IrTestDocuments.WithComment("Base", "B", "2026-01-01T00:00:00Z", "Base comment", body);
+
+    private const string CommentedTail =
+        "<w:p><w:commentRangeStart w:id=\"0\"/><w:r><w:t>Tail</w:t></w:r><w:commentRangeEnd w:id=\"0\"/>" + CommentReference + "</w:p>";
+
+    private const string ReferencedTail = "<w:p><w:r><w:t>Tail</w:t></w:r>" + CommentReference + "</w:p>";
+
+    public static TheoryData<string, string, string> MovedCommentRanges()
+    {
+        var data = new TheoryData<string, string, string>();
+        foreach (var engine in new[] { "DocxCompare", "DocxDiff" })
+        {
+            // An existing comment's range moves from inside its paragraph to bracket a cell's paragraphs, then two
+            // body paragraphs; a body edit elsewhere keeps it a real comparison.
+            data.Add(engine, P("Lead") + Table(P("Alpha") + P("Bravo")) + CommentedTail,
+                P("Lead one") + Table("<w:commentRangeStart w:id=\"0\"/>" + P("Alpha") + P("Bravo") + "<w:commentRangeEnd w:id=\"0\"/>") + ReferencedTail);
+            data.Add(engine, P("Lead") + P("Alpha") + P("Bravo") + CommentedTail,
+                P("Lead one") + "<w:commentRangeStart w:id=\"0\"/>" + P("Alpha") + P("Bravo") + "<w:commentRangeEnd w:id=\"0\"/>" + ReferencedTail);
+        }
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(MovedCommentRanges))]
+    public void Compare_ExistingCommentRangeMovedBetweenBlocks_FollowsEachSide(string engine, string originalBody, string revisedBody)
+    {
+        AssertRoundTrip(engine, BaseCommentDoc(originalBody), BaseCommentDoc(revisedBody));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_HeaderCommentWhoseIdAloneChanges_IsUnchanged(string engine)
+    {
+        // The revised document numbers the same comment 5: that is no change to the header, which keeps the
+        // original's story (and its own reference) in both views.
+        var left = HeaderFooterDoc(CommentedStory(0, endAfterBravo: false), P("Footer"), comments: HeaderComment(0, "Check"));
+        var right = HeaderFooterDoc(CommentedStory(5, endAfterBravo: false), P("Footer"), comments: HeaderComment(5, "Check"));
+
+        Assert.Null(EditScript(left, right).HeaderFooterOps);
+        AssertStoryRoundTrip(engine, left, right);
+    }
+
+    private static string CommentedAlpha(bool startInside) =>
+        (startInside ? "<w:p><w:commentRangeStart w:id=\"0\"/><w:r><w:t>Alpha</w:t></w:r></w:p>"
+            : "<w:commentRangeStart w:id=\"0\"/>" + P("Alpha")) +
+        "<w:commentRangeEnd w:id=\"0\"/>" + $"<w:p><w:r><w:t>Bravo</w:t></w:r>{CommentReference}</w:p>";
+
+    /// <summary>The body's comment markers and text in document order, each marker by kind and the text of the
+    /// comment it points at.</summary>
+    private static string CommentView(WmlDocument document)
+    {
+        var texts = CommentTexts(document);
+        return string.Join(" ", Body(document).Descendants()
+            .Where(e => e.Name == W + "t" || e.Name.LocalName is "commentRangeStart" or "commentRangeEnd" or "commentReference")
+            .Select(e => e.Name == W + "t" ? e.Value : e.Name.LocalName + ":" + texts.GetValueOrDefault((string?)e.Attribute(W + "id") ?? "", "?")));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_CommentStartMovedFromInsideAParagraphToBetweenBlocks_KeepsARangeInEachView(string engine)
+    {
+        // The original's start inside the paragraph is part of a paragraph the revised copy stands in for, so only
+        // the end is left of the original's range between blocks; rather than lose it, both views share one range.
+        var left = CommentDoc(CommentedAlpha(startInside: true));
+        var right = CommentDoc(CommentedAlpha(startInside: false));
+
+        var redline = Compare(engine, left, right);
+
+        Assert.Equal(Layout(right), Layout(Accept(redline)));
+        Assert.Equal("commentRangeStart:Check this Alpha commentRangeEnd:Check this Bravo commentReference:Check this",
+            CommentView(Reject(redline)));
+        AssertNoNewValidationErrors(redline, left, right);
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_CommentStartMovedFromBetweenBlocksToInsideAParagraph_FollowsEachSide(string engine)
+    {
+        var left = CommentDoc(CommentedAlpha(startInside: false));
+        var right = CommentDoc(CommentedAlpha(startInside: true));
+
+        var redline = AssertRoundTrip(engine, left, right);
+
+        Assert.Equal(CommentView(right), CommentView(Accept(redline)));
+        Assert.Equal(CommentView(left), CommentView(Reject(redline)));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_HeaderCommentRenumberedInTheRevisedDocument_ResolvesInEachView(string engine)
+    {
+        // The revised document added a body comment first, so the header's (unchanged) comment is its second.
+        var left = HeaderFooterDoc(CommentedStory(0, endAfterBravo: false), P("Footer"), comments: HeaderComment(0, "Check"));
+        var right = HeaderFooterDoc(CommentedStory(1, endAfterBravo: false), P("Footer"),
+            $"<w:commentRangeStart w:id=\"0\"/><w:p><w:r><w:t>Body</w:t></w:r><w:commentRangeEnd w:id=\"0\"/>{CommentRef(0)}</w:p>",
+            HeaderComment(0, "New") + HeaderComment(1, "Check"));
+
+        // The same comment is no change to the header, so each view keeps its reference to it.
+        AssertStoryRoundTrip(engine, left, right);
+    }
+
+    [Theory]
+    [MemberData(nameof(MarkerOnlyStoryChanges))]
+    public void Compare_MarkerOnlyChange_InAHeaderOrFooter_FollowsEachSide(
+        string engine, string leftHeader, string rightHeader, string leftFooter, string rightFooter)
+    {
+        AssertStoryRoundTrip(engine, HeaderFooterDoc(leftHeader, leftFooter), HeaderFooterDoc(rightHeader, rightFooter));
+        AssertStoryRoundTrip(engine, HeaderFooterDoc(leftHeader, leftFooter, P("Body one")),
+            HeaderFooterDoc(rightHeader, rightFooter, P("Body two")));
+    }
+
+    private static Docxodus.Ir.Diff.IrEditScript EditScript(WmlDocument left, WmlDocument right) =>
+        Docxodus.Ir.Diff.IrEditScriptBuilder.Build(Docxodus.Ir.IrReader.Read(left), Docxodus.Ir.IrReader.Read(right), new());
+
+    [Fact]
+    public void EditScript_HeaderWithTheSameBlockLevelBookmarkOnBothSides_HasNoStoryDiff()
+    {
+        // A story both documents bracket the same way is unchanged: the comparison leaves the original's part alone.
+        var script = EditScript(HeaderFooterDoc(StoryWithBookmark, P("Footer"), P("Body one")),
+            HeaderFooterDoc(StoryWithBookmark, P("Footer"), P("Body two")));
+
+        Assert.Null(script.HeaderFooterOps);
+    }
+
+    [Fact]
+    public void EditScript_HeaderWhoseOnlyChangeIsABlockLevelBookmark_KeepsItsEqualOps()
+    {
+        var script = EditScript(HeaderFooterDoc(StoryWithoutBookmark, P("Footer")), HeaderFooterDoc(StoryWithBookmark, P("Footer")));
+
+        var story = Assert.Single(script.HeaderFooterOps!);
+        Assert.True(story.IsHeader);
+        Assert.Equal(2, story.Ops.Count);
+        Assert.All(story.Ops, op => Assert.Equal(Docxodus.Ir.Diff.IrEditOpKind.EqualBlock, op.Kind));
+    }
+
+    [Fact]
+    public void SemanticDiff_HeaderWhoseOnlyChangeIsABlockLevelBookmark_ReportsNoHeaderChange()
+    {
+        // Like the body's, a marker between blocks is not a semantic change: the story's projected value is equal.
+        var changes = Docxodus.Verification.SemanticDiff.Compare(
+            HeaderFooterDoc(StoryWithoutBookmark, P("Footer")), HeaderFooterDoc(StoryWithBookmark, P("Footer"))).Changes;
+
+        Assert.DoesNotContain(changes, c => c.Family == Docxodus.Verification.SemanticChangeFamily.Header);
+    }
+
+    private static XElement Story(string content) =>
+        XDocument.Parse($"<w:hdr xmlns:w=\"{W.NamespaceName}\">{content}</w:hdr>").Root!;
+
+    public static TheoryData<string, string, bool> StoryMarkerPairs() => new()
+    {
+        { StoryWithBookmark, StoryWithBookmark, false },
+        // The same bookmark under another id: a bookmark is matched by name.
+        { StoryWithBookmark, P("Alpha") + Start("Story", 3) + P("Bravo") + End(3), false },
+        // A marker inside a paragraph is not between blocks, so it is not compared here. (The reader leaves
+        // in-paragraph markers out of the IR too, rule N3, so a story differing only in one reads as unchanged.)
+        { $"<w:p>{Start("Inline")}<w:r><w:t>Alpha</w:t></w:r>{End()}</w:p>", P("Alpha"), false },
+        { StoryWithoutBookmark, StoryWithBookmark, true },
+        { Start("Story") + P("Alpha") + End() + P("Bravo"), Start("Story") + P("Alpha") + P("Bravo") + End(), true },
+        { Table(StoryWithoutBookmark), Table(StoryWithBookmark), true },
+        { Sdt(StoryWithBookmark), Sdt(StoryWithoutBookmark), true },
+        // A cell's marker is not the story's: the same marker one level out is a difference.
+        { Start("Story") + Table(P("Alpha")) + End(), Table(Start("Story") + P("Alpha") + End()), true },
+    };
+
+    [Theory]
+    [MemberData(nameof(StoryMarkerPairs))]
+    public void BlockLevelMarkersDiffer_ComparesEachBlockStreamsMarkersByBoundary(string left, string right, bool differ)
+    {
+        Assert.Equal(differ, Docxodus.Ir.Diff.IrMarkupRenderer.BlockLevelMarkersDiffer(Story(left), Story(right)));
+        Assert.Equal(differ, Docxodus.Ir.Diff.IrMarkupRenderer.BlockLevelMarkersDiffer(Story(right), Story(left)));
+    }
+
     // ---------------------------------------------------------------------------------- a real document
 
     /// <summary>Each body-level bookmark marker as kind, bookmark name and the number of body blocks before it.</summary>
@@ -771,5 +1196,323 @@ public class BlockLevelMarkerDiffTests
         Assert.Equal(Layout(original), Layout(Reject(consolidated)));
         Assert.Equal("First", (string?)Body(consolidated).Elements(W + "del")
             .Single(d => d.Element(W + "bookmarkStart") is not null).Attribute(W + "author"));
+    }
+
+    // ------------------------------------------------------- consolidate: cells, unchanged containers, notes (#1175)
+
+    public static TheoryData<string> ConsolidateEngines => new() { "DocxCompare", "DocxDiff" };
+
+    private static WmlDocument Consolidate(string engine, WmlDocument original, params (string Author, WmlDocument Document)[] reviewers)
+    {
+        var list = reviewers.Select(r => new DocxDiffReviewer { Author = r.Author, Document = r.Document }).ToList();
+        return engine == "DocxCompare" ? DocxCompare.Consolidate(original, list) : DocxDiff.Consolidate(original, list);
+    }
+
+    /// <summary>One reviewer: accepting the consolidated document gives the reviewer's layout, rejecting the
+    /// original's.</summary>
+    private static WmlDocument AssertConsolidateRoundTrip(string engine, WmlDocument original, WmlDocument reviewer,
+        Func<WmlDocument, string>? layout = null)
+    {
+        layout ??= Layout;
+        var consolidated = Consolidate(engine, original, ("Reviewer", reviewer));
+        Assert.Equal(layout(reviewer), layout(Accept(consolidated)));
+        Assert.Equal(layout(original), layout(Reject(consolidated)));
+        AssertNoNewValidationErrors(consolidated, original, reviewer);
+        return consolidated;
+    }
+
+    private static string WideTable(string content) =>
+        "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"5000\"/></w:tblGrid>" +
+        $"<w:tr><w:tc><w:tcPr><w:tcW w:w=\"5000\" w:type=\"dxa\"/></w:tcPr>{content}</w:tc></w:tr></w:tbl>";
+
+    /// <summary>With one reviewer, a table or cell that reviewer edits, and a block wrapper whose markers differ
+    /// (the reader folds a wrapper's markers into its hash, so it is always a change), are drawn by the two-way
+    /// renderer from the reviewer's copy, which already placed these markers: those rows guard that routing. The
+    /// unchanged-table rows are the ones the original's copy used to drop.</summary>
+    public static TheoryData<string, string, string> ConsolidateCellMarkerChanges()
+    {
+        var data = new TheoryData<string, string, string>();
+        foreach (var engine in new[] { "DocxCompare", "DocxDiff" })
+        {
+            // A cell the reviewer edits and brackets.
+            data.Add(engine, P("Lead") + Table(P("Alpha") + P("Bravo monthly")),
+                P("Lead") + Table(Start("InCell") + P("Alpha") + P("Bravo weekly") + End()));
+            // A cell the reviewer edits and un-brackets.
+            data.Add(engine, P("Lead") + Table(Start("InCell") + P("Alpha") + P("Bravo monthly") + End()),
+                P("Lead") + Table(P("Alpha") + P("Bravo weekly")));
+            // A cell whose shell (width) the reviewer changes too, so the merger takes the reviewer's cell shell.
+            data.Add(engine, P("Lead") + Table(P("Alpha") + P("Bravo monthly")),
+                P("Lead") + WideTable(Start("InCell") + P("Alpha") + P("Bravo weekly") + End()));
+            // An unchanged table: the reviewer only brackets a cell's paragraphs (and edits the body elsewhere).
+            data.Add(engine, P("Lead one") + Table(P("Alpha") + P("Bravo")), P("Lead two") + Table(Start("InCell") + P("Alpha") + P("Bravo") + End()));
+            data.Add(engine, P("Lead one") + Table(Start("InCell") + P("Alpha") + P("Bravo") + End()), P("Lead two") + Table(P("Alpha") + P("Bravo")));
+            // An unchanged cell of a row whose other cell the reviewer edits.
+            data.Add(engine, Rows(2, Row(P("Alpha") + P("Bravo"), P("Other one"))),
+                Rows(2, Row(Start("InCell") + P("Alpha") + P("Bravo") + End(), P("Other two"))));
+            // An unchanged block wrapper and custom-XML wrapper.
+            data.Add(engine, P("Lead one") + Sdt(P("Alpha") + P("Bravo")), P("Lead two") + Sdt(Start("Wrapped") + P("Alpha") + P("Bravo") + End()));
+            data.Add(engine, P("Lead one") + CustomXml(Start("Wrapped") + P("Alpha") + P("Bravo") + End()), P("Lead two") + CustomXml(P("Alpha") + P("Bravo")));
+        }
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateCellMarkerChanges))]
+    public void Consolidate_ReviewersBlockLevelBookmark_InACellOrUnchangedContainer_SurvivesAcceptAndReject(
+        string engine, string originalBody, string reviewerBody)
+    {
+        AssertConsolidateRoundTrip(engine, Doc(originalBody), Doc(reviewerBody));
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewersBookmarkOnlyChange_InAnUnchangedFootnote_SurvivesAcceptAndReject(string engine)
+    {
+        var original = FootnoteDoc(P("Note lead") + P("Alpha") + P("Bravo"));
+        var reviewer = FootnoteDoc(P("Note lead") + Start("InNote") + P("Alpha") + P("Bravo") + End());
+
+        AssertConsolidateRoundTrip(engine, original, reviewer, FootnoteLayout);
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewerInsertedFootnote_KeepsItsBookmarksAroundItsParagraphs(string engine)
+    {
+        var original = IrTestDocuments.FromParts("<w:p><w:r><w:t>Body</w:t></w:r></w:p>",
+            footnotesInnerXml: Separators);
+        var reviewer = FootnoteDoc(P("Note lead") + Start("InNote") + P("Alpha") + P("Bravo") + End());
+
+        var consolidated = Consolidate(engine, original, ("Reviewer", reviewer));
+
+        Assert.Equal(FootnoteLayout(reviewer), FootnoteLayout(Accept(consolidated)));
+        // The whole note is the reviewer's insertion: its bookmark is tracked as inserted with it.
+        var note = Part(consolidated, "word/footnotes.xml").Root!.Elements(W + "footnote")
+            .Single(n => (string?)n.Attribute(W + "id") == "1");
+        Assert.All(note.Elements().Where(e => e.Name != W + "p"), e => Assert.Equal("ins", e.Name.LocalName));
+        Assert.Equal(new[] { "p", "ins", "p", "p", "ins" }, note.Elements().Select(e => e.Name.LocalName));
+        AssertNoNewValidationErrors(consolidated, original, reviewer);
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_TwoReviewersBracketingTheSameUnchangedTable_KeepsEachReviewersBookmark(string engine)
+    {
+        var original = Doc(P("Lead") + Table(P("Alpha") + P("Bravo")) + P("Tail one"));
+        var first = Doc(P("Lead") + Table(Start("First") + P("Alpha") + End() + P("Bravo")) + P("Tail one"));
+        var second = Doc(P("Lead") + Table(P("Alpha") + Start("Second", 8) + P("Bravo") + End(8)) + P("Tail two"));
+
+        var consolidated = Consolidate(engine, original, ("First", first), ("Second", second));
+
+        Assert.Equal("P:Lead TBL[BS:First P:Alpha BE:First BS:Second P:Bravo BE:Second] P:Tail two", Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+        var cell = Body(consolidated).Descendants(W + "tc").Single();
+        Assert.Equal(new[] { "First", "First", "Second", "Second" },
+            cell.Elements(W + "ins").Select(i => (string?)i.Attribute(W + "author")));
+    }
+
+    private static string Cell(string content, int width = 3000) =>
+        $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>{content}</w:tc>";
+
+    private static string OneRow(params string[] cells) =>
+        "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid>" +
+        string.Concat(cells.Select(_ => "<w:gridCol w:w=\"3000\"/>")) + "</w:tblGrid><w:tr>" + string.Concat(cells) + "</w:tr></w:tbl>";
+
+    public static TheoryData<string, string, string, string, string> ConsolidateComposedCellMarkerChanges()
+    {
+        var data = new TheoryData<string, string, string, string, string>();
+        foreach (var engine in new[] { "DocxCompare", "DocxDiff" })
+        {
+            // The first reviewer edits and brackets the first cell, the second edits the second cell: the merger
+            // composes the row cell by cell.
+            data.Add(engine,
+                OneRow(Cell(P("Alpha") + P("Bravo monthly")), Cell(P("Other one"))),
+                OneRow(Cell(Start("InCell") + P("Alpha") + P("Bravo weekly") + End()), Cell(P("Other one"))),
+                OneRow(Cell(P("Alpha") + P("Bravo monthly")), Cell(P("Other two"))),
+                "TBL[BS:InCell P:Alpha P:Bravo weekly BE:InCell || P:Other two]");
+            // The same, un-bracketing.
+            data.Add(engine,
+                OneRow(Cell(Start("InCell") + P("Alpha") + P("Bravo monthly") + End()), Cell(P("Other one"))),
+                OneRow(Cell(P("Alpha") + P("Bravo weekly")), Cell(P("Other one"))),
+                OneRow(Cell(Start("InCell") + P("Alpha") + P("Bravo monthly") + End()), Cell(P("Other two"))),
+                "TBL[P:Alpha P:Bravo weekly || P:Other two]");
+            // The first reviewer also widens the cell, so the merger takes that reviewer's cell shell.
+            data.Add(engine,
+                OneRow(Cell(P("Alpha") + P("Bravo monthly")), Cell(P("Other one"))),
+                OneRow(Cell(Start("InCell") + P("Alpha") + P("Bravo weekly") + End(), 4000), Cell(P("Other one"))),
+                OneRow(Cell(P("Alpha") + P("Bravo monthly")), Cell(P("Other two"))),
+                "TBL[BS:InCell P:Alpha P:Bravo weekly BE:InCell || P:Other two]");
+            // Both reviewers edit the second cell; the first also brackets the first cell, which neither edits:
+            // a cell the composed row takes from the base.
+            data.Add(engine,
+                OneRow(Cell(P("Alpha") + P("Bravo")), Cell(P("Other one"))),
+                OneRow(Cell(Start("InCell") + P("Alpha") + P("Bravo") + End()), Cell(P("Other one changed"))),
+                OneRow(Cell(P("Alpha") + P("Bravo")), Cell(P("Other one"), 4000)),
+                "TBL[BS:InCell P:Alpha P:Bravo BE:InCell || P:Other one changed]");
+        }
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateComposedCellMarkerChanges))]
+    public void Consolidate_ReviewersBlockLevelBookmark_InAComposedTableCell_SurvivesAcceptAndReject(
+        string engine, string originalBody, string firstBody, string secondBody, string accepted)
+    {
+        var original = Doc(originalBody);
+        var consolidated = Consolidate(engine, original, ("First", Doc(firstBody)), ("Second", Doc(secondBody)));
+
+        Assert.Equal(accepted, Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+        AssertNoNewValidationErrors(consolidated, original, Doc(firstBody), Doc(secondBody));
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ComposedCellBookmarks_AreEachReviewersTrackedInsertion(string engine)
+    {
+        var original = Doc(OneRow(Cell(P("Alpha") + P("Bravo monthly")), Cell(P("Other one"))));
+        var first = Doc(OneRow(Cell(Start("InCell") + P("Alpha") + P("Bravo weekly") + End()), Cell(P("Other one"))));
+        var second = Doc(OneRow(Cell(P("Alpha") + P("Bravo monthly")), Cell(P("Other two"))));
+
+        var consolidated = Consolidate(engine, original, ("First", first), ("Second", second));
+
+        var cell = Body(consolidated).Descendants(W + "tc").First();
+        Assert.Equal(new[] { "First", "First" }, cell.Elements(W + "ins")
+            .Where(i => i.Elements().Any(IsMarker)).Select(i => (string?)i.Attribute(W + "author")));
+        static bool IsMarker(XElement e) => e.Name.LocalName is "bookmarkStart" or "bookmarkEnd";
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewerWhoEditsAFootnoteAndBracketsIt_KeepsTheBookmark(string engine)
+    {
+        var original = FootnoteDoc(P("Note lead") + P("Alpha") + P("Bravo monthly"));
+        var reviewer = FootnoteDoc(P("Note lead") + Start("InNote") + P("Alpha") + P("Bravo weekly") + End());
+
+        AssertConsolidateRoundTrip(engine, original, reviewer, FootnoteLayout);
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewersBookmarkInAWrapper_WhileAnotherReviewerEditsElsewhere_SurvivesAcceptAndReject(string engine)
+    {
+        // A guard: the wrapper's changed markers make it the first reviewer's change, drawn from that reviewer's copy.
+        var original = Doc(P("Lead one") + Sdt(P("Alpha") + P("Bravo")) + P("Tail one"));
+        var first = Doc(P("Lead one") + Sdt(Start("Wrapped") + P("Alpha") + P("Bravo") + End()) + P("Tail one"));
+        var second = Doc(P("Lead one") + Sdt(P("Alpha") + P("Bravo")) + P("Tail two"));
+
+        var consolidated = Consolidate(engine, original, ("First", first), ("Second", second));
+
+        Assert.Equal("P:Lead one SDT{BS:Wrapped P:Alpha P:Bravo BE:Wrapped} P:Tail two", Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+    }
+
+    // ---------------------------------------------- consolidate: rows nobody edited, promotion, comments (#1175)
+
+    private static string ThreeRows(string a, string b, string c) => Rows(1, Row(a), Row(b), Row(c));
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewersBookmark_InARowOnlyAnotherReviewerEdited_SurvivesAcceptAndReject(string engine)
+    {
+        // The first reviewer edits the first row's cell; the second brackets the same cell's paragraphs, leaving
+        // its content alone, and edits the second row.
+        var original = Doc(Rows(1, Row(P("Alpha") + P("Bravo")), Row(P("Charlie"))) + P("Tail"));
+        var first = Doc(Rows(1, Row(P("Alpha one") + P("Bravo")), Row(P("Charlie"))) + P("Tail"));
+        var second = Doc(Rows(1, Row(Start("X", 9) + P("Alpha") + P("Bravo") + End(9)), Row(P("Charlie two"))) + P("Tail"));
+
+        var consolidated = Consolidate(engine, original, ("First", first), ("Second", second));
+
+        Assert.Equal("TBL[BS:X P:Alpha one P:Bravo BE:X | P:Charlie two] P:Tail", Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+        AssertNoNewValidationErrors(consolidated, original, first, second);
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewersBookmark_InARowNoReviewerEdited_SurvivesAcceptAndReject(string engine)
+    {
+        var original = Doc(ThreeRows(P("Alpha") + P("Bravo"), P("Charlie"), P("Delta")) + P("Tail"));
+        var first = Doc(ThreeRows(P("Alpha") + P("Bravo"), P("Charlie one"), P("Delta")) + P("Tail"));
+        var second = Doc(ThreeRows(Start("X", 9) + P("Alpha") + P("Bravo") + End(9), P("Charlie"), P("Delta two")) + P("Tail"));
+
+        var consolidated = Consolidate(engine, original, ("First", first), ("Second", second));
+
+        Assert.Equal("TBL[BS:X P:Alpha P:Bravo BE:X | P:Charlie one | P:Delta two] P:Tail", Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+        AssertNoNewValidationErrors(consolidated, original, first, second);
+    }
+
+    /// <summary>The layout without its block-level bookmark markers.</summary>
+    private static string WithoutBookmarks(string layout)
+    {
+        static string Replace(string input, string pattern, string replacement) =>
+            System.Text.RegularExpressions.Regex.Replace(input, pattern, replacement);
+        var stripped = Replace(layout, @"B[SE]:[^ \]|]+", "");
+        stripped = Replace(Replace(stripped, @"\[ +", "["), @" +\]", "]");
+        return Replace(stripped, " {2,}", " ").Trim();
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewersBookmarkOnly_InATableOneOtherReviewerEdited_SurvivesAcceptAndReject(string engine)
+    {
+        // The first reviewer only brackets the cell; the second edits it, so it is the table's only real
+        // editor. The bracketing reviewer is composed in alongside, without changing what the edit does.
+        var original = Doc(Table(P("Alpha") + P("Bravo")) + P("Tail"));
+        var first = Doc(Table(Start("X", 9) + P("Alpha") + P("Bravo") + End(9)) + P("Tail"));
+        var second = Doc(Table(P("Alpha one") + P("Bravo")) + P("Tail"));
+
+        var consolidated = Consolidate(engine, original, ("First", first), ("Second", second));
+        var editOnly = Consolidate(engine, original, ("Second", second));
+
+        Assert.Equal("TBL[BS:X P:Alpha one P:Bravo BE:X] P:Tail", Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+        Assert.Equal(Layout(Accept(editOnly)), WithoutBookmarks(Layout(Accept(consolidated))));
+        Assert.Equal(Layout(Reject(editOnly)), Layout(Reject(consolidated)));
+        Assert.Equal(Body(Accept(editOnly)).Descendants(W + "t").Select(t => t.Value),
+            Body(Accept(consolidated)).Descendants(W + "t").Select(t => t.Value));
+        AssertNoNewValidationErrors(consolidated, original, first, second);
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_CellDeleteVsEditConflict_KeepsTheWinningEditorsCellBookmark(string engine)
+    {
+        var original = Doc(OneRow(Cell(P("Alpha")), Cell(P("Bravo") + P("Charlie"))) + P("Tail"));
+        var first = Doc(OneRow(Cell(P("Alpha")), Cell(Start("X", 9) + P("Bravo one") + P("Charlie") + End(9))) + P("Tail"));
+        var second = Doc(OneRow(Cell(P("Alpha two"))) + P("Tail"));
+        var list = new[] { new DocxDiffReviewer { Author = "First", Document = first }, new DocxDiffReviewer { Author = "Second", Document = second } };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.FirstReviewerWins };
+
+        var consolidated = engine == "DocxCompare" ? DocxCompare.Consolidate(original, list, settings) : DocxDiff.Consolidate(original, list, settings);
+
+        Assert.Contains("BS:X P:Bravo one P:Charlie BE:X", Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_TwoReviewersAddingTheSameBookmarkNameInDifferentStreams_KeepOneCopy(string engine)
+    {
+        // A guard: this shape kept one copy before the package-wide record of reviewers' block-level markers too.
+        var original = Doc(P("Lead") + Table(P("Alpha") + P("Bravo")) + P("Tail") + P("End"));
+        var first = Doc(P("Lead one") + Table(Start("X", 8) + P("Alpha") + P("Bravo") + End(8)) + P("Tail") + P("End"));
+        var second = Doc(P("Lead") + Table(P("Alpha") + P("Bravo")) + Start("X", 9) + P("Tail") + End(9) + P("End two"));
+
+        var accepted = Accept(Consolidate(engine, original, ("First", first), ("Second", second)));
+
+        Assert.Single(Body(accepted).Descendants(W + "bookmarkStart"), b => (string?)b.Attribute(W + "name") == "X");
+    }
+
+    [Theory]
+    [MemberData(nameof(MovedCommentRanges))]
+    public void Consolidate_ExistingCommentRangeMovedBetweenBlocks_FollowsEachSide(string engine, string originalBody, string revisedBody)
+    {
+        var consolidated = AssertConsolidateRoundTrip(engine, BaseCommentDoc(originalBody), BaseCommentDoc(revisedBody));
+
+        // Every revision, the old range's deletion included, is the reviewer's.
+        var authors = Body(consolidated).Descendants().Where(e => e.Name == W + "ins" || e.Name == W + "del")
+            .Select(e => (string?)e.Attribute(W + "author")).Distinct();
+        Assert.Equal(new[] { "Reviewer" }, authors);
     }
 }

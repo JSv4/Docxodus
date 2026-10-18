@@ -37,6 +37,10 @@ All notable changes to this project will be documented in this file.
   (issue #1221). Their zero-indent custom property now has a length unit, keeping the CSS
   offset calculation valid; indented paragraph offsets are unchanged.
 
+- Run decorations retain double underline and strikethrough, combined underline/strikethrough,
+  and underline patterns and colors (issue #1220). Decorations with different patterns or colors
+  use separate inline spans, including in browser/WASM and paginated output.
+
 - Rejecting revisions now reverses an insertion or deletion in every container that can hold one (issue
   #1176). Reject works by turning each insertion into a deletion and each deletion into an insertion,
   then accepting. Which revisions it turned around was a list of containers: paragraphs, hyperlinks,
@@ -205,6 +209,31 @@ All notable changes to this project will be documented in this file.
   region pairs exactly as it would without them, and each marker goes in front of the paragraph that holds its
   block's content (the folded paragraph, when that block was folded into another), so accepting and rejecting
   still put it back at its block boundary.
+- Comparing documents no longer loses a bookmark or comment range between the paragraphs of a header or footer
+  that is otherwise unchanged (issue #1174). The comparison aligns a story's blocks without such markers, so a
+  header whose only difference was one read as unchanged and kept the original's copy: accepting the redline
+  dropped the revised document's bookmark. Such a story is now rebuilt like any changed one, with the original's
+  markers as tracked deletions and the revised document's as tracked insertions at their block boundaries, for
+  each section the header or footer pairs with. Stories whose markers match are still left as they are. Such a
+  story now appears in the edit-script JSON's `headerFooterOps` with equal ops only; a full body replacement's
+  inserted-style projection treats it like an unchanged story. A header or footer the comparison rebuilds now
+  goes through the same comment clean-up as the body (right-only comment definitions merged in, unique ids,
+  paired ranges), so a comment range there no longer leaves a duplicate id or a reference to a comment the
+  output lacks. A comment both documents have whose range between blocks changed (its end moved one paragraph
+  on, say) now keeps each document's range in its own view, in the body too: the clean-up used to collapse the
+  two copies into one range, so rejecting gave the revised range. A header whose only difference is a comment's
+  id (the revised document numbers the same comment differently) is still left as it is.
+- Consolidating several reviewers' copies no longer drops or misplaces a reviewer's bookmarks and comment ranges
+  written between paragraphs in table cells, unchanged tables and notes (issue #1175). Where the merge composes a
+  table cell by cell, only the original's markers were placed, so a reviewer's bookmark in a cell was lost, whether
+  that reviewer edited the cell, left it or its whole row alone, or only bracketed it while another reviewer
+  edited the table; a reviewer whose only change was such a marker inside a table or footnote nobody else
+  changed lost it too, because the output copies those from the original; and a footnote a reviewer inserted
+  carried its bookmarks in front of its paragraphs, untracked. Each reviewer's markers now go in as that
+  reviewer's tracked insertion (and an original marker the reviewer removed as their deletion) at the right
+  paragraph boundary, as two-document comparison does; a bookmark marker between blocks that two reviewers add
+  under one name is inserted once (one added between blocks and one inside a paragraph still give two copies). A table one reviewer edited and another only bracketed is now composed cell by cell; the edits
+  themselves come out the same.
 - Right-to-left bordered paragraphs (`w:bidi`) now draw their left and right borders outside the
   indented text, mirroring left-to-right paragraphs (issue #1129). The border wrapper put the
   paragraph's leading (start) indent on its left side, although a right-to-left paragraph's start is
@@ -407,6 +436,47 @@ All notable changes to this project will be documented in this file.
   or starts with a page break, one with a `thead`, `tfoot` or several row groups, or one holding a
   nested table or a footnote; and header rows whose vertical merge runs on into the body rows are
   not repeated.
+- A keep-with-next heading is no longer stranded at a page's foot by a footnote continuation still
+  to be placed (issue #1180). To decide whether the heading and its paragraph could move to the next
+  page together, the paginator counted the whole continuation against that page, and the chain's
+  notes in full. The move was refused, the heading fitted where it was and its paragraph opened the
+  next page. Word reference PDFs show the carried note either leaving the chain its room on the next
+  page or keeping that page, the chain opening the page after; so the move now depends only on the
+  chain fitting a page with room for its notes to start (judged as for a citing paragraph, here and
+  on the fresh page), and a moved chain is judged again beside the next page's carried note, moving
+  on once more when that note keeps the page. With issue #1178's note area, the NVCA model
+  charter keeps the heading "2.3 Deemed Liquidation Events" on the page of "2.3.1 Definition", as
+  in Word's PDF; it takes 50 pages in the export, as on main (Word: 49).
+- Paginated footnotes may now take the whole page, as Word reference PDFs show (issue #1178). The
+  paginator capped the note area at 60% of the body band while body text remained, and at 95% once
+  it was placed (the share LibreOffice 25.8.7.3 allows). Word holds no room back: a note takes
+  everything below the line that cites it, and a carried note that does not end on a page takes
+  that page alone; body text, with any new citation, resumes on the page where the note ends.
+  Both hold in the paginated view and the PDF export (the export of a note carried over several
+  pages with later citations still fails PageMap verification for those notes, as it did before).
+  On a Letter page whose first line cites a 90-line note, page 1 now shows that line and 53 lines
+  of the note, as Word does (it showed 19 body lines beside 33 note lines). A table in a note now
+  splits between pages at row boundaries, as Word splits it; it was indivisible and was clipped
+  beside its citation. Like a body table, it repeats its header rows (`w:tblHeader`) at
+  the top of each continuation. The note band never covers body text already placed on its page: a note
+  part taller than the room left is clipped in the band, below that body. A note too tall to start
+  beside its citation now starts whole on the next page when that page's band can hold it, as in
+  Word reference PDFs, rather than being clipped beside the citation. A page that starts with a
+  page-break-before paragraph now measures its carried note before placing that paragraph, so a
+  keep-with-next chain there no longer leaves its heading alone at the page's foot. The shape issue
+  #1179 lengthened to three pages (a table citing a note too tall for the room left, then a
+  paragraph citing a short note) takes two again: the deferred note now starts on page 2 with room
+  for both notes.
+- A paginated footnote that continues onto the next page now stays last on its page (issue #1179).
+  The paginator could start a later, whole note below the split one: a note cited after it on the
+  same page, a note deferred to a page whose carried continuation runs on again, or a note cited
+  beside such a continuation, which could also overtake an earlier deferred note. Word reference
+  PDFs and LibreOffice keep a continued note last on its page and notes in citation order, so once a
+  note on a page continues, or a note cited there has been deferred, later notes start on the next
+  page, below the continuation and after the deferred notes. One shape takes a page more:
+  a table citing a note too tall for the room left, followed by a paragraph citing a short note, now
+  lays out on three pages instead of two, because the short note no longer overtakes the deferred
+  one (LibreOffice also moves the citing line after the deferred note).
 - In the PDF export, a paragraph border on content that an exact-height table row hides is now hidden
   with it (issue #1171). Exactly sized paragraph borders are painted as shapes over the page, which
   did not inherit the row's clip, so the border of a paragraph cut by the row still showed below it.

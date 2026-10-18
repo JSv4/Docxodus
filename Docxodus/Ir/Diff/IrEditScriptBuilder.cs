@@ -177,7 +177,9 @@ internal static class IrEditScriptBuilder
     ///
     /// <para><b>Ops.</b> A matched pair runs the block aligner over the two stories' block lists exactly
     /// like a note or a cell (a header-text edit surfaces as a ModifyBlock token diff); an all-Equal pair
-    /// emits NOTHING (the unchanged story keeps today's verbatim part carry-over); a right-only story is
+    /// emits NOTHING (the unchanged story keeps today's verbatim part carry-over) unless the two stories'
+    /// bookmarks or comment ranges between blocks differ, when it keeps its all-Equal ops so the story is rebuilt
+    /// with each side's markers (issue #1174); a right-only story is
     /// all InsertBlock; a left-only story all DeleteBlock. Deterministic order: headers (section
     /// ascending, kind Default&lt;First&lt;Even), then footers.</para>
     /// </summary>
@@ -242,7 +244,7 @@ internal static class IrEditScriptBuilder
         }
 
         foreach (var plan in plans)
-            plan.Ops = BuildHeaderFooterStoryOps(plan.Left, plan.Right, settings);
+            plan.Ops = BuildHeaderFooterStoryOps(leftDocument, rightDocument, plan.Left, plan.Right, settings);
 
         // One physical left part can safely be rewritten once. Prefer an unchanged pair as its primary output
         // (preserving the left part byte-for-byte), otherwise use the first effective cell deterministically;
@@ -340,14 +342,25 @@ internal static class IrEditScriptBuilder
         Math.Max(1, document.Body.Blocks.OfType<IrParagraph>()
             .Count(paragraph => paragraph.InlineSectionBreakAnchor is not null) + 1);
 
-    private static List<IrEditOp> BuildHeaderFooterStoryOps(
+    /// <summary>The <c>w:hdr</c>/<c>w:ftr</c> root a story was read from, when the IR kept its source.</summary>
+    private static System.Xml.Linq.XElement? StoryRoot(IrDocument document, IrHeaderFooter story) =>
+        story.Scope.PartUri is { } uri && document.Sources.TryGetValue(uri, out var source) ? source.Root : null;
+
+    private static List<IrEditOp> BuildHeaderFooterStoryOps(IrDocument leftDocument, IrDocument rightDocument,
         IrHeaderFooter? left, IrHeaderFooter? right, IrDiffSettings settings)
     {
         if (left is not null && right is not null)
         {
             var alignment = IrBlockAligner.AlignBlocks(left.Scope.Blocks, right.Scope.Blocks, settings);
             var ops = ProjectAlignment(left.Scope.Blocks, alignment, settings);
-            return ops.Any(op => op.Kind is not IrEditOpKind.EqualBlock) ? ops : new List<IrEditOp>();
+            // A story whose blocks all match is unchanged and keeps the original's part, unless the two differ in
+            // a bookmark or comment range between blocks, which the IR leaves out (rule N3): then its all-equal
+            // ops stay, so the renderer rebuilds the story and places each side's markers as it does in the body
+            // (issue #1174).
+            return ops.Any(op => op.Kind is not IrEditOpKind.EqualBlock) ||
+                IrMarkupRenderer.BlockLevelMarkersDiffer(StoryRoot(leftDocument, left), StoryRoot(rightDocument, right),
+                    leftDocument, rightDocument)
+                ? ops : new List<IrEditOp>();
         }
         if (right is not null)
             return right.Scope.Blocks
