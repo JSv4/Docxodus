@@ -5757,10 +5757,8 @@ internal static partial class IrMarkupRenderer
         // (A w:fldSimple is handled upstream by ExpandFieldForRevision — it is EXPANDED to fldChar runs before
         // reaching here, since w:fldSimple is not in w:del's content model and keeping its wrapper bare would
         // leave a dangling empty field on accept/reject.)
-        // Inline custom XML also carries runs and must be traversed, including when nested in a hyperlink.
         bool insGrade = !IsDeleteGrade(kind);
-        if (runLevel.Name == W.hyperlink || runLevel.Name == W.sdt || runLevel.Name == W.smartTag
-            || runLevel.Name == W.customXml)
+        if (runLevel.Name == W.hyperlink || runLevel.Name == W.sdt || runLevel.Name == W.smartTag)
         {
             var container = new XElement(runLevel.Name, runLevel.Attributes());
             if (insGrade)
@@ -5783,7 +5781,7 @@ internal static partial class IrMarkupRenderer
 
     /// <summary>
     /// Wrap a child of a run-level container (see <see cref="WrapRunLevel"/>). A run-level child
-    /// (<c>w:r</c>/<c>w:hyperlink</c>/<c>w:smartTag</c>/<c>w:customXml</c>/<c>w:sdt</c>) is wrapped in the revision element; a
+    /// (<c>w:r</c>/<c>w:hyperlink</c>/<c>w:smartTag</c>/<c>w:sdt</c>) is wrapped in the revision element; a
     /// <c>w:sdtContent</c> is PRESERVED as a wrapper and its OWN run-level children wrapped. The runs of an
     /// inline content control live under <c>w:sdtContent</c>, NOT as direct <c>w:sdt</c> children, and
     /// <c>w:ins</c>/<c>w:del</c> is a valid child of <c>w:sdtContent</c>. Without this descent an
@@ -5795,10 +5793,9 @@ internal static partial class IrMarkupRenderer
     {
         // A nested fldSimple is just as illegal inside w:ins/w:del as a top-level one. Expand it before
         // wrapping, preserving its result position inside the enclosing hyperlink/SDT/smartTag container.
-        if (child.Name == W.fldSimple)
+        if (child.Name == W.fldSimple || child.Name == W.customXml)
             return WrapFieldAware(child, kind, state);
-        if (child.Name == W.r || child.Name == W.hyperlink || child.Name == W.smartTag || child.Name == W.sdt
-            || child.Name == W.customXml)
+        if (child.Name == W.r || child.Name == W.hyperlink || child.Name == W.smartTag || child.Name == W.sdt)
             return new[] { WrapRunLevel(child, kind, state) };
         if (child.Name == W.sdtContent)
         {
@@ -7353,9 +7350,26 @@ internal static partial class IrMarkupRenderer
 
     /// <summary>Wrap a run-level element in a revision (<see cref="WrapRunLevel"/>), first expanding a
     /// <c>w:fldSimple</c> via <see cref="ExpandFieldForRevision"/> so a field is fully deletable/insertable.
+    /// Inline custom XML uses the existing cross-boundary envelope marks so its shell resolves with its runs.
     /// Yields one or more wrapped run-level elements.</summary>
-    private static IEnumerable<XElement> WrapFieldAware(XElement runLevel, RevKind kind, RenderState state) =>
-        ExpandFieldForRevision(runLevel).Select(part => WrapRunLevel(part, kind, state));
+    private static IEnumerable<XElement> WrapFieldAware(XElement runLevel, RevKind kind, RenderState state)
+    {
+        foreach (var part in ExpandFieldForRevision(runLevel))
+        {
+            if (part.Name == W.customXml)
+            {
+                var wrapper = new XElement(part);
+                if (!IsDeleteGrade(kind))
+                    state.RegisterMediaReferences(wrapper);
+                var boundaries = MarkWholeSdtEnvelope(wrapper, kind, state);
+                yield return boundaries.Before;
+                yield return wrapper;
+                yield return boundaries.After;
+            }
+            else
+                yield return WrapRunLevel(part, kind, state);
+        }
+    }
 
     // ----------------------------------------------------------------- rPrChange (format change)
 

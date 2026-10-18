@@ -33,8 +33,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Comparing text inside inline custom XML within a hyperlink now marks the enclosed runs,
-  so accept keeps the revised text and reject restores the original without duplicating either (#1188).
+- Comparing text inside inline custom XML now marks its wrapper and enclosed runs, including
+  inside a hyperlink. Accept keeps the revised text and reject restores the original without
+  duplicate text or empty wrapper copies (#1188).
 
 - SVG `href` fragment links in copied comment content retain their inert behavior alongside
   ordinary copied links (follow-up to #1229). Only native HTML return labels are reactivated.

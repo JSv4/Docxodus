@@ -51,6 +51,8 @@ public class IrInlineEnvelopeMarkupRendererTests
     [InlineData("sdt", true)]
     [InlineData("nested", false)]
     [InlineData("nested", true)]
+    [InlineData("direct", false)]
+    [InlineData("direct", true)]
     [InlineData("unchanged", false)]
     [InlineData("unchanged", true)]
     public void InlineCustomXmlContent_TracksTextThroughItsContainers(string shape, bool facade)
@@ -62,7 +64,7 @@ public class IrInlineEnvelopeMarkupRendererTests
             var inner = Custom("<w:r><w:t>Cedar " + text + "</w:t></w:r>");
             if (shape == "nested") inner = Custom(inner);
             var carrier = shape == "sdt" ? "<w:sdt><w:sdtPr/><w:sdtContent>" + inner + "</w:sdtContent></w:sdt>"
-                : "<w:hyperlink w:anchor=\"cedar\">" + inner + "</w:hyperlink>";
+                : shape == "direct" ? inner : "<w:hyperlink w:anchor=\"cedar\">" + inner + "</w:hyperlink>";
             return Doc("<w:p><w:r><w:t>Before.</w:t></w:r>" + carrier + "<w:r><w:t>After.</w:t></w:r></w:p>");
         }
         var original = Input("opened");
@@ -81,6 +83,7 @@ public class IrInlineEnvelopeMarkupRendererTests
             AssertNoRevisionMarkup(resolved);
             var actual = MainXml(resolved);
             Assert.Equal(MainXml(expected).Root!.Value, actual.Root!.Value);
+            Assert.Equal(MainXml(expected).Descendants(W + "customXml").Count(), actual.Descendants(W + "customXml").Count());
             var text = Assert.Single(actual.Descendants(W + "t"), t => t.Value.Contains("Cedar"));
             Assert.Equal(shape == "nested" ? 2 : 1, text.Ancestors(W + "customXml").Count());
             foreach (var wrapper in text.Ancestors(W + "customXml"))
