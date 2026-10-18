@@ -413,7 +413,7 @@ All notable changes to this project will be documented in this file.
   note end after all, the notes deferred behind it join it there again. One shape takes a page more:
   a table citing a note too tall for the room left, followed by a paragraph citing a short note, now
   lays out on three pages instead of two, because the short note no longer overtakes the deferred
-  one (LibreOffice lays it out the same way).
+  one (LibreOffice also moves the citing line after the deferred note).
 - In the PDF export, a paragraph border on content that an exact-height table row hides is now hidden
   with it (issue #1171). Exactly sized paragraph borders are painted as shapes over the page, which
   did not inherit the row's clip, so the border of a paragraph cut by the row still showed below it.

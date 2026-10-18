@@ -175,9 +175,10 @@ test.describe('A continued note stays last on its page', () => {
   }
 
   test('notes deferred behind a carried note rejoin it when the last body page lets it end', async ({ page }) => {
-    // Note 1 carries onto page 2, which is first partitioned while body text remains. Once the body
-    // is placed the carried note gets the rest of the page and ends there, so note 2, cited on
-    // page 2 and deferred behind it, follows it on that page instead of opening a page of its own.
+    // Note 2 is cited by the table on page 1, where note 1 splits, and so reaches page 2 by
+    // deferral. Page 2 is first partitioned while body text remains; once the body is placed the
+    // carried note gets the rest of the page and ends there, so note 2 follows it on that page
+    // instead of opening a page of its own.
     const layout = await paginate(page, staging(
       `<p>cites A${reference('1')}</p><table><tr><td>cites B${reference('2')}</td></tr></table>`
         + `<p>${lines('tail', 7)}</p>`,

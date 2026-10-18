@@ -3304,20 +3304,28 @@ whatever its rule, before that issue.
 
 ## Footnotes: a continued note stays last, and notes keep their order (issue #1179)
 
-Five shapes, Letter page, 12pt body, single-line note paragraphs (Word reference PDFs, LibreOffice
-25.8.7.3):
+Five shapes, Letter page, 12pt body, single-line note paragraphs except in D and E, whose note 1 is
+a single 20-line keep-lines paragraph (Word reference PDFs, LibreOffice 25.8.7.3, Docxodus's
+paginated view after this issue, still at the 60% note-area cap):
 
-| Case | Shape | Word | LibreOffice |
-|---|---|---|---|
-| A | `cites A` (90-line note 1), `cites B` (1-line note 2), 30 body lines | note 1 splits on p1; `cites B` moves to p2, note 2 follows note 1's end there | same |
-| B | `cites A` (150-line note), page break, `cites B`, `cites C` (1-line notes) | p2 holds only note 1's continuation, no body; `cites B` and `cites C` open p3, where note 1 ends and notes 2, 3 follow in order | `cites B` alone on p2 beside the continuation; notes 2, 3 on p4 after note 1 ends |
-| C | `cites A` (220-line note), then eight citing lines with plain lines between | p2-p4 hold only the continuation; body resumes on p5, where note 1 ends, and notes 2-9 follow in order | one citing line per continuation page; notes 2-9 after note 1's end |
-| D | 40 filler lines, a paragraph citing a 20-line keep-lines note, `cites B` | the citing line moves to p2 with its note | same |
-| E | 40 filler lines, a one-row table citing that note, `cites B` | the table moves to p2 with its note and `cites B` | the table stays on p1; note 1 and note 2 go to p2, in order |
+| Case | Shape | Word | LibreOffice | Docxodus |
+|---|---|---|---|---|
+| A | `cites A` (90-line note 1), `cites B` (1-line note 2), 30 body lines | note 1 splits on p1; `cites B` moves to p2, note 2 follows note 1's end there | same | note 1 splits on p1; `cites B` moves to p2 beside the continuation; note 1 ends on p3 and note 2 follows it there |
+| B | `cites A` (150-line note), page break, `cites B`, `cites C` (1-line notes) | p2 holds only note 1's continuation, no body; `cites B` and `cites C` open p3, where note 1 ends and notes 2, 3 follow in order | `cites B` alone on p2 beside the continuation; notes 2, 3 on p4 after note 1 ends | `cites B` alone on p2, `cites C` on p3; notes 2, 3 on p4 after note 1 ends |
+| C | `cites A` (220-line note), then eight citing lines with plain lines between | p2-p4 hold only the continuation; body resumes on p5, where note 1 ends, and notes 2-9 follow in order | `cites X2` on p2, only `plain2 2` on p3, `cites X3` on p4; note 1 ends on p5 and notes 2-9 start there | one citing line and its plain lines per continuation page; notes 2-9 after note 1 ends, on p7 and p8 |
+| D | 40 filler lines, a paragraph citing note 1, `cites B` | the citing line moves to p2 with its note | same | same |
+| E | 40 filler lines, a one-row table citing note 1, `cites B` | the table moves to p2 with its note and `cites B` | the table stays on p1; note 1 and note 2 go to p2, in order | as LibreOffice |
 
-Both keep a continued note last on its page and every note in citation order. Where they differ,
-Word gives a page whose carried note runs on to the next page entirely to that note (B, C); see the
-note-area entry for issue #1178.
+All three keep a continued note last on its page and every note in citation order. Where Word and
+LibreOffice differ, Word gives a page whose carried note runs on to the next page entirely to that
+note (B, C; see the note-area entry for issue #1178), and moves a table whose note cannot start
+beside it to the note's page (E).
+
+The Docxodus rule is `laterNotesClosed` in `PaginationEngine.flowToPages`
+(`npm/src/pagination.ts`): a page closes to new notes once one of its notes continues
+(`nextPageContinuation`) or a note cited on it is deferred (`deferredFootnoteIds`), and
+`prepareCurrentContinuation` moves the notes deferred to a page on with a carried note that runs on
+again; `finishPage` hands them back when the last body page lets the carried note end.
 
 ## Contributing
 
