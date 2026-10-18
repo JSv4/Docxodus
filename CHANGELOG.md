@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- DocumentBuilder keeps style IDs unique when sources use one ID for different style types
+  (#1186). Incoming styles and their references, including inherited styles and running stories,
+  are renamed together; styles with the same name are matched only within the same type.
+
 - Comparing text inside inline custom XML now marks its wrapper and enclosed runs, including
   inside a hyperlink. Accept keeps the revised text and reject restores the original without
   duplicate text or empty wrapper copies. HTML and paginated export also retain custom-XML
