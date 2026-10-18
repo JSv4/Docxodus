@@ -623,6 +623,12 @@ export interface PaginatedDocumentProps {
   showPageNumbers?: boolean;
   /** Gap between pages in pixels. Default: 20 */
   pageGap?: number;
+  /** Read-only comments appear beside the page by default; margin keeps physical citations. */
+  commentColumnPlacement?: PaginationOptions["commentColumnPlacement"];
+  /** Outside column width in points. Default: 144. */
+  commentColumnWidthPt?: number;
+  /** Gap from the page in points. Default: 12. */
+  commentColumnGapPt?: number;
   /** Whether simple paragraphs may fragment across page boundaries. Default: true. */
   fragmentParagraphs?: boolean;
   /** Exact tokens used to include an authoritative pageMap in onPaginationComplete. */
@@ -697,6 +703,9 @@ export function usePagination(
     pageGap = 20,
     cssPrefix = "page-",
     fragmentParagraphs = true,
+    commentColumnPlacement = "outside",
+    commentColumnWidthPt,
+    commentColumnGapPt,
     layoutToken,
   } = options;
 
@@ -735,6 +744,9 @@ export function usePagination(
         pageGap,
         cssPrefix,
         fragmentParagraphs,
+        commentColumnPlacement,
+        commentColumnWidthPt,
+        commentColumnGapPt,
         layoutToken,
         // A read-only viewer, like paginateHtml.
         alignBaselinesToWord: true,
@@ -755,6 +767,9 @@ export function usePagination(
     pageGap,
     cssPrefix,
     fragmentParagraphs,
+    commentColumnPlacement,
+    commentColumnWidthPt,
+    commentColumnGapPt,
     layoutToken?.documentVersion,
     layoutToken?.rendererFingerprint,
   ]);
@@ -810,6 +825,9 @@ export function PaginatedDocument({
   showPageNumbers = true,
   pageGap = 20,
   fragmentParagraphs = true,
+  commentColumnPlacement,
+  commentColumnWidthPt,
+  commentColumnGapPt,
   layoutToken,
   backgroundColor = "#525659",
   cssPrefix = "page-",
@@ -829,6 +847,9 @@ export function PaginatedDocument({
     pageGap,
     cssPrefix,
     fragmentParagraphs,
+    commentColumnPlacement,
+    commentColumnWidthPt,
+    commentColumnGapPt,
     layoutToken,
   }), [
     scale,
@@ -836,6 +857,9 @@ export function PaginatedDocument({
     pageGap,
     cssPrefix,
     fragmentParagraphs,
+    commentColumnPlacement,
+    commentColumnWidthPt,
+    commentColumnGapPt,
     layoutToken?.documentVersion,
     layoutToken?.rendererFingerprint,
   ]);
