@@ -90,6 +90,12 @@ and notes are presentation fragments: they do not duplicate the active `data-anc
 copies of a table's header rows (`w:tblHeader`) that open each page a split table continues on
 (`data-docx-repeated-header-row`, issue #1171): the row has one fragment per page it opens.
 
+Margin-note copies strip duplicate element IDs. Their generated return links are resolved only
+after all pages exist, against one actual rendered reading-content reference. Repeated notes can
+return to the same reference without adding another bookmark target or editor anchor. Link
+eligibility uses painted geometry; a visible citation can still be excluded from the authored
+source inventory.
+
 ## Registration and invalidation
 
 Register a map through `DocxSession.RegisterPageMap` (`registerPageMap` in TypeScript,

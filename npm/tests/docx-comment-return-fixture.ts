@@ -2,10 +2,11 @@ import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
 
 // Original comment range and ordinary bookmark link; the optional page break separates
 // the first painted note from its one real return target.
-export function commentReturnFixture(comments = true, later = false): Uint8Array {
+export function commentReturnFixture(comments = true, later = false, frame = false): Uint8Array {
   const mark = comments ? '<w:r><w:commentReference w:id="6"/></w:r>' : '';
   const ending = comments ? '<w:commentRangeEnd w:id="6"/>' + mark : '';
-  const body = `<w:p>${comments ? '<w:commentRangeStart w:id="6"/>' : ''}<w:r><w:t>Maple navigation anchor.</w:t></w:r>${later ? '' : ending}</w:p>` +
+  const framePr = frame ? '<w:pPr><w:framePr w:hAnchor="page" w:vAnchor="page" w:x="7200" w:y="1440" w:w="1440"/></w:pPr>' : '';
+  const body = `<w:p>${framePr}${comments ? '<w:commentRangeStart w:id="6"/>' : ''}<w:r><w:t>Maple navigation anchor.</w:t></w:r>${later ? '' : ending}</w:p>` +
     (later ? `<w:p><w:r><w:br w:type="page"/></w:r></w:p><w:p><w:r><w:t>Maple return target.</w:t></w:r>${ending}</w:p>` : '') +
     '<w:p><w:bookmarkStart w:id="12" w:name="MapleDestination"/><w:r><w:t>Maple bookmark destination.</w:t></w:r><w:bookmarkEnd w:id="12"/></w:p>' +
     '<w:p><w:hyperlink w:anchor="MapleDestination"><w:r><w:t>MapleBodyReturn</w:t></w:r></w:hyperlink></w:p>';

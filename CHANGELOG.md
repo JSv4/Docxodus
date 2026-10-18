@@ -85,6 +85,10 @@ All notable changes to this project will be documented in this file.
   the full row, and pages without comments stay aligned. Physical page dimensions and print/export
   margin placement are preserved.
 
+- Paginated margin comments retain return links to uniquely rendered reference marks, including
+  targets on later pages and in floating body frames (issue #1229). Missing, hidden, clipped or
+  ambiguous targets keep their return labels disabled.
+
 - A comparison or consolidation no longer writes two styles with the same `w:styleId` when the documents
   use one id for styles of different types, such as a paragraph style `DocID` in the original and a
   character style `DocID` in the revision (issue #1184). Style ids are unique across all types, so the

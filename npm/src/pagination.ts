@@ -1069,9 +1069,9 @@ export class PaginationEngine {
     this.qualifyPageFragments(pages);
     this.transferVisibleFragmentTargets();
     if (!this.deferFragmentIdentities) this.normalizeVisiblePageFragments(pages);
-    this.activateCommentReturnLinks(pages);
     // Glyph placement only: run once every page and running story is final.
     if (this.alignBaselines) alignBaselinesToWord(this.containerElement);
+    this.activateCommentReturnLinks(pages);
     this.lastPages = pages;
 
       const result = {
@@ -4934,8 +4934,8 @@ export class PaginationEngine {
         if (story !== "body" && story !== "footnote" && story !== "endnote") continue;
       } else if (!target.closest(`.${this.cssPrefix}content, .${this.cssPrefix}footnotes`)) continue;
       const pageElement = page as HTMLElement;
-      if (this.isDeliberatelyUnrenderedSource(target, pageElement)
-          || this.view.getComputedStyle(target).visibility !== "visible") continue;
+      // A painted citation may be excluded from PageMap's authored source inventory.
+      if (this.view.getComputedStyle(target).visibility !== "visible") continue;
       const { visible } = measureRenderedSource(this.view, target, pageElement);
       if (visible.right <= visible.left || visible.bottom <= visible.top) continue;
       let transparent = false;
