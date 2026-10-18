@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Preserve comment ranges and references when a block content control or custom XML wrapper is added or
+  removed, including endpoints in otherwise unchanged paragraphs (#1195). Consolidation now carries
+  reviewer-added comments from unchanged paragraphs and tables and retains their revision author (#1196).
+
 - SVG `href` fragment links in copied comment content retain their inert behavior alongside
   ordinary copied links (follow-up to #1229). Only native HTML return labels are reactivated.
 

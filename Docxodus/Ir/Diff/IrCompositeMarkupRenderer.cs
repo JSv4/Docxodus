@@ -194,12 +194,12 @@ internal static class IrCompositeMarkupRenderer
                 // Reconcile the assembled body's comment markers (unique ids, 1:1 range pairing, exactly-one
                 // resolved definition per reference) — the multi-source analogue of the two-way NormalizeComments.
                 // Left = base; "right" = the union of every reviewer's anchored comment ids (accept ≡ reviewers).
-                var reviewerCommentIds = new HashSet<string>();
-                foreach (var rir in reviewerIrs)
-                    foreach (var id in IrMarkupRenderer.BodyCommentIds(rir))
-                        reviewerCommentIds.Add(id);
+                var commentAuthors = new Dictionary<string, string>();
+                for (int r = 0; r < reviewerIrs.Count; r++)
+                    foreach (var id in IrMarkupRenderer.BodyCommentIds(reviewerIrs[r]))
+                        commentAuthors.TryAdd(id, authors[r]);
                 IrMarkupRenderer.NormalizeComments(main, IrMarkupRenderer.BodyCommentIds(baseIr),
-                    reviewerCommentIds, state);
+                    commentAuthors.Keys.ToHashSet(), state, commentAuthors);
 
                 // The base's and the reviewers' surviving bookmarks can share ids; renumber them unique,
                 // each start kept with its own end (issue #840).
@@ -707,16 +707,20 @@ internal static class IrCompositeMarkupRenderer
 
         int emittedFrom = sink.Count;
         IrMarkupRenderer.RenderBlockOp(op, state, sink);
-        if (baseSourced && compositeOp.EqualReviewerBookmarks is { } reviewerBookmarks && sink.Count == emittedFrom + 1)
+        if (baseSourced && compositeOp.EqualReviewerMarkers is { } reviewerMarkers && sink.Count == emittedFrom + 1)
         {
+            foreach (var reviewer in reviewerMarkers)
+                if (reviewer.Reviewer >= 0 && reviewer.Reviewer < reviewerIrs.Count)
+                    IrMarkupRenderer.CarryMissingComments(sink[emittedFrom],
+                        IrMarkupRenderer.SourceElement(reviewer.Anchor, reviewerIrs[reviewer.Reviewer]));
             if (sink[emittedFrom].Name == W.p)
-                IrMarkupRenderer.CarryReviewerOnlyBookmarks(sink[emittedFrom], reviewerBookmarks, baseIr, reviewerIrs, state);
+                IrMarkupRenderer.CarryReviewerOnlyBookmarks(sink[emittedFrom], reviewerMarkers, baseIr, reviewerIrs, state);
             else if (IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr) is { } baseSource)
                 IrMarkupRenderer.ReconcileCompositeEqualContainerMarkers(sink[emittedFrom], baseSource,
-                    reviewerBookmarks.Where(b => b.Reviewer >= 0 && b.Reviewer < reviewerIrs.Count)
+                    reviewerMarkers.Where(b => b.Reviewer >= 0 && b.Reviewer < reviewerIrs.Count)
                         .Select(b => (b.Reviewer, IrMarkupRenderer.SourceElement(b.Anchor, reviewerIrs[b.Reviewer])))
                         .Where(c => c.Item2 is not null).Select(c => (c.Reviewer, c.Item2!)).ToList(),
-                    AuthorsByReviewer(reviewerBookmarks, reviewerIrs.Count), state);
+                    AuthorsByReviewer(reviewerMarkers, reviewerIrs.Count), state);
         }
 
         // Restore the shared state so a CELL recursion does not leak its per-op source into the surrounding
@@ -727,7 +731,7 @@ internal static class IrCompositeMarkupRenderer
     }
 
     /// <summary>Each reviewer's author by reviewer index, from the entries that name them.</summary>
-    private static IReadOnlyList<string> AuthorsByReviewer(IEnumerable<IrEqualReviewerBookmarks> entries, int reviewers)
+    private static IReadOnlyList<string> AuthorsByReviewer(IEnumerable<IrEqualReviewerMarkers> entries, int reviewers)
     {
         var authors = new string[reviewers];
         foreach (var entry in entries)

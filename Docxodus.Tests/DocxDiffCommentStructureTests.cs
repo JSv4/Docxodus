@@ -10,6 +10,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
+using Docxodus.Tests.Ir;
 using DocxodusDiffParityFixtures;
 using Xunit;
 
@@ -35,6 +36,54 @@ namespace Docxodus.Tests;
 /// </summary>
 public class DocxDiffCommentStructureTests
 {
+    [Theory]
+    [InlineData(false, false, "body")]
+    [InlineData(false, true, "body")]
+    [InlineData(true, false, "body")]
+    [InlineData(true, true, "body")]
+    [InlineData(true, false, "table")]
+    [InlineData(true, true, "table")]
+    [InlineData(true, false, "sdt")]
+    [InlineData(true, true, "sdt")]
+    [InlineData(true, false, "body-mid")]
+    [InlineData(true, false, "table-mid")]
+    [InlineData(true, false, "hyperlink-mid")]
+    public void ReviewerCommentInUnchangedText_SurvivesOnlyAccept(bool consolidate, bool control, string container)
+    {
+        const string plain = "<w:p><w:r><w:t>Maple clause</w:t></w:r></w:p>";
+        string marked = "<w:p><w:commentRangeStart w:id=\"0\"/><w:r><w:t>Maple clause</w:t></w:r>" +
+            "<w:commentRangeEnd w:id=\"0\"/><w:r><w:commentReference w:id=\"0\"/></w:r></w:p>";
+        if (container.EndsWith("-mid", StringComparison.Ordinal))
+            marked = marked.Replace("<w:commentRangeStart w:id=\"0\"/><w:r><w:t>Maple clause",
+                "<w:r><w:t xml:space=\"preserve\">Maple </w:t></w:r><w:commentRangeStart w:id=\"0\"/><w:r><w:t>clause");
+        string Wrap(string paragraph) => container.Split('-')[0] switch
+        {
+            "hyperlink" => paragraph.Replace("<w:p>", "<w:p><w:hyperlink w:anchor=\"Cedar\">").Replace("</w:p>", "</w:hyperlink></w:p>"),
+            "table" => "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid><w:tr><w:tc>" + paragraph + "</w:tc></w:tr></w:tbl>",
+            "sdt" => "<w:sdt><w:sdtPr><w:tag w:val=\"clause\"/></w:sdtPr><w:sdtContent>" + paragraph + "</w:sdtContent></w:sdt>",
+            _ => paragraph,
+        };
+        var original = IrTestDocuments.FromBodyXml(Wrap(plain));
+        var revised = control ? original : IrTestDocuments.WithComment(
+            "Cedar", "C", "2026-01-01T00:00:00Z", "Check the maple clause.", Wrap(marked));
+        var redline = consolidate
+            ? DocxDiff.Consolidate(original, new[] { new DocxDiffReviewer { Document = revised, Author = "Cedar" } })
+            : DocxDiff.Compare(original, revised);
+        var accepted = RevisionProcessor.AcceptRevisions(redline);
+        var rejected = RevisionProcessor.RejectRevisions(redline);
+        Assert.Equal(AnchorProjection(revised), AnchorProjection(accepted));
+        Assert.Equal(RangeCoverage(revised), RangeCoverage(accepted));
+        Assert.Equal(AnchorProjection(original), AnchorProjection(rejected));
+        Assert.Equal(BodyText(original), BodyText(accepted));
+        Assert.Empty(SchemaErrors(redline).Except(SchemaErrors(original).Concat(SchemaErrors(revised))));
+        using var stream = new MemoryStream(redline.DocumentByteArray);
+        using var package = WordprocessingDocument.Open(stream, false);
+        var markers = package.MainDocumentPart!.GetXDocument().Descendants(W.ins).ToList();
+        Assert.Equal(control, markers.Count == 0);
+        if (consolidate)
+            Assert.All(markers, m => Assert.Equal("Cedar", (string?)m.Attribute(W.author)));
+    }
+
     public static IEnumerable<object[]> AllScenarios() =>
         DocxDiffCommentFixtures.Names().Select(n => new object[] { n });
 
