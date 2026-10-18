@@ -40,6 +40,10 @@ All notable changes to this project will be documented in this file.
   Removing a comment from unchanged text also preserves its markers for the rejected view, including
   packages that retain the now-unanchored definition.
 
+- Consolidating independent reviewer edits beside a complex field preserves one set of field
+  characters in both accepted and rejected views, including adjacent fields, nested results and
+  field-boundary bookmarks (issue #1206). Revisions retain their contributing authors.
+
 - Paragraph borders now render in headers, footers, footnotes and endnotes, including grouped
   paragraphs in paginated HTML and PDF export (#1203). Note numbers and back links stay inside
   their paragraphs.

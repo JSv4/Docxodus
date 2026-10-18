@@ -331,6 +331,47 @@ test.describe('DocxDiff consolidate (composite N-way) bridge', () => {
     });
   }
 
+  for (const kind of ['result-edit', 'prefix-delete', 'bookmark-added', 'plain-control']) {
+    test(`consolidated field ${kind} preserves both resolved views`, async ({ page }) => {
+      const fixture = (role: string) => readTestFile(`ConsolidatedFields/consolidated-field-${kind}-${role}.docx`);
+      const inputs = ['0', '1', '2'].map(role => Array.from(fixture(role)));
+      const resolved = await page.evaluate(inputs => {
+        const T = (window as any).DocxodusTests;
+        const documents = inputs.map(bytes => new Uint8Array(bytes));
+        const redline = T.docxDiffConsolidate(documents[0], documents.slice(1).map((document, i) =>
+          ({ document, author: `Reviewer${i + 1}` })));
+        if (redline.error) throw new Error(JSON.stringify(redline.error));
+        return [T.docxDiffAcceptRevisions(redline.docxBytes), T.docxDiffRejectRevisions(redline.docxBytes)].map(view => {
+          if (view.error) throw new Error(JSON.stringify(view.error));
+          return Array.from(view.docxBytes) as number[];
+        });
+      }, inputs);
+      const xml = [...resolved.map(bytes => Buffer.from(bytes)), fixture('final'), fixture('original')]
+        .map(bytes => readZipEntry(Buffer.from(bytes), 'word/document.xml'));
+      const shapes = await page.evaluate(xml => xml.map(text => {
+        const doc = new DOMParser().parseFromString(text, 'application/xml');
+        const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+        const names = new Map(Array.from(doc.getElementsByTagNameNS(ns, 'bookmarkStart')).map(e =>
+          [e.getAttributeNS(ns, 'id'), e.getAttributeNS(ns, 'name')]));
+        return Array.from(doc.getElementsByTagName('*')).map(e => {
+          switch (e.localName) {
+            case 'p': return '¶';
+            case 't': return e.textContent;
+            case 'fldChar': return `{${e.getAttributeNS(ns, 'fldCharType')}}`;
+            case 'instrText': return `<${e.textContent}>`;
+            case 'bookmarkStart': case 'bookmarkEnd':
+              return `[${e.localName}:${names.get(e.getAttributeNS(ns, 'id'))}]`;
+            default: return '';
+          }
+        }).join('');
+      }), xml);
+      expect(shapes[0]).toBe(shapes[2]);
+      expect(shapes[1]).toBe(shapes[3]);
+      expect(shapes[2]).not.toBe(shapes[3]);
+    });
+  }
+
+
   test('GetConflicts reports overlapping reviewer edits', async ({ page }) => {
     // Two reviewers edit the SAME word differently ("quick" -> "SLOW" vs "FAST"),
     // which is a genuine cross-reviewer token-overlap conflict. (Two reviewers making
