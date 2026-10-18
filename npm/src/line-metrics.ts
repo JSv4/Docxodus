@@ -232,9 +232,17 @@ export function preserveExactLineInk(content: HTMLElement, topLimit: number, bot
   }
 }
 
-/** Read the pixel inset used for the exact-text paint clip, including CSS's 1-4 value shorthand. */
+/** Read a rectangular paint clip: a pixel inset or an exact-row rectangle with zero-area spikes. */
 export function insetClipBounds(value: string, box: DOMRect, scale: number):
   { top: number; right: number; bottom: number; left: number } | null {
+  const n = '-?\\d+(?:\\.\\d+)?';
+  const rectangle = new RegExp(`^path\\(["']M\\s*(${n})[ ,]+(${n})\\s*H\\s*(${n})\\s*V\\s*(${n})\\s*H\\s*(${n})\\s*Z`
+    + `(?:\\s*M\\s*${n}[ ,]+${n}\\s*[HV]\\s*${n}){4}["']\\)$`).exec(value);
+  if (rectangle && rectangle[1] === rectangle[5]) {
+    const [, left, top, right, bottom] = rectangle.map(Number);
+    return { left: box.left + left * scale, top: box.top + top * scale,
+      right: box.left + right * scale, bottom: box.top + bottom * scale };
+  }
   const match = /^inset\(((?:-?\d+(?:\.\d+)?px\s*){1,4})\)$/.exec(value);
   if (!match) return null;
   const parts = match[1].trim().split(/\s+/).map(Number.parseFloat);

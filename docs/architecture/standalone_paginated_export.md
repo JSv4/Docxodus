@@ -530,6 +530,13 @@ then meets the bounds, so the hidden text is written once, whole, at its laid-ou
 painted area is unchanged. (A CSS `clip-path` of the same shape works for the text layer but makes
 the cell a stacking context, which moves its text to the end of the page's content stream.)
 
+An enclosing header, footer, body or page band can otherwise cut the same hidden text into glyph
+fragments (#1200). Bands enclosing rewritten cells use the same rectangle with zero-area spikes,
+while retaining their original clipping axes and any exact-line inset. The shared rectangular-clip
+reader gives PageMap and exact-line ink checks the visible bounds rather than the expanded overflow
+bounds. Each band is changed once, so later cells cannot narrow a body band that permits text in
+the side margins. A custom nonrectangular clip is preserved.
+
 - **Geometry.** Chromium paints an SVG root at a whole pixel of its page box. The root is placed on
   the pixel at or before the clip box, with negative margins so the cell's layout is unchanged, and
   the `foreignObject` takes back the fraction. All lengths are written with six decimals, which hold

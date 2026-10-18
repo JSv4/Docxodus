@@ -1,0 +1,1 @@
+Original literal OOXML fixtures authored in JSv4/docx-fidelity-bench by John Scrudato IV, licensed MIT. The exact-height header row hides two paragraphs; its header band is 36pt in the reproduction and 72pt in the control. The visible words must survive once, and hidden words must be whole or absent in the PDF text layer.

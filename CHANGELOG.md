@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Hidden exact-row text stays whole in PDF text layers when a header, footer or body band also
+  clips it (#1200). The shared clip geometry keeps visible ink, side-margin overflow and PageMap
+  bounds consistent, including existing exact-line paint clips.
+
 - Paragraph borders now render in headers, footers, footnotes and endnotes, including grouped
   paragraphs in paginated HTML and PDF export (#1203). Note numbers and back links stay inside
   their paragraphs.
@@ -77,6 +81,10 @@ All notable changes to this project will be documented in this file.
 - Manual labels with hanging indentation now keep their first left tab stop in proportional-font
   fallback rendering (issue #1224). Left/right tab segments use the browser's actual glyph widths
   to fill leader space and align the following text, including later tabs in the same paragraph.
+
+- A keep-with-next heading can stay with a valid first fragment of the following paragraph instead
+  of moving that paragraph whole (#1182). Fragment checks retain keep-lines, page-break, widow-control
+  and citation constraints and also keep the heading with a fragment when moving to a fresh page.
 
 - Hidden paragraph marks (`w:pPr/w:rPr/w:vanish`) now join following paragraph text on the same
   rendered line, preserving the heading and visible generated numbering (issue #1223). Explicitly
