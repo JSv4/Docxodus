@@ -1135,15 +1135,15 @@ internal static class IrCompositeMerger
         }
         var touched = entries.Where(e => e.Op.Kind != IrEditOpKind.EqualBlock).ToList();
 
+        // Marker-only reviewers contribute even when several other reviewers edit the table's cells.
+        if (baseIr.AnchorIndex.TryGetValue(anchor, out var editedBlock) && editedBlock is IrTable editedTable &&
+            MarkerOnlyTableReviewers(anchor, editedTable, touched[0], entries, reviewers) is { Count: > 0 } promoted &&
+            ComposeTable(anchor, editedTable, touched.Concat(promoted).ToList(), reviewers, baseIr, policy, settings,
+                ops, conflicts, ref nextConflictId))
+            return;
+
         if (touched.Count == 1)
         {
-            // A table one reviewer edited and another left equal but for the markers between a cell's blocks
-            // composes cell by cell, so the second reviewer's markers find their cells (issue #1175).
-            if (baseIr.AnchorIndex.TryGetValue(anchor, out var editedBlock) && editedBlock is IrTable editedTable &&
-                MarkerOnlyTableReviewers(anchor, editedTable, touched[0], entries, reviewers) is { Count: > 0 } promoted &&
-                ComposeTable(anchor, editedTable, touched.Concat(promoted).ToList(), reviewers, baseIr, policy, settings,
-                    ops, conflicts, ref nextConflictId))
-                return;
             var (rev, op) = touched[0];
             ops.Add(EmitOp(op, reviewers[rev].Author, rev));
             return;
@@ -1782,7 +1782,10 @@ internal static class IrCompositeMerger
             ConflictId: tableConflicts.Count > 0 ? tableConflicts[0].Id : (int?)null,
             SourceRightAnchors: null,
             AuthoredRows: IrNodeList.From(authoredRows),
-            TableShell: tableShell));
+            TableShell: tableShell,
+            ReviewerTables: IrMarkupRenderer.HasTableBoundaryMarkers(baseTable.Source.Element) || touched.Any(t =>
+                IrMarkupRenderer.HasTableBoundaryMarkers(IrMarkupRenderer.SourceElement(t.Op.RightAnchor, reviewers[t.Reviewer].Ir)))
+                ? IrNodeList.From(reviewerTableDiffs.Select(r => new IrReviewerTable(r.Reviewer, r.Author, r.Item3))) : null));
         return true;
     }
 
