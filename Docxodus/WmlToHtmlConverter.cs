@@ -2616,17 +2616,33 @@ namespace Docxodus
                 sb.AppendLine("    background-color: #fff9c4;");
                 sb.AppendLine("    border-left: 3px solid #fbc02d;");
                 sb.AppendLine("    border-radius: 0 4px 4px 0;");
-                sb.AppendLine("    font-size: 0.85em;");
+                sb.AppendLine("    font-size: 0.85rem;");
                 sb.AppendLine("    box-shadow: 0 1px 3px rgba(0,0,0,0.1);");
+                sb.AppendLine("}");
+
+                // Preserve space for reply text instead of shrinking its font in nested notes.
+                sb.AppendLine($"div.{prefix}margin-reply {{");
+                sb.AppendLine("    padding: 0.25em;");
                 sb.AppendLine("}");
 
                 // Margin comment header
                 sb.AppendLine($"div.{prefix}margin-note-header {{");
                 sb.AppendLine("    display: flex;");
                 sb.AppendLine("    justify-content: space-between;");
+                sb.AppendLine("    flex-wrap: wrap;");
+                sb.AppendLine("    gap: 0.25em 0.5em;");
+                sb.AppendLine("    min-width: 0;");
                 sb.AppendLine("    align-items: center;");
                 sb.AppendLine("    margin-bottom: 0.25em;");
                 sb.AppendLine("    font-size: 0.9em;");
+                sb.AppendLine("}");
+
+                // Every header item must fit even when the review column is narrow.
+                sb.AppendLine($"div.{prefix}margin-note-header * {{");
+                sb.AppendLine("    min-width: 0;");
+                sb.AppendLine("    max-width: 100%;");
+                sb.AppendLine("    box-sizing: border-box;");
+                sb.AppendLine("    overflow-wrap: anywhere;");
                 sb.AppendLine("}");
 
                 sb.AppendLine($"span.{prefix}margin-author {{");
