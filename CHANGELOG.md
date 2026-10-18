@@ -438,7 +438,8 @@ All notable changes to this project will be documented in this file.
   On a Letter page whose first line cites a 90-line note, page 1 now shows that line and 53 lines
   of the note, as Word does (it showed 19 body lines beside 33 note lines). A table in a note now
   splits between pages at row boundaries, as Word splits it; it was indivisible and was clipped
-  beside its citation. The note band never covers body text already placed on its page: a note
+  beside its citation. Like a body table, it repeats its header rows (`w:tblHeader`) at
+  the top of each continuation. The note band never covers body text already placed on its page: a note
   part taller than the room left is clipped in the band, below that body. A note too tall to start
   beside its citation now starts whole on the next page when that page's band can hold it, as in
   Word reference PDFs, rather than being clipped beside the citation. A page that starts with a

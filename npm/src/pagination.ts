@@ -1994,14 +1994,14 @@ export class PaginationEngine {
    * header rows, on a continuation) are copied in first, marked as repeats.
    */
   private createSimpleTableFragment(
-    wrapper: HTMLElement,
+    wrapper: HTMLElement | null,
     table: HTMLTableElement,
     body: HTMLTableSectionElement,
     rows: HTMLTableRowElement[],
     retainAnchor: boolean,
     repeatedRows: HTMLTableRowElement[] = [],
   ): HTMLElement {
-    const wrapperClone = wrapper.cloneNode(false) as HTMLElement;
+    const wrapperClone = wrapper ? wrapper.cloneNode(false) as HTMLElement : null;
     const tableClone = table.cloneNode(false) as HTMLTableElement;
 
     // The eligibility gate permits only colgroups alongside the body. Keep each
@@ -2027,12 +2027,43 @@ export class PaginationEngine {
     tableClone.appendChild(bodyClone);
 
     if (!retainAnchor) {
-      wrapperClone.removeAttribute("data-anchor");
+      wrapperClone?.removeAttribute("data-anchor");
       tableClone.removeAttribute("data-anchor");
     }
 
+    if (!wrapperClone) return tableClone;
     wrapperClone.appendChild(tableClone);
     return wrapperClone;
+  }
+
+  /**
+   * The row counts after which a table may split: a boundary is safe only after every cell
+   * starting above it has ended. Overlapping merges in different columns extend the same
+   * indivisible group; HTML rowspan=0 extends through the remainder of the row section. The last
+   * entry is always `rows.length`.
+   */
+  private tableRowGroupEnds(rows: HTMLTableRowElement[]): number[] {
+    const ends: number[] = [];
+    let mergedEnd = 0;
+    for (let index = 0; index < rows.length; index++) {
+      this.checkpoint();
+      for (const cell of Array.from(rows[index].cells)) {
+        mergedEnd = Math.max(mergedEnd, cell.rowSpan === 0
+          ? rows.length : Math.min(rows.length, index + cell.rowSpan));
+      }
+      if (index + 1 >= mergedEnd) ends.push(index + 1);
+    }
+    return ends;
+  }
+
+  /**
+   * How many leading rows are the table's header rows (`w:tblHeader`), which a split repeats at
+   * the top of each continuation: the run must end at a safe boundary and leave rows to carry.
+   */
+  private leadingHeaderRowCount(rows: HTMLTableRowElement[], ends: number[]): number {
+    let count = 0;
+    while (count < rows.length && rows[count].dataset.docxHeaderRow === "true") count++;
+    return count === rows.length || !ends.includes(count) ? 0 : count;
   }
 
   /**
@@ -2083,19 +2114,7 @@ export class PaginationEngine {
     }
 
     const rows = Array.from(body.rows);
-    // A boundary is safe only after every cell starting above it has ended.
-    // Overlapping merges in different columns extend the same indivisible group.
-    // HTML rowspan=0 extends through the remainder of this row section.
-    const rowGroupEnds: number[] = [];
-    let mergedEnd = 0;
-    for (let index = 0; index < rows.length; index++) {
-      this.checkpoint();
-      for (const cell of Array.from(rows[index].cells)) {
-        mergedEnd = Math.max(mergedEnd, cell.rowSpan === 0
-          ? rows.length : Math.min(rows.length, index + cell.rowSpan));
-      }
-      if (index + 1 >= mergedEnd) rowGroupEnds.push(index + 1);
-    }
+    const rowGroupEnds = this.tableRowGroupEnds(rows);
     const minimumContentHeight = this.smallestEffectiveContentHeight(dims, sectionIndex);
     // Use the source's full vertical margins while forming groups. Continuation
     // fragments later clear their joining margins, so this conservative bound
@@ -2106,10 +2125,7 @@ export class PaginationEngine {
     }
 
     // The header run must end at a safe boundary and leave body rows to carry.
-    let headerCount = 0;
-    while (repeatHeaderRows && headerCount < rows.length
-      && rows[headerCount].dataset.docxHeaderRow === "true") headerCount++;
-    if (headerCount === rows.length || !rowGroupEnds.includes(headerCount)) headerCount = 0;
+    const headerCount = repeatHeaderRows ? this.leadingHeaderRowCount(rows, rowGroupEnds) : 0;
     const headerRows = rows.slice(0, headerCount);
     const withoutRepeats = (): MeasuredBlock[] | null => headerCount > 0
       ? this.trySplitSimpleOversizedTable(block, dims, sectionIndex, false)
@@ -3344,34 +3360,16 @@ export class PaginationEngine {
     }
     const body = table.tBodies[0];
     const rows = Array.from(body.rows);
-    const ends: number[] = [];
-    let mergedEnd = 0;
-    rows.forEach((row, index) => {
-      for (const cell of Array.from(row.cells)) {
-        mergedEnd = Math.max(mergedEnd, cell.rowSpan === 0 ? rows.length : Math.min(rows.length, index + cell.rowSpan));
-      }
-      if (index + 1 >= mergedEnd && index + 1 < rows.length) ends.push(index + 1);
-    });
+    const allEnds = this.tableRowGroupEnds(rows);
+    const headerRows = rows.slice(0, this.leadingHeaderRowCount(rows, allEnds));
+    // A cut inside or right after the header run would leave a page of header rows alone.
+    const ends = allEnds.filter((end) => end > headerRows.length && end < rows.length);
     if (ends.length === 0) return null;
-    const fragment = (from: number, to: number, first: boolean): HTMLElement => {
-      const tableClone = table.cloneNode(false) as HTMLTableElement;
-      for (const child of Array.from(table.children)) {
-        if (child !== body) tableClone.appendChild(child.cloneNode(true));
-      }
-      const bodyClone = body.cloneNode(false) as HTMLTableSectionElement;
-      for (const row of rows.slice(from, to)) bodyClone.appendChild(row.cloneNode(true));
-      tableClone.appendChild(bodyClone);
-      let root: HTMLElement = tableClone;
-      if (element !== table) {
-        root = element.cloneNode(false) as HTMLElement;
-        root.appendChild(tableClone);
-      }
-      if (!first) {
-        root.removeAttribute("data-anchor");
-        tableClone.removeAttribute("data-anchor");
-      }
-      return root;
-    };
+    const wrapper = element === table ? null : element;
+    // The table's header rows open the continuation again, as on a body table's later pages.
+    const fragment = (from: number, to: number, first: boolean): HTMLElement =>
+      this.createSimpleTableFragment(wrapper, table, body, rows.slice(from, to), first,
+        first ? [] : headerRows);
     let low = 0;
     let high = ends.length - 1;
     let best = -1;

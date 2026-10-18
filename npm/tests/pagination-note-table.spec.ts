@@ -18,6 +18,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 interface Page_ {
   /** Body lines on the page, by number. */
   body: number[];
+  /** The text of the page's first note table row. */
+  firstRow: string;
   /** Note table rows on the page, by number. */
   rows: number[];
   /** Whether each body line on the page is inside the page's visible body area. */
@@ -49,6 +51,7 @@ async function paginate(page: Page, bytes: Uint8Array, fragmentParagraphs: boole
       return {
         body: numbers(content.textContent ?? '', /Body line (\d+)/g),
         rows: numbers(box.querySelector('.page-footnotes')?.textContent ?? '', /Note table row (\d+)/g),
+        firstRow: (box.querySelector('.page-footnotes tr')?.textContent ?? '').trim(),
         bodyVisible: lines.every((line) => {
           const rect = line.getBoundingClientRect();
           return rect.top >= area.top - 0.5 && rect.bottom <= area.bottom + 0.5;
@@ -92,3 +95,13 @@ for (const fragmentParagraphs of [true, false]) {
     });
   });
 }
+
+test('a note table repeats its header row on the page it continues on', async ({ page }) => {
+  const pages = await paginate(page, generateNoteTableDocx(61, 1, 80, true), true);
+
+  expect(pages[0].firstRow).toMatch(/Note table heading\.$/);
+  expect(pages[1].rows.length).toBeGreaterThan(0);
+  expect(pages[1].firstRow).toMatch(/Note table heading\.$/);
+  expect(pages.flatMap((p) => p.rows)).toEqual(range(1, 80));
+});
+
