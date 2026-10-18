@@ -27,6 +27,9 @@ internal sealed record IrSourceRightAnchor(int Reviewer, string Anchor);
 /// block can still hold a bookmark only that reviewer added (issues #864, #1175).</summary>
 internal sealed record IrEqualReviewerBookmarks(int Reviewer, string Anchor, string Author);
 
+/// <summary>A contributing reviewer's row/cell pairings, retained to place markers between rows and cells.</summary>
+internal sealed record IrReviewerTable(int Reviewer, string Author, IrTableDiff Diff);
+
 /// <summary>The kind of one composed table cell (see <see cref="IrAuthoredCellOp"/>).</summary>
 internal enum IrAuthoredCellKind
 {
@@ -153,7 +156,8 @@ internal sealed record IrCompositeOp(
     IrNodeList<IrSourceRightAnchor>? SourceRightAnchors = null,
     IrNodeList<IrAuthoredRowOp>? AuthoredRows = null,
     IrComposedTableShell? TableShell = null,
-    IrNodeList<IrEqualReviewerBookmarks>? EqualReviewerBookmarks = null);
+    IrNodeList<IrEqualReviewerBookmarks>? EqualReviewerBookmarks = null,
+    IrNodeList<IrReviewerTable>? ReviewerTables = null);
 
 /// <summary>
 /// One reviewer's competing result for a conflicted span. <see cref="Author"/> is the reviewer
