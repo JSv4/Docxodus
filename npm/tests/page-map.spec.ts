@@ -487,6 +487,7 @@ test.describe('PageMap materialization and citation navigation', () => {
       const pagination = (window as any).DocxodusPagination.paginateHtml(html, 'viewer', {
         showPageNumbers: false,
         layoutToken: { documentVersion: 0, rendererFingerprint: 'margin-comments-v1' },
+        commentColumnPlacement: 'margin',
       });
       const pageBoxes = Array.from(document.querySelectorAll<HTMLElement>('.page-box'));
       return {
