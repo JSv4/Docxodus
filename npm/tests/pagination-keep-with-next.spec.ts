@@ -41,32 +41,32 @@ function registry(...notes: string[]): string {
   return `<div id="pagination-footnote-registry">${notes.join('')}</div>`;
 }
 
-async function paginate(page: Page): Promise<string[][]> {
+async function paginate(page: Page, fragmentParagraphs = false): Promise<string[][]> {
   await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
 
-  return page.evaluate(() => {
+  return page.evaluate((fragmentParagraphs) => {
     const staging = document.getElementById('staging') as HTMLElement;
     const container = document.getElementById('container') as HTMLElement;
     const { PaginationEngine } = (window as any).DocxodusPagination;
-    new PaginationEngine(staging, container, { showPageNumbers: false }).paginate();
+    new PaginationEngine(staging, container, { showPageNumbers: false, fragmentParagraphs }).paginate();
 
     return Array.from(container.querySelectorAll<HTMLElement>('.page-content')).map(content =>
       Array.from(content.children).map(block => (block.textContent || '').trim())
     );
-  });
+  }, fragmentParagraphs);
 }
 
-async function paginateWithFootnoteInfo(page: Page): Promise<{
+async function paginateWithFootnoteInfo(page: Page, fragmentParagraphs = false): Promise<{
   content: string[][];
   footnotePages: boolean[];
 }> {
   await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
 
-  return page.evaluate(() => {
+  return page.evaluate((fragmentParagraphs) => {
     const staging = document.getElementById('staging') as HTMLElement;
     const container = document.getElementById('container') as HTMLElement;
     const { PaginationEngine } = (window as any).DocxodusPagination;
-    new PaginationEngine(staging, container, { showPageNumbers: false }).paginate();
+    new PaginationEngine(staging, container, { showPageNumbers: false, fragmentParagraphs }).paginate();
 
     const pages = Array.from(container.querySelectorAll<HTMLElement>('.page-box'));
     return {
@@ -77,10 +77,47 @@ async function paginateWithFootnoteInfo(page: Page): Promise<{
       ),
       footnotePages: pages.map(page => page.querySelector('.page-footnotes') !== null),
     };
-  });
+  }, fragmentParagraphs);
 }
 
 test.describe('Pagination keep-with-next chains', () => {
+  for (const mode of ['split', 'keep-lines', 'widow-control', 'page-break', 'fragmentation-disabled']) {
+    test(`a heading keeps a valid first paragraph fragment: ${mode}`, async ({ page }) => {
+      const lines = Array.from({ length: 6 }, (_, i) => `Cedar${i + 1}`);
+      await page.setContent(section(`
+        <p style="height: 40pt">lead</p>
+        <p data-keep-with-next="true" style="height: 20pt">heading</p>
+        <p data-keep-lines="${mode === 'keep-lines'}" data-page-break-before="${mode === 'page-break'}"
+           data-widow-control="${mode === 'widow-control'}"
+           style="font: 10pt/10pt Arial">${lines.join('<br>')}</p>`));
+
+      const pages = await paginate(page, mode !== 'fragmentation-disabled');
+      expect(pages).toEqual(mode === 'split'
+        ? [['lead', 'heading', lines.slice(0, 4).join('')], [lines.slice(4).join('')]]
+        : mode === 'page-break'
+          ? [['lead', 'heading'], [lines.join('')]]
+          : [['lead'], ['heading', lines.join('')]]);
+    });
+  }
+
+  for (const [citationLine, leadHeight] of [[0, 15], [5, 15], [0, 30]]) {
+    test(`a kept paragraph fragment carries line ${citationLine + 1}'s note after ${leadHeight}pt`, async ({ page }) => {
+      const lines = Array.from({ length: 6 }, (_, i) => `Cedar${i + 1}`);
+      const markup = lines.map((line, i) => line + (i === citationLine ? '<sup data-footnote-id="f1">1</sup>' : ''));
+      await page.setContent(section(`<p style="height: ${leadHeight}pt">lead</p>
+        <p data-keep-with-next="true" style="height: 20pt">heading</p>
+        <p style="font: 10pt/10pt Arial">${markup.join('<br>')}</p>`, registry(note('f1', '1', [10]))));
+      const result = await paginateWithFootnoteInfo(page, true);
+      const text = lines.map((line, i) => line + (i === citationLine ? '1' : ''));
+      const firstLines = citationLine === 0 ? 2 : 5;
+      expect(result.content).toEqual(leadHeight === 30
+        ? [['lead'], ['heading', text.slice(0, 3).join('')], [text.slice(3).join('')]]
+        : [['lead', 'heading', text.slice(0, firstLines).join('')], [text.slice(firstLines).join('')]]);
+      expect(result.footnotePages).toEqual(leadHeight === 30 ? [false, true, false]
+        : citationLine === 0 ? [true, false] : [false, true]);
+    });
+  }
+
   test('moves a feasible multi-block keep chain to the next page', async ({ page }) => {
     await page.setContent(section(`
       <p style="height: 50pt">lead</p>
