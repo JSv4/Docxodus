@@ -594,9 +594,15 @@ up to one pixel off (measured: up to 255/255 on the glyphs of that cell on A4 pa
 page the screen raster matched within 1/255, and the PDF is exact. Firefox draws the rewritten cell
 clipped like the original, with its text a fraction of a pixel off (up to 64/255 on page 1).
 
-A cell that hides a whole paragraph still fails export before this rewrite runs: PageMap
-verification finds no measurable fragment for that paragraph. The rewrite helps only cells whose
-hidden paragraphs are at least partly inside the row.
+A cell can hide a whole paragraph, not just part of a line. That paragraph renders nowhere, so the
+PageMap has no fragment for it, and PageMap completeness does not count it as missing (issue #1168;
+see `page_map.md`). The rewrite treats it like any other hidden text: it is drawn outside the clip,
+so its text is in the PDF text layer, whole and in reading order after the cell's visible text.
+LibreOffice leaves such a paragraph out of its text layer. The rewrite widens only the row's own
+clip: where a header or footer band, or the body band, also clips the hidden text, that clip still
+bounds what the PDF writer keeps, and the text can reach the text layer in fragments. A clip box of
+no height (a row no taller than its borders and padding) shows nothing and is left alone; an inline
+SVG root of no height cannot be printed.
 
 Chromium printing uses `printBackground: true`, `preferCSSPageSize: true`, `tagged: true`,
 `outline: false`, `displayHeaderFooter: false`, scale 1, and zero browser margins. Tags receive

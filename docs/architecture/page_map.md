@@ -48,7 +48,11 @@ staging. It separately inventories cited footnote definitions and the header/foo
 selected by real pages. Publishing fails if any expected canonical source lacks a measurable page
 fragment. Producers can mark deliberately non-rendered content with
 `data-page-map-exclude="true"`; `hidden`, `aria-hidden="true"`, and inline hidden styles carry the
-same meaning.
+same meaning. Content an exact-height table row (`w:hRule="exact"`) hides whole is not missing
+either: Word hides what such a row cannot hold, so a source whose layout box lies wholly outside its
+row cell's clip box (`data-docx-exact-row-cell`) has no fragment and does not fail publishing
+(issue #1168), and a citation of it reads `anchor_not_mapped`. Only that clip counts; content the
+body band or a pagination clone clips away whole still fails, because there it was lost.
 
 A source's fragment is where it renders, measured by `measureRenderedSource` in
 `npm/src/pagination.ts` — the one function fragment-identity normalization, PageMap materialization
