@@ -185,7 +185,12 @@ Paragraphs (`w:p`) are converted based on their style's outline level:
 | 5 | `<h6>` |
 | None/other | `<p>` |
 
-Style separators (`w:specVanish`) cause following paragraphs to be rendered as `<span>` within the heading.
+Hidden paragraph marks (`w:pPr/w:rPr/w:vanish`) and style separators (`w:specVanish`)
+render following paragraph text as a `<span>` within the first paragraph or heading. Explicit off
+values preserve separate blocks. Joining stops at another block container or a section boundary;
+range markers such as bookmarks do not create a physical boundary. Paragraph-mark visibility
+does not hide the generated list number; run defaults, run styles, and numbering-level visibility
+still apply to the number.
 
 ### Runs (Text Formatting)
 

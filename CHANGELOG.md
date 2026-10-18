@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Hidden paragraph marks (`w:pPr/w:rPr/w:vanish`) now join following paragraph text on the same
+  rendered line, preserving the heading and visible generated numbering (issue #1223). Explicitly
+  hidden runs and number styles remain hidden; tables and section boundaries stop joining.
+
 - Rejecting revisions now reverses an insertion or deletion in every container that can hold one (issue
   #1176). Reject works by turning each insertion into a deletion and each deletion into an insertion,
   then accepting. Which revisions it turned around was a list of containers: paragraphs, hyperlinks,
