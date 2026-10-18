@@ -100,6 +100,10 @@ All notable changes to this project will be documented in this file.
   old properties) keep the original's id, so rejecting restores them unchanged. What Word does in the
   referenced case is not yet verified (see `docs/ooxml_corner_cases.md`).
 
+- Margin comment replies retain the same note text size at every nesting level, and long authors,
+  dates, resolved badges and return links wrap inside narrow headers (issue #1227). Note sizing
+  follows the root text scale, including with a custom comment class prefix.
+
 - A content control or block `w:customXml` wrapper is again replaced whole when one of its paragraphs
   closes a complex field opened before it and opens another that closes after it (issue #1166). The
   wrapper scan netted the paragraph's begin and end characters against each other, saw no spanning field
