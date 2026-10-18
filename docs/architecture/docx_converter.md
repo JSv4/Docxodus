@@ -637,3 +637,25 @@ html.Save("output.html", SaveOptions.DisableFormatting);
 - `OpenXmlPowerTools/FormattingAssembler.cs` - Style resolution
 - `OpenXmlPowerTools/FieldRetriever.cs` - Field code processing
 - `OpenXmlPowerTools/PtOpenXml.cs` - Custom annotation namespace
+
+## Formatting revision descriptions
+
+With tracked-change rendering enabled, formatting assembly resolves each run's previous `rPr`
+through the same default, paragraph, table and character-style rules as its current properties
+(issue #1222). An empty previous snapshot, including one removed by markup simplification, means
+inherited formatting. Descriptions compare those effective properties and honor explicit off
+values. The extra resolution is internal to HTML rendering; ordinary `FormattingAssembler`
+callers keep the original revision snapshots.
+
+## Run text decorations
+
+The shared run-style conversion preserves underline and strike independently (issue #1220).
+Single, double, dotted, dashed and wavy underlines use CSS text decorations; explicit and theme
+underline colors resolve through the same color helper as run text. Double strike uses a double
+line-through. When both lines share their pattern and color, one decoration draws both. Otherwise,
+a nested inline span draws the strike so it keeps its own pattern and text color. A cached TOC
+hyperlink still suppresses its underline without removing a strike.
+
+Heavy variants increase decoration thickness. CSS has no direct double-wave or dot-dash equivalent;
+those variants use wavy or dashed lines respectively. Word's word-only underline retains the existing
+continuous underline rendering. These approximations do not change run text or line metrics.

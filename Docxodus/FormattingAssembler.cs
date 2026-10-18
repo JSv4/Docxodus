@@ -27,6 +27,10 @@ namespace Docxodus
         /// along with <c>w:numPr</c>. Set by the HTML converter for semantic lists (issue #895).</summary>
         internal bool AnnotateListMembership;
 
+        /// <summary>Resolve a run revision's previous properties in the same inherited style
+        /// context as its current properties, for HTML formatting-change descriptions only.</summary>
+        internal bool ResolveRevisionFormatting;
+
         public FormattingAssemblerSettings()
         {
             RemoveStyleNamesFromParagraphAndRunProperties = true;
@@ -2896,11 +2900,26 @@ namespace Docxodus
                     }
                 }
             }
-            XElement rolledRunProps = CharStyleRollup(fai, wDoc, runOrPara);
-            var toggledRunProps = ToggleMergeRunProps(rolledRunProps, tablerPr);
-            var currentRunProps = runOrPara.Element(PtOpenXml.rPr); // this is already stored on the run from previous aggregation of props
-            var mergedRunProps = MergeStyleElement(toggledRunProps, currentRunProps);
-            var newMergedRunProps = MergeStyleElement(localRunProps, mergedRunProps)!;
+            var currentRunProps = runOrPara.Element(PtOpenXml.rPr);
+            var revision = localRunProps.Element(W.rPrChange);
+            if (settings.ResolveRevisionFormatting && runOrPara.Name == W.r && revision != null)
+            {
+                // Markup simplification can remove an empty previous rPr. It still denotes
+                // inherited formatting, rather than a font or size changing to an absent value.
+                var previous = revision.Element(W.rPr);
+                if (previous == null)
+                {
+                    previous = new XElement(W.rPr);
+                    revision.Add(previous);
+                }
+                var resolvedPrevious = ResolveRunProperties(fai, wDoc, runOrPara, previous, tablerPr, currentRunProps);
+                // Historical properties need theme-font resolution, not current-run metadata
+                // or validation of a script that is no longer being rendered.
+                ResolveRunFonts(wDoc, resolvedPrevious);
+                resolvedPrevious.Name = W.rPr;
+                previous.ReplaceWith(resolvedPrevious);
+            }
+            var newMergedRunProps = ResolveRunProperties(fai, wDoc, runOrPara, localRunProps, tablerPr, currentRunProps);
             XElement? pPr = null;
             if (runOrPara.Name == W.p)
                 pPr = runOrPara.Element(PtOpenXml.pPr);
@@ -2917,7 +2936,15 @@ namespace Docxodus
             }
         }
 
-        private static XElement CharStyleRollup(FormattingAssemblerInfo fai, WordprocessingDocument wDoc, XElement runOrPara)
+        private static XElement ResolveRunProperties(FormattingAssemblerInfo fai, WordprocessingDocument wDoc,
+            XElement runOrPara, XElement localRunProps, XElement? tableRunProps, XElement? inheritedRunProps)
+        {
+            var rolledRunProps = CharStyleRollup(fai, wDoc, runOrPara, localRunProps);
+            var toggledRunProps = ToggleMergeRunProps(rolledRunProps, tableRunProps);
+            return MergeStyleElement(localRunProps, MergeStyleElement(toggledRunProps, inheritedRunProps));
+        }
+
+        private static XElement CharStyleRollup(FormattingAssemblerInfo fai, WordprocessingDocument wDoc, XElement runOrPara, XElement? localRunProps = null)
         {
             string? charStyle = null;
             string? paraStyle = null;
@@ -2957,7 +2984,7 @@ namespace Docxodus
             }
             else
             {
-                rPr = runOrPara.Element(W.rPr);
+                rPr = localRunProps ?? runOrPara.Element(W.rPr);
             }
             if (rPr != null)
             {
@@ -3521,8 +3548,7 @@ namespace Docxodus
             '\x06F9',
         };
 
-        private static void AdjustFontAttributes(WordprocessingDocument wDoc, XElement paraOrRun, XElement? pPr,
-            XElement? rPr, FormattingAssemblerSettings settings)
+        private static XElement? ResolveRunFonts(WordprocessingDocument wDoc, XElement? rPr)
         {
             XDocument? themeXDoc = null;
             var themePart = wDoc.MainDocumentPart!.ThemePart;
@@ -3541,7 +3567,7 @@ namespace Docxodus
             var rFonts = rPr?.Element(W.rFonts);
             if (rFonts == null)
             {
-                return;
+                return null;
             }
             var asciiTheme = (string?)rFonts.Attribute(W.asciiTheme);
             var hAnsiTheme = (string?)rFonts.Attribute(W.hAnsiTheme);
@@ -3627,6 +3653,16 @@ namespace Docxodus
             {
                 rFonts.SetAttributeValue(W.cs, cs);
             }
+
+            return rFonts;
+        }
+
+        private static void AdjustFontAttributes(WordprocessingDocument wDoc, XElement paraOrRun, XElement? pPr,
+            XElement? rPr, FormattingAssemblerSettings settings)
+        {
+            var rFonts = ResolveRunFonts(wDoc, rPr);
+            if (rFonts == null)
+                return;
 
             var firstTextNode = paraOrRun.Descendants(W.t).FirstOrDefault(t => t.Value.Length > 0);
             string str = " ";
