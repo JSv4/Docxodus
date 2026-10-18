@@ -75,6 +75,12 @@ All notable changes to this project will be documented in this file.
   were empty, even with no revisions in it, and accepting or rejecting a paragraph-mark revision on a
   paragraph whose content sits in an inline custom-XML element threw "Internal error 20".
 
+- Long margin comments are readable through a scrollable column beside the read-only viewer's pages
+  (issue #1226), including the React hook and component. Its width and gap are configurable and
+  scale with the page. Narrow viewers can pan
+  the full row, and pages without comments stay aligned. Physical page dimensions and print/export
+  margin placement are preserved.
+
 - A comparison or consolidation no longer writes two styles with the same `w:styleId` when the documents
   use one id for styles of different types, such as a paragraph style `DocID` in the original and a
   character style `DocID` in the revision (issue #1184). Style ids are unique across all types, so the

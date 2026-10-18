@@ -312,6 +312,12 @@ export interface PaginationOptions {
   showPageNumbers?: boolean;
   /** Gap between pages in pixels. Default: 20 */
   pageGap?: number;
+  /** Comment placement: physical margin for PaginationEngine, outside for paginateHtml. */
+  commentColumnPlacement?: "margin" | "outside";
+  /** Outside comment-column width in points. Default: 144 (2 inches). */
+  commentColumnWidthPt?: number;
+  /** Gap between the page and an outside comment column, in points. Default: 12. */
+  commentColumnGapPt?: number;
   /**
    * Whether ordinary paragraphs may be fragmented across page boundaries.
    * Defaults to false for direct PaginationEngine callers; read-only viewer
@@ -709,6 +715,9 @@ export class PaginationEngine {
   private cssPrefix: string;
   private showPageNumbers: boolean;
   private pageGap: number;
+  private commentColumnPlacement: "margin" | "outside";
+  private commentColumnWidthPt: number;
+  private commentColumnGapPt: number;
   private fragmentParagraphs: boolean;
   private alignBaselines: boolean;
   private deferFragmentIdentities: boolean;
@@ -777,6 +786,18 @@ export class PaginationEngine {
     this.cssPrefix = options.cssPrefix ?? "page-";
     this.showPageNumbers = options.showPageNumbers ?? true;
     this.pageGap = options.pageGap ?? 20;
+    this.commentColumnPlacement = options.commentColumnPlacement ?? "margin";
+    this.commentColumnWidthPt = options.commentColumnWidthPt ?? 144;
+    this.commentColumnGapPt = options.commentColumnGapPt ?? 12;
+    if (this.commentColumnPlacement !== "margin" && this.commentColumnPlacement !== "outside") {
+      throw new RangeError("commentColumnPlacement must be 'margin' or 'outside'");
+    }
+    if (!Number.isFinite(this.commentColumnWidthPt) || this.commentColumnWidthPt <= 0) {
+      throw new RangeError("commentColumnWidthPt must be a finite positive number");
+    }
+    if (!Number.isFinite(this.commentColumnGapPt) || this.commentColumnGapPt < 0) {
+      throw new RangeError("commentColumnGapPt must be a finite non-negative number");
+    }
     this.fragmentParagraphs = options.fragmentParagraphs ?? false;
     this.alignBaselines = options.alignBaselinesToWord ?? false;
     this.deferFragmentIdentities = options.deferFragmentIdentities ?? false;
@@ -830,6 +851,11 @@ export class PaginationEngine {
     // Parse the margin-comment registry if present. Its entries are cloned into
     // the side substrate of pages that contain the corresponding range marker.
     this.commentMarginRegistry = this.parseCommentMarginRegistry();
+    if (this.commentColumnPlacement === "outside") {
+      // The PageMap describes physical page substrates. Outside review panels remain readable
+      // UI, with an explicit source exclusion rather than invented in-page comment geometry.
+      for (const source of this.commentMarginRegistry.values()) source.dataset.pageMapExclude = "true";
+    }
     this.footnoteLayoutLikeWord8 =
       this.stagingElement.dataset.footnoteLayoutLikeWord8 === "true";
 
@@ -5289,6 +5315,7 @@ export class PaginationEngine {
         pageCommentIds.push(id);
       }
     }
+    let outsideCommentColumn: HTMLElement | undefined;
     if (pageCommentIds.length > 0) {
       const marginColumn = this.document.createElement("aside");
       marginColumn.className = `${this.cssPrefix}comment-margin`;
@@ -5297,7 +5324,11 @@ export class PaginationEngine {
       marginColumn.style.left = `${dims.marginLeft + dims.contentWidth + 3}pt`;
       marginColumn.style.width = `${Math.max(12, dims.marginRight - 6)}pt`;
       marginColumn.style.maxHeight = `${contentAreaHeight}pt`;
-      marginColumn.style.overflow = "hidden";
+      marginColumn.style.overflowY = "auto";
+      marginColumn.style.overflowX = "hidden";
+      marginColumn.tabIndex = 0;
+      marginColumn.setAttribute("aria-label", `Comments for page ${displayedPageNumber}`);
+      marginColumn.dataset.pageNumber = String(pageNumber);
       marginColumn.style.boxSizing = "border-box";
       const placedThreadRoots = new Set<string>();
       for (const id of pageCommentIds) {
@@ -5313,7 +5344,15 @@ export class PaginationEngine {
           marginColumn.appendChild(clone);
         }
       }
-      pageBox.appendChild(marginColumn);
+      if (this.commentColumnPlacement === "outside") {
+        marginColumn.style.top = `${contentAreaTop * this.scale}pt`;
+        marginColumn.style.left = "0";
+        marginColumn.style.width = `${this.commentColumnWidthPt}pt`;
+        marginColumn.style.transform = `scale(${this.scale})`;
+        marginColumn.style.transformOrigin = "top left";
+        marginColumn.dataset.pageMapExclude = "true";
+        outsideCommentColumn = marginColumn;
+      } else pageBox.appendChild(marginColumn);
     }
 
     // Add footer if available for this section/page
@@ -5357,7 +5396,36 @@ export class PaginationEngine {
     }
 
     // Add to container
-    this.containerElement.appendChild(pageBox);
+    if (this.commentColumnPlacement === "outside" && this.commentMarginRegistry.size > 0) {
+      const row = this.document.createElement("div");
+      row.dataset.docxPageCommentsRow = "true";
+      row.style.display = "flex";
+      row.style.alignItems = "flex-start";
+      row.style.width = "max-content";
+      // Auto margins center a row when it fits, and become zero when a narrow viewer must pan.
+      row.style.alignSelf = "flex-start";
+      row.style.marginLeft = "auto";
+      row.style.marginRight = "auto";
+      row.style.gap = `${this.commentColumnGapPt * this.scale}pt`;
+      pageBox.style.flexShrink = "0";
+      const panel = this.document.createElement("div");
+      panel.dataset.docxCommentPanel = "true";
+      panel.style.position = "relative";
+      panel.style.flexShrink = "0";
+      panel.style.width = `${this.commentColumnWidthPt * this.scale}pt`;
+      panel.style.height = `${dims.pageHeight * this.scale}pt`;
+      if (outsideCommentColumn) panel.appendChild(outsideCommentColumn);
+      else panel.setAttribute("aria-hidden", "true");
+      row.append(pageBox, panel);
+      this.containerElement.appendChild(row);
+      if (!this.document.head.querySelector("style[data-docx-comment-column-print]")) {
+        const printStyle = this.document.createElement("style");
+        printStyle.dataset.docxCommentColumnPrint = "true";
+        printStyle.textContent = "@media print { [data-docx-comment-panel] { display:none!important; } " +
+          "[data-docx-page-comments-row] { display:block!important; width:auto!important; } }";
+        this.document.head.appendChild(printStyle);
+      }
+    } else this.containerElement.appendChild(pageBox);
 
     // Floating objects need the final page and anchor-paragraph boxes. Resolve them only after
     // append, when getBoundingClientRect() is meaningful, and lift them out of content clipping.
@@ -5476,6 +5544,7 @@ export function paginateHtml(
     ...options,
     fragmentParagraphs: options.fragmentParagraphs ?? true,
     alignBaselinesToWord: options.alignBaselinesToWord ?? true,
+    commentColumnPlacement: options.commentColumnPlacement ?? "outside",
   });
   return engine.paginate();
 }
