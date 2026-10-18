@@ -5791,8 +5791,7 @@ internal static partial class IrMarkupRenderer
     /// </summary>
     private static IEnumerable<XElement> WrapContainerChild(XElement child, RevKind kind, RenderState state)
     {
-        // A nested fldSimple is just as illegal inside w:ins/w:del as a top-level one. Expand it before
-        // wrapping, preserving its result position inside the enclosing hyperlink/SDT/smartTag container.
+        // Fields need expansion and custom XML needs envelope marks, also inside another container.
         if (child.Name == W.fldSimple || child.Name == W.customXml)
             return WrapFieldAware(child, kind, state);
         if (child.Name == W.r || child.Name == W.hyperlink || child.Name == W.smartTag || child.Name == W.sdt)
