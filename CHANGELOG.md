@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Paragraph borders now render in headers, footers, footnotes and endnotes, including grouped
+  paragraphs in paginated HTML and PDF export (#1203). Note numbers and back links stay inside
+  their paragraphs.
+
 - DocumentBuilder keeps style IDs unique when sources use one ID for different style types
   (#1186). Incoming styles and their references, including inherited styles and running stories,
   are renamed together; styles with the same name are matched only within the same type.
