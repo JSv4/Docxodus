@@ -274,6 +274,147 @@ public class BlockLevelMarkerDiffTests
         AssertRoundTrip(engine, left, right);
     }
 
+    // ---------------------------------------------------------- folding a replaced gap around a marker (#1183)
+
+    // A heading whose bookmark starts inside it and ends between blocks, as Word writes a TOC heading bookmark,
+    // followed by two more paragraphs, all of it replaced. The bookmark end sits in front of the second deleted
+    // paragraph, which the paragraph-mark pairing never fuses: the inserted paragraph still folds into the
+    // deleted heading, as Word's compare does.
+    private const string HeadingWithBookmarkEndBetweenBlocks =
+        "<w:p><w:bookmarkStart w:id=\"0\" w:name=\"_Toc1\"/><w:r><w:t>Quarterly Planning Notes</w:t></w:r></w:p>" +
+        "<w:bookmarkEnd w:id=\"0\"/>";
+
+    private static readonly string ReplacedGapLeft =
+        HeadingWithBookmarkEndBetweenBlocks + P("Budget review is scheduled for Monday.") + P("Hiring plan is attached.");
+
+    private static string TwoByTwoTable()
+    {
+        static string Cell(string text) => $"<w:tc><w:tcPr><w:tcW w:w=\"3000\" w:type=\"dxa\"/></w:tcPr>{P(text)}</w:tc>";
+        return "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"3000\"/>" +
+            "<w:gridCol w:w=\"3000\"/></w:tblGrid>" + $"<w:tr>{Cell("R1C1")}{Cell("R1C2")}</w:tr><w:tr>{Cell("R2C1")}{Cell("R2C2")}</w:tr></w:tbl>";
+    }
+
+    private static int BodyParagraphs(WmlDocument document) => Body(document).Descendants(W + "p").Count();
+
+    private static int BookmarkMarkers(WmlDocument document) =>
+        Body(document).Descendants().Count(e => e.Name == W + "bookmarkStart" || e.Name == W + "bookmarkEnd");
+
+    /// <summary>The round trip, plus the bookmark checks <see cref="Layout"/> cannot see: accepting leaves no
+    /// bookmark anywhere (the revised document has none, not even inside a coalesced paragraph), and rejecting
+    /// restores the heading's start inside it.</summary>
+    private static WmlDocument AssertReplacedGapRoundTrip(string engine, WmlDocument left, WmlDocument right)
+    {
+        var redline = AssertRoundTrip(engine, left, right);
+        Assert.Equal(0, BookmarkMarkers(Accept(redline)));
+        var rejected = Reject(redline);
+        Assert.Equal(2, BookmarkMarkers(rejected));
+        Assert.Equal("_Toc1", (string?)Body(rejected).Elements(W + "p").First()
+            .Elements(W + "bookmarkStart").Single().Attribute(W + "name"));
+        return redline;
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_ReplacedGap_WithABookmarkEndBetweenItsDeletedBlocks_StillFoldsTheInsertedParagraph(string engine)
+    {
+        var left = Doc(ReplacedGapLeft);
+        var right = Doc(P("Draft agenda for the offsite."));
+
+        var redline = AssertReplacedGapRoundTrip(engine, left, right);
+
+        // The inserted text shares the deleted heading's paragraph, and the bookmark end stays between blocks.
+        Assert.Equal(3, BodyParagraphs(redline));
+        var first = Body(redline).Elements(W + "p").First();
+        Assert.Contains("Draft agenda for the offsite.", string.Concat(first.Descendants(W + "t").Select(t => t.Value)));
+        Assert.Contains("Quarterly Planning Notes", string.Concat(first.Descendants(W + "delText").Select(t => t.Value)));
+        Assert.Equal("p", Body(redline).Elements().Single(e => e.Descendants(W + "bookmarkEnd").Any() &&
+            e.Name != W + "p").ElementsBeforeSelf().Last().Name.LocalName);
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_ReplacedGap_WithABookmarkEndBetweenItsDeletedBlocks_StillFoldsTheParagraphAfterAnInsertedTable(string engine)
+    {
+        var left = Doc(ReplacedGapLeft);
+        var right = Doc(TwoByTwoTable() + "<w:p/>");
+
+        AssertReplacedGapRoundTrip(engine, left, right);
+
+        // Four cell paragraphs and the three deleted ones: the inserted empty paragraph after the table folds
+        // into the last deleted paragraph rather than standing on its own.
+        Assert.Equal(7, BodyParagraphs(Compare(engine, left, right)));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_ReplacedCellGap_WithABookmarkEndBetweenItsDeletedBlocks_StillFoldsTheInsertedParagraph(string engine)
+    {
+        var left = Doc(P("Lead") + Table(ReplacedGapLeft));
+        var right = Doc(P("Lead") + Table(P("Draft agenda for the offsite.")));
+
+        var redline = AssertRoundTrip(engine, left, right);
+
+        var cell = Body(redline).Descendants(W + "tc").Single();
+        Assert.Equal(new[] { "p", "del", "p", "p" },
+            cell.Elements().Where(e => e.Name != W + "tcPr").Select(e => e.Name.LocalName));
+        Assert.Equal(0, BookmarkMarkers(Accept(redline)));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_ReplacedGap_WithABookmarkInFrontOfAnInsertedParagraph_StillFoldsTheFinalPair(string engine)
+    {
+        // The revised side's marker, in front of an inserted paragraph the pairing leaves alone.
+        var left = Doc(P("Quarterly budget summary."));
+        var right = Doc(P("Draft agenda.") + Start("Added") + P("Venue options.") + P("Travel logistics.") + End());
+
+        var redline = AssertRoundTrip(engine, left, right);
+
+        // The last inserted paragraph shares the deleted one's paragraph mark.
+        Assert.Equal(3, BodyParagraphs(redline));
+        Assert.Equal(new[] { "BS:Added@1", "BE:Added@3" }, BodyMarkerPositions(Accept(redline)));
+        Assert.Equal(0, BookmarkMarkers(Reject(redline)));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_ReplacedGap_WithABookmarkEndInFrontOfTheParagraphThatKeepsItsMark_StillFolds(string engine)
+    {
+        // Here the marker sits in front of the deleted paragraph whose mark the pairing keeps: the pair still forms,
+        // and the marker goes in front of the shared paragraph that paragraph's runs end up in.
+        var left = Doc(HeadingWithBookmarkEndBetweenBlocks + P("Hiring plan is attached."));
+        var right = Doc(P("Draft agenda for the offsite."));
+
+        var redline = AssertReplacedGapRoundTrip(engine, left, right);
+
+        Assert.Equal(2, BodyParagraphs(redline));
+        var children = Body(redline).Elements().Where(e => e.Name != W + "sectPr").ToList();
+        Assert.Equal(new[] { "p", "del", "p" }, children.Select(e => e.Name.LocalName));
+        Assert.Equal("bookmarkEnd", children[1].Elements().Single().Name.LocalName);
+        Assert.Contains("Draft agenda for the offsite.", string.Concat(children[0].Descendants(W + "t").Select(t => t.Value)));
+        Assert.Contains("Quarterly Planning Notes", string.Concat(children[0].Descendants(W + "delText").Select(t => t.Value)));
+        Assert.Contains("Hiring plan is attached.", string.Concat(children[2].Descendants(W + "delText").Select(t => t.Value)));
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public void Compare_ReplacedInteriorGap_WithABookmarkInFrontOfAnInsertedBlank_PairsAsWithoutIt(string engine)
+    {
+        // Between unchanged paragraphs a wordful-then-blank original faces three blanks, the first of which holds a
+        // heading bookmark that ends after it. The paragraph-mark chain decides exactly as it does without the
+        // bookmark: the same paragraphs come out, and the bookmark keeps its place in each view.
+        string Gap(bool bookmark) =>
+            (bookmark ? "<w:p><w:bookmarkStart w:id=\"21\" w:name=\"_TocR\"/></w:p><w:bookmarkEnd w:id=\"21\"/>" : "<w:p/>") +
+            "<w:p/><w:p/>";
+        var left = Doc(P("Lead") + P("Original wordful paragraph.") + "<w:p/>" + P("Tail"));
+        var right = Doc(P("Lead") + Gap(bookmark: true) + P("Tail"));
+        var unmarked = Doc(P("Lead") + Gap(bookmark: false) + P("Tail"));
+
+        var redline = AssertRoundTrip(engine, left, right);
+
+        Assert.Equal(BodyParagraphs(Compare(engine, left, unmarked)), BodyParagraphs(redline));
+    }
+
     // ------------------------------------------------------------------------------------- a table cell
 
     [Theory]

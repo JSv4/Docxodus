@@ -1039,17 +1039,16 @@ internal static partial class IrMarkupRenderer
         List<GapGroup> insGroups, List<GapGroup> delGroups, bool storyEnd,
         RenderState state, List<XElement> sink)
     {
-        // A block-level marker that one side has in front of a block inside the gap (issue #1149) must stay in
-        // front of that block, which pilcrow fusion would merge into another. Such a gap is emitted fully
-        // marked, inserts first: the shape the arrangement falls back to whenever it cannot pair.
-        if (insGroups.Concat(delGroups).Any(g => g.Markers.Count > 0))
+        // A block-level marker that one side has in front of a block inside the gap (issue #1149) goes out in
+        // front of the output paragraph that holds that block's content on that side: a group that stays a
+        // paragraph of its own takes its markers with it (Emit), and a pair member's go in front of the fused or
+        // shared paragraph its content ends up in. So markers never change the pairing, which pairs exactly as for
+        // a gap without them (issue #1183); in each view the marker still sits at the boundary in front of its
+        // block, since everything the pairing emits between it and that block belongs to the other view.
+        void Emit(GapGroup g)
         {
-            foreach (var g in insGroups.Concat(delGroups))
-            {
-                sink.AddRange(g.Markers);
-                sink.AddRange(g.Elements);
-            }
-            return;
+            sink.AddRange(g.Markers);
+            sink.AddRange(g.Elements);
         }
 
         // ---- pilcrow pairing. B/N = index into delGroups/insGroups; -1 = virtual (that side ends
@@ -1087,7 +1086,7 @@ internal static partial class IrMarkupRenderer
                 // inserted runs coalesce forward onto it across the fully-deleted chain
                 // (accept ≡ right) — while rendering identically (an empty final line).
                 for (int k = 0; k < ni; k++)
-                    sink.AddRange(insGroups[k].Elements);
+                    Emit(insGroups[k]);
                 var insEl = insGroups[ni].Paragraph!;
                 var nextPPr = DetachNextSidePPr(insEl, state);
                 var firstDel = delGroups[0].Paragraph!;
@@ -1102,9 +1101,11 @@ internal static partial class IrMarkupRenderer
                     child.Remove();
                     insEl.Add(child);
                 }
+                sink.AddRange(delGroups[0].Markers);
+                sink.AddRange(insGroups[ni].Markers);
                 sink.Add(insEl);
                 for (int k = 1; k < delGroups.Count; k++)
-                    sink.AddRange(delGroups[k].Elements);
+                    Emit(delGroups[k]);
                 sink.Add(BuildInsertedTailPilcrow(nextPPr, state));
                 return;
             }
@@ -1116,10 +1117,10 @@ internal static partial class IrMarkupRenderer
                 // accept keeps it — rendering the same trailing empty line). Every other insert
                 // stays ahead of the deletions, exactly as in the fused shape above.
                 for (int k = 0; k < ni; k++)
-                    sink.AddRange(insGroups[k].Elements);
+                    Emit(insGroups[k]);
                 foreach (var g in delGroups)
-                    sink.AddRange(g.Elements);
-                sink.AddRange(insGroups[ni].Elements);
+                    Emit(g);
+                Emit(insGroups[ni]);
                 return;
             }
         }
@@ -1239,7 +1240,7 @@ internal static partial class IrMarkupRenderer
         foreach (var (pb, pn) in pairs)
         {
             for (int k = nStart; k < pn; k++)
-                sink.AddRange(insGroups[k].Elements);
+                Emit(insGroups[k]);
             var delItems = new List<GapGroup>();
             for (int k = bStart; k < pb; k++)
                 delItems.Add(delGroups[k]);
@@ -1270,9 +1271,12 @@ internal static partial class IrMarkupRenderer
                     child.Remove();
                     insEl.Add(child);
                 }
+                sink.AddRange(delItems[0].Markers);
+                sink.AddRange(sharedIns.Markers);
                 sink.Add(insEl);
                 for (int k = 1; k < delItems.Count; k++)
-                    sink.AddRange(delItems[k].Elements);
+                    Emit(delItems[k]);
+                sink.AddRange(sharedDel.Markers);
                 EmitSharedBasePilcrow(sharedDel, nextPPr, state, sink);
             }
             else if (fuseIns)
@@ -1289,6 +1293,8 @@ internal static partial class IrMarkupRenderer
                     insEl.Add(child);
                 }
                 ApplySharedPilcrowPPr(insEl, nextPPr, basePPr, state);
+                sink.AddRange(sharedDel.Markers);
+                sink.AddRange(sharedIns.Markers);
                 sink.Add(insEl);
             }
             else
@@ -1298,12 +1304,14 @@ internal static partial class IrMarkupRenderer
                 // does carry (inserted breaks, bookmarks, comment-range markers) must ride into
                 // the shared paragraph, ahead of the deleted runs, or they would be silently lost.
                 foreach (var g in delItems)
-                    sink.AddRange(g.Elements);
+                    Emit(g);
                 var insEl = sharedIns.Paragraph!;
                 var nextPPr = DetachNextSidePPr(insEl, state);
                 var carried = insEl.Elements().Where(e => e.Name != W.pPr).ToList();
                 foreach (var child in carried)
                     child.Remove();
+                sink.AddRange(sharedDel.Markers);
+                sink.AddRange(sharedIns.Markers);
                 EmitSharedBasePilcrow(sharedDel, nextPPr, state, sink);
                 if (carried.Count > 0)
                 {
@@ -1321,9 +1329,9 @@ internal static partial class IrMarkupRenderer
 
         // Terminal (anchored) part: everything marked, inserts first.
         for (int k = nStart; k < insGroups.Count; k++)
-            sink.AddRange(insGroups[k].Elements);
+            Emit(insGroups[k]);
         for (int k = bStart; k < delGroups.Count; k++)
-            sink.AddRange(delGroups[k].Elements);
+            Emit(delGroups[k]);
     }
 
     /// <summary>A gap group that renders exactly one whole table — the shape the virtual structural
