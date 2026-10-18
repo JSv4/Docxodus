@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Word-style change bars stay a quarter inch outside the text column on unindented paragraphs
+  (issue #1221). Their zero-indent custom property now has a length unit, keeping the CSS
+  offset calculation valid; indented paragraph offsets are unchanged.
+
 - Run decorations retain double underline and strikethrough, combined underline/strikethrough,
   and underline patterns and colors (issue #1220). Decorations with different patterns or colors
   use separate inline spans, including in browser/WASM and paginated output.

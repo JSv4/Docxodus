@@ -6064,7 +6064,8 @@ namespace Docxodus
             AddClass(paragraph, prefix + "changed-line");
             var style = paragraph.Annotation<Dictionary<string, string>>();
             if (style != null && style.TryGetValue("margin-left", out var indent))
-                style[$"--{prefix}change-bar-indent"] = indent;
+                // A unitless CSS zero is valid for margin-left, but not as an addend in calc().
+                style[$"--{prefix}change-bar-indent"] = indent == "0" ? "0pt" : indent;
         }
 
         /// <summary>
