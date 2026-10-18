@@ -44,6 +44,59 @@ public class IrInlineEnvelopeMarkupRendererTests
     private static IrParagraph Paragraph(WmlDocument doc) =>
         IrReader.Read(doc).Body.Blocks.OfType<IrParagraph>().Single();
 
+    [Theory]
+    [InlineData("hyperlink", false)]
+    [InlineData("hyperlink", true)]
+    [InlineData("sdt", false)]
+    [InlineData("sdt", true)]
+    [InlineData("nested", false)]
+    [InlineData("nested", true)]
+    [InlineData("direct", false)]
+    [InlineData("direct", true)]
+    [InlineData("unchanged", false)]
+    [InlineData("unchanged", true)]
+    public void InlineCustomXmlContent_TracksTextThroughItsContainers(string shape, bool facade)
+    {
+        string Custom(string content) => "<w:customXml w:element=\"entry\">"
+            + "<w:customXmlPr><w:attr w:name=\"key\" w:val=\"original\"/></w:customXmlPr>" + content + "</w:customXml>";
+        WmlDocument Input(string text)
+        {
+            var inner = Custom("<w:r><w:t>Cedar " + text + "</w:t></w:r>");
+            if (shape == "nested") inner = Custom(inner);
+            var carrier = shape == "sdt" ? "<w:sdt><w:sdtPr/><w:sdtContent>" + inner + "</w:sdtContent></w:sdt>"
+                : shape == "direct" ? inner : "<w:hyperlink w:anchor=\"cedar\">" + inner + "</w:hyperlink>";
+            return Doc("<w:p><w:r><w:t>Before.</w:t></w:r>" + carrier + "<w:r><w:t>After.</w:t></w:r></w:p>");
+        }
+        var original = Input("opened");
+        var revised = Input(shape == "unchanged" ? "opened" : "closed");
+        AssertSchemaValid(original);
+        AssertSchemaValid(revised);
+        var redline = facade ? DocxCompare.Compare(original, revised) : DocxDiff.Compare(original, revised);
+        AssertSchemaValid(redline);
+        foreach (var (resolved, expected) in new[]
+        {
+            (RevisionProcessor.AcceptRevisions(redline), revised),
+            (RevisionProcessor.RejectRevisions(redline), original),
+        })
+        {
+            AssertSchemaValid(resolved);
+            AssertNoRevisionMarkup(resolved);
+            var actual = MainXml(resolved);
+            Assert.Equal(MainXml(expected).Root!.Value, actual.Root!.Value);
+            Assert.Equal(MainXml(expected).Descendants(W + "customXml").Count(), actual.Descendants(W + "customXml").Count());
+            var text = Assert.Single(actual.Descendants(W + "t"), t => t.Value.Contains("Cedar"));
+            Assert.Equal(shape == "nested" ? 2 : 1, text.Ancestors(W + "customXml").Count());
+            foreach (var wrapper in text.Ancestors(W + "customXml"))
+                Assert.Equal("original", (string?)wrapper.Element(W + "customXmlPr")?.Element(W + "attr")?.Attribute(W + "val"));
+            foreach (var pagination in new[] { PaginationMode.None, PaginationMode.Paginated })
+            {
+                var html = WmlToHtmlConverter.ConvertToHtml(resolved, new WmlToHtmlConverterSettings { RenderPagination = pagination });
+                Assert.Equal(MainXml(expected).Root!.Value,
+                    Assert.Single(html.Descendants(Xhtml.p)).Value.Replace('\u00a0', ' '));
+            }
+        }
+    }
+
     [Fact]
     public void Read_InlineEnvelopeDigest_IgnoresFormattingOnlyRunSplit()
     {
