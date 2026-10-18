@@ -515,6 +515,23 @@ public class BodyFieldSpanDiffTests
         Assert.DoesNotContain(Body(redline.DocumentByteArray).Descendants(W.bookmarkStart), b => (string?)b.Attribute(W.name) == "_GoBack");
     }
 
+    /// <summary>A bookmark the revision adds beside a field inside a hyperlink nested in another hyperlink (not
+    /// schema-valid, but documents carry it): the field is left to the ops, as before the placement, and accepting
+    /// keeps the bookmark and the revision's field characters.</summary>
+    [Fact]
+    public void Compare_BookmarkAddedBesideAFieldInANestedHyperlink_SurvivesAccept()
+    {
+        var original = MarkerDoc(Para("<w:hyperlink w:anchor=\"_Toc1\">", R("Scope "), "<w:hyperlink w:anchor=\"_Toc2\">",
+            R("of work"), Field("PAGEREF _Toc1 \\h", "1"), "</w:hyperlink></w:hyperlink>"));
+        var revised = MarkerDoc(Para("<w:hyperlink w:anchor=\"_Toc1\">", R("Scope "), "<w:hyperlink w:anchor=\"_Toc2\">",
+            R("of"), BookmarkStart("x"), Field("PAGEREF _Toc1 \\h", "7"), BookmarkEnd, "</w:hyperlink></w:hyperlink>"));
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        Assert.Equal(Paragraphs(revised.DocumentByteArray, markers: true),
+            Paragraphs(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray), markers: true));
+    }
+
     /// <summary>A rendered page break (a layout cache Word rewrites on save) inside a field code on one side only
     /// is dropped with the field placed once: drawn as a deletion it would be lifted back out with the code.</summary>
     [Fact]

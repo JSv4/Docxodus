@@ -6674,7 +6674,13 @@ internal static partial class IrMarkupRenderer
                 points[k] = (-2, -2);
                 continue;
             }
-            bool onPath = lt >= 0 && rt >= 0 && left[k].CoreSignature == right[k].CoreSignature;
+            // A one-sided marker would be drawn in a clone of its container of its own, and the pieces of a
+            // container nested in another (a hyperlink in a hyperlink, which the schema does not allow but documents
+            // carry) are not rejoined: accept would drop the clone, marker and all. Such a field is left to the ops.
+            static string NestedMarkers(SourceRunModel.FieldCharacter c) => string.Join(" ",
+                c.Items.Where(item => item.Nested && !item.IsCore).Select(item => item.AfterFieldChar + item.Key));
+            bool onPath = lt >= 0 && rt >= 0 && left[k].CoreSignature == right[k].CoreSignature &&
+                NestedMarkers(left[k]) == NestedMarkers(right[k]);
             bool held = false;
             foreach (var op in ops)
             {
@@ -6869,10 +6875,12 @@ internal static partial class IrMarkupRenderer
     /// <summary>Wrap a one-sided marker beside a placed field character as that side's revision. A marker inside a
     /// hyperlink (a table-of-contents entry's) comes in a clone of the hyperlink: the clone stays bare and each
     /// marker in it is wrapped, as a <c>w:del</c>/<c>w:ins</c> may hold a bookmark or comment endpoint there (the
-    /// generic container wrap copies such children as they are).</summary>
+    /// generic container wrap copies such children as they are). A hyperlink is the only container a field
+    /// character is placed in (<see cref="SourceRunModel.FieldCharacters"/>: a content control or smart tag is
+    /// one atomic segment, and a nested container leaves the paragraph to the ops).</summary>
     private static IEnumerable<XElement> WrapOneSidedMarker(XElement runLevel, RevKind kind, RenderState state)
     {
-        if (runLevel.Name != W.hyperlink && runLevel.Name != W.smartTag && runLevel.Name != W.sdt)
+        if (runLevel.Name != W.hyperlink)
             return WrapFieldAware(runLevel, kind, state);
         var container = new XElement(runLevel.Name, runLevel.Attributes());
         if (!IsDeleteGrade(kind))
@@ -11169,8 +11177,9 @@ internal static partial class IrMarkupRenderer
         /// instruction run (<see cref="IsCore"/>), or a marker next to it at its position (a bookmark or comment
         /// range endpoint, a comment reference, a proofing mark or a rendered page break). <see cref="Key"/> is
         /// its identity on both sides (<c>fldChar</c>, <c>instr</c>, a bookmark by name, a comment by id, a proofing
-        /// mark by type); <see cref="AfterFieldChar"/> whether it follows the <c>w:fldChar</c>.</summary>
-        public sealed record FieldCharacterItem(XElement Element, string Key, bool IsCore, bool AfterFieldChar);
+        /// mark by type); <see cref="AfterFieldChar"/> whether it follows the <c>w:fldChar</c>; <see cref="Nested"/>
+        /// whether it sits in a container inside another (a hyperlink nested in a hyperlink).</summary>
+        public sealed record FieldCharacterItem(XElement Element, string Key, bool IsCore, bool AfterFieldChar, bool Nested);
 
         /// <summary>The paragraph's field characters in document order, or null when an instruction run follows no
         /// field character at its position (the characters cannot be told apart then). Field characters inside an
@@ -11216,10 +11225,11 @@ internal static partial class IrMarkupRenderer
                     if (IsEmptyRun(member))
                         continue;
                     var element = member.OtherChild ?? member.Element;
-                    items.Add(IsFieldChar(member) ? new FieldCharacterItem(element, "fldChar", true, false)
-                        : IsInstruction(member) ? new FieldCharacterItem(element, "instr", true, true)
+                    bool nested = member.Chain.Count > 1;
+                    items.Add(IsFieldChar(member) ? new FieldCharacterItem(element, "fldChar", true, false, nested)
+                        : IsInstruction(member) ? new FieldCharacterItem(element, "instr", true, true, nested)
                         : new FieldCharacterItem(element,
-                            element.Name.LocalName + ":" + (MarkerKey(member) ?? (string?)element.Attribute(W.type)), false, j > i));
+                            element.Name.LocalName + ":" + (MarkerKey(member) ?? (string?)element.Attribute(W.type)), false, j > i, nested));
                 }
 
                 var type = (string?)seg.OtherChild!.Attribute(W.fldCharType) ?? "";
