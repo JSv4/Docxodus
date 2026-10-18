@@ -88,6 +88,12 @@ public class IrInlineEnvelopeMarkupRendererTests
             Assert.Equal(shape == "nested" ? 2 : 1, text.Ancestors(W + "customXml").Count());
             foreach (var wrapper in text.Ancestors(W + "customXml"))
                 Assert.Equal("original", (string?)wrapper.Element(W + "customXmlPr")?.Element(W + "attr")?.Attribute(W + "val"));
+            foreach (var pagination in new[] { PaginationMode.None, PaginationMode.Paginated })
+            {
+                var html = WmlToHtmlConverter.ConvertToHtml(resolved, new WmlToHtmlConverterSettings { RenderPagination = pagination });
+                Assert.Equal(MainXml(expected).Root!.Value,
+                    Assert.Single(html.Descendants(Xhtml.p)).Value.Replace('\u00a0', ' '));
+            }
         }
     }
 

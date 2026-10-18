@@ -3498,10 +3498,10 @@ namespace Docxodus
                 return ProcessAlternateContent(wordDoc, settings, element, currentMarginLeft);
             }
 
-            // Transform content controls.
-            if (element.Name == W.sdt)
+            // Render the content of controls and custom XML through the same container path.
+            if (element.Name == W.sdt || element.Name == W.customXml)
             {
-                return ProcessContentControl(wordDoc, settings, element, currentMarginLeft);
+                return ProcessContentContainer(wordDoc, settings, element, currentMarginLeft);
             }
 
             // A simple PAGE / NUMPAGES field carries the same page-number marker as its complex
@@ -3756,12 +3756,12 @@ namespace Docxodus
             WmlToHtmlConverterSettings settings,
             XElement hyperlink)
         {
-            var runs = hyperlink.Elements(W.r).ToList();
+            var runs = hyperlink.Elements().ToList();
             var alignedTabContent = ConvertAlignedTabRuns(wordDoc, settings, runs);
             if (alignedTabContent != null) return alignedTabContent;
             var firstTabRun = runs.FirstOrDefault(run => run.Elements(W.tab).Any());
             if (firstTabRun == null)
-                return runs.Select(run => ConvertRun(wordDoc, settings, run));
+                return runs.Select(child => ConvertToHtmlTransform(wordDoc, settings, child, false, 0m));
 
             // A cached TOC keeps its label, leader tab, and page-number field inside one
             // w:hyperlink. Run the same tab grouping used for direct paragraph children so the
@@ -3776,7 +3776,7 @@ namespace Docxodus
             content.AddRange(runs
                 .SkipWhile(run => run != firstTabRun)
                 .Skip(1)
-                .Select(run => ConvertRun(wordDoc, settings, run)));
+                .Select(child => ConvertToHtmlTransform(wordDoc, settings, child, false, 0m)));
             return content;
         }
 
@@ -5819,18 +5819,21 @@ namespace Docxodus
             };
         }
 
-        private static object ProcessContentControl(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+        private static object ProcessContentContainer(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             XElement element, decimal currentMarginLeft)
         {
+            var content = element.Name == W.customXml
+                ? element.Elements().Where(e => e.Name != W.customXmlPr)
+                : element.Elements(W.sdtContent).Elements();
             var relevantAncestors = element.Ancestors().TakeWhile(a => a.Name != W.txbxContent);
             var isRunLevelContentControl = relevantAncestors.Any(a => a.Name == W.p);
             if (isRunLevelContentControl)
             {
-                return element.Elements(W.sdtContent).Elements()
+                return content
                     .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
                     .ToList();
             }
-            return CreateBorderDivs(wordDoc, settings, element.Elements(W.sdtContent).Elements());
+            return CreateBorderDivs(wordDoc, settings, content);
         }
 
         // Transform the w:p element, including the following sibling w:p element(s)
