@@ -165,6 +165,8 @@ export interface PaginatedHtmlOptions {
   markupPresentation?: MarkupPresentation;
   commentProfile: CommentProfile;
   title?: string;
+  /** CSS appended to the converter stylesheet before pagination. */
+  additionalCss?: string;
   unsupportedContent?: UnsupportedContentPolicy;
   strictFonts?: boolean;
   timeoutMs?: number;
@@ -229,6 +231,8 @@ export interface RenderReportBase {
     markupPresentation?: "word";
     commentProfile: CommentProfile;
     title: string;
+    /** Present only when a nonempty additional stylesheet was applied. */
+    additionalCss?: string;
     outputs: Array<"html" | "pdf">;
     layoutDigest: string;
     runtimePolicyDigest: string;
@@ -497,6 +501,7 @@ interface NormalizedOptions {
   markupPresentation: MarkupPresentation;
   commentProfile: CommentProfile;
   title: string;
+  additionalCss: string;
   unsupportedContent: UnsupportedContentPolicy;
   strictFonts: boolean;
   /** Ephemeral: held only for the duration of the render, never serialized or digested. */
@@ -609,6 +614,17 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
   if (!options || typeof options !== "object") {
     fail("invalid_argument", "input_validation", "Export options are required.",
       "Supply explicit reviewProfile and commentProfile values.");
+  }
+  const additionalCss = options.additionalCss === undefined ? "" : options.additionalCss;
+  if (typeof additionalCss !== "string") {
+    fail("invalid_argument", "input_validation", "additionalCss must be a string.",
+      "Supply stylesheet text, or omit additionalCss.");
+  }
+  try {
+    assertWellFormedUnicode(additionalCss);
+  } catch {
+    fail("invalid_argument", "input_validation", "additionalCss contains an unpaired UTF-16 surrogate.",
+      "Supply well-formed Unicode stylesheet text that can be encoded as strict UTF-8.");
   }
   if (!ALLOWED_REVIEW_PROFILES.has(options.reviewProfile)) {
     fail("invalid_argument", "input_validation", "reviewProfile is invalid.",
@@ -735,6 +751,7 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     markupPresentation,
     commentProfile: options.commentProfile,
     title,
+    additionalCss,
     unsupportedContent,
     strictFonts: options.strictFonts ?? false,
     ...(options.fontResolver ? { fontResolver: options.fontResolver } : {}),
@@ -1718,7 +1735,7 @@ function conversionOptions(options: NormalizedOptions) {
     pageTitle: options.title,
     cssPrefix: "docx-",
     fabricateClasses: true,
-    additionalCss: "",
+    additionalCss: options.additionalCss,
     commentRenderMode,
     commentCssClassPrefix: "comment-",
     paginationMode: PaginationMode.Paginated,
@@ -2980,9 +2997,12 @@ function automaticResourceCount(document: Document): { count: number; bytes: num
   return { count, bytes };
 }
 
-/** The report's and layout digest's record of the presentation: only the non-default one is named. */
-function markupPresentationField(options: NormalizedOptions): { markupPresentation?: "word" } {
-  return options.markupPresentation === "word" ? { markupPresentation: "word" } : {};
+/** Record non-default presentation settings in both the report and layout digest. */
+function presentationFields(options: NormalizedOptions): { markupPresentation?: "word"; additionalCss?: string } {
+  return {
+    ...(options.markupPresentation === "word" ? { markupPresentation: "word" as const } : {}),
+    ...(options.additionalCss ? { additionalCss: options.additionalCss } : {}),
+  };
 }
 
 async function layoutDigestForOptions(options: NormalizedOptions): Promise<string> {
@@ -2991,7 +3011,7 @@ async function layoutDigestForOptions(options: NormalizedOptions): Promise<strin
     reviewProfile: options.reviewProfile,
     reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied,
     // Absent for the default, so default layouts keep the digest they had before the option.
-    ...markupPresentationField(options),
+    ...presentationFields(options),
     commentProfile: options.commentProfile,
     pagination: {
       mode: "paginated",
@@ -3294,7 +3314,7 @@ function reportBase(
     options: {
       reviewProfile: options.reviewProfile,
       reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied,
-      ...markupPresentationField(options),
+      ...presentationFields(options),
       commentProfile: options.commentProfile,
       title: options.title,
       outputs: ["html"],

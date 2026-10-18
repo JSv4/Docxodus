@@ -81,6 +81,12 @@ await renderDocxFile("contract.docx", {
 });
 ```
 
+The browser and Node export APIs accept `additionalCss` to append stylesheet text before pagination,
+for example `additionalCss: "p > span { color: red !important; }"`. Nonempty CSS is recorded in
+`renderReport.options.additionalCss` and changes the layout digest. Empty or omitted CSS retains
+the default report and layout identity. The framed host accepts the same batch option. CSS can
+change pagination; document resources still follow the exporter's closed resource policy.
+
 Caller `Uint8Array` values are synchronously copied. A caller-supplied Playwright Chromium
 `Browser` remains caller-owned; Docxodus closes only the fresh context it creates. Every runtime
 asset is length/hash checked against the public manifest and served at a routed `.invalid` origin.

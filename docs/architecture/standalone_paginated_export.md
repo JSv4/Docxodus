@@ -51,6 +51,7 @@ interface ExportOptions {
   markupPresentation?: MarkupPresentation; // markup only; default "docxodus"
   commentProfile: CommentProfile;
   title?: string;
+  additionalCss?: string; // appended before pagination; default empty
   unsupportedContent?: "warn" | "strict";
   strictFonts?: boolean;
   timeoutMs?: number;
@@ -1073,6 +1074,13 @@ resource inventories, PageMap, report, PDF parser state, and framed output; chec
 unbounded allocation is a defect. `pdf_write_failure` means Chromium failed to produce PDF bytes. Byte-returning library calls do no
 destination write. The path/CLI layer uses `output_write_failure` for an
 HTML/PDF/report/PageMap destination and `filesystem_failure` for stage or commit mechanics.
+
+The browser, Node and framed-host batch APIs accept `additionalCss`, the converter's existing
+stylesheet override, before layout. It must be a well-formed Unicode string. Nonempty CSS is
+included verbatim in report v2's optional `options.additionalCss` and in the layout digest;
+empty and omitted values preserve the default report shape and digest. It can affect pagination
+and uses the same closed resource policy as generated styles. It is an API option; no CLI flag
+is introduced. The core conversion API, bridges and Python already expose `AdditionalCss`.
 
 ## Render report schema
 

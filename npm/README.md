@@ -791,6 +791,10 @@ External HTTPS/mail/tel links remain user-activated links and are inventoried in
 exporter never follows them. `unsupportedContent: 'strict'` rejects visible placeholders or omitted
 resources instead of returning a nominally complete artifact.
 
+`additionalCss` appends stylesheet text before pagination, including selectors such as
+`p > span`. Nonempty CSS is recorded in the render report and layout digest; omitted and empty
+CSS share the default identity. The same option is available in `@docxodus/export`.
+
 All three revision profiles (`final`, `original`, `markup`) are supported; `final` and `original`
 derive their projection out-of-place and never mutate the caller's bytes. `strictFonts: true`
 turns unresolved or unverified font families into failures; supplying a `fontResolver` (in Node,

@@ -429,6 +429,7 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
     "markupPresentation",
     "commentProfile",
     "title",
+    "additionalCss",
     "unsupportedContent",
     "strictFonts",
     "timeoutMs",
@@ -516,6 +517,11 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
     && (typeof options.title !== "string" || !wellFormed(options.title))) {
     exportError("invalid_argument", "input_validation", "title must be a well-formed Unicode string.",
       "Provide plain document-title text without unpaired UTF-16 surrogates, or omit it.");
+  }
+  if (options.additionalCss !== undefined
+    && (typeof options.additionalCss !== "string" || !wellFormed(options.additionalCss))) {
+    exportError("invalid_argument", "input_validation", "additionalCss must be a well-formed Unicode string.",
+      "Supply stylesheet text without unpaired UTF-16 surrogates, or omit it.");
   }
   if (options.signal !== undefined
     && (typeof options.signal !== "object"
@@ -752,6 +758,7 @@ function browserOptions(options: NodeExportOptions): Omit<PaginatedHtmlOptions, 
     markupPresentation: options.markupPresentation,
     commentProfile: options.commentProfile,
     title: options.title,
+    additionalCss: options.additionalCss,
     unsupportedContent: options.unsupportedContent,
     strictFonts: options.strictFonts,
     timeoutMs: options.timeoutMs,

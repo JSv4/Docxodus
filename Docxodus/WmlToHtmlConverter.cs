@@ -1953,15 +1953,19 @@ namespace Docxodus
             var styleElement = xhtml
                 .Descendants(Xhtml.style)
                 .FirstOrDefault();
-            if (styleElement != null)
-                styleElement.Value = styleValue;
-            else
+            if (styleElement == null)
             {
-                styleElement = new XElement(Xhtml.style, styleValue);
-                var head = xhtml.Element(Xhtml.head);
-                if (head != null)
-                    head.Add(styleElement);
+                styleElement = new XElement(Xhtml.style);
+                xhtml.Element(Xhtml.head)?.Add(styleElement);
             }
+
+            // HTML treats style as raw text, while XML escapes text nodes. A CSS-commented
+            // CDATA section preserves selectors and string values in both serializations.
+            // Escape both closing delimiters; escaping the slash leaves an existing CSS escape of < intact.
+            var css = Regex.Replace(styleValue, "</style", match => @"<\/" + match.Value.Substring(2),
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            css = css.Replace("]]>", @"]]\3e ", StringComparison.Ordinal);
+            styleElement.ReplaceNodes(new XText("/*"), new XCData("*/\n" + css + "\n/*"), new XText("*/"));
         }
 
         /// <summary>

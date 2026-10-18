@@ -12,12 +12,10 @@ using Xunit;
 namespace Docxodus.Tests;
 
 /// <summary>
-/// The generated stylesheet is the VALUE of an <c>h:style</c> element, so serializing the XHTML
-/// escapes any XML metacharacter in it. A CSS child combinator therefore reaches the browser as
-/// <c>&amp;gt;</c> — not a valid selector, so the whole rule is silently dropped. That is exactly
-/// how the paginated footnote layout broke: <c>.footnote-content &gt; p:first-of-type</c> never
-/// applied, so every note rendered its number alone on one line with the text starting below it,
-/// which reads as a layout bug rather than a dead stylesheet.
+/// Plain XML text escapes CSS metacharacters during serialization. HTML style elements keep
+/// those entities literally, so a child combinator becomes an invalid selector. This once broke
+/// footnote layout rules. CSS-commented CDATA now preserves both generated and custom CSS in
+/// XML and HTML (issue #1230); these tests retain coverage of all generated stylesheets.
 /// </summary>
 public class GeneratedCssEscapingTests
 {
@@ -91,8 +89,7 @@ public class GeneratedCssEscapingTests
         Assert.True(
             escaped.Count == 0,
             $"generated CSS contains XML-escaped characters {string.Join(", ", escaped)} — the browser " +
-            "will drop those rules. Rewrite the selector without the raw character (e.g. use a " +
-            "descendant selector instead of the `>` child combinator).");
+            "will drop those rules. Preserve stylesheet CDATA during serialization.");
     }
 
     [Fact]
