@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Paragraph borders now render in headers, footers, footnotes and endnotes, including grouped
+  paragraphs in paginated HTML and PDF export (#1203). Note numbers and back links stay inside
+  their paragraphs.
+
 - SVG `href` fragment links in copied comment content retain their inert behavior alongside
   ordinary copied links (follow-up to #1229). Only native HTML return labels are reactivated.
 
