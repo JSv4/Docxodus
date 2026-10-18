@@ -220,9 +220,14 @@ test.describe('DocxDiff (IR diff engine) bridge', () => {
   // full client wire: Compare (bytes out), AcceptRevisions/RejectRevisions (bytes
   // in→out, the new surface), all marshalled JS↔WASM. A wire/type-mapping break in
   // any of those diff paths corrupts the bytes and breaks the text equality below.
-  test('accept/reject round-trip: accept ≡ right, reject ≡ left (text level)', async ({ page }) => {
-    const left = readTestFile('WC/WC001-Digits.docx');
-    const right = readTestFile('WC/WC001-Digits-Mod.docx');
+  [
+    ['digits', 'WC/WC001-Digits.docx', 'WC/WC001-Digits-Mod.docx'],
+    ...['customxml', 'hyperlink-control'].map(kind => [kind,
+      `InlineCustomXmlDiff/compare-inline-${kind}-left.docx`,
+      `InlineCustomXmlDiff/compare-inline-${kind}-right.docx`]),
+  ].forEach(([name, leftFile, rightFile]) => test(`accept/reject round-trip: ${name}`, async ({ page }) => {
+    const left = readTestFile(leftFile);
+    const right = readTestFile(rightFile);
 
     const result = await page.evaluate(
       ([l, r]) => {
@@ -230,10 +235,7 @@ test.describe('DocxDiff (IR diff engine) bridge', () => {
         const text = (bytes: Uint8Array): string | { __err: unknown } => {
           const h = T.convertToHtml(bytes);
           if (h.error) return { __err: h.error };
-          return (h.html as string)
-            .replace(/<[^>]+>/g, ' ')
-            .replace(/&nbsp;/g, ' ')
-            .replace(/&amp;/g, '&')
+          return (new DOMParser().parseFromString(h.html, 'text/html').body.textContent ?? '')
             .replace(/\s+/g, ' ')
             .trim();
         };
@@ -264,7 +266,7 @@ test.describe('DocxDiff (IR diff engine) bridge', () => {
     expect(r.rejectText).toBe(r.leftText); // reject restores the original side
     // and the two sides genuinely differ — so the round-trip can't pass by echoing one input.
     expect(r.rightText).not.toBe(r.leftText);
-  });
+  }));
 });
 
 // Composite N-way consolidate: merge two reviewers' edits against a shared base.
