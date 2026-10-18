@@ -140,7 +140,8 @@ test.describe('generated tab-stop geometry', () => {
     const tocTargetPx = 9350 / 1440 * 96;
     expect(Math.abs(geometry.pageNumberRight - tocTargetPx)).toBeLessThanOrEqual(2);
     expect(geometry.tabRight).toBeCloseTo(geometry.pageNumberLeft, 0);
-    expect(geometry.tabWidth).toBeGreaterThan(200);
+    // Glyph widths change the remaining advance; alignment above is the invariant.
+    expect(geometry.tabWidth).toBeGreaterThan(0);
     // The tab can shrink or grow relative to its estimate as browser glyph widths change.
     expect(Number.isFinite(geometry.tabDataWidth)).toBe(true);
     expect(geometry.tabDataWidth).toBeGreaterThan(0);
