@@ -1159,13 +1159,14 @@ test.describe('standalone paginated HTML', () => {
       {
         id: 'single-oversized-paragraph',
         // Issue #489 case C: one paragraph is taller than the maximum note band and must
-        // continue across pages without clipping.
-        source: generateFootnoteDocx(1, 2, 1, [700]),
+        // continue across pages without clipping. Since issue #1178 a note may take the whole
+        // band, so the paragraph is long enough to cross at least two page boundaries.
+        source: generateFootnoteDocx(1, 2, 1, [1200]),
       },
       {
         id: 'oversized-leading-paragraph-with-tail',
         // Issue #489 case C2: the long leader and its tail must all survive continuation.
-        source: generateFootnoteDocx(1, 2, 3, [700, 8, 8]),
+        source: generateFootnoteDocx(1, 2, 3, [1200, 8, 8]),
       },
     ];
     const evidence: Array<{
