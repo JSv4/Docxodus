@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Run decorations retain double underline and strikethrough, combined underline/strikethrough,
+  and underline patterns and colors (issue #1220). Decorations with different patterns or colors
+  use separate inline spans, including in browser/WASM and paginated output.
+
 - Rejecting revisions now reverses an insertion or deletion in every container that can hold one (issue
   #1176). Reject works by turning each insertion into a deletion and each deletion into an insertion,
   then accepting. Which revisions it turned around was a list of containers: paragraphs, hyperlinks,
