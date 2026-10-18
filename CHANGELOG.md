@@ -33,6 +33,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Formatting-revision descriptions compare current and previous effective run properties, so a
+  bold-only change no longer claims an inherited font or size changed (issue #1222). Previous
+  character styles and explicit off values are respected. Ordinary formatting assembly retains
+  its original revision snapshots.
+
 - Word-style change bars stay a quarter inch outside the text column on unindented paragraphs
   (issue #1221). Their zero-indent custom property now has a length unit, keeping the CSS
   offset calculation valid; indented paragraph offsets are unchanged.

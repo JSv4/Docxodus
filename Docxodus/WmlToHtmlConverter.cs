@@ -1070,6 +1070,7 @@ namespace Docxodus
                 CreateHtmlConverterAnnotationAttributes = true,
                 OrderElementsPerStandard = false,
                 AnnotateListMembership = EmitsSemanticLists(htmlConverterSettings),
+                ResolveRevisionFormatting = htmlConverterSettings.RenderTrackedChanges,
                 ListItemRetrieverSettings =
                     htmlConverterSettings.ListItemImplementations == null ?
                     new ListItemRetrieverSettings()
@@ -8068,14 +8069,14 @@ namespace Docxodus
             var previousRPr = rPrChange.Element(W.rPr);
 
             // Check for bold change
-            var currentBold = currentRPr.Element(W.b) != null;
-            var previousBold = previousRPr?.Element(W.b) != null;
+            var currentBold = GetBoolProp(currentRPr, W.b);
+            var previousBold = previousRPr != null && GetBoolProp(previousRPr, W.b);
             if (currentBold != previousBold)
                 changes.Add(currentBold ? "Bold added" : "Bold removed");
 
             // Check for italic change
-            var currentItalic = currentRPr.Element(W.i) != null;
-            var previousItalic = previousRPr?.Element(W.i) != null;
+            var currentItalic = GetBoolProp(currentRPr, W.i);
+            var previousItalic = previousRPr != null && GetBoolProp(previousRPr, W.i);
             if (currentItalic != previousItalic)
                 changes.Add(currentItalic ? "Italic added" : "Italic removed");
 
@@ -8086,8 +8087,8 @@ namespace Docxodus
                 changes.Add(currentUnderline ? "Underline added" : "Underline removed");
 
             // Check for strikethrough change
-            var currentStrike = currentRPr.Element(W.strike) != null;
-            var previousStrike = previousRPr?.Element(W.strike) != null;
+            var currentStrike = GetBoolProp(currentRPr, W.strike);
+            var previousStrike = previousRPr != null && GetBoolProp(previousRPr, W.strike);
             if (currentStrike != previousStrike)
                 changes.Add(currentStrike ? "Strikethrough added" : "Strikethrough removed");
 
