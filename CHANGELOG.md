@@ -59,6 +59,10 @@ All notable changes to this project will be documented in this file.
   and underline patterns and colors (issue #1220). Decorations with different patterns or colors
   use separate inline spans, including in browser/WASM and paginated output.
 
+- Comment rendering and comment listings use a matching valid modern UTC timestamp, with the
+  original legacy date as a fallback (issue #1228). Margin dates include the year, and cached
+  block rendering retains the metadata required to resolve the same instant.
+
 - Rejecting revisions now reverses an insertion or deletion in every container that can hold one (issue
   #1176). Reject works by turning each insertion into a deletion and each deletion into an insertion,
   then accepting. Which revisions it turned around was a list of containers: paragraphs, hyperlinks,
@@ -95,10 +99,6 @@ All notable changes to this project will be documented in this file.
   which of the two styles it means. References in content only the original holds (deleted runs, archived
   old properties) keep the original's id, so rejecting restores them unchanged. What Word does in the
   referenced case is not yet verified (see `docs/ooxml_corner_cases.md`).
-
-- Comment rendering and comment listings use a matching valid modern UTC timestamp, with the
-  original legacy date as a fallback (issue #1228). Margin dates include the year, and cached
-  block rendering retains the metadata required to resolve the same instant.
 
 - A content control or block `w:customXml` wrapper is again replaced whole when one of its paragraphs
   closes a complex field opened before it and opens another that closes after it (issue #1166). The

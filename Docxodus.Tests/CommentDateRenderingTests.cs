@@ -128,6 +128,7 @@ public class CommentDateRenderingTests
 
     [Theory]
     [InlineData("duplicate-map")]
+    [InlineData("shared-durable-id")]
     [InlineData("duplicate-date")]
     [InlineData("other-durable-id")]
     public void AmbiguousOrUnmatchedRecords_CannotOverrideTheLegacyDate(string kind)
@@ -138,11 +139,17 @@ public class CommentDateRenderingTests
         using (var doc = WordprocessingDocument.Open(stream, true))
         {
             var main = doc.MainDocumentPart!;
-            var part = kind == "duplicate-map" ? (OpenXmlPart)main.WordprocessingCommentsIdsPart!
+            var part = kind is "duplicate-map" or "shared-durable-id" ? (OpenXmlPart)main.WordprocessingCommentsIdsPart!
                 : main.WordCommentsExtensiblePart!;
             var xml = part.GetXDocument();
             if (kind == "other-durable-id")
                 xml.Root!.Elements().Single().SetAttributeValue(Cex + "durableId", "00000033");
+            else if (kind == "shared-durable-id")
+            {
+                var other = new XElement(xml.Root!.Elements().Single());
+                other.SetAttributeValue(Cid + "paraId", "00000044");
+                xml.Root.Add(other);
+            }
             else
                 xml.Root!.Add(new XElement(xml.Root.Elements().Single()));
             part.PutXDocument(xml);

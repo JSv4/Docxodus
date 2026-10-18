@@ -18,8 +18,12 @@ internal sealed class CommentDateResolver
 
     internal CommentDateResolver(MainDocumentPart main)
     {
-        _ids = UniqueEntries(main.WordprocessingCommentsIdsPart?.GetXDocument().Root,
+        var ids = UniqueEntries(main.WordprocessingCommentsIdsPart?.GetXDocument().Root,
             Cid + "commentId", Cid + "paraId");
+        _ids = ids.Values.Where(entry => !string.IsNullOrEmpty((string?)entry.Attribute(Cid + "durableId")))
+            .GroupBy(entry => (string)entry.Attribute(Cid + "durableId")!, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() == 1).Select(group => group.Single())
+            .ToDictionary(entry => (string)entry.Attribute(Cid + "paraId")!, StringComparer.OrdinalIgnoreCase);
         _dates = UniqueEntries(main.WordCommentsExtensiblePart?.GetXDocument().Root,
             Cex + "commentExtensible", Cex + "durableId");
     }
