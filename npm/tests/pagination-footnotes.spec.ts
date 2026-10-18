@@ -48,11 +48,21 @@ test.describe('Pagination footnote continuations', () => {
         emptyPageContents: pageContents.filter(pageContent =>
           !(pageContent.textContent || '').trim()
         ).length,
+        blankPages: Array.from(container.querySelectorAll<HTMLElement>('.page-box')).filter(box =>
+          !(box.textContent || '').trim()).length,
+        notePages: Array.from(container.querySelectorAll<HTMLElement>('.page-box')).map(box =>
+          (box.querySelector('.page-footnotes')?.textContent || '').replace(/\s+/g, ' ').trim()),
       };
     });
 
-    expect(result.totalPages).toBe(1);
-    expect(result.pageBoxes).toBe(1);
-    expect(result.emptyPageContents).toBe(0);
+    // The note, 90pt with its padding, does not fit beside its citing line, but it fits a fresh
+    // page's note band, which may take the whole band (issue #1178): it starts there, whole, rather
+    // than being clipped beside its citation. The Word reference PDF of this shape at Letter size
+    // (a 54-line keep-lines note cited by line 1) does the same: page 1 holds the body, page 2 the
+    // note alone. No page is blank.
+    expect(result.totalPages).toBe(2);
+    expect(result.pageBoxes).toBe(2);
+    expect(result.blankPages).toBe(0);
+    expect(result.notePages).toEqual(['', '1 note']);
   });
 });

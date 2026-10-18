@@ -251,19 +251,7 @@ internal static partial class IrMarkupRenderer
                 byBaseAnchor.TryAdd(a, i);
         int? BaseIndex(string? anchor) => anchor is not null && byBaseAnchor.TryGetValue(anchor, out var i) ? i : null;
 
-        var deletedBy = new Dictionary<XElement, int>(ReferenceEqualityComparer.Instance);
-        var afterPrevious = new Dictionary<int, List<(int Reviewer, XElement Marker)>>();
-        var beforeOp = new Dictionary<int, List<(int Reviewer, XElement Marker)>>();
-        var added = new HashSet<string>(StringComparer.Ordinal);
-        void Add(Dictionary<int, List<(int, XElement)>> map, int position, int reviewer, XElement marker)
-        {
-            if (!added.Add(MarkerKey(marker)))
-                return; // another reviewer already brought the same marker
-            if (!map.TryGetValue(position, out var list))
-                map[position] = list = new List<(int, XElement)>();
-            list.Add((reviewer, marker));
-        }
-
+        var placement = new CompositeMarkerPlacement(state);
         for (int r = 0; r < layouts.Length; r++)
         {
             if (layouts[r] is not { } layout)
@@ -271,26 +259,22 @@ internal static partial class IrMarkupRenderer
             var rops = reviewerOps![r];
             var two = layout.TwoSidedOps;
             int reviewer = r;
-            void Take(MarkerEntry entry, Dictionary<int, List<(int, XElement)>> map, int position)
+            void Take(MarkerEntry entry, int position, bool beforeBase)
             {
-                if (layout.IsShared(entry))
-                    return;
-                if (entry.Left is not null)
-                    deletedBy.TryAdd(entry.Left, reviewer);
-                if (entry.Right is not null)
-                    Add(map, position, reviewer, entry.Right);
+                if (!layout.IsShared(entry))
+                    placement.Take(entry, reviewer, position, beforeBase);
             }
             foreach (var (g, entries) in layout.GapStart)
             {
                 int position = g == 0 ? 0 : (BaseIndex(rops[two[g - 1]].LeftAnchor) ?? ops.Count - 1) + 1;
                 foreach (var entry in entries)
-                    Take(entry, afterPrevious, position);
+                    Take(entry, position, beforeBase: true);
             }
             foreach (var (g, entries) in layout.GapEnd)
             {
                 int position = g < two.Count ? BaseIndex(rops[two[g]].LeftAnchor) ?? ops.Count : ops.Count;
                 foreach (var entry in entries)
-                    Take(entry, beforeOp, position);
+                    Take(entry, position, beforeBase: false);
             }
             foreach (var (j, entry) in layout.Interior)
             {
@@ -300,38 +284,142 @@ internal static partial class IrMarkupRenderer
                             ops[i!.Value].SourceReviewer == reviewer && ops[i.Value].Op.RightAnchor == right)
                         : null)
                     ?? BaseIndex(op.LeftAnchor) ?? ops.Count;
-                Take(entry, beforeOp, position);
+                Take(entry, position, beforeBase: false);
             }
         }
 
-        if (baseSide is null && afterPrevious.Count == 0 && beforeOp.Count == 0)
+        if (baseSide is null && placement.IsEmpty)
             return null;
 
-        var savedAuthor = state.AuthorOverride;
-        XElement Revision(XName name, int reviewer, XElement marker)
-        {
-            state.AuthorOverride = reviewer >= 0 && reviewer < authors.Count ? authors[reviewer] : savedAuthor;
-            return new XElement(name, state.RevisionAttributes(), StripUnids(new XElement(marker)));
-        }
         var plan = new Dictionary<int, List<XElement>>();
         for (int i = 0; i <= ops.Count; i++)
         {
-            var output = new List<XElement>();
-            foreach (var (reviewer, marker) in afterPrevious.GetValueOrDefault(i) ?? new())
-                output.Add(Revision(W.ins, reviewer, marker));
             var baseMarkers = baseSide is null ? new List<XElement>()
                 : i == ops.Count ? baseSide.Trailing : baseSide.Before.GetValueOrDefault((i, 0)) ?? new List<XElement>();
-            foreach (var marker in baseMarkers)
-                output.Add(deletedBy.TryGetValue(marker, out var reviewer)
-                    ? Revision(W.del, reviewer, marker)
-                    : StripUnids(new XElement(marker)));
-            foreach (var (reviewer, marker) in beforeOp.GetValueOrDefault(i) ?? new())
-                output.Add(Revision(W.ins, reviewer, marker));
+            var output = placement.Render(i, baseMarkers, authors, state);
             if (output.Count > 0)
                 plan[i] = output;
         }
-        state.AuthorOverride = savedAuthor;
         return plan;
+    }
+
+    /// <summary>
+    /// The N-way rule for one base block stream's markers (issue #1149, #1175), shared by the composite plan and
+    /// <see cref="ReconcileCompositeEqualContainerMarkers"/>. Each reviewer's comparison with the base yields
+    /// merged marker entries per base block boundary (position); a shared entry is that reviewer keeping the base
+    /// marker. A base marker stays bare unless a reviewer does not keep it: it is then the deletion of the first
+    /// such reviewer. A reviewer's own marker goes in as that reviewer's insertion at the boundary, in front of
+    /// the base markers there (the start of a gap) or after them; a marker another reviewer already brought is
+    /// not repeated.
+    /// </summary>
+    private sealed class CompositeMarkerPlacement
+    {
+        private readonly Dictionary<XElement, int> _deletedBy = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<(XElement? Stream, int Position), List<(int Reviewer, XElement Marker)>> _beforeBase = new();
+        private readonly Dictionary<(XElement? Stream, int Position), List<(int Reviewer, XElement Marker)>> _afterBase = new();
+        private readonly HashSet<string> _added;
+
+        /// <summary>Markers a reviewer brings are recorded package-wide (<see cref="RenderState.CompositeAddedMarkers"/>):
+        /// a bookmark two reviewers add under one name, in different block streams, is inserted once.</summary>
+        public CompositeMarkerPlacement(RenderState state) =>
+            _added = state.CompositeAddedMarkers ??= new HashSet<string>(StringComparer.Ordinal);
+
+        public bool IsEmpty => _deletedBy.Count == 0 && _beforeBase.Count == 0 && _afterBase.Count == 0;
+
+        /// <summary>Record one reviewer's entry that is not shared with the base, at <paramref name="position"/>
+        /// of <paramref name="stream"/> (null for a plan over one stream's ops).</summary>
+        public void Take(MarkerEntry entry, int reviewer, int position, bool beforeBase, XElement? stream = null)
+        {
+            if (entry.Left is not null)
+                _deletedBy.TryAdd(entry.Left, reviewer);
+            if (entry.Right is null || !_added.Add(MarkerKey(entry.Right)))
+                return; // another reviewer already brought the same marker
+            var map = beforeBase ? _beforeBase : _afterBase;
+            if (!map.TryGetValue((stream, position), out var list))
+                map[(stream, position)] = list = new List<(int, XElement)>();
+            list.Add((reviewer, entry.Right));
+        }
+
+        /// <summary>The markers to emit at <paramref name="position"/>, whose base markers are
+        /// <paramref name="baseMarkers"/>: each as a bare clone or as a reviewer's revision.</summary>
+        public List<XElement> Render(int position, IReadOnlyList<XElement> baseMarkers, IReadOnlyList<string> authors,
+            RenderState state, XElement? stream = null)
+        {
+            var savedAuthor = state.AuthorOverride;
+            XElement Revision(XName name, int reviewer, XElement marker)
+            {
+                state.AuthorOverride = reviewer >= 0 && reviewer < authors.Count ? authors[reviewer] : savedAuthor;
+                return new XElement(name, state.RevisionAttributes(), StripUnids(new XElement(marker)));
+            }
+            var output = new List<XElement>();
+            foreach (var (reviewer, marker) in _beforeBase.GetValueOrDefault((stream, position)) ?? new())
+                output.Add(Revision(W.ins, reviewer, marker));
+            foreach (var marker in baseMarkers)
+                output.Add(_deletedBy.TryGetValue(marker, out var reviewer)
+                    ? Revision(W.del, reviewer, marker)
+                    : StripUnids(new XElement(marker)));
+            foreach (var (reviewer, marker) in _afterBase.GetValueOrDefault((stream, position)) ?? new())
+                output.Add(Revision(W.ins, reviewer, marker));
+            state.AuthorOverride = savedAuthor;
+            return output;
+        }
+    }
+
+    /// <summary>
+    /// The consolidate counterpart of <see cref="ReconcileEqualContainerMarkers"/>: put each reviewer's
+    /// block-level markers into a container emitted from the base because every reviewer left it equal (an
+    /// unchanged table, cell, block wrapper or note; issue #1175). <paramref name="counterparts"/> are the
+    /// reviewers' copies of <paramref name="baseSource"/>, which line up with it block for block. Each block
+    /// boundary of every stream inside is merged per reviewer as the two-way reconcile merges it, then placed by
+    /// the N-way rule (<see cref="CompositeMarkerPlacement"/>): a base marker a reviewer drops becomes that
+    /// reviewer's deletion, a reviewer's own marker that reviewer's insertion.
+    /// </summary>
+    internal static void ReconcileCompositeEqualContainerMarkers(XElement emitted, XElement baseSource,
+        IReadOnlyList<(int Reviewer, XElement Counterpart)> counterparts, IReadOnlyList<string> authors, RenderState state)
+    {
+        var placement = new CompositeMarkerPlacement(state);
+        var streams = new Dictionary<XElement, XElement>(ReferenceEqualityComparer.Instance); // emitted -> base
+        foreach (var (reviewer, counterpart) in counterparts)
+        {
+            if (ReferenceEquals(counterpart, baseSource) ||
+                !HasMarkerBetweenBlocks(baseSource) && !HasMarkerBetweenBlocks(counterpart))
+                continue;
+            var entries = new List<(XElement Stream, XElement LeftStream, int Boundary, List<MarkerEntry> Entries)>();
+            CollectEqualStreamMarkers(emitted, baseSource, counterpart, entries);
+            var unmatched = entries.SelectMany(e => e.Entries).Where(e => e.Left is null || e.Right is null)
+                .Select(e => MarkerIdentity(e.Left ?? e.Right!)).ToHashSet(StringComparer.Ordinal);
+            if (unmatched.Count == 0)
+                continue; // this reviewer kept every base marker and added none
+            foreach (var (stream, leftStream, boundary, list) in entries)
+            {
+                streams.TryAdd(stream, leftStream);
+                foreach (var entry in list)
+                    if (entry.Left is null || entry.Right is null || unmatched.Contains(MarkerIdentity(entry.Right)))
+                        placement.Take(entry, reviewer, boundary, beforeBase: false, stream);
+            }
+        }
+        if (placement.IsEmpty)
+            return;
+        foreach (var (stream, leftStream) in streams)
+        {
+            var blocks = stream.Elements().Where(IsBlockContent).ToList();
+            var (_, baseBefore) = SplitStream(leftStream);
+            if (baseBefore.Count != blocks.Count + 1)
+                continue;
+            stream.Elements().Where(IsBlockLevelMarker).Remove();
+            for (int k = 0; k <= blocks.Count; k++)
+            {
+                var rendered = placement.Render(k, baseBefore[k], authors, state, stream);
+                if (rendered.Count == 0)
+                    continue;
+                if (k < blocks.Count)
+                    blocks[k].AddBeforeSelf(rendered);
+                else if (blocks.Count > 0)
+                    blocks[^1].AddAfterSelf(rendered);
+                else
+                    stream.Add(rendered);
+            }
+        }
     }
 
     /// <summary>
@@ -349,7 +437,7 @@ internal static partial class IrMarkupRenderer
         if (left is null || right is null || ReferenceEquals(left, right) ||
             !HasMarkerBetweenBlocks(left) && !HasMarkerBetweenBlocks(right))
             return false;
-        var entries = new List<(XElement Stream, int Boundary, List<MarkerEntry> Entries)>();
+        var entries = new List<(XElement Stream, XElement LeftStream, int Boundary, List<MarkerEntry> Entries)>();
         CollectEqualStreamMarkers(emitted, left, right, entries);
         if (entries.Count == 0)
             return false;
@@ -365,7 +453,7 @@ internal static partial class IrMarkupRenderer
             var stream = group.Key;
             var blocks = stream.Elements().Where(IsBlockContent).ToList();
             stream.Elements().Where(IsBlockLevelMarker).Remove();
-            foreach (var (_, boundary, list) in group)
+            foreach (var (_, _, boundary, list) in group)
             {
                 var rendered = RenderMarkerEntries(list, entry => entry.Left is not null && entry.Right is not null &&
                     !unmatched.Contains(MarkerIdentity(entry.Right)), state);
@@ -512,7 +600,7 @@ internal static partial class IrMarkupRenderer
     /// <summary>The merged markers at each block boundary of every block stream inside an equal container pair
     /// (see <see cref="ReconcileEqualContainerMarkers"/>), for the boundaries where the sides differ.</summary>
     private static void CollectEqualStreamMarkers(XElement emitted, XElement left, XElement right,
-        List<(XElement Stream, int Boundary, List<MarkerEntry> Entries)> sink)
+        List<(XElement Stream, XElement LeftStream, int Boundary, List<MarkerEntry> Entries)> sink)
     {
         if (emitted.Name != left.Name || emitted.Name != right.Name)
             return;
@@ -548,33 +636,36 @@ internal static partial class IrMarkupRenderer
             return;
         }
 
-        static (List<XElement> Blocks, List<List<XElement>> Before) Split(XElement s)
-        {
-            var blocks = new List<XElement>();
-            var before = new List<List<XElement>> { new() };
-            foreach (var c in s.Elements())
-            {
-                if (IsBlockLevelMarker(c))
-                    before[^1].Add(c);
-                else if (IsBlockContent(c))
-                {
-                    blocks.Add(c);
-                    before.Add(new List<XElement>());
-                }
-            }
-            return (blocks, before);
-        }
-        var (eb, _) = Split(stream);
-        var (lb, lm) = Split(leftStream);
-        var (rb, rm) = Split(rightStream);
+        var (eb, _) = SplitStream(stream);
+        var (lb, lm) = SplitStream(leftStream);
+        var (rb, rm) = SplitStream(rightStream);
         if (eb.Count != lb.Count || eb.Count != rb.Count)
             return;
         for (int k = 0; k <= eb.Count; k++)
             if (lm[k].Count > 0 || rm[k].Count > 0)
-                sink.Add((stream, k, MergeMarkers(lm[k], rm[k])));
+                sink.Add((stream, leftStream, k, MergeMarkers(lm[k], rm[k])));
         for (int k = 0; k < eb.Count; k++)
             if (eb[k].Name != W.p)
                 CollectEqualStreamMarkers(eb[k], lb[k], rb[k], sink);
+    }
+
+    /// <summary>A block stream's blocks and, for each block boundary (before each block, then after the last), the
+    /// block-level markers there.</summary>
+    private static (List<XElement> Blocks, List<List<XElement>> Before) SplitStream(XElement stream)
+    {
+        var blocks = new List<XElement>();
+        var before = new List<List<XElement>> { new() };
+        foreach (var c in stream.Elements())
+        {
+            if (IsBlockLevelMarker(c))
+                before[^1].Add(c);
+            else if (IsBlockContent(c))
+            {
+                blocks.Add(c);
+                before.Add(new List<XElement>());
+            }
+        }
+        return (blocks, before);
     }
 
     /// <summary>Render merged marker entries: a shared one bare (the revised document's copy), any other as its

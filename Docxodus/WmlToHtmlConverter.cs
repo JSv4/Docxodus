@@ -6065,7 +6065,8 @@ namespace Docxodus
             AddClass(paragraph, prefix + "changed-line");
             var style = paragraph.Annotation<Dictionary<string, string>>();
             if (style != null && style.TryGetValue("margin-left", out var indent))
-                style[$"--{prefix}change-bar-indent"] = indent;
+                // A unitless CSS zero is valid for margin-left, but not as an addend in calc().
+                style[$"--{prefix}change-bar-indent"] = indent == "0" ? "0pt" : indent;
         }
 
         /// <summary>
@@ -7763,7 +7764,7 @@ namespace Docxodus
                 settings.RenderPagination != PaginationMode.Paginated)
                 return null;
 
-            var style = DefineRunStyle(run);
+            var style = DefineRunStyle(run, out var secondaryDecoration);
             ApplyFieldResultPresentation(run, style);
             if (paragraphHasExactLineHeight)
             {
@@ -7814,6 +7815,13 @@ namespace Docxodus
                 }
                 if (newContent != null && newContent.Nodes().Any())
                     content = newContent;
+            }
+
+            if (secondaryDecoration != null)
+            {
+                var decorated = new XElement(Xhtml.span, content);
+                decorated.AddAnnotation(secondaryDecoration);
+                content = decorated;
             }
 
             var langAttribute = GetLangAttribute(run);
@@ -8045,8 +8053,12 @@ namespace Docxodus
                 .Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)
                 .Where(value => !string.Equals(value, "underline", StringComparison.OrdinalIgnoreCase))
                 .ToArray();
-            if (remaining.Length == 0)
+            if (!remaining.Any(value => value == "line-through" || value == "overline"))
+            {
                 style.Remove("text-decoration");
+                style.Remove("text-decoration-color");
+                style.Remove("text-decoration-thickness");
+            }
             else
                 style["text-decoration"] = string.Join(" ", remaining);
         }
@@ -8105,8 +8117,9 @@ namespace Docxodus
         }
 
         [SuppressMessage("ReSharper", "FunctionComplexityOverflow")]
-        private static Dictionary<string, string> DefineRunStyle(XElement run)
+        private static Dictionary<string, string> DefineRunStyle(XElement run, out Dictionary<string, string>? secondaryDecoration)
         {
+            secondaryDecoration = null;
             var style = new Dictionary<string, string>();
 
             var rPr = run.Elements(W.rPr).FirstOrDefault();
@@ -8208,21 +8221,59 @@ namespace Docxodus
             if (GetBoolProp(rPr, W.vanish) && !GetBoolProp(rPr, W.specVanish))
                 style.AddIfMissing("display", "none");
 
-            // W.u
-            if (rPr.Element(W.u) != null && (string?) rPr.Elements(W.u).Attributes(W.val).FirstOrDefault() != "none")
-                style.AddIfMissing("text-decoration", "underline");
-
             // W.i
             style.AddIfMissing("font-style", GetBoolProp(rPr, W.i) ? "italic" : "normal");
 
             // W.b
             style.AddIfMissing("font-weight", GetBoolProp(rPr, W.b) ? "bold" : "normal");
 
-            // W.strike
-            if (GetBoolProp(rPr, W.strike) || GetBoolProp(rPr, W.dstrike))
-                style.AddIfMissing("text-decoration", "line-through");
+            secondaryDecoration = DefineRunDecorations(run, rPr, style);
 
             return style;
+        }
+
+        // One CSS decoration can draw several lines only when they share a pattern and color.
+        // Keep differing underline/strike decorations on nested inline spans so both survive.
+        private static Dictionary<string, string>? DefineRunDecorations(
+            XElement run, XElement rPr, Dictionary<string, string> style)
+        {
+            var underline = rPr.Element(W.u);
+            var underlineValue = (string?)underline?.Attribute(W.val);
+            var hasUnderline = underline != null && underlineValue != "none";
+            var strike = GetBoolProp(rPr, W.strike) || GetBoolProp(rPr, W.dstrike);
+            var strikeStyle = GetBoolProp(rPr, W.dstrike) ? "double" : "solid";
+            if (!hasUnderline)
+            {
+                if (strike)
+                    style["text-decoration"] = "line-through" + (strikeStyle == "double" ? " double" : "");
+                return null;
+            }
+
+            var underlineStyle = underlineValue switch
+            {
+                "double" => "double",
+                "dotted" or "dottedHeavy" => "dotted",
+                "dash" or "dashedHeavy" or "dashLong" or "dashLongHeavy" or
+                    "dotDash" or "dashDotHeavy" or "dotDotDash" or "dashDotDotHeavy" => "dashed",
+                "wave" or "wavyHeavy" or "wavyDouble" => "wavy",
+                _ => "solid",
+            };
+            var color = ResolveThemeColor(underline, W.color, W.themeColor, W.themeTint, W.themeShade,
+                GetThemeColorScheme(run));
+            var hasColor = color != null && color != "auto";
+            var heavy = underlineValue == "thick" || underlineValue?.EndsWith("Heavy", StringComparison.Ordinal) == true;
+            var shared = strike && underlineStyle == strikeStyle && !heavy && !hasColor;
+            // A shorthand resets its longhands. Insert it first: fabricated class CSS preserves
+            // dictionary order, while inline CSS sorts declarations by name.
+            style["text-decoration"] = "underline" + (shared ? " line-through" : "") +
+                (underlineStyle == "solid" ? "" : " " + underlineStyle);
+            if (hasColor)
+                CreateColorProperty("text-decoration-color", color!, style);
+            if (heavy)
+                style["text-decoration-thickness"] = "0.12em";
+            return strike && !shared
+                ? new Dictionary<string, string> { { "text-decoration", "line-through" + (strikeStyle == "double" ? " double" : "") } }
+                : null;
         }
 
         private static decimal? GetFontSize(XElement e)
