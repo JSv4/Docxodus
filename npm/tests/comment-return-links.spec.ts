@@ -18,7 +18,8 @@ async function synthetic(page: import('@playwright/test').Page,
     <div id="pagination-staging"><aside id="pagination-comment-margin-registry" style="display:none">
       <div data-comment-id="6"><aside class="review-margin-note" id="comment-6">
         <a class="review-margin-backref" href="#comment-ref-6" ${linkAttributes}>ReturnMaple</a>
-        <a class="authored-link" href="#MapleDestination">Other fragment</a><p>Maple note.</p>
+        <a class="authored-link" href="#MapleDestination">Other fragment</a>
+        <svg width="20" height="10" viewBox="0 0 20 10"><a class="authored-svg-link" href="#MapleDestination"><text x="0" y="8">SVG</text></a><a class="svg-margin-backref" href="#comment-ref-6"><text x="0" y="8">Return SVG</text></a></svg><p>Maple note.</p>
       </aside></div></aside>
       <div data-section-index="0" data-page-width="612" data-page-height="792"
         data-content-width="468" data-content-height="648" data-margin-top="72"
@@ -46,6 +47,11 @@ for (const placement of ['margin', 'outside'] as const) test(`unique rendered re
   expect(await link.evaluate(element => (element as HTMLAnchorElement).tabIndex)).toBe(0);
   await expect(page.locator('#host .page-comment-margin [id]')).toHaveCount(0);
   await expect(page.locator('#host .page-comment-margin .authored-link')).not.toHaveAttribute('href');
+  const svgLink = page.locator('#host .page-comment-margin .authored-svg-link');
+  await expect(svgLink).not.toHaveAttribute('href');
+  await expect(svgLink).toHaveAttribute('aria-disabled', 'true');
+  await expect(svgLink).toHaveAttribute('tabindex', '-1');
+  await expect(page.locator('#host .page-comment-margin .svg-margin-backref')).not.toHaveAttribute('href');
   await expect(page.locator('#host .page-content .body-return')).toHaveAttribute('href', '#MapleDestination');
 });
 
