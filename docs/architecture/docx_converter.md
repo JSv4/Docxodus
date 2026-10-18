@@ -185,7 +185,12 @@ Paragraphs (`w:p`) are converted based on their style's outline level:
 | 5 | `<h6>` |
 | None/other | `<p>` |
 
-Style separators (`w:specVanish`) cause following paragraphs to be rendered as `<span>` within the heading.
+Hidden paragraph marks (`w:pPr/w:rPr/w:vanish`) and style separators (`w:specVanish`)
+render following paragraph text as a `<span>` within the first paragraph or heading. Explicit off
+values preserve separate blocks. Joining stops at another block container or a section boundary;
+range markers such as bookmarks do not create a physical boundary. Paragraph-mark visibility
+does not hide the generated list number; run defaults, run styles, and numbering-level visibility
+still apply to the number.
 
 ### Paragraph text frames
 
@@ -279,16 +284,22 @@ result. Removing rather than replacing them exposes the document's underlying TO
 ### Tabs
 
 `CalculateSpanWidthForTabs` measures the current position and following segment, then annotates each
-tab with the advance needed for its OOXML target. During transformation the text and tab become one
-fixed-width inline flex row; the browser assigns any font-metric difference to the tab remainder, so
-the post-tab text stays aligned without invisible padding after a leader. The same grouping is used
-when a cached TOC nests the runs inside `w:hyperlink`.
+tab with the advance needed for its OOXML target. Left/right tab sequences use character-class
+fallback widths to choose a stop; fixed-pitch prefixes retain constant advances. Plain left/right
+segments in left-to-right paragraphs become fixed-width inline flex rows, including the following text in a right segment.
+The browser assigns font-metric differences to the tab remainder, so later tabs retain their own
+stops and page-number right edges follow actual glyph widths. The same grouping is used inside
+`w:hyperlink`. Bidirectional paragraphs, complex fields, breaks, active comment/annotation ranges and tab runs
+with visibility, revision or exceptional geometry retain the run-aware path and its conservative
+following-text reservations. Leader rules inherit the tab run's resolved foreground color.
 
 ```html
 <span style="align-items: baseline; display: inline-flex; width: 4.000in">
   <span style="flex-shrink: 0">Before</span>
-  <span data-docx-tab="right" data-docx-tab-width="3.500"
-        style="display: inline-block; flex-grow: 1; width: 3.50in"></span>
+  <span style="display: inline-block; flex: 1 1 0; min-width: 0; color: blue">
+    <span data-docx-tab="right" data-docx-tab-width="3.500" style="width: 100%"></span>
+  </span>
+  <span style="flex-shrink: 0">After</span>
 </span>
 ```
 
@@ -651,3 +662,25 @@ html.Save("output.html", SaveOptions.DisableFormatting);
 - `OpenXmlPowerTools/FormattingAssembler.cs` - Style resolution
 - `OpenXmlPowerTools/FieldRetriever.cs` - Field code processing
 - `OpenXmlPowerTools/PtOpenXml.cs` - Custom annotation namespace
+
+## Formatting revision descriptions
+
+With tracked-change rendering enabled, formatting assembly resolves each run's previous `rPr`
+through the same default, paragraph, table and character-style rules as its current properties
+(issue #1222). An empty previous snapshot, including one removed by markup simplification, means
+inherited formatting. Descriptions compare those effective properties and honor explicit off
+values. The extra resolution is internal to HTML rendering; ordinary `FormattingAssembler`
+callers keep the original revision snapshots.
+
+## Run text decorations
+
+The shared run-style conversion preserves underline and strike independently (issue #1220).
+Single, double, dotted, dashed and wavy underlines use CSS text decorations; explicit and theme
+underline colors resolve through the same color helper as run text. Double strike uses a double
+line-through. When both lines share their pattern and color, one decoration draws both. Otherwise,
+a nested inline span draws the strike so it keeps its own pattern and text color. A cached TOC
+hyperlink still suppresses its underline without removing a strike.
+
+Heavy variants increase decoration thickness. CSS has no direct double-wave or dot-dash equivalent;
+those variants use wavy or dashed lines respectively. Word's word-only underline retains the existing
+continuous underline rendering. These approximations do not change run text or line metrics.
