@@ -8,7 +8,7 @@ for (const paginated of [false, true]) for (const escaped of [false, true]) {
     await page.waitForFunction(() => (window as any).DocxodusReady === true);
     await page.addScriptTag({ url: '/pagination.bundle.js' });
     const observed = await page.evaluate(async ({ bytes, paginated, escaped }) => {
-      const closing = JSON.stringify('</StYlE><p id=escape>A&B ]]> C').replaceAll('<', escaped ? '\\<' : '<');
+      const closing = JSON.stringify('</StYlE><p id=escape>A&B ]]> C').replace(/</g, escaped ? '\\<' : '<');
       const css = 'p:first-child > span { color: rgb(255, 0, 0) !important; background-color: rgb(0, 255, 0); }' +
         'p:first-child::after { content: "A&B > C"; }' +
         'p:nth-child(2)::after { content: ' + closing + '; }';
