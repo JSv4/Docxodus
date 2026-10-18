@@ -82,7 +82,7 @@ function finalBlockDeferralHtml(): string {
 const LONG_NOTE_WORDS = Array.from({ length: 120 }, (_, index) => `word-${index}`).join(' ');
 
 /**
- * One ordinary long paragraph is deliberately wider than several 60%-height note bands. The
+ * One ordinary long paragraph is deliberately taller than several note bands. The
  * trailing paragraphs make the former C2 failure visible: an oversized leader must not evacuate
  * the citing page or strand otherwise splittable siblings inside one clipped continuation.
  */
@@ -670,7 +670,8 @@ test.describe('Paginated footnote layout', () => {
   });
 
   test('a page whose notes are capped still fills its remaining body space', async ({ page }) => {
-    // Notes long enough to hit the 60% cap: the other 40% must still take body text.
+    // Notes long enough to fill the band below their citing lines: the body left on each page
+    // must still take body text.
     const pages = await paginate(page, stagingHtml(30, 6, 8));
 
     const withNotes = pages.filter((p: any) => p.hasNotes);
@@ -684,10 +685,10 @@ test.describe('Paginated footnote layout', () => {
   });
 
   test('a long note after the last body block uses the space the body no longer needs', async ({ page }) => {
-    // Issue #1119: one citing paragraph and a 60-line (600pt) note on 300pt bands. The 60% cap
-    // reserves 40% of every page for body text that does not exist; budgeting from the space
-    // actually left (up to 95% of the band: LibreOffice keeps a twentieth of it for the
-    // body) fits the note on three pages instead of five.
+    // Issue #1119: one citing paragraph and a 60-line (600pt) note on 300pt bands. The note is
+    // budgeted from the space actually left on each page (since issue #1178 the whole band, as in
+    // Word reference PDFs), not from a share held back for body text that does not exist, so it
+    // fits on three pages instead of five.
     await page.setContent(stagingHtml(1, 1, 60));
     await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
     const result = await page.evaluate(
@@ -712,7 +713,7 @@ test.describe('Paginated footnote layout', () => {
     expect(result.clipped).toEqual([]);
     expect(result.lines.reduce((sum: number, count: number) => sum + count, 0)).toBe(60);
     expect(result.pages).toBe(3);
-    // A continuation page holds 95% of its band (285pt, separator included), not 60% of it.
+    // A continuation page holds its whole band (separator included), not a capped share of it.
     expect(result.lines[1]).toBeGreaterThanOrEqual(26);
     expect(result.lines[1]).toBeLessThanOrEqual(28);
   });

@@ -433,11 +433,15 @@ All notable changes to this project will be documented in this file.
   it was placed (the share LibreOffice 25.8.7.3 allows). Word holds no room back: a note takes
   everything below the line that cites it, and a carried note that does not end on a page takes
   that page alone; body text, with any new citation, resumes on the page where the note ends.
-  Both now hold in the paginated view and the PDF export. On a Letter page whose first line cites
-  a 90-line note, page 1 now shows that line and 54 lines of the note, as Word does (it showed 19
-  body lines beside 33 note lines). A note too tall to start beside its citation now starts whole
-  on the next page when that page's band can hold it, rather than being clipped beside the
-  citation; one taller than any band is still clipped beside it. A page that starts with a
+  Both hold in the paginated view and the PDF export (the export of a note carried over several
+  pages with later citations still fails PageMap verification for those notes, as it did before).
+  On a Letter page whose first line cites a 90-line note, page 1 now shows that line and 53 lines
+  of the note, as Word does (it showed 19 body lines beside 33 note lines). A table in a note now
+  splits between pages at row boundaries, as Word splits it; it was indivisible and was clipped
+  beside its citation. The note band never covers body text already placed on its page: a note
+  part taller than the room left is clipped in the band, below that body. A note too tall to start
+  beside its citation now starts whole on the next page when that page's band can hold it, as in
+  Word reference PDFs, rather than being clipped beside the citation. A page that starts with a
   page-break-before paragraph now measures its carried note before placing that paragraph, so a
   keep-with-next chain there no longer leaves its heading alone at the page's foot. The shape issue
   #1179 lengthened to three pages (a table citing a note too tall for the room left, then a
@@ -449,8 +453,7 @@ All notable changes to this project will be documented in this file.
   beside such a continuation, which could also overtake an earlier deferred note. Word reference
   PDFs and LibreOffice keep a continued note last on its page and notes in citation order, so once a
   note on a page continues, or a note cited there has been deferred, later notes start on the next
-  page, below the continuation and after the deferred notes. When the last body page lets a carried
-  note end after all, the notes deferred behind it join it there again. One shape takes a page more:
+  page, below the continuation and after the deferred notes. One shape takes a page more:
   a table citing a note too tall for the room left, followed by a paragraph citing a short note, now
   lays out on three pages instead of two, because the short note no longer overtakes the deferred
   one (LibreOffice also moves the citing line after the deferred note).

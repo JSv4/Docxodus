@@ -12,8 +12,7 @@ const __dirname = path.dirname(__filename);
  * after the deferred notes. Word reference PDFs and LibreOffice both keep this order
  * (docs/ooxml_corner_cases.md).
  *
- * Every page here is 300pt of body at 15pt lines; the note area may take 60% of a page while body
- * text remains.
+ * Every page here is 300pt of body at 15pt lines.
  */
 
 const LINE_PT = 15;
@@ -131,18 +130,18 @@ test.describe('A continued note stays last on its page', () => {
     expect(layout.notePage['2']).toBeGreaterThan(1);
   });
 
-  test('a note deferred to a page whose continuation runs on moves on with it', async ({ page }) => {
-    // Note 1 is eight paragraphs that each keep their lines together, so every page it fills has
-    // room to spare that a one-line note would otherwise take.
+  test('a note cited beside the end of a carried note starts where that note ends', async ({ page }) => {
+    // Note 1 is seven paragraphs that each keep their lines together. It fills page 1 below
+    // `cites A` and ends on page 2, where `cites B` opens the body and note 2 follows note 1's
+    // end, beside its citation, as in the Word reference PDF of this shape at Letter size.
     const layout = await paginate(page, staging(
       `<p>cites A${reference('1')}</p><p>cites B${reference('2')}</p><p>${lines('tail', 30)}</p>`,
-      keptNote('1', 8, 4) + note('2', 1)));
+      keptNote('1', 7, 4) + note('2', 1)));
 
     expectContinuedNotesLast(layout);
-    // Note 2 starts no earlier than the page where note 1 ends.
-    const noteOneEnds = layout.notes.reduce((last, items, index) =>
-      (items.includes('1') || items.includes('1c') ? index + 1 : last), 0);
-    expect(layout.notePage['2']).toBeGreaterThanOrEqual(noteOneEnds);
+    expect(layout.notes[0]).toEqual(['1']);
+    expect(layout.notes[layout.notePage['2'] - 1]).toEqual(['1c', '2']);
+    expect(layout.body[layout.notePage['2'] - 1][0]).toBe('cites B2');
   });
 
   test('notes cited beside a carried continuation keep their order behind it', async ({ page }) => {
@@ -175,11 +174,10 @@ test.describe('A continued note stays last on its page', () => {
     });
   }
 
-  test('notes deferred behind a carried note rejoin it when the last body page lets it end', async ({ page }) => {
-    // Note 2 is cited by the table on page 1, where note 1 splits, and so reaches page 2 by
-    // deferral. Page 2 is first partitioned while body text remains; once the body is placed the
-    // carried note gets the rest of the page and ends there, so note 2 follows it on that page
-    // instead of opening a page of its own.
+  test('a note deferred behind a carried note follows it on the page where it ends', async ({ page }) => {
+    // Note 2 is cited by the table on page 1, where note 1 splits, so it waits for note 1 to end.
+    // Page 2 holds the rest of note 1 beside the remaining body, and note 2 follows it there
+    // rather than opening a page of its own.
     const layout = await paginate(page, staging(
       `<p>cites A${reference('1')}</p><table><tr><td>cites B${reference('2')}</td></tr></table>`
         + `<p>${lines('tail', 7)}</p>`,

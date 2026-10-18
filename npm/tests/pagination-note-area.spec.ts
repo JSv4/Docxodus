@@ -58,30 +58,40 @@ const reference = (id: string) => `<a class="footnote-ref" data-footnote-id="${i
 interface Layout {
   /** Body paragraphs on each page. */
   body: number[];
+  /** Whether every body paragraph on each page lies inside that page's visible body area. */
+  bodyVisible: boolean[];
   /** Height of each page's note area, in points (0 without one). */
   band: number[];
   /** The note text each page shows. */
   notes: string[];
 }
 
-async function paginate(page: Page, html: string): Promise<Layout> {
+async function paginate(page: Page, html: string, fragmentParagraphs = true): Promise<Layout> {
   await page.setContent(html);
   await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
-  return page.evaluate(() => {
+  return page.evaluate((fragmentParagraphs) => {
     const { PaginationEngine } = (window as any).DocxodusPagination;
     new PaginationEngine(document.getElementById('staging'), document.getElementById('container'), {
-      scale: 1, showPageNumbers: false,
+      scale: 1, showPageNumbers: false, fragmentParagraphs,
     }).paginate();
     const boxes = Array.from(document.querySelectorAll<HTMLElement>('#container .page-box'));
     return {
       body: boxes.map((box) => box.querySelector('.page-content')!.children.length),
+      bodyVisible: boxes.map((box) => {
+        const content = box.querySelector<HTMLElement>('.page-content')!;
+        const area = content.getBoundingClientRect();
+        return Array.from(content.children).every((block) => {
+          const rect = block.getBoundingClientRect();
+          return rect.top >= area.top - 0.5 && rect.bottom <= area.bottom + 0.5;
+        });
+      }),
       band: boxes.map((box) => {
         const notes = box.querySelector<HTMLElement>('.page-footnotes');
         return notes ? notes.getBoundingClientRect().height * 0.75 : 0;
       }),
       notes: boxes.map((box) => (box.querySelector('.page-footnotes')?.textContent || '').replace(/\s+/g, ' ').trim()),
     };
-  });
+  }, fragmentParagraphs);
 }
 
 test.describe('Paginated note area', () => {
@@ -111,8 +121,8 @@ test.describe('Paginated note area', () => {
   });
 
   test('a carried part taller than any page still advances page by page', async ({ page }) => {
-    // The note's middle paragraph is one indivisible 400pt box. Its page clips it, the note's last
-    // paragraph follows on the next page, and pagination ends.
+    // A liveness guard: the note's middle paragraph is one indivisible 400pt box. Its page clips
+    // it, the note's last paragraph follows on the next page, and pagination ends.
     const layout = await paginate(page, staging(
       `<p>cites${reference('1')}</p>${bodyLines(1, 5)}`,
       note('1', ['first part', '<span class="tall"></span> tall part', 'last part'])));
@@ -121,5 +131,33 @@ test.describe('Paginated note area', () => {
     for (const part of ['first part', 'tall', 'last part']) expect(text).toContain(part);
     expect(layout.body.reduce((sum, count) => sum + count, 0)).toBe(6);
     expect(layout.body.length).toBeLessThan(6);
+  });
+
+  for (const fragmentParagraphs of [true, false]) {
+    test(`a note part taller than any page never covers the body placed above it (fragmentation ${fragmentParagraphs ? 'on' : 'off'})`, async ({ page }) => {
+      // Five body lines, then a line citing a note whose only part is an indivisible 400pt box.
+      // The band is clipped to what the body leaves; every body line placed on the page shows.
+      const layout = await paginate(page, staging(
+        `${bodyLines(1, 5)}<p>cites${reference('1')}</p>${bodyLines(6, 5)}`,
+        note('1', ['<span class="tall"></span>'])), fragmentParagraphs);
+
+      expect(layout.bodyVisible.every(Boolean)).toBe(true);
+      expect(layout.body.reduce((sum, count) => sum + count, 0)).toBe(11);
+    });
+  }
+
+  test('a carried note of kept paragraphs that runs past the next page holds those pages alone', async ({ page }) => {
+    // Six-line paragraphs that each keep their lines together, as in the Word reference PDF of
+    // this shape: pages whose carried note does not end on them hold no body (issue #1178).
+    const parts = Array.from({ length: 10 }, (_, index) =>
+      `<span style="display:inline-block">${lines(`part ${index + 1} line`, 6)}</span>`);
+    const layout = await paginate(page, staging(
+      `<p>cites${reference('1')}</p>${bodyLines(1, 10)}`, note('1', parts)));
+
+    // Every page after the first whose note runs on to the next page holds no body.
+    const runsOn = layout.notes.map((text, index) => index > 0 && text !== '' && (layout.notes[index + 1] ?? '') !== '');
+    expect(runsOn.filter(Boolean).length).toBeGreaterThanOrEqual(2);
+    layout.body.forEach((count, index) => { if (runsOn[index]) expect(count, `page ${index + 1}`).toBe(0); });
+    expect(layout.body.reduce((sum, count) => sum + count, 0)).toBe(11);
   });
 });
