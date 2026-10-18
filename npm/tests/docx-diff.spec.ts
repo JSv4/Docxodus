@@ -308,7 +308,15 @@ test.describe('DocxDiff consolidate (composite N-way) bridge', () => {
           if (e.localName === 't') return [e.textContent];
           if (e.localName === 'bookmarkStart' || e.localName === 'bookmarkEnd')
             return [[e.localName, names.get(e.getAttributeNS(ns, 'id'))]];
-          const children = Array.from(e.children).flatMap(walk);
+          // Run boundaries can change during revision resolution; only markers and block boundaries
+          // separate text in this structural projection.
+          const children: unknown[] = [];
+          for (const child of Array.from(e.children).flatMap(walk)) {
+            const previous = children[children.length - 1];
+            if (typeof child === 'string' && typeof previous === 'string')
+              children[children.length - 1] = previous + child;
+            else children.push(child);
+          }
           return ['tbl', 'tr', 'tc', 'p'].includes(e.localName) ? [[e.localName, children]] : children;
         }
         return walk(document.documentElement);
