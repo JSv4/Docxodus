@@ -252,6 +252,7 @@ detail; this file deliberately does not restate them.
 | `FormattingAssembler.cs` | Resolve and flatten formatting | — |
 | `MetricsGetter.cs` | Document metrics (styles, fonts, languages) | — |
 | `PageMap.cs` + `npm/src/pagination.ts` | Page geometry and the paginated view | `page_map.md`, `paginated_headers_footers.md` |
+| Layout compatibility profiles (proposed) | Word/LibreOffice policy ownership, evidence ledger, API and identity migration | `layout_profiles.md` |
 | `Ir/` | The structure-aware IR the diff and markdown projection read | `document_ir.md` |
 | `Delivery/` | Delivery bundles and change receipts | `delivery_bundle.md`, `delivery_change_receipt.md` |
 | `Verification/` | Package manifests, semantic change sets, reversibility proof | `deliverable_verification.md`, `package_manifests.md`, `semantic_diff.md`, `redline_reversibility_proof.md` |
@@ -342,6 +343,27 @@ to rediscover, and each one should eventually get a test.
 
 Record: a minimal XML reproducer, a Word / LibreOffice / Docxodus comparison table, your
 analysis of why they differ, the Docxodus code involved, and the fix if known.
+
+### Layout compatibility profiles
+
+For rendering or pagination changes, read
+[`docs/architecture/layout_profiles.md`](docs/architecture/layout_profiles.md). It is a proposed
+design, not a shipped API. Until implementation lands, keep its evidence ledger current; when it
+lands, update the design's status and implementation pointers in the same change.
+
+- **Classify the finding.** Distinguish a shared defect, a measured Word/LibreOffice difference,
+  an environment effect and an unresolved hypothesis. Read historical issue resolutions and
+  linked measurements, not just titles. A benchmark drop alone does not establish a profile rule.
+- **Update profiles with the fix.** For a confirmed difference, update the central policy and
+  both profiles' expected behavior together. Keep shared fixes shared; do not scatter profile-ID
+  checks through the renderer or encode a known bug as a compatibility preference.
+- **Keep the evidence and regression current.** Update the corner-case measurements and profile
+  ledger, add a fixture/control and target-specific assertions, and follow the fidelity-bench
+  workflow. Record unmeasured behavior as pending rather than asserting Word/LibreOffice parity.
+- **Preserve identity.** A new or changed profile must be reflected in option forwarding,
+  layout digests, reports and cache/citation invalidation. Follow the design's schema migration;
+  a frozen report cannot silently acquire a field. Document the default and any profile-version
+  change. Layout profiles do not change DOCX editing, comparison or revision semantics.
 
 ## Release Process
 
