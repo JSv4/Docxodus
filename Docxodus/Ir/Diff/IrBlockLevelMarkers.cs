@@ -27,7 +27,7 @@ internal static partial class IrMarkupRenderer
     /// marker the block placement (or a replaced wrapper's copy) gave to one document's view only.</summary>
     private static bool IsBlockLevelRevisionMarker(XElement marker) =>
         marker.Parent is { } wrapper && (wrapper.Name == W.ins || wrapper.Name == W.del) &&
-        wrapper.Parent is { } stream && (stream.Name == W.body || stream.Name == W.tc ||
+        wrapper.Parent is { } stream && (stream.Name == W.body || stream.Name == W.tbl || stream.Name == W.tr || stream.Name == W.tc ||
             stream.Name == W.sdtContent || stream.Name == W.customXml || stream.Name == W.hdr || stream.Name == W.ftr ||
             stream.Name == W.footnote || stream.Name == W.endnote);
 
@@ -124,6 +124,13 @@ internal static partial class IrMarkupRenderer
         for (int i = 0; i < ops.Count; i++)
             (leftBlocks[i], rightBlocks[i]) = OpSourceBlocks(ops[i], leftDoc, rightDoc);
 
+        return ComputeMarkerLayout(leftBlocks, rightBlocks);
+    }
+
+    // Rows and cells use the same gap matching as paragraph blocks; their sources are resolved by the table
+    // renderer because row/cell anchors are not part of the document's block index.
+    private static MarkerLayout? ComputeMarkerLayout(List<XElement>[] leftBlocks, List<XElement>[] rightBlocks)
+    {
         var left = ReadSideMarkers(leftBlocks);
         var right = ReadSideMarkers(rightBlocks);
         if (left is null && right is null)
@@ -132,12 +139,12 @@ internal static partial class IrMarkupRenderer
         right ??= new SideMarkers(new(), new());
 
         // Gap g holds the one-sided ops after the (g-1)-th two-sided op; each side's ops in it, in order.
-        var twoSided = new bool[ops.Count];
-        var gapOf = new int[ops.Count];
+        var twoSided = new bool[leftBlocks.Length];
+        var gapOf = new int[leftBlocks.Length];
         int gaps = 0;
         var leftGapOps = new List<List<int>> { new() };
         var rightGapOps = new List<List<int>> { new() };
-        for (int i = 0; i < ops.Count; i++)
+        for (int i = 0; i < leftBlocks.Length; i++)
         {
             twoSided[i] = leftBlocks[i].Count > 0 && rightBlocks[i].Count > 0;
             gapOf[i] = gaps;
@@ -213,7 +220,7 @@ internal static partial class IrMarkupRenderer
             if (entry.Left is null || entry.Right is null)
                 unmatched.Add(MarkerIdentity(entry.Left ?? entry.Right!));
 
-        var twoSidedOps = Enumerable.Range(0, ops.Count).Where(i => twoSided[i]).ToList();
+        var twoSidedOps = Enumerable.Range(0, leftBlocks.Length).Where(i => twoSided[i]).ToList();
         return new MarkerLayout(gapStart, gapEnd, interior, twoSidedOps, unmatched);
     }
 
@@ -251,12 +258,23 @@ internal static partial class IrMarkupRenderer
                 byBaseAnchor.TryAdd(a, i);
         int? BaseIndex(string? anchor) => anchor is not null && byBaseAnchor.TryGetValue(anchor, out var i) ? i : null;
 
+        return PlanCompositeMarkers(ops.Count, baseSide, layouts,
+            (r, j) => BaseIndex(reviewerOps![r][j].LeftAnchor),
+            (r, j) => reviewerOps![r][j].RightAnchor is { } right
+                ? Enumerable.Range(0, ops.Count).Cast<int?>().FirstOrDefault(i =>
+                    ops[i!.Value].SourceReviewer == r && ops[i.Value].Op.RightAnchor == right)
+                : null, authors, state);
+    }
+
+    private static Dictionary<int, List<XElement>>? PlanCompositeMarkers(int count, SideMarkers? baseSide,
+        IReadOnlyList<MarkerLayout?> layouts, Func<int, int, int?> baseIndex, Func<int, int, int?> rightIndex,
+        IReadOnlyList<string> authors, RenderState state)
+    {
         var placement = new CompositeMarkerPlacement(state);
-        for (int r = 0; r < layouts.Length; r++)
+        for (int r = 0; r < layouts.Count; r++)
         {
             if (layouts[r] is not { } layout)
                 continue;
-            var rops = reviewerOps![r];
             var two = layout.TwoSidedOps;
             int reviewer = r;
             void Take(MarkerEntry entry, int position, bool beforeBase)
@@ -266,24 +284,19 @@ internal static partial class IrMarkupRenderer
             }
             foreach (var (g, entries) in layout.GapStart)
             {
-                int position = g == 0 ? 0 : (BaseIndex(rops[two[g - 1]].LeftAnchor) ?? ops.Count - 1) + 1;
+                int position = g == 0 ? 0 : (baseIndex(r, two[g - 1]) ?? count - 1) + 1;
                 foreach (var entry in entries)
                     Take(entry, position, beforeBase: true);
             }
             foreach (var (g, entries) in layout.GapEnd)
             {
-                int position = g < two.Count ? BaseIndex(rops[two[g]].LeftAnchor) ?? ops.Count : ops.Count;
+                int position = g < two.Count ? baseIndex(r, two[g]) ?? count : count;
                 foreach (var entry in entries)
                     Take(entry, position, beforeBase: false);
             }
             foreach (var (j, entry) in layout.Interior)
             {
-                var op = rops[j];
-                int position = (op.RightAnchor is { } right
-                        ? Enumerable.Range(0, ops.Count).Cast<int?>().FirstOrDefault(i =>
-                            ops[i!.Value].SourceReviewer == reviewer && ops[i.Value].Op.RightAnchor == right)
-                        : null)
-                    ?? BaseIndex(op.LeftAnchor) ?? ops.Count;
+                int position = rightIndex(r, j) ?? baseIndex(r, j) ?? count;
                 Take(entry, position, beforeBase: false);
             }
         }
@@ -292,15 +305,144 @@ internal static partial class IrMarkupRenderer
             return null;
 
         var plan = new Dictionary<int, List<XElement>>();
-        for (int i = 0; i <= ops.Count; i++)
+        for (int i = 0; i <= count; i++)
         {
             var baseMarkers = baseSide is null ? new List<XElement>()
-                : i == ops.Count ? baseSide.Trailing : baseSide.Before.GetValueOrDefault((i, 0)) ?? new List<XElement>();
+                : i == count ? baseSide.Trailing : baseSide.Before.GetValueOrDefault((i, 0)) ?? new List<XElement>();
             var output = placement.Render(i, baseMarkers, authors, state);
             if (output.Count > 0)
                 plan[i] = output;
         }
         return plan;
+    }
+
+    /// <summary>Put a table or row's markers around its rendered rows/cells, using their actual pairings rather
+    /// than their output ordinals. An inserted/deleted row or cell can shift every subsequent boundary.</summary>
+    private static void ReconcileTableStreamMarkers(XElement emitted,
+        IReadOnlyList<(XElement? Left, XElement? Right)> pairs, RenderState state)
+    {
+        var layout = ComputeMarkerLayout(pairs.Select(p => MarkerBlock(p.Left)).ToArray(),
+            pairs.Select(p => MarkerBlock(p.Right)).ToArray());
+        if (layout is null)
+            return;
+        var entries = new Dictionary<int, List<MarkerEntry>>();
+        void Add(int index, IEnumerable<MarkerEntry> values)
+        {
+            if (!entries.TryGetValue(index, out var list))
+                entries[index] = list = new();
+            list.AddRange(values);
+        }
+        foreach (var (gap, values) in layout.GapStart)
+            Add(gap == 0 ? 0 : layout.TwoSidedOps[gap - 1] + 1, values);
+        foreach (var (gap, values) in layout.GapEnd)
+            Add(gap < layout.TwoSidedOps.Count ? layout.TwoSidedOps[gap] : pairs.Count, values);
+        foreach (var (index, entry) in layout.Interior)
+            Add(index, new[] { entry });
+        PlaceStreamMarkers(emitted, entries.ToDictionary(p => p.Key,
+            p => RenderMarkerEntries(p.Value, layout.IsShared, state)));
+    }
+
+    private static List<XElement> MarkerBlock(XElement? element) => element is null ? new() : new() { element };
+
+    private static void PlaceStreamMarkers(XElement stream, IReadOnlyDictionary<int, List<XElement>> markers)
+    {
+        var blocks = stream.Elements().Where(IsMarkerStreamContent).ToList();
+        stream.Elements().Where(IsBlockLevelMarker).Remove();
+        foreach (var (index, values) in markers.OrderBy(p => p.Key))
+        {
+            if (index < blocks.Count)
+                blocks[index].AddBeforeSelf(values);
+            else
+                stream.Add(values);
+        }
+    }
+
+    internal static bool HasTableBoundaryMarkers(XElement? table) => table is not null &&
+        (table.Elements().Any(IsBlockLevelMarker) || table.Elements(W.tr).Any(r => r.Elements().Any(IsBlockLevelMarker)));
+
+    private sealed record MarkerStreamReview(int Reviewer, string Author,
+        IReadOnlyList<(XElement? Left, XElement? Right)> Pairs);
+
+    private static void ReconcileCompositeTableStreamMarkers(XElement emitted, IReadOnlyList<XElement?> baseElements,
+        IReadOnlyList<(int Reviewer, XElement? Element)> insertedElements, IReadOnlyList<MarkerStreamReview> reviewers,
+        int reviewerCount, RenderState state)
+    {
+        var baseSide = ReadSideMarkers(baseElements.Select(MarkerBlock).ToArray());
+        var layouts = new MarkerLayout?[reviewerCount];
+        var authors = new string[reviewerCount];
+        foreach (var reviewer in reviewers)
+        {
+            layouts[reviewer.Reviewer] = ComputeMarkerLayout(reviewer.Pairs.Select(p => MarkerBlock(p.Left)).ToArray(),
+                reviewer.Pairs.Select(p => MarkerBlock(p.Right)).ToArray());
+            authors[reviewer.Reviewer] = reviewer.Author;
+        }
+        if (baseSide is null && layouts.All(l => l is null))
+            return;
+        var byBase = baseElements.Select((element, index) => (element, index)).Where(p => p.element is not null)
+            .ToDictionary(p => p.element!, p => p.index);
+        var byRight = insertedElements.Select((pair, index) => (pair, index)).Where(p => p.pair.Element is not null)
+            .ToDictionary(p => p.pair, p => p.index);
+        XElement? Source(int r, int j, bool right)
+        {
+            var pair = reviewers.First(v => v.Reviewer == r).Pairs[j];
+            return right ? pair.Right : pair.Left;
+        }
+        var plan = PlanCompositeMarkers(baseElements.Count, baseSide, layouts,
+            (r, j) => Source(r, j, false) is { } left && byBase.TryGetValue(left, out var i) ? i : null,
+            (r, j) => Source(r, j, true) is { } right && byRight.TryGetValue((r, right), out var i) ? i : null,
+            authors, state);
+        if (plan is not null)
+            PlaceStreamMarkers(emitted, plan);
+    }
+
+    private static void ReconcileComposedTableMarkers(XElement emitted, IrCompositeOp op,
+        Dictionary<string, XElement> baseRows, Dictionary<string, XElement> baseCells,
+        IReadOnlyList<IrDocument> reviewerIrs, RenderState state)
+    {
+        if (op.AuthoredRows is not { } rows || op.ReviewerTables is not { } tables)
+            return;
+        XElement? RightRow(int reviewer, string? anchor) => anchor is null ? null : FindRowSource(reviewerIrs[reviewer], anchor);
+        var reviews = tables.Select(t => new MarkerStreamReview(t.Reviewer, t.Author,
+            t.Diff.RowOps.Select(r => (
+                r.Kind == IrRowOpKind.MovedRow && r.IsMoveSource != true ? null : baseRows.GetValueOrDefault(r.LeftRowAnchor ?? ""),
+                r.Kind == IrRowOpKind.MovedRow && r.IsMoveSource == true ? null : RightRow(t.Reviewer, r.RightRowAnchor)))
+                .ToList())).ToList();
+        ReconcileCompositeTableStreamMarkers(emitted,
+            rows.Select(r => baseRows.GetValueOrDefault(r.BaseRowAnchor ?? "")).ToList(),
+            rows.Select(r => (r.SourceReviewer, r.Kind == IrRowOpKind.InsertRow ? RightRow(r.SourceReviewer, r.RightRowAnchor) : null)).ToList(),
+            reviews, reviewerIrs.Count, state);
+
+        var outputRows = emitted.Elements(W.tr).ToList();
+        for (int i = 0; i < rows.Count && i < outputRows.Count; i++)
+        {
+            var row = rows[i];
+            if (row.Kind != IrRowOpKind.EqualRow && row.Kind != IrRowOpKind.ModifyRow ||
+                row.BaseRowAnchor is not { } anchor || !baseRows.TryGetValue(anchor, out var source))
+                continue;
+            var baseRowCells = source.Elements(W.tc).ToList();
+            var cellReviews = new List<MarkerStreamReview>();
+            foreach (var table in tables)
+            {
+                var pair = table.Diff.RowOps.FirstOrDefault(r => r.LeftRowAnchor == anchor);
+                if (pair is null || RightRow(table.Reviewer, pair.RightRowAnchor) is not { } right)
+                    continue;
+                var rightCells = right.Elements(W.tc).ToList();
+                int l = 0, r = 0;
+                var pairs = pair.CellOps is { } cells
+                    ? cells.Select(c => (c.LeftCellAnchor is null ? null : baseRowCells[l++],
+                        c.RightCellAnchor is null ? null : rightCells[r++])).ToList()
+                    : baseRowCells.Select((c, j) => ((XElement?)c, j < rightCells.Count ? rightCells[j] : null)).ToList();
+                cellReviews.Add(new MarkerStreamReview(table.Reviewer, table.Author, pairs));
+            }
+            var outputBase = row.ComposedCells is { } composed
+                ? composed.Select(c => baseCells.GetValueOrDefault(c.BaseCellAnchor ?? "")).ToList()
+                : baseRowCells.Cast<XElement?>().ToList();
+            var outputInserted = row.ComposedCells is { } cc
+                ? cc.Select(c => (c.ShellSourceReviewer, c.Kind == IrAuthoredCellKind.InsertCell && c.ShellRightCellAnchor is { } right
+                    ? FindCellSource(reviewerIrs[c.ShellSourceReviewer], right) : null)).ToList()
+                : baseRowCells.Select(_ => (-1, (XElement?)null)).ToList();
+            ReconcileCompositeTableStreamMarkers(outputRows[i], outputBase, outputInserted, cellReviews, reviewerIrs.Count, state);
+        }
     }
 
     /// <summary>
@@ -402,7 +544,7 @@ internal static partial class IrMarkupRenderer
             return;
         foreach (var (stream, leftStream) in streams)
         {
-            var blocks = stream.Elements().Where(IsBlockContent).ToList();
+            var blocks = stream.Elements().Where(IsMarkerStreamContent).ToList();
             var (_, baseBefore) = SplitStream(leftStream);
             if (baseBefore.Count != blocks.Count + 1)
                 continue;
@@ -451,7 +593,7 @@ internal static partial class IrMarkupRenderer
         foreach (var group in entries.GroupBy(e => e.Stream))
         {
             var stream = group.Key;
-            var blocks = stream.Elements().Where(IsBlockContent).ToList();
+            var blocks = stream.Elements().Where(IsMarkerStreamContent).ToList();
             stream.Elements().Where(IsBlockLevelMarker).Remove();
             foreach (var (_, _, boundary, list) in group)
             {
@@ -489,13 +631,10 @@ internal static partial class IrMarkupRenderer
         // Most containers hold no marker in a block stream: tell that without building signatures.
         static bool HasStreamMarker(XElement container) =>
             container.DescendantsAndSelf().Any(e => IsBlockLevelMarker(e) && e.Parent is { } p && p.Name != W.p &&
-                (p == container || p.Name == W.tc || p.Name == W.sdtContent || p.Name == W.customXml));
+                (p == container || p.Name == W.tbl || p.Name == W.tr || p.Name == W.tc || p.Name == W.sdtContent || p.Name == W.customXml));
 
         static IEnumerable<string> ContainerSignature(XElement container, IReadOnlyDictionary<string, string>? comments)
         {
-            if (container.Name == W.tbl)
-                return container.Elements(W.tr).SelectMany(tr => tr.Elements(W.tc))
-                    .SelectMany(tc => StreamSignature(tc, comments).Prepend("["));
             if (container.Name == W.sdt)
                 return BlockWrapperContent(container) is { } content ? StreamSignature(content, comments) : Enumerable.Empty<string>();
             return StreamSignature(container, comments);
@@ -520,7 +659,7 @@ internal static partial class IrMarkupRenderer
                     yield return Key(child, comments);
                     continue;
                 }
-                if (!IsBlockContent(child))
+                if (!IsMarkerStreamContent(child))
                     continue;
                 yield return "|";
                 if (child.Name == W.p)
@@ -556,7 +695,7 @@ internal static partial class IrMarkupRenderer
     /// below it: a cell, a block wrapper's content or a note.</summary>
     private static bool HasMarkerBetweenBlocks(XElement container) =>
         container.DescendantsAndSelf().Any(e => IsBlockLevelMarker(e) && e.Parent is { } p &&
-            (p.Name == W.tc || p.Name == W.sdtContent || p.Name == W.customXml || p.Name == W.footnote || p.Name == W.endnote));
+            (p.Name == W.tbl || p.Name == W.tr || p.Name == W.tc || p.Name == W.sdtContent || p.Name == W.customXml || p.Name == W.footnote || p.Name == W.endnote));
 
     /// <summary>
     /// The output keeps the original's copy of every note the comparison did not change, so a note whose only
@@ -603,20 +742,11 @@ internal static partial class IrMarkupRenderer
     {
         if (emitted.Name != left.Name || emitted.Name != right.Name)
             return;
-        if (emitted.Name == W.tbl || emitted.Name == W.tr)
-        {
-            var child = emitted.Name == W.tbl ? W.tr : W.tc;
-            var (e, l, r) = (emitted.Elements(child).ToList(), left.Elements(child).ToList(), right.Elements(child).ToList());
-            if (e.Count == l.Count && e.Count == r.Count)
-                for (int i = 0; i < e.Count; i++)
-                    CollectEqualStreamMarkers(e[i], l[i], r[i], sink);
-            return;
-        }
         var stream = emitted.Name == W.sdt ? emitted.Element(W.sdtContent) : emitted;
         var leftStream = left.Name == W.sdt ? left.Element(W.sdtContent) : left;
         var rightStream = right.Name == W.sdt ? right.Element(W.sdtContent) : right;
         if (stream is null || leftStream is null || rightStream is null ||
-            !(emitted.Name == W.tc || emitted.Name == W.sdt || emitted.Name == W.customXml ||
+            !(emitted.Name == W.tbl || emitted.Name == W.tr || emitted.Name == W.tc || emitted.Name == W.sdt || emitted.Name == W.customXml ||
               emitted.Name == W.footnote || emitted.Name == W.endnote))
             return;
         // A copy holding a revision wrapper between its blocks (preserved input revisions) is not a plain clone.
@@ -626,8 +756,8 @@ internal static partial class IrMarkupRenderer
         if (!leftStream.Elements().Any(IsBlockLevelMarker) && !rightStream.Elements().Any(IsBlockLevelMarker))
         {
             // No marker at this level: only nested containers can hold one.
-            var (en, ln, rn) = (stream.Elements().Where(IsBlockContent).ToList(),
-                leftStream.Elements().Where(IsBlockContent).ToList(), rightStream.Elements().Where(IsBlockContent).ToList());
+            var (en, ln, rn) = (stream.Elements().Where(IsMarkerStreamContent).ToList(),
+                leftStream.Elements().Where(IsMarkerStreamContent).ToList(), rightStream.Elements().Where(IsMarkerStreamContent).ToList());
             if (en.Count == ln.Count && en.Count == rn.Count)
                 for (int k = 0; k < en.Count; k++)
                     if (en[k].Name != W.p)
@@ -648,6 +778,9 @@ internal static partial class IrMarkupRenderer
                 CollectEqualStreamMarkers(eb[k], lb[k], rb[k], sink);
     }
 
+    private static bool IsMarkerStreamContent(XElement element) =>
+        IsBlockContent(element) || element.Name == W.tr || element.Name == W.tc;
+
     /// <summary>A block stream's blocks and, for each block boundary (before each block, then after the last), the
     /// block-level markers there.</summary>
     private static (List<XElement> Blocks, List<List<XElement>> Before) SplitStream(XElement stream)
@@ -658,7 +791,7 @@ internal static partial class IrMarkupRenderer
         {
             if (IsBlockLevelMarker(c))
                 before[^1].Add(c);
-            else if (IsBlockContent(c))
+            else if (IsMarkerStreamContent(c))
             {
                 blocks.Add(c);
                 before.Add(new List<XElement>());

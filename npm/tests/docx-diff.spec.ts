@@ -2,6 +2,7 @@ import { test, expect, Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { readZipEntry } from './zip.js';
 
 // Minimal browser/WASM smoke for the DocxDiff (IR diff engine) bridge — the
 // Specialized DocxDiff bridge surface for anchor-addressed revisions and edit
@@ -279,27 +280,56 @@ test.describe('DocxDiff consolidate (composite N-way) bridge', () => {
     await waitForDocxodus(page);
   });
 
-  test('Consolidate two reviewers returns redlined DOCX bytes', async ({ page }) => {
-    const base = readTestFile('WC/WC001-Digits.docx');
-    const rev = readTestFile('WC/WC001-Digits-Mod.docx');
-
-    const result = await page.evaluate(
-      ([b, r]) => {
-        const res = (window as any).DocxodusTests.docxDiffConsolidate(
-          new Uint8Array(b),
-          [
-            { author: 'Alice', document: new Uint8Array(r) },
-            { author: 'Bob', document: new Uint8Array(r) },
-          ]
-        );
-        return res.docxBytes ? { length: res.docxBytes.length } : res;
-      },
-      [Array.from(base), Array.from(rev)]
-    );
-
-    expect(result.error).toBeUndefined();
-    expect(result.length).toBeGreaterThan(1000);
-  });
+  for (const [operation, level] of [['compare', 'tbl'], ['consolidate', 'tr'], ['consolidate', 'paragraph-control']]) {
+    test(`${operation} resolves ${level} structure through accept/reject`, async ({ page }) => {
+      const prefix = `TableBoundaryBookmarks/boundary-bookmark-${operation}-${level}`;
+      const inputs = [0, 1, ...(operation === 'consolidate' ? [2] : [])].map(i => readTestFile(`${prefix}-${i}.docx`));
+      const expected = readTestFile(`${prefix}-final.docx`);
+      const result = await page.evaluate(({ operation, inputs }) => {
+        const T = (window as any).DocxodusTests;
+        const bytes = inputs.map(input => new Uint8Array(input));
+        const result = operation === 'compare'
+          ? T.docxDiffCompare(bytes[0], bytes[1])
+          : T.docxDiffConsolidate(bytes[0], bytes.slice(1).map((document, i) => ({ author: `Reviewer${i + 1}`, document })));
+        if (result.error) throw new Error(JSON.stringify(result.error));
+        return [T.docxDiffAcceptRevisions(result.docxBytes), T.docxDiffRejectRevisions(result.docxBytes)].map(resolved => {
+          if (resolved.error) throw new Error(JSON.stringify(resolved.error));
+          const html = T.convertToHtml(resolved.docxBytes);
+          if (html.error) throw new Error(JSON.stringify(html.error));
+          return { bytes: Array.from(resolved.docxBytes) as number[], text: new DOMParser().parseFromString(html.html, 'text/html').body.textContent };
+        });
+      }, { operation, inputs: inputs.map(bytes => Array.from(bytes)) });
+      const xml = [...result.map(r => Buffer.from(r.bytes)), Buffer.from(expected), Buffer.from(inputs[0])]
+        .map(bytes => readZipEntry(bytes, 'word/document.xml'));
+      const views = await page.evaluate(xml => xml.map(source => {
+        const document = new DOMParser().parseFromString(source, 'application/xml');
+        const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+        const names = new Map(Array.from(document.getElementsByTagNameNS(ns, 'bookmarkStart'))
+          .map(e => [e.getAttributeNS(ns, 'id'), e.getAttributeNS(ns, 'name')]));
+        function walk(e: Element): unknown[] {
+          if (e.localName === 't') return [e.textContent];
+          if (e.localName === 'bookmarkStart' || e.localName === 'bookmarkEnd')
+            return [[e.localName, names.get(e.getAttributeNS(ns, 'id'))]];
+          // Run boundaries can change during revision resolution; only markers and block boundaries
+          // separate text in this structural projection.
+          const children: unknown[] = [];
+          for (const child of Array.from(e.children).flatMap(walk)) {
+            const previous = children[children.length - 1];
+            if (typeof child === 'string' && typeof previous === 'string')
+              children[children.length - 1] = previous + child;
+            else children.push(child);
+          }
+          return ['tbl', 'tr', 'tc', 'p'].includes(e.localName) ? [[e.localName, children]] : children;
+        }
+        return walk(document.documentElement);
+      }), xml);
+      expect(views[0]).toEqual(views[2]);
+      expect(views[1]).toEqual(views[3]);
+      expect(views[2]).not.toEqual(views[3]);
+      expect(result[0].text).toContain(operation === 'consolidate' ? 'Hazel lower revised' : 'Hazel lower');
+      expect(result[1].text).not.toContain('revised');
+    });
+  }
 
   test('GetConflicts reports overlapping reviewer edits', async ({ page }) => {
     // Two reviewers edit the SAME word differently ("quick" -> "SLOW" vs "FAST"),

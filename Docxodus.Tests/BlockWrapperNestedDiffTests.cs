@@ -426,6 +426,54 @@ public class BlockWrapperNestedDiffTests
         AssertNoNewValidationErrors(redline, left, right);
     }
 
+    public static IEnumerable<object[]> OneSidedCommentWrapperCases()
+    {
+        foreach (var kind in Enum.GetValues<Wrapper>())
+        foreach (var change in new[] { "add", "remove", "add-content", "remove-content", "control" })
+        foreach (var referenceAfter in new[] { false, true })
+        foreach (var engine in new[] { "DocxCompare", "DocxDiff", "Consolidate" })
+            yield return new object[] { kind, change, referenceAfter, engine };
+    }
+
+    [Theory]
+    [MemberData(nameof(OneSidedCommentWrapperCases))]
+    public void CommentStraddlingAOneSidedWrapper_ResolvesAtItsSourcePositions(
+        Wrapper kind, string change, bool referenceAfter, string engine)
+    {
+        WmlDocument Input(bool wrapped, bool revised)
+        {
+            string inner = referenceAfter
+                ? $"<w:p>{Start}{Run("Cedar inner clause")}{End}</w:p>"
+                : $"<w:p>{Run("Cedar inner clause")}{End}{ReferenceRun}</w:p>";
+            if (revised && change == "control")
+                inner = inner.Replace("inner", "revised");
+            string before = referenceAfter ? P("Maple opening") : $"<w:p>{Run("Maple opening")}{Start}</w:p>";
+            string after = referenceAfter ? $"<w:p>{ReferenceRun}{Run("Birch closing")}</w:p>" : P("Birch closing");
+            if (change.EndsWith("content", StringComparison.Ordinal) && !wrapped)
+            {
+                inner = "";
+                before = referenceAfter
+                    ? $"<w:p>{Start}{Run("Maple opening")}{End}</w:p>"
+                    : $"<w:p>{Run("Maple opening")}{Start}{End}{ReferenceRun}</w:p>";
+            }
+            return IrTestDocuments.WithComment("Cedar", "C", "2026-01-01T00:00:00Z", "Check this clause.",
+                before + (wrapped ? Wrap(kind, inner) : inner) + after);
+        }
+        var left = Input(!change.StartsWith("add", StringComparison.Ordinal), revised: false);
+        var right = Input(!change.StartsWith("remove", StringComparison.Ordinal), revised: true);
+        var redline = engine == "Consolidate"
+            ? DocxCompare.Consolidate(left, new[] { new DocxDiffReviewer { Document = right, Author = "Cedar" } })
+            : engine == "DocxCompare" ? DocxCompare.Compare(left, right) : DocxDiff.Compare(left, right);
+        var accepted = DocxDiffOps.AcceptRevisions(redline.DocumentByteArray);
+        var rejected = DocxDiffOps.RejectRevisions(redline.DocumentByteArray);
+        AssertRoundTrip(left, right, redline);
+        Assert.Equal(CommentPlacement(right.DocumentByteArray), CommentPlacement(accepted));
+        Assert.Equal(CommentPlacement(left.DocumentByteArray), CommentPlacement(rejected));
+        AssertOneCompleteCommentPerId(accepted, comments: 1);
+        AssertOneCompleteCommentPerId(rejected, comments: 1);
+        AssertNoNewValidationErrors(redline, left, right);
+    }
+
     /// <summary>In a consolidate, the twin <c>w:del</c>/<c>w:ins</c> around the comment's outside marker carry the
     /// author and date of the wrapper copy each one pairs with — the reviewer's — not the renderer's default.</summary>
     [Theory]
@@ -459,13 +507,15 @@ public class BlockWrapperNestedDiffTests
     [InlineData(Wrapper.ContentControl, "", "")]
     [InlineData(Wrapper.CustomXml, "First", "Second", true)]
     [InlineData(Wrapper.ContentControl, "Reviewer", "Reviewer", true)]
+    [InlineData(Wrapper.CustomXml, "Reviewer", "Reviewer", false, true)]
+    [InlineData(Wrapper.ContentControl, "First", "Second", false, true)]
     public void Consolidate_TwoReviewersReplaceTheWrapper_EachCopysCommentHasItsOwnId(Wrapper kind, string firstAuthor,
-        string secondAuthor, bool firstDropsTheRangeEnd = false)
+        string secondAuthor, bool firstDropsTheRangeEnd = false, bool duplicateReferences = false)
     {
         WmlDocument Document(string first, string second, string bravo, bool dropEnd = false) => IrTestDocuments.WithComment(
             "Ann", "A", "2026-01-01T00:00:00Z", CommentText,
             $"<w:p>{Run(BeforeText)}{Start}</w:p>" + Wrap(kind, P(bravo), first)
-            + Wrap(kind, P(Alpha) + P(bravo) + $"<w:p>{Run(Charlie)}{(dropEnd ? "" : End)}{ReferenceRun}</w:p>", second) + P(Tail));
+            + Wrap(kind, P(Alpha) + P(bravo) + $"<w:p>{Run(Charlie)}{(dropEnd ? "" : End)}{ReferenceRun}{(duplicateReferences ? ReferenceRun : "")}</w:p>", second) + P(Tail));
         var original = Document("A1", "a1", Bravo);
         // When the first reviewer's copy has no range end, the second reviewer's end must stay with the second
         // reviewer's reference rather than fill the first copy's gap.
@@ -481,6 +531,8 @@ public class BlockWrapperNestedDiffTests
         var body = Body(redline);
         var copies = body.Descendants(WrapperName(kind)).Count(w => w.Descendants(W.commentReference).Any());
         Assert.True(copies >= 3, $"expected a deleted and two inserted copies of the second wrapper, found {copies}");
+        Assert.All(body.Descendants(WrapperName(kind)).Where(w => w.Descendants(W.commentReference).Any()),
+            w => Assert.Single(w.Descendants(W.commentReference)));
         AssertCommentMarkersWellFormed(redline.DocumentByteArray);
         // A copy's range end stays with the reference of the same copy of the wrapper.
         foreach (var end in body.Descendants(W.commentRangeEnd).Where(e => e.Ancestors(WrapperName(kind)).Any()))
