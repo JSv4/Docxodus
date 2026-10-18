@@ -1200,7 +1200,7 @@ export class PaginationEngine {
             height: (bottom - top) * pointPerRenderedY,
           },
           story: this.storyForCanonicalAnchor(anchorId),
-          inTableCell: element.matches("td,th") || element.closest("td,th") !== null,
+          inTableCell: element.matches("td,th") || element.closest('td,th,[data-docx-frame-in-table-cell="true"]') !== null,
         });
       }
     }
@@ -4965,6 +4965,62 @@ export class PaginationEngine {
    * bases belong to the laid-out anchor. Once both coordinate systems exist, promote the object
    * from the clipped text column into the page box and position it in one shared point space.
    */
+  /** Resolve legacy paragraph frames after their ordinary anchor paragraphs have flowed. */
+  private positionTextFrames(pageBox: HTMLElement, dims: PageDimensions, pageNumber: number): HTMLElement[] {
+    const frames = Array.from(pageBox.querySelectorAll<HTMLElement>('[data-docx-text-frame="true"]'));
+    const pageRect = pageBox.getBoundingClientRect();
+    const pixelsPerPoint = pageRect.width / dims.pageWidth;
+    if (!(pixelsPerPoint > 0)) return [];
+    for (const frame of frames) {
+      const placeholder = frame.closest<HTMLElement>('[data-docx-frame-container="true"]');
+      if (!placeholder) continue;
+      let following = placeholder.nextElementSibling;
+      while (following instanceof this.view.HTMLElement && following.dataset.docxFrameContainer === 'true') {
+        following = following.nextElementSibling;
+      }
+      const paragraph = following instanceof this.view.HTMLElement
+        ? (following.matches('p,h1,h2,h3,h4,h5,h6') ? following : following.querySelector<HTMLElement>('p,h1,h2,h3,h4,h5,h6'))
+        : null;
+      const anchorRect = (paragraph ?? placeholder).getBoundingClientRect();
+      const rect = frame.getBoundingClientRect();
+      const computed = this.view.getComputedStyle(frame);
+      const context = {
+        staticLeft: (anchorRect.left - pageRect.left) / pixelsPerPoint,
+        staticTop: (anchorRect.top - pageRect.top) / pixelsPerPoint,
+        paragraphLeft: (anchorRect.left - pageRect.left) / pixelsPerPoint,
+        paragraphTop: (anchorRect.top - pageRect.top) / pixelsPerPoint,
+        paragraphWidth: anchorRect.width / pixelsPerPoint,
+        paragraphHeight: anchorRect.height / pixelsPerPoint,
+        lineHeight: anchorRect.height / pixelsPerPoint,
+      };
+      const horizontal = this.horizontalAnchorReference(
+        frame.dataset.docxFrameHAnchor === 'text' ? 'column' : frame.dataset.docxFrameHAnchor ?? 'column',
+        dims, pageNumber, context,
+      );
+      const vertical = this.verticalAnchorReference(
+        frame.dataset.docxFrameVAnchor === 'text' ? 'paragraph' : frame.dataset.docxFrameVAnchor ?? 'paragraph',
+        dims, pageNumber, context,
+      );
+      const xAlign = frame.getAttribute('data-docx-frame-xalign');
+      const yAlign = frame.getAttribute('data-docx-frame-yalign');
+      const left = this.resolveAnchorAxis(horizontal, rect.width / pixelsPerPoint, xAlign,
+        xAlign ? undefined : pxToPt(parseFloat(computed.left) || 0), pageNumber);
+      const top = this.resolveAnchorAxis(vertical, rect.height / pixelsPerPoint, yAlign,
+        yAlign ? undefined : pxToPt(parseFloat(computed.top) || 0), pageNumber);
+      // Escape body/story clipping while keeping inherited presentation and canonical source ids.
+      for (const property of ['font-family', 'font-size', 'font-style', 'font-weight', 'line-height',
+        'color', 'direction', 'text-align', 'letter-spacing', 'word-spacing', 'white-space']) {
+        frame.style.setProperty(property, computed.getPropertyValue(property));
+      }
+      if (frame.closest('td,th')) frame.dataset.docxFrameInTableCell = 'true';
+      pageBox.appendChild(frame);
+      frame.style.left = `${left}pt`;
+      frame.style.top = `${top}pt`;
+      frame.style.margin = '0';
+    }
+    return frames;
+  }
+
   private positionDrawingAnchors(
     pageBox: HTMLElement,
     contentArea: HTMLElement,
@@ -5435,7 +5491,9 @@ export class PaginationEngine {
 
     // Floating objects need the final page and anchor-paragraph boxes. Resolve them only after
     // append, when getBoundingClientRect() is meaningful, and lift them out of content clipping.
+    const textFrames = this.positionTextFrames(pageBox, dims, pageNumber);
     this.positionDrawingAnchors(pageBox, contentArea, dims, pageNumber);
+    for (const frame of textFrames) this.positionDrawingAnchors(pageBox, frame, dims, pageNumber);
 
     // Body and notes must occupy DISJOINT bands. The note block is absolutely positioned against
     // the page bottom and grows upward, while the content area spans the whole text height — so

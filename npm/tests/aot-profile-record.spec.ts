@@ -16,6 +16,10 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { loadWorkloadInput, runWasmWorkload } from './wasm-workload';
 import { runWasmBrowserWorkload, BrowserOperation } from './wasm-browser-workload';
+import { paragraphFrameFixture } from './docx-paragraph-frame-fixture.js';
+
+import { multipleTabFixture } from './docx-multiple-tab-fixture.js';
+import { commentDateFixture } from './docx-comment-date-fixture.js';
 
 const PROFILE_PATH = process.env.DOCXODUS_AOT_PROFILE_OUT ?? path.join(
   path.dirname(fileURLToPath(import.meta.url)), '../../wasm/DocxodusWasm/docxodus.aotprofile');
@@ -85,6 +89,45 @@ test.describe('AOT profile recording', () => {
         const samples = await page.evaluate(runWasmBrowserWorkload, { bytes, operation, iterations: 1 });
         expect(samples[0].outputLength, `${fixture}: ${operation} produced output`).toBeGreaterThan(0);
       }
+    }
+
+    // Frame grouping has both body-border and running-story conversion paths.
+    for (const story of ['body', 'footer'] as const) {
+      const samples = await page.evaluate(runWasmBrowserWorkload, {
+        bytes: Array.from(paragraphFrameFixture(true, story, true)),
+        operation: 'html.options' as BrowserOperation, iterations: 1,
+      });
+      expect(samples[0].outputLength).toBeGreaterThan(0);
+    }
+
+    // Manual tab labels exercise the resolved-stop and formatted spacer paths.
+    const tabSamples = await page.evaluate(runWasmBrowserWorkload, {
+      bytes: Array.from(multipleTabFixture()), operation: 'html.options' as BrowserOperation, iterations: 1,
+    });
+    expect(tabSamples[0].outputLength).toBeGreaterThan(0);
+
+    // Modern UTC comments exercise durable-ID lookup in full and cached block reads.
+    for (const modern of [false, true]) {
+      await page.evaluate(bytes => {
+        const D = (window as any).Docxodus;
+        const input = new Uint8Array(bytes);
+        for (const mode of [0, 1, 2]) {
+          const html = D.DocumentConverter.ConvertDocxToHtmlComplete(input, 'Profile dates',
+            'docx-', false, '', mode, 'comment-', 1, 1, 'page-', false, 0, 'annot-',
+            false, false, false, true, true);
+          if (!html.startsWith('<')) throw new Error(html);
+        }
+        const bridge = D.DocxSessionBridge;
+        const handle = bridge.OpenSession(input, '');
+        try {
+          bridge.ListComments(handle);
+          const anchor = JSON.parse(bridge.ListBlocks(handle)).body[0].id;
+          for (let pass = 0; pass < 2; pass++) {
+            const html = bridge.RenderEditorBlockHtml(handle, anchor, '{"comments":true}');
+            if (!html.startsWith('<')) throw new Error(html);
+          }
+        } finally { bridge.CloseSession(handle); }
+      }, Array.from(commentDateFixture(modern)));
     }
 
     const profile = await page.evaluate(() => {

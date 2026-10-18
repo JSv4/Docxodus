@@ -33,6 +33,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Paragraph text frames now retain their declared size and anchor offsets (issue #1225), including
+  footer frames that previously added an extra line ahead of centered footer text. Adjacent frame
+  paragraphs share a floating box, and pagination preserves its visible source geometry outside
+  the body or running-story clipping area.
+
+- Manual labels with hanging indentation now keep their first left tab stop in proportional-font
+  fallback rendering (issue #1224). Left/right tab segments use the browser's actual glyph widths
+  to fill leader space and align the following text, including later tabs in the same paragraph.
+
 - Hidden paragraph marks (`w:pPr/w:rPr/w:vanish`) now join following paragraph text on the same
   rendered line, preserving the heading and visible generated numbering (issue #1223). Explicitly
   hidden runs and number styles remain hidden; tables and section boundaries stop joining.
@@ -49,6 +58,10 @@ All notable changes to this project will be documented in this file.
 - Run decorations retain double underline and strikethrough, combined underline/strikethrough,
   and underline patterns and colors (issue #1220). Decorations with different patterns or colors
   use separate inline spans, including in browser/WASM and paginated output.
+
+- Comment rendering and comment listings use a matching valid modern UTC timestamp, with the
+  original legacy date as a fallback (issue #1228). Margin dates include the year, and cached
+  block rendering retains the metadata required to resolve the same instant.
 
 - Rejecting revisions now reverses an insertion or deletion in every container that can hold one (issue
   #1176). Reject works by turning each insertion into a deletion and each deletion into an insertion,

@@ -104,13 +104,11 @@ namespace Docxodus
         /// The per-class widths below track Times New Roman / Calibri averages closely enough
         /// that "does the number end before the text indent" decisions match real renderers.
         ///
-        /// This is deliberately NOT the general text fallback. For ordinary tab runs the HTML
-        /// layout reserves (tab stop − estimated following-text width) and the browser paints
-        /// the real glyphs after that reservation, so the flat 0.6 em estimate must stay at or
-        /// above browser fallback-font advances (monospace fixtures and DejaVu-class fallbacks
-        /// sit at ~0.6 em) or lines near the column edge overflow and wrap. A list marker is
-        /// safe: its wrapper is (chosen stop − marker start) with a flex tab absorbing any
-        /// glyph-width error, so only the stop choice needs realistic widths.
+        /// Flex tab segments can also use these widths to choose stops for proportional-font
+        /// prefixes: the browser absorbs glyph-width differences in the tab's flex space.
+        /// Fixed-pitch text and following-text reservations on complex inline paths still need
+        /// their conservative flat estimate, because those paths paint real glyphs after a fixed
+        /// reservation. This helper does not measure the browser's actual fallback font.
         /// </summary>
         public static int EstimateTextWidth(decimal sz, string text)
         {

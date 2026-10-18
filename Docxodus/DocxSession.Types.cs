@@ -1505,7 +1505,8 @@ public sealed record NoteListEntry(string Id, string DefAnchorId, int Ordinal);
 /// One native Word comment, in comments-part order — see <see cref="DocxSession.ListComments"/>.
 /// <see cref="DefAnchorId"/> addresses the definition (kind <c>cmt</c>) for
 /// <see cref="DocxSession.UpdateComment"/>/<see cref="DocxSession.RemoveComment"/>;
-/// <see cref="Date"/> is the raw <c>w:date</c> attribute string (null when absent);
+/// <see cref="Date"/> is the matching valid extensible comment UTC timestamp, or the raw
+/// <c>w:date</c> attribute string as a fallback (null when both are absent);
 /// <see cref="Text"/> is the flattened body (paragraphs joined by a space, the
 /// <c>w:annotationRef</c> mark excluded). <see cref="ParentAnchorId"/> resolves
 /// <c>w15:paraIdParent</c> back to the parent definition anchor; <see cref="Resolved"/>
