@@ -16,6 +16,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { loadWorkloadInput, runWasmWorkload } from './wasm-workload';
 import { runWasmBrowserWorkload, BrowserOperation } from './wasm-browser-workload';
+import { multipleTabFixture } from './docx-multiple-tab-fixture.js';
 
 const PROFILE_PATH = process.env.DOCXODUS_AOT_PROFILE_OUT ?? path.join(
   path.dirname(fileURLToPath(import.meta.url)), '../../wasm/DocxodusWasm/docxodus.aotprofile');
@@ -86,6 +87,12 @@ test.describe('AOT profile recording', () => {
         expect(samples[0].outputLength, `${fixture}: ${operation} produced output`).toBeGreaterThan(0);
       }
     }
+
+    // Manual tab labels exercise the resolved-stop and formatted spacer paths.
+    const tabSamples = await page.evaluate(runWasmBrowserWorkload, {
+      bytes: Array.from(multipleTabFixture()), operation: 'html.options' as BrowserOperation, iterations: 1,
+    });
+    expect(tabSamples[0].outputLength).toBeGreaterThan(0);
 
     const profile = await page.evaluate(() => {
       (window as any).Docxodus.DocumentComparer.Warmup();

@@ -7340,6 +7340,44 @@ namespace Docxodus
                 position is "absolute" or "fixed";
         }
 
+        private static bool CanFlexTabRun(WmlToHtmlConverterSettings settings, XElement run)
+        {
+            var rPr = run.Element(W.rPr);
+            return rPr != null && run.Elements().Count(e => e.Name != W.rPr) == 1 && run.Element(W.tab) != null &&
+                !(GetBoolProp(rPr, W.vanish) && !GetBoolProp(rPr, W.specVanish)) &&
+                !(rPr.Element(W.webHidden) != null && settings.RenderPagination != PaginationMode.Paginated) &&
+                rPr.Element(W.rPrChange) == null && rPr.Element(W.bdr) == null &&
+                rPr.Element(W.position) == null && rPr.Element(W.vertAlign) == null &&
+                !GetBoolProp(rPr, W.rtl) && !GetBoolProp(rPr, W.cs) &&
+                !GetBoolProp(rPr, W.strike) && !GetBoolProp(rPr, W.dstrike) &&
+                !(rPr.Element(W.u) is XElement underline && (string?)underline.Attribute(W.val) != "none");
+        }
+
+        private static XElement? CreateFlexibleTabRun(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement run)
+        {
+            // Reuse the run renderer so font/color properties and presentation metadata survive.
+            // The wrapper receives the flex space; its tab rule fills that wrapper's actual width.
+            var rendered = ConvertRun(wordDoc, settings, run);
+            if (rendered == null) return null;
+            if (rendered is not XElement wrapper)
+                return (XElement?)ProcessTab(run.Element(W.tab)!);
+            var tab = wrapper.DescendantsAndSelf().First(e => e.Attribute("data-docx-tab") != null);
+            var style = wrapper.Annotation<Dictionary<string, string>>();
+            if (style == null)
+            {
+                style = new Dictionary<string, string>();
+                wrapper.AddAnnotation(style);
+            }
+            style["display"] = "inline-block";
+            style["flex-grow"] = "1";
+            style["flex-shrink"] = "1";
+            style["flex-basis"] = "0";
+            style["min-width"] = "0";
+            tab.Annotation<Dictionary<string, string>>()!["width"] = "100%";
+            return wrapper;
+        }
+
         /// <summary>Keep each plain left/right tab segment pinned to its stop, including
         /// the following text in a right-aligned segment so real browser glyph widths are absorbed
         /// by the tab. Complex fields, breaks, and other inline containers retain their field-aware
@@ -7350,6 +7388,14 @@ namespace Docxodus
             var paragraph = content.FirstOrDefault()?.Ancestors(W.p).FirstOrDefault();
             if (paragraph != null && IsBidi(paragraph)) return null;
             var tabRuns = content.Where(e => e.Name == W.r && e.Element(W.tab) != null).ToList();
+            // Keep the established path for ranges and tab formatting whose visibility or
+            // borders/vertical placement cannot be treated as an ordinary flex spacer.
+            if (paragraph != null &&
+                ((settings.RenderComments && GetCommentTracker(paragraph)?.OpenRanges.Any() == true) ||
+                 (settings.RenderAnnotations && GetAnnotationTracker(paragraph)?.OpenRanges.Any() == true)))
+                return null;
+            foreach (var tabRun in tabRuns)
+                if (!CanFlexTabRun(settings, tabRun)) return null;
             if (tabRuns.Count == 0 || content.Any(e => e.Name != W.r ||
                     e.Elements().Any(c => c.Name != W.rPr && c.Name != W.t && c.Name != W.tab)) ||
                 tabRuns.Any(r => r.Elements().Count(e => e.Name != W.rPr) != 1 ||
@@ -7395,11 +7441,10 @@ namespace Docxodus
                     });
                     return span;
                 }
-                var tabSpan = (XElement)ProcessTab(tab)!;
-                var tabStyle = tabSpan.Annotation<Dictionary<string, string>>()!;
-                tabStyle["flex-grow"] = "1";
-                tabStyle["flex-shrink"] = "1";
-                var segment = new XElement(Xhtml.span, TextSpan(preceding), tabSpan, TextSpan(following));
+                var precedingSpan = TextSpan(preceding);
+                var tabSpan = CreateFlexibleTabRun(wordDoc, settings, tabRun)!;
+                var followingSpan = TextSpan(following);
+                var segment = new XElement(Xhtml.span, precedingSpan, tabSpan, followingSpan);
                 segment.AddAnnotation(new Dictionary<string, string>
                 {
                     { "display", "inline-flex" }, { "align-items", "baseline" },
@@ -7441,7 +7486,11 @@ namespace Docxodus
             object? tabSpan = null;
             if (tabElement != null)
             {
-                tabSpan = ProcessTab(tabElement);
+                tabSpan = txElementsPrecedingTab.Count > 0 &&
+                    tabElement.Attribute(PtOpenXml.TabAfterWrappedText) == null &&
+                    CanFlexTabRun(settings, firstTabRun!)
+                    ? CreateFlexibleTabRun(wordDoc, settings, firstTabRun!)
+                    : ProcessTab(tabElement);
             }
 
             // Text longer than its line wraps, so it cannot sit in a box pinned to the tab stop:

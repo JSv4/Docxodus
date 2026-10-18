@@ -254,8 +254,9 @@ public class HtmlConversionOpsTests
 
         Assert.Equal(alignment, (string?)tab.Attribute("data-docx-tab"));
         Assert.Equal(expectedTabWidth, (string?)tab.Attribute("data-docx-tab-width"));
-        Assert.Contains(expectedPrecedingWidth, (string?)tab.Parent!.Attribute("style"));
-        Assert.Contains($"iiii{after}", tab.Parent!.Parent!.Value);
+        var segment = tab.Ancestors().First(e => ((string?)e.Attribute("style") ?? "").Contains("display: inline-flex"));
+        Assert.Contains(expectedPrecedingWidth, (string?)segment.Attribute("style"));
+        Assert.Contains($"iiii{after}", root.Value);
         Assert.Empty(tab.Nodes());
     }
 
@@ -270,7 +271,8 @@ public class HtmlConversionOpsTests
             new HtmlConversionOptions { FabricateCssClasses = false }));
         var tab = root.Descendants().Single(e => (string?)e.Attribute("data-docx-tab") == alignment);
         Assert.Equal("3.400", (string?)tab.Attribute("data-docx-tab-width"));
-        Assert.Contains("width: 273.6pt", (string?)tab.Parent!.Attribute("style"));
+        var segment = tab.Ancestors().First(e => ((string?)e.Attribute("style") ?? "").Contains("display: inline-flex"));
+        Assert.Contains("width: 273.6pt", (string?)segment.Attribute("style"));
     }
 
     [Fact]
@@ -284,12 +286,11 @@ public class HtmlConversionOpsTests
             var root = XElement.Parse(html);
             var tab = root.Descendants()
                 .Single(element => (string?)element.Attribute("data-docx-tab") == "right");
-            var tabStyle = (string)tab.Attribute("style")!;
-            var precedingStyle = (string)tab.Parent!.Attribute("style")!;
+            var segment = tab.Ancestors().First(e => ((string?)e.Attribute("style") ?? "").Contains("display: inline-flex"));
+            var precedingStyle = (string)segment.Attribute("style")!;
             return (
-                decimal.Parse(
-                    tabStyle.Split("width: ")[1].Split("pt")[0],
-                    System.Globalization.CultureInfo.InvariantCulture),
+                decimal.Parse((string)tab.Attribute("data-docx-tab-width")!,
+                    System.Globalization.CultureInfo.InvariantCulture) * 72m,
                 decimal.Parse(
                     precedingStyle.Split("width: ")[1].Split("pt")[0],
                     System.Globalization.CultureInfo.InvariantCulture));
@@ -322,7 +323,8 @@ public class HtmlConversionOpsTests
 
         Assert.Equal("right", (string?)leader.Attribute("data-docx-tab"));
         Assert.Empty(leader.Value);
-        Assert.Contains("width: 252pt", (string?)leader.Attribute("style"));
+        Assert.Equal("3.500", (string?)leader.Attribute("data-docx-tab-width"));
+        Assert.Contains("width: 100%", (string?)leader.Attribute("style"));
         Assert.Contains("border-bottom: 1px dotted currentColor", (string?)leader.Attribute("style"));
     }
 
@@ -407,6 +409,7 @@ public class HtmlConversionOpsTests
         // render as "(a)", "(i)", "(ii)", "(iii)".
         var wrappers = root.Descendants()
             .Where(element => (string?)element.Attribute("data-list-marker") == "true" &&
+                !element.Ancestors().Any(a => (string?)a.Attribute("data-list-marker") == "true") &&
                 ((string?)element.Attribute("style") ?? "").Contains("width:"))
             .ToList();
 

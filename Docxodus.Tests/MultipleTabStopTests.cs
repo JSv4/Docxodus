@@ -10,7 +10,7 @@ namespace Docxodus.Tests;
 
 public class MultipleTabStopTests
 {
-    private static byte[] Fixture(string label, bool hyperlink)
+    private static byte[] Fixture(string label, bool hyperlink, string? tabFormat = null)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -30,6 +30,17 @@ public class MultipleTabStopTests
                 new Wp.Run(new Wp.Text("27"))),
                 new Wp.SectionProperties(new Wp.PageSize { Width = 12240, Height = 15840 },
                     new Wp.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440, Header = 720, Footer = 720, Gutter = 0 })));
+            if (tabFormat != null)
+            {
+                var tabRun = main.Document.Descendants<Wp.Run>().Where(r => r.GetFirstChild<Wp.TabChar>() != null).Last();
+                var properties = new Wp.RunProperties();
+                if (tabFormat == "hidden") properties.Append(new Wp.Vanish());
+                if (tabFormat == "color" || tabFormat == "revision") properties.Append(new Wp.Color { Val = "0000FF" });
+                if (tabFormat == "large") properties.Append(new Wp.FontSize { Val = "48" });
+                if (tabFormat == "revision") properties.Append(new Wp.RunPropertiesChange(new Wp.PreviousRunProperties())
+                    { Id = "1", Author = "Cedar tab reviewer" });
+                tabRun.PrependChild(properties);
+            }
             if (hyperlink)
             {
                 var paragraph = main.Document.Body!.Elements<Wp.Paragraph>().Single();
@@ -60,7 +71,7 @@ public class MultipleTabStopTests
         Assert.Null(tabs[0].Attribute("data-docx-tab-leader"));
         Assert.Equal("dot", (string?)tabs[1].Attribute("data-docx-tab-leader"));
         Assert.Contains(label, html.Value);
-        var segment = tabs[1].Parent!;
+        var segment = tabs[1].Ancestors().First(e => ((string?)e.Attribute("style") ?? "").Contains("display: inline-flex"));
         Assert.Contains("Cedar archive inventory", segment.Value);
         Assert.Contains("27", segment.Value);
         var width = ((string?)segment.Attribute("style") ?? "").Split(';')
@@ -68,4 +79,21 @@ public class MultipleTabStopTests
             .Select(d => d[1].Trim()).Single();
         Assert.Equal("360pt", width);
     }
+    [Theory]
+    [InlineData("color")]
+    [InlineData("hidden")]
+    [InlineData("revision")]
+    [InlineData("large")]
+    public void LaterTabs_PreserveTheirRunFormattingAndRevisionMetadata(string format)
+    {
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("cedar-styled-tab.docx", Fixture("3.2.", false, format)),
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, RenderTrackedChanges = format == "revision" });
+        var tab = html.Descendants().Single(e => (string?)e.Attribute("data-docx-tab-leader") == "dot");
+        var styles = string.Join(";", tab.AncestorsAndSelf().Attributes("style").Select(a => a.Value)).ToUpperInvariant();
+        if (format == "color") Assert.Contains("COLOR: #0000FF", styles);
+        if (format == "hidden") Assert.Contains("DISPLAY:NONE", styles.Replace(" ", ""));
+        if (format == "large") Assert.Contains("FONT-SIZE: 24PT", styles);
+        if (format == "revision") Assert.Contains(tab.AncestorsAndSelf(), e => (string?)e.Attribute("data-author") == "Cedar tab reviewer");
+    }
+
 }

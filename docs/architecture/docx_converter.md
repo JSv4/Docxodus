@@ -265,14 +265,16 @@ fallback widths to choose a stop; fixed-pitch prefixes retain constant advances.
 segments in left-to-right paragraphs become fixed-width inline flex rows, including the following text in a right segment.
 The browser assigns font-metric differences to the tab remainder, so later tabs retain their own
 stops and page-number right edges follow actual glyph widths. The same grouping is used inside
-`w:hyperlink`. Bidirectional paragraphs, complex fields, breaks and other inline containers retain the field-aware path and
-its conservative following-text reservations.
+`w:hyperlink`. Bidirectional paragraphs, complex fields, breaks, active comment/annotation ranges and tab runs
+with visibility, revision or exceptional geometry retain the run-aware path and its conservative
+following-text reservations. Leader rules inherit the tab run's resolved foreground color.
 
 ```html
 <span style="align-items: baseline; display: inline-flex; width: 4.000in">
   <span style="flex-shrink: 0">Before</span>
-  <span data-docx-tab="right" data-docx-tab-width="3.500"
-        style="display: inline-block; flex-grow: 1; width: 3.50in"></span>
+  <span style="display: inline-block; flex: 1 1 0; min-width: 0; color: blue">
+    <span data-docx-tab="right" data-docx-tab-width="3.500" style="width: 100%"></span>
+  </span>
   <span style="flex-shrink: 0">After</span>
 </span>
 ```
