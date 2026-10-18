@@ -12,7 +12,8 @@ const budgetsKiB = {
   'embed.bundle.js': 135,
   'embed.iife.js': 135,
   'editor.bundle.js': 112,
-  'pagination.bundle.js': 23,
+  // Floating frames and scrollable review columns together measure 23.1 KiB gzip.
+  'pagination.bundle.js': 24,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,
