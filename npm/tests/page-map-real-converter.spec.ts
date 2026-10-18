@@ -32,6 +32,7 @@ interface RealPaginationResult {
   marginColumns: number;
   duplicatePageCommentIds: number;
   activeMarginBackrefs: number;
+  marginReturnTargets: Array<{ href: string; targetCount: number; bodyCitation: boolean; visible: boolean }>;
   endnoteReferenceCount: number;
   endnoteTargetCount: number;
   endnoteReferenceResolves: boolean;
@@ -133,6 +134,23 @@ async function convertPaginateAndRegister(
       activeMarginBackrefs: container.querySelectorAll(
         '.page-comment-margin a[href^="#"]',
       ).length,
+      marginReturnTargets: Array.from(container.querySelectorAll<HTMLAnchorElement>(
+        '.page-comment-margin a[href^="#"]',
+      )).map(link => {
+        const href = link.getAttribute('href')!;
+        const targets = document.querySelectorAll<HTMLElement>(`[id="${CSS.escape(href.slice(1))}"]`);
+        const target = targets[0];
+        const rect = target?.getBoundingClientRect();
+        const pageRect = target?.closest('.page-box')?.getBoundingClientRect();
+        return {
+          href, targetCount: targets.length,
+          bodyCitation: Boolean(target?.matches('a.comment-marker') && target.closest('.page-content')),
+          visible: Boolean(target && rect && pageRect && rect.width > 0 && rect.height > 0
+            && getComputedStyle(target).visibility === 'visible'
+            && rect.left >= pageRect.left - 1 && rect.right <= pageRect.right + 1
+            && rect.top >= pageRect.top - 1 && rect.bottom <= pageRect.bottom + 1),
+        };
+      }),
       endnoteReferenceCount: container.querySelectorAll(
         'a[href^="#en-"]:not([href^="#en-ref-"])',
       ).length,
@@ -202,7 +220,10 @@ test.describe('Real converter PageMap pipeline', () => {
         expect(result.marginColumns).toBeGreaterThan(0);
         expect(comments.every((fragment) => !fragment.inTableCell)).toBe(true);
         expect(result.duplicatePageCommentIds).toBe(0);
-        expect(result.activeMarginBackrefs).toBe(0);
+        expect(result.activeMarginBackrefs).toBe(1);
+        expect(result.marginReturnTargets).toEqual([
+          { href: '#comment-ref-0', targetCount: 1, bodyCitation: true, visible: true },
+        ]);
       }
     });
   }
@@ -227,6 +248,11 @@ test.describe('Real converter PageMap pipeline', () => {
       } else {
         expect(result.marginColumns).toBeGreaterThan(0);
         expect(comments.every((fragment) => !fragment.inTableCell)).toBe(true);
+        expect(result.duplicatePageCommentIds).toBe(0);
+        expect(result.activeMarginBackrefs).toBe(1);
+        expect(result.marginReturnTargets).toEqual([
+          { href: '#comment-ref-0', targetCount: 1, bodyCitation: true, visible: true },
+        ]);
       }
     });
   }
