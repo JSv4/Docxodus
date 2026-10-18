@@ -33,13 +33,17 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- DocumentBuilder keeps style IDs unique when sources use one ID for different style types
+  (#1186). Incoming styles and their references, including inherited styles and running stories,
+  are renamed together; styles with the same name are matched only within the same type.
+
+- SVG `href` fragment links in copied comment content retain their inert behavior alongside
+  ordinary copied links (follow-up to #1229). Only native HTML return labels are reactivated.
+
 - Compare and Consolidate now track bookmarks between table rows or cells at their original
   boundaries (issue #1190). Accept restores the revised markers and reject restores the original
   markers, including when another reviewer edits the table or inserts a row or column. Marker-only
   reviews are retained when several other reviewers edit the same table.
-
-- SVG `href` fragment links in copied comment content retain their inert behavior alongside
-  ordinary copied links (follow-up to #1229). Only native HTML return labels are reactivated.
 
 - Standalone browser, Node and framed-host exports accept the converter's existing `additionalCss`
   option before pagination and bind nonempty styles to the render report and layout digest (#1230).
