@@ -1070,6 +1070,7 @@ namespace Docxodus
                 CreateHtmlConverterAnnotationAttributes = true,
                 OrderElementsPerStandard = false,
                 AnnotateListMembership = EmitsSemanticLists(htmlConverterSettings),
+                ResolveRevisionFormatting = htmlConverterSettings.RenderTrackedChanges,
                 ListItemRetrieverSettings =
                     htmlConverterSettings.ListItemImplementations == null ?
                     new ListItemRetrieverSettings()
@@ -2620,17 +2621,33 @@ namespace Docxodus
                 sb.AppendLine("    background-color: #fff9c4;");
                 sb.AppendLine("    border-left: 3px solid #fbc02d;");
                 sb.AppendLine("    border-radius: 0 4px 4px 0;");
-                sb.AppendLine("    font-size: 0.85em;");
+                sb.AppendLine("    font-size: 0.85rem;");
                 sb.AppendLine("    box-shadow: 0 1px 3px rgba(0,0,0,0.1);");
+                sb.AppendLine("}");
+
+                // Preserve space for reply text instead of shrinking its font in nested notes.
+                sb.AppendLine($"div.{prefix}margin-reply {{");
+                sb.AppendLine("    padding: 0.25em;");
                 sb.AppendLine("}");
 
                 // Margin comment header
                 sb.AppendLine($"div.{prefix}margin-note-header {{");
                 sb.AppendLine("    display: flex;");
                 sb.AppendLine("    justify-content: space-between;");
+                sb.AppendLine("    flex-wrap: wrap;");
+                sb.AppendLine("    gap: 0.25em 0.5em;");
+                sb.AppendLine("    min-width: 0;");
                 sb.AppendLine("    align-items: center;");
                 sb.AppendLine("    margin-bottom: 0.25em;");
                 sb.AppendLine("    font-size: 0.9em;");
+                sb.AppendLine("}");
+
+                // Every header item must fit even when the review column is narrow.
+                sb.AppendLine($"div.{prefix}margin-note-header * {{");
+                sb.AppendLine("    min-width: 0;");
+                sb.AppendLine("    max-width: 100%;");
+                sb.AppendLine("    box-sizing: border-box;");
+                sb.AppendLine("    overflow-wrap: anywhere;");
                 sb.AppendLine("}");
 
                 sb.AppendLine($"span.{prefix}margin-author {{");
@@ -3740,6 +3757,8 @@ namespace Docxodus
             XElement hyperlink)
         {
             var runs = hyperlink.Elements(W.r).ToList();
+            var alignedTabContent = ConvertAlignedTabRuns(wordDoc, settings, runs);
+            if (alignedTabContent != null) return alignedTabContent;
             var firstTabRun = runs.FirstOrDefault(run => run.Elements(W.tab).Any());
             if (firstTabRun == null)
                 return runs.Select(run => ConvertRun(wordDoc, settings, run));
@@ -4586,10 +4605,7 @@ namespace Docxodus
                 return null;
 
             // Convert the content of the header
-            var content = headerRoot.Elements()
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
-                .Where(c => c != null)
-                .ToList();
+            var content = CreateFrameDivs(wordDoc, settings, headerRoot.Elements());
 
             if (!content.Any())
                 return null;
@@ -4654,10 +4670,7 @@ namespace Docxodus
                 return null;
 
             // Convert the content of the footer
-            var content = footerRoot.Elements()
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
-                .Where(c => c != null)
-                .ToList();
+            var content = CreateFrameDivs(wordDoc, settings, footerRoot.Elements());
 
             if (!content.Any())
                 return null;
@@ -4859,10 +4872,7 @@ namespace Docxodus
             FieldRetriever.AnnotateWithFieldInfo(headerPart);
 
             // Convert the content of the header
-            return headerRoot.Elements()
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
-                .Where(c => c != null)
-                .ToList();
+            return CreateFrameDivs(wordDoc, settings, headerRoot.Elements());
         }
 
         /// <summary>
@@ -4895,10 +4905,7 @@ namespace Docxodus
             FieldRetriever.AnnotateWithFieldInfo(footerPart);
 
             // Convert the content of the footer
-            return footerRoot.Elements()
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
-                .Where(c => c != null)
-                .ToList();
+            return CreateFrameDivs(wordDoc, settings, footerRoot.Elements());
         }
 
         private static void LoadComments(WordprocessingDocument wordDoc, CommentTracker tracker)
@@ -4911,6 +4918,7 @@ namespace Docxodus
             if (commentsXDoc.Root == null)
                 return;
 
+            var dates = new Internal.CommentDateResolver(wordDoc.MainDocumentPart!);
             foreach (var comment in commentsXDoc.Root.Elements(W.comment))
             {
                 var id = (int?)comment.Attribute(W.id);
@@ -4921,7 +4929,7 @@ namespace Docxodus
                 {
                     Id = id.Value,
                     Author = (string?)comment.Attribute(W.author),
-                    Date = (string?)comment.Attribute(W.date),
+                    Date = dates.Resolve(comment),
                     Initials = (string?)comment.Attribute(W.initials),
                     SourceElement = comment,
                     ContentParagraphs = comment.Elements(W.p).ToList()
@@ -5406,7 +5414,7 @@ namespace Docxodus
             if (comment.Date != null)
             {
                 // Format date nicely
-                if (DateTime.TryParse(comment.Date, out var dt))
+                if (Internal.CommentDateResolver.TryParseUtc(comment.Date, out var dt))
                 {
                     header.Add(new XElement(Xhtml.span,
                         new XAttribute("class", prefix + "date"),
@@ -5572,11 +5580,11 @@ namespace Docxodus
             if (comment.Date != null)
             {
                 // Format date nicely
-                if (DateTime.TryParse(comment.Date, out var dt))
+                if (Internal.CommentDateResolver.TryParseUtc(comment.Date, out var dt))
                 {
                     header.Add(new XElement(Xhtml.span,
                         new XAttribute("class", prefix + "margin-date"),
-                        dt.ToString("MMM d")));
+                        dt.ToString("MMM d, yyyy")));
                 }
             }
 
@@ -5826,16 +5834,16 @@ namespace Docxodus
         }
 
         // Transform the w:p element, including the following sibling w:p element(s)
-        // in case the w:p element has a style separator. The sibling(s) will be
+        // when the w:p element has a hidden paragraph mark. The sibling(s) will be
         // transformed to h:span elements rather than h:p elements and added to
         // the element (e.g., h:h2) created from the w:p element having the (first)
-        // style separator (i.e., a w:specVanish element).
+        // hidden paragraph mark (w:specVanish or w:vanish).
         private static object? ProcessParagraph(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             XElement element, bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool suppressLeadingWhiteSpace = false)
         {
-            // Ignore this paragraph if the previous paragraph has a style separator.
+            // Ignore this paragraph if the preceding paragraph ends in a hidden mark.
             // We have already transformed this one together with the previous one.
-            if (BlockSiblingIndex.Of(element).FollowsStyleSeparator(element)) return null;
+            if (BlockSiblingIndex.Of(element).FollowsHiddenParagraphMark(element)) return null;
 
             var elementName = GetParagraphElementName(element, wordDoc);
             var isBidi = IsBidi(element);
@@ -5854,22 +5862,43 @@ namespace Docxodus
                     span.Add(new XAttribute(XNamespace.Xml + "space", "preserve"));
             }
 
-            while (HasStyleSeparator(element))
+            ApplyParagraphRevisionMarkup(settings, element, paragraph);
+            var joinedElement = element;
+            while (HasHiddenParagraphMark(joinedElement))
             {
-                var nextElement = element.ElementsAfterSelf(W.p).FirstOrDefault();
-                if (nextElement == null) break;
-                element = nextElement;
+                var nextElement = joinedElement.ElementsAfterSelf().FirstOrDefault(e => !IsBlockBoundaryMarker(e));
+                if (nextElement?.Name != W.p) break;
+                joinedElement = nextElement;
 
                 elementName = Xhtml.span;
-                isBidi = IsBidi(element);
-                var span = (XElement)ConvertParagraph(wordDoc, settings, element, elementName,
+                isBidi = IsBidi(joinedElement);
+                var span = (XElement)ConvertParagraph(wordDoc, settings, joinedElement, elementName,
                     suppressTrailingWhiteSpace, currentMarginLeft, isBidi);
                 var v = span.Value;
                 if (v.Length > 0 && (char.IsWhiteSpace(v[0]) || char.IsWhiteSpace(v[v.Length - 1])) && span.Attribute(XNamespace.Xml + "space") == null)
                     span.Add(new XAttribute(XNamespace.Xml + "space", "preserve"));
+                ApplyParagraphRevisionMarkup(settings, joinedElement, span);
                 paragraph.Add(span);
             }
 
+            if (settings.RenderTrackedChanges && settings.RevisionPresentation == RevisionPresentation.Word)
+                MarkChangedLine(settings, paragraph);
+
+            // Add pagination-related data attributes when pagination is enabled
+            if (settings.RenderPagination == PaginationMode.Paginated)
+            {
+                AddPaginationDataAttributes(element, paragraph);
+                if ((string?)paragraph.Attribute("data-keep-lines") == "true")
+                    paragraph.Annotation<Dictionary<string, string>>()!["break-inside"] = "avoid";
+                return SplitColumnBreakParagraph(paragraph);
+            }
+
+            return paragraph;
+        }
+
+        private static void ApplyParagraphRevisionMarkup(WmlToHtmlConverterSettings settings,
+            XElement element, XElement paragraph)
+        {
             // Handle paragraph mark revisions (when paragraph was inserted/deleted)
             if (settings.RenderTrackedChanges)
             {
@@ -5967,19 +5996,6 @@ namespace Docxodus
                 }
             }
 
-            if (settings.RenderTrackedChanges && settings.RevisionPresentation == RevisionPresentation.Word)
-                MarkChangedLine(settings, paragraph);
-
-            // Add pagination-related data attributes when pagination is enabled
-            if (settings.RenderPagination == PaginationMode.Paginated)
-            {
-                AddPaginationDataAttributes(element, paragraph);
-                if ((string?)paragraph.Attribute("data-keep-lines") == "true")
-                    paragraph.Annotation<Dictionary<string, string>>()!["break-inside"] = "avoid";
-                return SplitColumnBreakParagraph(paragraph);
-            }
-
-            return paragraph;
         }
 
         private static object SplitColumnBreakParagraph(XElement paragraph)
@@ -6068,7 +6084,8 @@ namespace Docxodus
             AddClass(paragraph, prefix + "changed-line");
             var style = paragraph.Annotation<Dictionary<string, string>>();
             if (style != null && style.TryGetValue("margin-left", out var indent))
-                style[$"--{prefix}change-bar-indent"] = indent;
+                // A unitless CSS zero is valid for margin-left, but not as an addend in calc().
+                style[$"--{prefix}change-bar-indent"] = indent == "0" ? "0pt" : indent;
         }
 
         /// <summary>
@@ -6790,10 +6807,17 @@ namespace Docxodus
             return htmlRow;
         }
 
-        private static bool HasStyleSeparator(XElement? element)
+        private static bool HasHiddenParagraphMark(XElement? element)
         {
-            return element != null && element.Elements(W.pPr).Elements(W.rPr).Any(e => GetBoolProp(e, W.specVanish));
+            return element != null && !element.Elements(W.pPr).Elements(W.sectPr).Any() &&
+                element.Elements(W.pPr).Elements(W.rPr).Any(e =>
+                    GetBoolProp(e, W.specVanish) || GetBoolProp(e, W.vanish));
         }
+
+        // Range markers carry no block content and may surround a paragraph boundary.
+        private static bool IsBlockBoundaryMarker(XElement element) =>
+            element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd ||
+            element.Name == W.permStart || element.Name == W.permEnd || element.Name == W.proofErr;
 
         /// <summary>
         /// Backward-sibling facts for one parent's children, computed in a single pass the first time
@@ -6805,7 +6829,7 @@ namespace Docxodus
         private sealed class BlockSiblingIndex
         {
             private readonly Dictionary<XElement, XElement?> _previousElement = new();
-            private readonly HashSet<XElement> _followsStyleSeparator = new();
+            private readonly HashSet<XElement> _followsHiddenParagraphMark = new();
 
             private BlockSiblingIndex(XElement parent)
             {
@@ -6816,9 +6840,12 @@ namespace Docxodus
                     _previousElement[child] = previous;
                     previous = child;
                     if (child.Name != W.p)
+                    {
+                        if (!IsBlockBoundaryMarker(child)) previousParagraph = null;
                         continue;
-                    if (HasStyleSeparator(previousParagraph))
-                        _followsStyleSeparator.Add(child);
+                    }
+                    if (HasHiddenParagraphMark(previousParagraph))
+                        _followsHiddenParagraphMark.Add(child);
                     previousParagraph = child;
                 }
             }
@@ -6842,11 +6869,11 @@ namespace Docxodus
             public XElement? PreviousElement(XElement child) =>
                 _previousElement.TryGetValue(child, out var previous) ? previous : child.ElementsBeforeSelf().LastOrDefault();
 
-            /// <summary>True when the nearest preceding <c>w:p</c> sibling ends in a style separator.</summary>
-            public bool FollowsStyleSeparator(XElement paragraph) =>
+            /// <summary>True when the preceding block paragraph ends in a hidden paragraph mark.</summary>
+            public bool FollowsHiddenParagraphMark(XElement paragraph) =>
                 _previousElement.ContainsKey(paragraph)
-                    ? _followsStyleSeparator.Contains(paragraph)
-                    : HasStyleSeparator(paragraph.ElementsBeforeSelf(W.p).LastOrDefault());
+                    ? _followsHiddenParagraphMark.Contains(paragraph)
+                    : HasHiddenParagraphMark(paragraph.ElementsBeforeSelf().LastOrDefault(e => !IsBlockBoundaryMarker(e)));
         }
 
         private static bool IsBidi(XElement element)
@@ -7222,7 +7249,10 @@ namespace Docxodus
                 return paraElement1;
             }
 
-            var txElementsPrecedingTab = TransformElementsPrecedingTab(wordDoc, settings, elementsPrecedingTab, firstTabRun);
+            var alignedTabContent = ConvertAlignedTabRuns(wordDoc, settings, paragraphContent);
+            var txElementsPrecedingTab = alignedTabContent == null
+                ? TransformElementsPrecedingTab(wordDoc, settings, elementsPrecedingTab, firstTabRun)
+                : new List<object?>();
             var elementsSucceedingTab = firstTabRun != null
                 ? paragraph.Elements().SkipWhile(e => e != firstTabRun).Skip(1)
                 : paragraph.Elements();
@@ -7231,8 +7261,8 @@ namespace Docxodus
                 firstMark,
                 anchorAttr,
                 sourceAnchorAttr,
-                txElementsPrecedingTab,
-                ConvertContentThatCanContainFields(wordDoc, settings, elementsSucceedingTab));
+                alignedTabContent ?? new List<object?> { txElementsPrecedingTab,
+                    ConvertContentThatCanContainFields(wordDoc, settings, elementsSucceedingTab) });
             ApplyAutomaticLineSpacingToInlineContent(paraElement, style);
             paraElement.AddAnnotation(style);
             AnnotateSemanticListItem(paraElement, paragraph, elementName, isBidi);
@@ -7339,6 +7369,122 @@ namespace Docxodus
                 position is "absolute" or "fixed";
         }
 
+        private static bool CanFlexTabRun(WmlToHtmlConverterSettings settings, XElement run)
+        {
+            var rPr = run.Element(W.rPr);
+            return rPr != null && run.Elements().Count(e => e.Name != W.rPr) == 1 && run.Element(W.tab) != null &&
+                !(GetBoolProp(rPr, W.vanish) && !GetBoolProp(rPr, W.specVanish)) &&
+                !(rPr.Element(W.webHidden) != null && settings.RenderPagination != PaginationMode.Paginated) &&
+                rPr.Element(W.rPrChange) == null && rPr.Element(W.bdr) == null &&
+                rPr.Element(W.position) == null && rPr.Element(W.vertAlign) == null &&
+                !GetBoolProp(rPr, W.rtl) && !GetBoolProp(rPr, W.cs) &&
+                !GetBoolProp(rPr, W.strike) && !GetBoolProp(rPr, W.dstrike) &&
+                !(rPr.Element(W.u) is XElement underline && (string?)underline.Attribute(W.val) != "none");
+        }
+
+        private static XElement? CreateFlexibleTabRun(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement run)
+        {
+            // Reuse the run renderer so font/color properties and presentation metadata survive.
+            // The wrapper receives the flex space; its tab rule fills that wrapper's actual width.
+            var rendered = ConvertRun(wordDoc, settings, run);
+            if (rendered == null) return null;
+            if (rendered is not XElement wrapper)
+                return (XElement?)ProcessTab(run.Element(W.tab)!);
+            var tab = wrapper.DescendantsAndSelf().First(e => e.Attribute("data-docx-tab") != null);
+            var style = wrapper.Annotation<Dictionary<string, string>>();
+            if (style == null)
+            {
+                style = new Dictionary<string, string>();
+                wrapper.AddAnnotation(style);
+            }
+            style["display"] = "inline-block";
+            style["flex-grow"] = "1";
+            style["flex-shrink"] = "1";
+            style["flex-basis"] = "0";
+            style["min-width"] = "0";
+            tab.Annotation<Dictionary<string, string>>()!["width"] = "100%";
+            return wrapper;
+        }
+
+        /// <summary>Keep each plain left/right tab segment pinned to its stop, including
+        /// the following text in a right-aligned segment so real browser glyph widths are absorbed
+        /// by the tab. Complex fields, breaks, and other inline containers retain their field-aware
+        /// rendering path.</summary>
+        private static List<object?>? ConvertAlignedTabRuns(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, List<XElement> content)
+        {
+            var paragraph = content.FirstOrDefault()?.Ancestors(W.p).FirstOrDefault();
+            if (paragraph != null && IsBidi(paragraph)) return null;
+            var tabRuns = content.Where(e => e.Name == W.r && e.Element(W.tab) != null).ToList();
+            // Keep the established path for ranges and tab formatting whose visibility or
+            // borders/vertical placement cannot be treated as an ordinary flex spacer.
+            if (paragraph != null &&
+                ((settings.RenderComments && GetCommentTracker(paragraph)?.OpenRanges.Any() == true) ||
+                 (settings.RenderAnnotations && GetAnnotationTracker(paragraph)?.OpenRanges.Any() == true)))
+                return null;
+            foreach (var tabRun in tabRuns)
+                if (!CanFlexTabRun(settings, tabRun)) return null;
+            if (tabRuns.Count == 0 || content.Any(e => e.Name != W.r ||
+                    e.Elements().Any(c => c.Name != W.rPr && c.Name != W.t && c.Name != W.tab)) ||
+                tabRuns.Any(r => r.Elements().Count(e => e.Name != W.rPr) != 1 ||
+                    r.Element(W.tab)!.Attribute(PtOpenXml.TabAfterWrappedText) != null ||
+                    ((string?)r.Element(W.tab)!.Attribute(PtOpenXml.TabAlignment) ?? "left") is not ("left" or "right")))
+                return null;
+
+            var result = new List<object?>();
+            var start = 0;
+            while (start < content.Count)
+            {
+                var tabIndex = content.FindIndex(start, e => e.Element(W.tab) != null);
+                if (tabIndex < 0)
+                {
+                    result.Add(ConvertContentThatCanContainFields(wordDoc, settings, content.Skip(start)));
+                    break;
+                }
+                var preceding = content.Skip(start).Take(tabIndex - start).ToList();
+                var tabRun = content[tabIndex];
+                var tab = tabRun.Element(W.tab)!;
+                if ((string?)tab.Attribute(PtOpenXml.TabAlignment) != "right")
+                {
+                    result.AddRange(TransformElementsPrecedingTab(wordDoc, settings, preceding, tabRun));
+                    start = tabIndex + 1;
+                    continue;
+                }
+
+                var nextTab = content.FindIndex(tabIndex + 1, e => e.Element(W.tab) != null);
+                if (nextTab < 0) nextTab = content.Count;
+                var following = content.Skip(tabIndex + 1).Take(nextTab - tabIndex - 1).ToList();
+                var precedingWidth = preceding.Elements().Attributes(PtOpenXml.TabWidth)
+                    .Sum(a => (decimal)a);
+                var width = precedingWidth + ((decimal?)tab.Attribute(PtOpenXml.TabWidth) ?? 0m) +
+                    ((decimal?)tab.Attribute(TabFollowingWidthAttribute) ?? 0m);
+                XElement TextSpan(List<XElement> runs)
+                {
+                    var span = new XElement(Xhtml.span,
+                        ConvertContentThatCanContainFields(wordDoc, settings, runs));
+                    if (!span.Nodes().Any()) span.Add(new XText(""));
+                    span.AddAnnotation(new Dictionary<string, string>
+                    {
+                        { "flex-shrink", "0" }, { "white-space", "nowrap" }
+                    });
+                    return span;
+                }
+                var precedingSpan = TextSpan(preceding);
+                var tabSpan = CreateFlexibleTabRun(wordDoc, settings, tabRun)!;
+                var followingSpan = TextSpan(following);
+                var segment = new XElement(Xhtml.span, precedingSpan, tabSpan, followingSpan);
+                segment.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "display", "inline-flex" }, { "align-items", "baseline" },
+                    { "text-indent", "0" }, { "width", InchesCss(width) }
+                });
+                result.Add(segment);
+                start = nextTab;
+            }
+            return result;
+        }
+
         private static List<object?> TransformElementsPrecedingTab(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             List<XElement> elementsPrecedingTab, XElement? firstTabRun)
         {
@@ -7369,7 +7515,11 @@ namespace Docxodus
             object? tabSpan = null;
             if (tabElement != null)
             {
-                tabSpan = ProcessTab(tabElement);
+                tabSpan = txElementsPrecedingTab.Count > 0 &&
+                    tabElement.Attribute(PtOpenXml.TabAfterWrappedText) == null &&
+                    CanFlexTabRun(settings, firstTabRun!)
+                    ? CreateFlexibleTabRun(wordDoc, settings, firstTabRun!)
+                    : ProcessTab(tabElement);
             }
 
             // Text longer than its line wraps, so it cannot sit in a box pinned to the tab stop:
@@ -7766,7 +7916,7 @@ namespace Docxodus
                 settings.RenderPagination != PaginationMode.Paginated)
                 return null;
 
-            var style = DefineRunStyle(run);
+            var style = DefineRunStyle(run, out var secondaryDecoration);
             ApplyFieldResultPresentation(run, style);
             if (paragraphHasExactLineHeight)
             {
@@ -7817,6 +7967,13 @@ namespace Docxodus
                 }
                 if (newContent != null && newContent.Nodes().Any())
                     content = newContent;
+            }
+
+            if (secondaryDecoration != null)
+            {
+                var decorated = new XElement(Xhtml.span, content);
+                decorated.AddAnnotation(secondaryDecoration);
+                content = decorated;
             }
 
             var langAttribute = GetLangAttribute(run);
@@ -8048,8 +8205,12 @@ namespace Docxodus
                 .Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)
                 .Where(value => !string.Equals(value, "underline", StringComparison.OrdinalIgnoreCase))
                 .ToArray();
-            if (remaining.Length == 0)
+            if (!remaining.Any(value => value == "line-through" || value == "overline"))
+            {
                 style.Remove("text-decoration");
+                style.Remove("text-decoration-color");
+                style.Remove("text-decoration-thickness");
+            }
             else
                 style["text-decoration"] = string.Join(" ", remaining);
         }
@@ -8060,14 +8221,14 @@ namespace Docxodus
             var previousRPr = rPrChange.Element(W.rPr);
 
             // Check for bold change
-            var currentBold = currentRPr.Element(W.b) != null;
-            var previousBold = previousRPr?.Element(W.b) != null;
+            var currentBold = GetBoolProp(currentRPr, W.b);
+            var previousBold = previousRPr != null && GetBoolProp(previousRPr, W.b);
             if (currentBold != previousBold)
                 changes.Add(currentBold ? "Bold added" : "Bold removed");
 
             // Check for italic change
-            var currentItalic = currentRPr.Element(W.i) != null;
-            var previousItalic = previousRPr?.Element(W.i) != null;
+            var currentItalic = GetBoolProp(currentRPr, W.i);
+            var previousItalic = previousRPr != null && GetBoolProp(previousRPr, W.i);
             if (currentItalic != previousItalic)
                 changes.Add(currentItalic ? "Italic added" : "Italic removed");
 
@@ -8078,8 +8239,8 @@ namespace Docxodus
                 changes.Add(currentUnderline ? "Underline added" : "Underline removed");
 
             // Check for strikethrough change
-            var currentStrike = currentRPr.Element(W.strike) != null;
-            var previousStrike = previousRPr?.Element(W.strike) != null;
+            var currentStrike = GetBoolProp(currentRPr, W.strike);
+            var previousStrike = previousRPr != null && GetBoolProp(previousRPr, W.strike);
             if (currentStrike != previousStrike)
                 changes.Add(currentStrike ? "Strikethrough added" : "Strikethrough removed");
 
@@ -8108,8 +8269,9 @@ namespace Docxodus
         }
 
         [SuppressMessage("ReSharper", "FunctionComplexityOverflow")]
-        private static Dictionary<string, string> DefineRunStyle(XElement run)
+        private static Dictionary<string, string> DefineRunStyle(XElement run, out Dictionary<string, string>? secondaryDecoration)
         {
+            secondaryDecoration = null;
             var style = new Dictionary<string, string>();
 
             var rPr = run.Elements(W.rPr).FirstOrDefault();
@@ -8211,21 +8373,59 @@ namespace Docxodus
             if (GetBoolProp(rPr, W.vanish) && !GetBoolProp(rPr, W.specVanish))
                 style.AddIfMissing("display", "none");
 
-            // W.u
-            if (rPr.Element(W.u) != null && (string?) rPr.Elements(W.u).Attributes(W.val).FirstOrDefault() != "none")
-                style.AddIfMissing("text-decoration", "underline");
-
             // W.i
             style.AddIfMissing("font-style", GetBoolProp(rPr, W.i) ? "italic" : "normal");
 
             // W.b
             style.AddIfMissing("font-weight", GetBoolProp(rPr, W.b) ? "bold" : "normal");
 
-            // W.strike
-            if (GetBoolProp(rPr, W.strike) || GetBoolProp(rPr, W.dstrike))
-                style.AddIfMissing("text-decoration", "line-through");
+            secondaryDecoration = DefineRunDecorations(run, rPr, style);
 
             return style;
+        }
+
+        // One CSS decoration can draw several lines only when they share a pattern and color.
+        // Keep differing underline/strike decorations on nested inline spans so both survive.
+        private static Dictionary<string, string>? DefineRunDecorations(
+            XElement run, XElement rPr, Dictionary<string, string> style)
+        {
+            var underline = rPr.Element(W.u);
+            var underlineValue = (string?)underline?.Attribute(W.val);
+            var hasUnderline = underline != null && underlineValue != "none";
+            var strike = GetBoolProp(rPr, W.strike) || GetBoolProp(rPr, W.dstrike);
+            var strikeStyle = GetBoolProp(rPr, W.dstrike) ? "double" : "solid";
+            if (!hasUnderline)
+            {
+                if (strike)
+                    style["text-decoration"] = "line-through" + (strikeStyle == "double" ? " double" : "");
+                return null;
+            }
+
+            var underlineStyle = underlineValue switch
+            {
+                "double" => "double",
+                "dotted" or "dottedHeavy" => "dotted",
+                "dash" or "dashedHeavy" or "dashLong" or "dashLongHeavy" or
+                    "dotDash" or "dashDotHeavy" or "dotDotDash" or "dashDotDotHeavy" => "dashed",
+                "wave" or "wavyHeavy" or "wavyDouble" => "wavy",
+                _ => "solid",
+            };
+            var color = ResolveThemeColor(underline, W.color, W.themeColor, W.themeTint, W.themeShade,
+                GetThemeColorScheme(run));
+            var hasColor = color != null && color != "auto";
+            var heavy = underlineValue == "thick" || underlineValue?.EndsWith("Heavy", StringComparison.Ordinal) == true;
+            var shared = strike && underlineStyle == strikeStyle && !heavy && !hasColor;
+            // A shorthand resets its longhands. Insert it first: fabricated class CSS preserves
+            // dictionary order, while inline CSS sorts declarations by name.
+            style["text-decoration"] = "underline" + (shared ? " line-through" : "") +
+                (underlineStyle == "solid" ? "" : " " + underlineStyle);
+            if (hasColor)
+                CreateColorProperty("text-decoration-color", color!, style);
+            if (heavy)
+                style["text-decoration-thickness"] = "0.12em";
+            return strike && !shared
+                ? new Dictionary<string, string> { { "text-decoration", "line-through" + (strikeStyle == "double" ? " double" : "") } }
+                : null;
         }
 
         private static decimal? GetFontSize(XElement e)
@@ -8673,6 +8873,7 @@ namespace Docxodus
         /// <summary>Word's built-in default tab stop (in twips) used when no explicit
         /// w:defaultTabStop value is available, e.g. settings.xml is absent or lacks the element.</summary>
         private const int DefaultTabStopTwips = 720;
+        private static readonly XName TabFollowingWidthAttribute = PtOpenXml.pt + "TabFollowingWidth";
 
         /// <summary>Gets the DocumentSettingsPart's XDocument, or null if the part is absent.
         /// DocumentSettingsPart is optional in OOXML — Word opens packages without
@@ -9130,6 +9331,16 @@ namespace Docxodus
                 tabs = AddDefaultTabsAfterLastTab(tabs, defaultTabStop);
             }
 
+            var proportionalTabPrefixes = !IsBidi(element);
+            foreach (var stop in tabs.Elements(W.tab))
+            {
+                var alignment = (string?)stop.Attribute(W.val);
+                if (alignment is not ("left" or "start" or "right" or "end"))
+                {
+                    proportionalTabPrefixes = false;
+                    break;
+                }
+            }
             var twipCounter = firstInTwips;
             var contentToMeasure = element.DescendantsTrimmed(z => z.Name == W.txbxContent || z.Name == W.pPr || z.Name == W.rPr).ToArray();
             var currentElementIdx = 0;
@@ -9211,6 +9422,7 @@ namespace Docxodus
                             new XAttribute(PtOpenXml.TabWidth,
                                 TabWidthValue(delta2)),
                             new XAttribute(PtOpenXml.TabAlignment, "right"),
+                            new XAttribute(TabFollowingWidthAttribute, TabWidthValue(widthOfTextAfterTab)),
                             GetLeader(tabAfterText));
                         twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!), twipCounter + widthOfTextAfterTab);
 
@@ -9388,7 +9600,7 @@ namespace Docxodus
                     // A generated list-number run measures with the narrow-glyph-aware estimate
                     // so its suffix tab resolves against a realistic pen position (issue #415).
                     var widthOfText = CalcWidthOfRunInTwips(dummyRun3,
-                        isListMarker: runContainingTabToReplace.Attribute(PtOpenXml.ListItemRun) != null);
+                        isListMarker: runContainingTabToReplace.Attribute(PtOpenXml.ListItemRun) != null, isTabPrefix: proportionalTabPrefixes);
 
                     currentElement.Add(new XAttribute(PtOpenXml.TabWidth,
                         TabWidthValue(widthOfText)));
@@ -9598,7 +9810,7 @@ namespace Docxodus
 
         private static HashSet<string> KnownFamilies => FontFamilyHelper.KnownFamilies;
 
-        private static int CalcWidthOfRunInTwips(XElement r, bool isListMarker = false)
+        private static int CalcWidthOfRunInTwips(XElement r, bool isListMarker = false, bool isTabPrefix = false)
         {
             // A run with no resolvable font (WordprocessingMLUtil.MeasurementFontName returns null) takes
             // the character-width estimate below, the same fallback as an unknown font family; one
@@ -9651,19 +9863,13 @@ namespace Docxodus
             int w;
             if (fontName == null || FontFamilyHelper.IsMarkedUnknown(fontName) || !KnownFamilies.Contains(fontName))
             {
-                // Character-based estimation starts in point space (w:sz is half-points), while
-                // the rest of this method consumes CSS-pixel widths. Normalize it to the same
-                // 96-DPI coordinate space before converting the result to twips below.
-                //
-                // List-marker runs use the character-class estimate: the flat 0.6 em/char
-                // average roughly doubles narrow-glyph markers like "(a)", which pushed the
-                // suffix tab past the paragraph's text-indent stop (issue #415). General text
-                // must KEEP the flat average — HTML tab layout reserves (stop − this estimate)
-                // ahead of the browser's real glyphs, and browser fallback fonts advance at
-                // ~0.6 em, so a lower general estimate makes column-edge tab lines overflow
-                // and wrap. A marker's wrapper is (chosen stop − marker start) with a flex tab
-                // absorbing the difference, so only its stop CHOICE needs realistic widths.
-                if (isListMarker)
+                // Proportional fallback fonts need narrow-glyph-aware widths when choosing
+                // a stop: a flat average can consume an available left stop (issue #1224).
+                // Aligned prefixes use flex tabs to absorb real glyph-width differences.
+                // Preserve conservative reservations for following text on complex inline paths,
+                // and fixed-pitch advances for the monospace fallback emitted in CSS.
+                // Estimates are in points; this method consumes CSS pixels at 96 DPI.
+                if (isListMarker || (isTabPrefix && ClassifyFont(fontName ?? "") != GenericFontFamily.Monospace))
                 {
                     w = MetricsGetter.EstimateTextWidth(sz, runText) * 96 / 72;
                 }
@@ -10052,7 +10258,68 @@ namespace Docxodus
             return copy.ToString(SaveOptions.DisableFormatting);
         }
 
-        private static object CreateBorderDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements)
+        private static object CreateBorderDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements) =>
+            CreateFrameDivs(wordDoc, settings, elements, paragraphBorders: true);
+
+        private static List<object?> CreateFrameDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+            IEnumerable<XElement> elements, bool paragraphBorders = false)
+        {
+            // Equal frame properties on adjacent paragraphs identify one floating text frame.
+            // A zero-height placeholder keeps that frame beside its next ordinary anchor without
+            // charging its text height to the body or running-story flow.
+            var groups = elements.GroupAdjacent(e =>
+            {
+                var frame = e.Name == W.p ? e.Element(W.pPr)?.Element(W.framePr) : null;
+                if (frame == null || ((string?)frame.Attribute(W.dropCap) is string dropCap && dropCap != "none"))
+                    return string.Empty;
+                return "frame|" + string.Join("|", frame.Attributes().Where(a => a.Name.Namespace == W.framePr.Namespace)
+                    .OrderBy(a => a.Name.LocalName).Select(a => a.Name.LocalName + "=" + a.Value));
+            });
+            var result = new List<object?>();
+            foreach (var group in groups)
+            {
+                if (group.Key == string.Empty)
+                {
+                    if (paragraphBorders) result.Add(CreateBorderDivsCore(wordDoc, settings, group));
+                    else result.AddRange(group.Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                        .Where(c => c != null));
+                    continue;
+                }
+                var frame = group.First().Element(W.pPr)!.Element(W.framePr)!;
+                var style = new Dictionary<string, string>
+                {
+                    { "position", "absolute" }, { "box-sizing", "border-box" },
+                    { "left", PointsCss((WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W.x)) ?? 0m) / 20m) },
+                    { "top", PointsCss((WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W.y)) ?? 0m) / 20m) },
+                    { "line-height", "normal" },
+                };
+                var width = WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W._w));
+                if (width > 0m) style["width"] = PointsCss(width.Value / 20m);
+                var height = WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W.h));
+                if (height > 0m && (string?)frame.Attribute(W.hRule) != "auto")
+                    style[(string?)frame.Attribute(W.hRule) == "exact" ? "height" : "min-height"] = PointsCss(height.Value / 20m);
+                var rendered = new XElement(Xhtml.div, new XAttribute("data-docx-text-frame", "true"),
+                    new XAttribute("data-docx-frame-h-anchor", (string?)frame.Attribute(W.hAnchor) ?? "text"),
+                    new XAttribute("data-docx-frame-v-anchor", (string?)frame.Attribute(W.vAnchor) ?? "text"),
+                    paragraphBorders ? CreateBorderDivsCore(wordDoc, settings, group) :
+                        group.Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m)).ToList());
+                foreach (var name in new[] { W.x, W.y, W.xAlign, W.yAlign })
+                    if (frame.Attribute(name) is XAttribute value)
+                        rendered.Add(new XAttribute("data-docx-frame-" + name.LocalName.ToLowerInvariant(), value.Value));
+                rendered.AddAnnotation(style);
+                var placeholder = new XElement(Xhtml.div,
+                    new XAttribute("data-docx-frame-container", "true"),
+                    new XAttribute("data-keep-with-next", "true"), rendered);
+                placeholder.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "position", "relative" }, { "height", "0" }, { "margin", "0" }, { "padding", "0" },
+                });
+                result.Add(placeholder);
+            }
+            return result;
+        }
+
+        private static object CreateBorderDivsCore(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements)
         {
             return elements.GroupAdjacent(BorderGroupKey)
                 .Select(g =>

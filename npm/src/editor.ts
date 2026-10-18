@@ -1191,8 +1191,17 @@ function selectionHasFormat(key: FormatKey, fallback: HTMLElement): boolean {
   switch (key) {
     case "bold": return fontWeightIsBold(cs.fontWeight);
     case "italic": return cs.fontStyle === "italic" || cs.fontStyle === "oblique";
-    case "underline": return cs.textDecorationLine.includes("underline");
-    case "strike": return cs.textDecorationLine.includes("line-through");
+    case "underline":
+    case "strike": {
+      // Decorations propagate through inline descendants without being CSS-inherited. A run
+      // can carry its underline on an outer span and its independent strike on an inner one.
+      const line = key === "underline" ? "underline" : "line-through";
+      for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+        if (getComputedStyle(node).textDecorationLine.includes(line)) return true;
+        if (node === fallback) break;
+      }
+      return false;
+    }
     case "code": return /mono|courier|consolas/i.test(cs.fontFamily);
     case "superscript": return cs.verticalAlign === "super" || !!el.closest("sup");
     case "subscript": return cs.verticalAlign === "sub" || !!el.closest("sub");
@@ -2717,6 +2726,8 @@ export class DocxEditor {
       scale: this.options.scale,
       cssPrefix: "page-",
       fragmentParagraphs: false,
+      // The editor owns a separate comment gutter; keep its physical page substrate unchanged.
+      commentColumnPlacement: "margin",
       // Moved glyph boxes would part from text typed into them.
       alignBaselinesToWord: false,
     });

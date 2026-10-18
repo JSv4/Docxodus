@@ -64,6 +64,14 @@ zero-height line. Such a paragraph measures as the union of what it renders — 
 and the drawings promoted out of it, each clipped along its own ancestor chain — so it is not
 reported as missing (issue #849).
 
+Read-only `paginateHtml()` defaults to a scrollable comment panel outside each page. The source
+comment subtree and its outside presentation carry `data-page-map-exclude="true"`: they remain
+readable UI, but have no physical page substrate. Body and running-story coverage is still required.
+The lower-level `PaginationEngine` and standalone export retain physical-margin placement; callers
+can also select it explicitly with `commentColumnPlacement: "margin"` when comment page citations
+are required. Width and gap options affect the outside panel, and physical page dimensions remain
+unchanged.
+
 ## Source identity and clones
 
 `data-anchor` remains the bare Unid used by the editor, and an active bare value is unique across
@@ -81,6 +89,12 @@ Pagination clones retain `data-source-anchor-id` and receive `data-page-number`,
 and notes are presentation fragments: they do not duplicate the active `data-anchor`. So are the
 copies of a table's header rows (`w:tblHeader`) that open each page a split table continues on
 (`data-docx-repeated-header-row`, issue #1171): the row has one fragment per page it opens.
+
+Margin-note copies strip duplicate element IDs. Their generated return links are resolved only
+after all pages exist, against one actual rendered reading-content reference. Repeated notes can
+return to the same reference without adding another bookmark target or editor anchor. Link
+eligibility uses painted geometry; a visible citation can still be excluded from the authored
+source inventory.
 
 ## Registration and invalidation
 

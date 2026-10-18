@@ -61,8 +61,10 @@ public static class DocxDiff
     // The same read WITH provenance. DocxDiffComparison uses this one so a single pass per side feeds both
     // the edit-script build and the markup renderer's clone-from-provenance pass; provenance is
     // equality-neutral (see IrProvenance), so the script built over it is identical to one built over
-    // ReadOpts. ReadOpts stays for the paths that genuinely never clone source XML and want the lower
-    // footprint (the consolidate scoreboard, compatibility probes).
+    // ReadOpts with one exception: a header or footer whose only difference is a bookmark or comment range
+    // between its blocks is found from the retained source XML (issue #1174), so without it that story reads
+    // as unchanged. ReadOpts stays for callers that never clone source XML and want the lower footprint: the
+    // DocxDiff stress benchmark and a number of tests that read IR directly; no production path reads with it.
     internal static readonly IrReaderOptions RenderReadOpts =
         new()
         {

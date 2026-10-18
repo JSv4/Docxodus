@@ -1290,6 +1290,7 @@ internal static class HtmlConversionOps
         CopyPartXml(sourceDoc, blockDoc, p => p.WordprocessingCommentsPart);
         CopyPartXml(sourceDoc, blockDoc, p => p.WordprocessingCommentsExPart);
         CopyPartXml(sourceDoc, blockDoc, p => p.WordprocessingCommentsIdsPart);
+        CopyPartXml(sourceDoc, blockDoc, p => p.WordCommentsExtensiblePart);
         CopyPartXml(sourceDoc, blockDoc, p => p.WordprocessingPeoplePart);
     }
 

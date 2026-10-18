@@ -62,6 +62,7 @@ public sealed partial class DocxSession
         if (root is null) return result;
 
         var comments = root.Elements(W.comment).ToList();
+        var dates = new Internal.CommentDateResolver(main!);
         var anchorByParaId = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var c in comments)
         {
@@ -99,7 +100,7 @@ public sealed partial class DocxSession
                 $"cmt:cmt:{unid}",
                 (string?)c.Attribute(W.author) ?? "unknown",
                 (string?)c.Attribute(W.initials),
-                (string?)c.Attribute(W.date),
+                dates.Resolve(c),
                 Internal.CommentOps.FlattenBodyText(c))
             {
                 Id = int.TryParse((string?)c.Attribute(W.id), System.Globalization.NumberStyles.Integer,

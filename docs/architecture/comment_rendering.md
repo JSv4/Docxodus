@@ -63,6 +63,24 @@ The actual comment content is stored separately:
 </w:comments>
 ```
 
+### Modern comment timestamps
+
+`CommentDateResolver` joins the last comment paragraph's `w14:paraId` to
+`commentsIds.xml` (`w16cid:commentId/@w16cid:durableId`), then to
+`commentsExtensible.xml` (`w16cex:commentExtensible/@w16cex:dateUtc`).
+A matching valid timestamp supplies the instant for every rendered `data-date` and
+for `DocxSession.ListComments` (including the editor gutter). Offsets are normalized to UTC,
+fractional seconds are retained, and an omitted zone in `dateUtc` means UTC.
+Missing, invalid, unmatched or ambiguous metadata retains the original `w:date` fallback.
+Reading never rewrites the package. See Microsoft's
+[CT_CommentId](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/9c360cd7-653f-4d82-82be-7bda2488c0c1) and
+[CT_CommentExtensible](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/a7b57225-42e5-43e7-8d98-d90eabf3ca25).
+
+Margin and endnote captions use the UTC calendar day and include the year (`Sep 10, 2026`).
+Block conversion copies the extensible part along with comment IDs, so stateless and cached
+editor fragments resolve the same date as full conversion. A legacy timestamp's attribute
+is preserved verbatim even when its caption is formatted in UTC.
+
 ## Configuration
 
 ### WmlToHtmlConverterSettings
@@ -151,6 +169,7 @@ Before transformation, comments are loaded from the `WordprocessingCommentsPart`
 private static CommentTracker LoadComments(WordprocessingDocument wordDoc)
 {
     var tracker = new CommentTracker();
+    var dates = new Internal.CommentDateResolver(wordDoc.MainDocumentPart!);
     var commentsPart = wordDoc.MainDocumentPart?.WordprocessingCommentsPart;
 
     if (commentsPart != null)
@@ -162,7 +181,7 @@ private static CommentTracker LoadComments(WordprocessingDocument wordDoc)
             {
                 Id = (int)commentElement.Attribute(W.id),
                 Author = (string)commentElement.Attribute(W.author) ?? "",
-                Date = (string)commentElement.Attribute(W.date) ?? "",
+                Date = dates.Resolve(commentElement),
                 Initials = (string)commentElement.Attribute(W.initials) ?? "",
                 ContentParagraphs = commentElement.Elements(W.p).ToList()
             };
@@ -382,7 +401,7 @@ In margin mode, the entire document body is wrapped in a flexbox container with 
     <div class="comment-margin-note" id="comment-0" data-comment-id="0">
       <div class="comment-margin-note-header">
         <span class="comment-margin-author">John Doe</span>
-        <span class="comment-margin-date">Jan 15</span>
+        <span class="comment-margin-date">Jan 15, 2024</span>
         <a href="#comment-ref-0" class="comment-margin-backref">↩</a>
       </div>
       <div class="comment-margin-note-body">
@@ -489,16 +508,29 @@ div.comment-margin-note {
   background-color: #fff9c4;
   border-left: 3px solid #fbc02d;
   border-radius: 0 4px 4px 0;
-  font-size: 0.85em;
+  font-size: 0.85rem;
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+div.comment-margin-reply {
+  padding: 0.25em;
 }
 div.comment-margin-note-header {
   display: flex;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.25em 0.5em;
+  min-width: 0;
   align-items: center;
   margin-bottom: 0.25em;
   font-size: 0.9em;
 }
+div.comment-margin-note-header * {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+
 span.comment-margin-author {
   font-weight: bold;
   color: #f57f17;
@@ -536,6 +568,12 @@ span.comment-highlight[data-comment-id] {
   }
 }
 ```
+
+The note font uses the root scale (`0.85rem`), so replies inherit one readable size rather than
+multiplying an `em` reduction at each nested note (issue #1227). Replies use compact padding so the
+review column leaves space for text at deeper levels. Header items can wrap and break long
+names within the available width. The same rules cover dates, resolved badges and return links,
+including custom class prefixes; paragraph text and comment topology remain unchanged.
 
 ## WASM/npm Integration
 
@@ -637,6 +675,17 @@ comment-less `RenderBlockHtml` never sets either, so its output is unchanged.
 (`tracker.Comments.TryGetValue`), so a marker whose comment was deleted mid-session never
 throws. `ListComments()` surfaces each comment's numeric `w:id` as `CommentListEntry.Id` for
 precisely this pairing: it is the value the highlight's `data-comment-id` carries.
+
+## Paginated return navigation
+
+Margin-note copies keep their element IDs and editing anchors inert. After every page and its
+final glyph positions exist, the paginator resolves renderer-created `margin-backref` links to
+unique, rendered reference marks in body content or cited notes. This includes references on a
+later page and in promoted body frames. Missing, ambiguous, hidden, fully clipped or transparent
+targets stay disabled, as do references owned by header, footer or comment presentation copies.
+The geometry check shares the PageMap's rendered-source measurer; it does not treat exclusion
+from the authored-source inventory as visual absence. Explicit source focus/accessibility
+attributes are retained, and a deliberately disabled source link stays inert.
 
 ## Limitations
 

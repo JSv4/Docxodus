@@ -40,6 +40,23 @@ numbering, tables, images, comments, headers and footers, and real footnotes wit
 Paginated mode flows content into real page boxes with per-page numbers and page-anchored footnotes —
 a print-accurate preview in the browser.
 
+Read-only `paginateHtml()` places margin comments in a keyboard-focusable scroll column beside
+its pages. Configure the outside column without changing the document's page dimensions:
+
+```ts
+paginateHtml(html, viewer, {
+  commentColumnWidthPt: 180, // default 144pt
+  commentColumnGapPt: 12,
+});
+```
+
+The React `usePagination()` hook and `PaginatedDocument` component accept the same three column
+options and use the same outside placement by default. The column scales with the page, and pages
+without a note retain the same alignment. Use
+`commentColumnPlacement: 'margin'` to retain physical-margin placement and comment PageMap
+fragments. The lower-level `PaginationEngine`, editor and standalone export retain that physical
+placement; outside viewer panels have no physical page citation.
+
 Supply an exact layout token to materialize portable page citations from that layout:
 
 ```ts
