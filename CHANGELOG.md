@@ -159,6 +159,14 @@ All notable changes to this project will be documented in this file.
   bookmark no longer outlives it after accepting. Accepting and rejecting keep a body's or cell's non-paragraph
   children in place instead of dropping them (a `w:altChunk` stays outside a paragraph merged across it), and rejecting now reverses a tracked insertion or deletion written
   directly in the body or a cell.
+- Comparing documents once again folds an inserted paragraph into the neighbouring deleted one when a bookmark
+  or comment range sits between the deleted paragraphs (issue #1183, a regression from #1149). A heading whose
+  table-of-contents bookmark ends after the heading, as Word writes it, made the comparison skip paragraph-mark
+  pairing for the whole replaced region: the redline gained an extra paragraph that Word's compare does not
+  produce, and every later line moved down. Markers between blocks no longer affect the pairing at all: the
+  region pairs exactly as it would without them, and each marker goes in front of the paragraph that holds its
+  block's content (the folded paragraph, when that block was folded into another), so accepting and rejecting
+  still put it back at its block boundary.
 - Right-to-left bordered paragraphs (`w:bidi`) now draw their left and right borders outside the
   indented text, mirroring left-to-right paragraphs (issue #1129). The border wrapper put the
   paragraph's leading (start) indent on its left side, although a right-to-left paragraph's start is
