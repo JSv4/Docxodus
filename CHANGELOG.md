@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Word-style change bars stay a quarter inch outside the text column on unindented paragraphs
+  (issue #1221). Their zero-indent custom property now has a length unit, keeping the CSS
+  offset calculation valid; indented paragraph offsets are unchanged.
+
 - Rejecting revisions now reverses an insertion or deletion in every container that can hold one (issue
   #1176). Reject works by turning each insertion into a deletion and each deletion into an insertion,
   then accepting. Which revisions it turned around was a list of containers: paragraphs, hyperlinks,
