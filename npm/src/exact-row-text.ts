@@ -36,6 +36,8 @@
  * positioned element, for which the `foreignObject` would become the containing block and move it.
  */
 
+import { insetClipBounds } from './line-metrics.js';
+
 /** The converter's clip box around an exact-height row cell's content (`ClipExactRowCells`). */
 export const EXACT_ROW_CELL = 'div[data-docx-exact-row-cell="true"]';
 /**
@@ -64,6 +66,12 @@ const REACH = 100000;
 // that no longer cancel would grow the row by a layout unit.
 const number = (value: number) => String(Number(value.toFixed(6)));
 const px = (value: number) => `${number(value)}px`;
+
+/** Same visible rectangle, with bounds wide enough to keep clipped glyphs whole in Skia's text layer. */
+const expandedClip = (left: number, top: number, right: number, bottom: number) =>
+  `M${number(left)} ${number(top)}H${number(right)}V${number(bottom)}H${number(left)}Z`
+  + ` M${number(left)} ${number(top)}H${REACH} M${number(left)} ${number(top)}H${-REACH}`
+  + ` M${number(left)} ${number(top)}V${REACH} M${number(left)} ${number(top)}V${-REACH}`;
 
 /** The clip box's text nodes that hold more than white space. */
 function textNodes(clip: HTMLElement): Text[] {
@@ -150,6 +158,7 @@ export function preserveClippedExactRowText(root: HTMLElement): number {
   const view = document.defaultView;
   if (!view) return 0;
   let rewritten = 0;
+  const rewrittenBands = new Set<HTMLElement>();
   for (const clip of Array.from(root.querySelectorAll<HTMLElement>(EXACT_ROW_CELL))) {
     const page = clip.closest<HTMLElement>('.page-box');
     const parent = clip.parentElement;
@@ -188,8 +197,7 @@ export function preserveClippedExactRowText(root: HTMLElement): number {
     clipPath.setAttribute('clipPathUnits', 'userSpaceOnUse');
     const shape = document.createElementNS(SVG_NS, 'path');
     // The visible rectangle, then zero-area spikes that stretch the clip's bounds in every direction.
-    shape.setAttribute('d', `M${x0} ${y0}H${x1}V${y1}H${x0}Z`
-      + ` M${x0} ${y0}H${REACH} M${x0} ${y0}H${-REACH} M${x0} ${y0}V${REACH} M${x0} ${y0}V${-REACH}`);
+    shape.setAttribute('d', expandedClip(x0, y0, x1, y1));
     clipPath.appendChild(shape);
     const content = document.createElementNS(SVG_NS, 'foreignObject');
     content.setAttribute('x', number(fx));
@@ -213,6 +221,27 @@ export function preserveClippedExactRowText(root: HTMLElement): number {
     // cell's text paints in tree order inside it.
     if (phases.positioned.length > 0)
       for (const node of phases.inFlow) node.parentElement?.style.setProperty('position', 'relative');
+    // Page bands also clip the row's hidden text. Keep their visible rectangle while extending the
+    // clip bounds, just as the cell's SVG does; widening only the cell still loses glyphs at the band.
+    for (let band = svg.parentElement; band; band = band.parentElement) {
+      if (rewrittenBands.has(band) || !band.matches('.page-header, .page-footer, .page-content, .page-box')) continue;
+      const style = view.getComputedStyle(band);
+      const clipsX = ['hidden', 'clip'].includes(style.overflowX);
+      const clipsY = ['hidden', 'clip'].includes(style.overflowY);
+      const rect = band.getBoundingClientRect();
+      const existing = insetClipBounds(style.clipPath, rect, 1);
+      if ((!clipsX && !clipsY && !existing) || (style.clipPath !== 'none' && !existing)) continue;
+      const left = rect.left - pageRect.left;
+      const top = rect.top - pageRect.top;
+      band.style.setProperty('clip-path', `path('${expandedClip(
+        Math.max(existing ? existing.left - rect.left : -REACH, clipsX ? Math.round(left) - left : -REACH),
+        Math.max(existing ? existing.top - rect.top : -REACH, clipsY ? Math.round(top) - top : -REACH),
+        Math.min(existing ? existing.right - rect.left : REACH, clipsX ? Math.round(left + rect.width) - left : REACH),
+        Math.min(existing ? existing.bottom - rect.top : REACH, clipsY ? Math.round(top + rect.height) - top : REACH))}')`);
+      band.style.setProperty('overflow', 'clip');
+      band.style.setProperty('overflow-clip-margin', px(REACH));
+      rewrittenBands.add(band);
+    }
     rewritten++;
   }
   return rewritten;

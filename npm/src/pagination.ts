@@ -616,7 +616,7 @@ function createRenderedSourceMeasurer(
       const style = view.getComputedStyle(ancestor);
       const clipsX = clips(style.overflowX);
       const clipsY = clips(style.overflowY);
-      if (!clipsX && !clipsY && !style.clipPath.startsWith("inset(")) continue;
+      if (!clipsX && !clipsY && style.clipPath === "none") continue;
       const ancestorRect = ancestor.getBoundingClientRect();
       const scale = ancestorRect.width / ancestor.offsetWidth || 1;
       const inset = clipInset(style.clipPath, ancestorRect, scale);
@@ -626,11 +626,14 @@ function createRenderedSourceMeasurer(
         right = Math.min(right, inset.right);
         bottom = Math.min(bottom, inset.bottom);
       }
-      if (clipsX) {
+      // The exact-row path keeps the original visible rectangle; its expanded overflow clip is
+      // deliberately wider than the band, so only the path bounds constrain the map.
+      const expanded = inset !== null && style.clipPath.startsWith("path(");
+      if (clipsX && !expanded) {
         left = Math.max(left, ancestorRect.left);
         right = Math.min(right, ancestorRect.right);
       }
-      if (clipsY) {
+      if (clipsY && !expanded) {
         top = Math.max(top, ancestorRect.top);
         bottom = Math.min(bottom, ancestorRect.bottom);
       }
