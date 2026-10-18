@@ -16,6 +16,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { loadWorkloadInput, runWasmWorkload } from './wasm-workload';
 import { runWasmBrowserWorkload, BrowserOperation } from './wasm-browser-workload';
+import { paragraphFrameFixture } from './docx-paragraph-frame-fixture.js';
 
 const PROFILE_PATH = process.env.DOCXODUS_AOT_PROFILE_OUT ?? path.join(
   path.dirname(fileURLToPath(import.meta.url)), '../../wasm/DocxodusWasm/docxodus.aotprofile');
@@ -85,6 +86,15 @@ test.describe('AOT profile recording', () => {
         const samples = await page.evaluate(runWasmBrowserWorkload, { bytes, operation, iterations: 1 });
         expect(samples[0].outputLength, `${fixture}: ${operation} produced output`).toBeGreaterThan(0);
       }
+    }
+
+    // Frame grouping has both body-border and running-story conversion paths.
+    for (const story of ['body', 'footer'] as const) {
+      const samples = await page.evaluate(runWasmBrowserWorkload, {
+        bytes: Array.from(paragraphFrameFixture(true, story, true)),
+        operation: 'html.options' as BrowserOperation, iterations: 1,
+      });
+      expect(samples[0].outputLength).toBeGreaterThan(0);
     }
 
     const profile = await page.evaluate(() => {

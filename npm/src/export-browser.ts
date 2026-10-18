@@ -3236,7 +3236,7 @@ async function verifyOfflineReopen(
             height: (visible.bottom - visible.top) * pointPerRenderedY,
           },
           story: storyForAnchor(anchorId),
-          inTableCell: element.matches("td,th") || element.closest("td,th") !== null,
+          inTableCell: element.matches("td,th") || element.closest('td,th,[data-docx-frame-in-table-cell="true"]') !== null,
         });
       }
     }

@@ -33,6 +33,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Paragraph text frames now retain their declared size and anchor offsets (issue #1225), including
+  footer frames that previously added an extra line ahead of centered footer text. Adjacent frame
+  paragraphs share a floating box, and pagination preserves its visible source geometry outside
+  the body or running-story clipping area.
+
 - Rejecting revisions now reverses an insertion or deletion in every container that can hold one (issue
   #1176). Reject works by turning each insertion into a deletion and each deletion into an insertion,
   then accepting. Which revisions it turned around was a list of containers: paragraphs, hyperlinks,
