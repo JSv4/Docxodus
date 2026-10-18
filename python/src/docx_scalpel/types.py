@@ -3766,7 +3766,8 @@ class CommentListEntry:
 
     ``anchor_id`` addresses the definition (kind ``cmt``) for ``update_comment``/
     ``remove_comment``; ``date`` is the matching valid extensible UTC timestamp,
-    falling back to the raw ``w:date`` attribute string (``None`` when absent); ``text`` is the flattened body (paragraphs joined by a space, the
+    falling back to the raw ``w:date`` attribute string (``None`` when absent);
+    ``text`` is the flattened body (paragraphs joined by a space, the
     ``w:annotationRef`` mark excluded). ``parent_anchor_id`` and ``resolved`` are
     populated only when the comment has a ``commentsExtended.xml`` entry; ``None``
     distinguishes a legacy/flat comment from an explicitly reopened one. ``id`` is the
