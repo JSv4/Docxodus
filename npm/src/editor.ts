@@ -2717,6 +2717,8 @@ export class DocxEditor {
       scale: this.options.scale,
       cssPrefix: "page-",
       fragmentParagraphs: false,
+      // The editor owns a separate comment gutter; keep its physical page substrate unchanged.
+      commentColumnPlacement: "margin",
       // Moved glyph boxes would part from text typed into them.
       alignBaselinesToWord: false,
     });

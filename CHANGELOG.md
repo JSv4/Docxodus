@@ -33,6 +33,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Long margin comments are readable through a scrollable column beside the read-only viewer's pages
+  (issue #1226), including the React hook and component. Its width and gap are configurable and
+  scale with the page. Narrow viewers can pan
+  the full row, and pages without comments stay aligned. Physical page dimensions and print/export
+  margin placement are preserved.
+
 - Rejecting revisions now reverses an insertion or deletion in every container that can hold one (issue
   #1176). Reject works by turning each insertion into a deletion and each deletion into an insertion,
   then accepting. Which revisions it turned around was a list of containers: paragraphs, hyperlinks,
