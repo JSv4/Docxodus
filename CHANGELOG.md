@@ -33,6 +33,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Paragraph text frames now retain their declared size and anchor offsets (issue #1225), including
+  footer frames that previously added an extra line ahead of centered footer text. Adjacent frame
+  paragraphs share a floating box, and pagination preserves its visible source geometry outside
+  the body or running-story clipping area.
+
 - Manual labels with hanging indentation now keep their first left tab stop in proportional-font
   fallback rendering (issue #1224). Left/right tab segments use the browser's actual glyph widths
   to fill leader space and align the following text, including later tabs in the same paragraph.

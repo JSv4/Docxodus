@@ -192,6 +192,25 @@ range markers such as bookmarks do not create a physical boundary. Paragraph-mar
 does not hide the generated list number; run defaults, run styles, and numbering-level visibility
 still apply to the number.
 
+### Paragraph text frames
+
+`w:framePr` identifies a floating paragraph frame. Adjacent paragraphs with identical frame
+attributes share one frame, anchored to the next ordinary paragraph, as specified by
+[OOXML FrameProperties](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.frameproperties?view=openxml-3.0.1).
+The converter groups their ordinary paragraph HTML inside one absolutely positioned
+`data-docx-text-frame` wrapper. A zero-height placeholder keeps the frame with its following
+anchor without adding a line to the body, header or footer. Drop-cap properties retain their
+existing conversion path. Explicit automatic height ignores the stored height; exact and minimum
+heights retain their declared size. Omitted anchors use Word's text-relative defaults
+([MS-OE376](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/6ff920ba-f035-407d-aa15-c4e2ad916cb6)).
+
+The paginator resolves page, margin and text anchors after the ordinary content has flowed.
+It then places the frame directly in its page so body and running-story clipping cannot crop
+its overhang. Inherited presentation, canonical source identities and table-cell ownership
+survive placement; the PageMap measures the positioned source paragraphs. Ordinary running-story
+paragraphs retain their existing conversion. Frame geometry supports explicit offsets and
+horizontal/vertical alignment; surrounding-body text exclusion around frames remains unsupported.
+
 ### Runs (Text Formatting)
 
 Run properties (`w:rPr`) map to CSS:

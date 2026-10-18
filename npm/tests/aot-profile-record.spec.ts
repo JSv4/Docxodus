@@ -16,6 +16,8 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { loadWorkloadInput, runWasmWorkload } from './wasm-workload';
 import { runWasmBrowserWorkload, BrowserOperation } from './wasm-browser-workload';
+import { paragraphFrameFixture } from './docx-paragraph-frame-fixture.js';
+
 import { multipleTabFixture } from './docx-multiple-tab-fixture.js';
 
 const PROFILE_PATH = process.env.DOCXODUS_AOT_PROFILE_OUT ?? path.join(
@@ -86,6 +88,15 @@ test.describe('AOT profile recording', () => {
         const samples = await page.evaluate(runWasmBrowserWorkload, { bytes, operation, iterations: 1 });
         expect(samples[0].outputLength, `${fixture}: ${operation} produced output`).toBeGreaterThan(0);
       }
+    }
+
+    // Frame grouping has both body-border and running-story conversion paths.
+    for (const story of ['body', 'footer'] as const) {
+      const samples = await page.evaluate(runWasmBrowserWorkload, {
+        bytes: Array.from(paragraphFrameFixture(true, story, true)),
+        operation: 'html.options' as BrowserOperation, iterations: 1,
+      });
+      expect(samples[0].outputLength).toBeGreaterThan(0);
     }
 
     // Manual tab labels exercise the resolved-stop and formatted spacer paths.

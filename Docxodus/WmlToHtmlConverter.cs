@@ -4601,10 +4601,7 @@ namespace Docxodus
                 return null;
 
             // Convert the content of the header
-            var content = headerRoot.Elements()
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
-                .Where(c => c != null)
-                .ToList();
+            var content = CreateFrameDivs(wordDoc, settings, headerRoot.Elements());
 
             if (!content.Any())
                 return null;
@@ -4669,10 +4666,7 @@ namespace Docxodus
                 return null;
 
             // Convert the content of the footer
-            var content = footerRoot.Elements()
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
-                .Where(c => c != null)
-                .ToList();
+            var content = CreateFrameDivs(wordDoc, settings, footerRoot.Elements());
 
             if (!content.Any())
                 return null;
@@ -4874,10 +4868,7 @@ namespace Docxodus
             FieldRetriever.AnnotateWithFieldInfo(headerPart);
 
             // Convert the content of the header
-            return headerRoot.Elements()
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
-                .Where(c => c != null)
-                .ToList();
+            return CreateFrameDivs(wordDoc, settings, headerRoot.Elements());
         }
 
         /// <summary>
@@ -4910,10 +4901,7 @@ namespace Docxodus
             FieldRetriever.AnnotateWithFieldInfo(footerPart);
 
             // Convert the content of the footer
-            return footerRoot.Elements()
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
-                .Where(c => c != null)
-                .ToList();
+            return CreateFrameDivs(wordDoc, settings, footerRoot.Elements());
         }
 
         private static void LoadComments(WordprocessingDocument wordDoc, CommentTracker tracker)
@@ -10265,7 +10253,68 @@ namespace Docxodus
             return copy.ToString(SaveOptions.DisableFormatting);
         }
 
-        private static object CreateBorderDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements)
+        private static object CreateBorderDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements) =>
+            CreateFrameDivs(wordDoc, settings, elements, paragraphBorders: true);
+
+        private static List<object?> CreateFrameDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+            IEnumerable<XElement> elements, bool paragraphBorders = false)
+        {
+            // Equal frame properties on adjacent paragraphs identify one floating text frame.
+            // A zero-height placeholder keeps that frame beside its next ordinary anchor without
+            // charging its text height to the body or running-story flow.
+            var groups = elements.GroupAdjacent(e =>
+            {
+                var frame = e.Name == W.p ? e.Element(W.pPr)?.Element(W.framePr) : null;
+                if (frame == null || ((string?)frame.Attribute(W.dropCap) is string dropCap && dropCap != "none"))
+                    return string.Empty;
+                return "frame|" + string.Join("|", frame.Attributes().Where(a => a.Name.Namespace == W.framePr.Namespace)
+                    .OrderBy(a => a.Name.LocalName).Select(a => a.Name.LocalName + "=" + a.Value));
+            });
+            var result = new List<object?>();
+            foreach (var group in groups)
+            {
+                if (group.Key == string.Empty)
+                {
+                    if (paragraphBorders) result.Add(CreateBorderDivsCore(wordDoc, settings, group));
+                    else result.AddRange(group.Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                        .Where(c => c != null));
+                    continue;
+                }
+                var frame = group.First().Element(W.pPr)!.Element(W.framePr)!;
+                var style = new Dictionary<string, string>
+                {
+                    { "position", "absolute" }, { "box-sizing", "border-box" },
+                    { "left", PointsCss((WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W.x)) ?? 0m) / 20m) },
+                    { "top", PointsCss((WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W.y)) ?? 0m) / 20m) },
+                    { "line-height", "normal" },
+                };
+                var width = WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W._w));
+                if (width > 0m) style["width"] = PointsCss(width.Value / 20m);
+                var height = WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W.h));
+                if (height > 0m && (string?)frame.Attribute(W.hRule) != "auto")
+                    style[(string?)frame.Attribute(W.hRule) == "exact" ? "height" : "min-height"] = PointsCss(height.Value / 20m);
+                var rendered = new XElement(Xhtml.div, new XAttribute("data-docx-text-frame", "true"),
+                    new XAttribute("data-docx-frame-h-anchor", (string?)frame.Attribute(W.hAnchor) ?? "text"),
+                    new XAttribute("data-docx-frame-v-anchor", (string?)frame.Attribute(W.vAnchor) ?? "text"),
+                    paragraphBorders ? CreateBorderDivsCore(wordDoc, settings, group) :
+                        group.Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m)).ToList());
+                foreach (var name in new[] { W.x, W.y, W.xAlign, W.yAlign })
+                    if (frame.Attribute(name) is XAttribute value)
+                        rendered.Add(new XAttribute("data-docx-frame-" + name.LocalName.ToLowerInvariant(), value.Value));
+                rendered.AddAnnotation(style);
+                var placeholder = new XElement(Xhtml.div,
+                    new XAttribute("data-docx-frame-container", "true"),
+                    new XAttribute("data-keep-with-next", "true"), rendered);
+                placeholder.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "position", "relative" }, { "height", "0" }, { "margin", "0" }, { "padding", "0" },
+                });
+                result.Add(placeholder);
+            }
+            return result;
+        }
+
+        private static object CreateBorderDivsCore(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements)
         {
             return elements.GroupAdjacent(BorderGroupKey)
                 .Select(g =>
