@@ -56,6 +56,10 @@ All notable changes to this project will be documented in this file.
   fallback rendering (issue #1224). Left/right tab segments use the browser's actual glyph widths
   to fill leader space and align the following text, including later tabs in the same paragraph.
 
+- A keep-with-next heading can stay with a valid first fragment of the following paragraph instead
+  of moving that paragraph whole (#1182). Fragment checks retain keep-lines, page-break, widow-control
+  and citation constraints and also keep the heading with a fragment when moving to a fresh page.
+
 - Hidden paragraph marks (`w:pPr/w:rPr/w:vanish`) now join following paragraph text on the same
   rendered line, preserving the heading and visible generated numbering (issue #1223). Explicitly
   hidden runs and number styles remain hidden; tables and section boundaries stop joining.
