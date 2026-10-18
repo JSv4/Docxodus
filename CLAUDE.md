@@ -322,8 +322,17 @@ the Feature Development Workflow above.
    new code one responsibility.
 4. **Tests a reviewer can read.** Pair focused unit tests with isolated integration tests through
    the public entry point. Keep each short, named for the behaviour, and failing without the fix.
-5. **Stay in scope.** No unrelated fixes or refactors in the change; open an issue for anything
-   unrelated you find.
+5. **Stay in scope.** No unrelated fixes or refactors in the change. File a new issue for an
+   unrelated find only when it reproduces on `main`, affects realistic documents (not invalid
+   OOXML, not unverified speculation) and is at least moderate in severity; group related lesser
+   finds into one checklist issue per area rather than one issue each.
+6. **Pin it in the fidelity bench.** Every defect reproduced in step 1 also gets authored fixtures in
+   [`JSv4/docx-fidelity-bench`](https://github.com/JSv4/docx-fidelity-bench), so every Docxodus
+   version can be re-scored against it and a regression cannot return unnoticed. Rendering and
+   pagination defects go in its PDF track; comparison defects (`DocxDiff`, `DocxCompare`,
+   Consolidate) go in its redline track, which scores accept against the revised document, reject
+   against the original, and schema validity. Add a control case beside each reproducer, follow
+   that repository's fixture-authoring and rights rules, and link the bench PR from the Docxodus PR.
 
 ## OOXML Corner Cases
 
