@@ -11482,19 +11482,25 @@ internal static partial class IrMarkupRenderer
             // InlineWalker flattens nested fields into the outer result. Instruction runs after the
             // outer separate therefore also have opaque zero-width tokens, unlike outer field code.
             var resultInstructions = new HashSet<int>();
-            int depth = 0;
-            bool inResult = false;
-            for (int i = 0; i < _segments.Count; i++)
+            // Each hyperlink has its own InlineWalker, so an outer field does not make a
+            // hyperlink's own field instructions part of that walker's result tokens.
+            foreach (var scope in Enumerable.Range(0, _segments.Count).GroupBy(index =>
+                         _segments[index].Chain.Count == 0 ? null : _segments[index].Chain[^1]))
             {
-                var segment = _segments[i];
-                if (IsFieldChar(segment))
-                    switch ((string?)segment.OtherChild!.Attribute(W.fldCharType))
-                    {
-                        case "begin": if (depth++ == 0) inResult = false; break;
-                        case "separate": if (depth == 1) inResult = true; break;
-                        case "end": if (depth > 0 && --depth == 0) inResult = false; break;
-                    }
-                else if (inResult && IsInstruction(segment)) resultInstructions.Add(i);
+                int depth = 0;
+                bool inResult = false;
+                foreach (int i in scope)
+                {
+                    var segment = _segments[i];
+                    if (IsFieldChar(segment))
+                        switch ((string?)segment.OtherChild!.Attribute(W.fldCharType))
+                        {
+                            case "begin": if (depth++ == 0) inResult = false; break;
+                            case "separate": if (depth == 1) inResult = true; break;
+                            case "end": if (depth > 0 && --depth == 0) inResult = false; break;
+                        }
+                    else if (inResult && IsInstruction(segment)) resultInstructions.Add(i);
+                }
             }
             bool IsToken(int index) => MayBeZeroWidthToken(_segments[index]) || resultInstructions.Contains(index);
             var attached = new HashSet<int>();

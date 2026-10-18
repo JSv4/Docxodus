@@ -231,16 +231,22 @@ public class IrFieldNormalizationTests
     [InlineData("nested-hyperlink")]
     [InlineData("adjacent")]
     [InlineData("hyperlink")]
+    [InlineData("linked-nested-result")]
+    [InlineData("nested-linked-result")]
     public void Consolidate_ThreeReviewersPreserveFieldsOrReportCarrierConflict(string kind)
     {
         WmlDocument Document(string prefix, string result, string suffix)
         {
+            string Link(string content) => "<w:hyperlink w:anchor=\"Target\">" + content + "</w:hyperlink>";
+            string Nested(string content) => F("begin") + I("REF Outer") + F("separate") + R("cedar ") + content + R(" fir") + F("end");
             var field = kind switch
             {
-                "nested-result" => F("begin") + I("REF Outer") + F("separate") + R("cedar ") + PageField(result) + R(" fir") + F("end"),
+                "nested-result" => Nested(PageField(result)),
+                "linked-nested-result" => Link(Nested(PageField(result))),
+                "nested-linked-result" => Nested(Link(PageField(result))),
                 "nested-hyperlink" => F("begin") + I("HYPERLINK \"https://example.test/cedar\"") + F("separate") + R("cedar ") + PageField(result) + R(" fir") + F("end"),
                 "adjacent" => PageField(result) + R(" ") + PageField("2"),
-                "hyperlink" => "<w:hyperlink w:anchor=\"Target\">" + PageField(result) + "</w:hyperlink>",
+                "hyperlink" => Link(PageField(result)),
                 _ => PageField(result),
             };
             return IrTestDocuments.FromBodyXml(Para(R(prefix) + field + R(suffix)));
