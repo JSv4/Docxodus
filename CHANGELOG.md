@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Manual labels with hanging indentation now keep their first left tab stop in proportional-font
+  fallback rendering (issue #1224). Left/right tab segments use the browser's actual glyph widths
+  to fill leader space and align the following text, including later tabs in the same paragraph.
+
 - Hidden paragraph marks (`w:pPr/w:rPr/w:vanish`) now join following paragraph text on the same
   rendered line, preserving the heading and visible generated numbering (issue #1223). Explicitly
   hidden runs and number styles remain hidden; tables and section boundaries stop joining.

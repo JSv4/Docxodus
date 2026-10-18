@@ -100,7 +100,7 @@ test.describe('generated tab-stop geometry', () => {
     expect(geometry.borderBottomStyle).toBe('dotted');
   });
 
-  test('paginated cached TOC content retains its right-tab target', async ({ page }) => {
+  for (const letterSpacing of [0, 0.5]) test(`paginated cached TOC retains its right-tab target (letter spacing ${letterSpacing}px)`, async ({ page }) => {
     const bytes = new Uint8Array(readFileSync(join(TEST_FILES, 'HC022-Table-Of-Contents.docx')));
     const result = await page.evaluate((values) => {
       const html = (window as any).Docxodus.DocumentConverter.ConvertDocxToHtmlComplete(
@@ -115,12 +115,15 @@ test.describe('generated tab-stop geometry', () => {
     }, Array.from(bytes));
     expect(result.error).toBeUndefined();
 
-    const geometry = await page.evaluate((html: string) => {
+    const geometry = await page.evaluate(({ html, letterSpacing }: { html: string; letterSpacing: number }) => {
       const parsed = new DOMParser().parseFromString(html, 'text/html');
       document.head.innerHTML = parsed.head.innerHTML;
       document.body.innerHTML = parsed.body.innerHTML;
       const tab = document.querySelector<HTMLElement>('[data-docx-tab="right"]')!;
       const paragraph = tab.closest('p')!;
+      for (const span of Array.from(paragraph.querySelectorAll<HTMLElement>('span'))) {
+        span.style.letterSpacing = `${letterSpacing}px`;
+      }
       const pageNumber = Array.from(paragraph.querySelectorAll<HTMLElement>('span'))
         .find((span) => span.children.length === 0 && span.textContent === '1')!;
       const paragraphBox = paragraph.getBoundingClientRect();
@@ -129,12 +132,18 @@ test.describe('generated tab-stop geometry', () => {
         tabWidth: tab.getBoundingClientRect().width,
         tabDataWidth: Number(tab.dataset.docxTabWidth) * 96,
         pageNumberRight: pageNumberBox.right - paragraphBox.left,
+        pageNumberLeft: pageNumberBox.left - paragraphBox.left,
+        tabRight: tab.getBoundingClientRect().right - paragraphBox.left,
       };
-    }, result.html!);
+    }, { html: result.html!, letterSpacing });
 
     const tocTargetPx = 9350 / 1440 * 96;
-    expect(geometry.tabWidth).toBeGreaterThan(200);
-    expect(geometry.tabWidth).toBeGreaterThan(geometry.tabDataWidth);
     expect(Math.abs(geometry.pageNumberRight - tocTargetPx)).toBeLessThanOrEqual(2);
+    expect(geometry.tabRight).toBeCloseTo(geometry.pageNumberLeft, 0);
+    // Glyph widths change the remaining advance; alignment above is the invariant.
+    expect(geometry.tabWidth).toBeGreaterThan(0);
+    // The tab can shrink or grow relative to its estimate as browser glyph widths change.
+    expect(Number.isFinite(geometry.tabDataWidth)).toBe(true);
+    expect(geometry.tabDataWidth).toBeGreaterThan(0);
   });
 });

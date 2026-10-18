@@ -265,16 +265,22 @@ result. Removing rather than replacing them exposes the document's underlying TO
 ### Tabs
 
 `CalculateSpanWidthForTabs` measures the current position and following segment, then annotates each
-tab with the advance needed for its OOXML target. During transformation the text and tab become one
-fixed-width inline flex row; the browser assigns any font-metric difference to the tab remainder, so
-the post-tab text stays aligned without invisible padding after a leader. The same grouping is used
-when a cached TOC nests the runs inside `w:hyperlink`.
+tab with the advance needed for its OOXML target. Left/right tab sequences use character-class
+fallback widths to choose a stop; fixed-pitch prefixes retain constant advances. Plain left/right
+segments in left-to-right paragraphs become fixed-width inline flex rows, including the following text in a right segment.
+The browser assigns font-metric differences to the tab remainder, so later tabs retain their own
+stops and page-number right edges follow actual glyph widths. The same grouping is used inside
+`w:hyperlink`. Bidirectional paragraphs, complex fields, breaks, active comment/annotation ranges and tab runs
+with visibility, revision or exceptional geometry retain the run-aware path and its conservative
+following-text reservations. Leader rules inherit the tab run's resolved foreground color.
 
 ```html
 <span style="align-items: baseline; display: inline-flex; width: 4.000in">
   <span style="flex-shrink: 0">Before</span>
-  <span data-docx-tab="right" data-docx-tab-width="3.500"
-        style="display: inline-block; flex-grow: 1; width: 3.50in"></span>
+  <span style="display: inline-block; flex: 1 1 0; min-width: 0; color: blue">
+    <span data-docx-tab="right" data-docx-tab-width="3.500" style="width: 100%"></span>
+  </span>
+  <span style="flex-shrink: 0">After</span>
 </span>
 ```
 
