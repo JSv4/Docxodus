@@ -92,10 +92,10 @@ public sealed class DocxDiffComparison
                 () => _left.PreAccepted,
                 () => _right.PreAccepted);
             DocxDiff.PreflightCompatibility(_settings, preLeft, preRight);
-            return (preLeft, preRight);
+            return (preLeft, CommentOps.AlignIds(preLeft, new[] { preRight })[0]);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
-        // ONE read per side serves every product, including the markup renderer's clone-from-provenance
+        // One read per aligned side serves every product, including the markup renderer's clone-from-provenance
         // pass — hence DocxDiff.RenderReadOpts (RetainSources ON) rather than DocxDiff.ReadOpts. Provenance
         // is equality-neutral (see IrProvenance), so this snapshot is node-for-node value-equal to the
         // retention-off one and the edit script built over it is unchanged; what it buys is the renderer's
@@ -106,8 +106,9 @@ public sealed class DocxDiffComparison
         // OnCompatibilityWarning subscription into silence.
         _ir = new(() =>
         {
-            _ = _preflighted.Value;
-            return ParallelWork.Pair(() => _left.Ir, () => _right.Ir);
+            var (_, rightDocument) = _preflighted.Value;
+            return ParallelWork.Pair(() => _left.Ir, () => ReferenceEquals(rightDocument, _right.PreAccepted)
+                ? _right.Ir : IrReader.Read(rightDocument, DocxDiff.RenderReadOpts));
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
         // One block alignment serves every script: the aligner never reads CrossParagraphTokenDiff, the one

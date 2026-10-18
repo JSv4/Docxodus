@@ -82,6 +82,8 @@ public sealed class DocxDiffConsolidation
             DocxDiff.PreflightCompatibility(
                 _settings.Diff,
                 new[] { preBase }.Concat(preReviewers.Select(r => r.Document)).ToArray());
+            var aligned = CommentOps.AlignIds(preBase, preReviewers.Select(reviewer => reviewer.Document).ToList());
+            for (int i = 0; i < preReviewers.Count; i++) preReviewers[i].Document = aligned[i];
             return (preBase, (IReadOnlyList<DocxDiffReviewer>)preReviewers);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 

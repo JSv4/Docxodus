@@ -33,6 +33,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Comparison and consolidation preserve comment definitions when document versions reuse the same
+  numeric comment ID for different notes (#1210). Matching author/date/text definitions retain the
+  base identity; new definitions and independent reviewer additions receive distinct IDs. Markers
+  and definitions are remapped together without changing caller documents or reusable snapshots.
+
 - Paragraph borders now render in headers, footers, footnotes and endnotes, including grouped
   paragraphs in paginated HTML and PDF export (#1203). Note numbers and back links stay inside
   their paragraphs.

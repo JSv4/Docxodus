@@ -548,8 +548,7 @@ internal static partial class IrMarkupRenderer
             return identities;
         foreach (var comment in source.Root.Elements(W.comment))
             if ((string?)comment.Attribute(W.id) is { } id)
-                identities.TryAdd(id, (string?)comment.Attribute(W.author) + "\u0000" + (string?)comment.Attribute(W.date) + "\u0000" +
-                    string.Concat(comment.Descendants(W.t).Select(t => t.Value)));
+                identities.TryAdd(id, Internal.CommentOps.Identity(comment));
         return identities;
     }
 
