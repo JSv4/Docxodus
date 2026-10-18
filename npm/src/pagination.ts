@@ -731,6 +731,12 @@ export class PaginationEngine {
   private footnoteSeparator: HTMLElement | null = null;
   private footnoteContinuationSeparator: HTMLElement | null = null;
   private commentMarginRegistry: Map<string, HTMLElement>;
+  private commentReturnLinks: Array<{
+    link: HTMLAnchorElement;
+    href: string;
+    ariaDisabled: string | null;
+    tabIndex: string | null;
+  }> = [];
   private footnoteLayoutLikeWord8 = false;
   private pendingFootnoteContinuation: FootnoteContinuation | null = null;
   /** Per-section `w:pgNumType` (start / format), read off the section wrappers. */
@@ -1065,6 +1071,7 @@ export class PaginationEngine {
     if (!this.deferFragmentIdentities) this.normalizeVisiblePageFragments(pages);
     // Glyph placement only: run once every page and running story is final.
     if (this.alignBaselines) alignBaselinesToWord(this.containerElement);
+    this.activateCommentReturnLinks(pages);
     this.lastPages = pages;
 
       const result = {
@@ -4881,18 +4888,73 @@ export class PaginationEngine {
     }
   }
 
-  /** A repeated margin note is presentation, not a second bookmark/link target. */
+  /** Keep repeated note identities inert; resolve their return links after every page exists. */
   private makeClonedMarginCommentInert(root: HTMLElement): void {
     this.makeClonedStoryInert(root);
     const nodes = [root, ...Array.from(root.querySelectorAll<HTMLElement>("*"))];
     for (const element of nodes) {
       element.removeAttribute("id");
-      if (element.localName === "a" && element.getAttribute("href")?.startsWith("#")) {
+      const href = element.getAttribute("href");
+      if (element instanceof this.view.HTMLAnchorElement && href?.startsWith("#")) {
+        if (/^#comment-ref--?[0-9]+$/.test(href)
+            && Array.from(element.classList).some(name => name.endsWith("margin-backref"))
+            && element.getAttribute("aria-disabled") !== "true") {
+          this.commentReturnLinks.push({ link: element, href,
+            ariaDisabled: element.getAttribute("aria-disabled"),
+            tabIndex: element.getAttribute("tabindex") });
+        }
         element.removeAttribute("href");
         element.setAttribute("aria-disabled", "true");
         element.tabIndex = -1;
       }
     }
+  }
+
+  /** A return link may target only one actual rendered reference, including on a later page. */
+  private activateCommentReturnLinks(pages: PageInfo[]): void {
+    if (this.commentReturnLinks.length === 0) return;
+    const wanted = new Set(this.commentReturnLinks.map(({ href }) => href.slice(1)));
+    const targets = new Map<string, HTMLElement | null>();
+    for (const element of Array.from(this.document.querySelectorAll<HTMLElement>('[id^="comment-ref-"]'))) {
+      this.checkpoint();
+      if (!wanted.has(element.id)) continue;
+      targets.set(element.id, targets.has(element.id) ? null : element);
+    }
+    const pageElements = new Set<Element>(pages.map(page => page.element));
+    const eligible = new Set<string>();
+    for (const [id, target] of targets) {
+      this.checkpoint();
+      if (!target) continue;
+      let page: Element | null = target;
+      while (page && !pageElements.has(page)) page = page.parentElement;
+      if (!page || target.closest(`.${this.cssPrefix}header, .${this.cssPrefix}footer, .${this.cssPrefix}comment-margin`)) continue;
+      const sourceId = target.closest<HTMLElement>('[data-source-anchor-id]')?.dataset.sourceAnchorId;
+      if (sourceId) {
+        const story = this.storyForCanonicalAnchor(sourceId);
+        if (story !== "body" && story !== "footnote" && story !== "endnote") continue;
+      } else if (!target.closest(`.${this.cssPrefix}content, .${this.cssPrefix}footnotes`)) continue;
+      const pageElement = page as HTMLElement;
+      // A painted citation may be excluded from PageMap's authored source inventory.
+      if (this.view.getComputedStyle(target).visibility !== "visible") continue;
+      const { visible } = measureRenderedSource(this.view, target, pageElement);
+      if (visible.right <= visible.left || visible.bottom <= visible.top) continue;
+      let transparent = false;
+      for (let ancestor: HTMLElement | null = target; ancestor; ancestor = ancestor.parentElement) {
+        if (Number(this.view.getComputedStyle(ancestor).opacity) === 0) { transparent = true; break; }
+        if (ancestor === pageElement) break;
+      }
+      if (!transparent) eligible.add(id);
+    }
+    for (const { link, href, ariaDisabled, tabIndex } of this.commentReturnLinks) {
+      this.checkpoint();
+      if (!eligible.has(href.slice(1))) continue;
+      link.setAttribute("href", href);
+      if (ariaDisabled === null) link.removeAttribute("aria-disabled");
+      else link.setAttribute("aria-disabled", ariaDisabled);
+      if (tabIndex === null) link.removeAttribute("tabindex");
+      else link.setAttribute("tabindex", tabIndex);
+    }
+    this.commentReturnLinks.length = 0;
   }
 
   /**

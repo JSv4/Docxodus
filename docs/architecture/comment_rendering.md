@@ -676,6 +676,17 @@ comment-less `RenderBlockHtml` never sets either, so its output is unchanged.
 throws. `ListComments()` surfaces each comment's numeric `w:id` as `CommentListEntry.Id` for
 precisely this pairing: it is the value the highlight's `data-comment-id` carries.
 
+## Paginated return navigation
+
+Margin-note copies keep their element IDs and editing anchors inert. After every page and its
+final glyph positions exist, the paginator resolves renderer-created `margin-backref` links to
+unique, rendered reference marks in body content or cited notes. This includes references on a
+later page and in promoted body frames. Missing, ambiguous, hidden, fully clipped or transparent
+targets stay disabled, as do references owned by header, footer or comment presentation copies.
+The geometry check shares the PageMap's rendered-source measurer; it does not treat exclusion
+from the authored-source inventory as visual absence. Explicit source focus/accessibility
+attributes are retained, and a deliberately disabled source link stays inert.
+
 ## Limitations
 
 1. **Comment highlighting colors**: Word allows different highlight colors per comment; currently all use the same CSS
