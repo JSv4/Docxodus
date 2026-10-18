@@ -10,6 +10,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
+using Docxodus.Tests.Ir;
 using DocxodusDiffParityFixtures;
 using Xunit;
 
@@ -35,6 +36,50 @@ namespace Docxodus.Tests;
 /// </summary>
 public class DocxDiffCommentStructureTests
 {
+    public static IEnumerable<object[]> DuplicateReferenceCases()
+    {
+        foreach (var wrapper in new[] { "sdt", "customXml" })
+        foreach (bool duplicate in new[] { false, true })
+        foreach (bool referenceOnly in new[] { false, true })
+        foreach (bool consolidate in new[] { false, true })
+            yield return new object[] { wrapper, duplicate, referenceOnly, consolidate };
+    }
+
+    [Theory]
+    [MemberData(nameof(DuplicateReferenceCases))]
+    public void ReplacedWrapper_DuplicateCommentReferenceRemainsOneComment(
+        string wrapper, bool duplicate, bool referenceOnly, bool consolidate)
+    {
+        WmlDocument Document(string tag, bool extra)
+        {
+            const string reference = "<w:r><w:commentReference w:id=\"0\"/></w:r>";
+            string content = "<w:p>" + (referenceOnly ? "" : "<w:commentRangeStart w:id=\"0\"/>") +
+                "<w:r><w:t>Cedar clause</w:t></w:r>" +
+                (referenceOnly ? "" : "<w:commentRangeEnd w:id=\"0\"/>") + reference +
+                (extra ? reference : "") + "</w:p>";
+            string body = wrapper == "sdt"
+                ? $"<w:sdt><w:sdtPr><w:tag w:val=\"{tag}\"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"
+                : $"<w:customXml w:element=\"{tag}\">{content}</w:customXml>";
+            return IrTestDocuments.WithComment("Cedar", "C", "2026-01-01T00:00:00Z", "Check this clause.", body);
+        }
+
+        var original = Document("Maple", duplicate);
+        var revised = Document("Birch", duplicate);
+        var redline = consolidate
+            ? DocxDiff.Consolidate(original, new[] { new DocxDiffReviewer { Document = revised, Author = "Reviewer" } })
+            : DocxCompare.Compare(original, revised);
+        foreach (var (resolved, expected) in new[] {
+            (RevisionProcessor.AcceptRevisions(redline), Document("Birch", false)),
+            (RevisionProcessor.RejectRevisions(redline), Document("Maple", false)) })
+        {
+            Assert.Equal(AnchorProjection(expected), AnchorProjection(resolved));
+            Assert.Equal(RangeCoverage(expected), RangeCoverage(resolved));
+            Assert.Equal(BodyText(expected), BodyText(resolved));
+            Assert.Empty(SchemaErrors(resolved));
+        }
+        Assert.Empty(SchemaErrors(redline));
+    }
+
     public static IEnumerable<object[]> AllScenarios() =>
         DocxDiffCommentFixtures.Names().Select(n => new object[] { n });
 

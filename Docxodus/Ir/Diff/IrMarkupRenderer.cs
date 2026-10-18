@@ -3984,11 +3984,25 @@ internal static partial class IrMarkupRenderer
 
         bool changed = false;
 
+        // An invalid source may repeat a reference inside one replaced wrapper. It is still one
+        // comment in that copy, not another reviewer's copy for the clustering pass below (#1197).
+        var markers = Markers();
+        foreach (var group in markers.Where(m => m.Name == W.commentReference)
+            .GroupBy(m => (Id: IdOf(m), Copy: ReplacedWrapperCopy(m)))
+            .Where(g => g.Key.Id != null && g.Key.Copy != null))
+        {
+            foreach (var duplicate in group.Skip(1))
+            {
+                RemoveCommentMarker(duplicate);
+                changed = true;
+            }
+        }
+
         // One body scan, grouped by id in document order, serves (A) and (A2) instead of a rescan per id.
         // Both passes only remove, re-parent or wrap their own id's markers, never change an id, and add a
         // marker only as a twin of one (A)'s straddling split has already finished with; so each group stays
         // in document order and needs only its detached members dropped (`StillInBody`) to serve the passes.
-        var markersById = Markers().Where(m => IdOf(m) != null).GroupBy(m => IdOf(m)!)
+        var markersById = markers.Where(m => IdOf(m) != null && StillInBody(m)).GroupBy(m => IdOf(m)!)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
         List<XElement> MarkersWithId(string id) => markersById[id].Where(StillInBody).ToList();
         bool StillInBody(XElement m) => m.Ancestors().Any(a => ReferenceEquals(a, body));

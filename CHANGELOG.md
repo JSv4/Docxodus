@@ -47,6 +47,10 @@ All notable changes to this project will be documented in this file.
   (issue #1230). The shared converter emits a CSS-commented CDATA section, preserving styles
   for both HTML browsers and XML consumers, including custom `GeneralCss`, `AdditionalCss`
   and existing escapes in CSS strings.
+
+- Invalid repeated comment references inside a replaced block content control or custom XML wrapper
+  now retain one comment per view, while distinct reviewer copies remain separate (#1197).
+
 - Paragraph text frames now retain their declared size and anchor offsets (issue #1225), including
   footer frames that previously added an extra line ahead of centered footer text. Adjacent frame
   paragraphs share a floating box, and pagination preserves its visible source geometry outside

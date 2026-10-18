@@ -459,13 +459,15 @@ public class BlockWrapperNestedDiffTests
     [InlineData(Wrapper.ContentControl, "", "")]
     [InlineData(Wrapper.CustomXml, "First", "Second", true)]
     [InlineData(Wrapper.ContentControl, "Reviewer", "Reviewer", true)]
+    [InlineData(Wrapper.CustomXml, "Reviewer", "Reviewer", false, true)]
+    [InlineData(Wrapper.ContentControl, "First", "Second", false, true)]
     public void Consolidate_TwoReviewersReplaceTheWrapper_EachCopysCommentHasItsOwnId(Wrapper kind, string firstAuthor,
-        string secondAuthor, bool firstDropsTheRangeEnd = false)
+        string secondAuthor, bool firstDropsTheRangeEnd = false, bool duplicateReferences = false)
     {
         WmlDocument Document(string first, string second, string bravo, bool dropEnd = false) => IrTestDocuments.WithComment(
             "Ann", "A", "2026-01-01T00:00:00Z", CommentText,
             $"<w:p>{Run(BeforeText)}{Start}</w:p>" + Wrap(kind, P(bravo), first)
-            + Wrap(kind, P(Alpha) + P(bravo) + $"<w:p>{Run(Charlie)}{(dropEnd ? "" : End)}{ReferenceRun}</w:p>", second) + P(Tail));
+            + Wrap(kind, P(Alpha) + P(bravo) + $"<w:p>{Run(Charlie)}{(dropEnd ? "" : End)}{ReferenceRun}{(duplicateReferences ? ReferenceRun : "")}</w:p>", second) + P(Tail));
         var original = Document("A1", "a1", Bravo);
         // When the first reviewer's copy has no range end, the second reviewer's end must stay with the second
         // reviewer's reference rather than fill the first copy's gap.
@@ -481,6 +483,8 @@ public class BlockWrapperNestedDiffTests
         var body = Body(redline);
         var copies = body.Descendants(WrapperName(kind)).Count(w => w.Descendants(W.commentReference).Any());
         Assert.True(copies >= 3, $"expected a deleted and two inserted copies of the second wrapper, found {copies}");
+        Assert.All(body.Descendants(WrapperName(kind)).Where(w => w.Descendants(W.commentReference).Any()),
+            w => Assert.Single(w.Descendants(W.commentReference)));
         AssertCommentMarkersWellFormed(redline.DocumentByteArray);
         // A copy's range end stays with the reference of the same copy of the wrapper.
         foreach (var end in body.Descendants(W.commentRangeEnd).Where(e => e.Ancestors(WrapperName(kind)).Any()))
