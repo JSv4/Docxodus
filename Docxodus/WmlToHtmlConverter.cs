@@ -1961,8 +1961,8 @@ namespace Docxodus
 
             // HTML treats style as raw text, while XML escapes text nodes. A CSS-commented
             // CDATA section preserves selectors and string values in both serializations.
-            // Escape the two closing delimiters inside CSS so neither parser can end it early.
-            var css = Regex.Replace(styleValue, "</style", match => @"\3c /" + match.Value.Substring(2),
+            // Escape both closing delimiters; escaping the slash leaves an existing CSS escape of < intact.
+            var css = Regex.Replace(styleValue, "</style", match => @"<\/" + match.Value.Substring(2),
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             css = css.Replace("]]>", @"]]\3e ", StringComparison.Ordinal);
             styleElement.ReplaceNodes(new XText("/*"), new XCData("*/\n" + css + "\n/*"), new XText("*/"));

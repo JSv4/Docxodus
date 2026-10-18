@@ -55,10 +55,11 @@ test('styles participate in layout identity while empty CSS uses the default', a
   expect(empty.renderReport.options).not.toHaveProperty('additionalCss');
 });
 
-test('delivered CSS literals retain ampersands and mixed-case closing-style text', async ({ browser }) => {
+for (const escaped of [false, true]) test('delivered CSS literals retain ampersands and mixed-case closing-style text (escaped=' + escaped + ')', async ({ browser }) => {
   test.setTimeout(120_000);
   const literal = '</StYlE><p id=css-escape>A&B ]]> C';
-  const additionalCss = `p:first-child::after { content: ${JSON.stringify(literal)}; }`;
+  const quoted = escaped ? JSON.stringify(literal).replaceAll('<', '\\<') : JSON.stringify(literal);
+  const additionalCss = `p:first-child::after { content: ${quoted}; }`;
   const result = await renderDocxArtifacts(cssCascadeFixture(), {
     browser, outputs: ['html'], reviewProfile: 'final', commentProfile: 'hidden', additionalCss,
   });

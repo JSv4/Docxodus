@@ -38,7 +38,8 @@ All methods return an `XElement` representing the complete HTML document (the `<
 Serialize it with `html.ToString()` or `html.ToString(SaveOptions.DisableFormatting)`.
 Stylesheets use CSS-commented CDATA sections so child selectors (`p > span`), ampersands,
 and CSS string values survive both XML parsing and HTML raw-text parsing (issue #1230).
-CSS escapes protect embedded `</style` and `]]>` delimiters without changing string values.
+CSS escapes protect embedded `</style` and `]]>` delimiters without changing string values,
+including a less-than sign that the authored CSS already escapes.
 The byte-to-HTML facade used by WASM and the stdio host uses this same serialization.
 When manipulating the returned tree, preserve its stylesheet nodes rather than replacing
 `style.Value` with plain XML text, which would reintroduce entity escaping.
