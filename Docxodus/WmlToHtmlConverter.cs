@@ -3498,10 +3498,10 @@ namespace Docxodus
                 return ProcessAlternateContent(wordDoc, settings, element, currentMarginLeft);
             }
 
-            // Transform content controls.
-            if (element.Name == W.sdt)
+            // Render the content of controls and custom XML through the same container path.
+            if (element.Name == W.sdt || element.Name == W.customXml)
             {
-                return ProcessContentControl(wordDoc, settings, element, currentMarginLeft);
+                return ProcessContentContainer(wordDoc, settings, element, currentMarginLeft);
             }
 
             // A simple PAGE / NUMPAGES field carries the same page-number marker as its complex
@@ -3756,12 +3756,12 @@ namespace Docxodus
             WmlToHtmlConverterSettings settings,
             XElement hyperlink)
         {
-            var runs = hyperlink.Elements(W.r).ToList();
+            var runs = hyperlink.Elements().ToList();
             var alignedTabContent = ConvertAlignedTabRuns(wordDoc, settings, runs);
             if (alignedTabContent != null) return alignedTabContent;
             var firstTabRun = runs.FirstOrDefault(run => run.Elements(W.tab).Any());
             if (firstTabRun == null)
-                return runs.Select(run => ConvertRun(wordDoc, settings, run));
+                return runs.Select(child => ConvertToHtmlTransform(wordDoc, settings, child, false, 0m));
 
             // A cached TOC keeps its label, leader tab, and page-number field inside one
             // w:hyperlink. Run the same tab grouping used for direct paragraph children so the
@@ -3776,7 +3776,7 @@ namespace Docxodus
             content.AddRange(runs
                 .SkipWhile(run => run != firstTabRun)
                 .Skip(1)
-                .Select(run => ConvertRun(wordDoc, settings, run)));
+                .Select(child => ConvertToHtmlTransform(wordDoc, settings, child, false, 0m)));
             return content;
         }
 
@@ -4234,9 +4234,7 @@ namespace Docxodus
             }
 
             // Convert the content of the footnote/endnote
-            var content = noteElement.Elements()
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
-                .ToList();
+            var content = CreateBorderDivs(wordDoc, settings, noteElement.Elements());
 
             // Create the backref anchor
             var backref = new XElement(Xhtml.a,
@@ -4247,7 +4245,7 @@ namespace Docxodus
             // Find the last paragraph element and append backref inside it
             // This prevents the backref from appearing on a new line
             var lastParagraph = content
-                .OfType<XElement>()
+                .SelectMany(e => e.DescendantsAndSelf())
                 .LastOrDefault(e => e.Name == Xhtml.p);
 
             var printNote = settings.RenderPagination == PaginationMode.Paginated;
@@ -4265,8 +4263,8 @@ namespace Docxodus
                 var format = tracker?.EndnoteNumberFormat ?? "lowerRoman";
                 AddNoteNumberToFirstParagraph(content, RenderPaginatedNoteNumber(wordDoc, settings,
                     noteElement, FormatNoteNumber(displayNumber, format), endnote: true));
-                foreach (var paragraph in content.OfType<XElement>()
-                    .Where(e => e.Name == Xhtml.p))
+                foreach (var paragraph in content.SelectMany(e => e.DescendantsAndSelf())
+                    .Where(e => ParagraphElementNames.Contains(e.Name)))
                 {
                     var sourceIdentity = SourceAnchorIdentityAttribute(settings, noteElement);
                     if (sourceIdentity == null) continue;
@@ -4341,8 +4339,7 @@ namespace Docxodus
 
             if (hasAuthoredContent)
             {
-                story.Add(source.Elements()
-                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m)));
+                story.Add(CreateBorderDivs(wordDoc, settings, source.Elements()));
             }
             SanitizeRepeatedFootnoteSeparator(story);
             return story;
@@ -4448,9 +4445,7 @@ namespace Docxodus
                     : footnoteId;
 
                 // Convert the content of the footnote
-                var content = fn.Elements()
-                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
-                    .ToList();
+                var content = CreateBorderDivs(wordDoc, settings, fn.Elements());
 
                 // Create a footnote item div with data attribute for lookup. The paginated note
                 // area is a print surface: Word and LibreOffice render the bare superscript
@@ -4605,7 +4600,7 @@ namespace Docxodus
                 return null;
 
             // Convert the content of the header
-            var content = CreateFrameDivs(wordDoc, settings, headerRoot.Elements());
+            var content = CreateBorderDivs(wordDoc, settings, headerRoot.Elements());
 
             if (!content.Any())
                 return null;
@@ -4670,7 +4665,7 @@ namespace Docxodus
                 return null;
 
             // Convert the content of the footer
-            var content = CreateFrameDivs(wordDoc, settings, footerRoot.Elements());
+            var content = CreateBorderDivs(wordDoc, settings, footerRoot.Elements());
 
             if (!content.Any())
                 return null;
@@ -4872,7 +4867,7 @@ namespace Docxodus
             FieldRetriever.AnnotateWithFieldInfo(headerPart);
 
             // Convert the content of the header
-            return CreateFrameDivs(wordDoc, settings, headerRoot.Elements());
+            return CreateBorderDivs(wordDoc, settings, headerRoot.Elements());
         }
 
         /// <summary>
@@ -4905,7 +4900,7 @@ namespace Docxodus
             FieldRetriever.AnnotateWithFieldInfo(footerPart);
 
             // Convert the content of the footer
-            return CreateFrameDivs(wordDoc, settings, footerRoot.Elements());
+            return CreateBorderDivs(wordDoc, settings, footerRoot.Elements());
         }
 
         private static void LoadComments(WordprocessingDocument wordDoc, CommentTracker tracker)
@@ -5819,18 +5814,21 @@ namespace Docxodus
             };
         }
 
-        private static object ProcessContentControl(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+        private static object ProcessContentContainer(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             XElement element, decimal currentMarginLeft)
         {
+            var content = element.Name == W.customXml
+                ? element.Elements().Where(e => e.Name != W.customXmlPr)
+                : element.Elements(W.sdtContent).Elements();
             var relevantAncestors = element.Ancestors().TakeWhile(a => a.Name != W.txbxContent);
             var isRunLevelContentControl = relevantAncestors.Any(a => a.Name == W.p);
             if (isRunLevelContentControl)
             {
-                return element.Elements(W.sdtContent).Elements()
+                return content
                     .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
                     .ToList();
             }
-            return CreateBorderDivs(wordDoc, settings, element.Elements(W.sdtContent).Elements());
+            return CreateBorderDivs(wordDoc, settings, content);
         }
 
         // Transform the w:p element, including the following sibling w:p element(s)
@@ -10258,11 +10256,8 @@ namespace Docxodus
             return copy.ToString(SaveOptions.DisableFormatting);
         }
 
-        private static object CreateBorderDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements) =>
-            CreateFrameDivs(wordDoc, settings, elements, paragraphBorders: true);
-
-        private static List<object?> CreateFrameDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
-            IEnumerable<XElement> elements, bool paragraphBorders = false)
+        private static List<XElement> CreateBorderDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+            IEnumerable<XElement> elements)
         {
             // Equal frame properties on adjacent paragraphs identify one floating text frame.
             // A zero-height placeholder keeps that frame beside its next ordinary anchor without
@@ -10280,9 +10275,7 @@ namespace Docxodus
             {
                 if (group.Key == string.Empty)
                 {
-                    if (paragraphBorders) result.Add(CreateBorderDivsCore(wordDoc, settings, group));
-                    else result.AddRange(group.Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
-                        .Where(c => c != null));
+                    result.Add(CreateBorderDivsCore(wordDoc, settings, group));
                     continue;
                 }
                 var frame = group.First().Element(W.pPr)!.Element(W.framePr)!;
@@ -10301,8 +10294,7 @@ namespace Docxodus
                 var rendered = new XElement(Xhtml.div, new XAttribute("data-docx-text-frame", "true"),
                     new XAttribute("data-docx-frame-h-anchor", (string?)frame.Attribute(W.hAnchor) ?? "text"),
                     new XAttribute("data-docx-frame-v-anchor", (string?)frame.Attribute(W.vAnchor) ?? "text"),
-                    paragraphBorders ? CreateBorderDivsCore(wordDoc, settings, group) :
-                        group.Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m)).ToList());
+                    CreateBorderDivsCore(wordDoc, settings, group));
                 foreach (var name in new[] { W.x, W.y, W.xAlign, W.yAlign })
                     if (frame.Attribute(name) is XAttribute value)
                         rendered.Add(new XAttribute("data-docx-frame-" + name.LocalName.ToLowerInvariant(), value.Value));
@@ -10316,7 +10308,12 @@ namespace Docxodus
                 });
                 result.Add(placeholder);
             }
-            return result;
+            // Flatten nested projections once, then detach before their final insertion. Letting
+            // XElement clone parented nodes would discard the style annotations on these elements.
+            var container = new XElement(Xhtml.div, result);
+            var content = container.Elements().ToList();
+            container.RemoveNodes();
+            return content;
         }
 
         private static object CreateBorderDivsCore(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements)
