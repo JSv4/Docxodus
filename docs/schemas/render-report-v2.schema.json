@@ -723,6 +723,11 @@
                 "$ref": "#/$defs/limits"
               }
             }
+          },
+          "additionalCss": {
+            "description": "The nonempty stylesheet appended before layout; omitted for the default stylesheet.",
+            "type": "string",
+            "minLength": 1
           }
         }
       },

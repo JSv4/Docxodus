@@ -267,6 +267,7 @@ function validateRequest(value: unknown): HostRequest {
       "markupPresentation",
       "commentProfile",
       "title",
+      "additionalCss",
       "unsupportedContent",
       "strictFonts",
       "timeoutMs",

@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Standalone browser, Node and framed-host exports accept the converter's existing `additionalCss`
+  option before pagination and bind nonempty styles to the render report and layout digest (#1230).
+
+
 - CSS child selectors, ampersands and comparison operators survive DOCX-to-HTML serialization
   (issue #1230). The shared converter emits a CSS-commented CDATA section, preserving styles
   for both HTML browsers and XML consumers, including custom `GeneralCss` and `AdditionalCss`.
