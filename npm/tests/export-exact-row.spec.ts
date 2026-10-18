@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 import { generateExactRowDocx } from './docx-exact-row-fixture.js';
 import { decodePng } from './visual-parity/png.js';
@@ -24,6 +25,20 @@ async function pageTexts(bytes: Uint8Array): Promise<string[]> {
     }
     return pages;
   } finally { await task.destroy(); }
+}
+
+for (const name of ['band-clip', 'wide-control']) {
+  test(`hidden header-row words stay whole under the ${name} band`, async ({ browser }) => {
+    test.setTimeout(120_000);
+    const path = fileURLToPath(new URL(`../../TestFiles/ExactRowBands/tables-exact-row-header-${name}.docx`, import.meta.url));
+    const actual = await renderDocxArtifacts(new Uint8Array(readFileSync(path)), { browser, ...options });
+    const pages = await pageTexts(actual.pdf!);
+    expect(pages).toHaveLength(1);
+    const words = pages[0].trim().split(/\s+/);
+    for (const word of ['HdrAlder', 'HdrValue', 'BodyWillow']) expect(words.filter(value => value === word)).toHaveLength(1);
+    for (const word of ['HdrBirch', 'HdrCedar']) expect(words.filter(value => value === word).length).toBeLessThanOrEqual(1);
+    expect(words.filter(word => !['HdrAlder', 'HdrBirch', 'HdrCedar', 'HdrValue', 'BodyWillow'].includes(word))).toEqual([]);
+  });
 }
 
 test('a row that hides a whole paragraph exports, clipped like any other overflow (issue #1168)', async ({ browser }, testInfo) => {
