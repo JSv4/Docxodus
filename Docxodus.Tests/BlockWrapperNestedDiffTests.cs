@@ -1483,6 +1483,44 @@ public class BlockWrapperNestedDiffTests
         AssertFieldsSurviveRoundTrip(original, revised, DocxCompare.Compare(original, revised), "HC022");
     }
 
+    /// <summary>A content control holding one paragraph that closes a field opened before the control and opens
+    /// another that closes after it (issue #1166): its begins and ends net to zero, but each belongs to a field
+    /// spanning paragraphs. A field that opens and closes inside the paragraph does not count.</summary>
+    private static string ClosesOneFieldAndOpensAnother(string middle) =>
+        "<w:p><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> REF a \\h </w:instrText></w:r>" +
+        "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t xml:space=\"preserve\">Intro </w:t></w:r></w:p>" +
+        "<w:sdt><w:sdtPr><w:id w:val=\"11\"/></w:sdtPr><w:sdtContent><w:p>" +
+        "<w:r><w:t xml:space=\"preserve\">Second </w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r>" +
+        $"<w:r><w:t xml:space=\"preserve\"> {middle} </w:t></w:r>" +
+        "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> PAGE </w:instrText></w:r>" +
+        "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>3</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r>" +
+        "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> REF b \\h </w:instrText></w:r>" +
+        "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t xml:space=\"preserve\"> third</w:t></w:r>" +
+        "</w:p></w:sdtContent></w:sdt>" +
+        "<w:p><w:r><w:t xml:space=\"preserve\">Fourth </w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>" + P(Tail);
+
+    [Fact]
+    public void Read_ParagraphClosingOneFieldAndOpeningAnother_MarksItsWrapperAsSpanned()
+    {
+        var ir = IrReader.Read(Doc(ClosesOneFieldAndOpensAnother("middle")));
+
+        Assert.True(Assert.Single(ir.Body.Blocks.OfType<IrSdtBlock>()).HasParagraphSpanningField);
+    }
+
+    [Fact]
+    public void Compare_EditInAParagraphClosingOneFieldAndOpeningAnother_ReplacesTheControlWholeKeepingEveryFieldBalanced()
+    {
+        var original = Doc(ClosesOneFieldAndOpensAnother("middle"));
+        var revised = Doc(ClosesOneFieldAndOpensAnother("middle edited"));
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        AssertFieldsSurviveRoundTrip(original, revised, redline, "issue 1166");
+        // The control is replaced whole (a deleted and an inserted copy), the fallback for a field spanning its
+        // paragraphs, not diffed in place.
+        Assert.Equal(2, Body(redline).Descendants(W.sdt).Count());
+    }
+
     /// <summary>A Word-authored document whose block content control holds a heading, a prose paragraph, a
     /// seven-row table and a prose paragraph (the pair under <c>TestFiles/Issue1143</c>, see its README): one
     /// word edited inside the control is drawn as that word inside one copy of the control, through the
