@@ -33,15 +33,19 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Preserve comment ranges and references when a block content control or custom XML wrapper is added or
-  removed, including endpoints in otherwise unchanged paragraphs (#1195). Consolidation now carries
-  reviewer-added comments from unchanged paragraphs and tables and retains their revision author (#1196).
+- DocumentBuilder keeps style IDs unique when sources use one ID for different style types
+  (#1186). Incoming styles and their references, including inherited styles and running stories,
+  are renamed together; styles with the same name are matched only within the same type.
 
 - SVG `href` fragment links in copied comment content retain their inert behavior alongside
   ordinary copied links (follow-up to #1229). Only native HTML return labels are reactivated.
 
 - Standalone browser, Node and framed-host exports accept the converter's existing `additionalCss`
   option before pagination and bind nonempty styles to the render report and layout digest (#1230).
+
+- Preserve comment ranges and references when a block content control or custom XML wrapper is added or
+  removed, including endpoints in otherwise unchanged paragraphs (#1195). Consolidation now carries
+  reviewer-added comments from unchanged paragraphs and tables and retains their revision author (#1196).
 
 - CSS child selectors, ampersands and comparison operators survive DOCX-to-HTML serialization
   (issue #1230). The shared converter emits a CSS-commented CDATA section, preserving styles

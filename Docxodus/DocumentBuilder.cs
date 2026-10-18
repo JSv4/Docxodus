@@ -788,12 +788,8 @@ application/vnd.ms-word.styles.textEffects+xml                                  
             if (wDoc.MainDocumentPart!.WordprocessingCommentsExPart != null)
                 UpdateStyleIdsForContentPart(wDoc.MainDocumentPart!.WordprocessingCommentsExPart, correctionList);
 
-            // update numbering part
-            // Pre-existing: a source document with no numbered lists has no numbering part, and
-            // UpdateStyleIdsForNumberingPart dereferences it unconditionally (GetXDocument() throws
-            // on null). That crash predates nullable annotation; this assertion preserves it rather
-            // than silently skipping the update.
-            UpdateStyleIdsForNumberingPart(wDoc.MainDocumentPart!.NumberingDefinitionsPart!, correctionList);
+            if (wDoc.MainDocumentPart!.NumberingDefinitionsPart is { } numbering)
+                UpdateStyleIdsForNumberingPart(numbering, correctionList);
         }
 
         private static void UpdateStyleIdsForNumberingPart(OpenXmlPart part, Dictionary<string, string> correctionList)
@@ -1562,7 +1558,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                 var toStyle = toStyles
                     .Root!
                     .Elements(W.style)
-                    .FirstOrDefault(st => (string?)st.Elements(W.name).Attributes(W.val).FirstOrDefault() == fromName);
+                    .FirstOrDefault(st => StyleIdCollisions.TypeOf(st) == StyleIdCollisions.TypeOf(style) &&
+                        (string?)st.Elements(W.name).Attributes(W.val).FirstOrDefault() == fromName);
 
                 if (toStyle == null)
                 {
@@ -1914,6 +1911,26 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
         private static void CopyStylesAndFonts(WordprocessingDocument sourceDocument, WordprocessingDocument newDocument,
             IEnumerable<XElement> newContent)
         {
+            // Rename in the source before any stories or numbering are copied. A style id is unique
+            // across types; matching names alone must not turn a character style into a paragraph style.
+            if (sourceDocument.MainDocumentPart!.StyleDefinitionsPart?.GetXDocument().Root is { } sourceStyles &&
+                newDocument.MainDocumentPart!.StyleDefinitionsPart?.GetXDocument().Root is { } destinationStyles)
+            {
+                var renamed = new Dictionary<string, string>();
+                var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var style in sourceStyles.Elements(W.style))
+                {
+                    var id = (string)style.Attribute(W.styleId)!;
+                    if (!StyleIdCollisions.IdHeldByAnotherType(destinationStyles, StyleIdCollisions.TypeOf(style), id))
+                        continue;
+                    var fresh = StyleIdCollisions.FreshId(id, new[] { sourceStyles, destinationStyles }, taken);
+                    renamed.Add(id, fresh);
+                    taken.Add(fresh);
+                }
+                if (renamed.Count > 0)
+                    AdjustStyleIdsForDocument(sourceDocument, renamed);
+            }
+
             // Copy all styles to the new document
             if (sourceDocument.MainDocumentPart!.StyleDefinitionsPart != null)
             {
@@ -2138,6 +2155,7 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
         private static void AppendDocument(WordprocessingDocument sourceDocument, WordprocessingDocument newDocument,
             List<XElement> newContent, bool keepSection, string? insertId, List<ImageData> images)
         {
+            CopyStylesAndFonts(sourceDocument, newDocument, newContent);
             FixRanges(sourceDocument.MainDocumentPart!.GetXDocument(), newContent);
             AddRelationships(sourceDocument.MainDocumentPart!, newDocument.MainDocumentPart!, newContent);
             CopyRelatedPartsForContentParts(sourceDocument.MainDocumentPart!, newDocument.MainDocumentPart!,
@@ -2156,7 +2174,6 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
             var listOfSectionProps = newContent.DescendantsAndSelf(W.sectPr).ToList();
             foreach (var sectPr in listOfSectionProps)
                 AddSectionAndDependencies(sourceDocument, newDocument, sectPr, images);
-            CopyStylesAndFonts(sourceDocument, newDocument, newContent);
             CopyNumbering(sourceDocument, newDocument, newContent, images);
             CopyComments(sourceDocument, newDocument, newContent, images);
             CopyFootnotes(sourceDocument, newDocument, newContent, images);
@@ -2213,6 +2230,7 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
         private static void AppendDocument(WordprocessingDocument sourceDocument, WordprocessingDocument newDocument, OpenXmlPart part,
             List<XElement> newContent, bool keepSection, string insertId, List<ImageData> images)
         {
+            CopyStylesAndFonts(sourceDocument, newDocument, newContent);
             // Append contents
             XDocument partXDoc = part.GetXDocument();
             partXDoc.Declaration!.Standalone = Yes;

@@ -320,6 +320,9 @@ the Feature Development Workflow above.
    share rather than adding a branch per site, and take the architectural route whenever it is
    also the smaller diff. Reuse or relocate an existing helper before writing a second one; give
    new code one responsibility.
+   Keep the PR diff as short as the fix allows: prefer a succinct rewrite of existing code over
+   another special case, and share fixture setup instead of duplicating tests. Small diffs must
+   still include readable regressions that fail without the fix and meaningful control cases.
 4. **Tests a reviewer can read.** Pair focused unit tests with isolated integration tests through
    the public entry point. Keep each short, named for the behaviour, and failing without the fix.
 5. **Stay in scope.** No unrelated fixes or refactors in the change. File a new issue for an
