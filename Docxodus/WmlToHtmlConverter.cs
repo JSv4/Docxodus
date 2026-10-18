@@ -1070,6 +1070,7 @@ namespace Docxodus
                 CreateHtmlConverterAnnotationAttributes = true,
                 OrderElementsPerStandard = false,
                 AnnotateListMembership = EmitsSemanticLists(htmlConverterSettings),
+                ResolveRevisionFormatting = htmlConverterSettings.RenderTrackedChanges,
                 ListItemRetrieverSettings =
                     htmlConverterSettings.ListItemImplementations == null ?
                     new ListItemRetrieverSettings()
@@ -5824,16 +5825,16 @@ namespace Docxodus
         }
 
         // Transform the w:p element, including the following sibling w:p element(s)
-        // in case the w:p element has a style separator. The sibling(s) will be
+        // when the w:p element has a hidden paragraph mark. The sibling(s) will be
         // transformed to h:span elements rather than h:p elements and added to
         // the element (e.g., h:h2) created from the w:p element having the (first)
-        // style separator (i.e., a w:specVanish element).
+        // hidden paragraph mark (w:specVanish or w:vanish).
         private static object? ProcessParagraph(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             XElement element, bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool suppressLeadingWhiteSpace = false)
         {
-            // Ignore this paragraph if the previous paragraph has a style separator.
+            // Ignore this paragraph if the preceding paragraph ends in a hidden mark.
             // We have already transformed this one together with the previous one.
-            if (BlockSiblingIndex.Of(element).FollowsStyleSeparator(element)) return null;
+            if (BlockSiblingIndex.Of(element).FollowsHiddenParagraphMark(element)) return null;
 
             var elementName = GetParagraphElementName(element, wordDoc);
             var isBidi = IsBidi(element);
@@ -5852,22 +5853,43 @@ namespace Docxodus
                     span.Add(new XAttribute(XNamespace.Xml + "space", "preserve"));
             }
 
-            while (HasStyleSeparator(element))
+            ApplyParagraphRevisionMarkup(settings, element, paragraph);
+            var joinedElement = element;
+            while (HasHiddenParagraphMark(joinedElement))
             {
-                var nextElement = element.ElementsAfterSelf(W.p).FirstOrDefault();
-                if (nextElement == null) break;
-                element = nextElement;
+                var nextElement = joinedElement.ElementsAfterSelf().FirstOrDefault(e => !IsBlockBoundaryMarker(e));
+                if (nextElement?.Name != W.p) break;
+                joinedElement = nextElement;
 
                 elementName = Xhtml.span;
-                isBidi = IsBidi(element);
-                var span = (XElement)ConvertParagraph(wordDoc, settings, element, elementName,
+                isBidi = IsBidi(joinedElement);
+                var span = (XElement)ConvertParagraph(wordDoc, settings, joinedElement, elementName,
                     suppressTrailingWhiteSpace, currentMarginLeft, isBidi);
                 var v = span.Value;
                 if (v.Length > 0 && (char.IsWhiteSpace(v[0]) || char.IsWhiteSpace(v[v.Length - 1])) && span.Attribute(XNamespace.Xml + "space") == null)
                     span.Add(new XAttribute(XNamespace.Xml + "space", "preserve"));
+                ApplyParagraphRevisionMarkup(settings, joinedElement, span);
                 paragraph.Add(span);
             }
 
+            if (settings.RenderTrackedChanges && settings.RevisionPresentation == RevisionPresentation.Word)
+                MarkChangedLine(settings, paragraph);
+
+            // Add pagination-related data attributes when pagination is enabled
+            if (settings.RenderPagination == PaginationMode.Paginated)
+            {
+                AddPaginationDataAttributes(element, paragraph);
+                if ((string?)paragraph.Attribute("data-keep-lines") == "true")
+                    paragraph.Annotation<Dictionary<string, string>>()!["break-inside"] = "avoid";
+                return SplitColumnBreakParagraph(paragraph);
+            }
+
+            return paragraph;
+        }
+
+        private static void ApplyParagraphRevisionMarkup(WmlToHtmlConverterSettings settings,
+            XElement element, XElement paragraph)
+        {
             // Handle paragraph mark revisions (when paragraph was inserted/deleted)
             if (settings.RenderTrackedChanges)
             {
@@ -5965,19 +5987,6 @@ namespace Docxodus
                 }
             }
 
-            if (settings.RenderTrackedChanges && settings.RevisionPresentation == RevisionPresentation.Word)
-                MarkChangedLine(settings, paragraph);
-
-            // Add pagination-related data attributes when pagination is enabled
-            if (settings.RenderPagination == PaginationMode.Paginated)
-            {
-                AddPaginationDataAttributes(element, paragraph);
-                if ((string?)paragraph.Attribute("data-keep-lines") == "true")
-                    paragraph.Annotation<Dictionary<string, string>>()!["break-inside"] = "avoid";
-                return SplitColumnBreakParagraph(paragraph);
-            }
-
-            return paragraph;
         }
 
         private static object SplitColumnBreakParagraph(XElement paragraph)
@@ -6066,7 +6075,8 @@ namespace Docxodus
             AddClass(paragraph, prefix + "changed-line");
             var style = paragraph.Annotation<Dictionary<string, string>>();
             if (style != null && style.TryGetValue("margin-left", out var indent))
-                style[$"--{prefix}change-bar-indent"] = indent;
+                // A unitless CSS zero is valid for margin-left, but not as an addend in calc().
+                style[$"--{prefix}change-bar-indent"] = indent == "0" ? "0pt" : indent;
         }
 
         /// <summary>
@@ -6788,10 +6798,17 @@ namespace Docxodus
             return htmlRow;
         }
 
-        private static bool HasStyleSeparator(XElement? element)
+        private static bool HasHiddenParagraphMark(XElement? element)
         {
-            return element != null && element.Elements(W.pPr).Elements(W.rPr).Any(e => GetBoolProp(e, W.specVanish));
+            return element != null && !element.Elements(W.pPr).Elements(W.sectPr).Any() &&
+                element.Elements(W.pPr).Elements(W.rPr).Any(e =>
+                    GetBoolProp(e, W.specVanish) || GetBoolProp(e, W.vanish));
         }
+
+        // Range markers carry no block content and may surround a paragraph boundary.
+        private static bool IsBlockBoundaryMarker(XElement element) =>
+            element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd ||
+            element.Name == W.permStart || element.Name == W.permEnd || element.Name == W.proofErr;
 
         /// <summary>
         /// Backward-sibling facts for one parent's children, computed in a single pass the first time
@@ -6803,7 +6820,7 @@ namespace Docxodus
         private sealed class BlockSiblingIndex
         {
             private readonly Dictionary<XElement, XElement?> _previousElement = new();
-            private readonly HashSet<XElement> _followsStyleSeparator = new();
+            private readonly HashSet<XElement> _followsHiddenParagraphMark = new();
 
             private BlockSiblingIndex(XElement parent)
             {
@@ -6814,9 +6831,12 @@ namespace Docxodus
                     _previousElement[child] = previous;
                     previous = child;
                     if (child.Name != W.p)
+                    {
+                        if (!IsBlockBoundaryMarker(child)) previousParagraph = null;
                         continue;
-                    if (HasStyleSeparator(previousParagraph))
-                        _followsStyleSeparator.Add(child);
+                    }
+                    if (HasHiddenParagraphMark(previousParagraph))
+                        _followsHiddenParagraphMark.Add(child);
                     previousParagraph = child;
                 }
             }
@@ -6840,11 +6860,11 @@ namespace Docxodus
             public XElement? PreviousElement(XElement child) =>
                 _previousElement.TryGetValue(child, out var previous) ? previous : child.ElementsBeforeSelf().LastOrDefault();
 
-            /// <summary>True when the nearest preceding <c>w:p</c> sibling ends in a style separator.</summary>
-            public bool FollowsStyleSeparator(XElement paragraph) =>
+            /// <summary>True when the preceding block paragraph ends in a hidden paragraph mark.</summary>
+            public bool FollowsHiddenParagraphMark(XElement paragraph) =>
                 _previousElement.ContainsKey(paragraph)
-                    ? _followsStyleSeparator.Contains(paragraph)
-                    : HasStyleSeparator(paragraph.ElementsBeforeSelf(W.p).LastOrDefault());
+                    ? _followsHiddenParagraphMark.Contains(paragraph)
+                    : HasHiddenParagraphMark(paragraph.ElementsBeforeSelf().LastOrDefault(e => !IsBlockBoundaryMarker(e)));
         }
 
         private static bool IsBidi(XElement element)
@@ -7887,7 +7907,7 @@ namespace Docxodus
                 settings.RenderPagination != PaginationMode.Paginated)
                 return null;
 
-            var style = DefineRunStyle(run);
+            var style = DefineRunStyle(run, out var secondaryDecoration);
             ApplyFieldResultPresentation(run, style);
             if (paragraphHasExactLineHeight)
             {
@@ -7938,6 +7958,13 @@ namespace Docxodus
                 }
                 if (newContent != null && newContent.Nodes().Any())
                     content = newContent;
+            }
+
+            if (secondaryDecoration != null)
+            {
+                var decorated = new XElement(Xhtml.span, content);
+                decorated.AddAnnotation(secondaryDecoration);
+                content = decorated;
             }
 
             var langAttribute = GetLangAttribute(run);
@@ -8169,8 +8196,12 @@ namespace Docxodus
                 .Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)
                 .Where(value => !string.Equals(value, "underline", StringComparison.OrdinalIgnoreCase))
                 .ToArray();
-            if (remaining.Length == 0)
+            if (!remaining.Any(value => value == "line-through" || value == "overline"))
+            {
                 style.Remove("text-decoration");
+                style.Remove("text-decoration-color");
+                style.Remove("text-decoration-thickness");
+            }
             else
                 style["text-decoration"] = string.Join(" ", remaining);
         }
@@ -8181,14 +8212,14 @@ namespace Docxodus
             var previousRPr = rPrChange.Element(W.rPr);
 
             // Check for bold change
-            var currentBold = currentRPr.Element(W.b) != null;
-            var previousBold = previousRPr?.Element(W.b) != null;
+            var currentBold = GetBoolProp(currentRPr, W.b);
+            var previousBold = previousRPr != null && GetBoolProp(previousRPr, W.b);
             if (currentBold != previousBold)
                 changes.Add(currentBold ? "Bold added" : "Bold removed");
 
             // Check for italic change
-            var currentItalic = currentRPr.Element(W.i) != null;
-            var previousItalic = previousRPr?.Element(W.i) != null;
+            var currentItalic = GetBoolProp(currentRPr, W.i);
+            var previousItalic = previousRPr != null && GetBoolProp(previousRPr, W.i);
             if (currentItalic != previousItalic)
                 changes.Add(currentItalic ? "Italic added" : "Italic removed");
 
@@ -8199,8 +8230,8 @@ namespace Docxodus
                 changes.Add(currentUnderline ? "Underline added" : "Underline removed");
 
             // Check for strikethrough change
-            var currentStrike = currentRPr.Element(W.strike) != null;
-            var previousStrike = previousRPr?.Element(W.strike) != null;
+            var currentStrike = GetBoolProp(currentRPr, W.strike);
+            var previousStrike = previousRPr != null && GetBoolProp(previousRPr, W.strike);
             if (currentStrike != previousStrike)
                 changes.Add(currentStrike ? "Strikethrough added" : "Strikethrough removed");
 
@@ -8229,8 +8260,9 @@ namespace Docxodus
         }
 
         [SuppressMessage("ReSharper", "FunctionComplexityOverflow")]
-        private static Dictionary<string, string> DefineRunStyle(XElement run)
+        private static Dictionary<string, string> DefineRunStyle(XElement run, out Dictionary<string, string>? secondaryDecoration)
         {
+            secondaryDecoration = null;
             var style = new Dictionary<string, string>();
 
             var rPr = run.Elements(W.rPr).FirstOrDefault();
@@ -8332,21 +8364,59 @@ namespace Docxodus
             if (GetBoolProp(rPr, W.vanish) && !GetBoolProp(rPr, W.specVanish))
                 style.AddIfMissing("display", "none");
 
-            // W.u
-            if (rPr.Element(W.u) != null && (string?) rPr.Elements(W.u).Attributes(W.val).FirstOrDefault() != "none")
-                style.AddIfMissing("text-decoration", "underline");
-
             // W.i
             style.AddIfMissing("font-style", GetBoolProp(rPr, W.i) ? "italic" : "normal");
 
             // W.b
             style.AddIfMissing("font-weight", GetBoolProp(rPr, W.b) ? "bold" : "normal");
 
-            // W.strike
-            if (GetBoolProp(rPr, W.strike) || GetBoolProp(rPr, W.dstrike))
-                style.AddIfMissing("text-decoration", "line-through");
+            secondaryDecoration = DefineRunDecorations(run, rPr, style);
 
             return style;
+        }
+
+        // One CSS decoration can draw several lines only when they share a pattern and color.
+        // Keep differing underline/strike decorations on nested inline spans so both survive.
+        private static Dictionary<string, string>? DefineRunDecorations(
+            XElement run, XElement rPr, Dictionary<string, string> style)
+        {
+            var underline = rPr.Element(W.u);
+            var underlineValue = (string?)underline?.Attribute(W.val);
+            var hasUnderline = underline != null && underlineValue != "none";
+            var strike = GetBoolProp(rPr, W.strike) || GetBoolProp(rPr, W.dstrike);
+            var strikeStyle = GetBoolProp(rPr, W.dstrike) ? "double" : "solid";
+            if (!hasUnderline)
+            {
+                if (strike)
+                    style["text-decoration"] = "line-through" + (strikeStyle == "double" ? " double" : "");
+                return null;
+            }
+
+            var underlineStyle = underlineValue switch
+            {
+                "double" => "double",
+                "dotted" or "dottedHeavy" => "dotted",
+                "dash" or "dashedHeavy" or "dashLong" or "dashLongHeavy" or
+                    "dotDash" or "dashDotHeavy" or "dotDotDash" or "dashDotDotHeavy" => "dashed",
+                "wave" or "wavyHeavy" or "wavyDouble" => "wavy",
+                _ => "solid",
+            };
+            var color = ResolveThemeColor(underline, W.color, W.themeColor, W.themeTint, W.themeShade,
+                GetThemeColorScheme(run));
+            var hasColor = color != null && color != "auto";
+            var heavy = underlineValue == "thick" || underlineValue?.EndsWith("Heavy", StringComparison.Ordinal) == true;
+            var shared = strike && underlineStyle == strikeStyle && !heavy && !hasColor;
+            // A shorthand resets its longhands. Insert it first: fabricated class CSS preserves
+            // dictionary order, while inline CSS sorts declarations by name.
+            style["text-decoration"] = "underline" + (shared ? " line-through" : "") +
+                (underlineStyle == "solid" ? "" : " " + underlineStyle);
+            if (hasColor)
+                CreateColorProperty("text-decoration-color", color!, style);
+            if (heavy)
+                style["text-decoration-thickness"] = "0.12em";
+            return strike && !shared
+                ? new Dictionary<string, string> { { "text-decoration", "line-through" + (strikeStyle == "double" ? " double" : "") } }
+                : null;
         }
 
         private static decimal? GetFontSize(XElement e)

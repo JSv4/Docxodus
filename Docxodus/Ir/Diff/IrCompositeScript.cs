@@ -21,9 +21,10 @@ internal sealed record IrAuthoredTokenOp(IrTokenOp Op, string Author, int Source
 /// </summary>
 internal sealed record IrSourceRightAnchor(int Reviewer, string Anchor);
 
-/// <summary>A reviewer's paragraph that the reviewer left equal to its base block but that carries bookmark
-/// markers (<see cref="IrCompositeOp.EqualReviewerBookmarks"/>). Bookmarks are not part of the IR, so an equal
-/// block can still hold a bookmark only that reviewer added (issue #864).</summary>
+/// <summary>A reviewer's block that the reviewer left equal to its base block but that carries bookmark
+/// markers (<see cref="IrCompositeOp.EqualReviewerBookmarks"/>): a paragraph holding some, or a table whose
+/// markers between blocks differ from the base's. Bookmarks are not part of the IR, so an equal
+/// block can still hold a bookmark only that reviewer added (issues #864, #1175).</summary>
 internal sealed record IrEqualReviewerBookmarks(int Reviewer, string Anchor, string Author);
 
 /// <summary>The kind of one composed table cell (see <see cref="IrAuthoredCellOp"/>).</summary>
@@ -63,11 +64,21 @@ internal enum IrAuthoredCellKind
 /// <see cref="ShellSourceReviewer"/> is the deleting reviewer (attribution only; the shell stays base).</para>
 /// <para><see cref="Author"/> is the acting reviewer's name for an InsertCell/DeleteCell (revision
 /// attribution on the <c>w:cellIns</c>/<c>w:cellDel</c> marks); "" for Content.</para>
+/// <para><see cref="ReviewerCells"/> lists, for a Content cell, each reviewer's own comparison of this cell that
+/// the renderer needs to place that reviewer's bookmarks and comment ranges between the cell's blocks (issue
+/// #1175): the cell ops say nothing about them (rule N3). Renderer-only; absent from the JSON wire shape.</para>
 /// </summary>
 internal sealed record IrAuthoredCellOp(string? BaseCellAnchor, IrNodeList<IrCompositeOp>? ComposedBlockOps,
     int ShellSourceReviewer = -1, string? ShellRightCellAnchor = null,
     IrAuthoredCellKind Kind = IrAuthoredCellKind.Content, string Author = "",
-    string ShellAuthor = "");
+    string ShellAuthor = "", IrNodeList<IrReviewerCell>? ReviewerCells = null);
+
+/// <summary>One reviewer's copy of a composed table's base cell (<see cref="IrAuthoredCellOp.ReviewerCells"/>):
+/// the reviewer's right cell anchor and its comparison of the cell's blocks with the base cell's
+/// (<see cref="BlockOps"/>; equal ops pairing the cells block for block when the reviewer left the content
+/// equal but changed the markers between blocks).</summary>
+internal sealed record IrReviewerCell(int Reviewer, string Author, string RightCellAnchor, IrNodeList<IrEditOp> BlockOps,
+    bool ContentEqual);
 
 /// <summary>
 /// One ROW in a composed multi-reviewer table (FOLLOW-ON B). <see cref="Kind"/> mirrors
@@ -122,7 +133,9 @@ internal sealed record IrComposedTableShell(IrComposedShellRef? TblPr = null, Ir
 /// from the JSON wire shape, so existing tests/serialization are unaffected.</para>
 /// <para><see cref="EqualReviewerBookmarks"/> is non-null ONLY on a base-sourced EqualBlock some reviewer's
 /// equal paragraph carries bookmark markers for: the renderer emits the base block and then carries in each
-/// bookmark marker whose name the base document does not have, as that reviewer's insertion (issue #864).
+/// bookmark marker whose name the base document does not have, as that reviewer's insertion (issue #864). On an
+/// equal table it names each reviewer whose copy holds different bookmarks or comment ranges between a cell's
+/// blocks; the renderer reconciles the emitted base copy against those copies (issue #1175).
 /// Renderer-only, like <see cref="SourceRightAnchors"/>; absent from the JSON wire shape.</para>
 /// <para><see cref="AuthoredRows"/> is non-null ONLY on a COMPOSED multi-reviewer table (FOLLOW-ON B): the
 /// op is a ModifyBlock whose <see cref="Op"/>'s <see cref="IrEditOp.TableDiff"/> remains the MERGED
@@ -200,6 +213,9 @@ internal sealed record IrReviewerNoteIdMap(int Reviewer, IrNoteKind Kind, string
 /// ascending, then reviewer-inserted notes by reviewer/id) — mirroring the <see cref="IrEditScript.NoteOps"/>
 /// convention. <see cref="NoteIdMaps"/> carries every reviewer's note-id correspondence for the renderer's
 /// reference rewrite (see <see cref="IrReviewerNoteIdMap"/>); null when no reviewer has any note diff.
+/// <see cref="ReviewerComparisons"/> holds each reviewer's own two-way comparison with the base, by reviewer index:
+/// the renderer places a reviewer's bookmarks and comment ranges between blocks from it (issues #1149, #1175).
+/// Renderer-only; absent from the JSON wire shape.
 /// </summary>
 internal sealed record IrCompositeScript(
     IrNodeList<IrCompositeOp> Operations,
@@ -207,4 +223,8 @@ internal sealed record IrCompositeScript(
     IrNodeList<IrCompositeNoteDiff>? NoteOps = null,
     IrNodeList<IrReviewerNoteIdMap>? NoteIdMaps = null,
     IrComposedShellRef? TrailingSectPr = null,
-    IrNodeList<IrNodeList<IrEditOp>>? ReviewerBodyOps = null);
+    IrNodeList<IrReviewerComparison>? ReviewerComparisons = null);
+
+/// <summary>The parts of one reviewer's own two-way comparison with the base that the composite renderer reads
+/// (<see cref="IrCompositeScript.ReviewerComparisons"/>): the body ops and the note diffs.</summary>
+internal sealed record IrReviewerComparison(IrNodeList<IrEditOp> Operations, IrNodeList<IrNoteDiff>? NoteOps);

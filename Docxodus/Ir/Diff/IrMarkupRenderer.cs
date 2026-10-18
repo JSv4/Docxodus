@@ -2720,10 +2720,20 @@ internal static partial class IrMarkupRenderer
                 state.AuthorOverride = savedShellAuthor;
             }
 
+            // Each reviewer's comparison of this cell places that reviewer's markers between its blocks, as the
+            // reviewers' body comparisons do for the body (issue #1175).
+            var cellAuthors = new string[reviewerIrs.Count];
+            foreach (var rc in cellOp.ReviewerCells ?? IrNodeList.Empty<IrReviewerCell>())
+                if (rc.Reviewer >= 0 && rc.Reviewer < cellAuthors.Length)
+                    cellAuthors[rc.Reviewer] = rc.Author;
             if (cellOp.ComposedBlockOps is { } blockOps)
             {
-                var cellMarkers = PlanCompositeBlockLevelMarkers(blockOps, baseIr, reviewerIrs, null,
-                    Array.Empty<string>(), state);
+                var reviewerCellOps = cellOp.ReviewerCells is { } reviewerCells
+                    ? Enumerable.Range(0, reviewerIrs.Count).Select(r => (IReadOnlyList<IrEditOp>)
+                        (reviewerCells.FirstOrDefault(c => c.Reviewer == r)?.BlockOps ?? IrNodeList.Empty<IrEditOp>())).ToList()
+                    : null;
+                var cellMarkers = PlanCompositeBlockLevelMarkers(blockOps, baseIr, reviewerIrs, reviewerCellOps,
+                    cellAuthors, state);
                 var cellSink = new List<XElement>();
                 for (int b = 0; b < blockOps.Count; b++)
                 {
@@ -2743,9 +2753,16 @@ internal static partial class IrMarkupRenderer
             }
             else
             {
-                // Base passthrough: the base cell's content verbatim.
+                // Base passthrough: the base cell's content verbatim, with the markers of each reviewer who left
+                // the content equal but not the markers.
                 foreach (var b in baseCellSrc.Elements().Where(e => IsBlockContent(e) || IsBlockLevelMarker(e)))
                     newCell.Add(StripUnids(new XElement(b)));
+                var counterparts = (cellOp.ReviewerCells ?? IrNodeList.Empty<IrReviewerCell>())
+                    .Where(c => c.ContentEqual && c.Reviewer >= 0 && c.Reviewer < reviewerIrs.Count)
+                    .Select(c => (c.Reviewer, Cell: FindCellSource(reviewerIrs[c.Reviewer], c.RightCellAnchor)))
+                    .Where(c => c.Cell is not null).Select(c => (c.Reviewer, c.Cell!)).ToList();
+                if (counterparts.Count > 0)
+                    ReconcileCompositeEqualContainerMarkers(newCell, baseCellSrc, counterparts, cellAuthors, state);
             }
             newRow.Add(newCell);
         }
@@ -10125,7 +10142,7 @@ internal static partial class IrMarkupRenderer
 
     /// <summary>The source <c>w:p</c>/<c>w:tbl</c>/… XElement a block anchor resolves to, or null. Requires the
     /// block was read with <c>RetainSources=true</c> (the renderer's internal read does this).</summary>
-    private static XElement? SourceElement(string? anchor, IrDocument doc) =>
+    internal static XElement? SourceElement(string? anchor, IrDocument doc) =>
         ResolveBlock(anchor, doc)?.Source.Element;
 
     // ------------------------------------------- input-revision preservation (PreserveInputRevisions)
@@ -10864,6 +10881,10 @@ internal static partial class IrMarkupRenderer
         /// <summary>The header and footer parts the story diff rebuilt or inserted, whose comment markers the
         /// comment passes reconcile like the body's (issue #1174).</summary>
         public List<OpenXmlPart> RenderedStoryParts { get; } = new();
+
+        /// <summary>A consolidate's markers some reviewer brought, by kind and bookmark name or comment id, across
+        /// every block stream: a second reviewer's same marker is not repeated (issue #1175).</summary>
+        public HashSet<string>? CompositeAddedMarkers { get; set; }
 
         /// <summary>The two-way render's single clone bucket (bucket 0 = the right package). Preserves the original
         /// flat-list API for the two-way <see cref="Render"/> media-import pass; equivalent to the bucket-0 list.
