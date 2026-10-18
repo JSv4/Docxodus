@@ -680,6 +680,13 @@ internal static partial class IrMarkupRenderer
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IrDocument, IReadOnlyDictionary<string, string>>
         CommentIdentityMaps = new();
 
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IrDocument, HashSet<string>>
+        CommentAnchorMaps = new();
+
+    private static HashSet<string> AnchoredCommentIds(IrDocument document) => CommentAnchorMaps.GetValue(document,
+        source => source.Sources.Values.SelectMany(part => part.Descendants()).Where(IsCommentMarker)
+            .Select(marker => (string?)marker.Attribute(W.id)).OfType<string>().ToHashSet(StringComparer.Ordinal));
+
     private static IReadOnlyDictionary<string, string> BuildCommentIdentities(IrDocument document)
     {
         var identities = new Dictionary<string, string>(StringComparer.Ordinal);

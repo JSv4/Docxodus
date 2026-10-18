@@ -267,7 +267,18 @@ public class DocxDiffCommentStructureTests
     [InlineData(true, true, true, "date")]
     [InlineData(true, false, false, "duplicate")]
     [InlineData(true, false, true, "duplicate")]
-    public void Comment_IdentitySurvivesReusedIds(bool keepOld, bool collision, bool consolidate, string identityChange = "text")
+    [InlineData(false, true, false, "text", true)]
+    [InlineData(false, false, false, "text", true)]
+    [InlineData(false, true, true, "text", true)]
+    [InlineData(false, false, true, "text", true)]
+    [InlineData(true, true, false, "annotation-only")]
+    [InlineData(true, true, true, "annotation-only")]
+    [InlineData(false, true, false, "annotation-only", true)]
+    [InlineData(false, true, true, "annotation-only", true)]
+    [InlineData(false, true, false, "orphan", true)]
+    [InlineData(false, true, true, "orphan", true)]
+    public void Comment_IdentitySurvivesReusedIds(bool keepOld, bool collision, bool consolidate,
+        string identityChange = "text", bool keepRemovedText = false)
     {
         WmlDocument Document(bool revised)
         {
@@ -275,16 +286,16 @@ public class DocxDiffCommentStructureTests
             {
                 string author = added && identityChange == "author" ? "Willow" : "Cedar";
                 string date = added && identityChange == "date" ? "2026-02-01" : "2026-01-01";
-                string text = added && identityChange == "text" ? "New willow note" : "Old cedar note";
+                string text = added && identityChange is "text" or "annotation-only" or "orphan" ? "New willow note" : "Old cedar note";
                 return $"<w:comment w:id=\"{id}\" w:author=\"{author}\" w:date=\"{date}T00:00:00Z\">"
                     + $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:comment>";
             }
             string oldId = revised && collision ? "1" : "0", newId = collision ? "0" : "2";
             var doc = Ir.IrTestDocuments.FromBodyXml("<w:p>" + CommentRun("AlderFirst", revised ? newId : null)
                 + "<w:r><w:t xml:space=\"preserve\"> </w:t></w:r>"
-                + CommentRun(revised && !keepOld ? "WillowReplacement" : "BirchSecond", !revised || keepOld ? oldId : null)
-                + "<w:r><w:t xml:space=\"preserve\">" + (revised ? " tail revised" : " tail") + "</w:t></w:r></w:p>");
-            return AddComments(doc, (!revised || keepOld ? Note(oldId, false) : "")
+                + CommentRun(revised && !keepOld && !keepRemovedText ? "WillowReplacement" : "BirchSecond", !revised || keepOld ? oldId : null)
+                + "<w:r><w:t xml:space=\"preserve\">" + (revised && identityChange != "annotation-only" ? " tail revised" : " tail") + "</w:t></w:r></w:p>");
+            return AddComments(doc, (!revised || keepOld || identityChange == "orphan" ? Note(oldId, false) : "")
                 + (revised ? Note(newId, true) : ""));
         }
         var left = Document(false);
