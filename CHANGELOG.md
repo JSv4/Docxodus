@@ -434,8 +434,12 @@ All notable changes to this project will be documented in this file.
   notes in full. The move was refused, the heading fitted where it was and its paragraph opened the
   next page. Word reference PDFs show the carried note either leaving the chain its room on the next
   page or keeping that page, the chain opening the page after; so the move now depends only on the
-  chain fitting a page with room for its notes to start, and a moved chain is judged again beside
-  the next page's carried note, moving on once more when that note keeps the page.
+  chain fitting a page with room for its notes to start (judged as for a citing paragraph, here and
+  on the fresh page), and a moved chain is judged again beside the next page's carried note, moving
+  on once more when that note keeps the page. In the NVCA model charter the heading "2.3 Deemed
+  Liquidation Events" now shares its page with "2.3.1 Definition", as in Word's PDF; the charter
+  takes 50 pages (Word: 49), and 30 of Word's 49 page starts now fall on the same page number in
+  the export, against 9 before.
 - Paginated footnotes may now take the whole page, as Word reference PDFs show (issue #1178). The
   paginator capped the note area at 60% of the body band while body text remained, and at 95% once
   it was placed (the share LibreOffice 25.8.7.3 allows). Word holds no room back: a note takes

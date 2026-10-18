@@ -4426,33 +4426,29 @@ export class PaginationEngine {
             keepChain,
             currentFootnoteIds
           );
-          let additionalChainFootnoteHeight = 0;
-          if (newChainFootnoteIds.length > 0 && this.footnoteRegistry.size > 0) {
-            const totalChainFootnoteHeight = this.measureFootnotesHeight(
-              [...currentFootnoteIds, ...newChainFootnoteIds],
-              blockDimensions.contentWidth,
-              currentContinuation
-            );
-            // A note need only start beside the line that cites it; the rest may run on. The
-            // chain is judged by the room its notes need to start, here and on a fresh page alike,
-            // so a chain that fits a fresh page also fits once it gets there.
-            additionalChainFootnoteHeight = Math.min(MIN_FOOTNOTE_START_PT, Math.max(
-              0,
-              totalChainFootnoteHeight - currentFootnoteHeight
-            ));
-          }
-
+          // A note need only start beside the line that cites it; the rest may run on. Whether
+          // the chain's notes can start is asked the way a citing paragraph asks it
+          // (notesCanStartOnPage), here beside this page's notes and on a fresh page alike.
+          const chainNotesStart = (bodyPt: number, bandPt: number, payload: FootnotePackingContext, closed: boolean) =>
+            newChainFootnoteIds.length === 0 || this.footnoteRegistry.size === 0
+            || this.notesCanStartOnPage(newChainFootnoteIds, bandPt - bodyPt,
+              blockDimensions.contentWidth, payload, closed);
           const currentChainHeight =
             this.measureKeepWithNextChainBodyHeight(
               keepChain,
               prevMarginBottomPt,
               currentContent.length === 0,
               pageInSection(block.sectionIndex)
-            ) +
-            additionalChainFootnoteHeight;
+            );
           const currentAvailableHeight = remainingHeight - currentFootnoteHeight;
+          const chainFitsHere = currentChainHeight <= currentAvailableHeight
+            && chainNotesStart(currentChainHeight, remainingHeight, {
+              footnoteIds: currentFootnoteIds,
+              continuation: currentContinuation,
+              partialFootnotes: currentPartialFootnotes,
+            }, laterNotesClosed());
 
-          if (currentChainHeight > currentAvailableHeight) {
+          if (!chainFitsHere) {
             const nextPageBands = this.getPageBands(
               dimensionsFor(block.sectionIndex),
               block.sectionIndex,
@@ -4469,19 +4465,15 @@ export class PaginationEngine {
               true,
               pageInSection(block.sectionIndex, pageNumber + 1)
             );
-            // Whether the chain can fit a page at all, its own notes included. A carried note on
+            // Whether the chain can fit a page at all, its notes started beside it. A carried note on
             // the next page does not count against it: Word reference PDFs show that note either
             // leaving the chain its room or keeping the page, the chain opening the page after
             // (issue #1180). Counting the note refused the move, and the chain's first block was
             // left alone at this page's foot.
-            const freshChainFootnoteHeight = Math.min(MIN_FOOTNOTE_START_PT, this.measureFootnotesHeight(
-              newChainFootnoteIds,
-              blockDimensions.contentWidth,
-            ));
-
             if (
-              freshChainBodyHeight + freshChainFootnoteHeight <=
-              nextPageBands.bodyHeight
+              freshChainBodyHeight <= nextPageBands.bodyHeight
+              && chainNotesStart(freshChainBodyHeight, nextPageBands.bodyHeight,
+                { footnoteIds: [], continuation: null, partialFootnotes: [] }, false)
             ) {
               // Start the chain over on the fresh page, so that page's carried note is
               // partitioned first and the chain is judged again beside it.
