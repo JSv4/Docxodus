@@ -1881,7 +1881,7 @@ export class PaginationEngine {
    *
    * A hard page break or a page-break-before directive is stronger than a
    * keep-with-next directive, so it terminates the chain. The caller only
-   * keeps a chain together when the whole chain can fit on a fresh page.
+   * keeps a chain together when the whole chain or a valid first fragment can fit on a fresh page.
    */
   private getKeepWithNextChain(blocks: MeasuredBlock[], startIndex: number): MeasuredBlock[] {
     const firstBlock = blocks[startIndex];
@@ -4437,11 +4437,9 @@ export class PaginationEngine {
         continue;
       }
 
-      // A series of keep-with-next blocks is one indivisible placement unit
-      // when it can fit a new page. The former one-block lookahead was never
-      // applied to the placement decision, and it could not preserve a chain of
-      // headings/paragraphs. Do not force an oversized chain to a fresh page:
-      // its members retain the established greedy/overflow behavior instead.
+      // Keep the chain's headings with the following paragraph or a valid first fragment.
+      // If neither fits here, move a chain that fits a fresh page as a unit. Oversized
+      // indivisible chains retain the established greedy/overflow behavior.
       const previousBlock = blocks[i - 1];
       const startsKeepChain =
         !previousBlock ||
@@ -4462,9 +4460,10 @@ export class PaginationEngine {
           // A note need only start beside the line that cites it; the rest may run on. Whether
           // the chain's notes can start is asked the way a citing paragraph asks it
           // (notesCanStartOnPage), here beside this page's notes and on a fresh page alike.
-          const chainNotesStart = (bodyPt: number, bandPt: number, payload: FootnotePackingContext, closed: boolean) =>
-            newChainFootnoteIds.length === 0 || this.footnoteRegistry.size === 0
-            || this.notesCanStartOnPage(newChainFootnoteIds, bandPt - bodyPt,
+          const chainNotesStart = (bodyPt: number, bandPt: number, payload: FootnotePackingContext,
+            closed: boolean, ids = newChainFootnoteIds) =>
+            ids.length === 0 || this.footnoteRegistry.size === 0
+            || this.notesCanStartOnPage(ids, bandPt - bodyPt,
               blockDimensions.contentWidth, payload, closed);
           const currentChainHeight =
             this.measureKeepWithNextChainBodyHeight(
@@ -4482,6 +4481,26 @@ export class PaginationEngine {
             }, laterNotesClosed());
 
           if (!chainFitsHere) {
+            const last = keepChain[keepChain.length - 1];
+            const precedingNoteIds = this.collectNewFootnoteIds(keepChain.slice(0, -1), currentFootnoteIds);
+            const fragmentLast = (chainHeight: number, available: number, band: number,
+              payload: FootnotePackingContext, closed: boolean) => {
+              const beforeLastHeight = chainHeight - last.heightPt;
+              return this.tryFragmentParagraph(last, blockDimensions, available - beforeLastHeight, 0,
+                (ids, headHeight) => chainNotesStart(beforeLastHeight + headHeight, band, payload, closed,
+                  [...new Set([...precedingNoteIds, ...ids])].filter(id => !currentFootnoteIds.includes(id))));
+            };
+            const fragments = fragmentLast(currentChainHeight, currentAvailableHeight, remainingHeight, {
+              footnoteIds: currentFootnoteIds,
+              continuation: currentContinuation,
+              partialFootnotes: currentPartialFootnotes,
+            }, laterNotesClosed());
+            if (fragments) {
+              blocks.splice(i + keepChain.length - 1, 1, ...fragments);
+              i--;
+              continue;
+            }
+
             const nextPageBands = this.getPageBands(
               dimensionsFor(block.sectionIndex),
               block.sectionIndex,
@@ -4504,9 +4523,11 @@ export class PaginationEngine {
             // (issue #1180). Counting the note refused the move, and the chain's first block was
             // left alone at this page's foot.
             if (
-              freshChainBodyHeight <= nextPageBands.bodyHeight
-              && chainNotesStart(freshChainBodyHeight, nextPageBands.bodyHeight,
-                { footnoteIds: [], continuation: null, partialFootnotes: [] }, false)
+              (freshChainBodyHeight <= nextPageBands.bodyHeight
+                && chainNotesStart(freshChainBodyHeight, nextPageBands.bodyHeight,
+                  { footnoteIds: [], continuation: null, partialFootnotes: [] }, false))
+              || fragmentLast(freshChainBodyHeight, nextPageBands.bodyHeight, nextPageBands.bodyHeight,
+                { footnoteIds: [], continuation: null, partialFootnotes: [] }, false) !== null
             ) {
               // Start the chain over on the fresh page, so that page's carried note is
               // partitioned first and the chain is judged again beside it.
