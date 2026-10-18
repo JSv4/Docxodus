@@ -27,13 +27,16 @@ test('delivered HTML exposes the complete long note while PDF page dimensions st
   try {
     await page.setContent(result.html!);
     await page.evaluate(() => document.fonts.ready);
+    await page.locator('.page-comment-margin').focus();
+    await page.keyboard.press('Control+End');
+    await expect.poll(() => page.locator('.page-comment-margin').evaluate((column) =>
+      column.scrollHeight - column.clientHeight - column.scrollTop)).toBeLessThanOrEqual(1);
     const facts = await page.evaluate((last) => {
       const column = document.querySelector<HTMLElement>('.page-comment-margin')!;
       const walker = document.createTreeWalker(column, NodeFilter.SHOW_TEXT);
       let node: Node | null, tail: Text | null = null;
       while ((node = walker.nextNode())) if (node.textContent?.includes(last)) tail = node as Text;
       if (!tail) throw new Error('The delivered HTML lost the last comment token');
-      column.scrollTop = column.scrollHeight;
       const range = document.createRange(), start = tail.data.indexOf(last);
       range.setStart(tail, start); range.setEnd(tail, start + last.length);
       const rect = range.getBoundingClientRect(), box = column.getBoundingClientRect();
