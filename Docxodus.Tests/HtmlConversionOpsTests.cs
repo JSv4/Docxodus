@@ -35,7 +35,8 @@ public class HtmlConversionOpsTests
         Wp.TabStopValues alignment,
         string before,
         string after,
-        Wp.TabStopLeaderCharValues? leader = null)
+        Wp.TabStopLeaderCharValues? leader = null,
+        string font = "MissingTabGeometryMono")
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream,
@@ -68,8 +69,8 @@ public class HtmlConversionOpsTests
                         new Wp.RunPropertiesBaseStyle(
                             new Wp.RunFonts
                             {
-                                Ascii = "MissingTabGeometryFont",
-                                HighAnsi = "MissingTabGeometryFont",
+                                Ascii = font,
+                                HighAnsi = font,
                             },
                             new Wp.FontSize { Val = "24" }))));
             main.Document.Save();
@@ -225,7 +226,7 @@ public class HtmlConversionOpsTests
     }
 
     [Theory]
-    [InlineData("right", "W", "3.500", "width: 280.8pt")]
+    [InlineData("right", "W", "3.500", "width: 288pt")]
     [InlineData("center", "WWWW", "3.400", "width: 273.6pt")]
     [InlineData("decimal", "12.34", "3.400", "width: 273.6pt")]
     public void HCO088_AlignedTabWidth_MeasuresOnlyFollowingText(
@@ -233,7 +234,8 @@ public class HtmlConversionOpsTests
     {
         // A tab's following segment is measured exactly as authored. The old unconditional
         // trailing blank shifted right, center, and decimal alignment before the HTML renderer
-        // saw the run. Use an unavailable font to make the deterministic fallback explicit.
+        // saw the run. An unavailable fixed-pitch font keeps these numeric width checks
+        // independent of installed fonts. A right segment includes its following text.
         string html = HtmlConversionOps.ConvertToHtml(
             TabStopDocxBytes(
                 alignment switch
@@ -257,10 +259,24 @@ public class HtmlConversionOpsTests
         Assert.Empty(tab.Nodes());
     }
 
+    [Theory]
+    [InlineData("center", "WWWW")]
+    [InlineData("decimal", "12.34")]
+    public void CenterAndDecimalTabs_PreserveTheirExistingFallbackReservations(string alignment, string following)
+    {
+        var bytes = TabStopDocxBytes(alignment == "center" ? Wp.TabStopValues.Center : Wp.TabStopValues.Decimal,
+            "iiii", following, font: "MissingTabGeometryFont");
+        var root = XElement.Parse(HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false }));
+        var tab = root.Descendants().Single(e => (string?)e.Attribute("data-docx-tab") == alignment);
+        Assert.Equal("3.400", (string?)tab.Attribute("data-docx-tab-width"));
+        Assert.Contains("width: 273.6pt", (string?)tab.Parent!.Attribute("style"));
+    }
+
     [Fact]
     public void HCO089_RightTabWidth_TracksCurrentPositionAndFollowingRunWidth()
     {
-        static (decimal TabWidth, decimal PrecedingWidth) Geometry(string before, string after)
+        static (decimal TabWidth, decimal SegmentWidth) Geometry(string before, string after)
         {
             string html = HtmlConversionOps.ConvertToHtml(
                 TabStopDocxBytes(Wp.TabStopValues.Right, before, after),
@@ -285,9 +301,9 @@ public class HtmlConversionOpsTests
 
         Assert.Equal(252m, narrowCurrent.TabWidth);
         Assert.Equal(223.2m, wideCurrent.TabWidth);
-        Assert.Equal(narrowCurrent.PrecedingWidth, wideCurrent.PrecedingWidth);
-        Assert.Equal(280.8m, narrowCurrent.PrecedingWidth);
-        Assert.Equal(252m, wideFollowing.PrecedingWidth);
+        Assert.Equal(narrowCurrent.SegmentWidth, wideCurrent.SegmentWidth);
+        Assert.Equal(288m, narrowCurrent.SegmentWidth);
+        Assert.Equal(288m, wideFollowing.SegmentWidth);
     }
 
     [Fact]

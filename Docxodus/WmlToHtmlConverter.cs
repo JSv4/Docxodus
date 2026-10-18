@@ -3736,6 +3736,8 @@ namespace Docxodus
             XElement hyperlink)
         {
             var runs = hyperlink.Elements(W.r).ToList();
+            var alignedTabContent = ConvertAlignedTabRuns(wordDoc, settings, runs);
+            if (alignedTabContent != null) return alignedTabContent;
             var firstTabRun = runs.FirstOrDefault(run => run.Elements(W.tab).Any());
             if (firstTabRun == null)
                 return runs.Select(run => ConvertRun(wordDoc, settings, run));
@@ -7218,7 +7220,10 @@ namespace Docxodus
                 return paraElement1;
             }
 
-            var txElementsPrecedingTab = TransformElementsPrecedingTab(wordDoc, settings, elementsPrecedingTab, firstTabRun);
+            var alignedTabContent = ConvertAlignedTabRuns(wordDoc, settings, paragraphContent);
+            var txElementsPrecedingTab = alignedTabContent == null
+                ? TransformElementsPrecedingTab(wordDoc, settings, elementsPrecedingTab, firstTabRun)
+                : new List<object?>();
             var elementsSucceedingTab = firstTabRun != null
                 ? paragraph.Elements().SkipWhile(e => e != firstTabRun).Skip(1)
                 : paragraph.Elements();
@@ -7227,8 +7232,8 @@ namespace Docxodus
                 firstMark,
                 anchorAttr,
                 sourceAnchorAttr,
-                txElementsPrecedingTab,
-                ConvertContentThatCanContainFields(wordDoc, settings, elementsSucceedingTab));
+                alignedTabContent ?? new List<object?> { txElementsPrecedingTab,
+                    ConvertContentThatCanContainFields(wordDoc, settings, elementsSucceedingTab) });
             ApplyAutomaticLineSpacingToInlineContent(paraElement, style);
             paraElement.AddAnnotation(style);
             AnnotateSemanticListItem(paraElement, paragraph, elementName, isBidi);
@@ -7333,6 +7338,77 @@ namespace Docxodus
             var style = element.Annotation<Dictionary<string, string>>();
             return style != null && style.TryGetValue("position", out var position) &&
                 position is "absolute" or "fixed";
+        }
+
+        /// <summary>Keep each plain left/right tab segment pinned to its stop, including
+        /// the following text in a right-aligned segment so real browser glyph widths are absorbed
+        /// by the tab. Complex fields, breaks, and other inline containers retain their field-aware
+        /// rendering path.</summary>
+        private static List<object?>? ConvertAlignedTabRuns(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, List<XElement> content)
+        {
+            var paragraph = content.FirstOrDefault()?.Ancestors(W.p).FirstOrDefault();
+            if (paragraph != null && IsBidi(paragraph)) return null;
+            var tabRuns = content.Where(e => e.Name == W.r && e.Element(W.tab) != null).ToList();
+            if (tabRuns.Count == 0 || content.Any(e => e.Name != W.r ||
+                    e.Elements().Any(c => c.Name != W.rPr && c.Name != W.t && c.Name != W.tab)) ||
+                tabRuns.Any(r => r.Elements().Count(e => e.Name != W.rPr) != 1 ||
+                    r.Element(W.tab)!.Attribute(PtOpenXml.TabAfterWrappedText) != null ||
+                    ((string?)r.Element(W.tab)!.Attribute(PtOpenXml.TabAlignment) ?? "left") is not ("left" or "right")))
+                return null;
+
+            var result = new List<object?>();
+            var start = 0;
+            while (start < content.Count)
+            {
+                var tabIndex = content.FindIndex(start, e => e.Element(W.tab) != null);
+                if (tabIndex < 0)
+                {
+                    result.Add(ConvertContentThatCanContainFields(wordDoc, settings, content.Skip(start)));
+                    break;
+                }
+                var preceding = content.Skip(start).Take(tabIndex - start).ToList();
+                var tabRun = content[tabIndex];
+                var tab = tabRun.Element(W.tab)!;
+                if ((string?)tab.Attribute(PtOpenXml.TabAlignment) != "right")
+                {
+                    result.AddRange(TransformElementsPrecedingTab(wordDoc, settings, preceding, tabRun));
+                    start = tabIndex + 1;
+                    continue;
+                }
+
+                var nextTab = content.FindIndex(tabIndex + 1, e => e.Element(W.tab) != null);
+                if (nextTab < 0) nextTab = content.Count;
+                var following = content.Skip(tabIndex + 1).Take(nextTab - tabIndex - 1).ToList();
+                var precedingWidth = preceding.Elements().Attributes(PtOpenXml.TabWidth)
+                    .Sum(a => (decimal)a);
+                var width = precedingWidth + ((decimal?)tab.Attribute(PtOpenXml.TabWidth) ?? 0m) +
+                    ((decimal?)tab.Attribute(TabFollowingWidthAttribute) ?? 0m);
+                XElement TextSpan(List<XElement> runs)
+                {
+                    var span = new XElement(Xhtml.span,
+                        ConvertContentThatCanContainFields(wordDoc, settings, runs));
+                    if (!span.Nodes().Any()) span.Add(new XText(""));
+                    span.AddAnnotation(new Dictionary<string, string>
+                    {
+                        { "flex-shrink", "0" }, { "white-space", "nowrap" }
+                    });
+                    return span;
+                }
+                var tabSpan = (XElement)ProcessTab(tab)!;
+                var tabStyle = tabSpan.Annotation<Dictionary<string, string>>()!;
+                tabStyle["flex-grow"] = "1";
+                tabStyle["flex-shrink"] = "1";
+                var segment = new XElement(Xhtml.span, TextSpan(preceding), tabSpan, TextSpan(following));
+                segment.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "display", "inline-flex" }, { "align-items", "baseline" },
+                    { "text-indent", "0" }, { "width", InchesCss(width) }
+                });
+                result.Add(segment);
+                start = nextTab;
+            }
+            return result;
         }
 
         private static List<object?> TransformElementsPrecedingTab(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
@@ -8669,6 +8745,7 @@ namespace Docxodus
         /// <summary>Word's built-in default tab stop (in twips) used when no explicit
         /// w:defaultTabStop value is available, e.g. settings.xml is absent or lacks the element.</summary>
         private const int DefaultTabStopTwips = 720;
+        private static readonly XName TabFollowingWidthAttribute = PtOpenXml.pt + "TabFollowingWidth";
 
         /// <summary>Gets the DocumentSettingsPart's XDocument, or null if the part is absent.
         /// DocumentSettingsPart is optional in OOXML — Word opens packages without
@@ -9126,6 +9203,16 @@ namespace Docxodus
                 tabs = AddDefaultTabsAfterLastTab(tabs, defaultTabStop);
             }
 
+            var proportionalTabPrefixes = !IsBidi(element);
+            foreach (var stop in tabs.Elements(W.tab))
+            {
+                var alignment = (string?)stop.Attribute(W.val);
+                if (alignment is not ("left" or "start" or "right" or "end"))
+                {
+                    proportionalTabPrefixes = false;
+                    break;
+                }
+            }
             var twipCounter = firstInTwips;
             var contentToMeasure = element.DescendantsTrimmed(z => z.Name == W.txbxContent || z.Name == W.pPr || z.Name == W.rPr).ToArray();
             var currentElementIdx = 0;
@@ -9207,6 +9294,7 @@ namespace Docxodus
                             new XAttribute(PtOpenXml.TabWidth,
                                 TabWidthValue(delta2)),
                             new XAttribute(PtOpenXml.TabAlignment, "right"),
+                            new XAttribute(TabFollowingWidthAttribute, TabWidthValue(widthOfTextAfterTab)),
                             GetLeader(tabAfterText));
                         twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!), twipCounter + widthOfTextAfterTab);
 
@@ -9384,7 +9472,7 @@ namespace Docxodus
                     // A generated list-number run measures with the narrow-glyph-aware estimate
                     // so its suffix tab resolves against a realistic pen position (issue #415).
                     var widthOfText = CalcWidthOfRunInTwips(dummyRun3,
-                        isListMarker: runContainingTabToReplace.Attribute(PtOpenXml.ListItemRun) != null);
+                        isListMarker: runContainingTabToReplace.Attribute(PtOpenXml.ListItemRun) != null, isTabPrefix: proportionalTabPrefixes);
 
                     currentElement.Add(new XAttribute(PtOpenXml.TabWidth,
                         TabWidthValue(widthOfText)));
@@ -9594,7 +9682,7 @@ namespace Docxodus
 
         private static HashSet<string> KnownFamilies => FontFamilyHelper.KnownFamilies;
 
-        private static int CalcWidthOfRunInTwips(XElement r, bool isListMarker = false)
+        private static int CalcWidthOfRunInTwips(XElement r, bool isListMarker = false, bool isTabPrefix = false)
         {
             // A run with no resolvable font (WordprocessingMLUtil.MeasurementFontName returns null) takes
             // the character-width estimate below, the same fallback as an unknown font family; one
@@ -9647,19 +9735,13 @@ namespace Docxodus
             int w;
             if (fontName == null || FontFamilyHelper.IsMarkedUnknown(fontName) || !KnownFamilies.Contains(fontName))
             {
-                // Character-based estimation starts in point space (w:sz is half-points), while
-                // the rest of this method consumes CSS-pixel widths. Normalize it to the same
-                // 96-DPI coordinate space before converting the result to twips below.
-                //
-                // List-marker runs use the character-class estimate: the flat 0.6 em/char
-                // average roughly doubles narrow-glyph markers like "(a)", which pushed the
-                // suffix tab past the paragraph's text-indent stop (issue #415). General text
-                // must KEEP the flat average — HTML tab layout reserves (stop − this estimate)
-                // ahead of the browser's real glyphs, and browser fallback fonts advance at
-                // ~0.6 em, so a lower general estimate makes column-edge tab lines overflow
-                // and wrap. A marker's wrapper is (chosen stop − marker start) with a flex tab
-                // absorbing the difference, so only its stop CHOICE needs realistic widths.
-                if (isListMarker)
+                // Proportional fallback fonts need narrow-glyph-aware widths when choosing
+                // a stop: a flat average can consume an available left stop (issue #1224).
+                // Aligned prefixes use flex tabs to absorb real glyph-width differences.
+                // Preserve conservative reservations for following text on complex inline paths,
+                // and fixed-pitch advances for the monospace fallback emitted in CSS.
+                // Estimates are in points; this method consumes CSS pixels at 96 DPI.
+                if (isListMarker || (isTabPrefix && ClassifyFont(fontName ?? "") != GenericFontFamily.Monospace))
                 {
                     w = MetricsGetter.EstimateTextWidth(sz, runText) * 96 / 72;
                 }

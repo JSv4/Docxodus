@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Manual labels with hanging indentation now keep their first left tab stop in proportional-font
+  fallback rendering (issue #1224). Left/right tab segments use the browser's actual glyph widths
+  to fill leader space and align the following text, including later tabs in the same paragraph.
+
 - Rejecting revisions now reverses an insertion or deletion in every container that can hold one (issue
   #1176). Reject works by turning each insertion into a deletion and each deletion into an insertion,
   then accepting. Which revisions it turned around was a list of containers: paragraphs, hyperlinks,
