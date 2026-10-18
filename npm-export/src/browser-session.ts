@@ -633,7 +633,7 @@ async function validatePrintDocument(
             height: (bottom - top) * pageHeight / pageRect.height,
           },
           story: story(anchorId),
-          inTableCell: element.matches("td,th") || element.closest("td,th") !== null,
+          inTableCell: element.matches("td,th") || element.closest('td,th,[data-docx-frame-in-table-cell="true"]') !== null,
         });
       }
     }

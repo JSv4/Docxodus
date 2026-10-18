@@ -168,6 +168,12 @@ staging tree. It has these invariants:
 - reopening offline must reproduce the same logical page count and section/page geometry without
   rerunning WASM or pagination.
 
+Margin-profile comment columns remain keyboard-focusable and scrollable in delivered HTML,
+including notes longer than the page's body band. Standalone export retains the physical-margin
+placement, independently of the read-only viewer's outside-panel default. A PDF shows a static
+margin viewport; use the endnotes comment profile when the complete comment must flow into printed
+pages. Interactive overflow is therefore checked in the delivered HTML alongside PDF page geometry.
+
 The finalization order is normative: paginate pristine converted content; clone/materialize the
 fixed page tree; remove staging, containment, viewer, selection, and other transient state; attach
 the sanitized tree with final standalone styles; wait for final-tree stability; measure PageMap

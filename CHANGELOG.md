@@ -33,6 +33,19 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Paragraph text frames now retain their declared size and anchor offsets (issue #1225), including
+  footer frames that previously added an extra line ahead of centered footer text. Adjacent frame
+  paragraphs share a floating box, and pagination preserves its visible source geometry outside
+  the body or running-story clipping area.
+
+- Manual labels with hanging indentation now keep their first left tab stop in proportional-font
+  fallback rendering (issue #1224). Left/right tab segments use the browser's actual glyph widths
+  to fill leader space and align the following text, including later tabs in the same paragraph.
+
+- Hidden paragraph marks (`w:pPr/w:rPr/w:vanish`) now join following paragraph text on the same
+  rendered line, preserving the heading and visible generated numbering (issue #1223). Explicitly
+  hidden runs and number styles remain hidden; tables and section boundaries stop joining.
+
 - Formatting-revision descriptions compare current and previous effective run properties, so a
   bold-only change no longer claims an inherited font or size changed (issue #1222). Previous
   character styles and explicit off values are respected. Ordinary formatting assembly retains
@@ -61,6 +74,12 @@ All notable changes to this project will be documented in this file.
   runs all sit inside an inline custom-XML element was removed on accept (and so on reject) as if it
   were empty, even with no revisions in it, and accepting or rejecting a paragraph-mark revision on a
   paragraph whose content sits in an inline custom-XML element threw "Internal error 20".
+
+- Long margin comments are readable through a scrollable column beside the read-only viewer's pages
+  (issue #1226), including the React hook and component. Its width and gap are configurable and
+  scale with the page. Narrow viewers can pan
+  the full row, and pages without comments stay aligned. Physical page dimensions and print/export
+  margin placement are preserved.
 
 - A comparison or consolidation no longer writes two styles with the same `w:styleId` when the documents
   use one id for styles of different types, such as a paragraph style `DocID` in the original and a

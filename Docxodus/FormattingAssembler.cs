@@ -355,9 +355,17 @@ namespace Docxodus
 
                             var mergedRunProps = MergeStyleElement(lvlStyleRpr, paraStyleRunProps);
 
+                            // Paragraph-mark visibility describes the separator, not the marker
+                            // glyph. Preserve visibility inherited from run defaults/styles and the
+                            // numbering level, without copying w:pPr/w:rPr/w:vanish onto the number.
+                            var defaultVisibility = stylesXDoc.Root?.Elements(W.docDefaults)
+                                .Elements(W.rPrDefault).Elements(W.rPr).Elements(W.vanish).FirstOrDefault();
+                            if (mergedRunProps.Element(W.vanish) == null && defaultVisibility != null)
+                                mergedRunProps.Add(new XElement(defaultVisibility));
                             var accumulatedRunProps = element.Elements(PtOpenXml.pPr).Elements(W.rPr).FirstOrDefault();
                             if (accumulatedRunProps != null)
-                                mergedRunProps = MergeStyleElement(accumulatedRunProps, mergedRunProps);
+                                mergedRunProps = MergeStyleElement(new XElement(W.rPr,
+                                    accumulatedRunProps.Elements().Where(e => e.Name != W.vanish)), mergedRunProps);
 
                             // Use effective level for continuation patterns (deeper-level items that continue a flat list)
                             var effectiveLevel = ListItemRetriever.GetEffectiveLevel(element);
