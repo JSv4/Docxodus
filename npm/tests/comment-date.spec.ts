@@ -27,13 +27,15 @@ for (const modern of [false, true]) for (const mode of [0, 1, 2]) {
         }
         return { dates: Array.from(document.querySelectorAll('[data-date]')).map(el => el.getAttribute('data-date')),
           captions: Array.from(document.querySelectorAll('.comment-date, .comment-margin-date')).map(el => el.textContent),
-          listed: JSON.parse(bridge.ListComments(handle))[0].date, blockDates };
+          listed: JSON.parse(bridge.ListComments(handle))[0].date,
+          stateless: JSON.parse(D.DocumentComparer.GetCommentsJson(input))[0].date, blockDates };
       } finally { bridge.CloseSession(handle); }
     }, { bytes: Array.from(commentDateFixture(modern)), mode });
     const expected = modern ? '2026-09-10T04:45:00Z' : '2026-09-09T23:45:00Z';
     expect(result.dates.length).toBeGreaterThan(0);
     expect(new Set(result.dates)).toEqual(new Set([expected]));
     expect(result.listed).toBe(expected);
+    expect(result.stateless).toBe(expected);
     expect(result.blockDates.length).toBeGreaterThan(0);
     expect(new Set(result.blockDates)).toEqual(new Set([expected]));
     if (mode !== 1) expect(result.captions).toEqual([modern ? 'Sep 10, 2026' : 'Sep 9, 2026']);
