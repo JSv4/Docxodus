@@ -1197,4 +1197,322 @@ public class BlockLevelMarkerDiffTests
         Assert.Equal("First", (string?)Body(consolidated).Elements(W + "del")
             .Single(d => d.Element(W + "bookmarkStart") is not null).Attribute(W + "author"));
     }
+
+    // ------------------------------------------------------- consolidate: cells, unchanged containers, notes (#1175)
+
+    public static TheoryData<string> ConsolidateEngines => new() { "DocxCompare", "DocxDiff" };
+
+    private static WmlDocument Consolidate(string engine, WmlDocument original, params (string Author, WmlDocument Document)[] reviewers)
+    {
+        var list = reviewers.Select(r => new DocxDiffReviewer { Author = r.Author, Document = r.Document }).ToList();
+        return engine == "DocxCompare" ? DocxCompare.Consolidate(original, list) : DocxDiff.Consolidate(original, list);
+    }
+
+    /// <summary>One reviewer: accepting the consolidated document gives the reviewer's layout, rejecting the
+    /// original's.</summary>
+    private static WmlDocument AssertConsolidateRoundTrip(string engine, WmlDocument original, WmlDocument reviewer,
+        Func<WmlDocument, string>? layout = null)
+    {
+        layout ??= Layout;
+        var consolidated = Consolidate(engine, original, ("Reviewer", reviewer));
+        Assert.Equal(layout(reviewer), layout(Accept(consolidated)));
+        Assert.Equal(layout(original), layout(Reject(consolidated)));
+        AssertNoNewValidationErrors(consolidated, original, reviewer);
+        return consolidated;
+    }
+
+    private static string WideTable(string content) =>
+        "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"5000\"/></w:tblGrid>" +
+        $"<w:tr><w:tc><w:tcPr><w:tcW w:w=\"5000\" w:type=\"dxa\"/></w:tcPr>{content}</w:tc></w:tr></w:tbl>";
+
+    /// <summary>With one reviewer, a table or cell that reviewer edits, and a block wrapper whose markers differ
+    /// (the reader folds a wrapper's markers into its hash, so it is always a change), are drawn by the two-way
+    /// renderer from the reviewer's copy, which already placed these markers: those rows guard that routing. The
+    /// unchanged-table rows are the ones the original's copy used to drop.</summary>
+    public static TheoryData<string, string, string> ConsolidateCellMarkerChanges()
+    {
+        var data = new TheoryData<string, string, string>();
+        foreach (var engine in new[] { "DocxCompare", "DocxDiff" })
+        {
+            // A cell the reviewer edits and brackets.
+            data.Add(engine, P("Lead") + Table(P("Alpha") + P("Bravo monthly")),
+                P("Lead") + Table(Start("InCell") + P("Alpha") + P("Bravo weekly") + End()));
+            // A cell the reviewer edits and un-brackets.
+            data.Add(engine, P("Lead") + Table(Start("InCell") + P("Alpha") + P("Bravo monthly") + End()),
+                P("Lead") + Table(P("Alpha") + P("Bravo weekly")));
+            // A cell whose shell (width) the reviewer changes too, so the merger takes the reviewer's cell shell.
+            data.Add(engine, P("Lead") + Table(P("Alpha") + P("Bravo monthly")),
+                P("Lead") + WideTable(Start("InCell") + P("Alpha") + P("Bravo weekly") + End()));
+            // An unchanged table: the reviewer only brackets a cell's paragraphs (and edits the body elsewhere).
+            data.Add(engine, P("Lead one") + Table(P("Alpha") + P("Bravo")), P("Lead two") + Table(Start("InCell") + P("Alpha") + P("Bravo") + End()));
+            data.Add(engine, P("Lead one") + Table(Start("InCell") + P("Alpha") + P("Bravo") + End()), P("Lead two") + Table(P("Alpha") + P("Bravo")));
+            // An unchanged cell of a row whose other cell the reviewer edits.
+            data.Add(engine, Rows(2, Row(P("Alpha") + P("Bravo"), P("Other one"))),
+                Rows(2, Row(Start("InCell") + P("Alpha") + P("Bravo") + End(), P("Other two"))));
+            // An unchanged block wrapper and custom-XML wrapper.
+            data.Add(engine, P("Lead one") + Sdt(P("Alpha") + P("Bravo")), P("Lead two") + Sdt(Start("Wrapped") + P("Alpha") + P("Bravo") + End()));
+            data.Add(engine, P("Lead one") + CustomXml(Start("Wrapped") + P("Alpha") + P("Bravo") + End()), P("Lead two") + CustomXml(P("Alpha") + P("Bravo")));
+        }
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateCellMarkerChanges))]
+    public void Consolidate_ReviewersBlockLevelBookmark_InACellOrUnchangedContainer_SurvivesAcceptAndReject(
+        string engine, string originalBody, string reviewerBody)
+    {
+        AssertConsolidateRoundTrip(engine, Doc(originalBody), Doc(reviewerBody));
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewersBookmarkOnlyChange_InAnUnchangedFootnote_SurvivesAcceptAndReject(string engine)
+    {
+        var original = FootnoteDoc(P("Note lead") + P("Alpha") + P("Bravo"));
+        var reviewer = FootnoteDoc(P("Note lead") + Start("InNote") + P("Alpha") + P("Bravo") + End());
+
+        AssertConsolidateRoundTrip(engine, original, reviewer, FootnoteLayout);
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewerInsertedFootnote_KeepsItsBookmarksAroundItsParagraphs(string engine)
+    {
+        var original = IrTestDocuments.FromParts("<w:p><w:r><w:t>Body</w:t></w:r></w:p>",
+            footnotesInnerXml: Separators);
+        var reviewer = FootnoteDoc(P("Note lead") + Start("InNote") + P("Alpha") + P("Bravo") + End());
+
+        var consolidated = Consolidate(engine, original, ("Reviewer", reviewer));
+
+        Assert.Equal(FootnoteLayout(reviewer), FootnoteLayout(Accept(consolidated)));
+        // The whole note is the reviewer's insertion: its bookmark is tracked as inserted with it.
+        var note = Part(consolidated, "word/footnotes.xml").Root!.Elements(W + "footnote")
+            .Single(n => (string?)n.Attribute(W + "id") == "1");
+        Assert.All(note.Elements().Where(e => e.Name != W + "p"), e => Assert.Equal("ins", e.Name.LocalName));
+        Assert.Equal(new[] { "p", "ins", "p", "p", "ins" }, note.Elements().Select(e => e.Name.LocalName));
+        AssertNoNewValidationErrors(consolidated, original, reviewer);
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_TwoReviewersBracketingTheSameUnchangedTable_KeepsEachReviewersBookmark(string engine)
+    {
+        var original = Doc(P("Lead") + Table(P("Alpha") + P("Bravo")) + P("Tail one"));
+        var first = Doc(P("Lead") + Table(Start("First") + P("Alpha") + End() + P("Bravo")) + P("Tail one"));
+        var second = Doc(P("Lead") + Table(P("Alpha") + Start("Second", 8) + P("Bravo") + End(8)) + P("Tail two"));
+
+        var consolidated = Consolidate(engine, original, ("First", first), ("Second", second));
+
+        Assert.Equal("P:Lead TBL[BS:First P:Alpha BE:First BS:Second P:Bravo BE:Second] P:Tail two", Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+        var cell = Body(consolidated).Descendants(W + "tc").Single();
+        Assert.Equal(new[] { "First", "First", "Second", "Second" },
+            cell.Elements(W + "ins").Select(i => (string?)i.Attribute(W + "author")));
+    }
+
+    private static string Cell(string content, int width = 3000) =>
+        $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>{content}</w:tc>";
+
+    private static string OneRow(params string[] cells) =>
+        "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid>" +
+        string.Concat(cells.Select(_ => "<w:gridCol w:w=\"3000\"/>")) + "</w:tblGrid><w:tr>" + string.Concat(cells) + "</w:tr></w:tbl>";
+
+    public static TheoryData<string, string, string, string, string> ConsolidateComposedCellMarkerChanges()
+    {
+        var data = new TheoryData<string, string, string, string, string>();
+        foreach (var engine in new[] { "DocxCompare", "DocxDiff" })
+        {
+            // The first reviewer edits and brackets the first cell, the second edits the second cell: the merger
+            // composes the row cell by cell.
+            data.Add(engine,
+                OneRow(Cell(P("Alpha") + P("Bravo monthly")), Cell(P("Other one"))),
+                OneRow(Cell(Start("InCell") + P("Alpha") + P("Bravo weekly") + End()), Cell(P("Other one"))),
+                OneRow(Cell(P("Alpha") + P("Bravo monthly")), Cell(P("Other two"))),
+                "TBL[BS:InCell P:Alpha P:Bravo weekly BE:InCell || P:Other two]");
+            // The same, un-bracketing.
+            data.Add(engine,
+                OneRow(Cell(Start("InCell") + P("Alpha") + P("Bravo monthly") + End()), Cell(P("Other one"))),
+                OneRow(Cell(P("Alpha") + P("Bravo weekly")), Cell(P("Other one"))),
+                OneRow(Cell(Start("InCell") + P("Alpha") + P("Bravo monthly") + End()), Cell(P("Other two"))),
+                "TBL[P:Alpha P:Bravo weekly || P:Other two]");
+            // The first reviewer also widens the cell, so the merger takes that reviewer's cell shell.
+            data.Add(engine,
+                OneRow(Cell(P("Alpha") + P("Bravo monthly")), Cell(P("Other one"))),
+                OneRow(Cell(Start("InCell") + P("Alpha") + P("Bravo weekly") + End(), 4000), Cell(P("Other one"))),
+                OneRow(Cell(P("Alpha") + P("Bravo monthly")), Cell(P("Other two"))),
+                "TBL[BS:InCell P:Alpha P:Bravo weekly BE:InCell || P:Other two]");
+            // Both reviewers edit the second cell; the first also brackets the first cell, which neither edits:
+            // a cell the composed row takes from the base.
+            data.Add(engine,
+                OneRow(Cell(P("Alpha") + P("Bravo")), Cell(P("Other one"))),
+                OneRow(Cell(Start("InCell") + P("Alpha") + P("Bravo") + End()), Cell(P("Other one changed"))),
+                OneRow(Cell(P("Alpha") + P("Bravo")), Cell(P("Other one"), 4000)),
+                "TBL[BS:InCell P:Alpha P:Bravo BE:InCell || P:Other one changed]");
+        }
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateComposedCellMarkerChanges))]
+    public void Consolidate_ReviewersBlockLevelBookmark_InAComposedTableCell_SurvivesAcceptAndReject(
+        string engine, string originalBody, string firstBody, string secondBody, string accepted)
+    {
+        var original = Doc(originalBody);
+        var consolidated = Consolidate(engine, original, ("First", Doc(firstBody)), ("Second", Doc(secondBody)));
+
+        Assert.Equal(accepted, Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+        AssertNoNewValidationErrors(consolidated, original, Doc(firstBody), Doc(secondBody));
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ComposedCellBookmarks_AreEachReviewersTrackedInsertion(string engine)
+    {
+        var original = Doc(OneRow(Cell(P("Alpha") + P("Bravo monthly")), Cell(P("Other one"))));
+        var first = Doc(OneRow(Cell(Start("InCell") + P("Alpha") + P("Bravo weekly") + End()), Cell(P("Other one"))));
+        var second = Doc(OneRow(Cell(P("Alpha") + P("Bravo monthly")), Cell(P("Other two"))));
+
+        var consolidated = Consolidate(engine, original, ("First", first), ("Second", second));
+
+        var cell = Body(consolidated).Descendants(W + "tc").First();
+        Assert.Equal(new[] { "First", "First" }, cell.Elements(W + "ins")
+            .Where(i => i.Elements().Any(IsMarker)).Select(i => (string?)i.Attribute(W + "author")));
+        static bool IsMarker(XElement e) => e.Name.LocalName is "bookmarkStart" or "bookmarkEnd";
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewerWhoEditsAFootnoteAndBracketsIt_KeepsTheBookmark(string engine)
+    {
+        var original = FootnoteDoc(P("Note lead") + P("Alpha") + P("Bravo monthly"));
+        var reviewer = FootnoteDoc(P("Note lead") + Start("InNote") + P("Alpha") + P("Bravo weekly") + End());
+
+        AssertConsolidateRoundTrip(engine, original, reviewer, FootnoteLayout);
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewersBookmarkInAWrapper_WhileAnotherReviewerEditsElsewhere_SurvivesAcceptAndReject(string engine)
+    {
+        // A guard: the wrapper's changed markers make it the first reviewer's change, drawn from that reviewer's copy.
+        var original = Doc(P("Lead one") + Sdt(P("Alpha") + P("Bravo")) + P("Tail one"));
+        var first = Doc(P("Lead one") + Sdt(Start("Wrapped") + P("Alpha") + P("Bravo") + End()) + P("Tail one"));
+        var second = Doc(P("Lead one") + Sdt(P("Alpha") + P("Bravo")) + P("Tail two"));
+
+        var consolidated = Consolidate(engine, original, ("First", first), ("Second", second));
+
+        Assert.Equal("P:Lead one SDT{BS:Wrapped P:Alpha P:Bravo BE:Wrapped} P:Tail two", Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+    }
+
+    // ---------------------------------------------- consolidate: rows nobody edited, promotion, comments (#1175)
+
+    private static string ThreeRows(string a, string b, string c) => Rows(1, Row(a), Row(b), Row(c));
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewersBookmark_InARowOnlyAnotherReviewerEdited_SurvivesAcceptAndReject(string engine)
+    {
+        // The first reviewer edits the first row's cell; the second brackets the same cell's paragraphs, leaving
+        // its content alone, and edits the second row.
+        var original = Doc(Rows(1, Row(P("Alpha") + P("Bravo")), Row(P("Charlie"))) + P("Tail"));
+        var first = Doc(Rows(1, Row(P("Alpha one") + P("Bravo")), Row(P("Charlie"))) + P("Tail"));
+        var second = Doc(Rows(1, Row(Start("X", 9) + P("Alpha") + P("Bravo") + End(9)), Row(P("Charlie two"))) + P("Tail"));
+
+        var consolidated = Consolidate(engine, original, ("First", first), ("Second", second));
+
+        Assert.Equal("TBL[BS:X P:Alpha one P:Bravo BE:X | P:Charlie two] P:Tail", Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+        AssertNoNewValidationErrors(consolidated, original, first, second);
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewersBookmark_InARowNoReviewerEdited_SurvivesAcceptAndReject(string engine)
+    {
+        var original = Doc(ThreeRows(P("Alpha") + P("Bravo"), P("Charlie"), P("Delta")) + P("Tail"));
+        var first = Doc(ThreeRows(P("Alpha") + P("Bravo"), P("Charlie one"), P("Delta")) + P("Tail"));
+        var second = Doc(ThreeRows(Start("X", 9) + P("Alpha") + P("Bravo") + End(9), P("Charlie"), P("Delta two")) + P("Tail"));
+
+        var consolidated = Consolidate(engine, original, ("First", first), ("Second", second));
+
+        Assert.Equal("TBL[BS:X P:Alpha P:Bravo BE:X | P:Charlie one | P:Delta two] P:Tail", Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+        AssertNoNewValidationErrors(consolidated, original, first, second);
+    }
+
+    /// <summary>The layout without its block-level bookmark markers.</summary>
+    private static string WithoutBookmarks(string layout)
+    {
+        static string Replace(string input, string pattern, string replacement) =>
+            System.Text.RegularExpressions.Regex.Replace(input, pattern, replacement);
+        var stripped = Replace(layout, @"B[SE]:[^ \]|]+", "");
+        stripped = Replace(Replace(stripped, @"\[ +", "["), @" +\]", "]");
+        return Replace(stripped, " {2,}", " ").Trim();
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_ReviewersBookmarkOnly_InATableOneOtherReviewerEdited_SurvivesAcceptAndReject(string engine)
+    {
+        // The first reviewer only brackets the cell; the second edits it, so it is the table's only real
+        // editor. The bracketing reviewer is composed in alongside, without changing what the edit does.
+        var original = Doc(Table(P("Alpha") + P("Bravo")) + P("Tail"));
+        var first = Doc(Table(Start("X", 9) + P("Alpha") + P("Bravo") + End(9)) + P("Tail"));
+        var second = Doc(Table(P("Alpha one") + P("Bravo")) + P("Tail"));
+
+        var consolidated = Consolidate(engine, original, ("First", first), ("Second", second));
+        var editOnly = Consolidate(engine, original, ("Second", second));
+
+        Assert.Equal("TBL[BS:X P:Alpha one P:Bravo BE:X] P:Tail", Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+        Assert.Equal(Layout(Accept(editOnly)), WithoutBookmarks(Layout(Accept(consolidated))));
+        Assert.Equal(Layout(Reject(editOnly)), Layout(Reject(consolidated)));
+        Assert.Equal(Body(Accept(editOnly)).Descendants(W + "t").Select(t => t.Value),
+            Body(Accept(consolidated)).Descendants(W + "t").Select(t => t.Value));
+        AssertNoNewValidationErrors(consolidated, original, first, second);
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_CellDeleteVsEditConflict_KeepsTheWinningEditorsCellBookmark(string engine)
+    {
+        var original = Doc(OneRow(Cell(P("Alpha")), Cell(P("Bravo") + P("Charlie"))) + P("Tail"));
+        var first = Doc(OneRow(Cell(P("Alpha")), Cell(Start("X", 9) + P("Bravo one") + P("Charlie") + End(9))) + P("Tail"));
+        var second = Doc(OneRow(Cell(P("Alpha two"))) + P("Tail"));
+        var list = new[] { new DocxDiffReviewer { Author = "First", Document = first }, new DocxDiffReviewer { Author = "Second", Document = second } };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.FirstReviewerWins };
+
+        var consolidated = engine == "DocxCompare" ? DocxCompare.Consolidate(original, list, settings) : DocxDiff.Consolidate(original, list, settings);
+
+        Assert.Contains("BS:X P:Bravo one P:Charlie BE:X", Layout(Accept(consolidated)));
+        Assert.Equal(Layout(original), Layout(Reject(consolidated)));
+    }
+
+    [Theory]
+    [MemberData(nameof(ConsolidateEngines))]
+    public void Consolidate_TwoReviewersAddingTheSameBookmarkNameInDifferentStreams_KeepOneCopy(string engine)
+    {
+        // A guard: this shape kept one copy before the package-wide record of reviewers' block-level markers too.
+        var original = Doc(P("Lead") + Table(P("Alpha") + P("Bravo")) + P("Tail") + P("End"));
+        var first = Doc(P("Lead one") + Table(Start("X", 8) + P("Alpha") + P("Bravo") + End(8)) + P("Tail") + P("End"));
+        var second = Doc(P("Lead") + Table(P("Alpha") + P("Bravo")) + Start("X", 9) + P("Tail") + End(9) + P("End two"));
+
+        var accepted = Accept(Consolidate(engine, original, ("First", first), ("Second", second)));
+
+        Assert.Single(Body(accepted).Descendants(W + "bookmarkStart"), b => (string?)b.Attribute(W + "name") == "X");
+    }
+
+    [Theory]
+    [MemberData(nameof(MovedCommentRanges))]
+    public void Consolidate_ExistingCommentRangeMovedBetweenBlocks_FollowsEachSide(string engine, string originalBody, string revisedBody)
+    {
+        var consolidated = AssertConsolidateRoundTrip(engine, BaseCommentDoc(originalBody), BaseCommentDoc(revisedBody));
+
+        // Every revision, the old range's deletion included, is the reviewer's.
+        var authors = Body(consolidated).Descendants().Where(e => e.Name == W + "ins" || e.Name == W + "del")
+            .Select(e => (string?)e.Attribute(W + "author")).Distinct();
+        Assert.Equal(new[] { "Reviewer" }, authors);
+    }
 }

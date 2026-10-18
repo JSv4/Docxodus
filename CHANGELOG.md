@@ -215,6 +215,17 @@ All notable changes to this project will be documented in this file.
   on, say) now keeps each document's range in its own view, in the body too: the clean-up used to collapse the
   two copies into one range, so rejecting gave the revised range. A header whose only difference is a comment's
   id (the revised document numbers the same comment differently) is still left as it is.
+- Consolidating several reviewers' copies no longer drops or misplaces a reviewer's bookmarks and comment ranges
+  written between paragraphs in table cells, unchanged tables and notes (issue #1175). Where the merge composes a
+  table cell by cell, only the original's markers were placed, so a reviewer's bookmark in a cell was lost, whether
+  that reviewer edited the cell, left it or its whole row alone, or only bracketed it while another reviewer
+  edited the table; a reviewer whose only change was such a marker inside a table or footnote nobody else
+  changed lost it too, because the output copies those from the original; and a footnote a reviewer inserted
+  carried its bookmarks in front of its paragraphs, untracked. Each reviewer's markers now go in as that
+  reviewer's tracked insertion (and an original marker the reviewer removed as their deletion) at the right
+  paragraph boundary, as two-document comparison does; a bookmark marker between blocks that two reviewers add
+  under one name is inserted once (one added between blocks and one inside a paragraph still give two copies). A table one reviewer edited and another only bracketed is now composed cell by cell; the edits
+  themselves come out the same.
 - Right-to-left bordered paragraphs (`w:bidi`) now draw their left and right borders outside the
   indented text, mirroring left-to-right paragraphs (issue #1129). The border wrapper put the
   paragraph's leading (start) indent on its left side, although a right-to-left paragraph's start is

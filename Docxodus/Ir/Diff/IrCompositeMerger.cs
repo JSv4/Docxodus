@@ -95,11 +95,11 @@ internal static class IrCompositeMerger
         var trailingSectPr = ComposeTrailingSection(
             baseIr, reviewers, policy, settings, conflicts, ref nextConflictId);
 
-        // Each reviewer's own body ops ride along for the renderer: the composite ops say nothing about the
+        // Each reviewer's own comparison rides along for the renderer: the composite ops say nothing about the
         // bookmarks and comment ranges a reviewer has between blocks (rule N3), and placing them needs that
-        // reviewer's alignment with the base (issue #1149).
+        // reviewer's alignment with the base, in the body and in each note (issues #1149, #1175).
         return new IrCompositeScript(IrNodeList.From(ops), IrNodeList.From(conflicts), noteOps, noteIdMaps, trailingSectPr,
-            IrNodeList.From(scripts.Select(script => script.Operations)));
+            IrNodeList.From(scripts.Select(script => new IrReviewerComparison(script.Operations, script.NoteOps))));
     }
 
     // ---- N-way note-scope merge ----
@@ -1130,13 +1130,20 @@ internal static class IrCompositeMerger
         if (!byBase.TryGetValue(anchor, out var entries) ||
             entries.All(e => e.Op.Kind == IrEditOpKind.EqualBlock))
         {
-            ops.Add(EqualOp(anchor, entries, reviewers));
+            ops.Add(EqualOp(anchor, entries, reviewers, baseIr));
             return;
         }
         var touched = entries.Where(e => e.Op.Kind != IrEditOpKind.EqualBlock).ToList();
 
         if (touched.Count == 1)
         {
+            // A table one reviewer edited and another left equal but for the markers between a cell's blocks
+            // composes cell by cell, so the second reviewer's markers find their cells (issue #1175).
+            if (baseIr.AnchorIndex.TryGetValue(anchor, out var editedBlock) && editedBlock is IrTable editedTable &&
+                MarkerOnlyTableReviewers(anchor, editedTable, touched[0], entries, reviewers) is { Count: > 0 } promoted &&
+                ComposeTable(anchor, editedTable, touched.Concat(promoted).ToList(), reviewers, baseIr, policy, settings,
+                    ops, conflicts, ref nextConflictId))
+                return;
             var (rev, op) = touched[0];
             ops.Add(EmitOp(op, reviewers[rev].Author, rev));
             return;
@@ -1241,47 +1248,9 @@ internal static class IrCompositeMerger
         // row moves are uncontested — otherwise we FALL BACK to the block-level conflict (no silent loss; the
         // base table is kept under BaseWins and the disagreement is recorded under every policy). An
         // UNCONTESTED reviewer MovedRow composes (lowered to del+ins rows, the two-way shape).
-        if (baseIr.AnchorIndex.TryGetValue(anchor, out var baseBlk) && baseBlk is IrTable baseTable
-            && touched.All(e => IsTableContentOrShellEdit(e.Op, reviewers[e.Reviewer].Ir))
-            && MovedRowsComposable(touched))
-        {
-            // Content composition over the CONTENT (ModifyBlock w/TableDiff) touchers — a pure shell
-            // (FormatOnlyBlock) toucher contributes no row ops, so with only shell touchers ComposeTableDiffs
-            // yields an all-EqualRow authored table onto which the shell attribution below layers the markup.
-            var reviewerTableDiffs = touched
-                .Where(e => e.Op.Kind == IrEditOpKind.ModifyBlock && e.Op.TableDiff != null)
-                .Select(e => (e.Reviewer, reviewers[e.Reviewer].Author, e.Op.TableDiff!))
-                .ToList();
-            var merged = ComposeTableDiffs(
-                anchor, baseTable, reviewerTableDiffs, reviewers, baseIr, policy, settings,
-                ref nextConflictId, out var tableConflicts, out var authoredRows);
-            conflicts.AddRange(tableConflicts);
-
-            // B2: per-element table + row shell composition across ALL touchers (tblPr/tblGrid at table level;
-            // trPr/tblPrEx per row) — mirrors ComposeCellShell (0→base / agree→consensus / ≥2→conflict per
-            // policy / non-stackable). Mutates authoredRows in place (attaches row-shell refs) and returns the
-            // table-level shell attribution. Cell tcPr is already composed inside ComposeTableDiffs.
-            var tableShell = ComposeTableAndRowShells(
-                anchor, baseTable, touched, reviewers, policy, settings, ref nextConflictId, conflicts, authoredRows);
-
-            Invariant(AssertTilesBaseTable(authoredRows, baseTable),
-                "ComposeTableDiffs: authored rows/cells must tile the base table's rows/cells exactly once.");
-
-            // Representative op: prefer a real content ModifyBlock (its TableDiff carries content truth); else a
-            // pure-shell toucher, coerced to ModifyBlock so the emitted/serialized op kind is consistent (the
-            // render dispatches on AuthoredRows, not op kind, and resolves the base table via LeftAnchor).
-            var repOp = touched.Where(e => e.Op.Kind == IrEditOpKind.ModifyBlock && e.Op.TableDiff != null)
-                               .Select(e => e.Op).FirstOrDefault() ?? touched[0].Op;
-            var structOp = (repOp.Kind == IrEditOpKind.ModifyBlock ? repOp : repOp with { Kind = IrEditOpKind.ModifyBlock })
-                with { TableDiff = merged };
-            ops.Add(new IrCompositeOp(structOp, "", touched[0].Reviewer,
-                AuthoredTokens: null,
-                ConflictId: tableConflicts.Count > 0 ? tableConflicts[0].Id : (int?)null,
-                SourceRightAnchors: null,
-                AuthoredRows: IrNodeList.From(authoredRows),
-                TableShell: tableShell));
+        if (baseIr.AnchorIndex.TryGetValue(anchor, out var baseBlk) && baseBlk is IrTable baseTable &&
+            ComposeTable(anchor, baseTable, touched, reviewers, baseIr, policy, settings, ops, conflicts, ref nextConflictId))
             return;
-        }
         // BLOCK-LEVEL CONFLICT
         var cid = nextConflictId++;
         conflicts.Add(new IrConflict(cid, anchor, 0, 0, policy,
@@ -1368,15 +1337,21 @@ internal static class IrCompositeMerger
 
     /// <summary>A base-sourced EqualBlock for a block every reviewer left equal, noting each reviewer paragraph
     /// that carries bookmark markers: the IR leaves bookmarks out, so one only that reviewer added would
-    /// otherwise be lost with the reviewer's copy of the block (issue #864).</summary>
+    /// otherwise be lost with the reviewer's copy of the block (issue #864). Likewise each reviewer's equal
+    /// table whose bookmarks or comment ranges between its blocks differ from the base's (issue #1175); a block
+    /// wrapper never gets here with different markers, since the reader folds them into its hash.</summary>
     private static IrCompositeOp EqualOp(
-        string anchor, List<(int Reviewer, IrEditOp Op)>? entries, IReadOnlyList<(string Author, IrDocument Ir)> reviewers)
+        string anchor, List<(int Reviewer, IrEditOp Op)>? entries, IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
+        IrDocument baseIr)
     {
+        var baseElement = baseIr.AnchorIndex.TryGetValue(anchor, out var baseBlock) ? baseBlock.Source.Element : null;
         var withBookmarks = (entries ?? new List<(int Reviewer, IrEditOp Op)>())
             .Where(e => e.Op.RightAnchor is { } right &&
                 reviewers[e.Reviewer].Ir.AnchorIndex.TryGetValue(right, out var block) &&
-                block is IrParagraph &&
-                block.Source.Element?.Elements().Any(c => c.Name == W.bookmarkStart || c.Name == W.bookmarkEnd) == true)
+                block.Source.Element is { } element &&
+                (block is IrParagraph
+                    ? element.Elements().Any(c => c.Name == W.bookmarkStart || c.Name == W.bookmarkEnd)
+                    : element.Name == W.tbl && IrMarkupRenderer.BlockLevelMarkersDiffer(baseElement, element)))
             .Select(e => new IrEqualReviewerBookmarks(e.Reviewer, e.Op.RightAnchor!, reviewers[e.Reviewer].Author))
             .ToList();
         return withBookmarks.Count == 0
@@ -1764,6 +1739,83 @@ internal static class IrCompositeMerger
     // ---- FOLLOW-ON B: per-cell table composition ----
 
     /// <summary>
+    /// TABLE COMPOSITION (FOLLOW-ON B) of <paramref name="touched"/>, each a table content or shell edit of the
+    /// base table at <paramref name="anchor"/>; false (nothing emitted) when one is not, or when row moves are
+    /// contested. The first content toucher is the representative op and source reviewer.
+    /// </summary>
+    private static bool ComposeTable(string anchor, IrTable baseTable, List<(int Reviewer, IrEditOp Op)> touched,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers, IrDocument baseIr, Docxodus.ConflictResolution policy,
+        IrDiffSettings settings, List<IrCompositeOp> ops, List<IrConflict> conflicts, ref int nextConflictId)
+    {
+        if (!touched.All(e => IsTableContentOrShellEdit(e.Op, reviewers[e.Reviewer].Ir)) || !MovedRowsComposable(touched))
+            return false;
+        // Content composition over the CONTENT (ModifyBlock w/TableDiff) touchers — a pure shell
+        // (FormatOnlyBlock) toucher contributes no row ops, so with only shell touchers ComposeTableDiffs
+        // yields an all-EqualRow authored table onto which the shell attribution below layers the markup.
+        var reviewerTableDiffs = touched
+            .Where(e => e.Op.Kind == IrEditOpKind.ModifyBlock && e.Op.TableDiff != null)
+            .Select(e => (e.Reviewer, reviewers[e.Reviewer].Author, e.Op.TableDiff!))
+            .ToList();
+        var merged = ComposeTableDiffs(
+            anchor, baseTable, reviewerTableDiffs, reviewers, baseIr, policy, settings,
+            ref nextConflictId, out var tableConflicts, out var authoredRows);
+        conflicts.AddRange(tableConflicts);
+
+        // B2: per-element table + row shell composition across ALL touchers (tblPr/tblGrid at table level;
+        // trPr/tblPrEx per row) — mirrors ComposeCellShell (0→base / agree→consensus / ≥2→conflict per
+        // policy / non-stackable). Mutates authoredRows in place (attaches row-shell refs) and returns the
+        // table-level shell attribution. Cell tcPr is already composed inside ComposeTableDiffs.
+        var tableShell = ComposeTableAndRowShells(
+            anchor, baseTable, touched, reviewers, policy, settings, ref nextConflictId, conflicts, authoredRows);
+
+        Invariant(AssertTilesBaseTable(authoredRows, baseTable),
+            "ComposeTableDiffs: authored rows/cells must tile the base table's rows/cells exactly once.");
+
+        // Representative op: prefer a real content ModifyBlock (its TableDiff carries content truth); else a
+        // pure-shell toucher, coerced to ModifyBlock so the emitted/serialized op kind is consistent (the
+        // render dispatches on AuthoredRows, not op kind, and resolves the base table via LeftAnchor).
+        var repOp = touched.Where(e => e.Op.Kind == IrEditOpKind.ModifyBlock && e.Op.TableDiff != null)
+                           .Select(e => e.Op).FirstOrDefault() ?? touched[0].Op;
+        var structOp = (repOp.Kind == IrEditOpKind.ModifyBlock ? repOp : repOp with { Kind = IrEditOpKind.ModifyBlock })
+            with { TableDiff = merged };
+        ops.Add(new IrCompositeOp(structOp, "", touched[0].Reviewer,
+            AuthoredTokens: null,
+            ConflictId: tableConflicts.Count > 0 ? tableConflicts[0].Id : (int?)null,
+            SourceRightAnchors: null,
+            AuthoredRows: IrNodeList.From(authoredRows),
+            TableShell: tableShell));
+        return true;
+    }
+
+    /// <summary>
+    /// The reviewers to compose into a table that <paramref name="editor"/> alone changed because their own copy,
+    /// equal to the base table, differs from it in the bookmarks or comment ranges between a cell's blocks (issue
+    /// #1175): each as an all-EqualRow ModifyBlock pairing the two tables' rows by position. Only for an editor's
+    /// ModifyBlock with a table diff (never a whole-table delete or replace).
+    /// </summary>
+    private static List<(int Reviewer, IrEditOp Op)> MarkerOnlyTableReviewers(string anchor, IrTable baseTable,
+        (int Reviewer, IrEditOp Op) editor, List<(int Reviewer, IrEditOp Op)> entries,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers)
+    {
+        var promoted = new List<(int Reviewer, IrEditOp Op)>();
+        if (editor.Op.Kind != IrEditOpKind.ModifyBlock || editor.Op.TableDiff is null)
+            return promoted;
+        foreach (var (reviewer, op) in entries)
+        {
+            if (op.Kind != IrEditOpKind.EqualBlock || op.RightAnchor is not { } right ||
+                !reviewers[reviewer].Ir.AnchorIndex.TryGetValue(right, out var block) || block is not IrTable table ||
+                table.Rows.Count != baseTable.Rows.Count ||
+                !IrMarkupRenderer.BlockLevelMarkersDiffer(baseTable.Source.Element, table.Source.Element))
+                continue;
+            var rows = baseTable.Rows.Zip(table.Rows, (b, r) =>
+                new IrRowOp(IrRowOpKind.EqualRow, b.Anchor.ToString(), r.Anchor.ToString(), null));
+            promoted.Add((reviewer, new IrEditOp(IrEditOpKind.ModifyBlock, anchor, right, null, null, null,
+                TableDiff: new IrTableDiff(IrNodeList.From(rows)))));
+        }
+        return promoted;
+    }
+
+    /// <summary>
     /// Row-move composability gate (the row analogue of the block move plan's sole-toucher predicate): true
     /// when every reviewer <see cref="IrRowOpKind.MovedRow"/>'s SOURCE base row is touched (non-Equal,
     /// non-Insert row op) by that reviewer ALONE. A composable MovedRow is then LOWERED during row indexing
@@ -2103,12 +2155,19 @@ internal static class IrCompositeMerger
         var touched = byBaseRow.TryGetValue(rowAnchor, out var entries)
             ? entries.Where(e => e.Op.Kind != IrRowOpKind.EqualRow).ToList()
             : new List<(int Reviewer, string Author, IrRowOp Op)>();
+        // The reviewers who left the row equal pair its cells by position; one whose markers between a cell's
+        // blocks differ from the base's has them placed in that cell (issue #1175).
+        var equalRowCells = EqualRowCellPairs(baseRow, entries, reviewers);
 
         if (touched.Count == 0)
         {
-            // Untouched (every reviewer Equal / absent) → base row verbatim.
+            // Untouched (every reviewer Equal / absent) → base row verbatim, its cells reconciled against the
+            // copies whose markers differ when there are any.
             mergedRowOps.Add(new IrRowOp(IrRowOpKind.EqualRow, rowAnchor, rowAnchor, null));
-            authoredRows.Add(new IrAuthoredRowOp(IrRowOpKind.EqualRow, rowAnchor, -1, "", null));
+            var passthrough = baseRow.Cells.Select(c => new IrAuthoredCellOp(c.Anchor.ToString(), null)).ToList();
+            authoredRows.Add(WithEqualRowReviewerCells(passthrough, equalRowCells, reviewers, baseIr) is { } marked
+                ? new IrAuthoredRowOp(IrRowOpKind.ModifyRow, rowAnchor, -1, "", IrNodeList.From(marked))
+                : new IrAuthoredRowOp(IrRowOpKind.EqualRow, rowAnchor, -1, "", null));
             return;
         }
 
@@ -2164,7 +2223,8 @@ internal static class IrCompositeMerger
         {
             var (reviewer, author, op) = modifiers[0];
             mergedRowOps.Add(op);
-            var authoredCells = AuthoredCellsForSingleReviewer(op, baseRow, reviewer, author);
+            var authoredCells = AuthoredCellsForSingleReviewer(op, baseRow, reviewer, author, reviewers, baseIr);
+            authoredCells = WithEqualRowReviewerCells(authoredCells, equalRowCells, reviewers, baseIr) ?? authoredCells;
             authoredRows.Add(new IrAuthoredRowOp(IrRowOpKind.ModifyRow, rowAnchor, reviewer, author, IrNodeList.From(authoredCells)));
             return;
         }
@@ -2174,9 +2234,75 @@ internal static class IrCompositeMerger
         var mergedCellOps = new List<IrCellOp>();
         ComposeRowCells(rowAnchor, baseRow, modifiers, reviewers, baseIr, policy, settings,
             ref nextConflictId, conflicts, mergedCellOps, composedCells);
+        composedCells = WithEqualRowReviewerCells(composedCells, equalRowCells, reviewers, baseIr) ?? composedCells;
         mergedRowOps.Add(new IrRowOp(IrRowOpKind.ModifyRow, rowAnchor, rowAnchor, IrNodeList.From(mergedCellOps)));
         authoredRows.Add(new IrAuthoredRowOp(IrRowOpKind.ModifyRow, rowAnchor, -1, "", IrNodeList.From(composedCells)));
     }
+
+    /// <summary>Each base cell's pairing with the copy of every reviewer whose row op left this row equal: equal
+    /// rows have the same cells, so the k-th cells pair. Empty when no reviewer reports the row equal.</summary>
+    private static Dictionary<string, List<(int Reviewer, string Author, IrCellOp CellOp)>> EqualRowCellPairs(
+        IrRow baseRow, List<(int Reviewer, string Author, IrRowOp Op)>? entries,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers)
+    {
+        var pairs = new Dictionary<string, List<(int, string, IrCellOp)>>(StringComparer.Ordinal);
+        foreach (var (reviewer, author, op) in entries ?? new())
+        {
+            if (op.Kind != IrRowOpKind.EqualRow || op.RightRowAnchor is not { } rightRow ||
+                !RowIndex(reviewers[reviewer].Ir).TryGetValue(rightRow, out var row) || row.Cells.Count != baseRow.Cells.Count)
+                continue;
+            for (int k = 0; k < row.Cells.Count; k++)
+            {
+                var baseAnchor = baseRow.Cells[k].Anchor.ToString();
+                if (!pairs.TryGetValue(baseAnchor, out var list))
+                    pairs[baseAnchor] = list = new();
+                list.Add((reviewer, author, new IrCellOp(baseAnchor, row.Cells[k].Anchor.ToString(), null)));
+            }
+        }
+        return pairs;
+    }
+
+    /// <summary><paramref name="cells"/> with the equal-row reviewers' copies whose markers differ added to each
+    /// content cell's <see cref="IrAuthoredCellOp.ReviewerCells"/>, or null when there are none.</summary>
+    private static List<IrAuthoredCellOp>? WithEqualRowReviewerCells(List<IrAuthoredCellOp> cells,
+        Dictionary<string, List<(int Reviewer, string Author, IrCellOp CellOp)>> equalRowCells,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers, IrDocument baseIr)
+    {
+        if (equalRowCells.Count == 0)
+            return null;
+        bool any = false;
+        var result = cells.Select(cell =>
+        {
+            if (cell.Kind != IrAuthoredCellKind.Content || cell.BaseCellAnchor is not { } anchor ||
+                !equalRowCells.TryGetValue(anchor, out var pairs) || ReviewerCells(pairs, reviewers, baseIr) is not { } more)
+                return cell;
+            any = true;
+            return cell with { ReviewerCells = IrNodeList.From((cell.ReviewerCells ?? IrNodeList.Empty<IrReviewerCell>()).Concat(more)) };
+        }).ToList();
+        return any ? result : null;
+    }
+
+    /// <summary>Every row of <paramref name="ir"/>'s tables by anchor, nested tables included; built once per
+    /// document.</summary>
+    private static Dictionary<string, IrRow> RowIndex(IrDocument ir) => RowIndexes.GetValue(ir, doc =>
+    {
+        var index = new Dictionary<string, IrRow>(StringComparer.Ordinal);
+        void Visit(IrTable table)
+        {
+            foreach (var row in table.Rows)
+            {
+                index.TryAdd(row.Anchor.ToString(), row);
+                foreach (var nested in row.Cells.SelectMany(c => c.Blocks).OfType<IrTable>())
+                    Visit(nested);
+            }
+        }
+        foreach (var table in doc.AnchorIndex.Values.OfType<IrTable>())
+            Visit(table);
+        return index;
+    });
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IrDocument, Dictionary<string, IrRow>>
+        RowIndexes = new();
 
     /// <summary>Emit the winning row of a row-level conflict (its merged row op + authored view).</summary>
     private static void EmitWinnerRow(
@@ -2194,7 +2320,7 @@ internal static class IrCompositeMerger
         else // ModifyRow winner
         {
             mergedRowOps.Add(winner.Op);
-            var cells = AuthoredCellsForSingleReviewer(winner.Op, baseRow, winner.Reviewer, winner.Author);
+            var cells = AuthoredCellsForSingleReviewer(winner.Op, baseRow, winner.Reviewer, winner.Author, reviewers, baseIr);
             authoredRows.Add(new IrAuthoredRowOp(IrRowOpKind.ModifyRow, rowAnchor, winner.Reviewer, winner.Author,
                 IrNodeList.From(cells)));
         }
@@ -2215,7 +2341,8 @@ internal static class IrCompositeMerger
     /// identical, so this is inert).
     /// </summary>
     private static List<IrAuthoredCellOp> AuthoredCellsForSingleReviewer(
-        IrRowOp op, IrRow baseRow, int reviewer, string author)
+        IrRowOp op, IrRow baseRow, int reviewer, string author,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers, IrDocument baseIr)
     {
         var result = new List<IrAuthoredCellOp>();
         if (op.CellOps is not { } cellOps)
@@ -2231,17 +2358,18 @@ internal static class IrCompositeMerger
             if (cellOp.LeftCellAnchor is { } baseCellAnchor && cellOp.RightCellAnchor != null)
             {
                 // Paired cell: composed content when changed, base passthrough otherwise.
+                var reviewerCells = ReviewerCells(new[] { (reviewer, author, cellOp) }, reviewers, baseIr);
                 if (cellOp.BlockOps is { } blockOps)
                 {
                     var composed = blockOps.Select(b => EmitOp(b, author, reviewer)).ToList();
                     result.Add(new IrAuthoredCellOp(baseCellAnchor, IrNodeList.From(composed),
                         ShellSourceReviewer: reviewer,
                         ShellRightCellAnchor: cellOp.RightCellAnchor,
-                        ShellAuthor: author));
+                        ShellAuthor: author, ReviewerCells: reviewerCells));
                 }
                 else
                 {
-                    result.Add(new IrAuthoredCellOp(baseCellAnchor, null));
+                    result.Add(new IrAuthoredCellOp(baseCellAnchor, null, ReviewerCells: reviewerCells));
                 }
             }
             else if (cellOp.LeftCellAnchor is { } deletedAnchor)
@@ -2374,7 +2502,8 @@ internal static class IrCompositeMerger
             }
             else
             {
-                EmitSingleEditorCell(baseCellAnchor, winner, mergedCellOps, composedCells);
+                EmitSingleEditorCell(baseCellAnchor, winner, mergedCellOps, composedCells,
+                    ReviewerCells(new[] { winner }, reviewers, baseIr));
             }
             return;
         }
@@ -2387,17 +2516,19 @@ internal static class IrCompositeMerger
             return;
         }
 
+        // Each reviewer's comparison of this cell, for the markers between its blocks (issue #1175).
+        var reviewerCells = ReviewerCells(entries, reviewers, baseIr);
         if (cellEditors.Count == 0)
         {
             // Base passthrough.
             mergedCellOps.Add(new IrCellOp(baseCellAnchor, baseCellAnchor, null));
-            composedCells.Add(new IrAuthoredCellOp(baseCellAnchor, null));
+            composedCells.Add(new IrAuthoredCellOp(baseCellAnchor, null, ReviewerCells: reviewerCells));
             return;
         }
 
         if (cellEditors.Count == 1)
         {
-            EmitSingleEditorCell(baseCellAnchor, cellEditors[0], mergedCellOps, composedCells);
+            EmitSingleEditorCell(baseCellAnchor, cellEditors[0], mergedCellOps, composedCells, reviewerCells);
             return;
         }
 
@@ -2415,21 +2546,76 @@ internal static class IrCompositeMerger
             IrNodeList.From(cellOps.Select(c => c.Op))));
         composedCells.Add(new IrAuthoredCellOp(baseCellAnchor, IrNodeList.From(cellOps),
             shellReviewer, shellAnchor,
-            ShellAuthor: shellReviewer >= 0 ? reviewers[shellReviewer].Author : ""));
+            ShellAuthor: shellReviewer >= 0 ? reviewers[shellReviewer].Author : "", ReviewerCells: reviewerCells));
     }
+
+    /// <summary>
+    /// Each reviewer's copy of one base cell, for placing the bookmarks and comment ranges between its blocks
+    /// (<see cref="IrAuthoredCellOp.ReviewerCells"/>, issue #1175): a reviewer who changed the cell's content
+    /// brings their own cell ops; one who left it equal is listed, with equal ops pairing the two cells block
+    /// for block, only when the markers between the blocks differ from the base's. Null when no reviewer has
+    /// anything to place.
+    /// </summary>
+    private static IrNodeList<IrReviewerCell>? ReviewerCells(
+        IEnumerable<(int Reviewer, string Author, IrCellOp CellOp)> entries,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers, IrDocument baseIr)
+    {
+        var result = new List<IrReviewerCell>();
+        foreach (var (reviewer, author, cellOp) in entries)
+        {
+            if (cellOp.LeftCellAnchor is not { } leftAnchor || cellOp.RightCellAnchor is not { } rightAnchor)
+                continue;
+            if (cellOp.BlockOps is { } blockOps)
+            {
+                result.Add(new IrReviewerCell(reviewer, author, rightAnchor, blockOps, ContentEqual: false));
+                continue;
+            }
+            if (!CellIndex(baseIr).TryGetValue(leftAnchor, out var baseCell) ||
+                !CellIndex(reviewers[reviewer].Ir).TryGetValue(rightAnchor, out var cell) ||
+                baseCell.Blocks.Count != cell.Blocks.Count ||
+                !IrMarkupRenderer.BlockLevelMarkersDiffer(baseCell.Source.Element, cell.Source.Element))
+                continue;
+            var equalOps = baseCell.Blocks.Zip(cell.Blocks, (b, r) =>
+                new IrEditOp(IrEditOpKind.EqualBlock, b.Anchor.ToString(), r.Anchor.ToString(), null, null, null));
+            result.Add(new IrReviewerCell(reviewer, author, rightAnchor, IrNodeList.From(equalOps), ContentEqual: true));
+        }
+        return result.Count == 0 ? null : IrNodeList.From(result);
+    }
+
+    /// <summary>Every cell of <paramref name="ir"/> by anchor, nested tables included; built once per document.</summary>
+    private static Dictionary<string, IrCell> CellIndex(IrDocument ir) => CellIndexes.GetValue(ir, doc =>
+    {
+        var index = new Dictionary<string, IrCell>(StringComparer.Ordinal);
+        void Visit(IrTable table)
+        {
+            foreach (var row in table.Rows)
+                foreach (var cell in row.Cells)
+                {
+                    index.TryAdd(cell.Anchor.ToString(), cell);
+                    foreach (var nested in cell.Blocks.OfType<IrTable>())
+                        Visit(nested);
+                }
+        }
+        foreach (var table in doc.AnchorIndex.Values.OfType<IrTable>())
+            Visit(table);
+        return index;
+    });
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IrDocument, Dictionary<string, IrCell>>
+        CellIndexes = new();
 
     /// <summary>Emit one reviewer's single-editor cell (merged op verbatim + authored Content view with the
     /// reviewer-sourced shell).</summary>
     private static void EmitSingleEditorCell(
         string baseCellAnchor, (int Reviewer, string Author, IrCellOp CellOp) editor,
-        List<IrCellOp> mergedCellOps, List<IrAuthoredCellOp> composedCells)
+        List<IrCellOp> mergedCellOps, List<IrAuthoredCellOp> composedCells, IrNodeList<IrReviewerCell>? reviewerCells = null)
     {
         mergedCellOps.Add(editor.CellOp);
         var composed = editor.CellOp.BlockOps!.Select(b => EmitOp(b, editor.Author, editor.Reviewer)).ToList();
         composedCells.Add(new IrAuthoredCellOp(baseCellAnchor, IrNodeList.From(composed),
             ShellSourceReviewer: editor.CellOp.RightCellAnchor != null ? editor.Reviewer : -1,
             ShellRightCellAnchor: editor.CellOp.RightCellAnchor,
-            ShellAuthor: editor.CellOp.RightCellAnchor != null ? editor.Author : ""));
+            ShellAuthor: editor.CellOp.RightCellAnchor != null ? editor.Author : "", ReviewerCells: reviewerCells));
     }
 
     /// <summary>Emit one reviewer's deleted base cell (merged left-only op + authored
