@@ -5823,16 +5823,16 @@ namespace Docxodus
         }
 
         // Transform the w:p element, including the following sibling w:p element(s)
-        // in case the w:p element has a style separator. The sibling(s) will be
+        // when the w:p element has a hidden paragraph mark. The sibling(s) will be
         // transformed to h:span elements rather than h:p elements and added to
         // the element (e.g., h:h2) created from the w:p element having the (first)
-        // style separator (i.e., a w:specVanish element).
+        // hidden paragraph mark (w:specVanish or w:vanish).
         private static object? ProcessParagraph(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             XElement element, bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool suppressLeadingWhiteSpace = false)
         {
-            // Ignore this paragraph if the previous paragraph has a style separator.
+            // Ignore this paragraph if the preceding paragraph ends in a hidden mark.
             // We have already transformed this one together with the previous one.
-            if (BlockSiblingIndex.Of(element).FollowsStyleSeparator(element)) return null;
+            if (BlockSiblingIndex.Of(element).FollowsHiddenParagraphMark(element)) return null;
 
             var elementName = GetParagraphElementName(element, wordDoc);
             var isBidi = IsBidi(element);
@@ -5851,22 +5851,43 @@ namespace Docxodus
                     span.Add(new XAttribute(XNamespace.Xml + "space", "preserve"));
             }
 
-            while (HasStyleSeparator(element))
+            ApplyParagraphRevisionMarkup(settings, element, paragraph);
+            var joinedElement = element;
+            while (HasHiddenParagraphMark(joinedElement))
             {
-                var nextElement = element.ElementsAfterSelf(W.p).FirstOrDefault();
-                if (nextElement == null) break;
-                element = nextElement;
+                var nextElement = joinedElement.ElementsAfterSelf().FirstOrDefault(e => !IsBlockBoundaryMarker(e));
+                if (nextElement?.Name != W.p) break;
+                joinedElement = nextElement;
 
                 elementName = Xhtml.span;
-                isBidi = IsBidi(element);
-                var span = (XElement)ConvertParagraph(wordDoc, settings, element, elementName,
+                isBidi = IsBidi(joinedElement);
+                var span = (XElement)ConvertParagraph(wordDoc, settings, joinedElement, elementName,
                     suppressTrailingWhiteSpace, currentMarginLeft, isBidi);
                 var v = span.Value;
                 if (v.Length > 0 && (char.IsWhiteSpace(v[0]) || char.IsWhiteSpace(v[v.Length - 1])) && span.Attribute(XNamespace.Xml + "space") == null)
                     span.Add(new XAttribute(XNamespace.Xml + "space", "preserve"));
+                ApplyParagraphRevisionMarkup(settings, joinedElement, span);
                 paragraph.Add(span);
             }
 
+            if (settings.RenderTrackedChanges && settings.RevisionPresentation == RevisionPresentation.Word)
+                MarkChangedLine(settings, paragraph);
+
+            // Add pagination-related data attributes when pagination is enabled
+            if (settings.RenderPagination == PaginationMode.Paginated)
+            {
+                AddPaginationDataAttributes(element, paragraph);
+                if ((string?)paragraph.Attribute("data-keep-lines") == "true")
+                    paragraph.Annotation<Dictionary<string, string>>()!["break-inside"] = "avoid";
+                return SplitColumnBreakParagraph(paragraph);
+            }
+
+            return paragraph;
+        }
+
+        private static void ApplyParagraphRevisionMarkup(WmlToHtmlConverterSettings settings,
+            XElement element, XElement paragraph)
+        {
             // Handle paragraph mark revisions (when paragraph was inserted/deleted)
             if (settings.RenderTrackedChanges)
             {
@@ -5964,19 +5985,6 @@ namespace Docxodus
                 }
             }
 
-            if (settings.RenderTrackedChanges && settings.RevisionPresentation == RevisionPresentation.Word)
-                MarkChangedLine(settings, paragraph);
-
-            // Add pagination-related data attributes when pagination is enabled
-            if (settings.RenderPagination == PaginationMode.Paginated)
-            {
-                AddPaginationDataAttributes(element, paragraph);
-                if ((string?)paragraph.Attribute("data-keep-lines") == "true")
-                    paragraph.Annotation<Dictionary<string, string>>()!["break-inside"] = "avoid";
-                return SplitColumnBreakParagraph(paragraph);
-            }
-
-            return paragraph;
         }
 
         private static object SplitColumnBreakParagraph(XElement paragraph)
@@ -6788,10 +6796,17 @@ namespace Docxodus
             return htmlRow;
         }
 
-        private static bool HasStyleSeparator(XElement? element)
+        private static bool HasHiddenParagraphMark(XElement? element)
         {
-            return element != null && element.Elements(W.pPr).Elements(W.rPr).Any(e => GetBoolProp(e, W.specVanish));
+            return element != null && !element.Elements(W.pPr).Elements(W.sectPr).Any() &&
+                element.Elements(W.pPr).Elements(W.rPr).Any(e =>
+                    GetBoolProp(e, W.specVanish) || GetBoolProp(e, W.vanish));
         }
+
+        // Range markers carry no block content and may surround a paragraph boundary.
+        private static bool IsBlockBoundaryMarker(XElement element) =>
+            element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd ||
+            element.Name == W.permStart || element.Name == W.permEnd || element.Name == W.proofErr;
 
         /// <summary>
         /// Backward-sibling facts for one parent's children, computed in a single pass the first time
@@ -6803,7 +6818,7 @@ namespace Docxodus
         private sealed class BlockSiblingIndex
         {
             private readonly Dictionary<XElement, XElement?> _previousElement = new();
-            private readonly HashSet<XElement> _followsStyleSeparator = new();
+            private readonly HashSet<XElement> _followsHiddenParagraphMark = new();
 
             private BlockSiblingIndex(XElement parent)
             {
@@ -6814,9 +6829,12 @@ namespace Docxodus
                     _previousElement[child] = previous;
                     previous = child;
                     if (child.Name != W.p)
+                    {
+                        if (!IsBlockBoundaryMarker(child)) previousParagraph = null;
                         continue;
-                    if (HasStyleSeparator(previousParagraph))
-                        _followsStyleSeparator.Add(child);
+                    }
+                    if (HasHiddenParagraphMark(previousParagraph))
+                        _followsHiddenParagraphMark.Add(child);
                     previousParagraph = child;
                 }
             }
@@ -6840,11 +6858,11 @@ namespace Docxodus
             public XElement? PreviousElement(XElement child) =>
                 _previousElement.TryGetValue(child, out var previous) ? previous : child.ElementsBeforeSelf().LastOrDefault();
 
-            /// <summary>True when the nearest preceding <c>w:p</c> sibling ends in a style separator.</summary>
-            public bool FollowsStyleSeparator(XElement paragraph) =>
+            /// <summary>True when the preceding block paragraph ends in a hidden paragraph mark.</summary>
+            public bool FollowsHiddenParagraphMark(XElement paragraph) =>
                 _previousElement.ContainsKey(paragraph)
-                    ? _followsStyleSeparator.Contains(paragraph)
-                    : HasStyleSeparator(paragraph.ElementsBeforeSelf(W.p).LastOrDefault());
+                    ? _followsHiddenParagraphMark.Contains(paragraph)
+                    : HasHiddenParagraphMark(paragraph.ElementsBeforeSelf().LastOrDefault(e => !IsBlockBoundaryMarker(e)));
         }
 
         private static bool IsBidi(XElement element)

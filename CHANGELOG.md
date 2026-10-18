@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Hidden paragraph marks (`w:pPr/w:rPr/w:vanish`) now join following paragraph text on the same
+  rendered line, preserving the heading and visible generated numbering (issue #1223). Explicitly
+  hidden runs and number styles remain hidden; tables and section boundaries stop joining.
+
 - Formatting-revision descriptions compare current and previous effective run properties, so a
   bold-only change no longer claims an inherited font or size changed (issue #1222). Previous
   character styles and explicit off values are respected. Ordinary formatting assembly retains
