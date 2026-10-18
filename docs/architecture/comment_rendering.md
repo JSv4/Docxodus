@@ -489,16 +489,29 @@ div.comment-margin-note {
   background-color: #fff9c4;
   border-left: 3px solid #fbc02d;
   border-radius: 0 4px 4px 0;
-  font-size: 0.85em;
+  font-size: 0.85rem;
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+div.comment-margin-reply {
+  padding: 0.25em;
 }
 div.comment-margin-note-header {
   display: flex;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.25em 0.5em;
+  min-width: 0;
   align-items: center;
   margin-bottom: 0.25em;
   font-size: 0.9em;
 }
+div.comment-margin-note-header * {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+
 span.comment-margin-author {
   font-weight: bold;
   color: #f57f17;
@@ -536,6 +549,12 @@ span.comment-highlight[data-comment-id] {
   }
 }
 ```
+
+The note font uses the root scale (`0.85rem`), so replies inherit one readable size rather than
+multiplying an `em` reduction at each nested note (issue #1227). Replies use compact padding so the
+review column leaves space for text at deeper levels. Header items can wrap and break long
+names within the available width. The same rules cover dates, resolved badges and return links,
+including custom class prefixes; paragraph text and comment topology remain unchanged.
 
 ## WASM/npm Integration
 
