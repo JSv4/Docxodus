@@ -6,10 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 
 /**
- * Issue #1180: in the NVCA model charter the keep-with-next heading "2.3 Deemed Liquidation Events"
- * shares its page with "2.3.1 Definition", whose paragraph cites three notes, as in Word's PDF.
- * Reserving a flat note start for the chain underestimated what those notes need, and the heading
- * was left alone at the foot of the page before.
+ * Issue #1180, a guard: in the NVCA model charter the keep-with-next heading "2.3 Deemed
+ * Liquidation Events" shares its page with "2.3.1 Definition", whose paragraph cites three notes, as
+ * in Word's PDF. An earlier form of the chain check, which reserved a flat note start for the chain,
+ * underestimated what those notes need and left the heading alone at the foot of the page before.
  */
 
 test.use({ launchOptions: { chromiumSandbox: true,
