@@ -280,11 +280,16 @@ test.describe('DocxDiff consolidate (composite N-way) bridge', () => {
     await waitForDocxodus(page);
   });
 
-  for (const [operation, level] of [['compare', 'tbl'], ['consolidate', 'tr'], ['consolidate', 'paragraph-control']]) {
-    test(`${operation} resolves ${level} structure through accept/reject`, async ({ page }) => {
-      const prefix = `TableBoundaryBookmarks/boundary-bookmark-${operation}-${level}`;
+  for (const [operation, prefix, finalText] of [
+    ['compare', 'TableBoundaryBookmarks/boundary-bookmark-compare-tbl', 'Hazel lower'],
+    ['consolidate', 'TableBoundaryBookmarks/boundary-bookmark-consolidate-tr', 'Hazel lower revised'],
+    ['consolidate', 'TableBoundaryBookmarks/boundary-bookmark-consolidate-paragraph-control', 'Hazel lower revised'],
+    ['compare', 'BookmarkBoundaries/bookmark-boundary-replacement', 'Alder study'],
+    ['compare', 'BookmarkBoundaries/bookmark-boundary-insertion-control', 'Alder ridge survey'],
+  ]) {
+    test(`${operation} resolves ${path.basename(prefix)} structure through accept/reject`, async ({ page }) => {
       const inputs = [0, 1, ...(operation === 'consolidate' ? [2] : [])].map(i => readTestFile(`${prefix}-${i}.docx`));
-      const expected = readTestFile(`${prefix}-final.docx`);
+      const expected = operation === 'compare' ? inputs[1] : readTestFile(`${prefix}-final.docx`);
       const result = await page.evaluate(({ operation, inputs }) => {
         const T = (window as any).DocxodusTests;
         const bytes = inputs.map(input => new Uint8Array(input));
@@ -326,7 +331,7 @@ test.describe('DocxDiff consolidate (composite N-way) bridge', () => {
       expect(views[0]).toEqual(views[2]);
       expect(views[1]).toEqual(views[3]);
       expect(views[2]).not.toEqual(views[3]);
-      expect(result[0].text).toContain(operation === 'consolidate' ? 'Hazel lower revised' : 'Hazel lower');
+      expect(result[0].text).toContain(finalText);
       expect(result[1].text).not.toContain('revised');
     });
   }

@@ -33,6 +33,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Rejecting a word replacement at the end of a bookmark restores the full original range (#1218).
+  Shared bookmark endpoints enclose both revision copies, preserving the revised range on accept.
+
 - Comparison and consolidation preserve comment definitions when document versions reuse the same
   numeric comment ID for different notes (#1210). Matching author/date/text definitions retain the
   base identity; new definitions and independent reviewer additions receive distinct IDs. Markers
