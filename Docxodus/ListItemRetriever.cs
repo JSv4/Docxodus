@@ -388,8 +388,9 @@ namespace Docxodus
         /// does. A paragraph counted before it was ever stamped is treated as a mismatch.
         /// Call it after each edit, before the next RetrieveListItem.
         /// </remarks>
-        /// <returns>True when it cleared the counters — the edit may have changed the number of a
-        /// list paragraph it did not touch — and false when every stamp still held.</returns>
+        /// <returns>True when numbering facts changed — including after a snapshot restore dropped
+        /// the computed counters — and false when every stamp still held. A changed prefix can
+        /// renumber paragraphs the edit did not touch in a client's existing projection.</returns>
         internal static bool ClearStaleAnnotations(WordprocessingDocument wordDoc)
         {
             var main = wordDoc.MainDocumentPart;
@@ -428,7 +429,7 @@ namespace Docxodus
         /// <summary>
         /// Walk every numbered story in the counting pass's order, stamping each paragraph that
         /// can number with the running prefix at its position. With <paramref name="verify"/>,
-        /// returns false (and stops) at the first counted paragraph whose stamp no longer holds.
+        /// returns false (and stops) at the first paragraph whose existing stamp no longer holds.
         /// </summary>
         private static bool StampNumberingPrefixes(WordprocessingDocument wordDoc, NumberingFactsHash definitions,
             HashSet<string> numberingStyles, string? defaultStyle, bool verify)
@@ -455,11 +456,11 @@ namespace Docxodus
                         var counted = paragraph.Annotation<ListItemInfo>() is not null;
                         if (!canNumber)
                         {
-                            // A stamp means it could number when last stamped: if it was counted
-                            // then, its annotations describe numbering it no longer has.
+                            // A stamp means it could number when last stamped. The client may
+                            // still hold those numbers even if Save restored XML without counters.
                             if (stamp is not null)
                             {
-                                if (verify && counted) return false;
+                                if (verify) return false;
                                 paragraph.RemoveAnnotations<NumberingStamp>();
                             }
                             continue;
@@ -481,7 +482,7 @@ namespace Docxodus
                         }
                         else if (!stamp.Prefix.Equals(prefix))
                         {
-                            if (verify && counted) return false;
+                            if (verify) return false;
                             stamp.Prefix = prefix;
                         }
                     }

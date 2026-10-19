@@ -453,8 +453,9 @@ incomplete:
   preview was committed, or any op ran while no index was watching (tracked with an epoch that every
   history-recording op advances), or because a refresh fell back (a style, shell or story-list
   change, a content control, a block without its own Unid);
-- list numbering was recounted (`ListItemRetriever.ClearStaleAnnotations` cleared its stamps), since
-  a renumber changes the markdown of list paragraphs the edit never touched;
+- list numbering facts changed (`ListItemRetriever.ClearStaleAnnotations` found a changed prefix),
+  since a renumber changes the markdown of list paragraphs the edit never touched. This also applies
+  after a clean save restores XML without cached counters: the client still holds the old numbers;
 - a note was added, removed or renumbered, since references render a note's label through its id;
 - a header or footer changed, since a header or footer scope appears in the projection only while it
   has text;
