@@ -20,6 +20,211 @@ namespace Docxodus.Tests;
 /// </summary>
 public class BlockLevelMarkerDiffTests
 {
+    public static IEnumerable<object[]> CompetingBookmarkCases()
+    {
+        foreach (var policy in Enum.GetValues<ConflictResolution>())
+        foreach (var container in new[] { "body", "cell", "sdt" })
+        foreach (var scenario in new[] { "block-position", "mixed-position", "inline-extent", "consensus", "mixed-consensus" })
+            yield return new object[] { policy, container, scenario };
+    }
+
+    [Theory]
+    [MemberData(nameof(CompetingBookmarkCases))]
+    public void Consolidate_CompetingBookmarkNames_ResolveOneRangeAndRecordEveryCompetitor(
+        ConflictResolution policy, string container, string scenario)
+    {
+        WmlDocument Document(int reviewer)
+        {
+            bool inline = scenario == "inline-extent" || scenario.StartsWith("mixed", StringComparison.Ordinal) && reviewer == 1;
+            int position = reviewer == 1 && scenario.EndsWith("position", StringComparison.Ordinal) ? 1 : 0;
+            string content = string.Concat(new[] { "Cedar clause", "Dune clause", "Reed tail" }.Select((text, i) =>
+            {
+                if (reviewer < 0 || i != position) return P(text);
+                if (!inline) return Start("SharedRange", reviewer + 7) + P(text) + End(reviewer + 7);
+                int extent = reviewer == 1 && scenario == "inline-extent" ? 5 : text.Length;
+                return "<w:p>" + Start("SharedRange", reviewer + 7) +
+                    "<w:r><w:t xml:space=\"preserve\">" + text[..extent] + "</w:t></w:r>" + End(reviewer + 7) +
+                    "<w:r><w:t xml:space=\"preserve\">" + text[extent..] + "</w:t></w:r></w:p>";
+            }));
+            return Doc(container == "cell" ? Table(content) : container == "sdt" ? Sdt(content) : content);
+        }
+        var original = Document(-1);
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Author = "Cedar", Document = Document(0) },
+            new DocxDiffReviewer { Author = "Willow", Document = Document(1) },
+        };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+        var conflicts = DocxDiff.GetConflicts(original, reviewers, settings);
+        var redline = DocxCompare.Consolidate(original, reviewers, settings);
+        var accepted = Accept(redline);
+        bool contested = !scenario.EndsWith("consensus", StringComparison.Ordinal);
+        Assert.Equal(contested ? 1 : 0, conflicts.Count);
+        if (contested)
+        {
+            Assert.Equal(policy, conflicts[0].AppliedPolicy);
+            Assert.Equal(new[] { "Cedar", "Willow" }, conflicts[0].Competitors.Select(c => c.Author));
+        }
+        // Names are unique even under StackAll: one name cannot identify competing ranges.
+        var expected = contested && policy == ConflictResolution.BaseWins ? original : Document(0);
+        Assert.Equal(MarkerAndTextLayout(expected), MarkerAndTextLayout(accepted));
+        Assert.Equal(MarkerAndTextLayout(original), MarkerAndTextLayout(Reject(redline)));
+        AssertNoNewValidationErrors(redline, original, reviewers[0].Document, reviewers[1].Document);
+
+        static string MarkerAndTextLayout(WmlDocument document)
+        {
+            var body = Body(document);
+            var names = body.Descendants(W + "bookmarkStart").ToDictionary(
+                e => (string)e.Attribute(W + "id")!, e => (string)e.Attribute(W + "name")!);
+            return string.Concat(body.Descendants().Select(e => e.Name == W + "p" ? "|P|" :
+                e.Name == W + "t" ? e.Value : e.Name == W + "bookmarkStart" ? "<" + (string?)e.Attribute(W + "name") + ">" :
+                e.Name == W + "bookmarkEnd" ? "</" + names[(string)e.Attribute(W + "id")!] + ">" : ""));
+        }
+    }
+
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins)]
+    [InlineData(ConflictResolution.FirstReviewerWins)]
+    [InlineData(ConflictResolution.StackAll)]
+    public void Consolidate_CompetingInlineBookmarks_DoNotDiscardIndependentTextEdits(ConflictResolution policy)
+    {
+        WmlDocument Document(int marked, bool cedar, bool dune) => Doc(string.Concat(new[]
+            { cedar ? "Cedar revised" : "Cedar clause", dune ? "Dune revised" : "Dune clause" }.Select((text, i) =>
+                i == marked ? P(text).Replace("<w:p>", "<w:p>" + Start("SharedRange", marked + 7))
+                    .Replace("</w:p>", End(marked + 7) + "</w:p>") : P(text))));
+        var original = Document(-1, false, false);
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Author = "Editor", Document = Document(0, true, false) },
+            new DocxDiffReviewer { Author = "Editor", Document = Document(1, false, true) },
+        };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+        var conflict = Assert.Single(DocxDiff.GetConflicts(original, reviewers, settings));
+        Assert.Equal(2, conflict.Competitors.Count);
+        var redline = DocxCompare.Consolidate(original, reviewers, settings);
+        var accepted = Accept(redline);
+        Assert.Equal(Layout(Document(-1, true, true)), Layout(accepted));
+        if (policy == ConflictResolution.BaseWins)
+            Assert.Empty(Body(accepted).Descendants(W + "bookmarkStart"));
+        else
+        {
+            var start = Assert.Single(Body(accepted).Descendants(W + "bookmarkStart"));
+            Assert.Equal("Cedar revised", string.Concat(start.Ancestors(W + "p").Single().Descendants(W + "t").Select(t => t.Value)));
+            Assert.Equal((string?)start.Attribute(W + "id"), (string?)Assert.Single(Body(accepted).Descendants(W + "bookmarkEnd")).Attribute(W + "id"));
+        }
+        Assert.Equal(Layout(original), Layout(Reject(redline)));
+        Assert.Empty(Body(Reject(redline)).Descendants(W + "bookmarkStart"));
+        AssertNoNewValidationErrors(redline, original, reviewers[0].Document, reviewers[1].Document);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Consolidate_SameBookmarkRange_UsesAlignedParagraphs(bool insertedParagraph, bool inline)
+    {
+        WmlDocument Document(bool marked, bool shifted)
+        {
+            var paragraph = P("Cedar clause");
+            if (marked) paragraph = inline ? paragraph.Replace("<w:p>", "<w:p>" + Start("SharedRange"))
+                .Replace("</w:p>", End() + "</w:p>") : Start("SharedRange") + paragraph + End();
+            return Doc((shifted && insertedParagraph ? P("Amber introduction") : "") +
+                P(shifted && !insertedParagraph ? "Dune revised" : "Dune preface") + paragraph);
+        }
+        var original = Document(false, false);
+        var first = Document(true, false);
+        var second = Document(true, true);
+        var reviewers = new[] { new DocxDiffReviewer { Author = "Cedar", Document = first },
+            new DocxDiffReviewer { Author = "Willow", Document = second } };
+        Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
+        var redline = DocxCompare.Consolidate(original, reviewers);
+        var accepted = Accept(redline);
+        Assert.Equal(Layout(second), Layout(accepted));
+        Assert.Single(Body(accepted).Descendants(W + "bookmarkStart"));
+        Assert.Single(Body(accepted).Descendants(W + "bookmarkEnd"));
+        Assert.Equal(Layout(original), Layout(Reject(redline)));
+        Assert.Empty(Body(Reject(redline)).Descendants(W + "bookmarkStart"));
+        AssertNoNewValidationErrors(redline, original, first, second);
+    }
+
+    [Theory]
+    [InlineData("<w:noBreakHyphen/>", true)]
+    [InlineData("<w:sym w:font=\"Symbol\" w:char=\"0041\"/>", true)]
+    [InlineData("<w:t> prefix</w:t>", true)]
+    [InlineData("<w:t xml:space=\"preserve\"> </w:t><w:noBreakHyphen/>", false)]
+    [InlineData("<w:sym w:font=\"Symbol\" w:char=\"0041\"/>", false)]
+    [InlineData("<w:t> suffix</w:t>", false)]
+    public void Consolidate_SameBookmarkRange_TranslatesSpecialCharacterOffsets(string inserted, bool before)
+    {
+        WmlDocument Document(bool marked, bool changed) => Doc("<w:p><w:r><w:t>Amber</w:t>" +
+            (changed && before ? inserted : "") + "</w:r><w:r><w:t xml:space=\"preserve\"> </w:t></w:r>" + (marked ? Start("SharedRange") : "") +
+            "<w:r><w:t>Cedar clause</w:t></w:r>" + (marked ? End() : "") +
+            (changed && !before ? "<w:r>" + inserted + "</w:r>" : "") + "</w:p>");
+        var original = Document(false, false);
+        var first = Document(true, false);
+        var second = Document(true, true);
+        var reviewers = new[] { new DocxDiffReviewer { Author = "Cedar", Document = first },
+            new DocxDiffReviewer { Author = "Willow", Document = second } };
+        Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
+        var redline = DocxCompare.Consolidate(original, reviewers);
+        var accepted = Body(Accept(redline));
+        var start = Assert.Single(accepted.Descendants(W + "bookmarkStart"));
+        var end = Assert.Single(accepted.Descendants(W + "bookmarkEnd"));
+        Assert.Equal("Cedar clause", string.Concat(start.NodesAfterSelf().TakeWhile(n => n != end)
+            .OfType<XElement>().SelectMany(e => e.DescendantsAndSelf(W + "t")).Select(e => e.Value)));
+        Assert.DoesNotContain(start.NodesAfterSelf().TakeWhile(n => n != end).OfType<XElement>()
+            .SelectMany(e => e.DescendantsAndSelf()), e => e.Name == W + "sym" || e.Name == W + "noBreakHyphen");
+        Assert.Empty(Body(Reject(redline)).Descendants(W + "bookmarkStart"));
+        AssertNoNewValidationErrors(redline, original, first, second);
+    }
+
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins)]
+    [InlineData(ConflictResolution.FirstReviewerWins)]
+    [InlineData(ConflictResolution.StackAll)]
+    public void Consolidate_NewParagraphsWithCompetingBookmarkNames_KeepBothTextInsertions(ConflictResolution policy)
+    {
+        var original = Doc(P("Reed tail"));
+        WmlDocument Added(string text, int id) => Doc(Start("SharedRange", id) + P(text) + End(id) + P("Reed tail"));
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Author = "Cedar", Document = Added("Cedar addition", 7) },
+            new DocxDiffReviewer { Author = "Willow", Document = Added("Dune addition", 9) },
+        };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+        Assert.Single(DocxDiff.GetConflicts(original, reviewers, settings));
+        var redline = DocxCompare.Consolidate(original, reviewers, settings);
+        var accepted = Body(Accept(redline));
+        Assert.Equal("Cedar additionDune additionReed tail", string.Concat(accepted.Descendants(W + "t").Select(t => t.Value)));
+        Assert.Equal(policy == ConflictResolution.BaseWins ? 0 : 1, accepted.Descendants(W + "bookmarkStart").Count());
+        Assert.Equal(Layout(original), Layout(Reject(redline)));
+        AssertNoNewValidationErrors(redline, original, reviewers[0].Document, reviewers[1].Document);
+    }
+
+    [Fact]
+    public void Consolidate_BookmarkEndpointInsideAReplacedWord_IsNotAssumedToBeConsensus()
+    {
+        WmlDocument Document(bool marked, bool changed) => Doc("<w:p>" + (marked ? Start("SharedRange") : "") +
+            "<w:r><w:t>Cedar clause</w:t></w:r>" + (marked ? End() : "") +
+            (changed ? "<w:r><w:noBreakHyphen/></w:r>" : "") + "</w:p>");
+        var original = Document(false, false);
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Author = "Cedar", Document = Document(true, false) },
+            new DocxDiffReviewer { Author = "Willow", Document = Document(true, true) },
+        };
+        // The word diff replaces "clause" with "clause‑": its interior boundary has no mapped base
+        // position. Report both placements rather than silently assume that their extents agree.
+        Assert.Single(DocxDiff.GetConflicts(original, reviewers));
+        var redline = DocxCompare.Consolidate(original, reviewers);
+        var accepted = Body(Accept(redline));
+        Assert.Empty(accepted.Descendants(W + "bookmarkStart"));
+        Assert.Single(accepted.Descendants(W + "noBreakHyphen"));
+        Assert.Equal(Layout(original), Layout(Reject(redline)));
+        AssertNoNewValidationErrors(redline, original, reviewers[0].Document, reviewers[1].Document);
+    }
+
     private static readonly XNamespace W = IrTestDocuments.W;
 
     private static string P(string text) => $"<w:p><w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r></w:p>";
@@ -1713,16 +1918,23 @@ public class BlockLevelMarkerDiffTests
 
     [Theory]
     [MemberData(nameof(ConsolidateEngines))]
-    public void Consolidate_TwoReviewersAddingTheSameBookmarkNameInDifferentStreams_KeepOneCopy(string engine)
+    public void Consolidate_TwoReviewersAddingTheSameBookmarkNameInDifferentStreams_ReportConflict(string engine)
     {
-        // A guard: this shape kept one copy before the package-wide record of reviewers' block-level markers too.
+        // The old name-only dedup silently chose one range. BaseWins now reports both competitors and keeps
+        // the base's absent bookmark, while retaining the reviewers' independent text edits.
         var original = Doc(P("Lead") + Table(P("Alpha") + P("Bravo")) + P("Tail") + P("End"));
         var first = Doc(P("Lead one") + Table(Start("X", 8) + P("Alpha") + P("Bravo") + End(8)) + P("Tail") + P("End"));
         var second = Doc(P("Lead") + Table(P("Alpha") + P("Bravo")) + Start("X", 9) + P("Tail") + End(9) + P("End two"));
 
         var accepted = Accept(Consolidate(engine, original, ("First", first), ("Second", second)));
 
-        Assert.Single(Body(accepted).Descendants(W + "bookmarkStart"), b => (string?)b.Attribute(W + "name") == "X");
+        Assert.Empty(Body(accepted).Descendants(W + "bookmarkStart"));
+        Assert.Equal(Layout(Doc(P("Lead one") + Table(P("Alpha") + P("Bravo")) + P("Tail") + P("End two"))), Layout(accepted));
+        Assert.Single(DocxDiff.GetConflicts(original, new[]
+        {
+            new DocxDiffReviewer { Author = "First", Document = first },
+            new DocxDiffReviewer { Author = "Second", Document = second },
+        }));
     }
 
     [Theory]

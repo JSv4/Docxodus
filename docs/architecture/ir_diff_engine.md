@@ -598,5 +598,14 @@ Consolidation retains equal reviewers' marker provenance alongside edited paragr
 cell and same-shell wrapper children. `CarryReviewerOnlyBookmarks` places a new bookmark at its original-view
 text offsets: inserted text consumes no original characters and deleted text does. Range endpoints enclose
 replacement text and remain outside other reviewers' revisions, so accepting a text edit does not also accept
-the bookmark. Paragraph markers inside hyperlinks use the same path. Same-name placement conflicts remain
-a separate limitation; this change does not resolve competing additions under one bookmark name.
+the bookmark. Paragraph markers inside hyperlinks use the same path.
+
+Names added by several reviewers in the main story share one range decision across inline and block
+placement. Pairwise paragraph alignments and source-run offsets identify consensus; endpoints inside
+unmatched replacement text remain competing placements. `BaseWins` keeps the base's absent name.
+`FirstReviewerWins` and `StackAll` keep the first range, since emitting multiple ranges under one name
+would be invalid. Every competitor is reported through the existing conflict API, with an empty token
+interval and a description of its name, covered text and endpoints in `ResultText`. These zero-width
+conflicts do not create token revisions. Body, cell and marker-only same-shell wrapper placement use
+the same choice; unrelated text edits keep their own revisions. Selected bookmarks cloned from an edited
+paragraph receive their own insertion revision, so rejection cannot leave a bare marker behind.

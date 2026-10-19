@@ -4943,7 +4943,8 @@ internal static partial class IrMarkupRenderer
                             : startNames.GetValueOrDefault((string?)child.Attribute(W.id) ?? "");
                         // One reviewer's copy of a name is enough; a second reviewer's would duplicate it.
                         var key = $"{child.Name.LocalName}:{name}";
-                        if (name != null && !state.BaseBookmarkNames.Contains(name) && carried.Add((targets[i], key)))
+                        if (name != null && !state.BaseBookmarkNames.Contains(name)
+                            && state.CompositeBookmarks?.Allows(reviewer.Reviewer, child) != false && carried.Add((targets[i], key)))
                         {
                             var marker = StripUnids(new XElement(child));
                             InsertAtTextOffset(targets[i], marker, offset, originalView: true);
@@ -5035,7 +5036,16 @@ internal static partial class IrMarkupRenderer
         foreach (var child in paragraph.Elements().Where(e => e.Name != W.pPr).ToList())
         {
             int length = originalView ? OriginalLength(child) : child.Descendants(W.t).Sum(t => t.Value.Length);
-            if (offset < seen || (offset == seen && (!end || length > 0)))
+            bool atBoundary = !end || length > 0;
+            if (originalView && child.Name == W.ins)
+            {
+                // Enclose replacement copies, but keep a pure insertion immediately before/after the
+                // range outside it. The original side of a replacement is the adjacent nonempty deletion.
+                var adjacent = (end ? child.ElementsBeforeSelf().Reverse() : child.ElementsAfterSelf())
+                    .FirstOrDefault(e => OriginalLength(e) > 0);
+                atBoundary = end ? adjacent?.Name != W.del : adjacent?.Name == W.del;
+            }
+            if (offset < seen || (offset == seen && atBoundary))
             {
                 child.AddBeforeSelf(marker);
                 return;
@@ -10920,6 +10930,10 @@ internal static partial class IrMarkupRenderer
         /// <summary>The base document's bookmark names, for <see cref="CarryReviewerOnlyBookmarks"/>.</summary>
         public HashSet<string>? BaseBookmarkNames { get; set; }
 
+        public CompositeBookmarkPlan? CompositeBookmarks { get; set; }
+
+        public Dictionary<XElement, int> CompositeBookmarkClones { get; } = new(ReferenceEqualityComparer.Instance);
+
         /// <summary>Each reviewer's bookmark names by id, for <see cref="CarryReviewerOnlyBookmarks"/>.</summary>
         public Dictionary<int, Dictionary<string, string>> ReviewerBookmarkNamesById { get; } = new();
 
@@ -11151,6 +11165,9 @@ internal static partial class IrMarkupRenderer
         /// every right-sourced clone already passes through.</summary>
         public void RegisterMediaReferences(XElement clone)
         {
+            if (CompositeBookmarks is { } bookmarks)
+                foreach (var marker in clone.DescendantsAndSelf().Where(e => bookmarks.Includes(RightSourceId, e)))
+                    CompositeBookmarkClones.TryAdd(marker, RightSourceId);
             if (clone.DescendantsAndSelf().Attributes().Any(a => a.Name.Namespace == R.r))
             {
                 if (!RightSourcedClonesBySource.TryGetValue(RightSourceId, out var list))
@@ -11229,6 +11246,21 @@ internal static partial class IrMarkupRenderer
         /// tags, revision wrappers, bookmarks, tabs/breaks/drawings, and pre-existing run-format revisions.
         /// </summary>
         public bool SupportsWhitespaceReanchoring { get; }
+
+        /// <summary>Coordinates used by both slicing and bookmark range comparison, including symbols and
+        /// special hyphens. Markers inside an atomic inline use their position within that container.</summary>
+        public int? MarkerOffset(XElement marker)
+        {
+            var segment = _segments.FirstOrDefault(s => s.Element == marker || s.Element.Descendants().Contains(marker));
+            if (segment is null) return null;
+            int offset = segment.Start;
+            for (var child = marker; child != segment.Element && child.Parent is not null; child = child.Parent)
+                offset += child.ElementsBeforeSelf().Sum(e => child.Parent.Name == W.r
+                    ? VisibleRunChildTextLength(e) : VisibleRunLevelTextLength(e, 0));
+            return offset;
+        }
+
+        public int TextLength => _segments.Count == 0 ? 0 : _segments.Max(s => s.End);
 
         public SourceRunModel(XElement para)
         {

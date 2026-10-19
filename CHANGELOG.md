@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Consolidation reports competing additions of a bookmark name instead of silently dropping a range
+  or keeping duplicate names (#1212). BaseWins retains the base's absent name; FirstReviewerWins and
+  StackAll retain the first range and report every competitor. Equal ranges share one attributed copy.
+  Independent text edits still compose, and rejecting the selected addition removes its bookmark.
+
 - Consolidation preserves one reviewer's added bookmarks when other reviewers edit the same paragraph,
   including paragraphs in content controls, hyperlinks and table cells (#1212). Same-shell block wrappers
   compose their child edits with per-reviewer authorship; overlapping edits still use the selected conflict

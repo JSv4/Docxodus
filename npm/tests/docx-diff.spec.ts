@@ -296,6 +296,10 @@ test.describe('DocxDiff consolidate (composite N-way) bridge', () => {
     ['consolidate', 'BookmarkReviewers/reviewer-bookmark-cell-outside-control', 'Willow tail revised'],
     ['consolidate', 'BookmarkReviewers/reviewer-bookmark-move-and-remove', 'Dune clause'],
     ['consolidate', 'BookmarkReviewers/reviewer-bookmark-single-remove-control', 'Dune clause'],
+    ['consolidate', 'BookmarkNameConflicts/bookmark-name-block-position', 'Reed tail revised'],
+    ['consolidate', 'BookmarkNameConflicts/bookmark-name-mixed-position', 'Reed tail revised'],
+    ['consolidate', 'BookmarkNameConflicts/bookmark-name-inline-extent', 'Reed tail revised'],
+    ['consolidate', 'BookmarkNameConflicts/bookmark-name-consensus-control', 'Reed tail revised'],
   ]) {
     test(`${operation} resolves ${path.basename(prefix)} structure through accept/reject`, async ({ page }) => {
       const inputs = [0, 1, ...(operation === 'consolidate' ? [2] : [])].map(i => readTestFile(`${prefix}-${i}.docx`));

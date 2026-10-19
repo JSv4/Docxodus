@@ -460,11 +460,15 @@ internal static partial class IrMarkupRenderer
         private readonly Dictionary<(XElement? Stream, int Position), List<(int Reviewer, XElement Marker)>> _beforeBase = new();
         private readonly Dictionary<(XElement? Stream, int Position), List<(int Reviewer, XElement Marker)>> _afterBase = new();
         private readonly HashSet<string> _added;
+        private readonly CompositeBookmarkPlan? _bookmarks;
 
         /// <summary>Markers a reviewer brings are recorded package-wide (<see cref="RenderState.CompositeAddedMarkers"/>):
         /// a bookmark two reviewers add under one name, in different block streams, is inserted once.</summary>
-        public CompositeMarkerPlacement(RenderState state) =>
+        public CompositeMarkerPlacement(RenderState state)
+        {
             _added = state.CompositeAddedMarkers ??= new HashSet<string>(StringComparer.Ordinal);
+            _bookmarks = state.CompositeBookmarks;
+        }
 
         public bool IsEmpty => _deletedBy.Count == 0 && _beforeBase.Count == 0 && _afterBase.Count == 0;
 
@@ -479,7 +483,7 @@ internal static partial class IrMarkupRenderer
                 if (!deletions.Contains(reviewer))
                     deletions.Add(reviewer);
             }
-            if (entry.Right is null || !_added.Add(MarkerKey(entry.Right)))
+            if (entry.Right is null || _bookmarks?.Allows(reviewer, entry.Right) == false || !_added.Add(MarkerKey(entry.Right)))
                 return; // another reviewer already brought the same marker
             var map = beforeBase ? _beforeBase : _afterBase;
             if (!map.TryGetValue((stream, position), out var list))

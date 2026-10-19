@@ -95,11 +95,14 @@ internal static class IrCompositeMerger
         var trailingSectPr = ComposeTrailingSection(
             baseIr, reviewers, policy, settings, conflicts, ref nextConflictId);
 
+        var bookmarks = IrMarkupRenderer.PlanCompositeBookmarks(baseIr, reviewers, scripts,
+            policy, settings, conflicts, ref nextConflictId);
+
         // Each reviewer's own comparison rides along for the renderer: the composite ops say nothing about the
         // bookmarks and comment ranges a reviewer has between blocks (rule N3), and placing them needs that
         // reviewer's alignment with the base, in the body and in each note (issues #1149, #1175).
         return new IrCompositeScript(IrNodeList.From(ops), IrNodeList.From(conflicts), noteOps, noteIdMaps, trailingSectPr,
-            IrNodeList.From(scripts.Select(script => new IrReviewerComparison(script.Operations, script.NoteOps))));
+            IrNodeList.From(scripts.Select(script => new IrReviewerComparison(script.Operations, script.NoteOps))), bookmarks);
     }
 
     // ---- N-way note-scope merge ----
@@ -1135,6 +1138,16 @@ internal static class IrCompositeMerger
         List<IrConflict> conflicts,
         ref int nextConflictId)
     {
+        if (byBase.TryGetValue(anchor, out var markerEntries) && baseIr.AnchorIndex.GetValueOrDefault(anchor) is IrSdtBlock)
+        {
+            markerEntries = markerEntries.Select(e => MarkerOnlyWrapper(e.Op, baseIr, reviewers[e.Reviewer].Ir, settings)
+                ? (e.Reviewer, e.Op with { Kind = IrEditOpKind.EqualBlock }) : e).ToList();
+            if (markerEntries.All(e => e.Op.Kind == IrEditOpKind.EqualBlock))
+            {
+                ops.Add(EqualOp(anchor, markerEntries, reviewers, baseIr));
+                return;
+            }
+        }
         if (!byBase.TryGetValue(anchor, out var entries) ||
             entries.All(e => e.Op.Kind == IrEditOpKind.EqualBlock))
         {
@@ -1373,13 +1386,22 @@ internal static class IrCompositeMerger
                 (element.Descendants().Any(c => c.Name == W.commentRangeStart || c.Name == W.commentRangeEnd ||
                     c.Name == W.commentReference) || (block is IrParagraph
                     ? element.Descendants().Any(c => c.Name == W.bookmarkStart || c.Name == W.bookmarkEnd)
-                    : element.Name == W.tbl && IrMarkupRenderer.CompositeMarkersDiffer(baseElement, element))))
+                    : (element.Name == W.tbl || block is IrSdtBlock) && IrMarkupRenderer.CompositeMarkersDiffer(baseElement, element))))
             .Select(e => new IrEqualReviewerMarkers(e.Reviewer, e.Op.RightAnchor!, reviewers[e.Reviewer].Author))
             .ToList();
         return withMarkers.Count == 0
             ? EqualOp(anchor)
             : EqualOp(anchor) with { EqualReviewerMarkers = IrNodeList.From(withMarkers) };
     }
+
+    /// <summary>A whole-wrapper pair whose shell and children are unchanged can use the existing equal-container
+    /// marker reconciliation. Keep changed shells, fields spanning paragraphs, and child edits on their usual paths.</summary>
+    internal static bool MarkerOnlyWrapper(IrEditOp op, IrDocument left, IrDocument right, IrDiffSettings settings) =>
+        op.Kind == IrEditOpKind.ModifyBlock && op.LeftAnchor is { } la && op.RightAnchor is { } ra &&
+        left.AnchorIndex.GetValueOrDefault(la) is IrSdtBlock l && right.AnchorIndex.GetValueOrDefault(ra) is IrSdtBlock r &&
+        IrSdtBlock.SameShell(l, r) && !l.HasParagraphSpanningField && !r.HasParagraphSpanningField &&
+        IrEditScriptBuilder.ProjectAlignment(l.Blocks, IrBlockAligner.AlignBlocks(l.Blocks, r.Blocks, settings), settings)
+            .All(child => child.Kind == IrEditOpKind.EqualBlock);
 
     /// <summary>
     /// Build the FINAL emitted <see cref="IrCompositeOp"/> for a base-block dispatch, stripping the
