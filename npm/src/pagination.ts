@@ -2025,7 +2025,7 @@ export class PaginationEngine {
   /**
    * Builds a clone of a simple table wrapper containing a contiguous run of rows.
    * The caller supplies complete vertical-merge groups: no rowspan crosses a
-   * fragment boundary. Nested tables and footnotes remain unsupported here.
+   * fragment boundary. Nested tables remain indivisible.
    * Horizontal merges (colspan) are confined to their own row. `repeatedRows` (the table's
    * header rows, on a continuation) are copied in first, marked as repeats.
    */
@@ -2944,27 +2944,38 @@ export class PaginationEngine {
     }
     if (split.kind !== "split") return null;
 
-    const headMeasured = this.measureElement(split.head, dims, block.sectionIndex);
-    const tailMeasured = this.measureElement(split.tail, dims, block.sectionIndex);
+    return [split.head, split.tail].map(element => ({
+      ...this.measureElement(element, dims, block.sectionIndex),
+      element,
+      keepWithNext: false,
+      keepLines: false,
+      pageBreakBefore: false,
+      isPageBreak: false,
+    }));
+  }
 
-    return [
-      {
-        ...headMeasured,
-        element: split.head,
-        keepWithNext: false,
-        keepLines: false,
-        pageBreakBefore: false,
-        isPageBreak: false,
-      },
-      {
-        ...tailMeasured,
-        element: split.tail,
-        keepWithNext: false,
-        keepLines: false,
-        pageBreakBefore: false,
-        isPageBreak: false,
-      },
-    ];
+  /** Keep complete row groups before a citation whose note cannot start on this page. */
+  private tryFragmentCitingTable(
+    block: MeasuredBlock,
+    dims: PageDimensions,
+    availableHeightPt: number,
+    effectiveMarginTopPt: number,
+    notesStart: (footnoteIds: string[], headHeightPt: number) => boolean,
+  ): MeasuredBlock[] | null {
+    if (block.keepLines || block.keepWithNext || block.pageBreakBefore) return null;
+    const split = this.splitTableAtRows(block.element, (head) => {
+      const measured = this.measureElement(head, dims, block.sectionIndex);
+      return effectiveMarginTopPt + measured.heightPt <= availableHeightPt
+        && notesStart(this.extractFootnoteRefs(head), measured.heightPt);
+    }, false);
+    if (!split) return null;
+    split.head.style.setProperty("margin-bottom", "0", "important");
+    split.tail.style.setProperty("margin-top", "0", "important");
+    return [split.head, split.tail].map(element => ({
+      ...this.measureElement(element, dims, block.sectionIndex),
+      keepWithNext: false,
+      pageBreakBefore: false,
+    }));
   }
 
   /**
@@ -3368,30 +3379,27 @@ export class PaginationEngine {
     }
   }
 
-  /**
-   * Partition a continuation for one page's note band, preferring complete children
-   * and range-fragmenting an eligible paragraph when necessary. Always advances by
-   * at least one element so an indivisible oversized paragraph follows the established
-   * clipped fallback without trapping pagination in a loop.
-   */
-  /**
-   * Split a table in a note between rows: the largest run of whole row groups (no vertical merge
-   * crosses the cut) that `fits`, and the rest. Word reference PDFs show a note's table split
-   * between pages at row boundaries like a body table (issue #1178). `element` is the table or a
-   * wrapper holding only it. Null when the table cannot be split, or when not even its first row
-   * group fits and `forceFirst` is false.
-   */
-  private splitNoteTableAtRows(
-    element: HTMLElement,
-    fits: (head: HTMLElement) => boolean,
-    forceFirst: boolean,
-  ): { head: HTMLElement; tail: HTMLElement } | null {
-    const table = element.localName === "table"
+  private blockTable(element: HTMLElement): HTMLTableElement | null {
+    return element.localName === "table"
       ? element as HTMLTableElement
       : element.childElementCount === 1 && element.firstElementChild?.localName === "table"
         ? element.firstElementChild as HTMLTableElement
         : null;
-    if (!table || table.tBodies.length !== 1 || table.tHead || table.tFoot || table.querySelector("table")) {
+  }
+
+  /**
+   * Split a body or note table at the largest complete row-group boundary that fits, preserving
+   * vertical merges and repeated headers. Null if no group fits, unless `forceFirst` requests
+   * the note-only liveness fallback. A wrapper holding only the table is retained.
+   */
+  private splitTableAtRows(
+    element: HTMLElement,
+    fits: (head: HTMLElement) => boolean,
+    forceFirst: boolean,
+  ): { head: HTMLElement; tail: HTMLElement } | null {
+    const table = this.blockTable(element);
+    if (!table || table.tBodies.length !== 1 || table.querySelector("table")
+      || Array.from(table.children).some(child => child !== table.tBodies[0] && child.localName !== "colgroup")) {
       return null;
     }
     const body = table.tBodies[0];
@@ -3424,6 +3432,7 @@ export class PaginationEngine {
     return { head: fragment(0, cut, true), tail: fragment(cut, rows.length, false) };
   }
 
+  /** Partition a carried note, advancing even when its first indivisible element is oversized. */
   private splitContinuationForPage(
     continuation: FootnoteContinuation,
     availableHeightPt: number,
@@ -3503,7 +3512,7 @@ export class PaginationEngine {
             forceFirstOnNoFit: fitting.length === 0,
           });
         }
-        const tableSplit = split?.kind === "split" ? null : this.splitNoteTableAtRows(element, (head) => {
+        const tableSplit = split?.kind === "split" ? null : this.splitTableAtRows(element, (head) => {
           content.appendChild(head);
           try {
             return pxToPt(measureContainer.getBoundingClientRect().height) <= availableHeightPt;
@@ -3741,7 +3750,7 @@ export class PaginationEngine {
             forceFirstOnNoFit: fits.length === 0 && forceProgress,
           })
           : null;
-        const tableSplit = split ? null : this.splitNoteTableAtRows(child, (head) => {
+        const tableSplit = split ? null : this.splitTableAtRows(child, (head) => {
           measuredContent.appendChild(head);
           try {
             return pxToPt(measureContainer.getBoundingClientRect().height) <= availableHeightPt;
@@ -4671,18 +4680,14 @@ export class PaginationEngine {
         const blockSpaceWithoutFootnotes = effectiveMarginTop + block.heightPt;
 
         if (newFootnoteIds.length > 0 && blockSpaceWithoutFootnotes <= effectiveRemainingHeight) {
-          // A note begins on the page that cites it. When a note this block cites cannot start
-          // here even in the expanded band, the citing line moves to the next page: keep the
-          // paragraph's lines up to that citation here, or, when the paragraph cannot be split
-          // (it keeps its lines together), move it whole. Deferring the note instead separates it
-          // from its citation, and the deferred notes accumulate into pages that carry nothing
-          // but notes. A paginator that splits no paragraph (the paginated editor) still defers:
-          // moving every citing paragraph whole would cost more pages than Word's split does.
-          // Moving the line helps only if a fresh page would offer its notes more room than is
-          // free here; a note too tall for any band is split on this page instead.
+          // Keep a paragraph's earlier lines or a table's earlier row groups here, moving the
+          // citing line/group with its note. Paragraph splitting remains opt-in for the editor;
+          // tables retain whole rows in either mode. A whole table moves only if its notes can
+          // actually start beside it on a fresh page.
+          const table = this.blockTable(block.element);
           const turnHelps = noteBandWith(blockSpaceWithoutFootnotes) - currentFootnoteHeight
             < freshBlockPageBodyHeight * MAX_FOOTNOTE_AREA_RATIO;
-          if (this.fragmentParagraphs && turnHelps && !this.notesCanStartOnPage(newFootnoteIds,
+          if ((this.fragmentParagraphs || table) && turnHelps && !this.notesCanStartOnPage(newFootnoteIds,
             noteBandWith(blockSpaceWithoutFootnotes), blockDimensions.contentWidth, notePayload,
             laterNotesClosed(), noteStartMemo)) {
             const fragments = this.tryFragmentParagraph(
@@ -4691,15 +4696,19 @@ export class PaginationEngine {
               effectiveRemainingHeight,
               effectiveMarginTop,
               headNotesStart,
-            );
+            ) ?? this.tryFragmentCitingTable(block, blockDimensions, effectiveRemainingHeight,
+              effectiveMarginTop, headNotesStart);
             if (fragments) {
               blocks.splice(i, 1, ...fragments);
               i--;
               continue;
             }
-            // Only a paragraph moves, and not away from a block that keeps with it: a table and
-            // a heading left alone at the foot of a page cost more than the deferred note.
-            if (currentContent.length > 0 && this.isWordParagraphElement(block.element)
+            const canMoveWhole = this.isWordParagraphElement(block.element) || (table
+              && this.notesCanStartOnPage(newFootnoteIds, freshBlockPageBodyHeight - block.heightPt
+                - this.effectiveBlockMarginTop(block, 0, true, pageInSection(block.sectionIndex, pageNumber + 1)),
+              blockDimensions.contentWidth, { footnoteIds: [], continuation: null, partialFootnotes: [] }, false));
+            // A preceding keep-with-next block belongs with the citation; the chain path owns it.
+            if (currentContent.length > 0 && canMoveWhole
                 && !blocks[i - 1]?.keepWithNext) {
               finishPage(block.sectionIndex);
               i--;

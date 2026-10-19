@@ -44,6 +44,10 @@ All notable changes to this project will be documented in this file.
   save. Numbering-prefix changes invalidate the patch even when the restored XML has no cached
   counters; text-only edits continue to return scoped patches.
 
+- A body table moves with a kept footnote when the note cannot start beside its citation (#1217).
+  Earlier row groups stay on the current page when they fit; vertical merges and repeated headers
+  are preserved. A whole table moves only when a fresh page can start its note, in both paginated modes.
+
 - Comparison and consolidation preserve comment definitions when document versions reuse the same
   numeric comment ID for different notes (#1210). Matching author/date/text definitions retain the
   base identity; new definitions and independent reviewer additions receive distinct IDs. Markers

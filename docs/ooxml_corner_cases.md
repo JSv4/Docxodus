@@ -3338,7 +3338,7 @@ nothing.
 In `npm/src/pagination.ts`, `MAX_FOOTNOTE_AREA_RATIO` is 1 and `noteBandLimit` never gives the band
 more than the body already placed on the page leaves; a page whose carried continuation does not
 end on it is finished before any body block is placed on it (`continuationRunsOn`); and
-`splitNoteTableAtRows` splits a note's table at row-group boundaries in both the first part's and
+`splitTableAtRows` splits a note's table at row-group boundaries in both the first part's and
 the continuation's split.
 
 ## Footnotes: a continued note stays last, and notes keep their order (issue #1179)
@@ -3353,7 +3353,7 @@ paginated view since issue #1178):
 | B | `cites A` (150-line note), page break, `cites B`, `cites C` (1-line notes) | p2 holds only note 1's continuation, no body; `cites B` and `cites C` open p3, where note 1 ends and notes 2, 3 follow in order | `cites B` alone on p2 beside the continuation; notes 2, 3 on p4 after note 1 ends | as Word |
 | C | `cites A` (220-line note), then eight citing lines with plain lines between | p2-p4 hold only the continuation; body resumes on p5, where note 1 ends, and notes 2-9 follow in order | `cites X2` on p2, only `plain2 2` on p3, `cites X3` on p4; note 1 ends on p5 and notes 2-9 start there | as Word |
 | D | 40 filler lines, a paragraph citing note 1, `cites B` | the citing line moves to p2 with its note | same | same |
-| E | 40 filler lines, a one-row table citing note 1, `cites B` | the table moves to p2 with its note and `cites B` | the table stays on p1; note 1 and note 2 go to p2, in order | as LibreOffice |
+| E | 40 filler lines, a one-row table citing note 1, `cites B` | the table moves to p2 with its note and `cites B` | the table stays on p1; note 1 and note 2 go to p2, in order | as Word (#1217) |
 
 All three keep a continued note last on its page and every note in citation order. While the
 paginator still capped the note area at 60% (until issue #1178), Docxodus laid B and C out like
@@ -3362,6 +3362,15 @@ continuation on p2 and note 2 after note 1's end on p3. Where Word and
 LibreOffice differ, Word gives a page whose carried note runs on to the next page entirely to that
 note (B, C; see the note-area entry for issue #1178), and moves a table whose note cannot start
 beside it to the note's page (E).
+
+For E, the citation-placement path also handles tables in either paragraph-fragmentation mode
+(#1217). It reuses `splitTableAtRows` to leave complete earlier row groups on the current page,
+without cutting vertical merges or leaving repeated headers alone. When no prefix fits, the
+whole table moves only if the fresh body band can hold it and start its notes. The keep-chain path
+still owns a preceding heading that keeps with the table. Captions and nested tables remain
+indivisible. The existing `notes-keep-lines-note-in-table` benchmark and a new fitting-note control
+check the delivered PDF, complete text inventory and note PageMap; synthetic browser tests also
+cover merged rows, repeated headers, captions and oversized-note progress.
 
 The Docxodus rule is `laterNotesClosed` in `PaginationEngine.flowToPages`
 (`npm/src/pagination.ts`): a page closes to new notes once one of its notes continues
