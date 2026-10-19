@@ -1655,16 +1655,18 @@ internal static partial class IrMarkupRenderer
     /// needs no revision mark; accept and reject resolve only the children. Returns false, rendering nothing,
     /// when either side's source element is unavailable, so the caller falls back to whole-wrapper replacement.
     /// </summary>
-    private static bool EmitModifiedWrapper(
-        IrEditOp op, IrNodeList<IrEditOp> childOps, RenderState state, List<XElement> sink)
+    internal static bool EmitModifiedWrapper(
+        IrEditOp op, IrNodeList<IrEditOp> childOps, RenderState state, List<XElement> sink,
+        List<XElement>? composedChildren = null)
     {
         var right = SourceElement(op.RightAnchor, state.RightSource);
         if (right is null || BlockWrapperContent(right) is not { } rightContent ||
             SourceElement(op.LeftAnchor, state.Left) is not { } left || BlockWrapperContent(left) is null)
             return false;
 
-        var children = new List<XElement>();
-        RenderBlockOpsWordShaped(childOps, state, children);
+        var children = composedChildren ?? new List<XElement>();
+        if (composedChildren is null)
+            RenderBlockOpsWordShaped(childOps, state, children);
 
         XElement ShellClone(XElement part)
         {
@@ -2682,12 +2684,20 @@ internal static partial class IrMarkupRenderer
                     : null;
                 var cellMarkers = PlanCompositeBlockLevelMarkers(blockOps, baseIr, reviewerIrs, reviewerCellOps,
                     cellAuthors, state);
+                var equalMarkers = cellOp.ReviewerCells is { } markerCells && markerCells.Any(c => c.ContentEqual)
+                    ? markerCells.Where(c => c.ContentEqual).SelectMany(c => c.BlockOps.Where(b => b.RightAnchor is not null).Select(b =>
+                        (b.LeftAnchor, Marker: new IrEqualReviewerMarkers(c.Reviewer, b.RightAnchor!, c.Author))))
+                        .ToLookup(c => c.LeftAnchor, c => c.Marker) : null;
                 var cellSink = new List<XElement>();
                 for (int b = 0; b < blockOps.Count; b++)
                 {
                     if (cellMarkers?.GetValueOrDefault(b) is { } before)
                         cellSink.AddRange(before);
-                    renderOneCompositeBlock(blockOps[b], baseIr, reviewerIrs, state, cellSink);
+                    var block = blockOps[b];
+                    if (equalMarkers?[block.Op.LeftAnchor].ToList() is { Count: > 0 } markers)
+                        block = block with { EqualReviewerMarkers = IrNodeList.From(
+                            (block.EqualReviewerMarkers ?? IrNodeList.Empty<IrEqualReviewerMarkers>()).Concat(markers)) };
+                    renderOneCompositeBlock(block, baseIr, reviewerIrs, state, cellSink);
                 }
                 if (cellMarkers?.GetValueOrDefault(blockOps.Count) is { } trailing)
                     cellSink.AddRange(trailing);
@@ -4877,9 +4887,9 @@ internal static partial class IrMarkupRenderer
     /// to classify a rendered bookmark as common (in both sources) / inserted / deleted for round-trip-correct
     /// normalization.</summary>
     /// <summary>
-    /// Carry into <paramref name="emittedBase"/> — a base paragraph every reviewer left equal — each bookmark
-    /// marker a reviewer's copy of that paragraph holds for a bookmark the base document does not have, at the
-    /// same text offset, wrapped as that reviewer's insertion. The IR leaves bookmarks out (rule N3), so such a
+    /// Carry into <paramref name="emittedBase"/> each new bookmark from a reviewer who left its paragraph's
+    /// text equal. Original-view offsets place markers around other reviewers' text revisions, and each
+    /// marker is wrapped as its own reviewer's insertion. The IR leaves bookmarks out (rule N3), so such a
     /// paragraph is equal and the base copy is emitted; without this, a reviewer's bookmark that opens here
     /// and closes in an inserted paragraph lost its start and then, as an orphan, its end (issue #864).
     /// Accept keeps the carried marker and reject drops it, as with the reviewer's other insertions.
@@ -4891,42 +4901,57 @@ internal static partial class IrMarkupRenderer
         IReadOnlyList<IrDocument> reviewerIrs,
         RenderState state)
     {
+        CarryReviewerOnlyBookmarks(emittedBase, reviewers
+            .Where(r => r.Reviewer >= 0 && r.Reviewer < reviewerIrs.Count)
+            .Select(r => (r.Reviewer, Source: SourceElement(r.Anchor, reviewerIrs[r.Reviewer]), r.Author))
+            .Where(r => r.Source is not null).Select(r => (r.Reviewer, r.Source!, r.Author)), baseIr, state);
+    }
+
+    internal static void CarryReviewerOnlyBookmarks(XElement emitted,
+        IEnumerable<(int Reviewer, XElement Source, string Author)> reviewers, IrDocument baseIr, RenderState state)
+    {
+        static List<XElement> Paragraphs(XElement element) => element.DescendantsAndSelf(W.p).ToList();
         state.BaseBookmarkNames ??= BodyBookmarkNames(baseIr);
-        var carried = new HashSet<string>();
+        var targets = Paragraphs(emitted);
+        var carried = new HashSet<(XElement Target, string Key)>();
         var savedAuthor = state.AuthorOverride;
         foreach (var reviewer in reviewers)
         {
-            if (reviewer.Reviewer < 0 || reviewer.Reviewer >= reviewerIrs.Count ||
-                SourceElement(reviewer.Anchor, reviewerIrs[reviewer.Reviewer]) is not { } reviewerParagraph)
+            var sources = Paragraphs(reviewer.Source);
+            if (sources.Count != targets.Count)
                 continue;
-            // Built once per reviewer: a bookmark-heavy document has many paragraphs that reach here.
-            if (!state.ReviewerBookmarkNamesById.TryGetValue(reviewer.Reviewer, out var startNames))
+            for (int i = 0; i < targets.Count; i++)
             {
-                startNames = reviewerParagraph.Document?.Root?.Descendants(W.bookmarkStart)
-                    .Where(s => s.Attribute(W.id) != null && s.Attribute(W.name) != null)
-                    .GroupBy(s => (string)s.Attribute(W.id)!)
-                    .ToDictionary(g => g.Key, g => (string)g.First().Attribute(W.name)!) ?? new Dictionary<string, string>();
-                state.ReviewerBookmarkNamesById[reviewer.Reviewer] = startNames;
-            }
-            state.AuthorOverride = reviewer.Author;
-            int offset = 0;
-            foreach (var child in reviewerParagraph.Elements())
-            {
-                if (child.Name == W.bookmarkStart || child.Name == W.bookmarkEnd)
+                var reviewerParagraph = sources[i];
+                // Built once per reviewer: a bookmark-heavy document has many paragraphs that reach here.
+                if (!state.ReviewerBookmarkNamesById.TryGetValue(reviewer.Reviewer, out var startNames))
                 {
-                    var name = child.Name == W.bookmarkStart
-                        ? (string?)child.Attribute(W.name)
-                        : startNames.GetValueOrDefault((string?)child.Attribute(W.id) ?? "");
-                    // One reviewer's copy of a name is enough; a second reviewer's would duplicate it.
-                    var key = $"{child.Name.LocalName}:{name}";
-                    if (name != null && !state.BaseBookmarkNames.Contains(name) && carried.Add(key))
-                    {
-                        var marker = StripUnids(new XElement(child));
-                        InsertAtTextOffset(emittedBase, marker, offset);
-                        WrapMarkerInRevision(marker, RevKind.Ins, state);
-                    }
+                    startNames = reviewerParagraph.Document?.Root?.Descendants(W.bookmarkStart)
+                        .Where(s => s.Attribute(W.id) != null && s.Attribute(W.name) != null)
+                        .GroupBy(s => (string)s.Attribute(W.id)!)
+                        .ToDictionary(g => g.Key, g => (string)g.First().Attribute(W.name)!) ?? new Dictionary<string, string>();
+                    state.ReviewerBookmarkNamesById[reviewer.Reviewer] = startNames;
                 }
-                offset += child.Descendants(W.t).Sum(t => t.Value.Length);
+                state.AuthorOverride = reviewer.Author;
+                int offset = 0;
+                foreach (var child in reviewerParagraph.Descendants())
+                {
+                    if ((child.Name == W.bookmarkStart || child.Name == W.bookmarkEnd) && IsRunLevelBookmark(child))
+                    {
+                        var name = child.Name == W.bookmarkStart
+                            ? (string?)child.Attribute(W.name)
+                            : startNames.GetValueOrDefault((string?)child.Attribute(W.id) ?? "");
+                        // One reviewer's copy of a name is enough; a second reviewer's would duplicate it.
+                        var key = $"{child.Name.LocalName}:{name}";
+                        if (name != null && !state.BaseBookmarkNames.Contains(name) && carried.Add((targets[i], key)))
+                        {
+                            var marker = StripUnids(new XElement(child));
+                            InsertAtTextOffset(targets[i], marker, offset, originalView: true);
+                            WrapMarkerInRevision(marker, RevKind.Ins, state);
+                        }
+                    }
+                    if (child.Name == W.t) offset += child.Value.Length;
+                }
             }
         }
         state.AuthorOverride = savedAuthor;
@@ -4998,23 +5023,39 @@ internal static partial class IrMarkupRenderer
 
     /// <summary>Insert <paramref name="marker"/> among <paramref name="paragraph"/>'s children where
     /// <paramref name="offset"/> characters of its text precede it, splitting a plain one-text run the offset
-    /// falls inside.</summary>
-    private static void InsertAtTextOffset(XElement paragraph, XElement marker, int offset)
+    /// falls inside. In the original view, insertions consume no characters and deletions do; bookmark
+    /// endpoints stay outside another reviewer's revisions and enclose replacement text at their boundaries.</summary>
+    private static void InsertAtTextOffset(XElement paragraph, XElement marker, int offset, bool originalView = false)
     {
+        static int OriginalLength(XElement element) => element.Name == W.ins ? 0
+            : element.Name == W.t || element.Name == W.delText ? element.Value.Length
+            : element.Elements().Sum(OriginalLength);
+        bool end = originalView && marker.Name == W.bookmarkEnd;
         int seen = 0;
         foreach (var child in paragraph.Elements().Where(e => e.Name != W.pPr).ToList())
         {
-            if (offset <= seen)
+            int length = originalView ? OriginalLength(child) : child.Descendants(W.t).Sum(t => t.Value.Length);
+            if (offset < seen || (offset == seen && (!end || length > 0)))
             {
                 child.AddBeforeSelf(marker);
                 return;
             }
-            int length = child.Descendants(W.t).Sum(t => t.Value.Length);
+            if (originalView && offset < seen + length && child.Name == W.del)
+            {
+                if (!end)
+                {
+                    child.AddBeforeSelf(marker);
+                    return;
+                }
+                // An interior position in deleted text has no accepted counterpart. Keep the range's
+                // end after the deletion and any adjacent insertion belonging to that replacement.
+                offset = seen + length;
+            }
             if (offset < seen + length && (child.Name == W.hyperlink || child.Name == W.customXml ||
                 child.Name == W.smartTag || child.Name == W.sdt))
             {
                 InsertAtTextOffset(child.Name == W.sdt ? child.Element(W.sdtContent)! : child,
-                    marker, offset - seen);
+                    marker, offset - seen, originalView);
                 return;
             }
             var runContent = child.Elements().Where(e => e.Name != W.rPr).ToList();

@@ -1518,6 +1518,115 @@ public class BlockLevelMarkerDiffTests
         Assert.Equal(Layout(original), Layout(Reject(consolidated)));
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Consolidate_InlineBookmark_ComposesWithAnotherReviewersText(bool wrapped, bool editSameParagraph)
+    {
+        WmlDocument Document(bool marked, bool edited)
+        {
+            string paragraph = P(edited && editSameParagraph ? "Cedar meadow" : "Cedar grove");
+            if (marked)
+                paragraph = paragraph.Replace("<w:p>", "<w:p>" + Start("CedarRange")).Replace("</w:p>", End() + "</w:p>");
+            return Doc((wrapped ? Sdt(paragraph) : paragraph) + P(edited && !editSameParagraph ? "Willow revised" : "Willow tail"));
+        }
+        var original = Document(false, false);
+        var first = Document(true, false);
+        var second = Document(false, true);
+        var redline = Consolidate("DocxCompare", original, ("Cedar", first), ("Willow", second));
+        var accepted = Accept(redline);
+        var rejected = Reject(redline);
+        Assert.Equal(Layout(Document(true, true)), Layout(accepted));
+        var start = Assert.Single(Body(accepted).Descendants(W + "bookmarkStart"));
+        Assert.Equal("CedarRange", (string?)start.Attribute(W + "name"));
+        var end = Assert.Single(Body(accepted).Descendants(W + "bookmarkEnd"));
+        Assert.Equal((string?)start.Attribute(W + "id"), (string?)end.Attribute(W + "id"));
+        Assert.Equal(editSameParagraph ? "Cedar meadow" : "Cedar grove",
+            string.Concat(start.NodesAfterSelf().TakeWhile(n => n != end).OfType<XElement>().SelectMany(e => e.DescendantsAndSelf(W + "t")).Select(e => e.Value)));
+        Assert.Equal(Layout(original), Layout(rejected));
+        Assert.Empty(Body(rejected).Descendants(W + "bookmarkStart"));
+        AssertNoNewValidationErrors(redline, original, first, second);
+    }
+
+    [Theory]
+    [InlineData("Amber", "Ivory", "Cedar grove")]
+    [InlineData("grove", "meadow", "Cedar meadow")]
+    [InlineData("tail", "suffix", "Cedar grove")]
+    public void Consolidate_InlineBookmark_TracksOriginalOffsetsAndItsOwnReviewer(string before, string after, string range)
+    {
+        WmlDocument Document(bool marked, bool edited) => Doc(P("Amber ").Replace("</w:p>",
+            (marked ? Start("CedarRange") : "") + "<w:r><w:t>Cedar grove</w:t></w:r>" +
+            (marked ? End() : "") + "<w:r><w:t xml:space=\"preserve\"> tail</w:t></w:r></w:p>")
+            .Replace(edited ? before : "unused", after));
+        var original = Document(false, false);
+        var bookmark = Document(true, false);
+        var text = Document(false, true);
+        var redline = Consolidate("DocxCompare", original, ("Cedar", bookmark), ("Willow", text));
+        var accepted = Body(Accept(redline));
+        var start = Assert.Single(accepted.Descendants(W + "bookmarkStart"));
+        var end = Assert.Single(accepted.Descendants(W + "bookmarkEnd"));
+        Assert.Equal(range, string.Concat(start.NodesAfterSelf().TakeWhile(n => n != end)
+            .OfType<XElement>().SelectMany(e => e.DescendantsAndSelf(W + "t")).Select(e => e.Value)));
+        Assert.Equal(Layout(original), Layout(Reject(redline)));
+        foreach (var (author, expected) in new[] { ("Cedar", bookmark), ("Willow", text) })
+        {
+            using var session = new DocxSession(redline.DocumentByteArray);
+            foreach (var revision in session.ListRevisions().Where(r => r.Author == author).ToArray())
+                Assert.True(session.AcceptRevision(revision.Id).Success);
+            Assert.True(session.RejectAllRevisions().Success);
+            var selected = new WmlDocument("selected.docx", session.Save());
+            Assert.Equal(Layout(expected), Layout(selected));
+            Assert.Equal(author == "Cedar" ? 1 : 0, Body(selected).Descendants(W + "bookmarkStart").Count());
+        }
+        AssertNoNewValidationErrors(redline, original, bookmark, text);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Consolidate_InlineBookmark_SurvivesTwoTextReviewersInACell(bool hyperlink, bool sameEdit)
+    {
+        WmlDocument Document(bool marked, string first, string last)
+        {
+            var inner = (marked ? Start("CedarRange") : "") +
+                $"<w:r><w:t>{first} Cedar grove {last}</w:t></w:r>" + (marked ? End() : "");
+            return Doc(Table("<w:p>" + (hyperlink ? "<w:hyperlink w:anchor=\"Target\">" + inner + "</w:hyperlink>" : inner) + "</w:p>"));
+        }
+        var original = Document(false, "Amber", "tail");
+        var marked = Document(true, "Amber", "tail");
+        var first = Document(false, "Ivory", "tail");
+        var last = sameEdit ? first : Document(false, "Amber", "suffix");
+        var redline = Consolidate("DocxCompare", original, ("Cedar", marked), ("Willow", first), ("Reed", last));
+        var accepted = Accept(redline);
+        Assert.Equal(Layout(Document(true, "Ivory", sameEdit ? "tail" : "suffix")), Layout(accepted));
+        Assert.Single(Body(accepted).Descendants(W + "bookmarkStart"));
+        Assert.Single(Body(accepted).Descendants(W + "bookmarkEnd"));
+        Assert.Empty(Body(Reject(redline)).Descendants(W + "bookmarkStart"));
+        AssertNoNewValidationErrors(redline, original, marked, first, last);
+    }
+
+    [Theory]
+    [InlineData("Cedar")]
+    [InlineData("Willow")]
+    public void Consolidate_SelectingOneBookmarkReviewer_KeepsThatReviewersRange(string author)
+    {
+        var original = Doc(Start("MovedRange") + P("Cedar clause") + End() + P("Dune clause"));
+        var removed = Doc(P("Cedar clause") + P("Dune clause"));
+        var moved = Doc(P("Cedar clause") + Start("MovedRange") + P("Dune clause") + End());
+        var redline = Consolidate("DocxCompare", original, ("Cedar", removed), ("Willow", moved));
+        AssertNoNewValidationErrors(redline, original, removed, moved);
+        using var session = new DocxSession(redline.DocumentByteArray);
+        foreach (var revision in session.ListRevisions().Where(r => r.Author == author).ToArray())
+            Assert.True(session.AcceptRevision(revision.Id).Success);
+        Assert.True(session.RejectAllRevisions().Success);
+        var resolved = new WmlDocument("selected.docx", session.Save());
+        Assert.Equal(Layout(author == "Cedar" ? removed : moved), Layout(resolved));
+    }
+
     // ---------------------------------------------- consolidate: rows nobody edited, promotion, comments (#1175)
 
     private static string ThreeRows(string a, string b, string c) => Rows(1, Row(a), Row(b), Row(c));

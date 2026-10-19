@@ -319,7 +319,15 @@ internal static class IrCompositeMerger
             }
             else if (!nativeMerges.Consumed.Contains(anchor))
             {
+                int first = ops.Count;
                 MergeOneBaseBlock(anchor, byBase, reviewers, baseIr, policy, settings, ops, conflicts, ref nextConflictId);
+                if (ops.Count == first + 1 && ops[first].EqualReviewerMarkers is null &&
+                    byBase.TryGetValue(anchor, out var entries) && entries.Any(e => e.Op.Kind != IrEditOpKind.EqualBlock))
+                    ops[first] = ops[first] with
+                    {
+                        EqualReviewerMarkers = EqualOp(anchor,
+                            entries.Where(e => e.Op.Kind == IrEditOpKind.EqualBlock).ToList(), reviewers, baseIr).EqualReviewerMarkers,
+                    };
             }
             // A merge-consumed anchor emits no block op, but its pending inserts still slot here.
             EmitInsertsAt(insertsAfter, anchor, reviewers, ops, suppressedRelocations);
@@ -1142,6 +1150,21 @@ internal static class IrCompositeMerger
                 ops, conflicts, ref nextConflictId))
             return;
 
+        // Same-shell wrappers already expose their child comparisons. Merge those children through the
+        // same dispatch as body and cell blocks, including a marker-only reviewer's equal paragraphs.
+        if (editedBlock is IrSdtBlock wrapper && touched.All(e => e.Op.WrapperOps is not null))
+        {
+            var children = new List<IrCompositeOp>();
+            if (ComposeMiniBody(wrapper.Blocks, touched.Select(e => (e.Reviewer, e.Op.WrapperOps!)),
+                reviewers, baseIr, policy, settings, ref nextConflictId, conflicts, children, requireUncontestedMoves: true))
+            {
+                var (reviewer, op) = touched[0];
+                ops.Add(new IrCompositeOp(op with { WrapperOps = IrNodeList.From(children.Select(c => c.Op)) },
+                    reviewers[reviewer].Author, reviewer, AuthoredWrapperOps: IrNodeList.From(children)));
+                return;
+            }
+        }
+
         if (touched.Count == 1)
         {
             var (rev, op) = touched[0];
@@ -1349,8 +1372,8 @@ internal static class IrCompositeMerger
                 block.Source.Element is { } element &&
                 (element.Descendants().Any(c => c.Name == W.commentRangeStart || c.Name == W.commentRangeEnd ||
                     c.Name == W.commentReference) || (block is IrParagraph
-                    ? element.Elements().Any(c => c.Name == W.bookmarkStart || c.Name == W.bookmarkEnd)
-                    : element.Name == W.tbl && IrMarkupRenderer.BlockLevelMarkersDiffer(baseElement, element))))
+                    ? element.Descendants().Any(c => c.Name == W.bookmarkStart || c.Name == W.bookmarkEnd)
+                    : element.Name == W.tbl && IrMarkupRenderer.CompositeMarkersDiffer(baseElement, element))))
             .Select(e => new IrEqualReviewerMarkers(e.Reviewer, e.Op.RightAnchor!, reviewers[e.Reviewer].Author))
             .ToList();
         return withMarkers.Count == 0
@@ -1807,7 +1830,7 @@ internal static class IrCompositeMerger
             if (op.Kind != IrEditOpKind.EqualBlock || op.RightAnchor is not { } right ||
                 !reviewers[reviewer].Ir.AnchorIndex.TryGetValue(right, out var block) || block is not IrTable table ||
                 table.Rows.Count != baseTable.Rows.Count ||
-                !IrMarkupRenderer.BlockLevelMarkersDiffer(baseTable.Source.Element, table.Source.Element))
+                !IrMarkupRenderer.CompositeMarkersDiffer(baseTable.Source.Element, table.Source.Element))
                 continue;
             var rows = baseTable.Rows.Zip(table.Rows, (b, r) =>
                 new IrRowOp(IrRowOpKind.EqualRow, b.Anchor.ToString(), r.Anchor.ToString(), null));
@@ -2541,8 +2564,8 @@ internal static class IrCompositeMerger
             baseCell, baseCellAnchor, cellEditors, reviewers, policy, settings, ref nextConflictId, conflicts);
         var cellOps = new List<IrCompositeOp>();
         var cellConflicts = new List<IrConflict>();
-        ComposeCellMiniBody(baseCell, cellEditors, reviewers, baseIr, policy, settings,
-            ref nextConflictId, cellConflicts, cellOps);
+        ComposeMiniBody(baseCell.Blocks, cellEditors.Select(e => (e.Reviewer, e.CellOp.BlockOps!)),
+            reviewers, baseIr, policy, settings, ref nextConflictId, cellConflicts, cellOps);
         conflicts.AddRange(cellConflicts);
         mergedCellOps.Add(new IrCellOp(baseCellAnchor, baseCellAnchor,
             IrNodeList.From(cellOps.Select(c => c.Op))));
@@ -2575,7 +2598,7 @@ internal static class IrCompositeMerger
             if (!CellIndex(baseIr).TryGetValue(leftAnchor, out var baseCell) ||
                 !CellIndex(reviewers[reviewer].Ir).TryGetValue(rightAnchor, out var cell) ||
                 baseCell.Blocks.Count != cell.Blocks.Count ||
-                !IrMarkupRenderer.BlockLevelMarkersDiffer(baseCell.Source.Element, cell.Source.Element))
+                !IrMarkupRenderer.CompositeMarkersDiffer(baseCell.Source.Element, cell.Source.Element))
                 continue;
             var equalOps = baseCell.Blocks.Zip(cell.Blocks, (b, r) =>
                 new IrEditOp(IrEditOpKind.EqualBlock, b.Anchor.ToString(), r.Anchor.ToString(), null, null, null));
@@ -2778,40 +2801,34 @@ internal static class IrCompositeMerger
         return sb.ToString();
     }
 
-    /// <summary>
-    /// Recurse the body merge over ONE cell's paragraph blocks: build a per-reviewer cell script from each
-    /// editor's <see cref="IrCellOp.BlockOps"/>, group by base anchor + preceding-anchor inserts exactly as
-    /// the body does, and run the shared <see cref="MergeBlockStream"/> dispatch over the base cell's block
-    /// anchors. The cell's paragraph anchors live in the SAME global <see cref="IrDocument.AnchorIndex"/>, so
-    /// the body's tokenization/format gates apply unchanged. Cell-local conflicts carry the base cell-paragraph
-    /// anchor (which resolves in <paramref name="baseIr"/>'s index).
-    /// </summary>
-    private static void ComposeCellMiniBody(
-        IrCell baseCell,
-        List<(int Reviewer, string Author, IrCellOp CellOp)> cellEditors,
+    /// <summary>Apply the body merge to a cell or same-shell wrapper's child blocks. Full reviewer
+    /// indices and the split/merge plan are preserved so nested conflicts and authorship use the same rules.</summary>
+    private static bool ComposeMiniBody(
+        IReadOnlyList<IrBlock> baseBlocks,
+        IEnumerable<(int Reviewer, IrNodeList<IrEditOp> Ops)> editors,
         IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
         IrDocument baseIr, Docxodus.ConflictResolution policy, IrDiffSettings settings,
-        ref int nextConflictId, List<IrConflict> conflicts, List<IrCompositeOp> ops)
+        ref int nextConflictId, List<IrConflict> conflicts, List<IrCompositeOp> ops, bool requireUncontestedMoves = false)
     {
-        // The base cell's block anchors in document order = the mini-body's base order.
-        var baseOrder = baseCell.Blocks.Select(b => b.Anchor.ToString()).ToList();
-
-        // Build one IrEditScript per editing reviewer from its cell BlockOps. Reviewer indices must match the
-        // outer reviewers list (so MergeOneBaseBlock's reviewers[e.Reviewer] resolves correctly); a reviewer
-        // that did NOT edit this cell contributes an empty script (all base blocks Equal — represented by
-        // absence, which MergeOneBaseBlock treats as untouched). We therefore build a FULL-length script list
-        // indexed by reviewer, with empty scripts for non-editors.
+        var baseOrder = baseBlocks.Select(b => b.Anchor.ToString()).ToList();
         var scripts = new List<IrEditScript>(reviewers.Count);
         for (int r = 0; r < reviewers.Count; r++)
             scripts.Add(new IrEditScript(IrNodeList.From(System.Array.Empty<IrEditOp>())));
-        foreach (var (reviewer, _, cellOp) in cellEditors)
-            scripts[reviewer] = new IrEditScript(cellOp.BlockOps!);
+        foreach (var (reviewer, childOps) in editors)
+            scripts[reviewer] = new IrEditScript(childOps);
 
         // A cell mini-body can itself carry Split/Merge ops (a reviewer split/merged paragraphs INSIDE the
         // cell). Run the same sole-toucher plan the body runs: native when uncontested, lowered to del/ins
         // when another editor touches a consumed cell paragraph. Without this, a MergeBlock (null LeftAnchor)
         // reached NEITHER grouping map and the merge was silently dropped from the composed cell.
         var cellTouchers = BuildTouchers(scripts);
+        // Nested moves already carry globally assigned ids. A contested source must keep the wrapper's
+        // whole-block conflict fallback; emitting only its destination would duplicate it under BaseWins.
+        if (requireUncontestedMoves)
+            for (int r = 0; r < scripts.Count; r++)
+                if (scripts[r].Operations.Any(op => op.IsMoveSource == true && op.LeftAnchor is { } anchor &&
+                    !SoleToucher(cellTouchers, anchor, r)))
+                    return false;
         for (int r = 0; r < scripts.Count; r++)
             scripts[r] = ApplySplitMergePlan(scripts[r], r, cellTouchers);
 
@@ -2821,6 +2838,7 @@ internal static class IrCompositeMerger
 
         MergeBlockStream(baseOrder, byBase, insertsAfter, nativeMerges, reviewers, baseIr, policy, settings,
             ops, conflicts, ref nextConflictId);
+        return true;
     }
 
     /// <summary>The flat text a row op's competitor carries, for delete-vs-modify ROW conflict reporting. A

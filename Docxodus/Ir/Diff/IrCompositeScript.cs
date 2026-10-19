@@ -132,8 +132,10 @@ internal sealed record IrComposedTableShell(IrComposedShellRef? TblPr = null, Ir
 /// Insert spans index that reviewer's right-token list). For all single-source ops it is null and
 /// <see cref="Op"/>'s own <c>RightAnchor</c> suffices. Additive/optional — absent from older scripts and
 /// from the JSON wire shape, so existing tests/serialization are unaffected.</para>
-/// <para><see cref="EqualReviewerMarkers"/> identifies reviewer copies of a base-sourced EqualBlock
-/// whose comment or bookmark markers must be preserved. Paragraph markers retain their text offsets;
+/// <para><see cref="AuthoredWrapperOps"/> carries composed child ops for a same-shell block wrapper,
+/// including recursive reviewer attribution. <see cref="Op"/>'s WrapperOps carries their structural projection.</para>
+/// <para><see cref="EqualReviewerMarkers"/> identifies reviewers who kept a block's content equal but
+/// contributed comment or bookmark markers. Paragraph bookmarks retain their original-view text offsets;
 /// markers between container blocks use the shared block placement rules.
 /// Renderer-only, like <see cref="SourceRightAnchors"/>; absent from the JSON wire shape.</para>
 /// <para><see cref="AuthoredRows"/> is non-null ONLY on a COMPOSED multi-reviewer table (FOLLOW-ON B): the
@@ -153,7 +155,8 @@ internal sealed record IrCompositeOp(
     IrNodeList<IrAuthoredRowOp>? AuthoredRows = null,
     IrComposedTableShell? TableShell = null,
     IrNodeList<IrEqualReviewerMarkers>? EqualReviewerMarkers = null,
-    IrNodeList<IrReviewerTable>? ReviewerTables = null);
+    IrNodeList<IrReviewerTable>? ReviewerTables = null,
+    IrNodeList<IrCompositeOp>? AuthoredWrapperOps = null);
 
 /// <summary>
 /// One reviewer's competing result for a conflicted span. <see cref="Author"/> is the reviewer

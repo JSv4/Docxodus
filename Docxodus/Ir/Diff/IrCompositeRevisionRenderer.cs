@@ -73,31 +73,10 @@ internal static class IrCompositeRevisionRenderer
 
         var result = new List<(IrRevision, string, int?)>();
         foreach (var op in script.Operations)
-        {
-            if (op.AuthoredRows != null)
-                RenderComposedTable(op, baseIr, reviewers, settings, script.Conflicts, moveSourceOp, result);
-            else if (op.AuthoredTokens != null)
-                RenderComposed(op, baseIr, reviewers, settings, script.Conflicts, result);
-            else
-                RenderSingleSource(op, baseIr, reviewers, settings, moveSourceOp, result);
-        }
-
-        // NOTE SCOPES: project each composed note diff's ops through the same per-op paths, appended after
-        // the body ops (footnotes then endnotes — the merger's NoteOps ordering), mirroring the two-way
-        // renderer's body-then-notes revision order.
-        if (script.NoteOps is { } noteOps)
-        {
-            foreach (var noteDiff in noteOps)
-            {
-                foreach (var op in noteDiff.Ops)
-                {
-                    if (op.AuthoredTokens != null)
-                        RenderComposed(op, baseIr, reviewers, settings, script.Conflicts, result);
-                    else
-                        RenderSingleSource(op, baseIr, reviewers, settings, moveSourceOp, result);
-                }
-            }
-        }
+            RenderComposite(op, baseIr, reviewers, settings, script.Conflicts, moveSourceOp, result);
+        foreach (var note in script.NoteOps ?? IrNodeList.Empty<IrCompositeNoteDiff>())
+            foreach (var op in note.Ops)
+                RenderComposite(op, baseIr, reviewers, settings, script.Conflicts, moveSourceOp, result);
 
         // TRAILING SECTION (B2): emit the document-level trailing-sectPr FormatChanged revision EXACTLY ONCE,
         // attributed to the section winner (script.TrailingSectPr). The per-op mini-scripts have it suppressed
@@ -120,6 +99,23 @@ internal static class IrCompositeRevisionRenderer
         }
 
         return result;
+    }
+
+    private static void RenderComposite(
+        IrCompositeOp op, IrDocument baseIr,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers, IrDiffSettings settings,
+        IrNodeList<IrConflict> conflicts, IReadOnlyDictionary<int, IrEditOp> moveSourceOp,
+        List<(IrRevision, string, int?)> sink)
+    {
+        if (op.AuthoredWrapperOps is { } children)
+            foreach (var child in children)
+                RenderComposite(child, baseIr, reviewers, settings, conflicts, moveSourceOp, sink);
+        else if (op.AuthoredRows is not null)
+            RenderComposedTable(op, baseIr, reviewers, settings, conflicts, moveSourceOp, sink);
+        else if (op.AuthoredTokens is not null)
+            RenderComposed(op, baseIr, reviewers, settings, conflicts, sink);
+        else
+            RenderSingleSource(op, baseIr, reviewers, settings, moveSourceOp, sink);
     }
 
     // ------------------------------------------------------------------ composed multi-reviewer table
@@ -249,12 +245,7 @@ internal static class IrCompositeRevisionRenderer
                         if (cellOp.ComposedBlockOps is not { } blockOps)
                             continue; // base passthrough → no content revision
                         foreach (var cellBlock in blockOps)
-                        {
-                            if (cellBlock.AuthoredTokens != null)
-                                RenderComposed(cellBlock, baseIr, reviewers, settings, conflicts, sink);
-                            else
-                                RenderSingleSource(cellBlock, baseIr, reviewers, settings, moveSourceOp, sink);
-                        }
+                            RenderComposite(cellBlock, baseIr, reviewers, settings, conflicts, moveSourceOp, sink);
                     }
                     break;
                 }

@@ -288,6 +288,14 @@ test.describe('DocxDiff consolidate (composite N-way) bridge', () => {
     ['compare', 'BookmarkBoundaries/bookmark-boundary-insertion-control', 'Alder ridge survey'],
     ['consolidate', 'NoteViews/consolidated-note-prefix', 'Dune citation revised'],
     ['consolidate', 'NoteViews/consolidated-note-suffix-control', 'Dune citation revised'],
+    ['consolidate', 'BookmarkReviewers/reviewer-bookmark-paragraph-edited', 'Cedar meadow'],
+    ['consolidate', 'BookmarkReviewers/reviewer-bookmark-paragraph-outside-control', 'Willow tail revised'],
+    ['consolidate', 'BookmarkReviewers/reviewer-bookmark-sdt-edited', 'Cedar meadow'],
+    ['consolidate', 'BookmarkReviewers/reviewer-bookmark-sdt-outside-control', 'Willow tail revised'],
+    ['consolidate', 'BookmarkReviewers/reviewer-bookmark-cell-edited', 'Cedar meadow'],
+    ['consolidate', 'BookmarkReviewers/reviewer-bookmark-cell-outside-control', 'Willow tail revised'],
+    ['consolidate', 'BookmarkReviewers/reviewer-bookmark-move-and-remove', 'Dune clause'],
+    ['consolidate', 'BookmarkReviewers/reviewer-bookmark-single-remove-control', 'Dune clause'],
   ]) {
     test(`${operation} resolves ${path.basename(prefix)} structure through accept/reject`, async ({ page }) => {
       const inputs = [0, 1, ...(operation === 'consolidate' ? [2] : [])].map(i => readTestFile(`${prefix}-${i}.docx`));
