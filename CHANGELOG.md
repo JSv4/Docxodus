@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Split oversized footnote-table rows through their cell content, including nested tables and wrapped paragraphs. Continuations preserve complete text, repeated headers and source geometry; explicit no-split rows remain intact (#1217).
+
 - Prevent a synthetic nonbreaking-space run in the required blank paragraph after a nested table. The paragraph retains a one-twip layout box for source geometry, so fitting nested footnote tables no longer fail PDF clipping verification (#1217).
 
 - Consolidation reports competing additions of a bookmark name instead of silently dropping a range

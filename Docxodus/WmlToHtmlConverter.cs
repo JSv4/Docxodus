@@ -6730,6 +6730,10 @@ namespace Docxodus
                 SourceAnchorIdentityAttribute(settings, element),
                 IsOnOffPropertyEnabled(element.Elements(W.trPr).Elements(W.tblHeader).FirstOrDefault())
                     ? new XAttribute("data-docx-header-row", "true") : null,
+                IsOnOffPropertyEnabled(element.Elements(W.trPr).Elements(W.cantSplit).FirstOrDefault())
+                    ? new XAttribute("data-docx-cant-split", "true") : null,
+                trHeight != null && heightRule != "auto"
+                    ? new XAttribute("data-docx-row-height-rule", heightRule) : null,
                 cells);
             if (style.Any())
                 htmlRow.AddAnnotation(style);

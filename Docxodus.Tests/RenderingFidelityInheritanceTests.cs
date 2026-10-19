@@ -109,6 +109,17 @@ public class RenderingFidelityInheritanceTests
         """;
 
     [Theory]
+    [InlineData("<w:cantSplit/>", "true")]
+    [InlineData("<w:cantSplit w:val=\"0\"/>", null)]
+    [InlineData("", null)]
+    public void RowSplitPermissionSurvivesHtmlConversion(string properties, string? expected)
+    {
+        var html = Render("<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid>"
+            + $"<w:tr><w:trPr>{properties}</w:trPr><w:tc><w:p><w:r><w:t>Row</w:t></w:r></w:p></w:tc></w:tr></w:tbl>");
+        Assert.Equal(expected, (string?)html.Descendants().Single(e => e.Name.LocalName == "tr").Attribute("data-docx-cant-split"));
+    }
+
+    [Theory]
     [InlineData("<w:p/>")]
     [InlineData("<w:p><w:pPr/><w:r><w:rPr/><w:t/></w:r></w:p>")]
     public void UnformattedNestedTableEndParagraphKeepsACompactSourceAnchor(string tail)
