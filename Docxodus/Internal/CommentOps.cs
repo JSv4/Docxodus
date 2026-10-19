@@ -36,8 +36,8 @@ internal static class CommentOps
         var documents = new[] { baseline }.Concat(revisions).ToArray();
         var identities = documents.Select(document =>
         {
-            using var stream = new MemoryStream(document.DocumentByteArray);
-            using var package = WordprocessingDocument.Open(stream, false);
+            using var stream = new OpenXmlMemoryStreamDocument(document);
+            using var package = stream.GetWordprocessingDocument();
             return package.MainDocumentPart?.WordprocessingCommentsPart?.GetXDocument().Root?.Elements(W.comment)
                 .Where(comment => comment.Attribute(W.id) is not null)
                 .Select(comment => (Id: (string)comment.Attribute(W.id)!, Key: Identity(comment))).ToList() ?? new();

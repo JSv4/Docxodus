@@ -78,42 +78,52 @@ public class DocxDiffPackageToleranceTests
         }
     }
 
-    [Fact]
-    public void Compare_tolerates_dangling_package_relationship_on_right()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Compare_tolerates_dangling_package_relationship_on_right(bool consolidate)
     {
         var left = IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Alpha shared body text.</w:t></w:r></w:p>");
         var right = WithDanglingPackageRelationship(
             IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Alpha revised body text.</w:t></w:r></w:p>"));
 
-        var redline = DocxDiff.Compare(left, right);
+        var redline = Compare(left, right, consolidate);
 
         Assert.NotNull(redline);
         AssertNoDanglingRelationships(redline);
     }
 
-    [Fact]
-    public void Compare_tolerates_dangling_package_relationship_on_left()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Compare_tolerates_dangling_package_relationship_on_left(bool consolidate)
     {
         var left = WithDanglingPackageRelationship(
             IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Alpha shared body text.</w:t></w:r></w:p>"));
         var right = IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Alpha revised body text.</w:t></w:r></w:p>");
 
-        var redline = DocxDiff.Compare(left, right);
+        var redline = Compare(left, right, consolidate);
 
         Assert.NotNull(redline);
         AssertNoDanglingRelationships(redline);
     }
 
-    [Fact]
-    public void Compare_tolerates_dangling_part_relationship()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Compare_tolerates_dangling_part_relationship(bool consolidate)
     {
         var left = IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Alpha shared body text.</w:t></w:r></w:p>");
         var right = WithDanglingPartRelationship(
             IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Alpha revised body text.</w:t></w:r></w:p>"));
 
-        var redline = DocxDiff.Compare(left, right);
+        var redline = Compare(left, right, consolidate);
 
         Assert.NotNull(redline);
         AssertNoDanglingRelationships(redline);
     }
+
+    private static WmlDocument Compare(WmlDocument left, WmlDocument right, bool consolidate) => consolidate
+        ? DocxCompare.Consolidate(left, new[] { new DocxDiffReviewer { Document = right, Author = "Reviewer" } })
+        : DocxDiff.Compare(left, right);
 }
