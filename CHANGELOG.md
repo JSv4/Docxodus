@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Consolidation preserves one reviewer's added bookmarks when other reviewers edit the same paragraph,
+  including paragraphs in content controls, hyperlinks and table cells (#1212). Same-shell block wrappers
+  compose their child edits with per-reviewer authorship; overlapping edits still use the selected conflict
+  policy. Each reviewer's removal of a shared bookmark remains independently selectable.
+
 ## [14.0.0] - 2026-10-19
 
 ### Changed

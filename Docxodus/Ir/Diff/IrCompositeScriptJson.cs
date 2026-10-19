@@ -106,6 +106,14 @@ internal static class IrCompositeScriptJson
             writer.WriteEndArray();
         }
 
+        if (compositeOp.AuthoredWrapperOps is { } wrapperOps)
+        {
+            writer.WriteStartArray("authoredWrapperOps");
+            foreach (var child in wrapperOps)
+                WriteCompositeOp(writer, child);
+            writer.WriteEndArray();
+        }
+
         // Additive composed-table attribution (FOLLOW-ON B): the merged tableDiff above is the apply/JSON
         // truth; authoredRows is the renderer/revision attribution view. Absent (null) for all non-table ops,
         // so existing JSON tests are byte-unaffected.

@@ -449,14 +449,14 @@ internal static partial class IrMarkupRenderer
     /// The N-way rule for one base block stream's markers (issue #1149, #1175), shared by the composite plan and
     /// <see cref="ReconcileCompositeEqualContainerMarkers"/>. Each reviewer's comparison with the base yields
     /// merged marker entries per base block boundary (position); a shared entry is that reviewer keeping the base
-    /// marker. A base marker stays bare unless a reviewer does not keep it: it is then the deletion of the first
-    /// such reviewer. A reviewer's own marker goes in as that reviewer's insertion at the boundary, in front of
+    /// marker. A base marker stays bare unless reviewers remove it: nested deletions preserve each reviewer's
+    /// decision, so accepting any removal removes the marker and rejecting all removals restores it. A reviewer's own marker goes in as that reviewer's insertion at the boundary, in front of
     /// the base markers there (the start of a gap) or after them; a marker another reviewer already brought is
     /// not repeated.
     /// </summary>
     private sealed class CompositeMarkerPlacement
     {
-        private readonly Dictionary<XElement, int> _deletedBy = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<XElement, List<int>> _deletedBy = new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<(XElement? Stream, int Position), List<(int Reviewer, XElement Marker)>> _beforeBase = new();
         private readonly Dictionary<(XElement? Stream, int Position), List<(int Reviewer, XElement Marker)>> _afterBase = new();
         private readonly HashSet<string> _added;
@@ -473,7 +473,12 @@ internal static partial class IrMarkupRenderer
         public void Take(MarkerEntry entry, int reviewer, int position, bool beforeBase, XElement? stream = null)
         {
             if (entry.Left is not null)
-                _deletedBy.TryAdd(entry.Left, reviewer);
+            {
+                if (!_deletedBy.TryGetValue(entry.Left, out var deletions))
+                    _deletedBy[entry.Left] = deletions = new List<int>();
+                if (!deletions.Contains(reviewer))
+                    deletions.Add(reviewer);
+            }
             if (entry.Right is null || !_added.Add(MarkerKey(entry.Right)))
                 return; // another reviewer already brought the same marker
             var map = beforeBase ? _beforeBase : _afterBase;
@@ -497,9 +502,15 @@ internal static partial class IrMarkupRenderer
             foreach (var (reviewer, marker) in _beforeBase.GetValueOrDefault((stream, position)) ?? new())
                 output.Add(Revision(W.ins, reviewer, marker));
             foreach (var marker in baseMarkers)
-                output.Add(_deletedBy.TryGetValue(marker, out var reviewer)
-                    ? Revision(W.del, reviewer, marker)
-                    : StripUnids(new XElement(marker)));
+            {
+                var copy = StripUnids(new XElement(marker));
+                // Any reviewer's accepted removal removes the base marker. Rejecting one removal only
+                // unwraps that reviewer's layer, leaving the other reviewers' decisions independent.
+                if (_deletedBy.TryGetValue(marker, out var reviewers))
+                    foreach (var reviewer in reviewers.AsEnumerable().Reverse())
+                        copy = Revision(W.del, reviewer, copy);
+                output.Add(copy);
+            }
             foreach (var (reviewer, marker) in _afterBase.GetValueOrDefault((stream, position)) ?? new())
                 output.Add(Revision(W.ins, reviewer, marker));
             state.AuthorOverride = savedAuthor;
@@ -519,6 +530,8 @@ internal static partial class IrMarkupRenderer
     internal static void ReconcileCompositeEqualContainerMarkers(XElement emitted, XElement baseSource,
         IReadOnlyList<(int Reviewer, XElement Counterpart)> counterparts, IReadOnlyList<string> authors, RenderState state)
     {
+        CarryReviewerOnlyBookmarks(emitted, counterparts.Select(c =>
+            (c.Reviewer, c.Counterpart, authors[c.Reviewer])), state.Left, state);
         var placement = new CompositeMarkerPlacement(state);
         var streams = new Dictionary<XElement, XElement>(ReferenceEqualityComparer.Instance); // emitted -> base
         foreach (var (reviewer, counterpart) in counterparts)
@@ -608,6 +621,27 @@ internal static partial class IrMarkupRenderer
             }
         }
         return true;
+    }
+
+    /// <summary>Marker-only table and cell reviewers also contribute bookmarks inside paragraphs.</summary>
+    internal static bool CompositeMarkersDiffer(XElement? left, XElement? right)
+    {
+        static IEnumerable<(int Paragraph, int Offset, string Key)> Inline(XElement? container)
+        {
+            int paragraph = 0;
+            foreach (var p in container?.DescendantsAndSelf(W.p) ?? Enumerable.Empty<XElement>())
+            {
+                int offset = 0;
+                foreach (var element in p.Descendants())
+                {
+                    if (element.Name == W.t) offset += element.Value.Length;
+                    if ((element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd) && IsRunLevelBookmark(element))
+                        yield return (paragraph, offset, MarkerKey(element));
+                }
+                paragraph++;
+            }
+        }
+        return BlockLevelMarkersDiffer(left, right) || !Inline(left).SequenceEqual(Inline(right));
     }
 
     /// <summary>

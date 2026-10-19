@@ -385,7 +385,8 @@ public static class DocxDiff
     /// script as a JSON string — the consolidate counterpart to <see cref="GetEditScriptJson"/>. It additively
     /// extends the two-way edit-script JSON: every operation carries an <c>author</c> and <c>sourceReviewer</c>,
     /// a <c>conflictId</c> when the op is a conflict winner, and (for a composed multi-reviewer paragraph)
-    /// <c>authoredTokens</c> + <c>sourceRightAnchors</c>; the document additionally carries a top-level
+    /// <c>authoredTokens</c> + <c>sourceRightAnchors</c>. A composed wrapper carries recursively attributed
+    /// <c>authoredWrapperOps</c> alongside its structural <c>wrapperOps</c>. The document carries a top-level
     /// <c>conflicts</c> array (id, base anchor, token span, applied policy, and the per-reviewer competing edits).
     /// </summary>
     /// <remarks>

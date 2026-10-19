@@ -239,25 +239,6 @@ internal static class IrCompositeMarkupRenderer
         IrMarkupRenderer.RenderState state,
         List<XElement> sink)
     {
-        // Composed multi-reviewer paragraph: per-span authorship from AuthoredTokens, each contributing
-        // reviewer's right paragraph resolved via SourceRightAnchors. Delegates to the two-way renderer's
-        // composed-paragraph builder so it can reuse the private token-span emit helpers (Task 2.3).
-        if (compositeOp.AuthoredTokens != null)
-        {
-            IrMarkupRenderer.RenderComposedParagraph(compositeOp, baseIr, reviewerIrs, state, sink);
-            return;
-        }
-
-        // Composed multi-reviewer TABLE (FOLLOW-ON B): per-row/per-cell authorship from AuthoredRows.
-        // Delegates to the two-way renderer's composed-table builder, which recursively renders each composed
-        // cell-block via the shared RenderOneCompositeBlock helper below.
-        if (compositeOp.AuthoredRows != null)
-        {
-            IrMarkupRenderer.RenderComposedTable(compositeOp, baseIr, reviewerIrs, state, sink,
-                RenderOneCompositeBlock);
-            return;
-        }
-
         RenderOneCompositeBlock(compositeOp, baseIr, reviewerIrs, state, sink);
     }
 
@@ -681,14 +662,6 @@ internal static class IrCompositeMarkupRenderer
         IrMarkupRenderer.RenderState state,
         List<XElement> sink)
     {
-        // A composed paragraph nested in a cell: per-span authorship (recursion proof for same-cell-paragraph
-        // token composition).
-        if (compositeOp.AuthoredTokens != null)
-        {
-            IrMarkupRenderer.RenderComposedParagraph(compositeOp, baseIr, reviewerIrs, state, sink);
-            return;
-        }
-
         var op = compositeOp.Op;
         int sourceReviewer = compositeOp.SourceReviewer;
 
@@ -705,16 +678,29 @@ internal static class IrCompositeMarkupRenderer
         state.RightSourceId = sourceReviewer;
 
         int emittedFrom = sink.Count;
-        IrMarkupRenderer.RenderBlockOp(op, state, sink);
-        if (baseSourced && compositeOp.EqualReviewerMarkers is { } reviewerMarkers && sink.Count == emittedFrom + 1)
+        if (compositeOp.AuthoredRows is not null)
+            IrMarkupRenderer.RenderComposedTable(compositeOp, baseIr, reviewerIrs, state, sink, RenderOneCompositeBlock);
+        else if (compositeOp.AuthoredWrapperOps is { } wrapperOps)
         {
-            foreach (var reviewer in reviewerMarkers)
-                if (reviewer.Reviewer >= 0 && reviewer.Reviewer < reviewerIrs.Count)
-                    IrMarkupRenderer.CarryMissingComments(sink[emittedFrom],
-                        IrMarkupRenderer.SourceElement(reviewer.Anchor, reviewerIrs[reviewer.Reviewer]));
-            if (sink[emittedFrom].Name == W.p)
+            var children = new List<XElement>();
+            foreach (var child in wrapperOps)
+                RenderOneCompositeBlock(child, baseIr, reviewerIrs, state, children);
+            IrMarkupRenderer.EmitModifiedWrapper(op, op.WrapperOps!, state, sink, children);
+        }
+        else if (compositeOp.AuthoredTokens is not null)
+            IrMarkupRenderer.RenderComposedParagraph(compositeOp, baseIr, reviewerIrs, state, sink);
+        else
+            IrMarkupRenderer.RenderBlockOp(op, state, sink);
+        if (compositeOp.EqualReviewerMarkers is { } reviewerMarkers && sink.Count == emittedFrom + 1)
+        {
+            if (baseSourced)
+                foreach (var reviewer in reviewerMarkers)
+                    if (reviewer.Reviewer >= 0 && reviewer.Reviewer < reviewerIrs.Count)
+                        IrMarkupRenderer.CarryMissingComments(sink[emittedFrom],
+                            IrMarkupRenderer.SourceElement(reviewer.Anchor, reviewerIrs[reviewer.Reviewer]));
+            if (sink[emittedFrom].Name == W.p && (baseSourced || op.TokenDiff is not null))
                 IrMarkupRenderer.CarryReviewerOnlyBookmarks(sink[emittedFrom], reviewerMarkers, baseIr, reviewerIrs, state);
-            else if (IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr) is { } baseSource)
+            else if (baseSourced && IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr) is { } baseSource)
                 IrMarkupRenderer.ReconcileCompositeEqualContainerMarkers(sink[emittedFrom], baseSource,
                     reviewerMarkers.Where(b => b.Reviewer >= 0 && b.Reviewer < reviewerIrs.Count)
                         .Select(b => (b.Reviewer, IrMarkupRenderer.SourceElement(b.Anchor, reviewerIrs[b.Reviewer])))

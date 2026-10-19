@@ -1395,7 +1395,7 @@ public class BlockWrapperNestedDiffTests
 
     [Theory]
     [MemberData(nameof(WrapperKindsAndPolicies))]
-    public void Consolidate_TwoReviewersEditingInsideTheSameWrapper_IsAConflictThatStaysReversible(
+    public void Consolidate_DisjointEditsInsideTheSameWrapper_ComposeUnderEveryPolicy(
         Wrapper kind, ConflictResolution policy)
     {
         var baseline = Doc(Three(kind) + P(Tail));
@@ -1410,16 +1410,66 @@ public class BlockWrapperNestedDiffTests
 
         var redline = DocxCompare.Consolidate(baseline, reviewers, settings);
 
-        var conflict = Assert.Single(DocxDiff.GetConflicts(baseline, reviewers, settings));
-        Assert.Collection(conflict.Competitors,
-            one => Assert.Contains("rules", one.ResultText),
-            two => Assert.Contains("twice", two.ResultText));
+        Assert.Empty(DocxDiff.GetConflicts(baseline, reviewers, settings));
+        var expected = Doc(Wrap(kind, P(Alpha.Replace("terms", "rules")) + P(Bravo) +
+            P(Charlie.Replace("once", "twice"))) + P(Tail));
+        AssertRoundTrip(baseline, expected, redline);
+        var inserted = DocxDiff.GetConsolidatedRevisions(baseline, reviewers, settings)
+            .Where(r => r.Type == DocxDiffRevisionType.Inserted).ToArray();
+        Assert.Collection(inserted, one => { Assert.Equal("One", one.Author); Assert.Equal("rules", one.Text); },
+            two => { Assert.Equal("Two", two.Author); Assert.Equal("twice", two.Text); });
+        using var json = System.Text.Json.JsonDocument.Parse(DocxDiff.GetConsolidatedEditScriptJson(baseline, reviewers, settings));
+        var wrapperOp = Assert.Single(json.RootElement.GetProperty("operations").EnumerateArray(),
+            op => op.TryGetProperty("authoredWrapperOps", out _));
+        Assert.Equal(new[] { "One", "", "Two" }, wrapperOp.GetProperty("authoredWrapperOps").EnumerateArray()
+            .Select(op => op.GetProperty("author").GetString()));
+    }
+
+    [Theory]
+    [MemberData(nameof(WrapperKindsAndPolicies))]
+    public void Consolidate_OverlappingEditsInsideNestedWrappers_KeepTheConflictPolicy(
+        Wrapper kind, ConflictResolution policy)
+    {
+        WmlDocument Document(string word) => Doc(Wrap(kind, Wrap(kind, P(Alpha.Replace("terms", word)), "inner")) + P(Tail));
+        var baseline = Document("terms");
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Document = Document("rules"), Author = "One" },
+            new DocxDiffReviewer { Document = Document("conditions"), Author = "Two" },
+        };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+        var redline = DocxCompare.Consolidate(baseline, reviewers, settings);
+        Assert.Single(DocxDiff.GetConflicts(baseline, reviewers, settings));
         Assert.Equal(Signature(baseline.DocumentByteArray), Signature(DocxDiffOps.RejectRevisions(redline.DocumentByteArray)));
         var accepted = Signature(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray));
-        if (policy == ConflictResolution.BaseWins)
-            Assert.Equal(Signature(baseline.DocumentByteArray), accepted);
-        else if (policy == ConflictResolution.FirstReviewerWins)
-            Assert.Equal(Signature(first.DocumentByteArray), accepted);
+        if (policy != ConflictResolution.StackAll)
+            Assert.Equal(Signature(Document(policy == ConflictResolution.BaseWins ? "terms" : "rules").DocumentByteArray), accepted);
+        else
+        {
+            Assert.Contains("rules", accepted);
+            Assert.Contains("conditions", accepted);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(WrapperKindsAndPolicies))]
+    public void Consolidate_MoveVersusEditInsideOneWrapper_KeepsTheConflictReversible(
+        Wrapper kind, ConflictResolution policy)
+    {
+        var baseline = Doc(Three(kind) + P(Tail));
+        var moved = Doc(Wrap(kind, P(Bravo) + P(Charlie) + P(Alpha)) + P(Tail));
+        var edited = Doc(Wrap(kind, P(Alpha.Replace("terms", "rules")) + P(Bravo) + P(Charlie)) + P(Tail));
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Document = moved, Author = "One" },
+            new DocxDiffReviewer { Document = edited, Author = "Two" },
+        };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+        var redline = DocxCompare.Consolidate(baseline, reviewers, settings);
+        Assert.NotEmpty(DocxDiff.GetConflicts(baseline, reviewers, settings));
+        Assert.Equal(Signature(baseline.DocumentByteArray), Signature(DocxDiffOps.RejectRevisions(redline.DocumentByteArray)));
+        if (policy != ConflictResolution.StackAll)
+            AssertRoundTrip(baseline, policy == ConflictResolution.BaseWins ? baseline : moved, redline);
     }
 
     // ---- edit script ---------------------------------------------------------------------------
