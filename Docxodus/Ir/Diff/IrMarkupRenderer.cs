@@ -4794,9 +4794,10 @@ internal static partial class IrMarkupRenderer
             if (nameStarts.Concat(nameEnds).Any(IsBlockLevelRevisionMarker))
                 continue; // a copy per side between blocks: the block placement found no boundary both share
 
-            // Collapse to a single bare start + bare end (both survive accept AND reject).
+            // Enclose both revision copies: a replacement may emit the insertion before the deletion.
+            // Keeping the first end would leave the deleted text outside the bookmark on reject.
             var keepStart = nameStarts[0];
-            var keepEnd = nameEnds.Count > 0 ? nameEnds[0] : null;
+            var keepEnd = nameEnds.LastOrDefault();
             foreach (var s in nameStarts)
                 if (!ReferenceEquals(s, keepStart)) { RemoveBookmarkMarker(s); changed = true; }
             foreach (var e in nameEnds)

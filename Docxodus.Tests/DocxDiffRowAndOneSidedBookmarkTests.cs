@@ -68,6 +68,38 @@ public class DocxDiffRowAndOneSidedBookmarkTests
         Assert.Equal(Spans(original), Spans(RevisionProcessor.RejectRevisions(redline)));
     }
 
+    [Theory]
+    [InlineData("Alder study", "paragraph")]
+    [InlineData("Birch survey", "paragraph")]
+    [InlineData("Alder ridge survey", "paragraph")]
+    [InlineData("Birch study", "paragraph")]
+    [InlineData("Alder", "paragraph")]
+    [InlineData("Alder study", "inline")]
+    [InlineData("Alder ridge survey", "inline")]
+    [InlineData("Alder study", "cell")]
+    public void Compare_ReplacementAtBookmarkBoundary_PreservesEnclosedText(string revisedText, string context)
+    {
+        WmlDocument Document(string text)
+        {
+            var paragraph = "<w:p><w:bookmarkStart w:id=\"5\" w:name=\"_Toc5\"/>" +
+                $"<w:r><w:t>{text}</w:t></w:r><w:bookmarkEnd w:id=\"5\"/>" +
+                (context == "inline" ? "<w:r><w:t xml:space=\"preserve\"> outside</w:t></w:r>" : "") + "</w:p>";
+            return IrTestDocuments.FromParts(context == "cell"
+                ? "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid>" +
+                  "<w:tr><w:tc><w:tcPr/>" + paragraph + "</w:tc></w:tr></w:tbl>"
+                : paragraph);
+        }
+        var original = Document("Alder survey");
+        var revised = Document(revisedText);
+
+        var redline = DocxCompare.Compare(original, revised);
+
+        AssertRoundTripsBookmarks(original, revised, redline);
+        Assert.Equal(Body(revised).Value, Body(RevisionProcessor.AcceptRevisions(redline)).Value);
+        Assert.Equal(Body(original).Value, Body(RevisionProcessor.RejectRevisions(redline)).Value);
+        NoNewValidationErrors(original.DocumentByteArray, redline.DocumentByteArray);
+    }
+
     // ------------------------------------------------------------ 1. a row-level bookmark in a modified row
 
     [Fact]
