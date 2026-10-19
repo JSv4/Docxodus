@@ -681,6 +681,41 @@ public class DocxSessionIncrementalIndexOracleTests
         Assert.False(session.ReplaceText(anchor, "Again.").Patch!.IsFullDocument);
     }
 
+    [Theory]
+    [InlineData(null, "remove")]
+    [InlineData(false, "remove")]
+    [InlineData(true, "remove")]
+    [InlineData(false, "delete")]
+    [InlineData(null, "text")]
+    [InlineData(false, "text")]
+    [InlineData(true, "text")]
+    public void List_edits_patch_later_numbers_after_save(bool? persistAnchors, string edit)
+    {
+        using var session = new DocxSession(Paragraphs(4));
+        var anchors = Anchors(session, "p");
+        Assert.True(session.ApplyListFormatRange(anchors[0], anchors[3], ListFormat.Decimal).Success);
+        session.Project();
+        var model = BlockModel(session);
+        if (persistAnchors is { } persist) session.Save(persist);
+
+        var result = edit switch
+        {
+            "text" => session.ReplaceText(anchors[1], "Birch revised."),
+            "delete" => session.DeleteBlock(anchors[1]),
+            _ => session.ApplyListFormat(anchors[1], ListFormat.None),
+        };
+        Assert.True(result.Success);
+        var patch = Assert.IsType<MarkdownPatch>(result.Patch);
+        if (edit == "text") Assert.False(patch.IsFullDocument);
+        if (patch.IsFullDocument)
+            Assert.Equal(session.Project().Markdown, patch.Markdown);
+        else
+        {
+            Assert.Null(ApplyPatch(model, patch));
+            Assert.Null(ModelMismatch(model, BlockModel(session)));
+        }
+    }
+
     [Fact]
     public void Tracked_change_sessions_stay_consistent()
     {

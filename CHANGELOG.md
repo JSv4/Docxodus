@@ -40,6 +40,10 @@ All notable changes to this project will be documented in this file.
   every note's content on accept and reject (#1212). Each reviewer-sourced reference is remapped
   once even when both its run and containing paragraph were registered for copying.
 
+- Markdown patches include later list numbers after removing list membership following a clean
+  save. Numbering-prefix changes invalidate the patch even when the restored XML has no cached
+  counters; text-only edits continue to return scoped patches.
+
 - Comparison and consolidation preserve comment definitions when document versions reuse the same
   numeric comment ID for different notes (#1210). Matching author/date/text definitions retain the
   base identity; new definitions and independent reviewer additions receive distinct IDs. Markers

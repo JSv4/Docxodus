@@ -2,6 +2,8 @@ import { test, expect, Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { generateFootnoteDocx } from './docx-footnote-fixture.js';
+import type { DocxSession } from '../src/session.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -82,6 +84,37 @@ test.describe('DocxSession (WASM bridge)', () => {
 
     expect(result.success).toBe(false);
     expect(result.errorCode).toBe('table_insert_not_supported');
+  });
+
+  test('list patches after save include renumbered followers and keep text edits scoped', async ({ page }) => {
+    // Reuse the generator for four plain body paragraphs, without any notes.
+    const results = await page.evaluate((bytes: number[]) => [false, true].map(textOnly => {
+      const session = (window as any).Docxodus.openTypedSession(new Uint8Array(bytes)) as DocxSession;
+      try {
+        const projection = session.project();
+        const anchors = Object.entries(projection.anchorIndex)
+          .filter(([, entry]: [string, any]) => entry.scope === 'body' && entry.kind === 'p')
+          .map(([id]) => id);
+        const numbered = session.applyListFormatRange(anchors[0], anchors[3], 'decimal');
+        session.project();
+        session.save();
+        const edited = textOnly ? session.replaceText(anchors[1], 'Birch revised.')
+          : session.applyListFormat(anchors[1], 'none');
+        return { textOnly, numbered: numbered.success, edited: edited.success,
+          patch: edited.patch, markdown: session.project().markdown };
+      } finally { session.close(); }
+    }), Array.from(generateFootnoteDocx(0, 4)));
+
+    for (const result of results) {
+      expect(result.numbered).toBe(true);
+      expect(result.edited).toBe(true);
+      expect(result.patch!.fullDocument).toBe(!result.textOnly);
+      if (result.textOnly) expect(result.patch!.markdown).toContain('Birch revised.');
+      else {
+        expect(result.patch!.markdown).toBe(result.markdown);
+        expect(result.patch!.markdown).toContain('2. Body line 3');
+      }
+    }
   });
 
   test('Undo restores prior state', async ({ page }) => {
