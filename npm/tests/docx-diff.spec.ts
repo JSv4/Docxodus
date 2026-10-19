@@ -286,6 +286,8 @@ test.describe('DocxDiff consolidate (composite N-way) bridge', () => {
     ['consolidate', 'TableBoundaryBookmarks/boundary-bookmark-consolidate-paragraph-control', 'Hazel lower revised'],
     ['compare', 'BookmarkBoundaries/bookmark-boundary-replacement', 'Alder study'],
     ['compare', 'BookmarkBoundaries/bookmark-boundary-insertion-control', 'Alder ridge survey'],
+    ['consolidate', 'NoteViews/consolidated-note-prefix', 'Dune citation revised'],
+    ['consolidate', 'NoteViews/consolidated-note-suffix-control', 'Dune citation revised'],
   ]) {
     test(`${operation} resolves ${path.basename(prefix)} structure through accept/reject`, async ({ page }) => {
       const inputs = [0, 1, ...(operation === 'consolidate' ? [2] : [])].map(i => readTestFile(`${prefix}-${i}.docx`));
@@ -305,14 +307,26 @@ test.describe('DocxDiff consolidate (composite N-way) bridge', () => {
         });
       }, { operation, inputs: inputs.map(bytes => Array.from(bytes)) });
       const xml = [...result.map(r => Buffer.from(r.bytes)), Buffer.from(expected), Buffer.from(inputs[0])]
-        .map(bytes => readZipEntry(bytes, 'word/document.xml'));
-      const views = await page.evaluate(xml => xml.map(source => {
-        const document = new DOMParser().parseFromString(source, 'application/xml');
+        .map(bytes => {
+          const body = readZipEntry(bytes, 'word/document.xml');
+          return { body, notes: body.includes('footnoteReference') ? readZipEntry(bytes, 'word/footnotes.xml') : '<notes/>' };
+        });
+      const views = await page.evaluate(xml => xml.map(({ body, notes }) => {
+        const document = new DOMParser().parseFromString(body, 'application/xml');
         const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
         const names = new Map(Array.from(document.getElementsByTagNameNS(ns, 'bookmarkStart'))
           .map(e => [e.getAttributeNS(ns, 'id'), e.getAttributeNS(ns, 'name')]));
+        const definitions = Array.from(new DOMParser().parseFromString(notes, 'application/xml').getElementsByTagNameNS(ns, 'footnote'))
+          .filter(e => !e.hasAttributeNS(ns, 'type'));
+        const noteIds = new Map(definitions.map(e => [e.getAttributeNS(ns, 'id'), e]));
+        if (noteIds.size !== definitions.length) throw new Error('Duplicate footnote ID');
         function walk(e: Element): unknown[] {
           if (e.localName === 't') return [e.textContent];
+          if (e.localName === 'footnoteReference') {
+            const note = noteIds.get(e.getAttributeNS(ns, 'id'));
+            if (!note) throw new Error('Unresolved footnote');
+            return [['footnote', walk(note)]];
+          }
           if (e.localName === 'bookmarkStart' || e.localName === 'bookmarkEnd')
             return [[e.localName, names.get(e.getAttributeNS(ns, 'id'))]];
           // Run boundaries can change during revision resolution; only markers and block boundaries
@@ -326,7 +340,8 @@ test.describe('DocxDiff consolidate (composite N-way) bridge', () => {
           }
           return ['tbl', 'tr', 'tc', 'p'].includes(e.localName) ? [[e.localName, children]] : children;
         }
-        return walk(document.documentElement);
+        return { body: walk(document.documentElement), notes: definitions.map(walk)
+          .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))) };
       }), xml);
       expect(views[0]).toEqual(views[2]);
       expect(views[1]).toEqual(views[3]);
