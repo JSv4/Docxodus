@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { readZipEntry } from './zip.js';
 
 const cases = [
+  ...['body', 'header', 'footer'].flatMap(story => ['edited', 'unchanged-control'].map(kind =>
+    [`removed-comment-${story}-${kind}`, 'compare', story === 'body' ? 'word/document.xml' : `word/${story}1.xml`, '1', '0'])),
   ['comment-add-customxml', 'compare'],
   ['comment-identity-reused-id', 'compare'],
   ['comment-identity-replaced-id', 'compare'],
@@ -21,7 +23,7 @@ const cases = [
 ];
 const fixture = (name: string) => readFileSync(new URL(`../../TestFiles/CommentViews/${name}.docx`, import.meta.url));
 
-for (const [name, operation] of cases) {
+for (const [name, operation, part = 'word/document.xml', final = 'final', original = 'original'] of cases) {
   test(`${name} preserves comment anchors through browser accept/reject`, async ({ page }) => {
     await page.goto('/test-harness.html');
     await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 30000 });
@@ -37,9 +39,9 @@ for (const [name, operation] of cases) {
         return Array.from(r.docxBytes) as number[];
       });
     }, { inputs, operation });
-    const packages = [...result.map(bytes => Buffer.from(bytes)), fixture(`${name}-final`), fixture(`${name}-original`)];
+    const packages = [...result.map(bytes => Buffer.from(bytes)), fixture(`${name}-${final}`), fixture(`${name}-${original}`)];
     const xml = packages.map(bytes => {
-      const body = readZipEntry(bytes, 'word/document.xml');
+      const body = readZipEntry(bytes, part);
       return { body, comments: body.includes('commentReference') ? readZipEntry(bytes, 'word/comments.xml') : '<comments/>' };
     });
     const views = await page.evaluate(xml => xml.map(({ body, comments }) => {
