@@ -89,7 +89,11 @@ internal static class IrCompositeMarkupRenderer
         // One shared RenderState (single ascending id counter, single move-name allocator). Left = base. The
         // RightSource / AuthorOverride / RightSourceId are switched per op below. RightSourcedClones are bucketed
         // by RightSourceId so each reviewer's media-bearing clones import from that reviewer's package.
-        var state = new IrMarkupRenderer.RenderState(baseIr, baseIr, settings) { IsComposite = true };
+        var state = new IrMarkupRenderer.RenderState(baseIr, baseIr, settings)
+        {
+            IsComposite = true,
+            CompositeBookmarks = script.Bookmarks,
+        };
 
         // Bookmarks and comment ranges between body blocks go back around the blocks they bracket: the base's
         // where the base has them, each reviewer's where that reviewer has them (issue #1149).
@@ -158,6 +162,10 @@ internal static class IrCompositeMarkupRenderer
                              .Where(a => a.Name.Namespace == PtOpenXml.pt).ToList())
                     attr.Remove();
 
+                // Whole-block and token clones use the same reviewer choice as explicit marker placement.
+                // These are live body nodes; note parts have their own id space and are rendered separately.
+                IrMarkupRenderer.ReconcileCompositeBookmarkClones(state, authors);
+                state.CompositeBookmarks = null;
                 main.PutXDocument();
 
                 // NOTE SCOPES (N-way): rewrite reviewer-sourced body note references into the base-anchored

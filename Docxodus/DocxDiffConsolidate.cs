@@ -13,7 +13,8 @@ public enum ConflictResolution
     BaseWins,
     /// <summary>Apply the first reviewer (list order) inline; record the others.</summary>
     FirstReviewerWins,
-    /// <summary>Emit each competing edit in sequence at the site; record all.</summary>
+    /// <summary>Emit each competing edit in sequence at the site; record all. A bookmark-name conflict
+    /// keeps the first reviewer's range, since a name can identify only one range.</summary>
     StackAll,
 }
 
@@ -167,6 +168,10 @@ public sealed class DocxDiffConsolidatedRevision
 /// block-level conflict (the whole block differs, e.g. an inserted vs. deleted paragraph at the same
 /// base position). Token indices correspond to the IR tokenizer's output; they are suitable for
 /// machine consumers that inspect the edit script — do not rely on them being character offsets.</para>
+/// <para>Competing additions of one bookmark name also use an empty token interval. The anchor identifies
+/// the first candidate's mapped base paragraph (or the first base block for newly inserted content).
+/// Each competitor describes the name, covered text and endpoints. Bookmarks are omitted from token
+/// revisions, so these conflicts have no corresponding token revision with a <c>ConflictId</c>.</para>
 /// <para><b>Linking to the consolidated revision list.</b> <see cref="Id"/> matches the
 /// <see cref="DocxDiffConsolidatedRevision.ConflictId"/> on the winning revision in the consolidated
 /// revision list, so conflicts can be correlated to the revision that was actually placed in the
@@ -250,7 +255,8 @@ public sealed class DocxDiffConflictCompetitor
 
     /// <summary>
     /// The flat text this reviewer's edit would have produced at the conflicted span. Empty string
-    /// means a deletion.
+    /// means a deletion. For a bookmark-name conflict, this describes the bookmark name, covered text
+    /// and base-relative range endpoints instead.
     /// </summary>
     public string ResultText { get; }
 

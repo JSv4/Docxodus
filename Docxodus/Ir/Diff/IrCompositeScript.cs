@@ -226,7 +226,8 @@ internal sealed record IrCompositeScript(
     IrNodeList<IrCompositeNoteDiff>? NoteOps = null,
     IrNodeList<IrReviewerNoteIdMap>? NoteIdMaps = null,
     IrComposedShellRef? TrailingSectPr = null,
-    IrNodeList<IrReviewerComparison>? ReviewerComparisons = null);
+    IrNodeList<IrReviewerComparison>? ReviewerComparisons = null,
+    IrMarkupRenderer.CompositeBookmarkPlan? Bookmarks = null);
 
 /// <summary>The parts of one reviewer's own two-way comparison with the base that the composite renderer reads
 /// (<see cref="IrCompositeScript.ReviewerComparisons"/>): the body ops and the note diffs.</summary>
