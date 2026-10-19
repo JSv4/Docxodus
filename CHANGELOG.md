@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [14.0.0] - 2026-10-19
+
 ### Changed
 
 - A comparison now diffs inside a block wrapper whose own markup is unchanged, instead of deleting and
