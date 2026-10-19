@@ -4,3 +4,7 @@ Copyright John Scrudato IV; MIT. No third-party documents, images or embedded fo
 
 The numbered files are comparison/consolidation inputs. `final` and `original` are independently
 authored expectations. The matching PDF and redline cases check the same source packages.
+
+The `duplicate-comment-*` packages are original #1197 fixtures from the same generator, branch
+`fixtures/1197-duplicate-comment-references`. Reproducer inputs intentionally repeat one reference;
+expected final/original documents and controls contain one reference per comment.

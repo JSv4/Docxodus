@@ -8,6 +8,10 @@ const cases = [
   ['comment-wrapper-control', 'compare'],
   ['reviewer-added-comment', 'consolidate'],
   ['reviewer-comment-control', 'consolidate'],
+  ['duplicate-comment-sdt', 'compare'],
+  ['duplicate-comment-sdt-control', 'compare'],
+  ['duplicate-comment-customxml', 'compare'],
+  ['duplicate-comment-customxml-control', 'compare'],
 ];
 const fixture = (name: string) => readFileSync(new URL(`../../TestFiles/CommentViews/${name}.docx`, import.meta.url));
 
@@ -52,7 +56,13 @@ for (const [name, operation] of cases) {
           if (typeof last === 'string' && typeof child === 'string') children[children.length - 1] = last + child;
           else children.push(child);
         }
-        return ['p', 'tbl', 'tr', 'tc', 'sdt', 'customXml'].includes(e.localName) ? [[e.localName, children]] : children;
+        if (e.localName === 'sdt' || e.localName === 'customXml') {
+          const tag = e.localName === 'sdt'
+            ? e.getElementsByTagNameNS(ns, 'tag')[0]?.getAttributeNS(ns, 'val')
+            : e.getAttributeNS(ns, 'element');
+          return [[e.localName, tag, children]];
+        }
+        return ['p', 'tbl', 'tr', 'tc'].includes(e.localName) ? [[e.localName, children]] : children;
       }
       const authors = Array.from(document.getElementsByTagNameNS(ns, 'ins'))
         .filter(e => e.getElementsByTagNameNS(ns, 'commentReference').length > 0)
