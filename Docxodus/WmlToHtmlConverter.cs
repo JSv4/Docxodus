@@ -7197,6 +7197,7 @@ namespace Docxodus
                 // inherited line height and space-after to the containing row.
                 style.Remove(AutomaticLineSpacingMultiplierCssProperty);
                 style["line-height"] = "0.05pt";
+                style["min-height"] = "0.05pt";
                 style["margin-top"] = "0";
                 style["margin-bottom"] = "0";
             }
@@ -9970,7 +9971,9 @@ namespace Docxodus
                             e.Name == W.yearLong ||
                             e.Name == W.yearShort
                         );
-                    if (hasContent == false)
+                    // Structural table-end paragraphs get a one-twip minimum box in ConvertParagraph.
+                    // A full-size placeholder would extend beyond it and trip export clipping checks.
+                    if (hasContent == false && (string?)element.Attribute(StructuralTableEndParagraphAttribute) != "true")
                         return new XElement(element.Name,
                             element.Attributes(),
                             new XAttribute(PtOpenXml.EmptyParagraph, true),

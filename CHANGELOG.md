@@ -47,6 +47,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Prevent a synthetic nonbreaking-space run in the required blank paragraph after a nested table. The paragraph retains a one-twip layout box for source geometry, so fitting nested footnote tables no longer fail PDF clipping verification (#1217).
+
 - Rejecting a word replacement at the end of a bookmark restores the full original range (#1218).
   Shared bookmark endpoints enclose both revision copies, preserving the revised range on accept.
 

@@ -121,6 +121,8 @@ public class RenderingFidelityInheritanceTests
         Assert.Contains("margin-bottom: 0", style);
         Assert.DoesNotContain("--docx-auto-line-spacing", style);
         Assert.NotNull(paragraph.Attribute("data-source-anchor-id"));
+        Assert.Empty(paragraph.Elements()); // A full-size placeholder has ink bounds beyond the one-twip line box.
+        Assert.Empty(paragraph.Value);
     }
 
     [Theory]

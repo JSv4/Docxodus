@@ -2,6 +2,8 @@ import { test, expect, type Page } from '@playwright/test';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { generateNoteTableDocx } from './docx-note-table-fixture.js';
+import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
+import { inspectPdf } from './visual-parity/pdf.js';
 
 /**
  * Issue #1178: a footnote holding a table. Word reference PDFs split the table between pages at row
@@ -24,6 +26,7 @@ interface Page_ {
   rows: number[];
   /** Whether each body line on the page is inside the page's visible body area. */
   bodyVisible: boolean;
+  notesVisible: boolean;
 }
 
 async function paginate(page: Page, bytes: Uint8Array, fragmentParagraphs: boolean): Promise<Page_[]> {
@@ -48,6 +51,7 @@ async function paginate(page: Page, bytes: Uint8Array, fragmentParagraphs: boole
       const content = box.querySelector<HTMLElement>('.page-content')!;
       const area = content.getBoundingClientRect();
       const lines = Array.from(content.querySelectorAll<HTMLElement>('p'));
+      const noteArea = box.querySelector<HTMLElement>('.page-footnotes')?.getBoundingClientRect();
       return {
         body: numbers(content.textContent ?? '', /Body line (\d+)/g),
         rows: numbers(box.querySelector('.page-footnotes')?.textContent ?? '', /Note table row (\d+)/g),
@@ -56,12 +60,39 @@ async function paginate(page: Page, bytes: Uint8Array, fragmentParagraphs: boole
           const rect = line.getBoundingClientRect();
           return rect.top >= area.top - 0.5 && rect.bottom <= area.bottom + 0.5;
         }),
+        notesVisible: Array.from(box.querySelectorAll<HTMLElement>('.page-footnotes p')).every(p => {
+          const rect = p.getBoundingClientRect();
+          return !p.textContent?.trim() || !!noteArea && rect.top >= noteArea.top - 0.5 && rect.bottom <= noteArea.bottom + 0.5;
+        }),
       };
     });
   }, { input: Array.from(bytes), fragmentParagraphs });
 }
 
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => from + index);
+
+for (const shape of ['rows', 'nested'] as const) {
+  const rows = 3;
+  test(`fitting note ${shape} with ${rows} lines remains visible in both pagination modes`, async ({ page }) => {
+    for (const fragmentParagraphs of [true, false]) {
+      const pages = await paginate(page, generateNoteTableDocx(61, 1, rows, false, shape === 'nested'), fragmentParagraphs);
+      expect(pages.flatMap(p => p.rows)).toEqual(range(1, rows));
+      expect(pages.flatMap(p => p.body)).toEqual(range(1, 61));
+      expect(pages.every(p => p.bodyVisible && p.notesVisible)).toBe(true);
+    }
+  });
+
+  test(`fitting note ${shape} with ${rows} lines survives PDF and PageMap verification`, async ({ browser }, testInfo) => {
+    test.setTimeout(120_000);
+    const result = await renderDocxArtifacts(generateNoteTableDocx(61, 1, rows, false, shape === 'nested'),
+      { browser, outputs: ['pdf'], timeoutMs: 120_000, reviewProfile: 'final', commentProfile: 'hidden' });
+    const text = (await inspectPdf(result.pdf!)).pages.map(p => p.text).join(' ');
+    expect(Array.from(text.matchAll(/Note table row\s+(\d+)/g), m => Number(m[1]))).toEqual(range(1, rows));
+    expect(Array.from(text.matchAll(/Body line\s+(\d+)/g), m => Number(m[1]))).toEqual(range(1, 61));
+    expect(result.pageMap.fragments.some(f => f.story === 'footnote')).toBe(true);
+    await testInfo.attach(`${shape}-${rows}.pdf`, { body: Buffer.from(result.pdf!), contentType: 'application/pdf' });
+  });
+}
 
 for (const fragmentParagraphs of [true, false]) {
   test.describe(`A note's table (paragraph fragmentation ${fragmentParagraphs ? 'on' : 'off'})`, () => {
