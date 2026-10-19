@@ -323,20 +323,19 @@ internal static class IrCompositeMarkupRenderer
         {
             if (reviewer < 0)
                 continue;   // base-sourced clones already carry base ids
-            foreach (var clone in clones)
+            // A whole-block insertion registers both its runs and its paragraph. Rewrite each live
+            // reference once, or a shifted id can be mistaken for another id in the reviewer's map.
+            foreach (var refEl in clones.SelectMany(c => c.DescendantsAndSelf())
+                         .Where(e => e.Name == W.footnoteReference || e.Name == W.endnoteReference).Distinct())
             {
-                foreach (var refEl in clone.DescendantsAndSelf()
-                             .Where(e => e.Name == W.footnoteReference || e.Name == W.endnoteReference))
-                {
-                    // Deleted/moved-from content is BASE-sourced (cloned from the left side) even inside a
-                    // reviewer-registered clone — its references already carry base ids.
-                    if (refEl.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom))
-                        continue;
-                    var kind = refEl.Name == W.footnoteReference ? IrNoteKind.Footnote : IrNoteKind.Endnote;
-                    var id = (string?)refEl.Attribute(W.id);
-                    if (id != null && outputId.TryGetValue((reviewer, kind, id), out var mapped) && mapped != id)
-                        refEl.SetAttributeValue(W.id, mapped);
-                }
+                // Deleted/moved-from content is BASE-sourced (cloned from the left side) even inside a
+                // reviewer-registered clone — its references already carry base ids.
+                if (refEl.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom))
+                    continue;
+                var kind = refEl.Name == W.footnoteReference ? IrNoteKind.Footnote : IrNoteKind.Endnote;
+                var id = (string?)refEl.Attribute(W.id);
+                if (id != null && outputId.TryGetValue((reviewer, kind, id), out var mapped) && mapped != id)
+                    refEl.SetAttributeValue(W.id, mapped);
             }
         }
         main.PutXDocument();

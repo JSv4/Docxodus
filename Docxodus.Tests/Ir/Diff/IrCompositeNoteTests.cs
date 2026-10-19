@@ -271,6 +271,53 @@ public class IrCompositeNoteTests
         Assert.Equal(BodyText(b), BodyText(rejected));
     }
 
+    [Theory]
+    [InlineData(0, false, false)]
+    [InlineData(0, false, true)]
+    [InlineData(0, true, false)]
+    [InlineData(0, true, true)]
+    [InlineData(3, false, false)]
+    [InlineData(3, false, true)]
+    [InlineData(3, true, false)]
+    [InlineData(3, true, true)]
+    public void Inserted_note_preserves_each_existing_note_when_another_reviewer_edits(int insertion, bool secondReviewer, bool newParagraph)
+    {
+        var entries = new (string Para, string? Note)[]
+        {
+            ("Cedar lead", null), ("Dune citation", "Cobalt reference"),
+            ("Reed citation", "Amber reference"), ("Willow tail", null),
+        };
+        var original = NoteDoc(entries);
+        var added = entries.ToList();
+        if (newParagraph)
+            added.Insert(insertion, ("Birch inserted clause", "Birch added reference"));
+        else
+            added[insertion] = (added[insertion].Para, "Birch added reference");
+        var edited = entries.ToArray();
+        edited[1].Para += " revised";
+        var reviewers = new List<DocxDiffReviewer> { new() { Author = "Cedar", Document = NoteDoc(added.ToArray()) } };
+        if (secondReviewer)
+            reviewers.Add(new() { Author = "Willow", Document = NoteDoc(edited) });
+
+        var redline = DocxCompare.Consolidate(original, reviewers);
+        var accepted = RevisionAccepter.AcceptRevisions(redline);
+        var rejected = RevisionProcessor.RejectRevisions(redline);
+        Assert.Equal(added.Where(e => e.Note != null).Select(e => e.Note), ReferencedNoteTexts(accepted));
+        Assert.Equal(ReferencedNoteTexts(original), ReferencedNoteTexts(rejected));
+        Assert.Equal(BodyText(original), BodyText(rejected));
+        var expected = added.Select(e => (secondReviewer && e.Para == "Dune citation" ? e.Para + " revised" : e.Para, e.Note)).ToArray();
+        Assert.Equal(BodyText(NoteDoc(expected)), BodyText(accepted));
+        foreach (var (view, count) in new[] { (accepted, 3), (rejected, 2) })
+        {
+            using var stream = new MemoryStream(view.DocumentByteArray);
+            using var document = WordprocessingDocument.Open(stream, false);
+            Assert.Equal(count, document.MainDocumentPart!.FootnotesPart!.GetXDocument().Root!
+                .Elements(XName.Get("footnote", W)).Count(e => e.Attribute(XName.Get("type", W)) == null));
+        }
+        foreach (var document in new[] { original, reviewers[0].Document, redline, accepted, rejected })
+            PackageValidation.AssertValid(document, FileFormatVersions.Microsoft365);
+    }
+
     // ------------------------------------------------------------------ 6. two reviewers insert notes
 
     [Fact]
