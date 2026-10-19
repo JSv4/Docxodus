@@ -2887,9 +2887,11 @@ internal static partial class IrMarkupRenderer
         if (rightPart == null)
             return null;
 
-        // Create the part and seed it with the right part's BOILERPLATE notes only (the reserved separator /
-        // continuation notes, ids ≤ 0), under a fresh root — so the real inserted notes start from a clean
-        // LEFT-side (empty) baseline and reject-all yields no real note content.
+        // Create the part and seed it with the right part's BOILERPLATE notes only, under a fresh root —
+        // so the real inserted notes start from a clean LEFT-side (empty) baseline and reject-all yields no
+        // real note content. Boilerplate is a w:type other than normal. A content footnote at id 0 is not
+        // boilerplate, even though continuationSeparator also uses id 0; copying it here would duplicate
+        // the note the insert then adds.
         var newPart = isFootnote
             ? (OpenXmlPart)main.AddDeterministicPart<FootnotesPart>("rIdFootnotes")
             : main.AddDeterministicPart<EndnotesPart>("rIdEndnotes");
@@ -2900,7 +2902,7 @@ internal static partial class IrMarkupRenderer
             rightRoot?.Attributes() ?? Enumerable.Empty<XAttribute>());
         if (rightRoot != null)
             foreach (var note in rightRoot.Elements(noteName)
-                         .Where(n => int.TryParse((string?)n.Attribute(W.id), out var id) && id <= 0))
+                         .Where(WmlToMarkdownConverter.IsBoilerplateNote))
                 newRoot.Add(new XElement(note));
         var xDoc = newPart.GetXDocument();
         if (xDoc.Root == null)
@@ -2932,8 +2934,10 @@ internal static partial class IrMarkupRenderer
         // Resolve every note by its LEFT id before any is re-id'd below: when an inserted reference shifts the
         // numbering, matched notes move along a chain (1→2, 2→3), and looking up left id 2 after note 1 took
         // id 2 found the wrong note, so two definitions ended up with one note's text.
+        // Skip boilerplate. continuationSeparator is also id 0, and a content footnote may use id 0
+        // beside it. First-wins would edit the separator and leave the content footnote untouched.
         var leftNotesById = root.Elements(noteName)
-            .Where(e => e.Attribute(W.id) != null)
+            .Where(e => e.Attribute(W.id) != null && !WmlToMarkdownConverter.IsBoilerplateNote(e))
             .GroupBy(e => (string)e.Attribute(W.id)!)
             .ToDictionary(g => g.Key, g => g.First());
         foreach (var diff in diffs)
@@ -2948,7 +2952,8 @@ internal static partial class IrMarkupRenderer
                 // the RIGHT note element's shell (attributes + non-block prelude) so the inserted blocks land in
                 // a schema-valid w:footnote/w:endnote; the ops (all InsertBlock) supply the content.
                 var rightNote = rightRoot?.Elements(noteName)
-                    .FirstOrDefault(e => (string?)e.Attribute(W.id) == diff.NoteId);
+                    .FirstOrDefault(e => (string?)e.Attribute(W.id) == diff.NoteId
+                        && !WmlToMarkdownConverter.IsBoilerplateNote(e));
                 if (rightNote == null)
                     continue;
                 noteEl = new XElement(noteName, rightNote.Attributes());
@@ -3470,11 +3475,15 @@ internal static partial class IrMarkupRenderer
     /// Each reference's <c>@w:id</c> is rewritten to <c>n</c> and its definition (matched by side: a reference
     /// inside <c>w:del</c> resolves a LEFT-sourced definition, an <c>w:ins</c>/equal reference a RIGHT-sourced one)
     /// is renumbered to <c>n</c> and emitted in that order. Reserved separator/continuation boilerplate notes
-    /// (<c>w:type</c> present, or id ≤ 0) keep their ids and lead the part. Definitions that no surviving reference
-    /// names are still carried (after the renumbered ones, original order) so accept/reject — which drop the
-    /// opposite side's references — never dangle: each surviving reference still resolves, and the kept ids stay an
-    /// ASCENDING subsequence of the renumbered space, so the read-order note sequence matches the right document on
-    /// accept and the left on reject. Idempotent when ids already coincide; runs for every render.
+    /// (<see cref="WmlToMarkdownConverter.IsBoilerplateNote"/>: a <c>w:type</c> other than <c>normal</c>) keep their
+    /// ids and lead the part. A content footnote at id 0 is not boilerplate — <c>continuationSeparator</c> also uses
+    /// id 0 — and is renumbered with the reference that cites it. A reference that names no definition is removed,
+    /// including when the notes part itself is absent; assigning it the next id, or returning before the walk,
+    /// leaves a <c>w:footnoteReference</c> Word offers to recover. Definitions that no
+    /// surviving reference names are still carried (after the renumbered ones, original order) so accept/reject —
+    /// which drop the opposite side's references — never dangle: each surviving reference still resolves, and the
+    /// kept ids stay an ASCENDING subsequence of the renumbered space, so the read-order note sequence matches the
+    /// right document on accept and the left on reject. Idempotent when ids already coincide; runs for every render.
     /// <para><b>Nested references.</b> The body walk cannot see a reference living INSIDE a note's definition
     /// body (a note that itself cites a note). Each renumbered definition's old→new id is therefore returned
     /// to the caller, which — after BOTH kinds' passes ran — sweeps BOTH note parts remapping nested
@@ -3497,16 +3506,20 @@ internal static partial class IrMarkupRenderer
     {
         var empty = new Dictionary<string, string>(StringComparer.Ordinal);
         if (notePart == null)
+        {
+            RemoveBodyReferencesWithNoNotePart(main, refName);
             return empty;
+        }
         var noteXDoc = notePart.GetXDocument();
         var noteRoot = noteXDoc.Root;
         if (noteRoot == null)
             return empty;
 
         // Partition: reserved boilerplate (kept verbatim, leads the part) vs real notes (renumber candidates).
-        bool IsReserved(XElement note) =>
-            note.Attribute(W.type) != null ||
-            (int.TryParse((string?)note.Attribute(W.id), out var nid) && nid <= 0);
+        // Id <= 0 is not the test. continuationSeparator occupies id 0, and a content footnote may occupy
+        // id 0 beside it. The reader already keeps that content footnote (IsBoilerplateNote). Reserving it
+        // here drops it from the lookup, and the reference that cites it is handed a fresh id no footnote has.
+        bool IsReserved(XElement note) => WmlToMarkdownConverter.IsBoilerplateNote(note);
         var reserved = noteRoot.Elements(noteName).Where(IsReserved).ToList();
         var realNotes = noteRoot.Elements(noteName).Where(e => !IsReserved(e)).ToList();
 
@@ -3519,13 +3532,13 @@ internal static partial class IrMarkupRenderer
             return empty;
         }
 
-        // A definition is DELETED-ONLY (left-sourced, vanishes on accept) iff every run carrying text is inside a
-        // w:del — i.e. it has w:delText and no live w:t outside a w:del. Its body reference lives in a w:del. A
-        // NON-deleted definition (matched or inserted) is named by an ins/equal reference. This deletedness — NOT
-        // the raw id — is the reliable side discriminator: left and right ids can collide numerically (a deleted
-        // note and a matched note can BOTH land on id 1), but a del reference always names a deleted-only def and
-        // an ins/equal reference always names a non-deleted def. Partitioning the defs this way mirrors the
-        // oracle's disjoint left/right id ranges without needing the preprocess range trick.
+        // A definition is DELETED-ONLY (left-sourced, vanishes on accept) iff it has w:delText and no live w:t
+        // outside a w:del. A del reference names that definition. An ins/equal reference names the live definition
+        // with the same id when one exists. A revised note whose element is empty is rendered with only w:delText,
+        // so it is deleted-only, while the body reference both documents still cite is not inside w:del. That equal
+        // reference names the deleted-only definition; removing it makes accept drop a citation the right document
+        // kept (WC063). Left and right ids can still collide (a deleted note and a matched note can BOTH land on
+        // id 1). The equal reference prefers the live definition.
         bool IsDeletedOnly(XElement note)
         {
             bool hasLiveText = note.Descendants(W.t)
@@ -3572,25 +3585,37 @@ internal static partial class IrMarkupRenderer
             var oldId = (string?)r.Attribute(W.id);
             if (oldId == null) continue;
             bool isDel = r.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom);
-            // ins/equal → the live definition with the reference's (right) id. del → the deleted-only definition
-            // with the reference's (left) id (left-sourced, vanishes on accept); but a del reference whose note was
-            // NOT deleted — its DEFINITION is preserved (a matched note whose only reference was deleted, so the
-            // def lingers unreferenced) — has no deleted-only def, so fall back to the LIVE def carrying the
-            // reference's id. Without the fallback the del reference gets a fresh sequential id while its
-            // preserved def keeps its original id, and reject dangles (the renumbered reference resolves to no
-            // definition) whenever the original id ≠ the reference's ordinal — masked by the {1,2}-in-order
-            // corpus, exposed by gapped ids (e.g. the NVCA contract's 111 footnotes).
+            // ins/equal → the live definition with the reference's id, else the deleted-only definition with
+            // that same id. The second lookup is the empty revised note: it is filed only in delById, and the
+            // citation is not inside w:del. A different id is not a match, so a dangling reference is still removed.
+            // When both partitions hold the id, live wins.
+            // del → the deleted-only definition with the reference's (left) id (left-sourced, vanishes on accept);
+            // but a del reference whose note was NOT deleted — its DEFINITION is preserved (a matched note whose
+            // only reference was deleted, so the def lingers unreferenced) — has no deleted-only def, so fall back
+            // to the LIVE def carrying the reference's id. Without the fallback the del reference gets a fresh
+            // sequential id while its preserved def keeps its original id, and reject dangles (the renumbered
+            // reference resolves to no definition) whenever the original id ≠ the reference's ordinal — masked by
+            // the {1,2}-in-order corpus, exposed by gapped ids (e.g. the NVCA contract's 111 footnotes).
             // A matched note re-id'd to its RIGHT id (ApplyNoteDiffsToPart) is found under that id, so a del
             // reference to it follows the re-id first.
             XElement? def = !isDel
-                ? liveById.GetValueOrDefault(oldId)
+                ? liveById.GetValueOrDefault(oldId) ?? delById.GetValueOrDefault(oldId)
                 : matchedLeftToRightIds is not null && matchedLeftToRightIds.TryGetValue(oldId, out var rightId)
                     ? liveById.GetValueOrDefault(rightId) ?? delById.GetValueOrDefault(rightId)
                     : delById.GetValueOrDefault(oldId) ?? liveById.GetValueOrDefault(oldId);
 
+            // A reference that names no definition is removed. The next sequential id would be a
+            // w:footnoteReference Word offers to recover, because no w:footnote carries it. The parent
+            // run stays, including when the reference was its only child.
+            if (def == null)
+            {
+                r.Remove();
+                continue;
+            }
+
             // A note referenced more than once corresponds once: the FIRST reference fixes its id; later references
             // to the same definition reuse it (mirroring the builder's first-reference-wins correspondence).
-            if (def != null && assignedIdByDef.TryGetValue(def, out var existing))
+            if (assignedIdByDef.TryGetValue(def, out var existing))
             {
                 r.SetAttributeValue(W.id, existing);
                 continue;
@@ -3599,14 +3624,11 @@ internal static partial class IrMarkupRenderer
             var newId = next.ToString();
             r.SetAttributeValue(W.id, newId);
             next++;
-            if (def != null)
-            {
-                var defOldId = (string?)def.Attribute(W.id);
-                def.SetAttributeValue(W.id, newId);
-                if (defOldId != null && defOldId != newId) idRemap[defOldId] = newId;
-                assignedIdByDef[def] = newId;
-                orderedDefs.Add(def);
-            }
+            var defOldId = (string?)def.Attribute(W.id);
+            def.SetAttributeValue(W.id, newId);
+            if (defOldId != null && defOldId != newId) idRemap[defOldId] = newId;
+            assignedIdByDef[def] = newId;
+            orderedDefs.Add(def);
         }
 
         // Carry any real definitions no surviving reference named (orphaned/unreferenced notes), after the
@@ -3648,6 +3670,20 @@ internal static partial class IrMarkupRenderer
         // RemapNestedNoteReferences sweep, which runs after BOTH kinds' renumber passes so a footnote-nested
         // endnote reference sees the endnote remap and vice versa.
         return idRemap;
+    }
+
+    /// <summary>
+    /// Drop every body reference of <paramref name="refName"/> when the output has no notes part.
+    /// Nothing in the package can define it. The parent run stays, including when the reference was its only child.
+    /// </summary>
+    private static void RemoveBodyReferencesWithNoNotePart(MainDocumentPart main, XName refName)
+    {
+        var bodyRefs = main.GetXDocument().Root?.Element(W.body)?.Descendants(refName).ToList();
+        if (bodyRefs == null || bodyRefs.Count == 0)
+            return;
+        foreach (var reference in bodyRefs)
+            reference.Remove();
+        main.PutXDocument();
     }
 
     /// <summary>
@@ -7502,16 +7538,31 @@ internal static partial class IrMarkupRenderer
 
     /// <summary>Convert every <c>w:t</c> descendant of a run-level element to <c>w:delText</c> in place,
     /// preserving its text and any <c>xml:space</c>. Required for deletions: accept drops the whole
-    /// <c>w:del</c>; reject swaps to <c>w:ins</c> and <c>delText</c>→<c>t</c>.</summary>
+    /// <c>w:del</c>; reject swaps to <c>w:ins</c> and <c>delText</c>→<c>t</c>.
+    /// Text inside <c>w:txbxContent</c> stays <c>w:t</c> / <c>w:instrText</c>. One <c>w:delText</c> or
+    /// <c>w:delInstrText</c> in a text box makes Word offer to recover the file. The same elements in
+    /// the body, or in a header or footer that has no text box, stay deleted text.</summary>
     private static void ConvertTextToDelText(XElement runLevel)
     {
         foreach (var t in runLevel.DescendantsAndSelf(W.t).ToList())
+        {
+            if (InsideTextBox(t)) continue;
             t.Name = W.delText;
+        }
         // A deleted field instruction is w:delInstrText (mirrors Word; w:instrText alone in a w:del confuses
         // a field re-parser). Only field runs carry instrText, so this is a no-op for ordinary text.
+        // Inside a text box the instruction stays w:instrText: w:delInstrText there is the same Word recovery.
         foreach (var it in runLevel.DescendantsAndSelf(W.instrText).ToList())
+        {
+            if (InsideTextBox(it)) continue;
             it.Name = W.delInstrText;
+        }
     }
+
+    /// <summary>Word recovers a package when deleted text sits inside a text box. The boundary is
+    /// <c>w:txbxContent</c> itself, in the body or in any header or footer.</summary>
+    private static bool InsideTextBox(XElement element) =>
+        element.Ancestors().Any(ancestor => ancestor.Name == W.txbxContent);
 
     /// <summary>
     /// A <c>w:fldSimple</c> is NOT a valid child of <c>w:ins</c>/<c>w:del</c>, so wrapping a field-bearing

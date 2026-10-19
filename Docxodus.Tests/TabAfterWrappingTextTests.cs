@@ -52,8 +52,12 @@ public class TabAfterWrappingTextTests
     [Fact]
     public void TwoColumnSection_TextWiderThanAColumn_WrapsAtTheColumnNotThePage()
     {
-        // About 4.5in of text: it fits the 6.5in page text width but not one of two 3.0in columns.
-        var html = Html(TabParagraph("the parties agree that the supplier shall deliver the services"),
+        // One column is 3.0in. The 0.6em estimate used when Times New Roman is not installed
+        // makes one sentence wider than that. An installed Times New Roman measures the same
+        // sentence under 2.5in, so the tab stays a pinned inline-flex box. Two sentences exceed
+        // the column under both measurements.
+        var sentence = "the parties agree that the supplier shall deliver the services";
+        var html = Html(TabParagraph(sentence + " " + sentence),
             "<w:cols w:num='2' w:space='720'/>");
 
         Assert.DoesNotContain(html.Descendants(), e => Style(e).GetValueOrDefault("display") == "inline-flex");
