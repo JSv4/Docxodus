@@ -1,6 +1,9 @@
 import { test, expect, Page } from '@playwright/test';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { readFileSync } from 'node:fs';
+import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
+import { inspectPdf } from './visual-parity/pdf.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -83,14 +86,22 @@ interface Layout {
   referenceCount: Record<string, number>;
   /** Whether the first body block of each page starts with a list marker. */
   startsWithMarker: boolean[];
+  overflowingNotePages: number[];
 }
 
-async function paginate(page: Page, html: string, options: Options = {}): Promise<Layout> {
+async function paginate(page: Page, html: string | Uint8Array, options: Options = {}): Promise<Layout> {
+  if (typeof html !== 'string') {
+    await page.goto('/test-harness.html');
+    await page.waitForFunction(() => (window as any).DocxodusReady === true);
+    html = await page.evaluate((input): string => (window as any).Docxodus.DocumentConverter.ConvertDocxToHtmlComplete(
+      new Uint8Array(input), 'Document', 'docx-', false, '', 0, 'comment-', 1, 1, 'page-', false, 0, 'annot-',
+      true, false, false, false, false, false, null, false), Array.from(html));
+  }
   await page.setContent(html);
   await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
   return page.evaluate((options) => {
-    const staging = document.getElementById('staging') as HTMLElement;
-    const container = document.getElementById('container') as HTMLElement;
+    const staging = document.querySelector('#staging, #pagination-staging') as HTMLElement;
+    const container = document.querySelector('#container, #pagination-container') as HTMLElement;
     const { PaginationEngine } = (window as any).DocxodusPagination;
     const result = new PaginationEngine(staging, container, {
       scale: 1, showPageNumbers: false, fragmentParagraphs: options.fragmentParagraphs ?? true,
@@ -120,6 +131,13 @@ async function paginate(page: Page, html: string, options: Options = {}): Promis
       referenceCount,
       startsWithMarker: boxes.map((box) =>
         box.querySelector('.page-content')?.firstElementChild?.querySelector('[data-list-marker]') != null),
+      overflowingNotePages: boxes.flatMap((box, index) => {
+        const band = box.querySelector('.page-footnotes')?.getBoundingClientRect();
+        return band && Array.from(box.querySelectorAll('.page-footnotes p')).some(p => {
+          const rect = p.getBoundingClientRect();
+          return rect.top < band.top - 1 || rect.bottom > band.bottom + 1;
+        }) ? [index + 1] : [];
+      }),
     };
   }, options);
 }
@@ -134,6 +152,31 @@ function citingLastLine(tag = 'p', attributes = ''): string {
 }
 
 test.describe('Paginated note placement beside its citation', () => {
+  for (const fragmentParagraphs of [false, true]) {
+    for (const table of [false, true]) {
+      for (const noteLines of [2, 13, 25]) {
+        test(`kept note beside ${table ? 'table' : 'paragraph'}: ${noteLines} lines, fragmentation ${fragmentParagraphs}`, async ({ page }) => {
+          const citation = `Birch citation${reference('1')}`;
+          const body = table ? `<table><tr><td>${citation}</td></tr></table>` : `<p>${citation}</p>`;
+          const layout = await paginate(page, staging(
+            `<p class="filler10">Cedar lead</p>${body}<p>Dune tail</p>`,
+            note('1', noteLines).replace('<p>', '<p data-keep-lines="true">')), { fragmentParagraphs });
+
+          expect(layout.pages).toBeLessThan(5); // A note taller than any page must still make progress.
+          expect(layout.referenceCount['1']).toBe(1);
+          expect(layout.body[0]).toContain('Cedar lead');
+          if (noteLines === 25) return; // Its indivisible overflow is a separate #1217 item.
+          const citationPage = noteLines === 13 && (table || fragmentParagraphs) ? 2 : 1;
+          expect(layout.referencePage['1']).toBe(citationPage);
+          expect(layout.notePage['1']).toBe(noteLines === 13 ? 2 : 1);
+          expect(layout.body[citationPage - 1]).toContain('Dune tail');
+          expect(layout.overflowingNotePages).toEqual([]);
+          expect(layout.notes.filter(text => text.includes('note 1 line')).length).toBe(1);
+        });
+      }
+    }
+  }
+
   test('the citing line moves to the page where its note begins', async ({ page }) => {
     // The paragraph's four lines fit beneath the filler, but no line of the note does.
     const layout = await paginate(page, citingLastLine());
@@ -249,9 +292,7 @@ test.describe('Paginated note placement beside its citation', () => {
     expect(layout.body[headingPage].some((text) => text.startsWith('kept 1'))).toBe(true);
   });
 
-  test('a table that cites a note stays on its page; the note follows', async ({ page }) => {
-    // Only a paragraph moves to its note's page. A table moved whole would leave half a page
-    // empty, so its note is deferred as before.
+  test('a table keeps its earlier rows while its citing row moves with the note', async ({ page }) => {
     const rows = Array.from({ length: 9 }, (_, index) =>
       `<tr><td>row ${index + 1}${index === 8 ? reference('1') : ''}</td></tr>`).join('');
     const layout = await paginate(page, staging(
@@ -259,8 +300,48 @@ test.describe('Paginated note placement beside its citation', () => {
         + `<p>${lines('after', 6)}</p>`,
       note('1', 6)));
 
-    expect(layout.body[0].join(' ')).toContain('row 9');
+    expect(layout.body[0].join(' ')).toContain('row 8');
+    expect(layout.body[0].join(' ')).not.toContain('row 9');
+    expect(layout.referencePage['1']).toBe(2);
+    expect(layout.notePage['1']).toBe(2);
   });
+
+  for (const merged of [false, true]) {
+    test(`a citing table preserves its ${merged ? 'merged row group' : 'preceding keep chain'}`, async ({ page }) => {
+      const heading = merged ? '' : '<h4 data-keep-with-next="true">Willow heading</h4>';
+      const rows = merged
+        ? `<tr><td rowspan="2">Birch group</td><td>Reed start</td></tr><tr><td>Reed end${reference('1')}</td></tr>`
+        : `<tr><td>Birch citation${reference('1')}</td></tr>`;
+      const layout = await paginate(page, staging(
+        `<p class="filler10">Cedar lead</p>${heading}<table><tbody>${rows}</tbody></table><p>Dune tail</p>`,
+        note('1', 13).replace('<p>', '<p data-keep-lines="true">')));
+
+      expect(layout.body[0]).toEqual(['Cedar lead']);
+      expect(layout.body[1].join(' ')).toContain(merged ? 'Birch groupReed startReed end1' : 'Willow heading');
+      expect(layout.referencePage['1']).toBe(2);
+      expect(layout.notePage['1']).toBe(2);
+      expect(layout.overflowingNotePages).toEqual([]);
+    });
+  }
+
+  for (const extra of ['header', 'caption']) {
+    test(`a citing table preserves its ${extra} without duplicating data rows`, async ({ page }) => {
+      const prefix = extra === 'header'
+        ? '<tr data-docx-header-row="true"><td>Willow heading</td></tr>' : '';
+      const rows = Array.from({ length: 9 }, (_, i) =>
+        `<tr><td>Birch${i + 1}${i === 8 ? reference('1') : ''}</td></tr>`).join('');
+      const caption = extra === 'caption' ? '<caption>Willow caption</caption>' : '';
+      const layout = await paginate(page, staging(
+        `<p class="filler10">Cedar lead</p><table style="border-collapse:collapse">${caption}<tbody>${prefix}${rows}</tbody></table>`,
+        note('1', 6)));
+
+      const text = layout.body.flat().join(' ');
+      expect(text.match(/Birch\d/g)).toEqual(Array.from({ length: 9 }, (_, i) => `Birch${i + 1}`));
+      expect(text.match(/Willow/g)?.length).toBe(extra === 'header' ? 2 : 1);
+      expect(layout.referencePage['1']).toBe(2);
+      expect(layout.notePage['1']).toBe(2);
+    });
+  }
 
   test('a note whose number sits inside its first paragraph still splits', async ({ page }) => {
     // The number is a generic `footnote-number` run, without a reference-run marker.
@@ -283,4 +364,38 @@ test.describe('Paginated note placement beside its citation', () => {
     expect(layout.notes[0]).not.toContain('note 1 line 30');
     expect(layout.notes.slice(1).some((text) => text.includes('note 1 line 30'))).toBe(true);
   });
+});
+
+test.describe('A table and its kept note in the delivered PDF (#1217)', () => {
+  for (const [name, noteLines, expectedPage] of [
+    ['notes-keep-lines-note-in-table', 12, 2],
+    ['notes-keep-lines-table-fitting-control', 2, 1],
+  ] as const) {
+    test(name, async ({ browser, page }, testInfo) => {
+      test.setTimeout(120_000);
+      const source = readFileSync(path.join(__dirname, '../../TestFiles/NoteCitationViews', `${name}.docx`));
+      for (const fragmentParagraphs of [false, true]) {
+        const layout = await paginate(page, source, { fragmentParagraphs });
+        expect(layout.body[0].join(' ')).toContain('TableLead30');
+        expect(layout.body[expectedPage - 1].join(' ')).toContain('TableTail01');
+        expect(layout.referencePage['1']).toBe(expectedPage);
+        expect(layout.notePage['1']).toBe(expectedPage);
+        expect(layout.overflowingNotePages).toEqual([]);
+      }
+      const result = await renderDocxArtifacts(source, { browser, outputs: ['pdf'], timeoutMs: 120_000,
+        reviewProfile: 'final', commentProfile: 'hidden' });
+      const text = (await inspectPdf(result.pdf!)).pages.map(page => page.text);
+      const pageOf = (marker: string) => text.findIndex(page => page.includes(marker)) + 1;
+      expect(pageOf('TableLead30')).toBe(1);
+      for (const marker of ['TableCite', 'TableTail01', 'TableKeepNote001', `TableKeepNote${String(noteLines).padStart(3, '0')}`])
+        expect(pageOf(marker), marker).toBe(expectedPage);
+      const markers = (prefix: string, count: number, digits: number) =>
+        Array.from({ length: count }, (_, i) => `${prefix}${String(i + 1).padStart(digits, '0')}`);
+      expect(text.join(' ').match(/Table(?:Lead\d{2}|Cite|KeepNote\d{3}|Tail\d{2})/g)?.sort())
+        .toEqual([...markers('TableLead', 30, 2), 'TableCite', ...markers('TableKeepNote', noteLines, 3), ...markers('TableTail', 8, 2)].sort());
+      expect([...new Set(result.pageMap.fragments.filter(f => f.story === 'footnote').map(f => f.pageNumber))])
+        .toEqual([expectedPage]);
+      await testInfo.attach(`${name}.pdf`, { body: Buffer.from(result.pdf!), contentType: 'application/pdf' });
+    });
+  }
 });
