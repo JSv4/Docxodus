@@ -96,8 +96,11 @@ public class BlockLevelMarkerDiffTests
                 else if (n == W + "commentRangeEnd")
                     yield return "CE:" + commentTexts.GetValueOrDefault(Id(child), "?" + Id(child));
                 else if (n == W + "tbl")
-                    yield return "TBL[" + string.Join(" | ", child.Elements(W + "tr").Select(tr =>
-                        string.Join(" || ", tr.Elements(W + "tc").Select(tc => string.Join(" ", Blocks(tc)))))) + "]";
+                    yield return "TBL[" + string.Join(" | ", Blocks(child)) + "]";
+                else if (n == W + "tr")
+                    yield return string.Join(" || ", Blocks(child));
+                else if (n == W + "tc")
+                    yield return string.Join(" ", Blocks(child));
                 else if (n == W + "sdt")
                     yield return "SDT{" + string.Join(" ", Blocks(child.Element(W + "sdtContent") ?? new XElement("x"))) + "}";
                 else if (n == W + "customXml")
@@ -113,6 +116,84 @@ public class BlockLevelMarkerDiffTests
     private static WmlDocument Accept(WmlDocument d) => RevisionProcessor.AcceptRevisions(d);
 
     private static WmlDocument Reject(WmlDocument d) => RevisionProcessor.RejectRevisions(d);
+
+    public static IEnumerable<object[]> TableBoundaryBookmarkCases()
+    {
+        foreach (var engine in new[] { "DocxCompare", "DocxDiff" })
+        foreach (var level in new[] { "tbl", "tr" })
+        foreach (var change in new[] { "add", "remove", "unchanged" })
+        foreach (var consolidate in new[] { false, true })
+        foreach (var otherEdit in new[] { "tail", "other-row", "same-row", "insert-row", "insert-cell", "delete-row", "delete-cell", "two-reviewers" })
+            if (consolidate || otherEdit != "two-reviewers")
+            yield return new object[] { engine, level, change, consolidate, otherEdit };
+    }
+
+    [Theory]
+    [MemberData(nameof(TableBoundaryBookmarkCases))]
+    public void TableBoundaryBookmarks_ResolveAtTheirOriginalRowOrCellBoundary(
+        string engine, string level, string change, bool consolidate, string otherEdit)
+    {
+        WmlDocument Input(bool marked, string tail = "Tail")
+        {
+            var source = TwoByTwoTable();
+            bool edit = tail != "Tail";
+            if (edit && (otherEdit == "same-row" || otherEdit == "other-row" || otherEdit == "two-reviewers"))
+            {
+                var token = otherEdit == "same-row" ? "R1C2" : "R2C2";
+                source = source.Replace(token, token + " changed");
+            }
+            if (edit && otherEdit == "two-reviewers" && tail == "Merged")
+                source = source.Replace("R1C1", "R1C1 changed");
+            if (otherEdit != "tail")
+                tail = "Tail";
+            var table = Body(Doc(source)).Element(W + "tbl")!;
+            var container = level == "tbl" ? table : table.Element(W + "tr")!;
+            if (marked)
+            {
+                var children = container.Elements(W + (level == "tbl" ? "tr" : "tc"));
+                var target = level == "tr" && otherEdit == "delete-cell" ? children.First() : children.Last();
+                target.AddBeforeSelf(new XElement(W + "bookmarkStart", new XAttribute(W + "id", 7), new XAttribute(W + "name", "CedarBoundary")));
+                target.AddAfterSelf(new XElement(W + "bookmarkEnd", new XAttribute(W + "id", 7)));
+            }
+            if (edit && otherEdit == "insert-row")
+                table.Element(W + "tr")!.AddBeforeSelf(new XElement(W + "tr",
+                    new XElement(W + "tc", new XElement(W + "p", new XElement(W + "r", new XElement(W + "t", "New cell A")))),
+                    new XElement(W + "tc", new XElement(W + "p", new XElement(W + "r", new XElement(W + "t", "New cell B"))))));
+            if (edit && otherEdit == "insert-cell")
+            {
+                table.Element(W + "tblGrid")!.AddFirst(new XElement(W + "gridCol", new XAttribute(W + "w", 2400)));
+                foreach (var row in table.Elements(W + "tr"))
+                    row.Element(W + "tc")!.AddBeforeSelf(new XElement(W + "tc",
+                        new XElement(W + "p", new XElement(W + "r", new XElement(W + "t", "New column")))));
+            }
+            if (edit && otherEdit == "delete-row")
+                table.Element(W + "tr")!.Remove();
+            // Cell removal is paired positionally by the differ; the trailing column is unambiguous.
+            if (edit && otherEdit == "delete-cell")
+            {
+                table.Element(W + "tblGrid")!.Elements().Last().Remove();
+                foreach (var row in table.Elements(W + "tr"))
+                    row.Elements(W + "tc").Last().Remove();
+            }
+            return Doc(table.ToString(SaveOptions.DisableFormatting) + P(tail));
+        }
+        var original = Input(change != "add");
+        var revised = Input(change != "remove", consolidate ? "Tail" : "Tail changed");
+        var expected = consolidate ? Input(change != "remove", otherEdit == "two-reviewers" ? "Merged" : "Tail changed") : revised;
+        var reviewers = new List<(string, WmlDocument)> { ("Cedar", revised), ("Birch", Input(change != "add", "Tail changed")) };
+        if (otherEdit == "two-reviewers")
+        {
+            var third = Body(original);
+            third.Descendants(W + "t").First(t => t.Value == "R1C1").Value += " changed";
+            reviewers.Add(("Spruce", Doc(string.Concat(third.Elements().Where(e => e.Name != W + "sectPr")))));
+        }
+        var redline = consolidate ? Consolidate(engine, original, reviewers.ToArray()) : Compare(engine, original, revised);
+
+        Assert.Contains("BS:CedarBoundary", Layout(Input(true)));
+        Assert.Equal(Layout(expected), Layout(Accept(redline)));
+        Assert.Equal(Layout(original), Layout(Reject(redline)));
+        AssertNoNewValidationErrors(redline, original, revised);
+    }
 
     public static TheoryData<string> Engines => new() { "DocxCompare", "DocxDiff" };
 

@@ -1135,15 +1135,15 @@ internal static class IrCompositeMerger
         }
         var touched = entries.Where(e => e.Op.Kind != IrEditOpKind.EqualBlock).ToList();
 
+        // Marker-only reviewers contribute even when several other reviewers edit the table's cells.
+        if (baseIr.AnchorIndex.TryGetValue(anchor, out var editedBlock) && editedBlock is IrTable editedTable &&
+            MarkerOnlyTableReviewers(anchor, editedTable, touched[0], entries, reviewers) is { Count: > 0 } promoted &&
+            ComposeTable(anchor, editedTable, touched.Concat(promoted).ToList(), reviewers, baseIr, policy, settings,
+                ops, conflicts, ref nextConflictId))
+            return;
+
         if (touched.Count == 1)
         {
-            // A table one reviewer edited and another left equal but for the markers between a cell's blocks
-            // composes cell by cell, so the second reviewer's markers find their cells (issue #1175).
-            if (baseIr.AnchorIndex.TryGetValue(anchor, out var editedBlock) && editedBlock is IrTable editedTable &&
-                MarkerOnlyTableReviewers(anchor, editedTable, touched[0], entries, reviewers) is { Count: > 0 } promoted &&
-                ComposeTable(anchor, editedTable, touched.Concat(promoted).ToList(), reviewers, baseIr, policy, settings,
-                    ops, conflicts, ref nextConflictId))
-                return;
             var (rev, op) = touched[0];
             ops.Add(EmitOp(op, reviewers[rev].Author, rev));
             return;
@@ -1335,28 +1335,27 @@ internal static class IrCompositeMerger
     private static IrCompositeOp EqualOp(string anchor) =>
         new(new IrEditOp(IrEditOpKind.EqualBlock, anchor, anchor, null, null, null), "", -1);
 
-    /// <summary>A base-sourced EqualBlock for a block every reviewer left equal, noting each reviewer paragraph
-    /// that carries bookmark markers: the IR leaves bookmarks out, so one only that reviewer added would
-    /// otherwise be lost with the reviewer's copy of the block (issue #864). Likewise each reviewer's equal
-    /// table whose bookmarks or comment ranges between its blocks differ from the base's (issue #1175); a block
-    /// wrapper never gets here with different markers, since the reader folds them into its hash.</summary>
+    /// <summary>Keep reviewer provenance for equal blocks that carry comments, paragraph bookmarks, or
+    /// changed markers between table blocks. These markers are outside the IR's content equality, so emitting
+    /// only the base copy would lose them.</summary>
     private static IrCompositeOp EqualOp(
         string anchor, List<(int Reviewer, IrEditOp Op)>? entries, IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
         IrDocument baseIr)
     {
         var baseElement = baseIr.AnchorIndex.TryGetValue(anchor, out var baseBlock) ? baseBlock.Source.Element : null;
-        var withBookmarks = (entries ?? new List<(int Reviewer, IrEditOp Op)>())
+        var withMarkers = (entries ?? new List<(int Reviewer, IrEditOp Op)>())
             .Where(e => e.Op.RightAnchor is { } right &&
                 reviewers[e.Reviewer].Ir.AnchorIndex.TryGetValue(right, out var block) &&
                 block.Source.Element is { } element &&
-                (block is IrParagraph
+                (element.Descendants().Any(c => c.Name == W.commentRangeStart || c.Name == W.commentRangeEnd ||
+                    c.Name == W.commentReference) || (block is IrParagraph
                     ? element.Elements().Any(c => c.Name == W.bookmarkStart || c.Name == W.bookmarkEnd)
-                    : element.Name == W.tbl && IrMarkupRenderer.BlockLevelMarkersDiffer(baseElement, element)))
-            .Select(e => new IrEqualReviewerBookmarks(e.Reviewer, e.Op.RightAnchor!, reviewers[e.Reviewer].Author))
+                    : element.Name == W.tbl && IrMarkupRenderer.BlockLevelMarkersDiffer(baseElement, element))))
+            .Select(e => new IrEqualReviewerMarkers(e.Reviewer, e.Op.RightAnchor!, reviewers[e.Reviewer].Author))
             .ToList();
-        return withBookmarks.Count == 0
+        return withMarkers.Count == 0
             ? EqualOp(anchor)
-            : EqualOp(anchor) with { EqualReviewerBookmarks = IrNodeList.From(withBookmarks) };
+            : EqualOp(anchor) with { EqualReviewerMarkers = IrNodeList.From(withMarkers) };
     }
 
     /// <summary>
@@ -1783,7 +1782,10 @@ internal static class IrCompositeMerger
             ConflictId: tableConflicts.Count > 0 ? tableConflicts[0].Id : (int?)null,
             SourceRightAnchors: null,
             AuthoredRows: IrNodeList.From(authoredRows),
-            TableShell: tableShell));
+            TableShell: tableShell,
+            ReviewerTables: IrMarkupRenderer.HasTableBoundaryMarkers(baseTable.Source.Element) || touched.Any(t =>
+                IrMarkupRenderer.HasTableBoundaryMarkers(IrMarkupRenderer.SourceElement(t.Op.RightAnchor, reviewers[t.Reviewer].Ir)))
+                ? IrNodeList.From(reviewerTableDiffs.Select(r => new IrReviewerTable(r.Reviewer, r.Author, r.Item3))) : null));
         return true;
     }
 

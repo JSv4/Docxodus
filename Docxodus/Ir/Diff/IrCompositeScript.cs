@@ -21,11 +21,12 @@ internal sealed record IrAuthoredTokenOp(IrTokenOp Op, string Author, int Source
 /// </summary>
 internal sealed record IrSourceRightAnchor(int Reviewer, string Anchor);
 
-/// <summary>A reviewer's block that the reviewer left equal to its base block but that carries bookmark
-/// markers (<see cref="IrCompositeOp.EqualReviewerBookmarks"/>): a paragraph holding some, or a table whose
-/// markers between blocks differ from the base's. Bookmarks are not part of the IR, so an equal
-/// block can still hold a bookmark only that reviewer added (issues #864, #1175).</summary>
-internal sealed record IrEqualReviewerBookmarks(int Reviewer, string Anchor, string Author);
+/// <summary>A reviewer's equal block carrying markers omitted from IR content equality. The renderer
+/// reconciles its comments and bookmarks against the emitted base copy.</summary>
+internal sealed record IrEqualReviewerMarkers(int Reviewer, string Anchor, string Author);
+
+/// <summary>A contributing reviewer's row/cell pairings, retained to place markers between rows and cells.</summary>
+internal sealed record IrReviewerTable(int Reviewer, string Author, IrTableDiff Diff);
 
 /// <summary>The kind of one composed table cell (see <see cref="IrAuthoredCellOp"/>).</summary>
 internal enum IrAuthoredCellKind
@@ -131,11 +132,9 @@ internal sealed record IrComposedTableShell(IrComposedShellRef? TblPr = null, Ir
 /// Insert spans index that reviewer's right-token list). For all single-source ops it is null and
 /// <see cref="Op"/>'s own <c>RightAnchor</c> suffices. Additive/optional — absent from older scripts and
 /// from the JSON wire shape, so existing tests/serialization are unaffected.</para>
-/// <para><see cref="EqualReviewerBookmarks"/> is non-null ONLY on a base-sourced EqualBlock some reviewer's
-/// equal paragraph carries bookmark markers for: the renderer emits the base block and then carries in each
-/// bookmark marker whose name the base document does not have, as that reviewer's insertion (issue #864). On an
-/// equal table it names each reviewer whose copy holds different bookmarks or comment ranges between a cell's
-/// blocks; the renderer reconciles the emitted base copy against those copies (issue #1175).
+/// <para><see cref="EqualReviewerMarkers"/> identifies reviewer copies of a base-sourced EqualBlock
+/// whose comment or bookmark markers must be preserved. Paragraph markers retain their text offsets;
+/// markers between container blocks use the shared block placement rules.
 /// Renderer-only, like <see cref="SourceRightAnchors"/>; absent from the JSON wire shape.</para>
 /// <para><see cref="AuthoredRows"/> is non-null ONLY on a COMPOSED multi-reviewer table (FOLLOW-ON B): the
 /// op is a ModifyBlock whose <see cref="Op"/>'s <see cref="IrEditOp.TableDiff"/> remains the MERGED
@@ -153,7 +152,8 @@ internal sealed record IrCompositeOp(
     IrNodeList<IrSourceRightAnchor>? SourceRightAnchors = null,
     IrNodeList<IrAuthoredRowOp>? AuthoredRows = null,
     IrComposedTableShell? TableShell = null,
-    IrNodeList<IrEqualReviewerBookmarks>? EqualReviewerBookmarks = null);
+    IrNodeList<IrEqualReviewerMarkers>? EqualReviewerMarkers = null,
+    IrNodeList<IrReviewerTable>? ReviewerTables = null);
 
 /// <summary>
 /// One reviewer's competing result for a conflicted span. <see cref="Author"/> is the reviewer

@@ -57,13 +57,26 @@ All notable changes to this project will be documented in this file.
 - SVG `href` fragment links in copied comment content retain their inert behavior alongside
   ordinary copied links (follow-up to #1229). Only native HTML return labels are reactivated.
 
+- Compare and Consolidate now track bookmarks between table rows or cells at their original
+  boundaries (issue #1190). Accept restores the revised markers and reject restores the original
+  markers, including when another reviewer edits the table or inserts a row or column. Marker-only
+  reviews are retained when several other reviewers edit the same table.
+
 - Standalone browser, Node and framed-host exports accept the converter's existing `additionalCss`
   option before pagination and bind nonempty styles to the render report and layout digest (#1230).
+
+- Preserve comment ranges and references when a block content control or custom XML wrapper is added or
+  removed, including endpoints in otherwise unchanged paragraphs (#1195). Consolidation now carries
+  reviewer-added comments from unchanged paragraphs and tables and retains their revision author (#1196).
 
 - CSS child selectors, ampersands and comparison operators survive DOCX-to-HTML serialization
   (issue #1230). The shared converter emits a CSS-commented CDATA section, preserving styles
   for both HTML browsers and XML consumers, including custom `GeneralCss`, `AdditionalCss`
   and existing escapes in CSS strings.
+
+- Invalid repeated comment references inside a replaced block content control or custom XML wrapper
+  now retain one comment per view, while distinct reviewer copies remain separate (#1197).
+
 - Paragraph text frames now retain their declared size and anchor offsets (issue #1225), including
   footer frames that previously added an extra line ahead of centered footer text. Adjacent frame
   paragraphs share a floating box, and pagination preserves its visible source geometry outside
