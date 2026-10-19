@@ -2944,27 +2944,14 @@ export class PaginationEngine {
     }
     if (split.kind !== "split") return null;
 
-    const headMeasured = this.measureElement(split.head, dims, block.sectionIndex);
-    const tailMeasured = this.measureElement(split.tail, dims, block.sectionIndex);
-
-    return [
-      {
-        ...headMeasured,
-        element: split.head,
-        keepWithNext: false,
-        keepLines: false,
-        pageBreakBefore: false,
-        isPageBreak: false,
-      },
-      {
-        ...tailMeasured,
-        element: split.tail,
-        keepWithNext: false,
-        keepLines: false,
-        pageBreakBefore: false,
-        isPageBreak: false,
-      },
-    ];
+    return [split.head, split.tail].map(element => ({
+      ...this.measureElement(element, dims, block.sectionIndex),
+      element,
+      keepWithNext: false,
+      keepLines: false,
+      pageBreakBefore: false,
+      isPageBreak: false,
+    }));
   }
 
   /** Keep complete row groups before a citation whose note cannot start on this page. */
