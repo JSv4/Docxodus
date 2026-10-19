@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Prevent a synthetic nonbreaking-space run in the required blank paragraph after a nested table. The paragraph retains a one-twip layout box for source geometry, so fitting nested footnote tables no longer fail PDF clipping verification (#1217).
+
 - Consolidation reports competing additions of a bookmark name instead of silently dropping a range
   or keeping duplicate names (#1212). BaseWins retains the base's absent name; FirstReviewerWins and
   StackAll retain the first range and report every competitor. Equal ranges share one attributed copy.

@@ -3341,6 +3341,15 @@ end on it is finished before any body block is placed on it (`continuationRunsOn
 `splitTableAtRows` splits a note's table at row-group boundaries in both the first part's and
 the continuation's split.
 
+A fitting nested table in a note exposed a separate conversion defect (#1217): the required
+unformatted `<w:p/>` after the inner table had a one-twip line box but contained a full-size
+synthetic nonbreaking-space run. Its descendant box protruded from the note area, so delivered
+PDF verification rejected it as clipped. `WmlToHtmlConverter` now skips that placeholder for
+paragraphs marked as structural table ends and gives the empty paragraph a one-twip minimum
+height. Its source anchor remains measurable; explicit paragraph formatting and ordinary blank
+paragraphs retain their normal rendering. This does not add splitting inside oversized rows or
+nested note tables.
+
 ## Footnotes: a continued note stays last, and notes keep their order (issue #1179)
 
 Five shapes, Letter page, 12pt body, single-line note paragraphs except in D and E, whose note 1 is

@@ -56,7 +56,7 @@ for (const formatted of [false, true]) {
       return { pages: pagination.totalPages, anchor, height: tail.getBoundingClientRect().height * 0.75,
         after: parseFloat(getComputedStyle(tail).marginBottom) * 0.75,
         gap: (next.getBoundingClientRect().top - table.getBoundingClientRect().bottom) * 0.75,
-        text: content.textContent?.replace(/\s+/g, ' ').trim(),
+        text: Array.from(content.querySelectorAll('p'), p => p.textContent?.trim()).filter(Boolean).join(' '),
         fragments: map.fragments.filter((f: any) => f.anchorId === anchor),
       };
     }, { bytes: Array.from(nestedTableDocx(formatted)) });
