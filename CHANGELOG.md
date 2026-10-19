@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Consolidating independent reviewer edits beside a complex field preserves one set of field
+  characters in both accepted and rejected views, including adjacent fields, nested results and
+  field-boundary bookmarks (issue #1206). Revisions retain their contributing authors.
+
 - Hidden exact-row text stays whole in PDF text layers when a header, footer or body band also
   clips it (#1200). The shared clip geometry keeps visible ink, side-margin overflow and PageMap
   bounds consistent, including existing exact-line paint clips.
