@@ -573,3 +573,17 @@ One before-paragraph whose content migrates across N after-paragraphs (the user 
 ## Cross-layer ripple
 
 The four-layer ripple (WASM bridge → npm/TypeScript → python host/`docx_scalpel`) for these three entry points is tracked as M2.5 Task 5 (see the program plan). This document covers the .NET public surface.
+
+### Comment markers in equal content and one-sided wrappers
+
+Equal blocks retain source XML but omit comments from content equality. The renderer copies missing
+comment markers from the counterpart at the same text offsets, keeping marker order at shared offsets.
+Equal container paragraphs pair in document order. Consolidation retains reviewer marker provenance
+for these blocks, merges their referenced definitions through the existing comments-part import, and
+passes the contributing reviewer to comment normalization for newly added comments (#1196).
+
+When a comment crosses an added, removed or replaced block wrapper, normalization gives each view a
+complete marker set. A bare counterpart outside a wrapper belongs to the view not already covered by
+the wrapper copy; markers shared by both views receive a twin for each copy. Wrapper and block-boundary
+reconciliation share this confinement step, followed by the existing per-copy definition deduplication
+(#1195). Raw comment-ID collisions between independently authored documents remain a separate issue.

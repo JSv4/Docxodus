@@ -25,4 +25,3 @@ export function readZipEntry(zip: Buffer, name: string): string {
   }
   throw new Error(`entry not found: ${name}`);
 }
-
