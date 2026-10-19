@@ -531,14 +531,18 @@ public sealed partial class DocxSession
     /// mirroring <c>IrMarkupRenderer.ConvertTextToDelText</c>. Text under a revision nested
     /// inside the element — a text box paragraph's own insertion, say — keeps its spelling: that
     /// revision owns it, and renaming it would leave <c>w:delText</c> that no reject of THIS
-    /// deletion could ever restore.</summary>
+    /// deletion could ever restore. Text inside <c>w:txbxContent</c> also keeps <c>w:t</c> /
+    /// <c>w:instrText</c>: one renamed element there makes Word offer to recover the file.</summary>
     private static void ConvertTextToDeletedText(XElement runLevel)
     {
         foreach (var t in runLevel.DescendantsAndSelf(W.t).ToList())
-            if (!UnderNestedRevision(t, runLevel)) t.Name = W.delText;
+            if (!UnderNestedRevision(t, runLevel) && !InsideTextBox(t)) t.Name = W.delText;
         foreach (var instr in runLevel.DescendantsAndSelf(W.instrText).ToList())
-            if (!UnderNestedRevision(instr, runLevel)) instr.Name = W.delInstrText;
+            if (!UnderNestedRevision(instr, runLevel) && !InsideTextBox(instr)) instr.Name = W.delInstrText;
     }
+
+    private static bool InsideTextBox(XElement element) =>
+        element.Ancestors().Any(ancestor => ancestor.Name == W.txbxContent);
 
     private static bool UnderNestedRevision(XElement text, XElement runLevel) =>
         text.Ancestors().TakeWhile(a => !ReferenceEquals(a, runLevel))

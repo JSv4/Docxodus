@@ -7502,16 +7502,31 @@ internal static partial class IrMarkupRenderer
 
     /// <summary>Convert every <c>w:t</c> descendant of a run-level element to <c>w:delText</c> in place,
     /// preserving its text and any <c>xml:space</c>. Required for deletions: accept drops the whole
-    /// <c>w:del</c>; reject swaps to <c>w:ins</c> and <c>delText</c>→<c>t</c>.</summary>
+    /// <c>w:del</c>; reject swaps to <c>w:ins</c> and <c>delText</c>→<c>t</c>.
+    /// Text inside <c>w:txbxContent</c> stays <c>w:t</c> / <c>w:instrText</c>. One <c>w:delText</c> or
+    /// <c>w:delInstrText</c> in a text box makes Word offer to recover the file. The same elements in
+    /// the body, or in a header or footer that has no text box, stay deleted text.</summary>
     private static void ConvertTextToDelText(XElement runLevel)
     {
         foreach (var t in runLevel.DescendantsAndSelf(W.t).ToList())
+        {
+            if (InsideTextBox(t)) continue;
             t.Name = W.delText;
+        }
         // A deleted field instruction is w:delInstrText (mirrors Word; w:instrText alone in a w:del confuses
         // a field re-parser). Only field runs carry instrText, so this is a no-op for ordinary text.
+        // Inside a text box the instruction stays w:instrText: w:delInstrText there is the same Word recovery.
         foreach (var it in runLevel.DescendantsAndSelf(W.instrText).ToList())
+        {
+            if (InsideTextBox(it)) continue;
             it.Name = W.delInstrText;
+        }
     }
+
+    /// <summary>Word recovers a package when deleted text sits inside a text box. The boundary is
+    /// <c>w:txbxContent</c> itself, in the body or in any header or footer.</summary>
+    private static bool InsideTextBox(XElement element) =>
+        element.Ancestors().Any(ancestor => ancestor.Name == W.txbxContent);
 
     /// <summary>
     /// A <c>w:fldSimple</c> is NOT a valid child of <c>w:ins</c>/<c>w:del</c>, so wrapping a field-bearing
