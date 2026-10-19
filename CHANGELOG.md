@@ -48,8 +48,9 @@ All notable changes to this project will be documented in this file.
   numeric comment ID for different notes (#1210). Matching author/date/text definitions retain the
   base identity; new definitions and independent reviewer additions receive distinct IDs. Markers
   and definitions are remapped together without changing caller documents or reusable snapshots.
-  Removing a comment from unchanged text also preserves its markers for the rejected view, including
-  packages that retain the now-unanchored definition.
+  Removing a comment also preserves its range and reference for the rejected view in unchanged or
+  edited body, header and footer paragraphs (#1211), including packages that retain the now-unanchored
+  definition.
 
 - Consolidating independent reviewer edits beside a complex field preserves one set of field
   characters in both accepted and rejected views, including adjacent fields, nested results and

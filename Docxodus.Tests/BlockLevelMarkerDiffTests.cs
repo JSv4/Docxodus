@@ -881,8 +881,7 @@ public class BlockLevelMarkerDiffTests
     }
 
     /// <summary>Accepting the redline gives the revised header and footer layout, rejecting it the original's.</summary>
-    private static void AssertStoryRoundTrip(string engine, WmlDocument left, WmlDocument right,
-        bool rejectKeepsReferences = true)
+    private static void AssertStoryRoundTrip(string engine, WmlDocument left, WmlDocument right)
     {
         var redline = Compare(engine, left, right);
         var (accepted, rejected) = (Accept(redline), Reject(redline));
@@ -892,8 +891,7 @@ public class BlockLevelMarkerDiffTests
             Assert.Equal(StoryLayout(left, header), StoryLayout(rejected, header));
             // Each view keeps its own side's comment references, and every comment marker resolves.
             Assert.Equal(CommentReferences(right, header), CommentReferences(accepted, header));
-            if (rejectKeepsReferences)
-                Assert.Equal(CommentReferences(left, header), CommentReferences(rejected, header));
+            Assert.Equal(CommentReferences(left, header), CommentReferences(rejected, header));
             foreach (var document in new[] { redline, accepted, rejected })
                 AssertStoryCommentMarkersResolve(document, header);
         }
@@ -976,12 +974,45 @@ public class BlockLevelMarkerDiffTests
         var left = HeaderFooterDoc(leftHeader, P("Footer"), comments: leftComments);
         var right = HeaderFooterDoc(rightHeader, P("Footer"), comments: rightComments);
 
-        // A removed comment's reference sits inside a paragraph, which the header diff takes from the revised
-        // document whether that paragraph is equal or edited (the reader keeps no comment reference in a header's
-        // IR), so rejecting cannot restore it. When the header paragraph is edited, main loses it the same way; for
-        // a removal alone, main kept the whole original header instead, so accepting kept the comment. Its range
-        // between blocks follows each side.
-        AssertStoryRoundTrip(engine, left, right, rejectKeepsReferences: leftComments is null);
+        AssertStoryRoundTrip(engine, left, right);
+    }
+
+    [Theory]
+    [InlineData("body", false)]
+    [InlineData("body", true)]
+    [InlineData("header", false)]
+    [InlineData("header", true)]
+    [InlineData("footer", false)]
+    [InlineData("footer", true)]
+    public void Compare_RemovedComment_RestoresItsReferenceInEachStory(string story, bool editReferenceParagraph)
+    {
+        foreach (bool remove in new[] { false, true })
+        {
+            WmlDocument Document(bool revised)
+            {
+                bool marked = !revised || !remove;
+                string content = (marked ? "<w:commentRangeStart w:id=\"0\"/>" : "") + P("Dune clause") +
+                    (marked ? "<w:commentRangeEnd w:id=\"0\"/>" : "") +
+                    "<w:p><w:r><w:t>Reed tail" + (revised && editReferenceParagraph ? " revised" : "") +
+                    "</w:t></w:r>" + (marked ? CommentRef(0) : "") + "</w:p>";
+                return HeaderFooterDoc(story == "header" ? content : P("Header"),
+                    story == "footer" ? content : P("Footer"), story == "body" ? content : P("Willow body"),
+                    marked ? HeaderComment(0, "Check dune clause") : null);
+            }
+            var original = Document(false);
+            var revised = Document(true);
+            var redline = DocxCompare.Compare(original, revised);
+            foreach (var (expected, actual) in new[] { (original, Reject(redline)), (revised, Accept(redline)) })
+            {
+                XElement Story(WmlDocument d) => story == "body" ? Body(d) : StoryRootOf(d, story == "header");
+                var definitions = CommentTexts(actual);
+                Assert.Equal(StreamLayout(expected, Story(expected)), StreamLayout(actual, Story(actual)));
+                var references = Story(actual).Descendants(W + "commentReference");
+                Assert.Equal(Story(expected).Descendants(W + "commentReference").Count(), references.Count());
+                Assert.All(references, r => Assert.Equal("Check dune clause", definitions[(string)r.Attribute(W + "id")!]));
+            }
+            AssertNoNewValidationErrors(redline, WithoutStoryCommentId, original, revised);
+        }
     }
 
     [Theory]

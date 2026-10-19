@@ -10,3 +10,7 @@ The `duplicate-comment-*` packages are original #1197 fixtures from the same gen
 expected final/original documents and controls contain one reference per comment.
 
 The 27 `comment-identity-*` packages are independent literal-OOXML inputs and expected views from `JSv4/docx-fidelity-bench` (issue #1210). They cover reused IDs, replaced notes, separate reviewer additions including identical note text, and distinct-ID controls.
+
+The `removed-comment-*` packages are original #1211 fixtures from `removed_comment_cases` in the same benchmark generator, branch `fixtures/removed-comment-reference`. Each body/header/footer edit has an unchanged-reference-paragraph control. Inputs 0 and 1 also supply the expected original/final views; no duplicate expected packages are stored.
+
+Header and footer variants use `removed_comment_cases(stories=("header", "footer"))` from the same generator. Their native and browser checks cover exact markers and text; LibreOffice 25.8.7.3 cannot load these comment placements, so only the body pair is in the scored PDF/redline corpus.
