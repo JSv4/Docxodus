@@ -24,6 +24,80 @@ internal static class CommentOps
     internal static readonly XNamespace W16Cid =
         "http://schemas.microsoft.com/office/word/2016/wordml/cid";
 
+    /// <summary>The identity already used by block-marker reconciliation, independent of package-local ids.</summary>
+    internal static string Identity(XElement comment) =>
+        (string?)comment.Attribute(W.author) + "\u0000" + (string?)comment.Attribute(W.date) + "\u0000" +
+        string.Concat(comment.Descendants(W.t).Select(t => t.Value));
+
+    /// <summary>Give matching comments shared ids and different comments distinct ids before comparison.
+    /// Returns the original package when no remap is needed; never mutates a caller's snapshot.</summary>
+    internal static IReadOnlyList<WmlDocument> AlignIds(WmlDocument baseline, IReadOnlyList<WmlDocument> revisions)
+    {
+        var documents = new[] { baseline }.Concat(revisions).ToArray();
+        var identities = documents.Select(document =>
+        {
+            using var stream = new OpenXmlMemoryStreamDocument(document);
+            using var package = stream.GetWordprocessingDocument();
+            return package.MainDocumentPart?.WordprocessingCommentsPart?.GetXDocument().Root?.Elements(W.comment)
+                .Where(comment => comment.Attribute(W.id) is not null)
+                .Select(comment => (Id: (string)comment.Attribute(W.id)!, Key: Identity(comment))).ToList() ?? new();
+        }).ToArray();
+        var reserved = identities.SelectMany(items => items).Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+        var assigned = new HashSet<string>(StringComparer.Ordinal);
+        var byIdentity = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        int next = 0;
+        for (int index = 0; index < documents.Length; index++)
+        {
+            var claimed = new HashSet<string>(StringComparer.Ordinal);
+            var remap = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (oldId, key) in identities[index])
+            {
+                byIdentity.TryGetValue(key, out var matches);
+                string? id = index == 0 ? oldId : matches?.FirstOrDefault(id => id == oldId && !claimed.Contains(id))
+                    ?? matches?.FirstOrDefault(id => !claimed.Contains(id));
+                if (id is null)
+                {
+                    id = oldId;
+                    if (assigned.Contains(id) || claimed.Contains(id))
+                    {
+                        do { id = (next++).ToString(CultureInfo.InvariantCulture); } while (!reserved.Add(id));
+                    }
+                }
+                // Only baseline definitions establish shared identity. Two reviewers can add
+                // the same note at different anchors; those are still separate annotations.
+                if (assigned.Add(id) && index == 0)
+                {
+                    if (matches is null) byIdentity[key] = matches = new();
+                    matches.Add(id);
+                }
+                claimed.Add(id);
+                if (id != oldId) remap[oldId] = id;
+            }
+            if (remap.Count == 0) continue;
+            using var output = new OpenXmlMemoryStreamDocument(documents[index]);
+            using (var package = output.GetWordprocessingDocument())
+            {
+                var main = package.MainDocumentPart!;
+                foreach (var part in ReferenceHostParts(main).Append(main.WordprocessingCommentsPart!))
+                {
+                    var root = part.GetXDocument().Root;
+                    if (root is null) continue;
+                    bool changed = false;
+                    foreach (var element in root.Descendants().Where(element => element.Name == W.comment ||
+                        element.Name == W.commentRangeStart || element.Name == W.commentRangeEnd || element.Name == W.commentReference))
+                        if ((string?)element.Attribute(W.id) is { } id && remap.TryGetValue(id, out var mapped))
+                        {
+                            element.SetAttributeValue(W.id, mapped);
+                            changed = true;
+                        }
+                    if (changed) part.PutXDocument();
+                }
+            }
+            documents[index] = output.GetModifiedWmlDocument();
+        }
+        return documents.Skip(1).ToArray();
+    }
+
     /// <summary>The paragraph style id a comment body paragraph wears.</summary>
     internal const string CommentTextStyleId = "CommentText";
 

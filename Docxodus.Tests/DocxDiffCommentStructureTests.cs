@@ -252,6 +252,134 @@ public class DocxDiffCommentStructureTests
         }
     }
 
+    [Theory]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, false, "author")]
+    [InlineData(true, true, true, "author")]
+    [InlineData(true, true, false, "date")]
+    [InlineData(true, true, true, "date")]
+    [InlineData(true, false, false, "duplicate")]
+    [InlineData(true, false, true, "duplicate")]
+    [InlineData(false, true, false, "text", true)]
+    [InlineData(false, false, false, "text", true)]
+    [InlineData(false, true, true, "text", true)]
+    [InlineData(false, false, true, "text", true)]
+    [InlineData(true, true, false, "annotation-only")]
+    [InlineData(true, true, true, "annotation-only")]
+    [InlineData(false, true, false, "annotation-only", true)]
+    [InlineData(false, true, true, "annotation-only", true)]
+    [InlineData(false, true, false, "orphan", true)]
+    [InlineData(false, true, true, "orphan", true)]
+    public void Comment_IdentitySurvivesReusedIds(bool keepOld, bool collision, bool consolidate,
+        string identityChange = "text", bool keepRemovedText = false)
+    {
+        WmlDocument Document(bool revised)
+        {
+            string Note(string id, bool added)
+            {
+                string author = added && identityChange == "author" ? "Willow" : "Cedar";
+                string date = added && identityChange == "date" ? "2026-02-01" : "2026-01-01";
+                string text = added && identityChange is "text" or "annotation-only" or "orphan" ? "New willow note" : "Old cedar note";
+                return $"<w:comment w:id=\"{id}\" w:author=\"{author}\" w:date=\"{date}T00:00:00Z\">"
+                    + $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:comment>";
+            }
+            string oldId = revised && collision ? "1" : "0", newId = collision ? "0" : "2";
+            var doc = Ir.IrTestDocuments.FromBodyXml("<w:p>" + CommentRun("AlderFirst", revised ? newId : null)
+                + "<w:r><w:t xml:space=\"preserve\"> </w:t></w:r>"
+                + CommentRun(revised && !keepOld && !keepRemovedText ? "WillowReplacement" : "BirchSecond", !revised || keepOld ? oldId : null)
+                + "<w:r><w:t xml:space=\"preserve\">" + (revised && identityChange != "annotation-only" ? " tail revised" : " tail") + "</w:t></w:r></w:p>");
+            return AddComments(doc, (!revised || keepOld || identityChange == "orphan" ? Note(oldId, false) : "")
+                + (revised ? Note(newId, true) : ""));
+        }
+        var left = Document(false);
+        var right = Document(true);
+        var leftBytes = left.DocumentByteArray.ToArray();
+        var rightBytes = right.DocumentByteArray.ToArray();
+        var result = consolidate
+            ? DocxCompare.Consolidate(left, new[] { new DocxDiffReviewer { Document = right, Author = "Reviewer" } })
+            : DocxCompare.Compare(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        foreach (var doc in new[] { left, right, result, accepted, rejected }) Assert.Empty(SchemaErrors(doc));
+        Assert.Empty(CommentStructure(result).UnresolvedIds);
+        Assert.Equal(RangeCoverage(right, true), RangeCoverage(accepted, true));
+        Assert.Equal(RangeCoverage(left, true), RangeCoverage(rejected, true));
+        Assert.Equal(AnchorProjection(right), AnchorProjection(accepted));
+        Assert.Equal(AnchorProjection(left), AnchorProjection(rejected));
+        Assert.Equal(BodyText(right), BodyText(accepted));
+        Assert.Equal(BodyText(left), BodyText(rejected));
+        if (!consolidate)
+        {
+            var snapshot = DocxDiff.CreateSnapshot(right);
+            var comparison = DocxDiff.CreateComparison(DocxDiff.CreateSnapshot(left), snapshot);
+            var throughSnapshot = comparison.ToRedline();
+            Assert.Same(throughSnapshot, comparison.ToRedline());
+            Assert.Equal(RangeCoverage(right, true), RangeCoverage(RevisionProcessor.AcceptRevisions(throughSnapshot), true));
+            Assert.Equal(RangeCoverage(left, true), RangeCoverage(RevisionProcessor.RejectRevisions(throughSnapshot), true));
+            Assert.Equal(RangeCoverage(right, true), RangeCoverage(DocxDiff.CreateComparison(snapshot, snapshot).ToRedline(), true));
+        }
+        Assert.Equal(leftBytes, left.DocumentByteArray);
+        Assert.Equal(rightBytes, right.DocumentByteArray);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Comment_IndependentReviewersReusingOneIdKeepBothDefinitions(bool identicalNotes)
+    {
+        WmlDocument Document(bool first, bool second)
+        {
+            string Paragraph(bool changed, string word) => "<w:p>" + CommentRun(word + (changed ? " revised" : ""), changed ? "0" : null) + "</w:p>";
+            var doc = Ir.IrTestDocuments.FromBodyXml(Paragraph(first, "Alder") + Paragraph(second, "Birch"));
+            if (!first && !second) return doc;
+            return AddComments(doc, "<w:comment w:id=\"0\" w:author=\"Cedar\" w:date=\"2026-01-01T00:00:00Z\">"
+                + "<w:p><w:r><w:t>" + (identicalNotes ? "Check clause" : first ? "Check alder" : "Check birch")
+                + "</w:t></w:r></w:p></w:comment>");
+        }
+        var original = Document(false, false);
+        var first = Document(true, false);
+        var second = Document(false, true);
+        var result = DocxCompare.Consolidate(original, new[]
+        {
+            new DocxDiffReviewer { Author = "First reviewer", Document = first },
+            new DocxDiffReviewer { Author = "Second reviewer", Document = second },
+        });
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        foreach (var doc in new[] { original, first, second, result, accepted, rejected }) Assert.Empty(SchemaErrors(doc));
+        Assert.Empty(CommentStructure(result).UnresolvedIds);
+        Assert.Equal(2, CommentStructure(accepted).RangeStartIds.Count);
+        Assert.Equal(2, CommentStructure(accepted).RangeStartIds.Distinct().Count());
+        foreach (var source in new[] { first, second })
+            Assert.Contains(RangeCoverage(source, true)[5..^1], RangeCoverage(accepted, true));
+        Assert.Equal(RangeCoverage(original, true), RangeCoverage(rejected, true));
+    }
+
+    private static string CommentRun(string text, string? id) => id is null ? $"<w:r><w:t>{text}</w:t></w:r>"
+        : $"<w:commentRangeStart w:id=\"{id}\"/><w:r><w:t>{text}</w:t></w:r>"
+            + $"<w:commentRangeEnd w:id=\"{id}\"/><w:r><w:commentReference w:id=\"{id}\"/></w:r>";
+
+    private static WmlDocument AddComments(WmlDocument document, string comments)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(document.DocumentByteArray);
+        using (var package = WordprocessingDocument.Open(stream, true))
+        {
+            var part = package.MainDocumentPart!.AddNewPart<WordprocessingCommentsPart>();
+            using var writer = new StreamWriter(part.GetStream(FileMode.Create));
+            writer.Write("<w:comments xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+                + comments + "</w:comments>");
+        }
+        return new WmlDocument("comment-identity.docx", stream.ToArray());
+    }
+
     // ---- comment structure observers ------------------------------------------------------------
 
     private sealed record CmtStructure(
@@ -347,7 +475,7 @@ public class DocxDiffCommentStructureTests
     /// on a MATERIALIZED accept/reject document (revisions resolved) it is the span-coverage counterpart to
     /// <see cref="AnchorProjection"/>: it catches a surviving range marker placed on the wrong side of an
     /// edited word, where accept/reject bracket different text than the side they must equal.</summary>
-    private static string RangeCoverage(WmlDocument doc)
+    private static string RangeCoverage(WmlDocument doc, bool includeDate = false)
     {
         using var ms = new MemoryStream(doc.DocumentByteArray);
         using var w = WordprocessingDocument.Open(ms, false);
@@ -359,7 +487,7 @@ public class DocxDiffCommentStructureTests
         var croot = main.WordprocessingCommentsPart?.GetXDocument().Root;
         if (croot != null)
             foreach (var c in croot.Elements().Where(e => e.Name.LocalName == "comment"))
-                content[AttrLocal(c, "id")] = AttrLocal(c, "author") + "|" +
+                content[AttrLocal(c, "id")] = AttrLocal(c, "author") + "|" + (includeDate ? AttrLocal(c, "date") + "|" : "") +
                     string.Concat(c.Descendants().Where(e => e.Name.LocalName == "t").Select(e => e.Value));
 
         var open = new Dictionary<string, System.Text.StringBuilder>();

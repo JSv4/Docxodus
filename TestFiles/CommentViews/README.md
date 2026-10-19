@@ -8,3 +8,5 @@ authored expectations. The matching PDF and redline cases check the same source 
 The `duplicate-comment-*` packages are original #1197 fixtures from the same generator, branch
 `fixtures/1197-duplicate-comment-references`. Reproducer inputs intentionally repeat one reference;
 expected final/original documents and controls contain one reference per comment.
+
+The 27 `comment-identity-*` packages are independent literal-OOXML inputs and expected views from `JSv4/docx-fidelity-bench` (issue #1210). They cover reused IDs, replaced notes, separate reviewer additions including identical note text, and distinct-ID controls.

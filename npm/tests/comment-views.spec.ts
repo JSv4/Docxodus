@@ -4,6 +4,12 @@ import { readZipEntry } from './zip.js';
 
 const cases = [
   ['comment-add-customxml', 'compare'],
+  ['comment-identity-reused-id', 'compare'],
+  ['comment-identity-replaced-id', 'compare'],
+  ['comment-identity-distinct-control', 'compare'],
+  ['comment-identity-reviewer-collision', 'consolidate'],
+  ['comment-identity-reviewer-identical', 'consolidate'],
+  ['comment-identity-reviewer-control', 'consolidate'],
   ['comment-remove-sdt', 'compare'],
   ['comment-wrapper-control', 'compare'],
   ['reviewer-added-comment', 'consolidate'],
@@ -41,8 +47,10 @@ for (const [name, operation] of cases) {
       const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
       const document = parse(body);
       const definitions = new Map(Array.from(parse(comments).getElementsByTagNameNS(ns, 'comment')).map(c =>
-        [c.getAttributeNS(ns, 'id'), c.getAttributeNS(ns, 'author') + '|' +
+        [c.getAttributeNS(ns, 'id'), c.getAttributeNS(ns, 'author') + '|' + c.getAttributeNS(ns, 'date') + '|' +
           Array.from(c.getElementsByTagNameNS(ns, 't')).map(t => t.textContent).join('')]));
+      const ranges = Array.from(document.getElementsByTagNameNS(ns, 'commentRangeStart')).map(e => e.getAttributeNS(ns, 'id'));
+      if (new Set(ranges).size !== ranges.length) throw new Error('Duplicate comment range ID');
       function walk(e: Element): unknown[] {
         if (e.localName === 't') return [e.textContent];
         if (['commentRangeStart', 'commentRangeEnd', 'commentReference'].includes(e.localName)) {

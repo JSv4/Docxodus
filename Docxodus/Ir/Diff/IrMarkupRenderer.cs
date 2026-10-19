@@ -4937,9 +4937,7 @@ internal static partial class IrMarkupRenderer
     /// in order, as their block content is unchanged.</summary>
     internal static void CarryMissingComments(XElement emitted, XElement? source)
     {
-        static bool IsMarker(XElement e) => e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd ||
-            e.Name == W.commentReference;
-        if (source is null || !source.Descendants().Any(IsMarker))
+        if (source is null || !source.Descendants().Any(IsCommentMarker))
             return;
         if (emitted.Name != W.p)
         {
@@ -4954,15 +4952,30 @@ internal static partial class IrMarkupRenderer
         if (!string.Concat(source.Descendants(W.t).Select(t => t.Value))
             .Equals(string.Concat(emitted.Descendants(W.t).Select(t => t.Value)), StringComparison.Ordinal))
             return;
-        var markers = emitted.Descendants().Where(IsMarker)
+        IEnumerable<(XElement Element, int Offset)> Positions()
+        {
+            int offset = 0;
+            foreach (var element in source.Descendants())
+            {
+                if (element.Name == W.t) offset += element.Value.Length;
+                if (IsCommentMarker(element)) yield return (element, offset);
+            }
+        }
+        CarryCommentMarkers(emitted, Positions());
+    }
+
+    private static bool IsCommentMarker(XElement element) => element.Name == W.commentRangeStart ||
+        element.Name == W.commentRangeEnd || element.Name == W.commentReference;
+
+    private static void CarryCommentMarkers(XElement emitted, IEnumerable<(XElement Element, int Offset)> positions)
+    {
+        var markers = emitted.Descendants().Where(IsCommentMarker)
             .GroupBy(m => (m.Name, (string?)m.Attribute(W.id))).ToDictionary(g => g.Key, g => g.First());
         XElement? previous = null;
-        int offset = 0, previousOffset = -1;
-        foreach (var element in source.Descendants())
+        int previousOffset = -1;
+        foreach (var (element, offset) in positions)
         {
-            if (element.Name == W.t)
-                offset += element.Value.Length;
-            if (!IsMarker(element) || (string?)element.Attribute(W.id) is not { } id)
+            if ((string?)element.Attribute(W.id) is not { } id)
                 continue;
             if (!markers.TryGetValue((element.Name, id), out var marker))
             {
@@ -6687,6 +6700,7 @@ internal static partial class IrMarkupRenderer
                     // Keys of the markers the right-only rendering below emits: they stand in for the left copies of
                     // the same markers in this span, which no later left-side op may then emit again.
                     var representedMarkers = new HashSet<string>(StringComparer.Ordinal);
+                    int spanStart = content.Count;
                     if (!rawEqual)
                     {
                         foreach (var r in leftRuns.Slice(ls, le, lzs, lze,
@@ -6754,9 +6768,13 @@ internal static partial class IrMarkupRenderer
                             AddStableSpan(r);
                     }
                     if (rawEqual)
+                    {
                         leftRuns.ClaimRepresented(ls, le, lzs, lze,
                             LeftNextOwns(opIndex),
                             LeftDeferOnlyKeys(opIndex), representedMarkers);
+                        if (state.Left.Comments.Comments.Count > 0)
+                            leftRuns.CarryDeletedComments(content, spanStart, ls, le, AnchoredCommentIds(state.RightSource));
+                    }
                     break;
                 }
                 case IrTokenOpKind.Insert:
@@ -11468,6 +11486,23 @@ internal static partial class IrMarkupRenderer
         public void ClaimRepresented(int start, int end, bool includeStartZeroWidth, bool includeEndZeroWidth,
             bool nextOwnsEndZeroWidth, ISet<string>? deferOnlyKeys, ISet<string> representedKeys) =>
             Scan(start, end, includeStartZeroWidth, includeEndZeroWidth, nextOwnsEndZeroWidth, deferOnlyKeys, representedKeys);
+
+        // An equal span emits the right text, but a deleted comment can lie wholly inside it.
+        // Keep its otherwise-unclaimed markers at their source offsets for NormalizeComments.
+        public void CarryDeletedComments(List<XElement> content, int spanStart, int start, int end,
+            ISet<string> remaining)
+        {
+            var missing = _segments.Where(segment => segment.Start >= start && segment.Start <= end)
+                .Select(segment => (Element: segment.OtherChild ?? segment.Element, Offset: segment.Start - start))
+                .Where(item => IsCommentMarker(item.Element) && (string?)item.Element.Attribute(W.id) is { } id &&
+                    !remaining.Contains(id) && !_claimedZeroWidth.Contains(item.Element)).ToList();
+            if (missing.Count == 0) return;
+            var emitted = new XElement(W.p, content.Skip(spanStart));
+            CarryCommentMarkers(emitted, missing);
+            _claimedZeroWidth.UnionWith(missing.Select(item => item.Element));
+            content.RemoveRange(spanStart, content.Count - spanStart);
+            content.AddRange(emitted.Elements());
+        }
 
         /// <summary>One <c>w:fldChar</c> of this paragraph (issue #1165): its <see cref="Type"/>, its character
         /// position, how many of the zero-width segments that could be diff tokens (a tab, a break, a note
