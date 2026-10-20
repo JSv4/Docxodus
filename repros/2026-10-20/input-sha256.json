@@ -1,0 +1,15 @@
+{
+  "inputs/footer-control.docx": "ba5359f8ddc1aea08a37678c9c66fc854ec7276610b30bc2780e30e83dbff6a5",
+  "inputs/footer-deleted.docx": "b3dbe86fc635158a6bacfb302c7f8e05e5396d4e5491f2726816ce49597875c7",
+  "inputs/group-deleted.docx": "ccaa5c546ec3c395ca37cf9df1f49d2362be4ed5f78804c4351046e7c992cdc8",
+  "inputs/group-plain.docx": "2408fcb94b2e3a855d32c67b11418c41ca5df52712387f1e160dab6235e52a96",
+  "inputs/note-arial20-control.docx": "1b6497a42b9fac16152dd5cfe73afb769040f8196d8ceee12037f2e3e15cc301",
+  "inputs/note-arial20.docx": "6feebdd0d94c2743731baf8fae299a235fadd9df586686c174073417abcff142",
+  "inputs/revisions-strict.docx": "6f03cddeee2678a1af084e6e69e74aa6c53468622712852ca287ba4adcb842f7",
+  "inputs/revisions-transitional.docx": "580b12b8790fb3473cb315915a8af53a38ebd117899dadcddea73c275e48d54a",
+  "inputs/shape-deleted.docx": "5a38e918edef96ac577a3e112695fc09c7bbfc1abcdbd05d919a1aba3e90d924",
+  "inputs/shape-plain.docx": "328f140c3c1e5596c7270b6395b542169b2a1c3338e1c6f978f7f106a09e12b1",
+  "inputs/tabs-0.docx": "209a286c9ed65f31aaf0c39a67eb631b66fb7fa3ce90ebf438c61beab16e425e",
+  "inputs/tabs-12.docx": "56a1f16d75eeccc9d95a02e116dd8d0ea8c670bfba41f3eb1dd6c9f43dfef60e",
+  "inputs/tabs-720.docx": "4f11cd379a35dcb655c7c8f7b9828de888db99a5b99f1a70974fc388f98db874"
+}
