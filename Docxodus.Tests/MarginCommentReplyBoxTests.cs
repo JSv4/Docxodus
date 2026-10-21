@@ -23,7 +23,7 @@ public class MarginCommentReplyBoxTests
     public void Reply_note_draws_no_box_of_its_own(string prefix)
     {
         var css = MarginCss(prefix);
-        var reply = Rule(css, $"div.{prefix}margin-reply");
+        var reply = Rule(css, $"div.{prefix}margin-replies > div.{prefix}margin-reply");
 
         Assert.Equal("none", reply.GetValueOrDefault("background"));
         Assert.Equal("none", reply.GetValueOrDefault("box-shadow"));
@@ -59,11 +59,18 @@ public class MarginCommentReplyBoxTests
     }
 
     [Fact]
-    public void Reply_rule_follows_the_note_rule_it_overrides()
+    public void Reply_rendered_at_top_level_by_a_parent_cycle_is_not_inside_a_replies_container()
     {
-        // Both selectors have the same specificity, so the later rule wins the cascade.
-        var css = MarginCss("comment-");
-        Assert.True(css.IndexOf("div.comment-margin-reply {") > css.IndexOf("div.comment-margin-note {"));
+        // Control for the scoped selector: a cycle leaves no root, so one reply is drawn at top
+        // level. It still wears the reply class, but no replies container holds it, so it keeps
+        // the full note box.
+        var html = Convert(BuildThreadDoc(cycle: true), "comment-");
+        var notes = html.Descendants().Where(IsNote).ToList();
+
+        Assert.Equal(3, notes.Count);
+        var top = Assert.Single(notes, n => ParentNoteOrNull(n) == null);
+        Assert.Equal("comment-margin-note comment-margin-reply", (string?)top.Attribute("class"));
+        Assert.NotEqual("comment-margin-replies", (string?)top.Parent!.Attribute("class"));
     }
 
     [Fact]
@@ -81,14 +88,20 @@ public class MarginCommentReplyBoxTests
         Assert.Equal("comment-margin-note comment-margin-reply", (string?)nested.Attribute("class"));
         Assert.Same(root, ParentNote(reply));
         Assert.Same(reply, ParentNote(nested));
+        Assert.Equal("comment-margin-replies", (string?)reply.Parent!.Attribute("class"));
+        Assert.Equal("comment-margin-replies", (string?)nested.Parent!.Attribute("class"));
     }
 
-    private static XElement ParentNote(XElement note) =>
-        note.Ancestors().First(e => ((string?)e.Attribute("class") ?? "").Contains("margin-note"));
+    private static XElement ParentNote(XElement note) => ParentNoteOrNull(note)!;
+
+    private static XElement? ParentNoteOrNull(XElement note) => note.Ancestors().FirstOrDefault(IsNote);
+
+    private static bool IsNote(XElement e) =>
+        ((string?)e.Attribute("class") ?? "").Split(' ').Contains("comment-margin-note");
 
     private static XElement NoteWithText(XElement html, string text) =>
         html.Descendants().Single(e => e.Name.LocalName == "p" && e.Value == text)
-            .Ancestors().First(e => e.Attribute("data-comment-id") != null);
+            .Ancestors().First(IsNote);
 
     private static string MarginCss(string prefix) =>
         Convert(BuildThreadDoc(), prefix).Descendants().First(e => e.Name.LocalName == "style").Value;
@@ -117,8 +130,11 @@ public class MarginCommentReplyBoxTests
         });
     }
 
-    /// <summary>A root comment, a reply to it, and a reply to that reply.</summary>
-    private static byte[] BuildThreadDoc()
+    /// <summary>
+    /// A root comment, a reply to it, and a reply to that reply; with <paramref name="cycle"/>,
+    /// the root is also made a reply to the nested reply.
+    /// </summary>
+    private static byte[] BuildThreadDoc(bool cycle = false)
     {
         using var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -133,6 +149,24 @@ public class MarginCommentReplyBoxTests
         var reply = session.AddCommentReply(root.Created.First(a => a.Kind == "cmt").Id, "Bo", "First reply.");
         var nested = session.AddCommentReply(reply.Created.First(a => a.Kind == "cmt").Id, "Cy", "Nested reply.");
         Assert.True(nested.Success, nested.Error?.Message);
-        return session.Save();
+        var bytes = session.Save();
+        if (!cycle)
+            return bytes;
+
+        using var edited = new MemoryStream();
+        edited.Write(bytes, 0, bytes.Length);
+        using (var doc = WordprocessingDocument.Open(edited, true))
+        {
+            var part = doc.MainDocumentPart!.WordprocessingCommentsExPart!;
+            XDocument xml;
+            using (var read = part.GetStream())
+                xml = XDocument.Load(read);
+            var entries = xml.Root!.Elements().ToList();
+            var w15 = entries[0].Name.Namespace;
+            entries[0].SetAttributeValue(w15 + "paraIdParent", (string?)entries[^1].Attribute(w15 + "paraId"));
+            using var stream = part.GetStream(FileMode.Create);
+            xml.Save(stream);
+        }
+        return edited.ToArray();
     }
 }

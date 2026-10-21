@@ -2623,9 +2623,10 @@ namespace Docxodus
                 sb.AppendLine("    box-shadow: 0 1px 3px rgba(0,0,0,0.1);");
                 sb.AppendLine("}");
 
-                // A reply is part of its parent's note: a separator, not another box, so its
-                // text keeps the root note's width at every nesting level.
-                sb.AppendLine($"div.{prefix}margin-reply {{");
+                // A nested reply is part of its parent's note: a separator, not another box, so
+                // its text keeps the root note's width at every nesting level. A reply that a
+                // malformed parent graph renders at top level keeps the full note box.
+                sb.AppendLine($"div.{prefix}margin-replies > div.{prefix}margin-reply {{");
                 sb.AppendLine("    margin: 0;");
                 sb.AppendLine("    padding: 0.5em 0 0;");
                 sb.AppendLine("    background: none;");
