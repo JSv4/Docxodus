@@ -746,8 +746,10 @@ function isGeneratedChrome(node: Node | null | undefined): boolean {
  * just before it, a word deletion that spans it. Nothing in the session re-creates the number (it
  * is the renderer's, not run text), so refuse those deletions, as Word refuses to backspace over a
  * reference mark. A deletion that replaces a selection is allowed; the repaint that commits it
- * restores the number (see `DocxEditor.replaceNode`). A rendered deletion is guarded the same way:
- * the session already holds it as deleted, so a caret deletion would only drop it from view.
+ * restores the number (see `DocxEditor.replaceNode`). A rendered deletion is not removed either
+ * (the session already holds it as deleted, so that would only drop it from view); as in Word, a
+ * character Backspace or Delete steps over it and removes the live character beyond it instead.
+ * A word or line deletion that reaches one is refused.
  */
 function guardChromeDeletion(block: HTMLElement, ev: InputEvent): void {
   if (!ev.inputType.startsWith("delete")) return;
@@ -760,11 +762,42 @@ function guardChromeDeletion(block: HTMLElement, ev: InputEvent): void {
     const range = block.ownerDocument.createRange();
     range.setStart(target.startContainer, target.startOffset);
     range.setEnd(target.endContainer, target.endOffset);
-    if (Array.from(islands).some((island) => range.intersectsNode(island))) {
+    const reached = Array.from(islands).filter((island) => range.intersectsNode(island));
+    if (reached.length > 0) {
       ev.preventDefault();
+      if (!reached.some((island) => island.matches(NOTE_NUMBER_SELECTOR))) {
+        deleteLiveCharacterBeyond(block, ev.inputType);
+      }
       return;
     }
   }
+}
+
+/**
+ * Remove the live character before (Backspace) or after (Delete) the collapsed caret, measured in
+ * content offsets, which rendered deletions do not occupy, so the step skips over them. Only a
+ * single-character deletion is stepped; the caret stays where the removed character was.
+ */
+function deleteLiveCharacterBeyond(block: HTMLElement, inputType: string): void {
+  const backward = inputType === "deleteContentBackward";
+  if (!backward && inputType !== "deleteContentForward") return;
+  const caret = caretOffsetIn(block);
+  if (caret === null) return;
+  const end = backward ? caret : caret + 1;
+  if (end < 1 || end > blockContentText(block).length) return;
+  // contentPositionIn resolves an offset to the earliest text node reaching it, so the
+  // character just before `end` is the one before this position in this node.
+  const { node, offset } = contentPositionIn(block, end);
+  if (node.nodeType !== 3 /* TEXT_NODE */ || offset < 1) return;
+  const text = node.textContent ?? "";
+  let from = offset - 1;
+  let to = offset;
+  if (/[\uDC00-\uDFFF]/.test(text[from]) && /[\uD800-\uDBFF]/.test(text[from - 1] ?? "")) from--;
+  else if (/[\uD800-\uDBFF]/.test(text[from]) && /[\uDC00-\uDFFF]/.test(text[to] ?? "")) to++;
+  node.textContent = text.slice(0, from) + text.slice(to);
+  const selection = block.ownerDocument.defaultView?.getSelection();
+  selection?.collapse(node, from);
+  block.dispatchEvent(new InputEvent("input", { inputType, bubbles: true }));
 }
 
 /**
@@ -3161,6 +3194,15 @@ export class DocxEditor {
     // field in a tool-generated footer): that is content, and the span path below keeps it
     // while inserting the typed text beside it.
     if (old.trim().length === 0 && !el.querySelector("[data-field]")) {
+      // Unless all it shows is deleted text: the whitespace is then the converter's placeholder
+      // too, but a tracked whole-paragraph rewrite is refused when the paragraph holds a bookmark,
+      // so the typed text goes in as an insertion at its start instead.
+      if (el.querySelector(RENDERED_DELETION_SELECTOR)) {
+        const typed = next.trim() + (keepsTrailingSpace(el) ? " " : "");
+        return this.parseEdit(
+          this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, 0, 0, typed),
+        );
+      }
       return this.parseEdit(
         this.exports.DocxSessionBridge.ReplaceText(this.handle, fullId, serializeInlineMarkdown(el)),
       );
