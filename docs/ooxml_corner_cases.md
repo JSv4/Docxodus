@@ -3154,6 +3154,62 @@ and deferred more, until a page held nothing but notes. Two limits made this com
 
 Tests: `npm/tests/pagination-note-citation-placement.spec.ts`.
 
+## Keep flags of a paragraph joined across a hidden paragraph mark (issue #1274)
+
+**Status:** Docxodus follows the paragraph model, not LibreOffice; Word not tested (October 2026)
+
+A paragraph whose mark is hidden (`w:pPr/w:rPr/w:vanish`, the "style separator" of run-in
+headings) renders on one line with the paragraph after it. Since #1223 the converter writes that
+pair as one `<p>`. The question is which source paragraph's `w:keepNext` and `w:keepLines` the
+joined block carries in paginated output.
+
+```xml
+<w:p>
+  <w:pPr><w:keepNext/><w:keepLines/><w:rPr><w:vanish/></w:rPr></w:pPr>
+  <w:r><w:t>Escrow</w:t></w:r>
+</w:p>
+<w:p>
+  <w:pPr><!-- variant: nothing, or <w:keepNext/> --></w:pPr>
+  <w:r><w:t xml:space="preserve">. The agent holds the deposit.</w:t></w:r>
+</w:p>
+<w:p><w:r><w:t>Next clause. …</w:t></w:r></w:p>
+```
+
+The experiment places 53 one-line filler paragraphs before the pair (exact 12pt lines, Letter
+page, 1in margins, widow control off), so the joined line is the last line of page 1 and the
+"Next clause" paragraph starts page 2. A `keepNext` that applies to the joined line moves it to
+page 2.
+
+| Flags (first / second paragraph) | LibreOffice 25.8.7.3 | Word | Docxodus before | Docxodus after |
+|---|---|---|---|---|
+| `keepNext keepLines` / none | line moves to page 2 | not tested | keep-with-next, keep-lines | neither |
+| none / `keepNext` | line stays on page 1 | not tested | neither | keep-with-next |
+| `keepNext` / `keepNext` | line moves to page 2 | not tested | keep-with-next | keep-with-next |
+| `keepNext w:val="0"` / `keepNext` | line stays on page 1 | not tested | neither | keep-with-next |
+| Control, visible mark: `keepNext keepLines` / none | "Escrow" moves to page 2 with its neighbour | not tested | first `<p>` keeps with next | unchanged |
+
+**Analysis.** OOXML stores paragraph properties on the paragraph mark, and a hidden mark does not
+join the two paragraphs in the document model: each keeps its own properties. The first
+paragraph's `keepNext` asks to stay with the paragraph it shares a line with, which always holds.
+The second paragraph's mark is the one that ends the line, so its `keepNext` and `keepLines`
+describe the joined line. Docxodus now follows that reading. LibreOffice also keeps two
+paragraphs in its model (its `.fodt` export has two `text:p`), but its layout formats the joined
+line with the first paragraph's properties. It ignores the second paragraph's `keepNext` and also
+takes alignment from the first paragraph: with `jc="center"` on the first and `jc="right"` on the
+second, the joined line is centred. The issue's expected table describes Word but was not checked
+against Word here. If Word turns out to follow LibreOffice, this fix should be reverted.
+
+Docxodus still takes every other property of the joined `<p>` (alignment, indentation, spacing,
+`pageBreakBefore`, `widowControl`) from the first paragraph. `pageBreakBefore` belongs there in
+any reading, because the break comes before the block.
+
+**Code.** `WmlToHtmlConverter.ProcessParagraph` tracks the last joined paragraph
+(`joinedElement`) and passes it to `AddPaginationDataAttributes`. That method reads `keepNext`
+and `keepLines` from the last paragraph and `pageBreakBefore` and `widowControl` from the first.
+`break-inside: avoid` follows `data-keep-lines`.
+
+Tests: `Docxodus.Tests/JoinedParagraphKeepFlagsTests.cs`.
+
 ## Paragraph spacing: consecutive numbered paragraphs keep their spacing after (issue #1151)
 
 **Status:** Docxodus matches LibreOffice (October 2026)

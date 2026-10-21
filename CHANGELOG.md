@@ -8,6 +8,8 @@ All notable changes to this project will be documented in this file.
 
 - Prevent a synthetic nonbreaking-space run in the required blank paragraph after a nested table. The paragraph retains a one-twip layout box for source geometry, so fitting nested footnote tables no longer fail PDF clipping verification (#1217).
 
+- In paginated HTML, a paragraph joined to the next one by a hidden paragraph mark now takes its keep-with-next and keep-lines-together flags from the last joined paragraph, whose visible mark ends the line. It used to take them from the first paragraph, which kept a run-in heading's body with the following clause. The page break before still comes from the first paragraph (#1274).
+
 - Consolidation reports competing additions of a bookmark name instead of silently dropping a range
   or keeping duplicate names (#1212). BaseWins retains the base's absent name; FirstReviewerWins and
   StackAll retain the first range and report every competitor. Equal ranges share one attributed copy.
