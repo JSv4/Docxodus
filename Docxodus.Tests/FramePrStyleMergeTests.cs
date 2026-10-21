@@ -19,7 +19,7 @@ public class FramePrStyleMergeTests
         "<w:framePr w:w=\"8640\" w:wrap=\"auto\" w:vAnchor=\"text\" w:hAnchor=\"page\" w:x=\"1008\" w:y=\"40\"/>";
 
     // directFrame: the stamp paragraph's own w:framePr attributes, or null for none.
-    private static byte[] Fixture(string? directFrame)
+    private static byte[] Fixture(string? directFrame, string styleFrame = StyleFrame)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -28,7 +28,7 @@ public class FramePrStyleMergeTests
             var styles = new Wp.Styles();
             styles.InnerXml =
                 $"<w:style xmlns:w=\"{WNs}\" w:type=\"paragraph\" w:customStyle=\"1\" w:styleId=\"StampFrame\">" +
-                $"<w:name w:val=\"Stamp Frame\"/><w:pPr>{StyleFrame.Replace("<w:framePr", $"<w:framePr xmlns:w=\"{WNs}\"")}</w:pPr></w:style>";
+                $"<w:name w:val=\"Stamp Frame\"/><w:pPr>{styleFrame.Replace("<w:framePr", $"<w:framePr xmlns:w=\"{WNs}\"")}</w:pPr></w:style>";
             main.AddNewPart<StyleDefinitionsPart>().Styles = styles;
             main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
             var stamp = new Wp.Paragraph(new Wp.ParagraphProperties(), new Wp.Run(new Wp.Text("REF 55-0912 rev3")));
@@ -50,10 +50,10 @@ public class FramePrStyleMergeTests
         return stream.ToArray();
     }
 
-    private static XElement EffectiveFrame(string? directFrame)
+    private static XElement EffectiveFrame(string? directFrame, string styleFrame = StyleFrame)
     {
         using var stream = new MemoryStream();
-        stream.Write(Fixture(directFrame));
+        stream.Write(Fixture(directFrame, styleFrame));
         using var doc = WordprocessingDocument.Open(stream, false);
         var stamp = doc.MainDocumentPart!.FooterParts.Single().GetXDocument().Descendants(W.p).First();
         var pPr = FormattingAssembler.ResolveEffectiveParagraphProperties(doc, stamp);
@@ -84,16 +84,79 @@ public class FramePrStyleMergeTests
         Assert.Equal("40", Attr(frame, W.y));
     }
 
+    // Style frames that place the stamp by alignment, or as a drop cap, on a page-anchored 2in frame.
+    private const string CenteredStyleFrame =
+        "<w:framePr w:w=\"2880\" w:wrap=\"around\" w:vAnchor=\"page\" w:hAnchor=\"page\" w:xAlign=\"center\" w:y=\"4000\"/>";
+    private const string MiddleStyleFrame =
+        "<w:framePr w:w=\"2880\" w:wrap=\"around\" w:vAnchor=\"page\" w:hAnchor=\"page\" w:x=\"2000\" w:yAlign=\"center\"/>";
+    private const string OffsetStyleFrame =
+        "<w:framePr w:w=\"2880\" w:wrap=\"around\" w:vAnchor=\"page\" w:hAnchor=\"page\" w:x=\"2000\" w:y=\"4000\"/>";
+    private const string DropCapStyleFrame =
+        "<w:framePr w:dropCap=\"drop\" w:lines=\"3\" w:wrap=\"around\" w:vAnchor=\"text\" w:hAnchor=\"text\"/>";
+    private const string PageFrame = "w:wrap=\"around\" w:hAnchor=\"page\" w:x=\"4000\" w:vAnchor=\"page\" w:y=\"4000\"";
+
+    // The merged frame's attributes, sorted, as "name=value" pairs.
+    private static string FrameAttributes(string directFrame, string styleFrame) =>
+        string.Join(" ", EffectiveFrame(directFrame, styleFrame).Attributes().Where(a => !a.IsNamespaceDeclaration)
+            .Select(a => $"{a.Name.LocalName}={a.Value}").OrderBy(a => a, System.StringComparer.Ordinal));
+
+    // x/xAlign and y/yAlign are one setting per axis: a paragraph that sets either replaces both. The
+    // anchors are separate settings, and a style's drop cap never reaches a paragraph with its own frame.
+    // LibreOffice 25.8.7.3 renders each case this way (docs/ooxml_corner_cases.md).
+    [Theory]
+    [InlineData(CenteredStyleFrame, "w:wrap=\"around\" w:x=\"2000\"",
+        "hAnchor=page vAnchor=page w=2880 wrap=around x=2000 y=4000")]
+    [InlineData(CenteredStyleFrame, "w:w=\"2880\" w:wrap=\"around\" w:vAnchor=\"page\" w:hAnchor=\"page\" w:x=\"2000\" w:y=\"4000\"",
+        "hAnchor=page vAnchor=page w=2880 wrap=around x=2000 y=4000")]
+    [InlineData(MiddleStyleFrame, "w:wrap=\"around\" w:y=\"4000\"",
+        "hAnchor=page vAnchor=page w=2880 wrap=around x=2000 y=4000")]
+    [InlineData(OffsetStyleFrame, "w:wrap=\"around\" w:xAlign=\"right\"",
+        "hAnchor=page vAnchor=page w=2880 wrap=around xAlign=right y=4000")]
+    [InlineData(OffsetStyleFrame, "w:wrap=\"around\" w:hAnchor=\"margin\"",
+        "hAnchor=margin vAnchor=page w=2880 wrap=around x=2000 y=4000")]
+    [InlineData(DropCapStyleFrame, PageFrame, "hAnchor=page vAnchor=page wrap=around x=4000 y=4000")]
+    [InlineData(DropCapStyleFrame, "w:lines=\"2\"", "hAnchor=text lines=2 vAnchor=text wrap=around")]
+    public void DirectFramePr_ReplacesWholeAxesAndNeverInheritsADropCap(string styleFrame, string directFrame, string expected) =>
+        Assert.Equal(expected, FrameAttributes(directFrame, styleFrame));
+
+    private static XElement RenderedFrame(string? directFrame, string styleFrame = StyleFrame)
+    {
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("stamp-frame.docx", Fixture(directFrame, styleFrame)),
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, RenderHeadersAndFooters = true,
+                RenderPagination = PaginationMode.Paginated });
+        var stamp = html.Descendants().Single(e => e.Name.LocalName == "p" && e.Value == "REF 55-0912 rev3");
+        return Assert.Single(stamp.Ancestors(), e => (string?)e.Attribute("data-docx-text-frame") == "true");
+    }
+
+    [Theory]
+    [InlineData(CenteredStyleFrame, "w:wrap=\"around\" w:x=\"2000\"")]
+    [InlineData(CenteredStyleFrame, "w:w=\"2880\" w:wrap=\"around\" w:vAnchor=\"page\" w:hAnchor=\"page\" w:x=\"2000\" w:y=\"4000\"")]
+    [InlineData(MiddleStyleFrame, "w:wrap=\"around\" w:y=\"4000\"")]
+    public void DirectOffset_IsNotRealignedByTheStyle(string styleFrame, string directFrame)
+    {
+        var frame = RenderedFrame(directFrame, styleFrame);
+        Assert.Contains("left: 100pt", (string?)frame.Attribute("style"));
+        Assert.Contains("top: 200pt", (string?)frame.Attribute("style"));
+        Assert.Null(frame.Attribute("data-docx-frame-xalign"));
+        Assert.Null(frame.Attribute("data-docx-frame-yalign"));
+    }
+
+    [Fact]
+    public void StyleDropCap_DoesNotSuppressADirectPageFrame()
+    {
+        var frame = RenderedFrame(PageFrame, DropCapStyleFrame);
+        Assert.Contains("left: 200pt", (string?)frame.Attribute("style"));
+        Assert.Contains("top: 200pt", (string?)frame.Attribute("style"));
+        Assert.Equal("page", (string?)frame.Attribute("data-docx-frame-h-anchor"));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("w:wrap=\"auto\"")]
     public void StyleDefinedFooterFrame_KeepsItsWidthAndPosition(string? directFrame)
     {
-        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("stamp-frame.docx", Fixture(directFrame)),
-            new WmlToHtmlConverterSettings { FabricateCssClasses = false, RenderHeadersAndFooters = true,
-                RenderPagination = PaginationMode.Paginated });
-        var stamp = html.Descendants().Single(e => e.Name.LocalName == "p" && e.Value == "REF 55-0912 rev3");
-        var frame = Assert.Single(stamp.Ancestors(), e => (string?)e.Attribute("data-docx-text-frame") == "true");
+        var frame = RenderedFrame(directFrame);
+        var html = frame.AncestorsAndSelf().Last();
         var style = (string?)frame.Attribute("style") ?? "";
         Assert.Contains("width: 432pt", style);
         Assert.Contains("left: 50.4pt", style);
