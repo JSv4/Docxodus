@@ -217,14 +217,28 @@ prompt.
 | Control | `DocxEditor` command | Session op |
 |---------|---------------------|-----------|
 | Track changes | `setTrackedChanges(mode)` | `SetTrackedChanges` — edits land as `w:ins`/`w:del` under `RenderInline` |
-| Markup: All / None | `setTrackedChanges(RenderInline \| Accept)` | render profile |
+| Markup: All / None | `showRevisions(bool)` | render profile (`renderTrackedChanges`) |
 | Author | `setRevisionAuthor(name)` | `SetRevisionAuthor` — also the comment author |
 | Accept / Reject | `acceptRevision(id)`, `rejectRevision(id)` | `AcceptRevision` / `RejectRevision` on the change at the caret (`revisionAt(mark)` maps the rendered `ins`/`del` to the registry entry) |
 | Accept all / Reject all | `acceptAllRevisions()`, `rejectAllRevisions()` | `AcceptAllRevisions` / `RejectAllRevisions` |
 | Previous / Next change | `revisionElements()` | steps through the rendered marks |
 
-Switching tracking mid-session keeps the undo history and the edits; the document re-renders so
-revisions show (or stop showing) inline.
+Switching tracking mid-session keeps the undo history and the edits; the document re-renders, and
+while no display choice has been made (see below) revisions show (or stop showing) inline with it.
+
+Showing revisions and recording them are separate settings, as in Word. `trackedChanges` decides
+how edits are recorded; the `showRevisions` option (and `showRevisions(bool)` /
+`revisionsVisible`) decides whether the revisions already in the document render as `ins`/`del`
+or as if every change were accepted. Left unset, the display follows the recording mode — shown
+under `RenderInline`, hidden otherwise — which is how the editor behaved before the two were
+split. The Markup dropdown sets only the display, so "No markup" leaves Track Changes on; the
+ribbon keeps that choice for the documents it opens next. Until the user picks a Markup value,
+checking Track Changes still shows the markup with it. Deleted text that is shown stays read-only
+whichever way edits are recorded: a single Backspace or Delete next to it steps over it and removes
+the live character beyond it, recorded or not, and the deletion stays. Typing into a paragraph whose
+only text is deleted keeps that deletion when edits are untracked, and is recorded when edits are
+tracked with the markup hidden, even in a paragraph that holds a bookmark; in both cases the typed
+text goes in as plain text at the start of the paragraph, without line breaks or formatting.
 
 ---
 
@@ -604,7 +618,8 @@ size its iframe wide enough to trip the roomy layout); `"auto"` is the default.
 
 Options the host controls: `chrome`, `compactBreakpoint`, `rail`, `fileActions`, `hint`, `loader`,
 `documentName`, `idPrefix`, `onSave`, `onOpen`, `onStatus`, `onCommand`, plus every
-`DocxEditorOptions` field (`comments`, `commentAuthor`, `headerFooter`, `trackedChanges`, …).
+`DocxEditorOptions` field (`comments`, `commentAuthor`, `headerFooter`, `trackedChanges`,
+`showRevisions`, …).
 
 ---
 

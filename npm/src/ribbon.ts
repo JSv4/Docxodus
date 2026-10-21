@@ -331,6 +331,8 @@ class RibbonSurface implements RibbonEditor {
   private density: "full" | "compact" = "full";
   private headerFooter: boolean;
   private author: string;
+  /** The Markup choice, carried to every document opened; unset, the display follows tracking. */
+  private showRevisions: boolean | undefined;
   private destroyed = false;
 
   private featureTimer: ReturnType<typeof setInterval> | null = null;
@@ -355,6 +357,7 @@ class RibbonSurface implements RibbonEditor {
     // Headers and footers are document content, so the surface edits them by default; the
     // engine's own default stays off for consumers that mount `DocxEditor` bare.
     this.headerFooter = options.headerFooter ?? true;
+    this.showRevisions = options.showRevisions;
     this.author = options.commentAuthor ?? options.revisionAuthor ?? "Reviewer";
     // false suppresses the overlay; true/omitted takes the defaults; an object rewords it.
     this.loaderOptions =
@@ -682,6 +685,7 @@ class RibbonSurface implements RibbonEditor {
       headerFooter: this.headerFooter,
       blockDrag: this.options.blockDrag ?? true,
       trackedChanges: tracked,
+      showRevisions: this.showRevisions,
       revisionAuthor: this.author,
       comments: this.options.comments,
       commentAuthor: this.author,
@@ -985,9 +989,9 @@ class RibbonSurface implements RibbonEditor {
     markup.addEventListener("change", () => {
       if (!this.live) return;
       // "No markup" shows the document as if every change were accepted; edits keep recording.
-      this.run(`markup ${markup.value}`, () =>
-        this.live!.setTrackedChanges(markup.value === "none" ? TrackedChangeMode.Accept : TrackedChangeMode.RenderInline));
-      trackchanges.checked = markup.value !== "none";
+      const visible = markup.value !== "none";
+      this.showRevisions = visible;
+      this.run(`markup ${markup.value}`, () => this.live!.showRevisions(visible));
     });
     const author = this.require<HTMLInputElement>("author");
     author.addEventListener("change", () => {
@@ -1208,9 +1212,9 @@ class RibbonSurface implements RibbonEditor {
 
   private syncReviewState(): void {
     if (!this.live) return;
-    const tracked = this.live.trackedChanges === TrackedChangeMode.RenderInline;
-    this.require<HTMLInputElement>("trackchanges").checked = tracked;
-    this.require<HTMLSelectElement>("markup").value = tracked ? "all" : "none";
+    this.require<HTMLInputElement>("trackchanges").checked =
+      this.live.trackedChanges === TrackedChangeMode.RenderInline;
+    this.require<HTMLSelectElement>("markup").value = this.live.revisionsVisible ? "all" : "none";
     const revs = this.live.listRevisions();
     const count = this.control("revcount");
     if (count) count.textContent = revs.length === 0 ? "No tracked changes" : `${revs.length} change${revs.length === 1 ? "" : "s"}`;
