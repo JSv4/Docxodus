@@ -32,6 +32,15 @@ function deletionFixture(): Uint8Array {
     `<w:p><w:pPr><w:rPr><w:del w:id="7" ${REVISION}/></w:rPr></w:pPr><w:r><w:t>Joined to the next.</w:t></w:r></w:p>`,
     // Control: no revisions at all.
     '<w:p><w:r><w:t>Plain control paragraph.</w:t></w:r></w:p>',
+    // A paragraph whose only text is deleted, inside a bookmark (a heading's TOC target), and the
+    // same without the bookmark.
+    '<w:p><w:bookmarkStart w:id="10" w:name="_Toc1"/>'
+      + `<w:del w:id="11" ${REVISION}><w:r><w:delText>Gone heading</w:delText></w:r></w:del>`
+      + '<w:bookmarkEnd w:id="10"/></w:p>',
+    `<w:p><w:del w:id="12" ${REVISION}><w:r><w:delText>Gone too</w:delText></w:r></w:del></w:p>`,
+    // A deletion at the end of a paragraph.
+    '<w:p><w:r><w:t>Keep this</w:t></w:r>'
+      + `<w:del w:id="13" ${REVISION}><w:r><w:delText xml:space="preserve"> tail</w:delText></w:r></w:del></w:p>`,
   ].join('');
   return storedZip(Object.entries({
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>',
@@ -98,6 +107,32 @@ async function caretAfter(page: Page, text: string, at: string) {
 
 async function blur(page: Page) {
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+}
+
+/** Put the caret at the start or end of the first text node in the block holding `text` that contains `node`. */
+async function caretAtEdgeOf(page: Page, text: string, node: string, side: 'start' | 'end') {
+  await page.evaluate(({ text, at, side }) => {
+    const block: HTMLElement = (window as any).block(text);
+    block.focus();
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (!(n.textContent ?? '').includes(at)) continue;
+      const range = document.createRange();
+      range.setStart(n, side === 'start' ? 0 : (n.textContent ?? '').length);
+      range.collapse(true);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+      return;
+    }
+    throw new Error(`no text node holds "${at}"`);
+  }, { text, at: node, side });
+}
+
+/** The deleted text, and deleted-mark pilcrows, the block holding `text` shows. */
+async function deletedTextIn(page: Page, text: string): Promise<string[]> {
+  return page.evaluate((t) => Array.from((window as any).block(t)
+    ?.querySelectorAll('del, [class*="para-mark-del"]') ?? [])
+    .map((d: any) => (d.textContent ?? '').replace(/\u00a0/g, ' ')), text);
 }
 
 test.describe('DocxEditor — offsets to the right of a rendered deletion (#1278)', () => {
@@ -188,36 +223,72 @@ test.describe('DocxEditor — offsets to the right of a rendered deletion (#1278
     expect(out.accepted).toContain('Joined to the next.!Plain control paragraph.');
   });
 
-  // The deletion is not editable, so the browser would remove it whole; the session still holds
-  // it, so the paragraph would show less than the document until the next repaint.
-  for (const [key, at, side] of [['Backspace', 'repaint', 'start'], ['Delete', 'shall', 'end']] as const) {
-    test(`${key} beside a deletion keeps it shown and leaves the document unchanged`, async ({ page }) => {
+  // The deletion is not editable, so the browser would remove it whole, although the session still
+  // holds it. As in Word, the caret skips the deleted text and removes the live character beyond it.
+  const besideDeletion = [
+    { key: 'Backspace', block: 'The tenant', caret: { node: 'repaint', side: 'start' }, shown: 'promptly ',
+      accepted: 'The tenant shallrepaint the fence each spring.' },
+    { key: 'Delete', block: 'The tenant', caret: { node: 'shall', side: 'end' }, shown: 'promptly ',
+      accepted: 'The tenant shall epaint the fence each spring.' },
+    { key: 'Backspace', block: 'Keep this', caret: 'End', shown: ' tail',
+      accepted: 'Keep thi' },
+    // A deleted paragraph mark: End puts the caret after the pilcrow.
+    { key: 'Backspace', block: 'Joined', caret: 'End', shown: '¶',
+      accepted: 'Joined to the nextPlain control paragraph.' },
+  ] as const;
+  for (const c of besideDeletion) {
+    test(`${c.key} beside the deletion in "${c.block}" removes the live character beyond it`, async ({ page }) => {
       await openTracked(page);
-      const revisions = () => page.evaluate(() => (window as any).editor.listRevisions()
-        .map((r: any) => `${r.type}:${r.text}`));
-      const before = await revisions();
-      await page.evaluate(({ at, side }) => {
-        const w = window as any;
-        const block: HTMLElement = w.block('The tenant');
-        block.focus();
-        const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          if (!(node.textContent ?? '').includes(at)) continue;
-          const range = document.createRange();
-          range.setStart(node, side === 'start' ? 0 : (node.textContent ?? '').length);
-          range.collapse(true);
-          window.getSelection()!.removeAllRanges();
-          window.getSelection()!.addRange(range);
-          return;
-        }
-      }, { at, side });
-      await page.keyboard.press(key);
-      const shown = await page.evaluate(() => (window as any).block('The tenant')?.querySelector('del')?.textContent);
+      if (c.caret === 'End') {
+        await page.evaluate((t) => (window as any).block(t).focus(), c.block);
+        await page.keyboard.press('End');
+      } else {
+        await caretAtEdgeOf(page, c.block, c.caret.node, c.caret.side);
+      }
+      await page.keyboard.press(c.key);
+      const shownBeforeCommit = await deletedTextIn(page, c.block);
       await blur(page);
-      expect(shown?.replace(/\u00a0/g, ' ')).toBe('promptly ');
-      expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
-      expect(before).toContain('delete:promptly ');
-      expect(await revisions()).toEqual(before);
+      const out = await page.evaluate(() => ({
+        failures: (window as any).failures,
+        accepted: (window as any).acceptedText(),
+      }));
+      expect(shownBeforeCommit).toContain(c.shown);
+      expect(await deletedTextIn(page, c.block)).toContain(c.shown);
+      expect(out.failures).toEqual([]);
+      expect(out.accepted).toContain(c.accepted);
+    });
+  }
+
+  test('Backspace after a deletion is recorded as a tracked deletion of the live character', async ({ page }) => {
+    await openTracked(page);
+    await page.evaluate(() => (window as any).block('Keep this').focus());
+    await page.keyboard.press('End');
+    await page.keyboard.press('Backspace');
+    await blur(page);
+    const revisions = await page.evaluate(() => (window as any).editor.listRevisions()
+      .map((r: any) => `${r.type}:${r.text}`));
+    expect(revisions).toContain('delete:s');
+    expect(revisions).toContain('delete: tail');
+  });
+
+  // A paragraph whose only text is deleted has an empty baseline. Rewriting it whole is refused in
+  // tracked mode when it holds a bookmark, so the typed text must go in as a span insertion.
+  for (const [block, key] of [['Gone heading', 'Home'], ['Gone heading', 'End'], ['Gone too', 'Home'], ['Gone too', 'End']] as const) {
+    test(`typing after ${key} in a paragraph whose only text ("${block}") is deleted is recorded`, async ({ page }) => {
+      await openTracked(page);
+      await page.evaluate((t) => (window as any).block(t).focus(), block);
+      await page.keyboard.press(key);
+      await page.keyboard.type('X');
+      await blur(page);
+      const out = await page.evaluate((t) => ({
+        failures: (window as any).failures,
+        shown: ((window as any).block(t)?.textContent ?? '').replace(/\u00a0/g, ' '),
+        accepted: (window as any).acceptedText(),
+      }), block);
+      expect(out.failures).toEqual([]);
+      expect(out.shown).toContain('X');
+      expect(out.shown).toContain(block);
+      expect(out.accepted).toContain('X');
     });
   }
 
