@@ -223,8 +223,8 @@ prompt.
 | Accept all / Reject all | `acceptAllRevisions()`, `rejectAllRevisions()` | `AcceptAllRevisions` / `RejectAllRevisions` |
 | Previous / Next change | `revisionElements()` | steps through the rendered marks |
 
-Switching tracking mid-session keeps the undo history and the edits; the document re-renders so
-revisions show (or stop showing) inline.
+Switching tracking mid-session keeps the undo history and the edits; the document re-renders, and
+while no display choice has been made (see below) revisions show (or stop showing) inline with it.
 
 Showing revisions and recording them are separate settings, as in Word. `trackedChanges` decides
 how edits are recorded; the `showRevisions` option (and `showRevisions(bool)` /
@@ -234,7 +234,11 @@ under `RenderInline`, hidden otherwise — which is how the editor behaved befor
 split. The Markup dropdown sets only the display, so "No markup" leaves Track Changes on; the
 ribbon keeps that choice for the documents it opens next. Until the user picks a Markup value,
 checking Track Changes still shows the markup with it. Deleted text that is shown stays read-only
-whichever way edits are recorded: a caret Backspace or Delete that would reach it is refused.
+whichever way edits are recorded: a single Backspace or Delete next to it steps over it and removes
+the live character beyond it, recorded or not, and the deletion stays. Typing into a paragraph whose
+only text is deleted keeps that deletion when edits are untracked, and is recorded when edits are
+tracked with the markup hidden, even in a paragraph that holds a bookmark; in both cases the typed
+text goes in as plain text at the start of the paragraph, without line breaks or formatting.
 
 ---
 

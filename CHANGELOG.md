@@ -59,7 +59,12 @@ All notable changes to this project will be documented in this file.
 
 - The ribbon's Markup dropdown changes only how revisions are shown (#1279). "No markup" used to turn
   tracked changes off and clear the Track Changes checkbox, so edits made afterwards were no longer
-  recorded as revisions.
+  recorded as revisions. With the two settings apart, typing into a paragraph whose only text is
+  deleted keeps that deletion when revisions are shown and edits are not recorded (rewriting the
+  paragraph had discarded it), and is recorded when edits are recorded with the markup hidden, even
+  in a paragraph that holds a bookmark; so is typing into an empty paragraph that holds a bookmark
+  while edits are recorded, which was refused. There the typed text goes in as plain text at the
+  start of the paragraph, without line breaks or formatting.
 
 ## [14.0.0] - 2026-10-19
 
