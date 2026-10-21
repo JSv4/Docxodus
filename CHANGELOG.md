@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Read every keyword of an HTML `text-decoration` value when converting HTML to DOCX (#1273). The
+  converter compared the whole value with `underline` and `line-through`, so a value with more than
+  one keyword produced no line at all, and a DOCX → HTML → DOCX round trip dropped double underlines
+  and double strikethroughs. `underline double` now gives `<w:u w:val="double"/>`,
+  `line-through double` gives `<w:dstrike/>`, `underline line-through` gives both lines, and the
+  `dotted`, `dashed` and `wavy` styles map to Word's `dotted`, `dash` and `wave` underlines.
+  Single-keyword values and `<u>`/`<s>` elements convert as before.
+
 - Prevent a synthetic nonbreaking-space run in the required blank paragraph after a nested table. The paragraph retains a one-twip layout box for source geometry, so fitting nested footnote tables no longer fail PDF clipping verification (#1217).
 
 - Consolidation reports competing additions of a bookmark name instead of silently dropping a range
