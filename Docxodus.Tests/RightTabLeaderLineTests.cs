@@ -129,12 +129,15 @@ public class RightTabLeaderLineTests
     [Fact]
     public void RightTabSegment_OverhangEndsAtTheStop()
     {
-        // The line ends at 9360 - 3360 = 6000 and the stop is at 6040. The longest title is estimated
-        // to end near 5920 twips, so its number is estimated to run past the stop. Every segment
-        // gives back only the 40 twips (2pt) up to the stop: text estimated to run past a stop gets
-        // no extra room, the same as at a stop inside the line.
-        foreach (var segment in RightTabSegments(Fixture("plain", rightIndent: 3360, rightStop: 6040)))
-            Assert.Equal("-2pt", Style(segment, "margin-right"));
+        // Where the longest entry's number is estimated to end (font metrics vary by host): the
+        // stop at 9360 less the estimated leader width of its right tab.
+        var textEnd = 9360 - (int)(1440 * (decimal)RightTabSegments(Fixture("plain", rightIndent: null))[2]
+            .Descendants().Single(e => (string?)e.Attribute("data-docx-tab") == "right").Attribute("data-docx-tab-width")!);
+        // End the line 30 twips before that and put the stop 20 twips past the line end, so that
+        // number runs past the stop. Every segment gives back only the 20 twips (1pt) to the stop:
+        // text estimated to run past a stop gets no extra room, the same as at a stop inside the line.
+        foreach (var segment in RightTabSegments(Fixture("plain", rightIndent: 9360 - (textEnd - 30), rightStop: textEnd - 10)))
+            Assert.Equal("-1pt", Style(segment, "margin-right"));
     }
 
     [Fact]
