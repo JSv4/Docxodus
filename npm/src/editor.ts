@@ -288,6 +288,12 @@ export interface DocxEditorOptions {
   blockDrag?: boolean;
   /** How editor mutations are recorded. RenderInline enables native Word revisions. */
   trackedChanges?: TrackedChangeMode;
+  /**
+   * Whether the document's tracked revisions render inline (`ins`/`del`) or as if every change
+   * were accepted, independently of how `trackedChanges` records edits. Unset, it follows
+   * `trackedChanges`: shown under RenderInline, hidden otherwise.
+   */
+  showRevisions?: boolean;
   /** Author stamped on native Word revisions. Default "docxodus". */
   revisionAuthor?: string;
   /**
@@ -1250,9 +1256,9 @@ export class DocxEditor {
   private container: HTMLElement;
   private readonly handle: number;
   private readonly options: Required<
-    Omit<DocxEditorOptions, "onEdit" | "onEditFailed" | "onMove" | "onStoryChange" | "onCommentsChange">
+    Omit<DocxEditorOptions, "onEdit" | "onEditFailed" | "onMove" | "onStoryChange" | "onCommentsChange" | "showRevisions">
   > &
-    Pick<DocxEditorOptions, "onEdit" | "onEditFailed" | "onMove" | "onStoryChange" | "onCommentsChange">;
+    Pick<DocxEditorOptions, "onEdit" | "onEditFailed" | "onMove" | "onStoryChange" | "onCommentsChange" | "showRevisions">;
   /** Map a block's current bare unid → its full kind:scope:unid (DocxSession anchor). */
   private readonly unidToFullId = new Map<string, string>();
   /** The element whose [data-anchor] descendants are the editable blocks (container or page container). */
@@ -1622,6 +1628,7 @@ export class DocxEditor {
       headerFooter: options.headerFooter ?? false,
       blockDrag: options.blockDrag ?? false,
       trackedChanges: options.trackedChanges ?? TrackedChangeMode.Accept,
+      showRevisions: options.showRevisions,
       revisionAuthor: options.revisionAuthor ?? "docxodus",
       comments: options.comments ?? true,
       commentAuthor: options.commentAuthor ?? options.revisionAuthor ?? "Reviewer",
@@ -3234,7 +3241,7 @@ export class DocxEditor {
   }
 
   private get renderTrackedChanges(): boolean {
-    return this.options.trackedChanges === TrackedChangeMode.RenderInline;
+    return this.options.showRevisions ?? this.options.trackedChanges === TrackedChangeMode.RenderInline;
   }
 
   private renderBlockHtml(anchorId: string): string {
@@ -4582,7 +4589,8 @@ export class DocxEditor {
 
   /**
    * Switch tracked-changes mode mid-session (Word's "Track Changes" toggle). Undo history and
-   * edits survive; the document re-renders so revisions show (or stop showing) inline.
+   * edits survive; the document re-renders, and unless `showRevisions` was set, revisions show
+   * (or stop showing) inline with it.
    */
   setTrackedChanges(mode: TrackedChangeMode): void {
     this.assertOpen();
@@ -4592,6 +4600,22 @@ export class DocxEditor {
     bridge.SetTrackedChanges(this.handle, mode);
     this.options.trackedChanges = mode;
     this.remount();
+  }
+
+  /** Whether the document's tracked revisions currently render inline. */
+  get revisionsVisible(): boolean {
+    return this.renderTrackedChanges;
+  }
+
+  /**
+   * Show or hide the document's tracked revisions (Word's "All Markup" / "No Markup") without
+   * changing how edits are recorded. The choice then holds across `setTrackedChanges`.
+   */
+  showRevisions(visible: boolean): void {
+    this.assertOpen();
+    const was = this.renderTrackedChanges;
+    this.options.showRevisions = visible;
+    if (was !== visible) this.remount();
   }
 
   setRevisionAuthor(author: string): void {

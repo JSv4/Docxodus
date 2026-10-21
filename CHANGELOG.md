@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `DocxEditor` takes a `showRevisions` option, with `showRevisions(bool)` and `revisionsVisible`, that
+  decides whether the revisions already in a document render, separately from how `trackedChanges`
+  records new edits (#1279). Left unset it follows the recording mode, as before.
+
 ### Fixed
 
 - Prevent a synthetic nonbreaking-space run in the required blank paragraph after a nested table. The paragraph retains a one-twip layout box for source geometry, so fitting nested footnote tables no longer fail PDF clipping verification (#1217).
@@ -23,6 +29,10 @@ All notable changes to this project will be documented in this file.
   was refused with `offset_out_of_range` and the keystrokes lost, or landed at the wrong place in the
   paragraph. The deleted text stays visible but cannot be edited, and a Backspace or Delete that would
   reach it is refused rather than removing it from view.
+
+- The ribbon's Markup dropdown changes only how revisions are shown (#1279). "No markup" used to turn
+  tracked changes off and clear the Track Changes checkbox, so edits made afterwards were no longer
+  recorded as revisions.
 
 ## [14.0.0] - 2026-10-19
 
