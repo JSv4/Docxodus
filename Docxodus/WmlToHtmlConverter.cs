@@ -2549,8 +2549,6 @@ namespace Docxodus
 
             sb.AppendLine($"div.{prefix}margin-replies {{");
             sb.AppendLine("    margin-top: 0.5em;");
-            sb.AppendLine("    padding-left: 0.75em;");
-            sb.AppendLine("    border-left: 2px solid #bbdefb;");
             sb.AppendLine("}");
 
             // Comment header
@@ -2625,9 +2623,17 @@ namespace Docxodus
                 sb.AppendLine("    box-shadow: 0 1px 3px rgba(0,0,0,0.1);");
                 sb.AppendLine("}");
 
-                // Preserve space for reply text instead of shrinking its font in nested notes.
-                sb.AppendLine($"div.{prefix}margin-reply {{");
-                sb.AppendLine("    padding: 0.25em;");
+                // A nested reply is part of its parent's note: a separator, not another box, so
+                // its text keeps the root note's width at every nesting level. A reply that a
+                // malformed parent graph renders at top level keeps the full note box.
+                sb.AppendLine($"div.{prefix}margin-replies > div.{prefix}margin-reply {{");
+                sb.AppendLine("    margin: 0;");
+                sb.AppendLine("    padding: 0.5em 0 0;");
+                sb.AppendLine("    background: none;");
+                sb.AppendLine("    border: 0;");
+                sb.AppendLine("    border-top: 1px solid rgba(0,0,0,0.1);");
+                sb.AppendLine("    border-radius: 0;");
+                sb.AppendLine("    box-shadow: none;");
                 sb.AppendLine("}");
 
                 // Margin comment header
