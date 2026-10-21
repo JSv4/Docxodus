@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Read every keyword of an HTML `text-decoration` value when converting HTML to DOCX (#1273). The
+  converter compared the whole value with `underline` and `line-through`, so a value with more than
+  one keyword produced no line at all, and a DOCX → HTML → DOCX round trip dropped double underlines
+  and double strikethroughs. `underline double` now gives `<w:u w:val="double"/>`,
+  `line-through double` gives `<w:dstrike/>`, `underline line-through` gives both lines, and the
+  `dotted`, `dashed` and `wavy` styles map to Word's `dotted`, `dash` and `wave` underlines.
+  Single-keyword values and `<u>`/`<s>` elements convert as before.
+
 - Prevent a synthetic nonbreaking-space run in the required blank paragraph after a nested table. The paragraph retains a one-twip layout box for source geometry, so fitting nested footnote tables no longer fail PDF clipping verification (#1217).
 
 - Consolidation reports competing additions of a bookmark name instead of silently dropping a range
@@ -17,6 +25,11 @@ All notable changes to this project will be documented in this file.
   attribute instead of replacing them whole (#1276). A footer paragraph whose style defines a
   page-anchored frame and whose own `w:framePr` sets only `w:wrap` keeps the style's width, anchors
   and offsets in the converted HTML, as LibreOffice renders it.
+
+- Margin comment replies no longer repeat the full note box at every nesting level (#1277). A reply
+  now sits inside its parent's note behind a thin separator, without its own fill, border, shadow or
+  side padding, and the replies container no longer indents, so reply text keeps the root note's width
+  instead of losing about 22px per level.
 
 - Consolidation preserves one reviewer's added bookmarks when other reviewers edit the same paragraph,
   including paragraphs in content controls, hyperlinks and table cells (#1212). Same-shell block wrappers

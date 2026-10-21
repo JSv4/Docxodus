@@ -2936,7 +2936,10 @@ namespace Docxodus.HtmlToWml
             string colorPropertyString = colorProperty.ToString();
             string? fontFamilyString = GetUsedFontFromFontFamilyProperty(fontFamilyProperty);
             TPoint? fontSizeTPoint = GetUsedSizeFromFontSizeProperty(fontSizeProperty);
-            string textDecorationString = textDecorationProperty.ToString();
+            // text-decoration lists its lines and an optional style in any order, e.g. "underline double"
+            // for w:u double and "line-through double" for w:dstrike (issue #1273).
+            var decorations = textDecorationProperty.Terms
+                .Select(t => t.Value?.ToLowerInvariant()).ToHashSet();
             string fontStyleString = fontStyleProperty.ToString();
             string fontWeightString = fontWeightProperty.ToString().ToLower();
             string backgroundColorString = backgroundColorProperty.ToString().ToLower();
@@ -2992,7 +2995,9 @@ namespace Docxodus.HtmlToWml
             }
 
             XElement? strike = null;
-            if (textDecorationString == "line-through" || sAncestor)
+            if (decorations.Contains("line-through"))
+                strike = new XElement(decorations.Contains("double") ? W.dstrike : W.strike);
+            else if (sAncestor)
                 strike = new XElement(W.strike);
 
             XElement? bold = null;
@@ -3012,7 +3017,13 @@ namespace Docxodus.HtmlToWml
             }
 
             XElement? underline = null;
-            if (uAncestor || textDecorationString == "underline")
+            if (decorations.Contains("underline"))
+                underline = new XElement(W.u, new XAttribute(W.val,
+                    decorations.Contains("double") ? "double" :
+                    decorations.Contains("dotted") ? "dotted" :
+                    decorations.Contains("dashed") ? "dash" :
+                    decorations.Contains("wavy") ? "wave" : "single"));
+            else if (uAncestor)
                 underline = new XElement(W.u, new XAttribute(W.val, "single"));
 
             XElement? rStyle = null;
