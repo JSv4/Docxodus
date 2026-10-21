@@ -736,7 +736,8 @@ const NOTE_NUMBER_SELECTOR = ".footnote-number, .endnote-number";
  * paragraph already makes the block read-only (see `wireBlock`), and the session does read the
  * `w:t` of one nested in a hyperlink, as Word writes it.
  */
-const RENDERED_DELETION_SELECTOR = 'del[class*="-del"], span[class*="para-mark-del"]';
+const RENDERED_TEXT_DELETION_SELECTOR = 'del[class*="-del"]';
+const RENDERED_DELETION_SELECTOR = RENDERED_TEXT_DELETION_SELECTOR + ', span[class*="para-mark-del"]';
 
 const GENERATED_CHROME_SELECTOR =
   '[data-list-marker], a.footnote-ref, a.endnote-ref, a[class$="-backref"], a.comment-marker, '
@@ -3224,15 +3225,22 @@ export class DocxEditor {
     // field in a tool-generated footer): that is content, and the span path below keeps it
     // while inserting the typed text beside it.
     if (old.trim().length === 0 && !el.querySelector("[data-field]")) {
-      // A paragraph whose only text is deleted renders that placeholder too. Tracked mode refuses
-      // its rewrite when it holds a bookmark; the typed text then goes in as a plain insertion at
-      // its start, which cannot carry a line break or inline formatting.
-      const onlyDeleted = !!el.querySelector(RENDERED_DELETION_SELECTOR);
-      const whole = this.parseEdit(
-        this.exports.DocxSessionBridge.ReplaceText(this.handle, fullId, serializeInlineMarkdown(el)),
-        { expectRejection: onlyDeleted },
-      );
-      if (whole.success || !onlyDeleted) return whole;
+      // A paragraph whose only text is deleted renders that placeholder too, and with the markup
+      // hidden nothing on the page shows the deleted text. Tracked mode refuses the rewrite when
+      // the paragraph holds a bookmark; an untracked rewrite would discard a shown deletion. The
+      // typed text then goes in as a plain insertion at its start, which cannot carry a line
+      // break or inline formatting.
+      const tracked = this.options.trackedChanges === TrackedChangeMode.RenderInline;
+      if (tracked || !el.querySelector(RENDERED_TEXT_DELETION_SELECTOR)) {
+        const whole = this.parseEdit(
+          this.exports.DocxSessionBridge.ReplaceText(this.handle, fullId, serializeInlineMarkdown(el)),
+          { expectRejection: true },
+        );
+        if (whole.success || whole.error?.code !== "tracked_operation_unsupported") {
+          if (!whole.success) this.reportEditFailure(whole.error);
+          return whole;
+        }
+      }
       const typed = next.trim() + (keepsTrailingSpace(el) ? " " : "");
       return this.parseEdit(
         this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, 0, 0, typed),

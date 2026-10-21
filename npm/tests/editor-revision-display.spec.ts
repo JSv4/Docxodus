@@ -21,6 +21,7 @@ const DELETED_ONLY_PARAGRAPH = `<w:p><w:del w:id="3" ${REVISION}><w:r><w:delText
 const BOOKMARKED_DELETED_ONLY_PARAGRAPH = '<w:p><w:bookmarkStart w:id="10" w:name="_Toc1"/>'
   + `<w:del w:id="3" ${REVISION}><w:r><w:delText>Gone clause</w:delText></w:r></w:del>`
   + '<w:bookmarkEnd w:id="10"/></w:p>';
+const EMPTY_BOOKMARKED_PARAGRAPH = '<w:p><w:bookmarkStart w:id="10" w:name="_Toc1"/><w:bookmarkEnd w:id="10"/></w:p>';
 /** A paragraph that shows only its deleted mark, then the paragraph it joins. */
 const DELETED_MARK_ONLY_PARAGRAPH = `<w:p><w:pPr><w:rPr><w:del w:id="4" ${REVISION}/></w:rPr></w:pPr></w:p>`
   + '<w:p><w:r><w:t>Next paragraph.</w:t></w:r></w:p>';
@@ -169,8 +170,17 @@ test.describe('DocxEditor — showing revisions apart from recording them (#1279
     await page.keyboard.type('New');
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
-    expect(await page.evaluate(() => (window as any).revisions())).toEqual(['delete:Gone clause', 'insert:New']);
+    expect(await page.evaluate(() => (window as any).revisions())).toEqual(['insert:New', 'delete:Gone clause']);
     expect(await shown(page)).toEqual({ ins: 0, del: 0, text: 'New', trackedChanges: 1 });
+  });
+
+  test('recording, typing into an empty paragraph that holds a bookmark is recorded', async ({ page }) => {
+    await openEditor(page, { trackedChanges: 1 }, revisionFixture(EMPTY_BOOKMARKED_PARAGRAPH));
+    await page.evaluate(() => (document.querySelector('p[data-anchor]') as HTMLElement).focus());
+    await page.keyboard.type('New');
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+    expect(await page.evaluate(() => (window as any).revisions())).toEqual(['insert:New']);
   });
 
   test('showRevisions(false) hides markup while edits keep recording as revisions', async ({ page }) => {
