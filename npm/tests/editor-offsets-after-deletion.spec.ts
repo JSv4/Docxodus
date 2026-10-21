@@ -47,6 +47,13 @@ function deletionFixture(): Uint8Array {
     '<w:p><w:r><w:t>Wave</w:t></w:r>'
       + `<w:del w:id="15" ${REVISION}><w:r><w:delText xml:space="preserve"> gone</w:delText></w:r></w:del>`
       + '<w:r><w:t>\u{1F600}!</w:t></w:r></w:p>',
+    // Deletions beside content that takes no room in the text: a line break, a tab.
+    '<w:p><w:r><w:t>Line</w:t><w:br/></w:r>'
+      + `<w:del w:id="16" ${REVISION}><w:r><w:delText>XX</w:delText></w:r></w:del><w:r><w:t>Tail4</w:t></w:r></w:p>`,
+    '<w:p><w:r><w:t>Tab</w:t><w:tab/></w:r>'
+      + `<w:del w:id="17" ${REVISION}><w:r><w:delText>XX</w:delText></w:r></w:del><w:r><w:t>Tail6</w:t></w:r></w:p>`,
+    '<w:p><w:r><w:t>Ahead</w:t></w:r>'
+      + `<w:del w:id="18" ${REVISION}><w:r><w:delText>XX</w:delText></w:r></w:del><w:r><w:tab/><w:t>Tail7</w:t></w:r></w:p>`,
   ].join('');
   return storedZip(Object.entries({
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>',
@@ -267,6 +274,32 @@ test.describe('DocxEditor — offsets to the right of a rendered deletion (#1278
     });
   }
 
+  // Where the step would also cross something the text does not count, or there is no live
+  // character beyond the deletion, the key does nothing rather than remove the wrong character.
+  const refusedBeside = [
+    { key: 'Backspace', block: 'Tail4', caret: { node: 'Tail4', side: 'start' }, why: 'a line break before the deletion' },
+    { key: 'Backspace', block: 'Tail6', caret: { node: 'Tail6', side: 'start' }, why: 'a tab before the deletion' },
+    { key: 'Delete', block: 'Tail7', caret: { node: 'Ahead', side: 'end' }, why: 'a tab after the deletion' },
+    { key: 'Delete', block: 'Keep this', caret: { node: 'Keep this', side: 'end' }, why: 'the paragraph end after the deletion' },
+  ] as const;
+  for (const c of refusedBeside) {
+    test(`${c.key} beside a deletion with ${c.why} changes nothing`, async ({ page }) => {
+      await openTracked(page);
+      const state = () => page.evaluate((t) => ({
+        text: (window as any).block(t)?.textContent,
+        revisions: (window as any).editor.listRevisions().map((r: any) => `${r.type}:${r.text}`),
+      }), c.block);
+      const before = await state();
+      await caretAtEdgeOf(page, c.block, c.caret.node, c.caret.side);
+      await page.keyboard.press(c.key);
+      const shownBeforeCommit = (await state()).text;
+      await blur(page);
+      expect(shownBeforeCommit).toBe(before.text);
+      expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+      expect(await state()).toEqual(before);
+    });
+  }
+
   test('Backspace after a deletion is recorded as a tracked deletion of the live character', async ({ page }) => {
     await openTracked(page);
     await page.evaluate(() => (window as any).block('Keep this').focus());
@@ -299,6 +332,24 @@ test.describe('DocxEditor — offsets to the right of a rendered deletion (#1278
       expect(out.accepted).toContain('X');
     });
   }
+
+  test('a line break typed into a paragraph whose only text is deleted is kept', async ({ page }) => {
+    await openTracked(page);
+    await page.evaluate(() => (window as any).block('Gone too').focus());
+    await page.keyboard.press('Home');
+    await page.keyboard.type('L1');
+    await page.keyboard.press('Shift+Enter');
+    await page.keyboard.type('L2');
+    await blur(page);
+    const out = await page.evaluate(() => {
+      const block: HTMLElement = (window as any).block('Gone too');
+      return { failures: (window as any).failures, breaks: block.querySelectorAll('br').length, text: block.textContent };
+    });
+    expect(out.failures).toEqual([]);
+    expect(out.breaks).toBe(1);
+    expect(out.text).toContain('L1');
+    expect(out.text).toContain('L2');
+  });
 
   test('control: typing to the left of a deletion is recorded', async ({ page }) => {
     await openTracked(page);
