@@ -2100,8 +2100,7 @@ namespace Docxodus
                 .Where(e => !lpe.Any(z => z.Name == e.Name))
                 .ToArray();
             var ma = AttributeMerge(higherPriorityElement.Element(W.spacing), lowerPriorityElement.Element(W.spacing));
-            // A paragraph's w:framePr overrides its style's frame attribute by attribute (issue #1276).
-            var framePr = AttributeMerge(higherPriorityElement.Element(W.framePr), lowerPriorityElement.Element(W.framePr));
+            var framePr = FramePrMerge(higherPriorityElement.Element(W.framePr), lowerPriorityElement.Element(W.framePr));
             var rFonts = FontMerge(higherPriorityElement.Element(W.rFonts), lowerPriorityElement.Element(W.rFonts));
             var tabs = TabsMerge(higherPriorityElement.Element(W.tabs), lowerPriorityElement.Element(W.tabs));
             var ind = IndMerge(higherPriorityElement.Element(W.ind), lowerPriorityElement.Element(W.ind));
@@ -2312,6 +2311,21 @@ namespace Docxodus
                 hn.Attributes(),
                 ln!.Attributes().Where(a => hn.Attribute(a.Name) == null));
             return mn1;
+        }
+
+        // A paragraph's w:framePr overrides its style's frame attribute by attribute (issue #1276), except
+        // that w:x/w:xAlign and w:y/w:yAlign are each one setting per axis, so setting either attribute of
+        // a pair replaces both, and a style's w:dropCap and w:lines never reach a paragraph that has its
+        // own w:framePr. LibreOffice resolves frames this way (docs/ooxml_corner_cases.md).
+        private static XElement? FramePrMerge(XElement? hn, XElement? ln)
+        {
+            if (hn == null || ln == null)
+                return AttributeMerge(hn, ln);
+            var notInherited = new HashSet<XName> { W.dropCap, W.lines };
+            foreach (var axis in new[] { new[] { W.x, W.xAlign }, new[] { W.y, W.yAlign } })
+                if (axis.Any(name => hn.Attribute(name) != null))
+                    notInherited.UnionWith(axis);
+            return AttributeMerge(hn, new XElement(ln.Name, ln.Attributes().Where(a => !notInherited.Contains(a.Name))));
         }
 
         private static IEnumerable<XElement> TableStyleStack(WordprocessingDocument wDoc, string tblStyleName)
