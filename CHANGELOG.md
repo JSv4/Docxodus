@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [14.1.0] - 2026-10-21
+
 ### Added
 
 - `DocxEditor` takes a `showRevisions` option, with `showRevisions(bool)` and `revisionsVisible`, that
