@@ -41,6 +41,9 @@ function deletionFixture(): Uint8Array {
     // A deletion at the end of a paragraph.
     '<w:p><w:r><w:t>Keep this</w:t></w:r>'
       + `<w:del w:id="13" ${REVISION}><w:r><w:delText xml:space="preserve"> tail</w:delText></w:r></w:del></w:p>`,
+    // The same after a character outside the BMP, which is two UTF-16 code units.
+    '<w:p><w:r><w:t>Smile\u{1F600}</w:t></w:r>'
+      + `<w:del w:id="14" ${REVISION}><w:r><w:delText xml:space="preserve"> gone</w:delText></w:r></w:del></w:p>`,
   ].join('');
   return storedZip(Object.entries({
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>',
@@ -230,8 +233,9 @@ test.describe('DocxEditor — offsets to the right of a rendered deletion (#1278
       accepted: 'The tenant shallrepaint the fence each spring.' },
     { key: 'Delete', block: 'The tenant', caret: { node: 'shall', side: 'end' }, shown: 'promptly ',
       accepted: 'The tenant shall epaint the fence each spring.' },
-    { key: 'Backspace', block: 'Keep this', caret: 'End', shown: ' tail',
+    { key: 'Backspace', block: 'Keep thi', caret: 'End', shown: ' tail',
       accepted: 'Keep thi' },
+    { key: 'Backspace', block: 'Smile', caret: 'End', shown: ' gone', accepted: 'Smile' },
     // A deleted paragraph mark: End puts the caret after the pilcrow.
     { key: 'Backspace', block: 'Joined', caret: 'End', shown: '¶',
       accepted: 'Joined to the nextPlain control paragraph.' },
