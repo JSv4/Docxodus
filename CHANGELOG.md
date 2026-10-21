@@ -8,6 +8,12 @@ All notable changes to this project will be documented in this file.
 
 - Prevent a synthetic nonbreaking-space run in the required blank paragraph after a nested table. The paragraph retains a one-twip layout box for source geometry, so fitting nested footnote tables no longer fail PDF clipping verification (#1217).
 
+- Leader-and-page-number lines in HTML output stay on one line and end their page number on the right
+  tab stop (#1275). A right stop past the paragraph's right indent no longer pushes every entry onto a
+  second line: the right-aligned segment extends into the indent, up to the column edge. A bookmark,
+  a non-breaking hyphen, or underline or strike on the tab run no longer switches the right
+  tab to a fixed width measured on the server, which left the page number short of the stop.
+
 - Consolidation reports competing additions of a bookmark name instead of silently dropping a range
   or keeping duplicate names (#1212). BaseWins retains the base's absent name; FirstReviewerWins and
   StackAll retain the first range and report every competitor. Equal ranges share one attributed copy.

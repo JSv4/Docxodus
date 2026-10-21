@@ -2668,6 +2668,54 @@ which the bidi algorithm placed by the surrounding RLM marks.
   `ReverseTableBordersForRtlTables`, all reading through `IsOnOffPropertyEnabled`.
 - Tests: `Docxodus.Tests/WmlToHtmlOnOffDirectionTests.cs`.
 
+## A right tab stop inside the right indent: the page number reaches the stop
+
+Table-of-contents and index entries often set a right indent, so long titles wrap short of the
+page-number column, while the right leader tab sits at the column edge (issue #1275):
+
+```xml
+<w:p>
+  <w:pPr>
+    <w:tabs><w:tab w:val="left" w:pos="1296"/><w:tab w:val="right" w:leader="dot" w:pos="9360"/></w:tabs>
+    <w:ind w:left="1296" w:right="864" w:hanging="648"/>
+  </w:pPr>
+  <w:r><w:t>2.1.</w:t></w:r><w:r><w:tab/></w:r>
+  <w:r><w:t>Quarry Access Roads</w:t></w:r>
+  <w:r><w:tab/><w:t>3</w:t></w:r>
+</w:p>
+```
+
+On a Letter page with one-inch margins the column is 9360 twips, so the line ends at 8496 twips but
+the stop is at 9360. The same entry with an empty `w:bookmarkStart`/`w:bookmarkEnd` pair, a
+`w:noBreakHyphen` run after the title, or `w:u`/`w:strike` on the tab runs should lay out the same way.
+
+| Renderer | Result |
+|---|---|
+| LibreOffice 25.8.7.3 (PDF export) | Every entry on one line, page number ending at 540pt (the stop) in all five variants, with and without `w:right` |
+| Word | Not measured |
+| Docxodus (before) | With `w:right`: every entry on two lines. With a bookmark, non-breaking hyphen, underline or strike: the right tab used a fixed server-measured width, so the number ended short of the stop |
+| Docxodus (after) | Every entry on one line; page number ends on the stop (624px in a 6.5in column) |
+
+Two separate causes:
+
+- The right-tab segment is an `inline-flex` box whose width runs from its start to the stop, so it
+  is 864 twips wider than what is left of the line. The browser moved it onto its own line. The tab
+  pass now records how far the segment passes the line end (`pt:TabOverhang`). That amount is capped
+  at the column edge, so it reclaims at most the right indent. The segment gets a matching negative
+  `margin-right`, which lets it fit on the line while it keeps its full width.
+- `ConvertAlignedTabRuns` accepted only runs that contain `w:rPr`, `w:t` and `w:tab`, and
+  `CanFlexTabRun` rejected underline and strike. Every other paragraph fell back to the fixed-width
+  tab. Bookmarks render as empty anchors and a non-breaking hyphen as text, so both now stay on the
+  flex path. A bookmark that opens a rendered annotation range still falls back, as an annotation
+  range that is already open does. Underline and strike were rejected, but CSS text decoration
+  does not paint an empty tab box on either path, so the rejection cost alignment and bought no
+  decoration. LibreOffice does draw the underline under an underlined tab; Docxodus still does not,
+  before or after this fix.
+
+- Code: `Docxodus/WmlToHtmlConverter.cs`: `CalculateSpanWidthTransform` (right-tab branch),
+  `ConvertAlignedTabRuns`, `CanFlexTabRun`.
+- Tests: `Docxodus.Tests/RightTabLeaderLineTests.cs`, `npm/tests/right-tab-leader-lines.spec.ts`.
+
 ## `w:ind` has two spellings for each edge: `w:start`/`w:left` and `w:end`/`w:right`
 
 ECMA-376 Part 1, §17.3.1.12 names a paragraph's indent edges `w:start` and `w:end`; the transitional
