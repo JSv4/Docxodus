@@ -21,6 +21,14 @@ All notable changes to this project will be documented in this file.
   StackAll retain the first range and report every competitor. Equal ranges share one attributed copy.
   Independent text edits still compose, and rejecting the selected addition removes its bookmark.
 
+- A paragraph's own `w:framePr` now overrides its paragraph style's frame properties attribute by
+  attribute instead of replacing them whole (#1276). A footer paragraph whose style defines a
+  page-anchored frame and whose own `w:framePr` sets only `w:wrap` keeps the style's width, anchors
+  and offsets in the converted HTML, as LibreOffice renders it. Each axis's offset and alignment
+  (`w:x`/`w:xAlign`, `w:y`/`w:yAlign`) count as one setting, so a paragraph's own `w:x` is not
+  realigned by its style's `w:xAlign`. A style's `w:dropCap` and `w:lines` do not carry over to a
+  paragraph with its own `w:framePr`, so they cannot hide a frame the paragraph positions itself.
+
 - Margin comment replies no longer repeat the full note box at every nesting level (#1277). A reply
   now sits inside its parent's note behind a thin separator, without its own fill, border, shadow or
   side padding, and the replies container no longer indents, so reply text keeps the root note's width
