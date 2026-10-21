@@ -1401,7 +1401,8 @@ notes as ordinary editable content, which took three things:
 - **The citation marker is inert chrome.** A citation is a zero-width `w:footnoteReference`; the
   displayed number is computed by the renderer from document order, and the note backref (`↩`) is
   generated too. None of it is in the session's run text, so the editor excludes all of it from its
-  content-offset space via one `GENERATED_CHROME_SELECTOR` (shared with generated list markers).
+  content-offset space via one `GENERATED_CHROME_SELECTOR` (shared with generated list markers and
+  with tracked deletions rendered inline, whose deleted text the session's run text also omits).
   Each place that has to honour it fails differently if missed: offsets drift (`OffsetOutOfRange`,
   silently dropped edits); the display number gets **committed as literal text**, destroying the
   citation run; or the user deletes a marker outright and orphans its note.
