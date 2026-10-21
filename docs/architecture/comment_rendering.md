@@ -511,8 +511,14 @@ div.comment-margin-note {
   font-size: 0.85rem;
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
-div.comment-margin-reply {
-  padding: 0.25em;
+div.comment-margin-replies > div.comment-margin-reply {
+  margin: 0;
+  padding: 0.5em 0 0;
+  background: none;
+  border: 0;
+  border-top: 1px solid rgba(0,0,0,0.1);
+  border-radius: 0;
+  box-shadow: none;
 }
 div.comment-margin-note-header {
   display: flex;
@@ -617,7 +623,10 @@ reply, `w15:done` marks it resolved. Every visible mode draws both:
 - **Margin**: a reply's note nests inside its parent's note in `div.comment-margin-replies`
   (class `comment-margin-reply`), so the whole thread positions as one page unit; the
   pagination engine maps every id in a thread to the root note and dedupes per page so a
-  reply's marker never materializes the thread twice. Resolved notes wear `comment-resolved`
+  reply's marker never materializes the thread twice. A nested reply draws no box of its own:
+  the `comment-margin-reply` rule removes the note's fill, border, shadow and side padding, and a
+  thin top rule separates it from what precedes it, so every reply keeps the root note's text
+  width however deep the thread goes (issue #1277). Resolved notes wear `comment-resolved`
   and the header badge.
 - **Inline**: a resolved comment's highlight span wears `comment-resolved`. A Word-authored
   reply has no range of its own, so its `[n]` marker is its whole presentation: under

@@ -13,6 +13,11 @@ All notable changes to this project will be documented in this file.
   StackAll retain the first range and report every competitor. Equal ranges share one attributed copy.
   Independent text edits still compose, and rejecting the selected addition removes its bookmark.
 
+- Margin comment replies no longer repeat the full note box at every nesting level (#1277). A reply
+  now sits inside its parent's note behind a thin separator, without its own fill, border, shadow or
+  side padding, and the replies container no longer indents, so reply text keeps the root note's width
+  instead of losing about 22px per level.
+
 - Consolidation preserves one reviewer's added bookmarks when other reviewers edit the same paragraph,
   including paragraphs in content controls, hyperlinks and table cells (#1212). Same-shell block wrappers
   compose their child edits with per-reviewer authorship; overlapping edits still use the selected conflict
