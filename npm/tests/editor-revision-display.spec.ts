@@ -10,12 +10,22 @@ const REVISION = 'w:author="Counsel A" w:date="2026-05-01T09:00:00Z"';
 const ACCEPTED = 'The tenant shall repaint the fence each spring.';
 const WITH_MARKUP = 'The tenant shall promptly repaint the fence each spring.';
 
-function revisionFixture(): number[] {
-  const body = '<w:p><w:r><w:t xml:space="preserve">The tenant shall </w:t></w:r>'
-    + `<w:del w:id="1" ${REVISION}><w:r><w:delText xml:space="preserve">promptly </w:delText></w:r></w:del>`
-    + '<w:r><w:t xml:space="preserve">repaint the fence</w:t></w:r>'
-    + `<w:ins w:id="2" ${REVISION}><w:r><w:t xml:space="preserve"> each spring</w:t></w:r></w:ins>`
-    + '<w:r><w:t>.</w:t></w:r></w:p>';
+const REVISED_PARAGRAPH = '<w:p><w:r><w:t xml:space="preserve">The tenant shall </w:t></w:r>'
+  + `<w:del w:id="1" ${REVISION}><w:r><w:delText xml:space="preserve">promptly </w:delText></w:r></w:del>`
+  + '<w:r><w:t xml:space="preserve">repaint the fence</w:t></w:r>'
+  + `<w:ins w:id="2" ${REVISION}><w:r><w:t xml:space="preserve"> each spring</w:t></w:r></w:ins>`
+  + '<w:r><w:t>.</w:t></w:r></w:p>';
+
+/** A paragraph whose only text is deleted, and the same inside a bookmark (a heading's TOC target). */
+const DELETED_ONLY_PARAGRAPH = `<w:p><w:del w:id="3" ${REVISION}><w:r><w:delText>Gone clause</w:delText></w:r></w:del></w:p>`;
+const BOOKMARKED_DELETED_ONLY_PARAGRAPH = '<w:p><w:bookmarkStart w:id="10" w:name="_Toc1"/>'
+  + `<w:del w:id="3" ${REVISION}><w:r><w:delText>Gone clause</w:delText></w:r></w:del>`
+  + '<w:bookmarkEnd w:id="10"/></w:p>';
+/** A paragraph that shows only its deleted mark, then the paragraph it joins. */
+const DELETED_MARK_ONLY_PARAGRAPH = `<w:p><w:pPr><w:rPr><w:del w:id="4" ${REVISION}/></w:rPr></w:pPr></w:p>`
+  + '<w:p><w:r><w:t>Next paragraph.</w:t></w:r></w:p>';
+
+function revisionFixture(body = REVISED_PARAGRAPH): number[] {
   return Array.from(storedZip(Object.entries({
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>',
     '_rels/.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rDoc" Type="${R_NS}/officeDocument" Target="word/document.xml"/></Relationships>`,
@@ -29,7 +39,7 @@ function revisionFixture(): number[] {
 /** What the editor shows: rendered revision marks, the paragraph text, and the recording mode. */
 type Shown = { ins: number; del: number; text: string; trackedChanges: number };
 
-async function openEditor(page: Page, options: Record<string, unknown>) {
+async function openEditor(page: Page, options: Record<string, unknown>, bytes = revisionFixture()) {
   await page.goto('/test-harness.html');
   await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 30000 });
   await page.evaluate(({ bytes, options }) => {
@@ -51,7 +61,7 @@ async function openEditor(page: Page, options: Record<string, unknown>) {
       };
     };
     w.revisions = () => w.editor.listRevisions().map((r: any) => `${r.type}:${r.text}`);
-  }, { bytes: revisionFixture(), options });
+  }, { bytes, options });
 }
 
 const shown = (page: Page): Promise<Shown> => page.evaluate(() => (window as any).shown());
@@ -83,7 +93,10 @@ test.describe('DocxEditor — showing revisions apart from recording them (#1279
     expect((await shown(page)).text).toBe(`${WITH_MARKUP} Z`);
   });
 
-  test('with edits untracked, a Backspace that would reach shown deleted text is refused', async ({ page }) => {
+  // With revisions shown, a Backspace beside deleted text steps over it, as it does while
+  // recording (#1278). Untracked, the live character it reaches is removed outright; the deletion
+  // stays a revision.
+  test('with edits untracked, Backspace after shown deleted text removes the live character beyond it', async ({ page }) => {
     await openEditor(page, { showRevisions: true });
     const before = await page.evaluate(() => (window as any).revisions());
     await page.evaluate(() => {
@@ -105,7 +118,59 @@ test.describe('DocxEditor — showing revisions apart from recording them (#1279
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
     expect(await page.evaluate(() => (window as any).revisions())).toEqual(before);
-    expect(await shown(page)).toEqual({ ins: 1, del: 1, text: WITH_MARKUP, trackedChanges: 0 });
+    expect(await shown(page)).toEqual({
+      ins: 1, del: 1, text: 'The tenant shallpromptly repaint the fence each spring.', trackedChanges: 0,
+    });
+  });
+
+  // An empty-looking paragraph that shows deleted text: the untracked edit must add the typed
+  // text without rewriting the paragraph, which would discard the pending deletion.
+  test('with edits untracked, typing into a paragraph whose only text is deleted keeps the deletion', async ({ page }) => {
+    await openEditor(page, { showRevisions: true }, revisionFixture(DELETED_ONLY_PARAGRAPH));
+    expect(await page.evaluate(() => (window as any).revisions())).toEqual(['delete:Gone clause']);
+    await page.evaluate(() => (document.querySelector('p[data-anchor]') as HTMLElement).focus());
+    await page.keyboard.press('Home');
+    await page.keyboard.type('New');
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+    expect(await page.evaluate(() => (window as any).revisions())).toEqual(['delete:Gone clause']);
+    expect(await shown(page)).toEqual({ ins: 0, del: 1, text: 'NewGone clause', trackedChanges: 0 });
+  });
+
+  test('control: while recording, typing into a paragraph whose only text is deleted keeps the deletion', async ({ page }) => {
+    await openEditor(page, { trackedChanges: 1 }, revisionFixture(DELETED_ONLY_PARAGRAPH));
+    await page.evaluate(() => (document.querySelector('p[data-anchor]') as HTMLElement).focus());
+    await page.keyboard.press('Home');
+    await page.keyboard.type('New');
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+    expect(await page.evaluate(() => (window as any).revisions())).toEqual(['delete:Gone clause', 'insert:New']);
+  });
+
+  test('control: untracked, typing into a paragraph that shows only its deleted mark keeps the mark deleted', async ({ page }) => {
+    await openEditor(page, { showRevisions: true }, revisionFixture(DELETED_MARK_ONLY_PARAGRAPH));
+    const before = await page.evaluate(() => (window as any).revisions());
+    await page.evaluate(() => (document.querySelector('p[data-anchor]') as HTMLElement).focus());
+    await page.keyboard.press('Home');
+    await page.keyboard.type('New');
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+    expect(await page.evaluate(() => (window as any).revisions())).toEqual(before);
+    expect((await shown(page)).text).toContain('New');
+  });
+
+  // Recording with markup hidden: the deleted text is not in the view, so nothing on the page says
+  // the paragraph is not empty. A whole-paragraph rewrite is refused there for the bookmark, and
+  // the typed text must still be recorded.
+  test('recording with markup hidden, typing into a bookmarked paragraph whose only text is deleted is recorded', async ({ page }) => {
+    await openEditor(page, { trackedChanges: 1, showRevisions: false }, revisionFixture(BOOKMARKED_DELETED_ONLY_PARAGRAPH));
+    await page.evaluate(() => (document.querySelector('p[data-anchor]') as HTMLElement).focus());
+    await page.keyboard.press('Home');
+    await page.keyboard.type('New');
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+    expect(await page.evaluate(() => (window as any).revisions())).toEqual(['delete:Gone clause', 'insert:New']);
+    expect(await shown(page)).toEqual({ ins: 0, del: 0, text: 'New', trackedChanges: 1 });
   });
 
   test('showRevisions(false) hides markup while edits keep recording as revisions', async ({ page }) => {
