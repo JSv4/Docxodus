@@ -304,8 +304,8 @@ segments in left-to-right paragraphs become fixed-width inline flex rows, includ
 The browser assigns font-metric differences to the tab remainder, so later tabs retain their own
 stops and page-number right edges follow actual glyph widths. The same grouping is used inside
 `w:hyperlink`. Bookmarks, non-breaking hyphens and underlined or struck tab runs stay on the flex path. A
-right stop inside the paragraph's right indent gives its segment a negative `margin-right` equal to the
-overhang (at most the indent), so the segment fits on its line and still ends on the stop.
+right stop past the line end (inside the paragraph's right indent, or past the column edge) gives its segment
+a negative `margin-right` equal to the overhang, so the segment fits on its line and still ends on the stop.
 Bidirectional paragraphs, complex fields, breaks, active comment/annotation ranges (including a bookmark
 that opens a rendered annotation) and tab runs with visibility, revision or exceptional geometry retain
 the run-aware path and its conservative following-text reservations. Leader rules inherit the tab run's resolved foreground color.

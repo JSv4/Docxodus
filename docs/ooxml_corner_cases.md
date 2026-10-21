@@ -2696,12 +2696,20 @@ the stop is at 9360. The same entry with an empty `w:bookmarkStart`/`w:bookmarkE
 | Docxodus (before) | With `w:right`: every entry on two lines. With a bookmark, non-breaking hyphen, underline or strike: the right tab used a fixed server-measured width, so the number ended short of the stop |
 | Docxodus (after) | Every entry on one line; page number ends on the stop (624px in a 6.5in column) |
 
+The stop can also lie past the column edge. LibreOffice keeps the entry on one line and ends the
+number on the stop, in the page margin. With the stop at 10000 twips, the number ends at 572.1pt
+(72 + 500pt), with or without `w:right="864"`; at 9800 it ends at 562.1pt. Docxodus before the fix
+put these entries on two lines, with or without the right indent. After it, they stay on one line
+and the number ends at 666.7px, the stop. A stop past the paper's edge (12000 twips, 672pt on a
+612pt page) was not compared: LibreOffice runs the leader to the paper edge and the number does not
+appear in its PDF.
+
 Two separate causes:
 
 - The right-tab segment is an `inline-flex` box whose width runs from its start to the stop, so it
   is 864 twips wider than what is left of the line. The browser moved it onto its own line. The tab
-  pass now records how far the segment passes the line end (`pt:TabOverhang`). That amount is capped
-  at the column edge, so it reclaims at most the right indent. The segment gets a matching negative
+  pass now records how far the segment passes the line end (`pt:TabOverhang`): into the right indent,
+  and past the column edge when the stop is there. The segment gets a matching negative
   `margin-right`, which lets it fit on the line while it keeps its full width.
 - `ConvertAlignedTabRuns` accepted only runs that contain `w:rPr`, `w:t` and `w:tab`, and
   `CanFlexTabRun` rejected underline and strike. Every other paragraph fell back to the fixed-width

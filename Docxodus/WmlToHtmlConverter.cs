@@ -7481,7 +7481,7 @@ namespace Docxodus
                     { "display", "inline-flex" }, { "align-items", "baseline" },
                     { "text-indent", "0" }, { "width", InchesCss(width) }
                 };
-                // Reaching a stop inside the right indent, the segment hands the overhang back
+                // Reaching a stop past the line end, the segment hands the overhang back
                 // to the line so it does not break before the segment.
                 if ((decimal?)tab.Attribute(TabOverhangAttribute) is { } overhang)
                     segmentStyle["margin-right"] = InchesCss(-overhang);
@@ -9432,11 +9432,13 @@ namespace Docxodus
                             new XAttribute(PtOpenXml.TabAlignment, "right"),
                             new XAttribute(TabFollowingWidthAttribute, TabWidthValue(widthOfTextAfterTab)),
                             GetLeader(tabAfterText));
-                        twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!), twipCounter + widthOfTextAfterTab);
-                        // A right stop may lie inside the right indent: the right-aligned text then
-                        // ends past the line, up to the column edge but never beyond it.
-                        if (lineWidthTwips is { } lineWidth && lineEndTwips is { } end && Math.Min(twipCounter, lineWidth) > end)
-                            currentElement.SetAttributeValue(TabOverhangAttribute, TabWidthValue(Math.Min(twipCounter, lineWidth) - end));
+                        var stopTwips = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!);
+                        twipCounter = Math.Max(stopTwips, twipCounter + widthOfTextAfterTab);
+                        // A right stop may lie inside the right indent or past the column edge: the
+                        // right-aligned text then ends past the line, on the stop. Text estimated to
+                        // run past the stop gets no more room than at a stop inside the line.
+                        if (lineEndTwips is { } end && stopTwips > end)
+                            currentElement.SetAttributeValue(TabOverhangAttribute, TabWidthValue(stopTwips - end));
 
                         var lastElement = textElementsToMeasure.LastOrDefault();
                         if (lastElement == null)

@@ -9,8 +9,9 @@ All notable changes to this project will be documented in this file.
 - Prevent a synthetic nonbreaking-space run in the required blank paragraph after a nested table. The paragraph retains a one-twip layout box for source geometry, so fitting nested footnote tables no longer fail PDF clipping verification (#1217).
 
 - Leader-and-page-number lines in HTML output stay on one line and end their page number on the right
-  tab stop (#1275). A right stop past the paragraph's right indent no longer pushes every entry onto a
-  second line: the right-aligned segment extends into the indent, up to the column edge. A bookmark,
+  tab stop (#1275). A right stop past the paragraph's right indent, or past the column edge, no longer
+  pushes every entry onto a second line: the right-aligned segment extends past the line end to the stop,
+  as LibreOffice lays it out. A bookmark,
   a non-breaking hyphen, or underline or strike on the tab run no longer switches the right
   tab to a fixed width measured on the server, which left the page number short of the stop.
 

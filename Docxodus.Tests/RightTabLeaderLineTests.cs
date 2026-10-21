@@ -127,6 +127,17 @@ public class RightTabLeaderLineTests
     }
 
     [Fact]
+    public void RightTabSegment_OverhangEndsAtTheStop()
+    {
+        // The line ends at 9360 - 3360 = 6000 and the stop is at 6040. The longest title is estimated
+        // to end near 5920 twips, so its number is estimated to run past the stop. Every segment
+        // gives back only the 40 twips (2pt) up to the stop: text estimated to run past a stop gets
+        // no extra room, the same as at a stop inside the line.
+        foreach (var segment in RightTabSegments(Fixture("plain", rightIndent: 3360, rightStop: 6040)))
+            Assert.Equal("-2pt", Style(segment, "margin-right"));
+    }
+
+    [Fact]
     public void AnnotationBookmark_KeepsTheRunAwarePath()
     {
         // Control: a bookmark that opens a rendered annotation range is not an inert marker.
