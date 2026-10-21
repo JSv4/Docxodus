@@ -1372,6 +1372,62 @@ taken, and the schema finding survives on both sides.
 
 ---
 
+## Text frames: a partial direct `w:framePr` combines with the style's
+
+A paragraph style can define a text frame, and a paragraph that uses the style can carry its own
+`w:framePr` with only some attributes. Here the paragraph sets only `w:wrap`:
+
+```xml
+<!-- styles.xml -->
+<w:style w:type="paragraph" w:customStyle="1" w:styleId="StampFrame">
+  <w:name w:val="Stamp Frame"/>
+  <w:pPr><w:framePr w:w="8640" w:wrap="auto" w:vAnchor="text" w:hAnchor="page" w:x="1008" w:y="40"/></w:pPr>
+</w:style>
+
+<!-- footer1.xml -->
+<w:p>
+  <w:pPr><w:pStyle w:val="StampFrame"/><w:framePr w:wrap="auto"/></w:pPr>
+  <w:r><w:t>REF 55-0912 rev3</w:t></w:r>
+</w:p>
+<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>Leaf 4</w:t></w:r></w:p>
+```
+
+### Comparison
+
+Letter page, 1in margins. The x column is where the stamp text begins.
+
+| Paragraph's own `w:framePr` | LibreOffice 25.8.7.3 (PDF export) | Docxodus before | Docxodus after |
+|---|---|---|---|
+| none (style only) | x = 72.1pt: no frame, the paragraph stays in the footer's flow | frame at `left: 50.4pt`, 432pt wide, page-anchored | unchanged |
+| `w:wrap="auto"` | x = 50.5pt: the style's `w:x` of 1008 twips | frame at `left: 0`, no width, text-anchored | frame at `left: 50.4pt`, 432pt wide, page-anchored |
+| `w:wrap="auto" w:x="2000"` | x = 100.1pt: the paragraph's `w:x`, the style's other attributes | frame at `left: 100pt`, no width, text-anchored | frame at `left: 100pt`, 432pt wide, page-anchored |
+
+Word was not tested.
+
+### Analysis
+
+LibreOffice resolves a direct `w:framePr` attribute by attribute: each attribute the paragraph sets
+wins, and each it omits comes from the style. Docxodus already resolves `w:spacing` and `w:ind` that
+way, but `w:framePr` was on no list of properties to merge attribute by attribute, so the paragraph's element replaced the style's whole and
+the frame lost its width, its horizontal anchor and its offsets.
+
+LibreOffice also ignores a frame that only the style defines (first row). Docxodus renders that frame,
+and this fix leaves that case alone.
+
+### Code involved
+
+`FormattingAssembler.MergeStyleElement` merges each pair of property layers (style chain, table style,
+numbering and direct formatting). `w:framePr` is now one of its special-cased children and goes through
+`AttributeMerge`, the same higher-priority-attributes-first merge `w:spacing` uses.
+`WmlToHtmlConverter.CreateBorderDivs` reads the merged element. One consequence follows from the
+attribute rule: a style's `w:dropCap` survives a direct `w:framePr` that does not restate it.
+
+### Tests
+
+`Docxodus.Tests/FramePrStyleMergeTests.cs`.
+
+---
+
 ## Headers/footers: a first/even part can outlive its `w:titlePg` / `w:evenAndOddHeaders` flag
 
 ### The behavior

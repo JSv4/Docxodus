@@ -13,6 +13,11 @@ All notable changes to this project will be documented in this file.
   StackAll retain the first range and report every competitor. Equal ranges share one attributed copy.
   Independent text edits still compose, and rejecting the selected addition removes its bookmark.
 
+- A paragraph's own `w:framePr` now overrides its paragraph style's frame properties attribute by
+  attribute instead of replacing them whole (#1276). A footer paragraph whose style defines a
+  page-anchored frame and whose own `w:framePr` sets only `w:wrap` keeps the style's width, anchors
+  and offsets in the converted HTML, as LibreOffice renders it.
+
 - Consolidation preserves one reviewer's added bookmarks when other reviewers edit the same paragraph,
   including paragraphs in content controls, hyperlinks and table cells (#1212). Same-shell block wrappers
   compose their child edits with per-reviewer authorship; overlapping edits still use the selected conflict
