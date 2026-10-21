@@ -723,9 +723,18 @@ function ensureListMarkerSeparator(block: HTMLElement): void {
  */
 const NOTE_NUMBER_SELECTOR = ".footnote-number, .endnote-number";
 
+/**
+ * A tracked deletion rendered inline (`<del>`) and the pilcrow shown for a deleted paragraph mark
+ * are not run text either: the session reads only live `w:t`, so counting them put every offset to
+ * their right past the session's (issue #1278). A move source is not listed. One directly in the
+ * paragraph already makes the block read-only (see `wireBlock`), and the session does read the
+ * `w:t` of one nested in a hyperlink, as Word writes it.
+ */
+const RENDERED_DELETION_SELECTOR = 'del[class*="-del"], span[class*="para-mark-del"]';
+
 const GENERATED_CHROME_SELECTOR =
   '[data-list-marker], a.footnote-ref, a.endnote-ref, a[class$="-backref"], a.comment-marker, '
-  + NOTE_NUMBER_SELECTOR;
+  + NOTE_NUMBER_SELECTOR + ", " + RENDERED_DELETION_SELECTOR;
 
 function isGeneratedChrome(node: Node | null | undefined): boolean {
   return node?.nodeType === 1 && !!(node as Element).matches?.(GENERATED_CHROME_SELECTOR);
@@ -737,12 +746,13 @@ function isGeneratedChrome(node: Node | null | undefined): boolean {
  * just before it, a word deletion that spans it. Nothing in the session re-creates the number (it
  * is the renderer's, not run text), so refuse those deletions, as Word refuses to backspace over a
  * reference mark. A deletion that replaces a selection is allowed; the repaint that commits it
- * restores the number (see `DocxEditor.replaceNode`).
+ * restores the number (see `DocxEditor.replaceNode`). A rendered deletion is guarded the same way:
+ * the session already holds it as deleted, so a caret deletion would only drop it from view.
  */
-function guardNoteNumber(block: HTMLElement, ev: InputEvent): void {
+function guardChromeDeletion(block: HTMLElement, ev: InputEvent): void {
   if (!ev.inputType.startsWith("delete")) return;
-  const number = block.querySelector(NOTE_NUMBER_SELECTOR);
-  if (!number) return;
+  const islands = block.querySelectorAll(NOTE_NUMBER_SELECTOR + ", " + RENDERED_DELETION_SELECTOR);
+  if (islands.length === 0) return;
   const selection = block.ownerDocument.defaultView?.getSelection();
   if (selection && !selection.isCollapsed) return;
   const targets = typeof ev.getTargetRanges === "function" ? ev.getTargetRanges() : [];
@@ -750,7 +760,7 @@ function guardNoteNumber(block: HTMLElement, ev: InputEvent): void {
     const range = block.ownerDocument.createRange();
     range.setStart(target.startContainer, target.startOffset);
     range.setEnd(target.endContainer, target.endOffset);
-    if (range.intersectsNode(number)) {
+    if (Array.from(islands).some((island) => range.intersectsNode(island))) {
       ev.preventDefault();
       return;
     }
@@ -2801,7 +2811,7 @@ export class DocxEditor {
     });
     el.addEventListener("blur", () => this.commitBlock(el));
     el.addEventListener("input", (ev) => noteTypedSpace(el, ev));
-    el.addEventListener("beforeinput", (ev) => guardNoteNumber(el, ev as InputEvent));
+    el.addEventListener("beforeinput", (ev) => guardChromeDeletion(el, ev as InputEvent));
     el.addEventListener("keydown", (ev) => this.onKeydown(el, ev as KeyboardEvent));
     // A band block re-rendered by an incremental swap is a fresh DOM node; re-adopt it (with the
     // anchor its caller already stamped) so the band chrome can still address it.

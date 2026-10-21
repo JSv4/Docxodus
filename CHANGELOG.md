@@ -18,6 +18,12 @@ All notable changes to this project will be documented in this file.
   compose their child edits with per-reviewer authorship; overlapping edits still use the selected conflict
   policy. Each reviewer's removal of a shared bookmark remains independently selectable.
 
+- The editor no longer counts a rendered tracked deletion, or the pilcrow shown for a deleted paragraph
+  mark, as paragraph text when tracked changes are shown inline (#1278). Typing to the right of either
+  was refused with `offset_out_of_range` and the keystrokes lost, or landed at the wrong place in the
+  paragraph. The deleted text stays visible but cannot be edited, and a Backspace or Delete that would
+  reach it is refused rather than removing it from view.
+
 ## [14.0.0] - 2026-10-19
 
 ### Changed
