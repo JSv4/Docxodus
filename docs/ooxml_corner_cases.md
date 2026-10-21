@@ -1372,6 +1372,112 @@ taken, and the schema finding survives on both sides.
 
 ---
 
+## Text frames: a partial direct `w:framePr` combines with the style's
+
+A paragraph style can define a text frame, and a paragraph that uses the style can carry its own
+`w:framePr` with only some attributes. Here the paragraph sets only `w:wrap`:
+
+```xml
+<!-- styles.xml -->
+<w:style w:type="paragraph" w:customStyle="1" w:styleId="StampFrame">
+  <w:name w:val="Stamp Frame"/>
+  <w:pPr><w:framePr w:w="8640" w:wrap="auto" w:vAnchor="text" w:hAnchor="page" w:x="1008" w:y="40"/></w:pPr>
+</w:style>
+
+<!-- footer1.xml -->
+<w:p>
+  <w:pPr><w:pStyle w:val="StampFrame"/><w:framePr w:wrap="auto"/></w:pPr>
+  <w:r><w:t>REF 55-0912 rev3</w:t></w:r>
+</w:p>
+<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>Leaf 4</w:t></w:r></w:p>
+```
+
+### Comparison
+
+Letter page, 1in margins. The x column is where the stamp text begins.
+
+| Paragraph's own `w:framePr` | LibreOffice 25.8.7.3 (PDF export) | Docxodus before | Docxodus after |
+|---|---|---|---|
+| none (style only) | x = 72.1pt: no frame, the paragraph stays in the footer's flow | frame at `left: 50.4pt`, 432pt wide, page-anchored | unchanged |
+| `w:wrap="auto"` | x = 50.5pt: the style's `w:x` of 1008 twips | frame at `left: 0`, no width, text-anchored | frame at `left: 50.4pt`, 432pt wide, page-anchored |
+| `w:wrap="auto" w:x="2000"` | x = 100.1pt: the paragraph's `w:x`, the style's other attributes | frame at `left: 100pt`, no width, text-anchored | frame at `left: 100pt`, 432pt wide, page-anchored |
+
+Word was not tested.
+
+### Analysis
+
+LibreOffice resolves a direct `w:framePr` attribute by attribute: each attribute the paragraph sets
+wins, and each it omits comes from the style. Docxodus already resolves `w:spacing` and `w:ind` that
+way, but `w:framePr` was on no list of properties to merge attribute by attribute, so the
+paragraph's element replaced the style's whole and the frame lost its width, its horizontal anchor
+and its offsets.
+
+LibreOffice also ignores a frame that only the style defines (first row). Docxodus renders that frame,
+and this fix leaves that case alone.
+
+### Two exceptions: alignment pairs and drop caps
+
+A plain attribute-by-attribute merge is wrong in two places. Each probe below is a body paragraph
+in a style `F`, on a Letter page with 1in margins, measured in a LibreOffice 25.8.7.3 PDF export.
+The frame is 2880 twips (144pt) wide where the style sets `w:w`.
+
+**`w:x`/`w:xAlign` and `w:y`/`w:yAlign` are one setting per axis.** Within one element, the
+paginated view gives `w:xAlign` precedence over `w:x` and `w:yAlign` over `w:y`. A naive merge
+combines a style's `w:xAlign` with the paragraph's own `w:x` into a pair neither layer wrote, so the
+paragraph's offset is lost. LibreOffice keeps the offset the paragraph set:
+
+| Style `w:framePr` | Paragraph `w:framePr` | LibreOffice frame text |
+|---|---|---|
+| `w:w="2880" w:wrap="around" w:vAnchor="page" w:hAnchor="page" w:xAlign="center" w:y="4000"` | `w:wrap="around" w:x="2000"` | x = 100.1pt (the paragraph's `w:x`, not centred) |
+| same | restates every attribute, with `w:x="2000"` in place of `w:xAlign` | x = 100.1pt |
+| `w:w="2880" w:wrap="around" w:vAnchor="page" w:hAnchor="page" w:x="2000" w:yAlign="center"` | `w:wrap="around" w:y="4000"` | y = 200pt (the paragraph's `w:y`, not centred) |
+| `w:w="2880" w:wrap="around" w:vAnchor="page" w:hAnchor="page" w:x="2000" w:y="4000"` | `w:wrap="around" w:xAlign="right"` | x = 468pt (right-aligned on the page) |
+| `w:w="2880" w:wrap="around" w:vAnchor="page" w:hAnchor="margin" w:x="2000" w:y="4000"` | `w:wrap="around" w:hAnchor="page" w:xAlign="center"` | x = 234pt (centred on the page) |
+
+The anchors are separate settings, not part of their axis. A paragraph that sets only `w:hAnchor`
+keeps the style's offset or alignment and measures it from its own anchor:
+
+| Style `w:framePr` | Paragraph `w:framePr` | LibreOffice frame text |
+|---|---|---|
+| `w:w="2880" w:wrap="around" w:vAnchor="page" w:hAnchor="margin" w:xAlign="right" w:y="4000"` | `w:wrap="around" w:hAnchor="page"` | x = 468pt (right-aligned on the page) |
+| `w:w="2880" w:wrap="around" w:vAnchor="page" w:hAnchor="page" w:x="2000" w:y="4000"` | `w:wrap="around" w:hAnchor="margin"` | x = 172.1pt (the style's 100pt from the margin) |
+| `w:w="2880" w:wrap="around" w:vAnchor="margin" w:hAnchor="page" w:x="2000" w:y="2000"` | `w:wrap="around" w:vAnchor="page"` | y = 100pt (the style's 100pt from the page) |
+
+**A style's `w:dropCap` never reaches a paragraph with its own `w:framePr`.** The style below
+defines a three-line drop cap. Converting each probe to ODT shows whether LibreOffice built a drop
+cap (`style:drop-cap`) or an ordinary frame (`draw:frame`):
+
+| Style `w:framePr` | Paragraph `w:framePr` | LibreOffice |
+|---|---|---|
+| `w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"` | `w:wrap="around" w:hAnchor="page" w:x="4000" w:vAnchor="page" w:y="4000"` | ordinary frame at (200pt, 200pt) |
+| same | `w:wrap="around"`; `w:w="2880"`; `w:hAnchor="page"`; `w:x="4000"`; or `w:vAnchor="page" w:y="4000"` | ordinary frame in each case |
+| same | `w:lines="2"` | ordinary frame |
+| `w:dropCap="drop" w:lines="3" w:wrap="around" w:hAnchor="page" w:x="4000" w:vAnchor="page" w:y="4000"` | `w:wrap="around"` | ordinary frame at (200pt, 200pt) |
+| none | `w:dropCap="drop" w:lines="3" w:wrap="around" w:hAnchor="page" w:x="4000" w:vAnchor="page" w:y="4000"` | drop cap, positioning ignored |
+| `w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"` | none | no frame and no drop cap (the style-only rule above) |
+
+Docxodus treats a paragraph whose merged frame has a `w:dropCap` other than `none` as a drop cap and
+renders no frame for it. The last row shows LibreOffice also ignores a drop cap that only the style
+defines. Docxodus keeps treating that paragraph as a drop cap, as it did before this fix. Whether a
+`w:dropCap` passes from a parent style to a `w:basedOn` style that has its own `w:framePr` cannot be
+measured this way, because LibreOffice ignores style-only frames. Docxodus applies the same rule
+there and does not inherit it. Word was not tested.
+
+### Code involved
+
+`FormattingAssembler.MergeStyleElement` merges each pair of property layers (style chain, table style,
+numbering and direct formatting). `w:framePr` is now one of its special-cased children and goes through
+`FramePrMerge`. When the higher-priority layer sets `w:x` or `w:xAlign`, it drops both from the lower
+layer, and likewise for `w:y` and `w:yAlign`. It always drops `w:dropCap` and `w:lines`. It then hands
+the rest to `AttributeMerge`, the same higher-priority-attributes-first merge `w:spacing` uses.
+`WmlToHtmlConverter.CreateBorderDivs` reads the merged element.
+
+### Tests
+
+`Docxodus.Tests/FramePrStyleMergeTests.cs`.
+
+---
+
 ## Headers/footers: a first/even part can outlive its `w:titlePg` / `w:evenAndOddHeaders` flag
 
 ### The behavior

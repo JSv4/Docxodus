@@ -12,12 +12,33 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Read every keyword of an HTML `text-decoration` value when converting HTML to DOCX (#1273). The
+  converter compared the whole value with `underline` and `line-through`, so a value with more than
+  one keyword produced no line at all, and a DOCX → HTML → DOCX round trip dropped double underlines
+  and double strikethroughs. `underline double` now gives `<w:u w:val="double"/>`,
+  `line-through double` gives `<w:dstrike/>`, `underline line-through` gives both lines, and the
+  `dotted`, `dashed` and `wavy` styles map to Word's `dotted`, `dash` and `wave` underlines.
+  Single-keyword values and `<u>`/`<s>` elements convert as before.
+
 - Prevent a synthetic nonbreaking-space run in the required blank paragraph after a nested table. The paragraph retains a one-twip layout box for source geometry, so fitting nested footnote tables no longer fail PDF clipping verification (#1217).
 
 - Consolidation reports competing additions of a bookmark name instead of silently dropping a range
   or keeping duplicate names (#1212). BaseWins retains the base's absent name; FirstReviewerWins and
   StackAll retain the first range and report every competitor. Equal ranges share one attributed copy.
   Independent text edits still compose, and rejecting the selected addition removes its bookmark.
+
+- A paragraph's own `w:framePr` now overrides its paragraph style's frame properties attribute by
+  attribute instead of replacing them whole (#1276). A footer paragraph whose style defines a
+  page-anchored frame and whose own `w:framePr` sets only `w:wrap` keeps the style's width, anchors
+  and offsets in the converted HTML, as LibreOffice renders it. Each axis's offset and alignment
+  (`w:x`/`w:xAlign`, `w:y`/`w:yAlign`) count as one setting, so a paragraph's own `w:x` is not
+  realigned by its style's `w:xAlign`. A style's `w:dropCap` and `w:lines` do not carry over to a
+  paragraph with its own `w:framePr`, so they cannot hide a frame the paragraph positions itself.
+
+- Margin comment replies no longer repeat the full note box at every nesting level (#1277). A reply
+  now sits inside its parent's note behind a thin separator, without its own fill, border, shadow or
+  side padding, and the replies container no longer indents, so reply text keeps the root note's width
+  instead of losing about 22px per level.
 
 - Consolidation preserves one reviewer's added bookmarks when other reviewers edit the same paragraph,
   including paragraphs in content controls, hyperlinks and table cells (#1212). Same-shell block wrappers
@@ -27,8 +48,14 @@ All notable changes to this project will be documented in this file.
 - The editor no longer counts a rendered tracked deletion, or the pilcrow shown for a deleted paragraph
   mark, as paragraph text when tracked changes are shown inline (#1278). Typing to the right of either
   was refused with `offset_out_of_range` and the keystrokes lost, or landed at the wrong place in the
-  paragraph. The deleted text stays visible but cannot be edited, and a Backspace or Delete that would
-  reach it is refused rather than removing it from view.
+  paragraph. The deleted text stays visible but cannot be edited. As in Word, a single Backspace or
+  Delete next to it steps over it and removes the live character beyond it. It removes nothing when
+  that paragraph has no live character beyond the deletion, when a line break, tab, image or field
+  also lies between the caret and that character, or for a word or line deletion. Typing into a
+  paragraph whose only text is deleted is recorded even when the paragraph holds a bookmark; there it
+  goes in as plain text at the start of the paragraph, without line breaks or formatting. In this
+  mode the editor's `find()` and `wordCount()` no longer match or count deleted text, which agrees
+  with the session's own text and its `Grep`.
 
 - The ribbon's Markup dropdown changes only how revisions are shown (#1279). "No markup" used to turn
   tracked changes off and clear the Track Changes checkbox, so edits made afterwards were no longer
