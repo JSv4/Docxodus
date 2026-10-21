@@ -116,10 +116,11 @@ public class RightTabLeaderLineTests
     [Theory]
     // A stop at 8000 lies inside a line that ends at 9360 - 864 = 8496: no overhang.
     [InlineData(864, 8000, null)]
-    // A stop past the column edge reclaims only the right indent, never the page margin.
-    [InlineData(null, 10000, null)]
-    [InlineData(864, 10000, "-43.2pt")]
-    public void RightTabSegment_OverhangIsLimitedToTheRightIndent(int? rightIndent, int rightStop, string? margin)
+    // A stop past the column edge overhangs into the page margin, as LibreOffice lays it out:
+    // 10000 - 9360 = 640 twips (32pt), or 10000 - 8496 = 1504 twips (75.2pt) with the indent.
+    [InlineData(null, 10000, "-32pt")]
+    [InlineData(864, 10000, "-75.2pt")]
+    public void RightTabSegment_OverhangRunsFromTheLineEndToTheStop(int? rightIndent, int rightStop, string? margin)
     {
         foreach (var segment in RightTabSegments(Fixture("plain", rightIndent, rightStop)))
             Assert.Equal(margin, Style(segment, "margin-right"));
