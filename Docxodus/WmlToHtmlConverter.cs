@@ -7382,9 +7382,7 @@ namespace Docxodus
                 !(rPr.Element(W.webHidden) != null && settings.RenderPagination != PaginationMode.Paginated) &&
                 rPr.Element(W.rPrChange) == null && rPr.Element(W.bdr) == null &&
                 rPr.Element(W.position) == null && rPr.Element(W.vertAlign) == null &&
-                !GetBoolProp(rPr, W.rtl) && !GetBoolProp(rPr, W.cs) &&
-                !GetBoolProp(rPr, W.strike) && !GetBoolProp(rPr, W.dstrike) &&
-                !(rPr.Element(W.u) is XElement underline && (string?)underline.Attribute(W.val) != "none");
+                !GetBoolProp(rPr, W.rtl) && !GetBoolProp(rPr, W.cs);
         }
 
         private static XElement? CreateFlexibleTabRun(WordprocessingDocument wordDoc,
@@ -7430,8 +7428,13 @@ namespace Docxodus
                 return null;
             foreach (var tabRun in tabRuns)
                 if (!CanFlexTabRun(settings, tabRun)) return null;
-            if (tabRuns.Count == 0 || content.Any(e => e.Name != W.r ||
-                    e.Elements().Any(c => c.Name != W.rPr && c.Name != W.t && c.Name != W.tab)) ||
+            // A bookmark is an invisible marker, unless it opens a rendered annotation range.
+            bool Unsupported(XElement e) => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd
+                ? settings.RenderAnnotations && ((string?)e.Attribute(W.name))?
+                    .StartsWith(AnnotationManager.BookmarkPrefix, StringComparison.Ordinal) == true
+                : e.Name != W.r || e.Elements().Any(c =>
+                    c.Name != W.rPr && c.Name != W.t && c.Name != W.tab && c.Name != W.noBreakHyphen);
+            if (tabRuns.Count == 0 || content.Any(Unsupported) ||
                 tabRuns.Any(r => r.Elements().Count(e => e.Name != W.rPr) != 1 ||
                     r.Element(W.tab)!.Attribute(PtOpenXml.TabAfterWrappedText) != null ||
                     ((string?)r.Element(W.tab)!.Attribute(PtOpenXml.TabAlignment) ?? "left") is not ("left" or "right")))
@@ -7479,11 +7482,16 @@ namespace Docxodus
                 var tabSpan = CreateFlexibleTabRun(wordDoc, settings, tabRun)!;
                 var followingSpan = TextSpan(following);
                 var segment = new XElement(Xhtml.span, precedingSpan, tabSpan, followingSpan);
-                segment.AddAnnotation(new Dictionary<string, string>
+                var segmentStyle = new Dictionary<string, string>
                 {
                     { "display", "inline-flex" }, { "align-items", "baseline" },
                     { "text-indent", "0" }, { "width", InchesCss(width) }
-                });
+                };
+                // Reaching a stop past the line end, the segment hands the overhang back
+                // to the line so it does not break before the segment.
+                if ((decimal?)tab.Attribute(TabOverhangAttribute) is { } overhang)
+                    segmentStyle["margin-right"] = InchesCss(-overhang);
+                segment.AddAnnotation(segmentStyle);
                 result.Add(segment);
                 start = nextTab;
             }
@@ -8879,6 +8887,7 @@ namespace Docxodus
         /// w:defaultTabStop value is available, e.g. settings.xml is absent or lacks the element.</summary>
         private const int DefaultTabStopTwips = 720;
         private static readonly XName TabFollowingWidthAttribute = PtOpenXml.pt + "TabFollowingWidth";
+        private static readonly XName TabOverhangAttribute = PtOpenXml.pt + "TabOverhang";
 
         /// <summary>Gets the DocumentSettingsPart's XDocument, or null if the part is absent.
         /// DocumentSettingsPart is optional in OOXML — Word opens packages without
@@ -9429,7 +9438,13 @@ namespace Docxodus
                             new XAttribute(PtOpenXml.TabAlignment, "right"),
                             new XAttribute(TabFollowingWidthAttribute, TabWidthValue(widthOfTextAfterTab)),
                             GetLeader(tabAfterText));
-                        twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!), twipCounter + widthOfTextAfterTab);
+                        var stopTwips = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!);
+                        twipCounter = Math.Max(stopTwips, twipCounter + widthOfTextAfterTab);
+                        // A right stop may lie inside the right indent or past the column edge: the
+                        // right-aligned text then ends past the line, on the stop. Text estimated to
+                        // run past the stop gets no more room than at a stop inside the line.
+                        if (lineEndTwips is { } end && stopTwips > end)
+                            currentElement.SetAttributeValue(TabOverhangAttribute, TabWidthValue(stopTwips - end));
 
                         var lastElement = textElementsToMeasure.LastOrDefault();
                         if (lastElement == null)
