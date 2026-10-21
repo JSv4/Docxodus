@@ -83,6 +83,31 @@ test.describe('DocxEditor — showing revisions apart from recording them (#1279
     expect((await shown(page)).text).toBe(`${WITH_MARKUP} Z`);
   });
 
+  test('with edits untracked, a Backspace that would reach shown deleted text is refused', async ({ page }) => {
+    await openEditor(page, { showRevisions: true });
+    const before = await page.evaluate(() => (window as any).revisions());
+    await page.evaluate(() => {
+      const p = document.querySelector<HTMLElement>('p[data-anchor]')!;
+      p.focus();
+      const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!(node.textContent ?? '').startsWith('repaint')) continue;
+        const range = document.createRange();
+        range.setStart(node, 0);
+        range.collapse(true);
+        window.getSelection()!.removeAllRanges();
+        window.getSelection()!.addRange(range);
+        return;
+      }
+      throw new Error('no text node starts with "repaint"');
+    });
+    await page.keyboard.press('Backspace');
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+    expect(await page.evaluate(() => (window as any).revisions())).toEqual(before);
+    expect(await shown(page)).toEqual({ ins: 1, del: 1, text: WITH_MARKUP, trackedChanges: 0 });
+  });
+
   test('showRevisions(false) hides markup while edits keep recording as revisions', async ({ page }) => {
     await openEditor(page, { trackedChanges: 1 /* RenderInline */ });
     expect(await shown(page)).toEqual({ ins: 1, del: 1, text: WITH_MARKUP, trackedChanges: 1 });
