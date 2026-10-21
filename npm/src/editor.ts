@@ -748,8 +748,9 @@ function isGeneratedChrome(node: Node | null | undefined): boolean {
  * reference mark. A deletion that replaces a selection is allowed; the repaint that commits it
  * restores the number (see `DocxEditor.replaceNode`). A rendered deletion is not removed either
  * (the session already holds it as deleted, so that would only drop it from view); as in Word, a
- * character Backspace or Delete steps over it and removes the live character beyond it instead.
- * A word or line deletion that reaches one is refused.
+ * character Backspace or Delete steps over it and removes the live character beyond it instead,
+ * where that is safe (see `deleteLiveCharacterBeyond`). A word or line deletion that reaches one
+ * is refused.
  */
 function guardChromeDeletion(block: HTMLElement, ev: InputEvent): void {
   if (!ev.inputType.startsWith("delete")) return;
@@ -774,9 +775,18 @@ function guardChromeDeletion(block: HTMLElement, ev: InputEvent): void {
 }
 
 /**
+ * Content that takes no room in the content offsets but is not chrome either: stepping over a
+ * deletion must not also cross one of these to reach a character on its far side.
+ */
+const STEP_BLOCKER_SELECTOR =
+  'br, img, svg, picture, canvas, video, object, [data-docx-tab], [data-field], [contenteditable="false"]';
+
+/**
  * Remove the live character before (Backspace) or after (Delete) the collapsed caret, measured in
  * content offsets, which rendered deletions do not occupy, so the step skips over them. Only a
- * single-character deletion is stepped; the caret stays where the removed character was.
+ * single-character deletion is stepped, and only across chrome: when a line break, tab, image or
+ * field also lies between the caret and that character, or there is no character beyond the
+ * deletion, nothing is removed. The caret stays where the removed character was.
  */
 function deleteLiveCharacterBeyond(block: HTMLElement, inputType: string): void {
   const backward = inputType === "deleteContentBackward";
@@ -794,10 +804,23 @@ function deleteLiveCharacterBeyond(block: HTMLElement, inputType: string): void 
   let to = offset;
   if (/[\uDC00-\uDFFF]/.test(text[from]) && /[\uD800-\uDBFF]/.test(text[from - 1] ?? "")) from--;
   else if (/[\uD800-\uDBFF]/.test(text[from]) && /[\uDC00-\uDFFF]/.test(text[to] ?? "")) to++;
-  node.textContent = text.slice(0, from) + text.slice(to);
   const selection = block.ownerDocument.defaultView?.getSelection();
-  selection?.collapse(node, from);
-  block.dispatchEvent(new InputEvent("input", { inputType, bubbles: true }));
+  if (!selection || selection.rangeCount === 0) return;
+  const at = selection.getRangeAt(0);
+  const gap = block.ownerDocument.createRange();
+  if (backward) {
+    gap.setStart(node, to);
+    gap.setEnd(at.startContainer, at.startOffset);
+  } else {
+    gap.setStart(at.startContainer, at.startOffset);
+    gap.setEnd(node, from);
+  }
+  const between = gap.cloneContents();
+  between.querySelectorAll(GENERATED_CHROME_SELECTOR).forEach((chrome) => chrome.remove());
+  if (between.querySelector(STEP_BLOCKER_SELECTOR)) return;
+  node.textContent = text.slice(0, from) + text.slice(to);
+  selection.collapse(node, from);
+  block.dispatchEvent(new InputEvent("input", { inputType, bubbles: true, composed: true }));
 }
 
 /**
@@ -3194,17 +3217,18 @@ export class DocxEditor {
     // field in a tool-generated footer): that is content, and the span path below keeps it
     // while inserting the typed text beside it.
     if (old.trim().length === 0 && !el.querySelector("[data-field]")) {
-      // Unless all it shows is deleted text: the whitespace is then the converter's placeholder
-      // too, but a tracked whole-paragraph rewrite is refused when the paragraph holds a bookmark,
-      // so the typed text goes in as an insertion at its start instead.
-      if (el.querySelector(RENDERED_DELETION_SELECTOR)) {
-        const typed = next.trim() + (keepsTrailingSpace(el) ? " " : "");
-        return this.parseEdit(
-          this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, 0, 0, typed),
-        );
-      }
-      return this.parseEdit(
+      // A paragraph whose only text is deleted renders that placeholder too. Tracked mode refuses
+      // its rewrite when it holds a bookmark; the typed text then goes in as a plain insertion at
+      // its start, which cannot carry a line break or inline formatting.
+      const onlyDeleted = !!el.querySelector(RENDERED_DELETION_SELECTOR);
+      const whole = this.parseEdit(
         this.exports.DocxSessionBridge.ReplaceText(this.handle, fullId, serializeInlineMarkdown(el)),
+        { expectRejection: onlyDeleted },
+      );
+      if (whole.success || !onlyDeleted) return whole;
+      const typed = next.trim() + (keepsTrailingSpace(el) ? " " : "");
+      return this.parseEdit(
+        this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, 0, 0, typed),
       );
     }
 

@@ -21,11 +21,14 @@ All notable changes to this project will be documented in this file.
 - The editor no longer counts a rendered tracked deletion, or the pilcrow shown for a deleted paragraph
   mark, as paragraph text when tracked changes are shown inline (#1278). Typing to the right of either
   was refused with `offset_out_of_range` and the keystrokes lost, or landed at the wrong place in the
-  paragraph. The deleted text stays visible but cannot be edited. As in Word, Backspace or Delete next
-  to it steps over it and removes the live character beyond it; a word or line deletion that would
-  reach it is refused. Typing into a paragraph whose only text is deleted is recorded even when the
-  paragraph holds a bookmark. In this mode the editor's `find()` and `wordCount()` no longer match or
-  count deleted text, which agrees with the session's own text and its `Grep`.
+  paragraph. The deleted text stays visible but cannot be edited. As in Word, a single Backspace or
+  Delete next to it steps over it and removes the live character beyond it. It removes nothing when
+  that paragraph has no live character beyond the deletion, when a line break, tab, image or field
+  also lies between the caret and that character, or for a word or line deletion. Typing into a
+  paragraph whose only text is deleted is recorded even when the paragraph holds a bookmark; there it
+  goes in as plain text at the start of the paragraph, without line breaks or formatting. In this
+  mode the editor's `find()` and `wordCount()` no longer match or count deleted text, which agrees
+  with the session's own text and its `Grep`.
 
 ## [14.0.0] - 2026-10-19
 
