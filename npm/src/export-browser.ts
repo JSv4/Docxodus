@@ -13,6 +13,7 @@ import { prepareWordText, paintWordText } from "./word-text.js";
 import { preserveClippedExactRowText } from "./exact-row-text.js";
 import { prepareParagraphBorders, paintParagraphBorders } from "./paragraph-borders.js";
 import { measureRenderedSource, PaginationEngine, type PageMap } from "./pagination.js";
+import { scopeMarkupBalloons } from "./markup-balloons.js";
 export { renderedSourceMeasurerExpression } from "./pagination.js";
 import {
   createWorkerDocxodus,
@@ -78,6 +79,12 @@ export type ReviewProfile = "final" | "original" | "markup";
  */
 export type MarkupPresentation = "docxodus" | "word";
 export type CommentProfile = "hidden" | "inline" | "endnotes" | "margin";
+/**
+ * Where margin comments go. `margin` keeps them in the page's right margin; `balloons` is Word's
+ * All Markup print layout: each page is shrunk beside a markup area whose balloons hold the
+ * comments and, with the Word presentation, the formatting changes.
+ */
+export type CommentColumnPlacement = "margin" | "balloons";
 export type UnsupportedContentPolicy = "warn" | "strict";
 
 export type ExportPhase =
@@ -164,6 +171,11 @@ export interface PaginatedHtmlOptions {
   /** Only with reviewProfile "markup"; default "docxodus". */
   markupPresentation?: MarkupPresentation;
   commentProfile: CommentProfile;
+  /**
+   * Default "margin". "balloons" needs the margin or hidden comment profile, and with the markup
+   * profile the Word presentation.
+   */
+  commentColumnPlacement?: CommentColumnPlacement;
   title?: string;
   /** CSS appended to the converter stylesheet before pagination. */
   additionalCss?: string;
@@ -230,6 +242,8 @@ export interface RenderReportBase {
     /** Present only when the markup profile used the Word presentation. */
     markupPresentation?: "word";
     commentProfile: CommentProfile;
+    /** Present only for the balloon layout. */
+    commentColumnPlacement?: "balloons";
     title: string;
     /** Present only when a nonempty additional stylesheet was applied. */
     additionalCss?: string;
@@ -500,6 +514,7 @@ interface NormalizedOptions {
   reviewProfileAlreadyApplied: boolean;
   markupPresentation: MarkupPresentation;
   commentProfile: CommentProfile;
+  commentColumnPlacement: CommentColumnPlacement;
   title: string;
   additionalCss: string;
   unsupportedContent: UnsupportedContentPolicy;
@@ -561,6 +576,7 @@ const TEXT_ENCODER = new TextEncoder();
 const ALLOWED_REVIEW_PROFILES = new Set<ReviewProfile>(["final", "original", "markup"]);
 const ALLOWED_COMMENT_PROFILES = new Set<CommentProfile>(["hidden", "inline", "endnotes", "margin"]);
 const ALLOWED_MARKUP_PRESENTATIONS = new Set<MarkupPresentation>(["docxodus", "word"]);
+const ALLOWED_COMMENT_COLUMN_PLACEMENTS = new Set<CommentColumnPlacement>(["margin", "balloons"]);
 const ALLOWED_UNSUPPORTED_POLICIES = new Set<UnsupportedContentPolicy>(["warn", "strict"]);
 const PACKAGE_LIMIT_FINDINGS = new Set([
   "entry_count_limit_exceeded",
@@ -653,6 +669,20 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     fail("invalid_argument", "input_validation",
       "markupPresentation applies only to the markup profile.",
       "Omit markupPresentation, or use reviewProfile markup.");
+  }
+  const commentColumnPlacement = options.commentColumnPlacement ?? "margin";
+  if (!ALLOWED_COMMENT_COLUMN_PLACEMENTS.has(commentColumnPlacement)) {
+    fail("invalid_argument", "input_validation", "commentColumnPlacement is invalid.", "Use margin or balloons.");
+  }
+  if (commentColumnPlacement === "balloons" && options.commentProfile !== "margin" && options.commentProfile !== "hidden") {
+    fail("invalid_argument", "input_validation",
+      "The balloon layout shows margin comments only.",
+      "Use the margin or hidden comment profile with balloons.");
+  }
+  if (commentColumnPlacement === "balloons" && options.reviewProfile === "markup" && markupPresentation !== "word") {
+    fail("invalid_argument", "input_validation",
+      "The balloon layout with the markup profile needs the Word presentation.",
+      "Set markupPresentation to word, or keep the margin placement.");
   }
   const unsupportedContent = options.unsupportedContent ?? "warn";
   if (!ALLOWED_UNSUPPORTED_POLICIES.has(unsupportedContent)) {
@@ -750,6 +780,7 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     reviewProfileAlreadyApplied,
     markupPresentation,
     commentProfile: options.commentProfile,
+    commentColumnPlacement,
     title,
     additionalCss,
     unsupportedContent,
@@ -1745,7 +1776,8 @@ function conversionOptions(options: NormalizedOptions) {
     renderFootnotesAndEndnotes: true,
     renderHeadersAndFooters: true,
     renderTrackedChanges: options.reviewProfile === "markup",
-    revisionPresentation: options.markupPresentation === "word"
+    // The balloon layout reads what the Word presentation records for balloons, in every profile.
+    revisionPresentation: options.markupPresentation === "word" || options.commentColumnPlacement === "balloons"
       ? RevisionPresentation.Word
       : RevisionPresentation.Docxodus,
     showDeletedContent: true,
@@ -2997,10 +3029,13 @@ function automaticResourceCount(document: Document): { count: number; bytes: num
   return { count, bytes };
 }
 
+type PresentationFields = Pick<RenderReportBase["options"], "markupPresentation" | "commentColumnPlacement" | "additionalCss">;
+
 /** Record non-default presentation settings in both the report and layout digest. */
-function presentationFields(options: NormalizedOptions): { markupPresentation?: "word"; additionalCss?: string } {
+function presentationFields(options: NormalizedOptions): PresentationFields {
   return {
     ...(options.markupPresentation === "word" ? { markupPresentation: "word" as const } : {}),
+    ...(options.commentColumnPlacement === "balloons" ? { commentColumnPlacement: "balloons" as const } : {}),
     ...(options.additionalCss ? { additionalCss: options.additionalCss } : {}),
   };
 }
@@ -3671,6 +3706,8 @@ export async function convertDocxToPaginatedHtml(
         // Chromium rounds a `normal` line height to a whole pixel, and that error accumulates
         // down the page (issue #850). Fix each line's height before anything is measured; both
         // attempts start from pristine HTML, so both apply it identically.
+        // Word prints no comment reference marks in balloons, so their rules apply before measuring too.
+        scopeMarkupBalloons(renderDocument, [staging, container], options.commentColumnPlacement === "balloons");
         applyUnroundedNormalLineHeights(renderDocument.body);
         prepareWordText(renderDocument.body, () => checkpointWordText(state));
         prepareParagraphBorders(renderDocument.body);
@@ -3684,6 +3721,9 @@ export async function convertDocxToPaginatedHtml(
           // restamps through normalizePageMapFragmentIdentities(); stamping inside paginate()
           // would be a second full forced-layout pass whose result is immediately overwritten.
           deferFragmentIdentities: true,
+          ...(options.commentColumnPlacement === "balloons"
+            ? { commentColumnPlacement: "balloons" as const, deferMarkupBalloons: true }
+            : {}),
           bodyBudgetReductionsPt,
           checkCancellation: () => {
             if (state.signal?.aborted) {
@@ -3804,6 +3844,25 @@ export async function convertDocxToPaginatedHtml(
         () => checkpointWordText(state)));
     await runPhase(state, "output_verification", ["paragraph borders"], () =>
       paintParagraphBorders(renderDocument.getElementById("pagination-container") as HTMLElement));
+    // The markup area shrinks each page's content, so it comes after every pass that measures it.
+    const balloons = await runPhase(state, "output_verification", ["markup balloons"], () => engine.layoutMarkupBalloons());
+    if (balloons && balloons.unplacedCommentIds.length > 0) {
+      // Under balloons the comment sources are not in the PageMap, so this is the coverage check.
+      fail("output_verification_failure", "output_verification",
+        `Comments ${balloons.unplacedCommentIds.join(", ")} are marked in the document but got no balloon.`,
+        "Report the source document to Docxodus, or export with the margin placement.");
+    }
+    if (balloons && (balloons.truncatedCommentIds.length > 0 || balloons.truncatedFormatting > 0)) {
+      addWarning(state, {
+        code: "comment_balloon_truncated",
+        severity: "warning",
+        phase: "output_verification",
+        message: `Balloons too many to fit beside their page were cut short: ${balloons.truncatedCommentIds.length} ` +
+          `comment(s) and ${balloons.truncatedFormatting} formatting change(s).`,
+        remediation: "Use the margin placement with the endnotes comment profile to print every comment in full.",
+        ...(balloons.truncatedCommentIds.length > 0 ? { resource: balloons.truncatedCommentIds.join(",") } : {}),
+      });
+    }
     const renderer = await runPhase(state, "output_verification", ["renderer identity"], () =>
       rendererIdentity(
         renderDocument,

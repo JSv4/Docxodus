@@ -8,7 +8,7 @@ test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}),
 } });
 
-test('PDF change bars share a column a quarter inch left of the text margin', async ({ browser }, info) => {
+test('PDF change bars share a column 30pt left of the text margin', async ({ browser }, info) => {
   test.setTimeout(120_000);
   const result = await renderDocxArtifacts(changeBarFixture(), { browser, outputs: ['pdf'],
     reviewProfile: 'markup', markupPresentation: 'word', commentProfile: 'hidden', timeoutMs: 120_000 });
@@ -37,8 +37,8 @@ test('PDF change bars share a column a quarter inch left of the text margin', as
       }
     });
     expect(bars).toHaveLength(2);
-    // The body starts at 72pt. A quarter inch outside the column is 54pt for both paragraphs.
-    for (const left of bars) expect(left).toBeCloseTo(54, 1);
+    // The body starts at 72pt. Word's 30pt outside the column is 42pt for both paragraphs.
+    for (const left of bars) expect(left).toBeCloseTo(42, 1);
     writeFileSync(info.outputPath('change-bars.pdf'), result.pdf!);
   } finally { await task.destroy(); }
 });

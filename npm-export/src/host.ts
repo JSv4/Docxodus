@@ -266,6 +266,7 @@ function validateRequest(value: unknown): HostRequest {
       "reviewProfileAlreadyApplied",
       "markupPresentation",
       "commentProfile",
+      "commentColumnPlacement",
       "title",
       "additionalCss",
       "unsupportedContent",
