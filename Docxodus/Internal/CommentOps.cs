@@ -211,14 +211,78 @@ internal static class CommentOps
             .Distinct()
             .ToList();
 
+        // Replies read in the order they were added, so the new reference goes after the thread's
+        // last one (the converter orders a thread by reference position), not straight after the parent.
+        var threadIds = ThreadCommentIds(main, parentId);
+        var threadRuns = roots.SelectMany(r => r.Descendants(W.commentReference))
+            .Where(e => threadIds.Contains((string?)e.Attribute(W.id) ?? ""))
+            .Select(e => e.AncestorsAndSelf(W.r).First())
+            .ToList();
+
         foreach (var parentRun in referenceRuns)
         {
             var replyRun = BuildReferenceRun(replyId);
             UnidHelper.AssignToSelfAndDescendants(replyRun);
-            parentRun.AddAfterSelf(replyRun);
+            var host = parentRun.Ancestors(W.p).FirstOrDefault();
+            (threadRuns.LastOrDefault(r => r.Ancestors(W.p).FirstOrDefault() == host) ?? parentRun)
+                .AddAfterSelf(replyRun);
         }
 
         return hostParagraphs;
+    }
+
+    /// <summary>
+    /// The ids of every comment in the thread containing <paramref name="commentId"/>: its root
+    /// (found by following <c>w15:paraIdParent</c> upward) and everything below that root.
+    /// A comment with no threading metadata is a thread of one.
+    /// </summary>
+    private static HashSet<string> ThreadCommentIds(MainDocumentPart main, string commentId)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal) { commentId };
+        var comments = main.WordprocessingCommentsPart?.GetXDocument().Root?.Elements(W.comment).ToList();
+        var exEntries = main.WordprocessingCommentsExPart?.GetXDocument().Root?.Elements(W15 + "commentEx").ToList();
+        if (comments is null || exEntries is null) return ids;
+
+        string? ParaIdOf(XElement c) => (string?)c.Elements(W.p).LastOrDefault()?.Attribute(W14.paraId);
+        var start = comments.FirstOrDefault(c => (string?)c.Attribute(W.id) == commentId);
+        var rootParaId = start is null ? null : ParaIdOf(start);
+        if (rootParaId is null) return ids;
+
+        var parentOf = exEntries
+            .Where(e => e.Attribute(W15 + "paraId") is not null && e.Attribute(W15 + "paraIdParent") is not null)
+            .GroupBy(e => (string)e.Attribute(W15 + "paraId")!)
+            .ToDictionary(g => g.Key, g => (string)g.First().Attribute(W15 + "paraIdParent")!);
+        var seen = new HashSet<string>(StringComparer.Ordinal) { rootParaId };
+        while (parentOf.TryGetValue(rootParaId, out var up) && seen.Add(up))
+            rootParaId = up;
+
+        var threadParaIds = WithDescendantParaIds(exEntries, rootParaId);
+        foreach (var c in comments)
+            if (ParaIdOf(c) is { } paraId && threadParaIds.Contains(paraId))
+                ids.Add((string?)c.Attribute(W.id) ?? "");
+        return ids;
+    }
+
+    /// <summary>
+    /// <paramref name="paraId"/> plus the paraId of every <c>commentEx</c> entry whose
+    /// <c>w15:paraIdParent</c> chain leads to it: the paraIds of the subtree rooted at that comment.
+    /// </summary>
+    internal static HashSet<string> WithDescendantParaIds(IReadOnlyList<XElement> exEntries, string paraId)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal) { paraId };
+        bool expanded;
+        do
+        {
+            expanded = false;
+            foreach (var entry in exEntries)
+            {
+                var child = (string?)entry.Attribute(W15 + "paraId");
+                var parent = (string?)entry.Attribute(W15 + "paraIdParent");
+                if (child is not null && parent is not null && result.Contains(parent) && result.Add(child))
+                    expanded = true;
+            }
+        } while (expanded);
+        return result;
     }
 
     /// <summary>The body-side reference run: <c>w:r[rStyle=CommentReference]/w:commentReference</c>.</summary>
