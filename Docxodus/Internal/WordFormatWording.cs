@@ -72,6 +72,15 @@ internal static class WordFormatWording
     }
 
     /// <summary>
+    /// The text of a change's balloon, "Formatted:" and its wording (or a bare "Formatted"), which the
+    /// Word presentation also uses as the change's tooltip. Null when <see cref="Stamp"/> did not run.
+    /// </summary>
+    internal static string? BalloonText(XElement change) =>
+        change.Attribute(BalloonData + "format-description")?.Value is { } wording
+            ? wording.Length == 0 ? "Formatted" : $"Formatted: {wording}"
+            : null;
+
+    /// <summary>
     /// The family and size of Word's balloon text: the document's Balloon Text paragraph style,
     /// or Word's own default, Segoe UI 9 pt.
     /// </summary>
@@ -312,7 +321,7 @@ internal static class WordFormatWording
 
     private static void Toggled(List<string> phrases, XElement now, XElement was, XName property, string on, string off)
     {
-        bool IsOn(XElement p) => p.Element(property) is { } e && (string?)e.Attribute(W.val) is not ("0" or "false" or "off");
+        bool IsOn(XElement p) => p.Element(property) is { } e && e.Attribute(W.val).ToBoolean() != false;
         if (IsOn(now) != IsOn(was))
             phrases.Add(IsOn(now) ? on : off);
     }

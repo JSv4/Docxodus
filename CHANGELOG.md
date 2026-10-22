@@ -17,9 +17,12 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- The Word revision presentation colours authors from Word's palette, starting `#0078D4`, `#D13438`
-  (was `#C00000`, `#0070C0`, …), and draws its change bar 30pt left of the text column (was 0.25in), as
-  measured from Word-printed All Markup PDFs (#1300). `AuthorColors` still overrides the palette.
+- The Word revision presentation's first two author colours are now Word's, `#0078D4` and `#D13438`
+  (were `#C00000` and `#0070C0`), and its change bar sits 30pt left of the text column (was 0.25in), as
+  measured from Word-printed All Markup PDFs (#1300). Its other six colours change too and remain this
+  implementation's choice. In that presentation a formatting change's tooltip is now its balloon's
+  text, for example `Formatted: Font: Bold` (was `Bold added`). `AuthorColors` still overrides the
+  palette.
 - Header/footer authoring is no longer applied untracked when tracked changes are on (#1299).
   A tracked `SetHeaderText`/`SetFooterText` over an existing story reports the story's kept last
   paragraph, which takes the new text, in `EditResult.Modified` rather than `Created`; `Created`

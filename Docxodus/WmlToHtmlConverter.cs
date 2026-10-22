@@ -2025,10 +2025,10 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// The colours Word gives authors, by author number, wrapping after the last. The first two
-        /// were measured from Word-printed All Markup PDFs (issue #1300); the rest are the same
-        /// Office palette's next hues. <see cref="WmlToHtmlConverterSettings.AuthorColors"/>
-        /// overrides them per author.
+        /// The colours of the Word presentation's authors, by author number, wrapping after the last.
+        /// The first two are Word's, measured from Word-printed All Markup PDFs (issue #1300); the
+        /// other six are this implementation's choice, not measured from Word.
+        /// <see cref="WmlToHtmlConverterSettings.AuthorColors"/> overrides them per author.
         /// </summary>
         private static readonly string[] WordAuthorPalette =
         {
@@ -5970,7 +5970,8 @@ namespace Docxodus
                     if (pPrChange != null || numberingChange != null)
                     {
                         classes.Add(prefix + "para-format-change");
-                        if (pPrChange != null) described.Add("Paragraph formatting changed");
+                        if (pPrChange != null)
+                            described.Add(Internal.WordFormatWording.BalloonText(pPrChange) ?? "Paragraph formatting changed");
                         if (numberingChange != null) described.Add("Numbering changed");
                     }
                     if (inlineSectPrChange != null)
@@ -8079,7 +8080,8 @@ namespace Docxodus
                     formatChangeSpan.Add(new XAttribute("class", className));
 
                     // Generate a title describing the change
-                    var changeDescription = DescribeFormatChange(rPr, rPrChange);
+                    // The Word presentation's tooltip is the text of the change's balloon.
+                    var changeDescription = Internal.WordFormatWording.BalloonText(rPrChange) ?? DescribeFormatChange(rPr, rPrChange);
                     if (!string.IsNullOrEmpty(changeDescription))
                         formatChangeSpan.Add(new XAttribute("title", changeDescription));
                     // A list number only shows its paragraph mark's formatting: no balloon of its own.

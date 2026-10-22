@@ -61,6 +61,8 @@ public class MarkupBalloonTests
         var change = html.Descendants(Html + "span").Single(e => HasClass(e, "rev-format-change"));
         Assert.Equal(wording, Data(change, "format-description"));
         Assert.Equal("#0078D4", Data(change, "author-color"));
+        // The tooltip is the balloon's text: one describer.
+        Assert.Equal(BalloonText(wording), (string?)change.Attribute("title"));
     }
 
     [Theory]
@@ -84,6 +86,7 @@ public class MarkupBalloonTests
         var paragraph = html.Descendants().Single(e => HasClass(e, "rev-para-format-change"));
         Assert.Equal(wording, Data(paragraph, "format-description"));
         Assert.Equal("#0078D4", Data(paragraph, "author-color"));
+        Assert.Equal(BalloonText(wording), (string?)paragraph.Attribute("title"));
     }
 
     [Fact]
@@ -164,6 +167,8 @@ public class MarkupBalloonTests
         Assert.Contains("Bold added", titles);
         Assert.Contains("Paragraph formatting changed", titles);
     }
+
+    private static string BalloonText(string wording) => wording.Length == 0 ? "Formatted" : $"Formatted: {wording}";
 
     private static string? Data(XElement element, string name) => (string?)element.Attribute("data-" + name);
 

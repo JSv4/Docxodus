@@ -598,8 +598,8 @@ All phases completed. The tracked changes HTML rendering feature is fully implem
   `"balloons"` comment placement reads them; see `all_markup_layout.md`.
 
 The first two palette colours (`#0078D4`, `#D13438`) and the change-bar offset were measured from
-Word-printed All Markup PDFs (issue #1300); the other six colours are the same Office palette's next
-hues, and the cell shading is Word's default. The setting
+Word-printed All Markup PDFs (issue #1300); the other six colours are this implementation's choice,
+not measured from Word, and the cell shading is Word's default. The setting
 applies to full renders. A block render numbers authors within its one block, so
 `HtmlConversionOps` leaves block renders in the default presentation. Surfaces:
 `HtmlConversionOptions.RevisionPresentation` (0/1), the WASM `ConvertDocxToHtmlComplete` trailing
