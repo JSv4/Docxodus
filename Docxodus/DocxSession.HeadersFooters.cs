@@ -42,9 +42,10 @@ public sealed partial class DocxSession
     /// </summary>
     /// <remarks>
     /// Under <see cref="TrackedChangeMode.RenderInline"/> the existing content is kept as a tracked
-    /// deletion and the new content is a tracked insertion; the story's final paragraph stays, so
-    /// <see cref="EditResult.Created"/> then lists the live paragraphs that hold the new content,
-    /// that final paragraph included. A <c>w:titlePg</c> it sets is a tracked section change. An
+    /// deletion and the new content is a tracked insertion. The existing story's final paragraph
+    /// stays and takes the last payload paragraph's content, so it is reported in
+    /// <see cref="EditResult.Modified"/> and only the paragraphs placed before it in
+    /// <see cref="EditResult.Created"/>. A <c>w:titlePg</c> it sets is a tracked section change. An
     /// even story while <c>w:evenAndOddHeaders</c> is off is refused with
     /// <see cref="EditErrorCode.TrackedOperationUnsupported"/>: that setting has no revision form.
     /// </remarks>
@@ -343,10 +344,14 @@ public sealed partial class DocxSession
                 : new XElement(isHeader ? W.hdr : W.ftr,
                     new XAttribute(XNamespace.Xmlns + "w", W.w),
                     new XAttribute(XNamespace.Xmlns + "r", R.r));
-            var contentParagraphs = tracked ? ReplaceStoryContentTracked(root, paras) : paras;
+            var retained = tracked ? ReplaceStoryContentTracked(root, paras) : null;
             if (!tracked) root.Add(paras);
             part.PutXDocument(root.Document ?? new XDocument(root));
-            foreach (var p in contentParagraphs) PromoteHyperlinkRelationships(p);
+            // A retained final paragraph took over the last payload paragraph's content; the
+            // payload paragraphs that were placed in the story are the created ones.
+            var createdParagraphs = retained is null ? paras : paras.Take(paras.Count - 1).ToList();
+            foreach (var p in createdParagraphs) PromoteHyperlinkRelationships(p);
+            if (retained is not null) PromoteHyperlinkRelationships(retained);
             foreach (var relationshipId in oldHyperlinkIds)
                 Internal.OwnedPartRelationships.DeleteReferenceRelationshipIfOrphaned(part, relationshipId, R.id);
             Internal.OwnedPartRelationships.SweepOrphanedImages(part);
@@ -360,7 +365,7 @@ public sealed partial class DocxSession
             InvalidateProjectionCache();
             var index = AnchorIndex();
             var created = new List<Anchor>();
-            foreach (var p in contentParagraphs)
+            foreach (var p in createdParagraphs)
             {
                 var unid = (string?)p.Attribute(PtOpenXml.Unid);
                 if (unid is null) continue;
@@ -372,6 +377,10 @@ public sealed partial class DocxSession
             {
                 Success = true,
                 Created = created,
+                Modified = retained is not null
+                    && AnchorForUnid((string?)retained.Attribute(PtOpenXml.Unid), PartUriOf(retained)) is { } kept
+                    ? new[] { kept }
+                    : Array.Empty<Anchor>(),
                 Patch = PatchFor(target),
             };
         }
@@ -415,10 +424,10 @@ public sealed partial class DocxSession
     /// inserted, and that paragraph's properties applied as a tracked <c>w:pPrChange</c>. Reject
     /// therefore restores exactly the old story and accept leaves exactly the new one. A new story
     /// has no final paragraph, so the last new paragraph keeps an untracked mark of its own and
-    /// rejecting leaves the story as one empty paragraph. Returns the live paragraphs that now
-    /// hold the new content.
+    /// rejecting leaves the story as one empty paragraph. Returns the retained final paragraph, or
+    /// null when every payload paragraph was placed in the story.
     /// </summary>
-    private List<XElement> ReplaceStoryContentTracked(XElement root, List<XElement> paras)
+    private XElement? ReplaceStoryContentTracked(XElement root, List<XElement> paras)
     {
         var stamp = NewDistinctRevisionStamp();
         var oldBlocks = root.Elements().ToList();
@@ -434,7 +443,7 @@ public sealed partial class DocxSession
                     preserveParagraphMark: ReferenceEquals(p, paras[^1]));
                 root.Add(p);
             }
-            return paras;
+            return null;
         }
 
         var leading = paras.Take(paras.Count - 1).ToList();
@@ -460,8 +469,7 @@ public sealed partial class DocxSession
             pPr.Elements().Where(e => e.Name != W.rPr && e.Name != W.sectPr && e.Name != W.pPrChange).Remove();
             pPr.AddFirst(newProperties);
         }, W.rPr, W.sectPr);
-        leading.Add(final);
-        return leading;
+        return final;
     }
 
     /// <summary>
@@ -507,9 +515,8 @@ public sealed partial class DocxSession
                 ? BuildPageOfTotalRuns(element, format)
                 : BuildPageNumberFieldRuns(field, format);
             foreach (var r in runs) UnidHelper.AssignToSelfAndDescendants(r);
-            // Word records an inserted field as an insertion of its runs
-            // (TestFiles/FA/RevTracking/008-InsertedFieldCode.docx); one envelope keeps the
-            // whole field a single revision that rejects as a unit.
+            // Tracked: the field is the author's insertion, the shape in
+            // TestFiles/FA/RevTracking/008-InsertedFieldCode.docx.
             if (_trackedChanges == TrackedChangeMode.RenderInline)
                 element.Add(CreateRevisionEnvelope(W.ins, NewDistinctRevisionStamp(), runs));
             else
@@ -907,10 +914,10 @@ public sealed partial class DocxSession
         MutateTrackedProperties(sectPr, W.sectPrChange, NewDistinctRevisionStamp(), mutate,
             W.headerReference, W.footerReference);
 
-    /// <summary><c>w:evenAndOddHeaders</c> is a document setting in <c>settings.xml</c>, and OOXML
-    /// has no revision element that can record a settings change. Under tracking, switching it is
-    /// refused before anything is written rather than applied where no reviewer can see or
-    /// reject it.</summary>
+    /// <summary>The refusal for switching "Different odd and even pages" while tracking is on.
+    /// The switch is <c>w:evenAndOddHeaders</c> in <c>settings.xml</c>; OOXML's revision markup
+    /// covers story content and property elements, never settings, so the change could only be
+    /// made invisibly. Null when tracking is off.</summary>
     private EditResult? RefuseTrackedEvenAndOddHeaders(string anchorId) =>
         _trackedChanges == TrackedChangeMode.RenderInline
             ? EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,

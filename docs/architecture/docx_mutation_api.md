@@ -542,7 +542,7 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | `ClearListStartOverride(li)` | — | — | every member of the item's numbering instance (all repointed together) | the anchored item |
 | `ReplaceCellContent(tc, md)` | — | descendant inline anchors (rare) | `tc` | `tc` |
 | table row/column CRUD, merge/unmerge | new `tr`/`tc` identities where applicable | invalidated `tr`/`tc` identities | addressed `tc` where applicable | enclosing `tbl`; full structural map in `TableAnchors` |
-| `SetHeaderText(p, kind, md)` / `SetFooterText(...)` | the new header/footer paragraph anchors (scope `hdr{N}`/`ftr{N}`) | — (reused-part old paragraphs cease to exist; not separately reported in v1) | — | whole document |
+| `SetHeaderText(p, kind, md)` / `SetFooterText(...)` | the new header/footer paragraph anchors (scope `hdr{N}`/`ftr{N}`); under `RenderInline` over an existing story, all but the last | — (reused-part old paragraphs cease to exist; not separately reported in v1; under `RenderInline` they stay live as tracked deletions) | under `RenderInline` over an existing story, the story's final paragraph, which keeps its mark and takes the last payload paragraph's content | whole document |
 | `InsertPageNumberField(p, field?)` | — | — | `p` (the paragraph the field is appended to) | `p` |
 | `InsertFootnote(p, offset, md)` / `InsertEndnote(...)` | the note definition (`fn`/`en`) + its paragraphs (scope `fn`/`en`) | — | `p` (the citing paragraph) | whole document |
 | `AddComment(p, span?, author, md, …)` | the comment definition (`cmt`) + its paragraphs (kind `p`, scope `cmt`) | — | `p` (the commented paragraph) | `p` |
@@ -1071,7 +1071,9 @@ yields one empty story paragraph.
 
 **Return shape.** `SetHeaderText`/`SetFooterText` report the new story paragraphs in
 `EditResult.Created` (scope `hdr{N}`/`ftr{N}`, 1-based by part-collection order) — pass
-one to `InsertPageNumberField`. `InsertPageNumberField` reports the target paragraph in
+one to `InsertPageNumberField`. Under tracked changes over an existing story, the story's
+final paragraph keeps its paragraph mark and takes the last payload paragraph's content, so it
+comes back in `Modified` and `Created` holds only the paragraphs inserted before it. `InsertPageNumberField` reports the target paragraph in
 `Modified`. The field is a native complex field (`fldChar`/`instrText`, cached "1"
 result), so it renders and updates like a hand-authored field.
 

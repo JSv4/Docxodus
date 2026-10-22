@@ -284,8 +284,15 @@ public class DocxSessionTrackedHeaderFooterTests
         var originalHeader = Root(s.Save(), m => m.HeaderParts.Single());
         s.SetTrackedChanges(TrackedChangeMode.RenderInline);
 
+        var lastOldParagraph = s.Project().AnchorIndex.Values.Select(v => v.Anchor)
+            .Last(a => a.Kind == "p" && a.Scope.StartsWith("hdr", StringComparison.Ordinal));
+
         var result = s.SetHeaderText(body, HeaderFooterKind.Default, replacement);
         Assert.True(result.Success, result.Error?.Message);
+        // The story's last paragraph keeps its mark and takes the last new paragraph's text, so
+        // it is modified; only the paragraphs placed before it are new anchors.
+        Assert.Equal(lastOldParagraph.Id, Assert.Single(result.Modified).Id);
+        Assert.Equal(replacement.Split("\n\n").Length - 1, result.Created.Count);
 
         var header = Root(s.Save(), m => m.HeaderParts.Single());
         Assert.NotEmpty(header.Descendants(W + "del"));
@@ -354,6 +361,79 @@ public class DocxSessionTrackedHeaderFooterTests
         Assert.False(result.Success);
         Assert.Equal(EditErrorCode.TrackedOperationUnsupported, result.Error!.Code);
         Assert.Equal(before, s.Save());
+    }
+
+    [Fact]
+    public void TrackedSectionChange_RejectedById_RestoresTheSection_AcceptedById_KeepsIt()
+    {
+        foreach (var accept in new[] { false, true })
+        {
+            var (s, body, _) = Open();
+            using var _s = s;
+            var before = SectionProperties(BodySectPr(s));
+            Assert.True(s.SetPageSetup(body, new PageSetupOp { Landscape = true }).Success);
+            var after = SectionProperties(BodySectPr(s));
+
+            var id = Assert.Single(s.ListRevisions()).Id;
+            Assert.True((accept ? s.AcceptRevision(id) : s.RejectRevision(id)).Success);
+
+            Assert.Empty(s.ListRevisions());
+            Assert.Equal(accept ? after : before, SectionProperties(BodySectPr(s)));
+        }
+    }
+
+    [Fact]
+    public void TrackedPageNumberField_RejectedById_IsRemoved()
+    {
+        var (s, _, footerParagraph) = Open(withStories: true);
+        using var _s = s;
+        Assert.True(s.InsertPageNumberField(footerParagraph!, PageNumberField.CurrentPage).Success);
+
+        Assert.True(s.RejectRevision(Assert.Single(s.ListRevisions()).Id).Success);
+
+        var footer = Root(s.Save(), m => m.FooterParts.Single());
+        Assert.Empty(footer.Descendants(W + "fldChar"));
+        Assert.Equal("Page ", string.Concat(footer.Descendants(W + "t").Select(t => t.Value)));
+    }
+
+    [Fact]
+    public void TrackedPageSetup_OnAMidDocumentSection_IsRecordedInThatSection()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new DocumentFormat.OpenXml.Wordprocessing.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new DocumentFormat.OpenXml.Wordprocessing.Settings();
+            static DocumentFormat.OpenXml.Wordprocessing.SectionProperties Letter() => new(
+                new DocumentFormat.OpenXml.Wordprocessing.PageSize { Width = 12240u, Height = 15840u },
+                new DocumentFormat.OpenXml.Wordprocessing.PageMargin
+                    { Top = 1440, Bottom = 1440, Left = 1440, Right = 1440, Header = 720, Footer = 720, Gutter = 0 });
+            main.Document = new DocumentFormat.OpenXml.Wordprocessing.Document(new DocumentFormat.OpenXml.Wordprocessing.Body(
+                new DocumentFormat.OpenXml.Wordprocessing.Paragraph(
+                    new DocumentFormat.OpenXml.Wordprocessing.ParagraphProperties(Letter()),
+                    new DocumentFormat.OpenXml.Wordprocessing.Run(new DocumentFormat.OpenXml.Wordprocessing.Text("First section."))),
+                new DocumentFormat.OpenXml.Wordprocessing.Paragraph(
+                    new DocumentFormat.OpenXml.Wordprocessing.Run(new DocumentFormat.OpenXml.Wordprocessing.Text("Second section."))),
+                Letter()));
+        }
+        using var s = new DocxSession(ms.ToArray(), new DocxSessionSettings
+            { RevisionAuthor = "Bob", TrackedChanges = TrackedChangeMode.RenderInline });
+        var first = s.Project().AnchorIndex.Values.First(v => v.TextPreview == "First section.").Anchor.Id;
+
+        Assert.True(s.SetPageSetup(first, new PageSetupOp { MarginTopTwips = 720 }).Success);
+
+        var midSectPr = Root(s.Save(), m => m).Descendants(W + "pPr").Elements(W + "sectPr").Single();
+        Assert.Equal("720", (string?)midSectPr.Element(W + "pgMar")!.Attribute(W + "top"));
+        Assert.NotNull(midSectPr.Element(W + "sectPrChange"));
+        Assert.Null(BodySectPr(s).Element(W + "sectPrChange"));
+        Assert.Single(s.ListRevisions());
+        AssertSchemaValid(s);
+
+        Assert.True(s.RejectAllRevisions().Success);
+        midSectPr = Root(s.Save(), m => m).Descendants(W + "pPr").Elements(W + "sectPr").Single();
+        Assert.Equal("1440", (string?)midSectPr.Element(W + "pgMar")!.Attribute(W + "top"));
+        Assert.Null(midSectPr.Element(W + "sectPrChange"));
     }
 
     [Fact]
