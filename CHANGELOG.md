@@ -40,6 +40,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `DocxSession.AddCommentReply` now places the new reply's `w:commentReference` after the last reference already in the thread (the root and all its replies, including replies to replies) instead of straight after the parent. Replies keep the order they were added in, in `document.xml` and in the rendered thread, and a new reply no longer reorders the earlier ones (#1296).
 - Read every keyword of an HTML `text-decoration` value when converting HTML to DOCX (#1273). The
   converter compared the whole value with `underline` and `line-through`, so a value with more than
   one keyword produced no line at all, and a DOCX → HTML → DOCX round trip dropped double underlines
