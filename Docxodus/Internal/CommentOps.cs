@@ -175,9 +175,9 @@ internal static class CommentOps
             .Any(r => (string?)r.Attribute(W.id) == commentId);
 
     /// <summary>
-    /// Add the body-side reference for a reply immediately after its parent's reference. Word's
-    /// native threaded shape keeps the range markers on the thread root and gives replies only an
-    /// adjacent <c>w:commentReference</c>; <c>w15:paraIdParent</c> supplies the relationship and
+    /// Add the body-side reference for a reply after the last reference already in its parent's
+    /// thread (so replies read in the order they were added). Word's native threaded shape keeps the
+    /// range markers on the thread root and gives replies only a <c>w:commentReference</c>; <c>w15:paraIdParent</c> supplies the relationship and
     /// makes every descendant share that root range. This also makes replying to an existing reply
     /// work when (as Word writes it) the immediate parent has no range markers of its own.
     /// </summary>
@@ -216,16 +216,21 @@ internal static class CommentOps
         var threadIds = ThreadCommentIds(main, parentId);
         var threadRuns = roots.SelectMany(r => r.Descendants(W.commentReference))
             .Where(e => threadIds.Contains((string?)e.Attribute(W.id) ?? ""))
-            .Select(e => e.AncestorsAndSelf(W.r).First())
+            .Select(e => e.AncestorsAndSelf(W.r).FirstOrDefault())
+            .Where(r => r is not null)
+            .Select(r => r!)
             .ToList();
 
         foreach (var parentRun in referenceRuns)
         {
             var replyRun = BuildReferenceRun(replyId);
             UnidHelper.AssignToSelfAndDescendants(replyRun);
-            var host = parentRun.Ancestors(W.p).FirstOrDefault();
-            (threadRuns.LastOrDefault(r => r.Ancestors(W.p).FirstOrDefault() == host) ?? parentRun)
-                .AddAfterSelf(replyRun);
+            // A thread sibling's run can sit inside a tracked-change or hyperlink wrapper; the new run
+            // goes after that wrapper, level with the parent's run, so accept/reject cannot drop it.
+            var lastSibling = threadRuns
+                .Select(r => r.AncestorsAndSelf().FirstOrDefault(a => a.Parent == parentRun.Parent))
+                .LastOrDefault(a => a is not null);
+            (lastSibling ?? parentRun).AddAfterSelf(replyRun);
         }
 
         return hostParagraphs;

@@ -976,4 +976,112 @@ public class DocxSessionCommentAuthoringTests
 
         PackageValidation.AssertValid(session.Save(), DocumentFormat.OpenXml.FileFormatVersions.Office2007);
     }
+
+    // ─── Reply order (#1296) ────────────────────────────────────────────
+
+    private static readonly string[] ReplyTexts = { "First reply.", "Second reply.", "Third reply." };
+
+    /// <summary>A root comment plus <see cref="ReplyTexts"/>, each added one at a time to the root.</summary>
+    private static byte[] BuildThreadOfThreeReplies(bool nestedReply = false)
+    {
+        using var session = new DocxSession(BuildSingleParagraphDoc("The seller delivers the goods."));
+        var root = session.AddComment(FirstBodyParagraph(session), null, "Ann", "Root comment.")
+            .Created.First(a => a.Kind == "cmt").Id;
+        var firstReply = "";
+        foreach (var text in ReplyTexts)
+        {
+            var reply = session.AddCommentReply(root, "Ben", text);
+            Assert.True(reply.Success, reply.Error?.Message);
+            if (firstReply == "") firstReply = reply.Created.First(a => a.Kind == "cmt").Id;
+        }
+        if (nestedReply)
+            Assert.True(session.AddCommentReply(firstReply, "Cy", "Nested reply.").Success);
+        return session.Save();
+    }
+
+    /// <summary>Comment texts in the order their <c>w:commentReference</c>s appear, tagged when tracked.</summary>
+    private static string[] ReferenceOrder(byte[] docx)
+    {
+        using var ms = new MemoryStream();
+        ms.Write(docx, 0, docx.Length);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var main = doc.MainDocumentPart!;
+        var textById = main.WordprocessingCommentsPart!.GetXDocument().Root!.Elements(W + "comment")
+            .ToDictionary(c => (string)c.Attribute(W + "id")!, c => c.Value);
+        return main.GetXDocument().Descendants(W + "commentReference")
+            .Select(r => textById[(string)r.Attribute(W + "id")!]
+                + (r.Ancestors(W + "ins").Any() ? " [ins]" : "")
+                + (r.Ancestors(W + "del").Any() ? " [del]" : ""))
+            .ToArray();
+    }
+
+    /// <summary>Wrap the reference run of the comment reading <paramref name="text"/> in a tracked <c>w:ins</c>/<c>w:del</c>.</summary>
+    private static byte[] WrapReferenceInRevision(byte[] docx, string text, string wrapper)
+    {
+        var ms = new MemoryStream();
+        ms.Write(docx, 0, docx.Length);
+        using (var doc = WordprocessingDocument.Open(ms, true))
+        {
+            var main = doc.MainDocumentPart!;
+            var id = (string)main.WordprocessingCommentsPart!.GetXDocument().Root!.Elements(W + "comment")
+                .First(c => c.Value == text).Attribute(W + "id")!;
+            var run = main.GetXDocument().Descendants(W + "commentReference")
+                .First(r => (string)r.Attribute(W + "id")! == id).Parent!;
+            var revision = new XElement(W + wrapper,
+                new XAttribute(W + "id", "901"), new XAttribute(W + "author", "Other"),
+                new XAttribute(W + "date", "2026-01-01T00:00:00Z"));
+            run.ReplaceWith(revision);
+            revision.Add(run);
+            main.PutXDocument();
+        }
+        return ms.ToArray();
+    }
+
+    [Fact]
+    public void DS410_AddCommentReply_KeepsReferencesInTheOrderRepliesWereAdded()
+    {
+        Assert.Equal(new[] { "Root comment." }.Concat(ReplyTexts), ReferenceOrder(BuildThreadOfThreeReplies()));
+    }
+
+    [Fact]
+    public void DS411_AddCommentReply_ToAReply_GoesAfterTheWholeThread()
+    {
+        Assert.Equal(new[] { "Root comment." }.Concat(ReplyTexts).Append("Nested reply."),
+            ReferenceOrder(BuildThreadOfThreeReplies(nestedReply: true)));
+    }
+
+    [Fact]
+    public void DS412_AddCommentReply_RendersTheThreadInTheOrderRepliesWereAdded()
+    {
+        using var ms = new MemoryStream();
+        var bytes = BuildThreadOfThreeReplies();
+        ms.Write(bytes, 0, bytes.Length);
+        using var doc = WordprocessingDocument.Open(ms, true);
+        var html = WmlToHtmlConverter.ConvertToHtml(doc,
+            new WmlToHtmlConverterSettings { RenderComments = true }).ToString();
+
+        var texts = new[] { "Root comment." }.Concat(ReplyTexts).ToList();
+        Assert.All(texts, t => Assert.Contains(t, html));
+        var positions = texts.Select(t => html.IndexOf(t, StringComparison.Ordinal)).ToList();
+        Assert.Equal(positions.OrderBy(i => i), positions);
+    }
+
+    [Theory]
+    [InlineData("ins")]
+    [InlineData("del")]
+    public void DS413_AddCommentReply_AfterATrackedReply_StaysOutsideItsRevisionWrapper(string wrapper)
+    {
+        // A reviewer's reply reference sits inside w:ins / w:del. The new reply must land beside that
+        // wrapper, not inside it, or accepting (del) / rejecting (ins) all changes would drop it.
+        var tracked = WrapReferenceInRevision(BuildThreadOfThreeReplies(), "Third reply.", wrapper);
+        using var session = new DocxSession(tracked);
+        var root = session.ListComments().First(c => c.ParentAnchorId is null).DefAnchorId;
+        Assert.True(session.AddCommentReply(root, "Me", "Fourth reply.").Success);
+        var saved = session.Save();
+
+        Assert.Equal(new[] { "Root comment.", "First reply.", "Second reply.", $"Third reply. [{wrapper}]", "Fourth reply." },
+            ReferenceOrder(saved));
+        Assert.Contains("Fourth reply.", ReferenceOrder(Docxodus.Internal.DocxDiffOps.AcceptRevisions(saved)));
+        Assert.Contains("Fourth reply.", ReferenceOrder(Docxodus.Internal.DocxDiffOps.RejectRevisions(saved)));
+    }
 }
