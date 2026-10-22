@@ -280,13 +280,19 @@ public sealed partial class DocxSession
             anchorId);
     }
 
+    /// <summary>The properties as a revision stores and compares them: without the excluded
+    /// children, and without the projector's <c>pt:</c> bookkeeping anywhere in the subtree, so a
+    /// property re-created without its Unid still equals its stored twin.</summary>
     private static XElement PropertySnapshot(XElement? properties, XName propertyName, XName changeName,
         params XName[] excluded)
     {
         var exclude = excluded.Append(changeName).ToHashSet();
-        return new XElement(propertyName,
-            properties?.Attributes().Where(a => !a.IsNamespaceDeclaration && a.Name != PtOpenXml.Unid),
+        var snapshot = new XElement(propertyName,
+            properties?.Attributes().Where(a => !a.IsNamespaceDeclaration),
             properties?.Elements().Where(e => !exclude.Contains(e.Name)).Select(e => new XElement(e)));
+        foreach (var element in snapshot.DescendantsAndSelf())
+            element.Attributes().Where(a => a.Name.Namespace == PtOpenXml.pt).Remove();
+        return snapshot;
     }
 
     private static bool PropertySnapshotEquals(XElement snapshot, XElement? current, XName changeName,

@@ -552,10 +552,12 @@ public class DocxSessionNoteAuthoringTests
     /// walk, note offsets could resolve inside <c>w:ins</c>/<c>w:moveTo</c>. The run splitter cut
     /// the nested run, but the top-level inserter treated the revision wrapper as atomic and
     /// silently placed the citation after the entire revision. Refuse that boundary before the
-    /// history snapshot instead of reporting a successful wrong-location edit.
+    /// history snapshot instead of reporting a successful wrong-location edit. A tracked
+    /// insertion is now cut in two at the offset instead (issue #1298; DS340); a move
+    /// destination still refuses.
     /// </summary>
     [Theory]
-    [InlineData("ins", true)]
+    [InlineData("moveTo", true)]
     [InlineData("moveTo", false)]
     public void DS339_InsertNote_InsideVisibleRevision_FailsClosedWithoutMutation(
         string revisionName, bool footnote)
@@ -588,6 +590,7 @@ public class DocxSessionNoteAuthoringTests
 
     [Theory]
     [InlineData(2)]
+    [InlineData(4)]
     [InlineData(6)]
     public void DS340_InsertFootnote_AtVisibleRevisionEdge_UsesTheExactOffset(int offset)
     {

@@ -245,31 +245,30 @@ public class DocxSessionPR131RegressionTests
     /// splitter cut the nested run, but <c>MoveInlineChildrenAfter</c> only relocates children
     /// whose START is at or past the offset — so the whole revision wrapper stayed with the
     /// first half and the paragraph silently split at the wrapper's far edge while reporting
-    /// success. Splitting a revision wrapper needs revision semantics this op does not own, so
-    /// it refuses instead.
+    /// success. The split now cuts the insertion in two at the offset (issue #1298), each half
+    /// still the reviewer's insertion.
     /// </summary>
     [Theory]
-    [InlineData(3)]
-    [InlineData(4)]
-    [InlineData(5)]
-    public void DS095_SplitParagraph_InsideTrackedInsertion_FailsClosedWithoutMutation(int offset)
+    [InlineData(3, "AAB", "BBBCC")]
+    [InlineData(4, "AABB", "BBCC")]
+    [InlineData(5, "AABBB", "BCC")]
+    public void DS095_SplitParagraph_InsideTrackedInsertion_SplitsTheInsertionExactly(
+        int offset, string expectedFirst, string expectedSecond)
     {
         using var session = new DocxSession(BuildParagraphWithTrackedInsertion());
         var anchor = FirstBodyParagraph(session).Anchor.Id;
         Assert.Equal("AABBBBCC", session.GetAnchorInfo(anchor)?.TextPreview);
-        var before = session.GetPackageContentHash();
-        var version = session.Version;
-        var undoCount = session.UndoCount;
 
         var result = session.SplitParagraph(anchor, offset);
 
-        Assert.False(result.Success);
-        Assert.Equal(EditErrorCode.UnsupportedInlineBoundary, result.Error!.Code);
-        Assert.Equal(before, session.GetPackageContentHash());
-        Assert.Equal(version, session.Version);
-        Assert.Equal(undoCount, session.UndoCount);
-        Assert.Single(BodyParagraphs(session));
-        Assert.Equal("AABBBBCC", session.GetAnchorInfo(anchor)?.TextPreview);
+        Assert.True(result.Success, $"{result.Error?.Code}/{result.Error?.Message}");
+        Assert.Equal(expectedFirst, session.GetAnchorInfo(anchor)?.TextPreview);
+        Assert.Equal(expectedSecond, session.GetAnchorInfo(result.Created[0].Id)?.TextPreview);
+        Assert.All(session.ListRevisions(), revision =>
+        {
+            Assert.Equal("Reviewer", revision.Author);
+            Assert.Equal(RevisionResolutionStatus.Supported, revision.ResolutionStatus);
+        });
     }
 
     [Theory]

@@ -3549,6 +3549,56 @@ The Docxodus rule is `laterNotesClosed` in `PaginationEngine.flowToPages`
 `prepareCurrentContinuation` moves the notes deferred to a page on with a carried note that runs on
 again; `finishPage` hands them back when the last body page lets the carried note end.
 
+## Splitting a paragraph: the new paragraph mark ends the first half (issues #1297, #1298)
+
+Word's tracked Enter marks the pilcrow that now ends the text *before* the cursor as inserted.
+`TestFiles/RP/RP006-Inserted-Paragraph-Mark.docx` shows the shape:
+
+```xml
+<w:p>
+  <w:pPr><w:rPr><w:ins w:id="0" w:author="Eric White" w:date="2017-03-24T21:58:00Z"/></w:rPr></w:pPr>
+  <w:r><w:t xml:space="preserve">Video provides a powerful way to help you prove your point. </w:t></w:r>
+</w:p>
+<w:p><w:r><w:t>When you click Online Video, …</w:t></w:r></w:p>
+```
+
+So the original mark goes on ending the second half, together with what belongs to the mark
+alone: its own revision (`w:pPr/w:rPr/w:ins` or `w:del`) and, for a paragraph that ends a section,
+the section's `w:sectPr` (a copy on the first half would add a section). Ordinary paragraph
+properties apply to both halves.
+Rejecting an inserted mark joins its paragraph into the next one. Which paragraph's properties
+the joined paragraph keeps differs between implementations:
+
+| Reject an inserted mark between P1 (`jc=center`, mark inserted) and P2 (`jc=right`) | Joined paragraph keeps |
+|---|---|
+| Word | unmeasured: RP006 and RP008 have the same properties on both sides, so they cannot tell |
+| LibreOffice (measured in review with the repository's headless listener) | P1's `w:pPr` (`center`) |
+| Docxodus (`RevisionOps.MergeParagraphWithNext`; `RevisionProcessor`'s coalescing takes the last member's `w:pPr`) | P2's `w:pPr` (`right`) |
+
+The split design gives the same answer either way. The first half keeps the original paragraph's
+properties, the ones LibreOffice keeps. Whatever the split changed on the second half, the one
+Docxodus keeps, is recorded as the editor's own property change, which reject-all undoes. So on
+every row of issues #1297 and #1298, reject-all gives back the original paragraph in both.
+
+| Split of a paragraph whose mark Alice inserted | Mark revision on | Reject everything |
+|---|---|---|
+| Copied onto both marks (Docxodus before #1297) | both, one shared `w:id` | ambiguous; nothing resolves individually |
+| Left on the first half's new mark | first half | undoes the user's untracked split, keeps Alice's break |
+| On the second half's original mark (Docxodus now) | second half | keeps the untracked split, removes Alice's break |
+
+The same rule explains Enter at the end of a heading: the empty second paragraph holds the
+heading's original mark in the heading's next style. Rejecting Alice's insertion of that mark
+joins the empty paragraph into the following one, and the heading keeps its style. Under
+tracking, Docxodus records whatever the split changed on the second half (the page break left
+on the first half, the next style, the dropped mark formatting) as the editor's
+`w:pPrChange`/`w:rPrChange`. Rejecting everything then restores the original paragraph's
+properties. A pending property change the paragraph already had keeps its baseline instead, and
+it survives the next-style rebuild for that reason; otherwise the editor's change would record the
+heading as the baseline, and reject would keep the heading that the pending change should undo.
+
+Code: `DocxSession.SplitParagraph`, `TrackSplitOffProperties`, `RemoveMarkOwnedProperties`.
+Tests: `DocxSessionClonedRevisionTests` (RID003, RID004, RID007, RID010, RID011, RID020, RID022).
+
 ## Hidden paragraph mark: which paragraph's keep properties govern the joined block (issue #1294)
 
 A paragraph whose mark is hidden (`w:pPr/w:rPr/w:vanish`) is joined to the paragraph after it, the

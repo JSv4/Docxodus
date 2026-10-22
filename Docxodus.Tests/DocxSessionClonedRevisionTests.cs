@@ -265,6 +265,291 @@ public class DocxSessionClonedRevisionTests
         AssertRevisionIdsDistinct(session, expectedCount: null);
     }
 
+    // ─── Splits under tracking and inside a tracked insertion (#1298) ─────
+
+    private const string SignHere = "<w:p><w:r><w:t>Sign here today</w:t></w:r></w:p>";
+
+    /// <summary>"Pay within thirty days of invoice." with Carol's insertion in the middle.</summary>
+    private const string CarolsInsertion =
+        "<w:p><w:r><w:t xml:space=\"preserve\">Pay </w:t></w:r>" +
+        "<w:ins w:id=\"12\" w:author=\"Carol\" w:date=\"2025-03-04T15:30:00Z\">" +
+        "<w:r><w:t xml:space=\"preserve\">within thirty days </w:t></w:r></w:ins>" +
+        "<w:r><w:t>of invoice.</w:t></w:r></w:p>";
+
+    /// <summary>Word records a tracked Enter as an insertion of the paragraph mark that now ends
+    /// the first half (TestFiles/RP/RP006-Inserted-Paragraph-Mark.docx).</summary>
+    [Fact]
+    public void RID010_TrackedSplit_RecordsTheBreakAsTheEditorsInsertedParagraphMark()
+    {
+        using var session = Open(SignHere, TrackedChangeMode.RenderInline);
+
+        var result = session.SplitParagraph(FirstParagraph(session), 10);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var paragraphs = Body(session).Elements(W.p).ToList();
+        Assert.Equal("Bob", (string?)paragraphs[0].Element(W.pPr)?.Element(W.rPr)?.Element(W.ins)?.Attribute(W.author));
+        Assert.Null(paragraphs[1].Element(W.pPr));
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.Equal(RevisionFamily.ParagraphMark, revision.Family);
+        Assert.Equal("Bob", revision.Author);
+        AssertOutcomes(session,
+            accepted: new[] { "p: Sign here ", "p: today" },
+            rejected: new[] { "p: Sign here |today" });
+    }
+
+    /// <summary>
+    /// The second half keeps the original paragraph mark, and rejecting the new mark joins the
+    /// first half into it, so whatever the split changed on the second half must be tracked
+    /// too: the page break stays with the first half, and a heading's Enter starts the next
+    /// style. Rejecting everything then gives back the original paragraph's properties exactly.
+    /// </summary>
+    [Theory]
+    [InlineData("<w:pageBreakBefore/><w:jc w:val=\"center\"/>", 5,
+        new[] { "p[center,pageBreakBefore]: Terms", "p[center]: apply", "p: after" },
+        new[] { "p[center,pageBreakBefore]: Terms|apply", "p: after" })]
+    [InlineData("<w:pStyle w:val=\"Heading1\"/><w:rPr><w:b/></w:rPr>", 10,
+        new[] { "p[Heading1]: Termsapply", "p[Normal]:", "p: after" },
+        new[] { "p[Heading1]: Termsapply", "p: after" })]
+    [InlineData("<w:pStyle w:val=\"Heading1\"/><w:rPr><w:b/></w:rPr>", 5,
+        new[] { "p[Heading1]: Terms", "p[Heading1]: apply", "p: after" },
+        new[] { "p[Heading1]: Terms|apply", "p: after" })]
+    [InlineData("<w:pStyle w:val=\"Heading1\"/><w:rPr><w:b/></w:rPr>", 0,
+        new[] { "p[Heading1]:", "p[Heading1]: Termsapply", "p: after" },
+        new[] { "p[Heading1]: Termsapply", "p: after" })]
+    public void RID011_TrackedSplit_RejectRestoresTheOriginalParagraphProperties(
+        string paragraphProperties, int offset, string[] accepted, string[] rejected)
+    {
+        var original = $"<w:pPr>{paragraphProperties}</w:pPr>";
+        using var session = Open(
+            $"<w:p>{original}<w:r><w:t>Termsapply</w:t></w:r></w:p><w:p><w:r><w:t>after</w:t></w:r></w:p>",
+            TrackedChangeMode.RenderInline, stylesXml: HeadingStyles);
+
+        var result = session.SplitParagraph(FirstParagraph(session), offset);
+
+        Assert.True(result.Success, result.Error?.Message);
+        AssertRevisionIdsDistinct(session, expectedCount: null);
+        AssertOutcomes(session, accepted, rejected);
+        Assert.True(session.RejectAllRevisions().Success);
+        var restored = Body(session).Elements(W.p).First().Element(W.pPr)!;
+        var expected = XElement.Parse($"<w:p xmlns:w=\"{W.w}\">{original}</w:p>").Element(W.pPr)!;
+        Assert.True(XNode.DeepEquals(expected, restored), restored.ToString());
+    }
+
+    [Theory]
+    [InlineData(TrackedChangeMode.RenderInline, "p: Pay |of invoice.")]
+    [InlineData(TrackedChangeMode.Accept, "p: Pay ", "p: of invoice.")]
+    public void RID012_SplitInsideATrackedInsertion_LeavesEachPartWithItsAuthor(
+        TrackedChangeMode mode, params string[] rejected)
+    {
+        using var session = Open(CarolsInsertion, mode);
+
+        var result = session.SplitParagraph(FirstParagraph(session), 11);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var paragraphs = Body(session).Elements(W.p).ToList();
+        Assert.Equal(new[] { "within ", "thirty days " }, paragraphs.Select(p =>
+            string.Concat(p.Elements(W.ins).Descendants(W.t).Select(t => t.Value))));
+        Assert.All(paragraphs.SelectMany(p => p.Elements(W.ins)),
+            ins => Assert.Equal("Carol", (string?)ins.Attribute(W.author)));
+        AssertRevisionIdsDistinct(session, expectedCount: mode == TrackedChangeMode.RenderInline ? 3 : 2);
+        AssertOutcomes(session,
+            accepted: new[] { "p: Pay |within ", "p: thirty days |of invoice." },
+            rejected: rejected);
+    }
+
+    /// <summary>A paragraph that ends a section carries the section's <c>w:sectPr</c> on its mark.
+    /// The original mark ends the second half, so the section break goes there alone; a copy on
+    /// the first half too would add a section.</summary>
+    [Theory]
+    [InlineData(TrackedChangeMode.Accept, "", 3)]
+    [InlineData(TrackedChangeMode.RenderInline, "", 3)]
+    [InlineData(TrackedChangeMode.Accept, "<w:pStyle w:val=\"Heading1\"/>", 6)]
+    [InlineData(TrackedChangeMode.RenderInline, "<w:pStyle w:val=\"Heading1\"/>", 6)]
+    public void RID020_SplitOfASectionsLastParagraph_KeepsOneSectionBreakOnTheSecondHalf(
+        TrackedChangeMode mode, string style, int offset)
+    {
+        using var session = Open(
+            $"<w:p><w:pPr>{style}<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr></w:pPr>" +
+            "<w:r><w:t>abcdef</w:t></w:r></w:p><w:p><w:r><w:t>after</w:t></w:r></w:p>", mode, stylesXml: HeadingStyles);
+
+        var result = session.SplitParagraph(FirstParagraph(session), offset);
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Equal(new[] { false, true, false }, Body(session).Elements(W.p)
+            .Select(p => p.Element(W.pPr)?.Element(W.sectPr) is not null));
+        if (mode != TrackedChangeMode.RenderInline) return;
+        Assert.True(session.RejectAllRevisions().Success);
+        Assert.Equal(new[] { true, false }, Body(session).Elements(W.p)
+            .Select(p => p.Element(W.pPr)?.Element(W.sectPr) is not null));
+    }
+
+    /// <summary>
+    /// Enter at the end of a heading whose heading style, or mark formatting, is Alice's pending
+    /// change: the second half starts in the next style, but Alice's change must still be there to
+    /// reject, so reject-all takes the paragraph back to what it was before her change.
+    /// </summary>
+    [Theory]
+    [InlineData("<w:pStyle w:val=\"Heading1\"/><w:pPrChange w:id=\"51\" " + Alice + "><w:pPr/></w:pPrChange>",
+        "<w:pPr/>")]
+    [InlineData("<w:pStyle w:val=\"Heading1\"/><w:rPr><w:b/><w:rPrChange w:id=\"52\" " + Alice +
+        "><w:rPr/></w:rPrChange></w:rPr>", "<w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr>")]
+    public void RID022_TrackedEnterAfterAHeadingWithAPendingChange_RejectStillUndoesThatChange(
+        string paragraphProperties, string rejectedProperties)
+    {
+        using var session = Open(
+            $"<w:p><w:pPr>{paragraphProperties}</w:pPr><w:r><w:t>Terms</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>after</w:t></w:r></w:p>",
+            TrackedChangeMode.RenderInline, stylesXml: HeadingStyles);
+
+        var result = session.SplitParagraph(FirstParagraph(session), "Terms".Length);
+
+        Assert.True(result.Success, result.Error?.Message);
+        AssertRevisionIdsDistinct(session, expectedCount: null);
+        Assert.True(session.RejectAllRevisions().Success);
+        var restored = Body(session).Elements(W.p).First();
+        Assert.Equal("Terms", string.Concat(restored.Descendants(W.t).Select(t => t.Value)));
+        var expected = XElement.Parse($"<w:p xmlns:w=\"{W.w}\">{rejectedProperties}</w:p>").Element(W.pPr)!;
+        var actual = restored.Element(W.pPr) ?? new XElement(W.pPr);
+        Assert.True(XNode.DeepEquals(expected, actual), actual.ToString());
+    }
+
+    /// <summary>A tracked Enter that changes nothing but the break lists exactly one revision,
+    /// whatever direct properties the paragraph has and whichever story it is in.</summary>
+    [Theory]
+    [InlineData("body", "<w:jc w:val=\"center\"/>")]
+    [InlineData("body", "<w:pStyle w:val=\"Quote\"/>")]
+    [InlineData("body", "<w:spacing w:after=\"240\"/>")]
+    [InlineData("cell", "<w:jc w:val=\"center\"/>")]
+    [InlineData("header", "")]
+    [InlineData("footnote", "")]
+    public void RID021_PlainTrackedEnter_ListsOnlyTheBreak(string story, string paragraphProperties)
+    {
+        var paragraph = $"<w:p><w:pPr>{paragraphProperties}</w:pPr><w:r><w:t>Sign here today</w:t></w:r></w:p>";
+        using var session = Open(story == "cell"
+                ? "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"2000\"/>" +
+                  $"</w:tblGrid><w:tr><w:tc>{paragraph}</w:tc></w:tr></w:tbl><w:p/>"
+                : paragraph,
+            TrackedChangeMode.Accept);
+        var body = FirstParagraph(session);
+        var scope = "body";
+        if (story == "header")
+        {
+            Assert.True(session.SetHeaderText(body, HeaderFooterKind.Default, "Sign here today").Success);
+            scope = "hdr1";
+        }
+        else if (story == "footnote")
+        {
+            Assert.True(session.InsertFootnote(body, 0, "Sign here today").Success);
+            scope = "fn";
+        }
+        var target = session.Project().AnchorIndex.Values.Select(v => v.Anchor)
+            .First(a => a.Kind == "p" && (story == "cell" || a.Scope == scope)
+                && session.GetAnchorInfo(a.Id)?.TextPreview?.Contains("Sign here today") == true).Id;
+        session.SetTrackedChanges(TrackedChangeMode.RenderInline);
+
+        var result = session.SplitParagraph(target,
+            session.GetAnchorInfo(target)!.TextPreview!.IndexOf("today", StringComparison.Ordinal));
+
+        Assert.True(result.Success, result.Error?.Message);
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.Equal(RevisionFamily.ParagraphMark, revision.Family);
+    }
+
+    [Theory]
+    [InlineData(TrackedChangeMode.Accept)]
+    [InlineData(TrackedChangeMode.RenderInline)]
+    public void RID023_SplitInsideATrackedInsertionInAHyperlink_LeavesEachPartWithItsAuthor(TrackedChangeMode mode)
+    {
+        using var session = Open(
+            "<w:p><w:r><w:t xml:space=\"preserve\">Pay </w:t></w:r><w:hyperlink w:anchor=\"terms\">" +
+            "<w:ins w:id=\"12\" w:author=\"Carol\" w:date=\"2025-03-04T15:30:00Z\">" +
+            "<w:r><w:t xml:space=\"preserve\">within thirty days </w:t></w:r></w:ins></w:hyperlink>" +
+            "<w:r><w:t>of invoice.</w:t></w:r></w:p>", mode);
+
+        var result = session.SplitParagraph(FirstParagraph(session), 11);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var paragraphs = Body(session).Elements(W.p).ToList();
+        Assert.Equal(new[] { "within ", "thirty days " }, paragraphs.Select(p =>
+            string.Concat(p.Elements(W.hyperlink).Elements(W.ins).Descendants(W.t).Select(t => t.Value))));
+        Assert.All(paragraphs.SelectMany(p => p.Descendants(W.ins).Where(ins => ins.Parent!.Name == W.hyperlink)),
+            ins => Assert.Equal("Carol", (string?)ins.Attribute(W.author)));
+        AssertRevisionIdsDistinct(session, expectedCount: mode == TrackedChangeMode.RenderInline ? 3 : 2);
+        AssertOutcomes(session,
+            accepted: new[] { "p: Pay |within ", "p: thirty days |of invoice." },
+            rejected: mode == TrackedChangeMode.RenderInline
+                ? new[] { "p: Pay |of invoice." }
+                : new[] { "p: Pay ", "p: of invoice." });
+    }
+
+    [Fact]
+    public void RID024_FootnoteInsideATrackedInsertion_CutsItIntoTwoRevisions()
+    {
+        using var session = Open(CarolsInsertion, TrackedChangeMode.Accept);
+
+        var result = session.InsertFootnote(FirstParagraph(session), 11, "See the schedule.");
+
+        Assert.True(result.Success, result.Error?.Message);
+        AssertRevisionIdsDistinct(session, expectedCount: 2);
+        AssertOutcomes(session,
+            accepted: new[] { "p: Pay |within |^|thirty days |of invoice." },
+            rejected: new[] { "p: Pay |^|of invoice." });
+    }
+
+    /// <summary>
+    /// One author's table edits within one timestamp (Word dates have minute resolution) list as
+    /// one revision only when together they are a column resize: the grid, and every cell's width
+    /// alone, with the table's width or layout at most. A shading of every cell made in the same
+    /// minute is a revision of its own, and so is a row change.
+    /// </summary>
+    [Theory]
+    [InlineData("<w:tcW w:w=\"3000\" w:type=\"dxa\"/>", false, false, 1)]
+    [InlineData("<w:tcW w:w=\"3000\" w:type=\"dxa\"/>", true, false, 1)]
+    [InlineData("<w:tcW w:w=\"2000\" w:type=\"dxa\"/><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FF0000\"/>",
+        false, false, 2)]
+    [InlineData("<w:tcW w:w=\"2000\" w:type=\"dxa\"/><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FF0000\"/>",
+        false, true, 3)]
+    public void RID028_SameStampTableEdits_ListAsOneRevisionOnlyWhenTheyAreAColumnResize(
+        string cellProperties, bool tableWidthChange, bool rowChange, int expectedRevisions)
+    {
+        int id = 20;
+        string Change(string name, string baseline) => $"<w:{name} w:id=\"{id++}\" {Alice}>{baseline}</w:{name}>";
+        string Cell(string text) =>
+            $"<w:tc><w:tcPr>{cellProperties}{Change("tcPrChange", "<w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr>")}" +
+            $"</w:tcPr><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        var body =
+            "<w:tbl><w:tblPr><w:tblW w:w=\"6000\" w:type=\"dxa\"/>" +
+            (tableWidthChange ? Change("tblPrChange", "<w:tblPr><w:tblW w:w=\"4000\" w:type=\"dxa\"/></w:tblPr>") : "") +
+            "</w:tblPr><w:tblGrid><w:gridCol w:w=\"3000\"/><w:gridCol w:w=\"3000\"/>" +
+            Change("tblGridChange", "<w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/></w:tblGrid>") +
+            "</w:tblGrid><w:tr>" +
+            (rowChange ? $"<w:trPr><w:cantSplit/>{Change("trPrChange", "<w:trPr/>")}</w:trPr>" : "") +
+            Cell("a") + Cell("b") + "</w:tr></w:tbl><w:p/>";
+        using var session = Open(body, TrackedChangeMode.Accept);
+
+        Assert.Equal(expectedRevisions, session.ListRevisions().Count);
+        AssertRevisionIdsDistinct(session, expectedCount: null);
+    }
+
+    [Fact]
+    public void RID013_CrossReferenceInsideATrackedInsertion_LandsAtTheOffset()
+    {
+        using var session = Open(CarolsInsertion +
+            "<w:p><w:bookmarkStart w:id=\"1\" w:name=\"Target\"/><w:r><w:t>target</w:t></w:r>" +
+            "<w:bookmarkEnd w:id=\"1\"/></w:p>", TrackedChangeMode.Accept);
+
+        var result = session.InsertCrossReference(FirstParagraph(session), 11, "Target");
+
+        Assert.True(result.Success, result.Error?.Message);
+        AssertRevisionIdsDistinct(session, expectedCount: 2);
+        var paragraph = Body(session).Elements(W.p).First();
+        var insertions = paragraph.Elements(W.ins).ToList();
+        Assert.Equal(new[] { "within ", "thirty days " },
+            insertions.Select(ins => string.Concat(ins.Descendants(W.t).Select(t => t.Value))));
+        Assert.Contains(paragraph.Descendants().Where(e => e.Name == W.fldSimple || e.Name == W.instrText),
+            field => field.IsAfter(insertions[0]) && field.IsBefore(insertions[1]));
+    }
+
     // ─── Shared fixture plumbing ──────────────────────────────────────────
 
     /// <summary>A heading whose next style is Normal, as in Word's built-in styles.</summary>
@@ -382,9 +667,11 @@ public class DocxSessionClonedRevisionTests
         var properties = new[] { W.pStyle, W.jc }
             .Select(name => (string?)paragraph.Element(W.pPr)?.Element(name)?.Attribute(W.val))
             .OfType<string>().ToList();
+        if (paragraph.Element(W.pPr)?.Element(W.pageBreakBefore) is not null) properties.Add("pageBreakBefore");
         var runs = paragraph.Descendants(W.r).Select(run =>
         {
-            var text = string.Concat(run.Elements(W.t).Select(t => t.Value));
+            var text = string.Concat(run.Elements(W.t).Select(t => t.Value))
+                + (run.Element(W.footnoteReference) is null ? "" : "^");
             var toggles = new[] { W.b, W.i }.Where(name => run.Element(W.rPr)?.Element(name) is not null)
                 .Select(name => name.LocalName).ToList();
             return toggles.Count == 0 ? text : $"{text}{{{string.Join(",", toggles)}}}";

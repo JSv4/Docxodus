@@ -564,13 +564,25 @@ Two conventions worth pinning down because they affect agent reasoning:
 - **A split leaves a paragraph-mark revision on the mark it describes.** As with Word's Enter, the
   new paragraph mark ends the first half and the original one goes on ending the second, even when
   the split is at the very end and the second half starts empty in the next style. A pending
-  `w:pPr/w:rPr/w:ins` or `w:del` stays on the original mark only. Both halves keep a pending
+  `w:pPr/w:rPr/w:ins` or `w:del` stays on the original mark only, as does the `w:sectPr` of a
+  paragraph that ends a section (issue #1298). Both halves keep a pending
   `w:pPrChange`. Every copied revision marker gets its own `w:id` from
   `RevisionOps.RenumberCopiedRevisions` (issue #1297), as in every other edit that copies run,
   paragraph or cell properties: run splits, tracked replacements and fills, tracked moves (and the
   comments they copy), new table cells and the tracked picture edits. The copy, not the original,
   takes the new ids: the second half of a split paragraph and the text after a run split keep
   theirs. Raw XML edits make the allocator re-scan the document before its next id.
+- **A tracked split is Word's tracked Enter.** Under `RenderInline` the new mark that ends the first
+  half is the editor's `w:pPr/w:rPr/w:ins`. Rejecting it joins the first half into the second, which
+  keeps its own properties, so anything the split changed on the second half (the page break that
+  stays on the first half, a heading's next style, the mark formatting a fresh paragraph drops) is
+  recorded as the editor's `w:pPrChange`/`w:rPrChange` on it. Rejecting everything returns the
+  original paragraph's text and properties; the restored paragraph carries the second half's anchor
+  (issue #1298). See `docs/ooxml_corner_cases.md`, "Splitting a paragraph".
+- **A split, note or cross-reference may land inside a tracked insertion.** The `w:ins` is
+  cut in two at the offset like a hyperlink, and the second part keeps the author and date under a
+  fresh `w:id`. Other revision wrappers (`w:moveTo`, `w:del`) stay atomic: an offset inside one is
+  refused with `UnsupportedInlineBoundary`.
 - **`MergeParagraphs` lets the first anchor absorb the second.** Symmetric reason: the first anchor is to the left in reading order and is more likely to be the one a caller has cached.
 
 **Tracked-change mode shifts the semantics for `ReplaceText` and block deletion (`DeleteBlock`, `DeleteRange`, and `DeleteSection`).** When `Settings.TrackedChanges = RenderInline`, supported deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. `ReplaceText` deletes each live run where it sits — inside hyperlinks, fields, inline controls and other authors' insertions (`w:ins > w:del`, so the deletion rejects on its own) — un-inserts the session author's own pending runs, keeps zero-width markers (bookmark/comment ranges, note and comment reference runs) in place, and inserts the replacement after the last superseded run, ahead of any trailing markers. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged. The mode is switchable mid-session — see "Switching tracked-changes mode mid-session" below.

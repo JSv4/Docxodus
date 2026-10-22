@@ -31,6 +31,19 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `SplitParagraph`, the editor's Enter key, works with tracked changes on and inside a tracked
+  insertion (#1298). Under `TrackedChangeMode.RenderInline` it was refused on every document; it now
+  records the break as Word does, as an insertion of the paragraph mark that ends the first half,
+  and also tracks what the split changes on the second half (the page break that stays on the first
+  half, a heading's next style), so rejecting everything gives back the original paragraph. An
+  offset inside a `w:ins` was refused in every mode; the insertion is now cut in two, each part still
+  the original author's under its own `w:id`. `InsertFootnote`, `InsertEndnote` and
+  `InsertCrossReference` share that boundary and now place their reference inside an insertion
+  instead of refusing; that includes the `w:hyperlink > w:ins` Word writes for text typed into a link
+  under tracking. Offsets inside a `w:moveTo` are still refused. Splitting the last paragraph
+  of a section, tracked or not, no longer copies its `w:sectPr` onto both halves, which added a
+  section; the break stays with the second half, which keeps the original paragraph mark.
+
 - Paginated HTML: a block merged through hidden paragraph marks (a run-in heading) now takes `data-keep-with-next` and `data-keep-lines` from its closing paragraph instead of the first, so consecutive run-in sections no longer chain into one unbreakable group, and an explicit `keepNext`/`keepLines` off on the closing paragraph is honored (#1294).
 - `DocxSession` edits that copy a run's, paragraph's or cell's properties no longer copy the
   tracked-change ids inside them (#1297). Formatting part of a run, a tracked replacement inside a

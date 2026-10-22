@@ -1615,6 +1615,22 @@ internal static class RevisionOps
         && (marker.Ancestors(W.del).Any(represented.Contains)
             || marker.Ancestors(W.moveFrom).Any(represented.Contains));
 
+    /// <summary>Whether the properties a <c>*PrChange</c> sits in differ from its stored baseline
+    /// only in <paramref name="names"/>.</summary>
+    private static bool ChangesOnly(XElement change, params XName[] names)
+    {
+        XElement Rest(XElement? properties)
+        {
+            var rest = new XElement(change.Name, properties?.Elements()
+                .Where(child => !names.Contains(child.Name) && !PropsChangeNames.Contains(child.Name)));
+            foreach (var element in rest.DescendantsAndSelf())
+                element.Attributes().Where(a => a.Name.Namespace == PtOpenXml.pt).Remove();
+            return rest;
+        }
+        var live = change.Parent;
+        return live is not null && XNode.DeepEquals(Rest(live), Rest(change.Element(live.Name)));
+    }
+
     /// <summary>
     /// Coalesce only property revisions that have a concrete table-operation topology. This
     /// preserves one-operation/one-entry semantics for row shading and column-width edits without
@@ -1650,12 +1666,19 @@ internal static class RevisionOps
                 .Where(cell => cell is not null)
                 .Select(cell => cell!)
                 .ToHashSet();
+            // A column-width edit changes the grid and every cell's width and nothing else of the
+            // cells; the table's own properties change only when its total width or layout did,
+            // so they may be absent. Anything more under the same stamp (Word dates have minute
+            // resolution) is a separate edit, such as shading the whole table.
+            var stampUnits = remaining.SelectMany(group => group.Units).ToList();
             bool completeColumnWidthTopology = tableCells.Count > 0
                 && tableCells.SetEquals(changedCells)
                 && tableLevel.Any(group => group.Units.Any(unit =>
                     unit.Element.Name == W.tblGridChange))
-                && tableLevel.Any(group => group.Units.Any(unit =>
-                    unit.Element.Name == W.tblPrChange));
+                && stampUnits.Where(unit => unit.Element.Name == W.tcPrChange)
+                    .All(unit => ChangesOnly(unit.Element, W.tcW))
+                && stampUnits.Where(unit => unit.Element.Name == W.tblPrChange)
+                    .All(unit => ChangesOnly(unit.Element, W.tblW, W.tblLayout));
             if (completeColumnWidthTopology)
             {
                 var structural = remaining.Where(group => group.Units.All(unit =>
