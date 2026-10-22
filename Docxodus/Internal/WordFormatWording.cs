@@ -267,8 +267,17 @@ internal static class WordFormatWording
     {
         if (Get(rPr, W.color, W.themeColor) is { } theme)
         {
-            return ThemeColors.TryGetValue(theme, out var themeName) ? themeName
+            var themeName = ThemeColors.TryGetValue(theme, out var known) ? known
                 : theme.StartsWith("accent", StringComparison.Ordinal) ? $"Accent {theme.Substring(6)}" : theme;
+            // A shade or tint keeps that fraction of the colour (hex 00-FF): Word names the rest.
+            int Percent(string hex) => int.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var kept)
+                ? (int)Math.Round(100 - kept / 2.55)
+                : 0;
+            if (Get(rPr, W.color, W.themeShade) is { Length: 2 } shade && Percent(shade) > 0)
+                return $"{themeName}, Darker {Percent(shade)}%";
+            if (Get(rPr, W.color, W.themeTint) is { Length: 2 } tint && Percent(tint) > 0)
+                return $"{themeName}, Lighter {Percent(tint)}%";
+            return themeName;
         }
         var value = Get(rPr, W.color) ?? "auto";
         if (StandardColors.TryGetValue(value, out var name))

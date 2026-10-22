@@ -50,6 +50,11 @@ public class MarkupBalloonTests
     [InlineData("<w:color w:val='7030A0'/><w:u w:val='single'/>", "", "Font color: Purple, Underline")]
     [InlineData("<w:color w:val='00FF7F'/>", "", "Font color: Custom Color(RGB(0,255,127))")]
     [InlineData("<w:vertAlign w:val='subscript'/>", "<w:highlight w:val='cyan'/>", "Font: Subscript, Not Highlight")]
+    // A theme colour's shade or tint is part of the colour.
+    [InlineData("<w:color w:val='2F5496' w:themeColor='accent1' w:themeShade='BF'/>", "<w:color w:val='4472C4' w:themeColor='accent1'/>",
+        "Font color: Accent 1, Darker 25%")]
+    [InlineData("<w:color w:val='8EAADB' w:themeColor='accent1' w:themeTint='99'/>", "<w:color w:val='4472C4' w:themeColor='accent1'/>",
+        "Font color: Accent 1, Lighter 40%")]
     // A character style is described by what it changes.
     [InlineData("<w:rStyle w:val='Emphatic'/>", "", "Font: Italic")]
     [InlineData("<w:caps/>", "<w:caps/>", "")]

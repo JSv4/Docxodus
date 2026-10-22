@@ -212,7 +212,7 @@ commas.
 | Size | `16 pt` |
 | Toggles | `Bold` / `Not Bold`, `Italic`, `All caps`, `Small caps`, `Hidden` |
 | Vertical position | `Superscript` / `Subscript` / `Not Superscript/ Subscript` |
-| Colour | `Font color: Red`, from Word's standard-colour names; `Text 1`, `Accent 2`… for theme colours; `Custom Color(RGB(r,g,b))` otherwise |
+| Colour | `Font color: Red`, from Word's standard-colour names; `Text 1`, `Accent 2`… for theme colours, with `, Darker 25%` or `, Lighter 40%` for a theme shade or tint; `Custom Color(RGB(r,g,b))` otherwise |
 | Underline | `Underline` / `Double underline` / `No underline` |
 | Strikethrough | `Strikethrough`, `Double strikethrough` (or `Not …`) |
 | Highlight | `Highlight` / `Not Highlight` |
