@@ -1046,13 +1046,20 @@ export class DocxSession {
    * `hdr{N}`) come back in `EditResult.created` — insert a page number into one with
    * {@link insertPageNumberField}. `"first"` sets the section's title-page flag; `"even"` sets the
    * document's even/odd-headers flag.
+   *
+   * Under tracked changes the old content is kept as a deletion and the new is an insertion. Over
+   * an existing story the story's last paragraph stays and takes the last new paragraph's text, so
+   * it is reported in `EditResult.modified`, not `created` — use it as the page-number target. A
+   * tracked `"even"` story while the even/odd flag is off, or a story the section inherits from an
+   * earlier section, is refused with `tracked_operation_unsupported`.
    */
   setHeaderText(anchorId: string, kind: HeaderFooterKind, markdown: string): EditResult {
     return JSON.parse(this.wasm.SetHeaderText(this.handle, anchorId, kind, markdown)) as EditResult;
   }
 
   /** Set the running footer story for the section that owns `anchorId` — see {@link setHeaderText};
-   * the created footer-paragraph anchors (scope `ftr{N}`) come back in `EditResult.created`. */
+   * the created footer-paragraph anchors (scope `ftr{N}`) come back in `EditResult.created`, and
+   * under tracked changes over an existing footer the kept last paragraph in `EditResult.modified`. */
   setFooterText(anchorId: string, kind: HeaderFooterKind, markdown: string): EditResult {
     return JSON.parse(this.wasm.SetFooterText(this.handle, anchorId, kind, markdown)) as EditResult;
   }

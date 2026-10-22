@@ -16,7 +16,19 @@ All notable changes to this project will be documented in this file.
   brings back the old header or footer. "Different odd and even pages" is a document setting with
   no revision form in OOXML, so switching it (including writing an even story while it is off) is
   refused with `TrackedOperationUnsupported` and nothing changes. In the browser editor these
-  refusals now reach `onEditFailed`, as refused body edits do, instead of being dropped.
+  refusals now reach `onEditFailed`, as refused body edits do, once per action, and the editor
+  asks for the even/odd or first-page setting before creating any story, so a refusal leaves the
+  document unchanged. A tracked story write is also refused, with nothing changed, when the
+  section inherits that story from an earlier section, and a section edit that folds into another
+  author's pending section change re-credits it to the latest editor.
+
+### Changed
+
+- Header/footer authoring is no longer applied untracked when tracked changes are on (#1299).
+  A tracked `SetHeaderText`/`SetFooterText` over an existing story reports the story's kept last
+  paragraph, which takes the new text, in `EditResult.Modified` rather than `Created`; `Created`
+  lists only the paragraphs added before it. Use that paragraph as the `InsertPageNumberField`
+  target. Untracked results are unchanged.
 
 ## [14.1.0] - 2026-10-21
 

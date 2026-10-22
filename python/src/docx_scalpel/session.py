@@ -1737,6 +1737,12 @@ class DocxSession:
         ``w:headerReference`` if the story of ``kind`` doesn't exist yet, else replaces its
         content. The created header-paragraph anchors (scope ``hdr{N}``) come back in
         ``EditResult.created`` — pass one to :meth:`insert_page_number_field`.
+
+        Under tracked changes the old content is kept as a deletion and the new is an insertion.
+        Over an existing story its last paragraph stays and takes the last new paragraph's text,
+        so it is reported in ``EditResult.modified`` rather than ``created``; use it as the
+        page-number target. A tracked ``EVEN`` story while odd/even pages is off, or a story the
+        section inherits from an earlier one, fails with ``TRACKED_OPERATION_UNSUPPORTED``.
         """
         return EditResult._from_wire(
             self._call(
@@ -1749,7 +1755,8 @@ class DocxSession:
         self, anchor_id: str, kind: HeaderFooterKind, markdown: str
     ) -> EditResult:
         """Set the running footer story for the section that owns ``anchor_id`` — see
-        :meth:`set_header_text`. Created footer-paragraph anchors have scope ``ftr{N}``."""
+        :meth:`set_header_text`. Created footer-paragraph anchors have scope ``ftr{N}``; under
+        tracked changes over an existing footer, the kept last paragraph is in ``modified``."""
         return EditResult._from_wire(
             self._call(
                 "set_footer_text",

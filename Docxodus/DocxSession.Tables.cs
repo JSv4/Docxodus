@@ -307,9 +307,10 @@ public sealed partial class DocxSession
     /// <summary>Run <paramref name="mutate"/> on a live properties element and, under tracking,
     /// record the result as its native <paramref name="changeName"/> revision holding the
     /// properties as they stood before. An element that already carries a pending change keeps
-    /// it, original baseline and attribution alike, so a later reject still restores the original
-    /// properties (the folding <see cref="ApplyFormatToRunTracked"/> does for run formatting); an
-    /// edit that brings the properties back to that baseline resolves the pending change.</summary>
+    /// its stored original baseline, so a later reject still restores the original properties;
+    /// when that pending change is another author's it is re-credited to this edit's author, date
+    /// and a fresh id, since it now carries this edit too. An edit that brings the properties back
+    /// to that baseline resolves the pending change.</summary>
     private void MutateTrackedProperties(XElement properties, XName changeName, RevisionStamp stamp,
         Action mutate, params XName[] excluded)
     {
@@ -333,7 +334,14 @@ public sealed partial class DocxSession
         bool atBaseline = XNode.DeepEquals(baseline, Snapshot(properties));
         if (pending is not null)
         {
-            if (atBaseline) pending.Remove();
+            if (atBaseline)
+                pending.Remove();
+            else if (!string.Equals((string?)pending.Attribute(W.author), stamp.Author, StringComparison.Ordinal))
+                // Another author's pending change now also carries this edit: credit it to the
+                // latest editor (this edit's author, date and a fresh id), keeping the stored
+                // original baseline exactly as it was.
+                pending.ReplaceWith(CreateRevisionEnvelope(changeName, stamp,
+                    pending.Elements().Select(e => new XElement(e)).ToArray()));
             return;
         }
         // Every *PrChange is the last child of its properties element, so appending is schema order.

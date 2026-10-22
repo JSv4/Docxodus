@@ -396,30 +396,54 @@ public class DocxSessionTrackedHeaderFooterTests
         Assert.Equal("Page ", string.Concat(footer.Descendants(W + "t").Select(t => t.Value)));
     }
 
-    [Fact]
-    public void TrackedPageSetup_OnAMidDocumentSection_IsRecordedInThatSection()
+    private const string LetterPage =
+        "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>"
+        + "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/>";
+
+    /// <summary>A package whose body is <paramref name="bodyXml"/> (w:/r: prefixes bound). When
+    /// <paramref name="headerXml"/> is given it becomes a header part, and every <c>{header}</c>
+    /// in the body is replaced by that part's relationship id.</summary>
+    private static byte[] Package(string bodyXml, string? headerXml = null)
     {
+        const string ns = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" "
+            + "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"";
         using var ms = new MemoryStream();
-        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
         {
             var main = doc.AddMainDocumentPart();
             main.AddNewPart<StyleDefinitionsPart>().Styles = new DocumentFormat.OpenXml.Wordprocessing.Styles();
             main.AddNewPart<DocumentSettingsPart>().Settings = new DocumentFormat.OpenXml.Wordprocessing.Settings();
-            static DocumentFormat.OpenXml.Wordprocessing.SectionProperties Letter() => new(
-                new DocumentFormat.OpenXml.Wordprocessing.PageSize { Width = 12240u, Height = 15840u },
-                new DocumentFormat.OpenXml.Wordprocessing.PageMargin
-                    { Top = 1440, Bottom = 1440, Left = 1440, Right = 1440, Header = 720, Footer = 720, Gutter = 0 });
-            main.Document = new DocumentFormat.OpenXml.Wordprocessing.Document(new DocumentFormat.OpenXml.Wordprocessing.Body(
-                new DocumentFormat.OpenXml.Wordprocessing.Paragraph(
-                    new DocumentFormat.OpenXml.Wordprocessing.ParagraphProperties(Letter()),
-                    new DocumentFormat.OpenXml.Wordprocessing.Run(new DocumentFormat.OpenXml.Wordprocessing.Text("First section."))),
-                new DocumentFormat.OpenXml.Wordprocessing.Paragraph(
-                    new DocumentFormat.OpenXml.Wordprocessing.Run(new DocumentFormat.OpenXml.Wordprocessing.Text("Second section."))),
-                Letter()));
+            if (headerXml is not null)
+            {
+                var header = main.AddNewPart<HeaderPart>();
+                using (var writer = new StreamWriter(header.GetStream(FileMode.Create)))
+                    writer.Write($"<w:hdr {ns}>{headerXml}</w:hdr>");
+                bodyXml = bodyXml.Replace("{header}", main.GetIdOfPart(header));
+            }
+            using var mainWriter = new StreamWriter(main.GetStream(FileMode.Create));
+            mainWriter.Write($"<w:document {ns}><w:body>{bodyXml}</w:body></w:document>");
         }
-        using var s = new DocxSession(ms.ToArray(), new DocxSessionSettings
-            { RevisionAuthor = "Bob", TrackedChanges = TrackedChangeMode.RenderInline });
-        var first = s.Project().AnchorIndex.Values.First(v => v.TextPreview == "First section.").Anchor.Id;
+        return ms.ToArray();
+    }
+
+    /// <summary>Two sections: the first ends at "First section." (an inline section break,
+    /// carrying <paramref name="firstSectionExtra"/>), the second is the body's trailing one.</summary>
+    private static byte[] TwoSections(string firstSectionExtra = "", string? headerXml = null) => Package(
+        $"<w:p><w:pPr><w:sectPr>{firstSectionExtra}{LetterPage}</w:sectPr></w:pPr><w:r><w:t>First section.</w:t></w:r></w:p>"
+        + $"<w:p><w:r><w:t>Second section.</w:t></w:r></w:p><w:sectPr>{LetterPage}</w:sectPr>",
+        headerXml);
+
+    private static string BodyAnchor(DocxSession s, string text) =>
+        s.Project().AnchorIndex.Values.First(v => v.Anchor.Scope == "body" && v.TextPreview == text).Anchor.Id;
+
+    private static DocxSession TrackedSession(byte[] bytes) => new(bytes, new DocxSessionSettings
+        { RevisionAuthor = "Bob", TrackedChanges = TrackedChangeMode.RenderInline });
+
+    [Fact]
+    public void TrackedPageSetup_OnAMidDocumentSection_IsRecordedInThatSection()
+    {
+        using var s = TrackedSession(TwoSections());
+        var first = BodyAnchor(s, "First section.");
 
         Assert.True(s.SetPageSetup(first, new PageSetupOp { MarginTopTwips = 720 }).Success);
 
@@ -434,6 +458,66 @@ public class DocxSessionTrackedHeaderFooterTests
         midSectPr = Root(s.Save(), m => m).Descendants(W + "pPr").Elements(W + "sectPr").Single();
         Assert.Equal("1440", (string?)midSectPr.Element(W + "pgMar")!.Attribute(W + "top"));
         Assert.Null(midSectPr.Element(W + "sectPrChange"));
+    }
+
+    [Fact]
+    public void TrackedStory_OnASectionThatInheritsIt_IsRefusedAndChangesNothing()
+    {
+        // The second section shows the first section's header by inheritance. Giving it its own
+        // story means adding a w:headerReference, which no revision can record, so a reject could
+        // never bring the inherited header back.
+        using var s = TrackedSession(TwoSections(
+            "<w:headerReference w:type=\"default\" r:id=\"{header}\"/>",
+            "<w:p><w:r><w:t>Section one header</w:t></w:r></w:p>"));
+        var before = s.Save();
+
+        var result = s.SetHeaderText(BodyAnchor(s, "Second section."), HeaderFooterKind.Default, "Section two header");
+
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.TrackedOperationUnsupported, result.Error!.Code);
+        Assert.Equal(before, s.Save());
+    }
+
+    [Fact]
+    public void TrackedSectionEdit_OverAnotherAuthorsPendingChange_IsRecreditedAndKeepsTheOriginalBaseline()
+    {
+        // Alice narrowed the left margin to 720 as a tracked change; Bob then turns the page.
+        using var s = TrackedSession(Package(
+            "<w:p><w:r><w:t>Body text.</w:t></w:r></w:p><w:sectPr>"
+            + "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>"
+            + "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"720\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/>"
+            + $"<w:sectPrChange w:id=\"77\" w:author=\"Alice\" w:date=\"2026-01-01T00:00:00Z\"><w:sectPr>{LetterPage}</w:sectPr></w:sectPrChange>"
+            + "</w:sectPr>"));
+        var originalBaseline = BodySectPr(s).Element(W + "sectPrChange")!.Element(W + "sectPr")!.ToString();
+
+        Assert.True(s.SetPageSetup(BodyAnchor(s, "Body text."), new PageSetupOp { Landscape = true }).Success);
+
+        var revision = Assert.Single(s.ListRevisions());
+        Assert.Equal("Bob", revision.Author);
+        var change = BodySectPr(s).Element(W + "sectPrChange")!;
+        Assert.NotEqual("77", (string?)change.Attribute(W + "id"));
+        Assert.NotEqual("2026-01-01T00:00:00Z", (string?)change.Attribute(W + "date"));
+        Assert.Equal(originalBaseline, change.Element(W + "sectPr")!.ToString());
+        AssertSchemaValid(s);
+
+        Assert.True(s.RejectAllRevisions().Success);
+        var restored = BodySectPr(s);
+        Assert.Equal("1440", (string?)restored.Element(W + "pgMar")!.Attribute(W + "left"));
+        Assert.Equal("15840", (string?)restored.Element(W + "pgSz")!.Attribute(W + "h"));
+    }
+
+    [Fact]
+    public void TrackedFirstPageOff_OnAFlagThatIsAlreadyOff_RecordsNothing()
+    {
+        // Word writes <w:titlePg w:val="0"/> when the box is cleared: the flag is present but off.
+        using var s = TrackedSession(Package(
+            $"<w:p><w:r><w:t>Body text.</w:t></w:r></w:p><w:sectPr>{LetterPage}<w:titlePg w:val=\"0\"/></w:sectPr>"));
+        var before = s.Save();
+
+        Assert.True(s.SetHeaderFooterKindEnabled(BodyAnchor(s, "Body text."), HeaderFooterKind.First, false).Success);
+
+        Assert.Empty(s.ListRevisions());
+        Assert.Equal(before, s.Save());
     }
 
     [Fact]

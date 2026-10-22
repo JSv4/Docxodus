@@ -27,7 +27,9 @@ public sealed partial class DocxSession
     // the same way GetSectionInfo resolves it (a mid-document section break, else the body's
     // trailing sectPr, creating one if the body has none). The created header/footer paragraph
     // anchors come back in EditResult.Created with a hdr{N}/ftr{N} scope, so a page-number field
-    // can then be inserted into them with InsertPageNumberField. Undo/redo of the part creation
+    // can then be inserted into them with InsertPageNumberField (under tracked changes over an
+    // existing story, the kept last paragraph comes back in Modified instead and is the one to
+    // use). Undo/redo of the part creation
     // is handled by the header/footer reconcile in RestoreSnapshot.
 
     /// <summary>
@@ -48,6 +50,8 @@ public sealed partial class DocxSession
     /// <see cref="EditResult.Created"/>. A <c>w:titlePg</c> it sets is a tracked section change. An
     /// even story while <c>w:evenAndOddHeaders</c> is off is refused with
     /// <see cref="EditErrorCode.TrackedOperationUnsupported"/>: that setting has no revision form.
+    /// So is a story the section inherits from an earlier one, because giving the section its own
+    /// adds a reference no revision can record.
     /// </remarks>
     public EditResult SetHeaderText(string anchorId, HeaderFooterKind kind, string markdownPayload)
         => SetHeaderFooterText(isHeader: true, anchorId, kind, markdownPayload);
@@ -57,7 +61,8 @@ public sealed partial class DocxSession
     /// Behaves exactly like <see cref="SetHeaderText"/> but for the footer part / <c>w:footerReference</c>;
     /// the created footer-paragraph anchors (scope <c>ftr{N}</c>) come back in
     /// <see cref="EditResult.Created"/> — insert a page number into one with
-    /// <see cref="InsertPageNumberField"/>.
+    /// <see cref="InsertPageNumberField"/>. Under tracked changes over an existing footer, the kept
+    /// last paragraph comes back in <see cref="EditResult.Modified"/>; insert the number there.
     /// </summary>
     public EditResult SetFooterText(string anchorId, HeaderFooterKind kind, string markdownPayload)
         => SetHeaderFooterText(isHeader: false, anchorId, kind, markdownPayload);
@@ -195,10 +200,12 @@ public sealed partial class DocxSession
         var settingsRoot = settingsPart?.GetXDocument().Root;
 
         // Already off? Return BEFORE snapshotting (same reasoning as EnsureHeaderFooterVisible).
-        // The element is removed whatever its w:val, so "present" is the test, not "on".
+        // Off is the flag's VALUE, as there: Word writes <w:titlePg w:val="0"/> when the box is
+        // cleared, and removing that changes nothing a reader sees (under tracking it would record
+        // a revision whose accept and reject look the same).
         bool alreadyOff = kind == HeaderFooterKind.First
-            ? sectPr?.Element(W.titlePg) is null
-            : settingsRoot?.Element(W.evenAndOddHeaders) is null;
+            ? sectPr is null || !WordprocessingMLUtil.GetBoolProp(sectPr, W.titlePg)
+            : settingsRoot is null || !WordprocessingMLUtil.GetBoolProp(settingsRoot, W.evenAndOddHeaders);
         if (alreadyOff)
             return new EditResult { Success = true, Modified = new[] { target.Anchor } };
         if (kind == HeaderFooterKind.Even && RefuseTrackedEvenAndOddHeaders(anchorId) is { } evenRefusal)
@@ -268,6 +275,15 @@ public sealed partial class DocxSession
                 && WordprocessingMLUtil.GetBoolProp(settingsRoot, W.evenAndOddHeaders))
             && RefuseTrackedEvenAndOddHeaders(anchorId) is { } evenRefusal)
             return evenRefusal;
+
+        // A section with no story of this kind of its own shows the nearest earlier section's.
+        // Giving it its own story adds a header/footer reference, which no revision can record,
+        // so a reject could never bring the inherited story back.
+        if (tracked && Internal.BlockMetadataOps.GetSectionInfo(_doc!, target) is { } section
+            && (isHeader ? section.HeaderRefs : section.FooterRefs).Any(r => r.Kind == kind && r.Inherited))
+            return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
+                $"this section inherits its {kind} {(isHeader ? "header" : "footer")} from an earlier section; giving it its own adds a reference that cannot be tracked. No changes were made.",
+                anchorId);
 
         // Resolve an existing same-kind story before snapshotting so replacing its root cannot
         // silently remove one end of a cross-boundary bookmark or a still-targeted bookmark.

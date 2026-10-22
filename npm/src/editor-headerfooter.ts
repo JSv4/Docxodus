@@ -188,15 +188,18 @@ export class HeaderFooterRegion {
 
   /** Select (and, if absent, create) the story kind a continuous band shows. */
   setKind(which: BandWhich, kind: HeaderFooterKind): void {
-    this.kinds[which] = kind;
-    if (!this.partUriFor(which, kind)) this.seedStory(which, kind);
     // Selecting first/even IS the user saying "use a different first/even page", so the
     // section's flag must be set even when the part already exists: Word leaves first/even parts
     // behind when those options are switched off, so a real document commonly has the reference
-    // WITHOUT the flag; without this the typed story is saved but never rendered.
-    if (this.bodyAnchorId && kind !== "default") {
-      this.callbacks.parseEdit(this.bridge.EnsureHeaderFooterVisible(this.handle, this.bodyAnchorId, kind));
+    // WITHOUT the flag; without this the typed story is saved but never rendered. The flag goes
+    // first: when the engine refuses it (the even/odd setting under tracked changes), nothing is
+    // seeded and the band stays on the kind it showed.
+    if (this.bodyAnchorId && kind !== "default"
+      && !this.callbacks.parseEdit(this.bridge.EnsureHeaderFooterVisible(this.handle, this.bodyAnchorId, kind)).success) {
+      return;
     }
+    this.kinds[which] = kind;
+    if (!this.partUriFor(which, kind)) this.seedStory(which, kind);
     this.refresh(which);
   }
 
@@ -226,14 +229,16 @@ export class HeaderFooterRegion {
   setKindEnabled(kind: "first" | "even", enabled: boolean): boolean {
     if (!this.bodyAnchorId) return false;
     if (enabled) {
+      // The flag first, so a refusal (the even/odd setting under tracked changes) is reported
+      // once and leaves no seeded stories behind.
+      const res = this.callbacks.parseEdit(this.bridge.EnsureHeaderFooterVisible(this.handle, this.bodyAnchorId, kind));
+      if (!res.success) return false;
       for (const which of ["header", "footer"] as BandWhich[]) {
         // The odd/all-pages story too: once the option is on, its pages need somewhere to
         // type as much as the first/even ones do (Word shows an empty area for both).
         if (!this.partUriFor(which, "default")) this.seedStory(which, "default");
         if (!this.partUriFor(which, kind)) this.seedStory(which, kind);
       }
-      const res = this.callbacks.parseEdit(this.bridge.EnsureHeaderFooterVisible(this.handle, this.bodyAnchorId, kind));
-      if (!res.success) return false;
     } else {
       if (!this.bridge.SetHeaderFooterKindEnabled) return false;
       const res = this.callbacks.parseEdit(this.bridge.SetHeaderFooterKindEnabled(this.handle, this.bodyAnchorId, kind, false));
