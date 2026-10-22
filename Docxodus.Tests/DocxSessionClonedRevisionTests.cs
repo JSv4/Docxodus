@@ -678,6 +678,30 @@ public class DocxSessionClonedRevisionTests
             rejected: new[] { "p: Terms|apply" });
     }
 
+    /// <summary>Section edits fold by the same rule as formatting: Bob reworking his own pending
+    /// section change keeps its id and takes the edit's date, and the baseline stays.</summary>
+    [Fact]
+    public void RID029_TrackedSectionEditOverYourOwnPendingChange_KeepsItsIdAndRefreshesTheDate()
+    {
+        const string letter = "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>";
+        using var session = Open(
+            "<w:p><w:r><w:t>Body text.</w:t></w:r></w:p><w:sectPr>" + letter +
+            "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"720\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/>" +
+            $"<w:sectPrChange w:id=\"77\" w:author=\"Bob\" w:date=\"2026-01-01T00:00:00Z\"><w:sectPr>{letter}</w:sectPr></w:sectPrChange>" +
+            "</w:sectPr>",
+            TrackedChangeMode.RenderInline);
+
+        var result = session.SetPageSetup(FirstParagraph(session), new PageSetupOp { Landscape = true });
+
+        Assert.True(result.Success, result.Error?.Message);
+        var change = Body(session).Element(W.sectPr)!.Element(W.sectPrChange)!;
+        Assert.Equal(("77", "Bob"), ((string?)change.Attribute(W.id), (string?)change.Attribute(W.author)));
+        Assert.NotEqual("2026-01-01T00:00:00Z", (string?)change.Attribute(W.date));
+        Assert.True(XNode.DeepEquals(
+            XElement.Parse($"<w:sectPrChange xmlns:w=\"{W.w}\"><w:sectPr>{letter}</w:sectPr></w:sectPrChange>").Element(W.sectPr),
+            change.Element(W.sectPr)), change.ToString());
+    }
+
     // ─── Shared fixture plumbing ──────────────────────────────────────────
 
     /// <summary>A heading whose next style is Normal, as in Word's built-in styles.</summary>

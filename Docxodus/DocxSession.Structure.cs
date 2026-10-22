@@ -735,21 +735,6 @@ public sealed partial class DocxSession
             PropertySnapshot(originalPPr, W.pPr, W.pPrChange, W.rPr, W.sectPr), stamp, W.rPr, W.sectPr);
     }
 
-    /// <summary>Settle a tracked edit that took <paramref name="properties"/> from
-    /// <paramref name="before"/> (a <see cref="PropertySnapshot"/> with the same exclusions) to
-    /// what they are now, through <see cref="SettlePropertyChange"/>.</summary>
-    private void TrackPropertyEdit(XElement properties, XName changeName, XElement before,
-        RevisionStamp stamp, params XName[] excluded)
-    {
-        var pending = properties.Element(changeName);
-        var after = PropertySnapshot(properties, properties.Name, changeName, excluded);
-        var baseline = pending is null
-            ? before
-            : PropertySnapshot(pending.Element(properties.Name), properties.Name, changeName, excluded);
-        SettlePropertyChange(properties, changeName, pending, before, stamp,
-            changed: !XNode.DeepEquals(before, after), atBaseline: XNode.DeepEquals(baseline, after));
-    }
-
     public EditResult SplitParagraph(string anchorId, int characterOffset)
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
