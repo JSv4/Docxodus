@@ -252,6 +252,7 @@ detail; this file deliberately does not restate them.
 | `FormattingAssembler.cs` | Resolve and flatten formatting | — |
 | `MetricsGetter.cs` | Document metrics (styles, fonts, languages) | — |
 | `PageMap.cs` + `npm/src/pagination.ts` | Page geometry and the paginated view | `page_map.md`, `paginated_headers_footers.md` |
+| `npm/src/markup-balloons.ts` + `Internal/WordFormatWording.cs` | Word's All Markup balloon print layout (`commentColumnPlacement: "balloons"`) | `all_markup_layout.md` |
 | `Ir/` | The structure-aware IR the diff and markdown projection read | `document_ir.md` |
 | `Delivery/` | Delivery bundles and change receipts | `delivery_bundle.md`, `delivery_change_receipt.md` |
 | `Verification/` | Package manifests, semantic change sets, reversibility proof | `deliverable_verification.md`, `package_manifests.md`, `semantic_diff.md`, `redline_reversibility_proof.md` |

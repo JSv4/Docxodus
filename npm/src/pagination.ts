@@ -18,6 +18,12 @@ import {
 } from "./page-geometry.js";
 import type { PageBands, PageDimensions } from "./page-geometry.js";
 import { EXACT_ROW_CELL } from "./exact-row-text.js";
+import {
+  installMarkupBalloonStyle,
+  layoutMarkupBalloons,
+  readMarkupBalloonComments,
+  type MarkupBalloonComment,
+} from "./markup-balloons.js";
 
 export type { PageBands, PageDimensions } from "./page-geometry.js";
 
@@ -312,8 +318,13 @@ export interface PaginationOptions {
   showPageNumbers?: boolean;
   /** Gap between pages in pixels. Default: 20 */
   pageGap?: number;
-  /** Comment placement: physical margin for PaginationEngine, outside for paginateHtml. */
-  commentColumnPlacement?: "margin" | "outside";
+  /**
+   * Comment placement: physical margin for PaginationEngine, outside for paginateHtml, or
+   * "balloons" for Word's All Markup print (issue #1300, markup-balloons.ts): pages shrink beside
+   * a markup area holding comments and, with Word-presentation HTML, formatting changes. As with
+   * "outside", comments then have no PageMap citations.
+   */
+  commentColumnPlacement?: "margin" | "outside" | "balloons";
   /** Outside comment-column width in points. Default: 144 (2 inches). */
   commentColumnWidthPt?: number;
   /** Gap between the page and an outside comment column, in points. Default: 12. */
@@ -340,6 +351,11 @@ export interface PaginationOptions {
    * otherwise pay the whole forced-layout pass twice and discard the first result. Default: false.
    */
   deferFragmentIdentities?: boolean;
+  /**
+   * Skip the "balloons" layout at the end of paginate(); the caller runs layoutMarkupBalloons()
+   * itself once it has finished changing the page tree (the standalone export). Default: false.
+   */
+  deferMarkupBalloons?: boolean;
   /**
    * Points to withhold from the body height available to specific physical pages (1-based page
    * number → pt). Only the fitting budget shrinks; the page's rendered bands do not move. The
@@ -718,7 +734,9 @@ export class PaginationEngine {
   private cssPrefix: string;
   private showPageNumbers: boolean;
   private pageGap: number;
-  private commentColumnPlacement: "margin" | "outside";
+  private commentColumnPlacement: "margin" | "outside" | "balloons";
+  private deferMarkupBalloons: boolean;
+  private markupBalloons?: { comments: MarkupBalloonComment[]; commentPrefix: string; laidOut: boolean };
   private commentColumnWidthPt: number;
   private commentColumnGapPt: number;
   private fragmentParagraphs: boolean;
@@ -798,9 +816,10 @@ export class PaginationEngine {
     this.commentColumnPlacement = options.commentColumnPlacement ?? "margin";
     this.commentColumnWidthPt = options.commentColumnWidthPt ?? 144;
     this.commentColumnGapPt = options.commentColumnGapPt ?? 12;
-    if (this.commentColumnPlacement !== "margin" && this.commentColumnPlacement !== "outside") {
-      throw new RangeError("commentColumnPlacement must be 'margin' or 'outside'");
+    if (!["margin", "outside", "balloons"].includes(this.commentColumnPlacement)) {
+      throw new RangeError("commentColumnPlacement must be one of margin, outside, balloons");
     }
+    this.deferMarkupBalloons = options.deferMarkupBalloons ?? false;
     if (!Number.isFinite(this.commentColumnWidthPt) || this.commentColumnWidthPt <= 0) {
       throw new RangeError("commentColumnWidthPt must be a finite positive number");
     }
@@ -841,6 +860,13 @@ export class PaginationEngine {
       const pages: PageInfo[] = [];
       let pageNumber = 1;
 
+    // The balloon layout hides comment reference marks, which changes line breaks: before measuring.
+    if (this.commentColumnPlacement === "balloons") {
+      const registry = this.stagingElement.querySelector("#pagination-comment-margin-registry");
+      this.markupBalloons = { ...readMarkupBalloonComments(registry), laidOut: false };
+      installMarkupBalloonStyle(this.document, this.markupBalloons.commentPrefix, this.cssPrefix);
+    }
+
     // Chromium rounds a `line-height: normal` line to a whole pixel, so single-spaced text
     // advanced 12.75pt where Word advances 12.65pt for 11pt Times New Roman, and the error
     // accumulated down every page (issues #850, #1151). Resolve each line height before
@@ -860,7 +886,7 @@ export class PaginationEngine {
     // Parse the margin-comment registry if present. Its entries are cloned into
     // the side substrate of pages that contain the corresponding range marker.
     this.commentMarginRegistry = this.parseCommentMarginRegistry();
-    if (this.commentColumnPlacement === "outside") {
+    if (this.commentColumnPlacement !== "margin") {
       // The PageMap describes physical page substrates. Outside review panels remain readable
       // UI, with an explicit source exclusion rather than invented in-page comment geometry.
       for (const source of this.commentMarginRegistry.values()) source.dataset.pageMapExclude = "true";
@@ -1076,6 +1102,7 @@ export class PaginationEngine {
     if (this.alignBaselines) alignBaselinesToWord(this.containerElement);
     this.activateCommentReturnLinks(pages);
     this.lastPages = pages;
+    if (!this.deferMarkupBalloons) this.layoutMarkupBalloons();
 
       const result = {
         totalPages: pages.length,
@@ -1097,6 +1124,27 @@ export class PaginationEngine {
 
   private checkpoint(): void {
     this.cancellationCheckpoint?.();
+  }
+
+  /**
+   * With "balloons" placement, lays out Word's markup area and balloons on the finished pages
+   * (once; later calls do nothing). Runs inside paginate() unless deferMarkupBalloons is set.
+   */
+  layoutMarkupBalloons(): void {
+    if (!this.markupBalloons || this.markupBalloons.laidOut) return;
+    if (this.lastPages.length === 0) throw new Error("paginate() must complete before layoutMarkupBalloons()");
+    this.markupBalloons.laidOut = true;
+    const font = this.stagingElement.dataset;
+    layoutMarkupBalloons({
+      document: this.document,
+      pages: this.lastPages,
+      comments: this.markupBalloons.comments,
+      commentPrefix: this.markupBalloons.commentPrefix,
+      cssPrefix: this.cssPrefix,
+      font: font.balloonFontFamily
+        ? { family: font.balloonFontFamily, sizePt: Number.parseFloat(font.balloonFontSize ?? "") }
+        : undefined,
+    });
   }
 
   /**
@@ -5411,7 +5459,7 @@ export class PaginationEngine {
       }
     }
     let outsideCommentColumn: HTMLElement | undefined;
-    if (pageCommentIds.length > 0) {
+    if (this.commentColumnPlacement !== "balloons" && pageCommentIds.length > 0) {
       const marginColumn = this.document.createElement("aside");
       marginColumn.className = `${this.cssPrefix}comment-margin`;
       marginColumn.style.position = "absolute";

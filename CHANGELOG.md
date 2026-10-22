@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Word's All Markup print layout for the paginated view and the PDF export (#1300):
+  `commentColumnPlacement: "balloons"` (`--comment-column-placement balloons` in the export CLI) keeps
+  each page's paper size and shrinks the page beside a markup area, where comments, their replies and
+  formatting changes become balloons level with their lines and joined to them by leader lines, while
+  insertions and deletions stay inline. Formatting balloons state the change in Word's wording, for
+  example `Formatted: Font: Bold` or `Formatted: Indent: Left: 0.5"`. Geometry, fonts and colours follow
+  Word-printed All Markup PDFs. In the Word revision presentation the HTML converter records this as
+  inert data attributes; the default output is unchanged.
+
+### Changed
+
+- The Word revision presentation colours authors from Word's palette, starting `#0078D4`, `#D13438`
+  (was `#C00000`, `#0070C0`, …), and draws its change bar 30pt left of the text column (was 0.25in), as
+  measured from Word-printed All Markup PDFs (#1300). `AuthorColors` still overrides the palette.
+
 ## [14.1.0] - 2026-10-21
 
 ### Added

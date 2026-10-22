@@ -585,13 +585,21 @@ All phases completed. The tracked changes HTML rendering feature is fully implem
 - **No pilcrows.** A deleted paragraph mark draws no `¶`, and a section change draws no inline
   marker; the change bar is their only trace.
 - **Change bars.** `MarkChangedLine` gives every paragraph holding any revision the
-  `rev-changed-line` class. Its `::before` draws a 1px bar 0.25in left of the text column, and the
+  `rev-changed-line` class. Its `::before` draws a 1px bar 30pt left of the text column, and the
   paragraph's own left indent is passed in `--rev-change-bar-indent`, so indented paragraphs' bars
   line up.
 - **Cells.** Inserted, deleted and merged cells keep Word's default light blue, pink and light
   yellow shading.
+- **Balloon data (issue #1300).** Formatting changes carry Word's balloon wording
+  (`data-format-description`), an ordinal shared by changes that recorded the same properties
+  (`data-format-key`) and the author's colour (`data-author-color`); margin comments carry
+  `data-initials`, `data-author-color` (comment authors numbered on their own) and
+  `data-font-family`; the pagination staging element names the Balloon Text font. Only the
+  `"balloons"` comment placement reads them; see `all_markup_layout.md`.
 
-The palette, offset and shading are chosen in Word's style rather than sampled from Word. The setting
+The first two palette colours (`#0078D4`, `#D13438`) and the change-bar offset were measured from
+Word-printed All Markup PDFs (issue #1300); the other six colours are the same Office palette's next
+hues, and the cell shading is Word's default. The setting
 applies to full renders. A block render numbers authors within its one block, so
 `HtmlConversionOps` leaves block renders in the default presentation. Surfaces:
 `HtmlConversionOptions.RevisionPresentation` (0/1), the WASM `ConvertDocxToHtmlComplete` trailing

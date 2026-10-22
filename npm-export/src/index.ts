@@ -428,6 +428,7 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
     "reviewProfileAlreadyApplied",
     "markupPresentation",
     "commentProfile",
+    "commentColumnPlacement",
     "title",
     "additionalCss",
     "unsupportedContent",
@@ -476,6 +477,17 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
       "markupPresentation applies only to the markup profile.",
       "Omit markupPresentation, or use reviewProfile markup.",
     );
+  }
+  if (options.commentColumnPlacement !== undefined
+    && options.commentColumnPlacement !== "margin" && options.commentColumnPlacement !== "balloons") {
+    exportError("invalid_argument", "input_validation", "commentColumnPlacement is invalid.",
+      "Use margin or balloons.");
+  }
+  if (options.commentColumnPlacement === "balloons" && (!["margin", "hidden"].includes(options.commentProfile)
+    || (options.reviewProfile === "markup" && options.markupPresentation !== "word"))) {
+    exportError("invalid_argument", "input_validation",
+      "The balloon layout needs the margin or hidden comment profile and, with markup, the Word presentation.",
+      "Use margin or hidden comments, and markupPresentation word with the markup profile.");
   }
   if (options.reviewProfileAlreadyApplied === true && options.reviewProfile === "markup") {
     exportError(
@@ -756,6 +768,7 @@ function browserOptions(options: NodeExportOptions): Omit<PaginatedHtmlOptions, 
     reviewProfile: options.reviewProfile,
     reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied,
     markupPresentation: options.markupPresentation,
+    commentColumnPlacement: options.commentColumnPlacement,
     commentProfile: options.commentProfile,
     title: options.title,
     additionalCss: options.additionalCss,

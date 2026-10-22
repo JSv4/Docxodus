@@ -720,6 +720,15 @@ namespace Docxodus
         public string? Author { get; set; }
         public string? Date { get; set; }
         public string? Initials { get; set; }
+
+        /// <summary>
+        /// The comment author's number among comment authors, in the order the comments part first
+        /// names them: Word colours comment balloons by it (issue #1300).
+        /// </summary>
+        internal int AuthorNumber { get; set; }
+
+        /// <summary>In the Word presentation, the comment text's font family, which its balloon keeps.</summary>
+        internal string? TextFont { get; set; }
         // Always set by the object initializer at the sole construction site (LoadComments);
         // `required` isn't usable here because it can't be less visible than the public class.
         internal XElement SourceElement { get; set; } = null!;
@@ -1060,6 +1069,13 @@ namespace Docxodus
             MarkupSimplifier.SimplifyMarkup(wordDoc, simplifyMarkupSettings);
 
             MarkStructuralTableEndParagraphs(wordDoc);
+            // Balloon wording compares direct properties, which assembly replaces (issue #1300).
+            if (htmlConverterSettings is { RenderTrackedChanges: true, RevisionPresentation: RevisionPresentation.Word })
+            {
+                var authors = wordDoc.MainDocumentPart!.Annotation<RevisionAuthorIndex>();
+                Internal.WordFormatWording.Stamp(wordDoc, author =>
+                    authors?.IndexOf(author) is { } number ? WordAuthorColor(htmlConverterSettings, author, number) : null);
+            }
 
             FormattingAssemblerSettings formattingAssemblerSettings = new FormattingAssemblerSettings
             {
@@ -1098,7 +1114,7 @@ namespace Docxodus
             var commentTracker = new CommentTracker();
             if (htmlConverterSettings.RenderComments)
             {
-                LoadComments(wordDoc, commentTracker);
+                LoadComments(wordDoc, htmlConverterSettings, commentTracker);
             }
             // Store tracker as annotation on the root element for access during transform
             rootElement.AddAnnotation(commentTracker);
@@ -2009,18 +2025,36 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// The colours Word-style revisions take, by author number, wrapping after the last.
-        /// These are distinct dark hues in the spirit of Word's "By author" colouring; they were
-        /// not sampled from Word, and <see cref="WmlToHtmlConverterSettings.AuthorColors"/>
+        /// The colours Word gives authors, by author number, wrapping after the last. The first two
+        /// were measured from Word-printed All Markup PDFs (issue #1300); the rest are the same
+        /// Office palette's next hues. <see cref="WmlToHtmlConverterSettings.AuthorColors"/>
         /// overrides them per author.
         /// </summary>
         private static readonly string[] WordAuthorPalette =
         {
-            "#C00000", "#0070C0", "#7030A0", "#00A0A0", "#C55A11", "#2E7D32", "#BF0080", "#806000",
+            "#0078D4", "#D13438", "#5C2E91", "#038387", "#CA5010", "#498205", "#C239B3", "#986F0B",
         };
 
-        /// <summary>How far left of the text column the Word presentation draws its change bar.</summary>
-        private const string WordChangeBarOffset = "0.25in";
+        /// <summary>
+        /// How far left of the text column the Word presentation draws its change bar, as measured
+        /// from Word-printed All Markup PDFs.
+        /// </summary>
+        private const string WordChangeBarOffset = "30pt";
+
+        /// <summary>An author's colour in the Word presentation: the caller's choice, else the palette's.</summary>
+        private static string WordAuthorColor(WmlToHtmlConverterSettings settings, string? author, int number) =>
+            author != null && settings.AuthorColors != null && settings.AuthorColors.TryGetValue(author, out var chosen)
+                ? chosen
+                : WordAuthorPalette[number % WordAuthorPalette.Length];
+
+        /// <summary>
+        /// The markup-balloon data <see cref="Internal.WordFormatWording.Stamp"/> left on a change
+        /// element (Word presentation only), published as <c>data-</c> attributes: the wording,
+        /// the recorded-properties key and the author's colour.
+        /// </summary>
+        private static IEnumerable<XAttribute> BalloonData(XElement change) =>
+            change.Attributes().Where(a => a.Name.Namespace == Internal.WordFormatWording.BalloonData)
+                .Select(a => new XAttribute("data-" + a.Name.LocalName, a.Value));
 
         /// <summary>
         /// In the Word presentation, give <paramref name="html"/> the class that colours it as its
@@ -2090,12 +2124,7 @@ namespace Docxodus
 
             var authors = wordDoc.MainDocumentPart?.Annotation<RevisionAuthorIndex>()?.Authors ?? new List<string>();
             for (var i = 0; i < authors.Count; i++)
-            {
-                var color = settings.AuthorColors != null && settings.AuthorColors.TryGetValue(authors[i], out var chosen)
-                    ? chosen
-                    : WordAuthorPalette[i % WordAuthorPalette.Length];
-                sb.AppendLine($".{prefix}author-{i} {{ color: {color}; }}");
-            }
+                sb.AppendLine($".{prefix}author-{i} {{ color: {WordAuthorColor(settings, authors[i], i)}; }}");
             return sb.ToString();
         }
 
@@ -4909,7 +4938,7 @@ namespace Docxodus
             return CreateBorderDivs(wordDoc, settings, footerRoot.Elements());
         }
 
-        private static void LoadComments(WordprocessingDocument wordDoc, CommentTracker tracker)
+        private static void LoadComments(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, CommentTracker tracker)
         {
             var commentsPart = wordDoc.MainDocumentPart!.WordprocessingCommentsPart;
             if (commentsPart == null)
@@ -4920,16 +4949,24 @@ namespace Docxodus
                 return;
 
             var dates = new Internal.CommentDateResolver(wordDoc.MainDocumentPart!);
+            var authors = new List<string>();
             foreach (var comment in commentsXDoc.Root.Elements(W.comment))
             {
                 var id = (int?)comment.Attribute(W.id);
                 if (id == null)
                     continue;
 
+                var author = (string?)comment.Attribute(W.author);
+                if (!authors.Contains(author ?? string.Empty))
+                    authors.Add(author ?? string.Empty);
                 tracker.Comments[id.Value] = new CommentInfo
                 {
                     Id = id.Value,
-                    Author = (string?)comment.Attribute(W.author),
+                    Author = author,
+                    AuthorNumber = authors.IndexOf(author ?? string.Empty),
+                    TextFont = settings.RevisionPresentation == RevisionPresentation.Word
+                        ? Internal.WordFormatWording.CommentTextFont(wordDoc, comment)
+                        : null,
                     Date = dates.Resolve(comment),
                     Initials = (string?)comment.Attribute(W.initials),
                     SourceElement = comment,
@@ -5566,6 +5603,13 @@ namespace Docxodus
                 if (comment.Date != null)
                     note.Add(new XAttribute("data-date", comment.Date));
             }
+            // The Word presentation's markup balloon labels the comment by its initials, colours it
+            // by its author and sets its text in the comment's own font (issue #1300).
+            if (settings.RevisionPresentation == RevisionPresentation.Word)
+                note.Add(
+                    comment.Initials is { Length: > 0 } initials ? new XAttribute("data-initials", initials) : null,
+                    new XAttribute("data-author-color", WordAuthorColor(settings, comment.Author, comment.AuthorNumber)),
+                    comment.TextFont is { } font ? new XAttribute("data-font-family", font) : null);
 
             // Header with author, date, and back link
             var header = new XElement(Xhtml.div,
@@ -5941,6 +5985,8 @@ namespace Docxodus
                         existingClass != null ? existingClass + " " + combined : combined);
                     if (paragraph.Attribute("title") == null)
                         paragraph.Add(new XAttribute("title", string.Join("; ", described)));
+                    foreach (var balloon in pPrChange != null ? BalloonData(pPrChange) : Enumerable.Empty<XAttribute>())
+                        paragraph.SetAttributeValue(balloon.Name, balloon.Value);
 
                     // Non-null: this block only runs when at least one of the three is set.
                     var marker = (pPrChange ?? numberingChange ?? inlineSectPrChange)!;
@@ -7104,6 +7150,10 @@ namespace Docxodus
                     .DocumentSettingsPart?.GetXDocument().Root?
                     .Element(W.compat)?.Element(W.footnoteLayoutLikeWW8);
                 var useWord8FootnoteLayout = IsOnOffPropertyEnabled(footnoteLayoutCompatibility);
+                // The font of the Word presentation's markup balloons (issue #1300).
+                (string Family, double SizePt)? balloonFont = settings.RevisionPresentation == RevisionPresentation.Word
+                    ? Internal.WordFormatWording.BalloonTextFont(wordDoc)
+                    : null;
 
                 return new object[]
                 {
@@ -7113,6 +7163,13 @@ namespace Docxodus
                         new XAttribute("class", prefix + "staging"),
                         useWord8FootnoteLayout
                             ? new XAttribute("data-footnote-layout-like-word8", "true")
+                            : null,
+                        balloonFont is { } font
+                            ? new[]
+                            {
+                                new XAttribute("data-balloon-font-family", font.Family),
+                                new XAttribute("data-balloon-font-size", font.SizePt.ToString(CultureInfo.InvariantCulture)),
+                            }
                             : null,
                         stagingContent),
                     // Container where paginated content will be rendered by client-side JavaScript
@@ -8025,6 +8082,8 @@ namespace Docxodus
                     var changeDescription = DescribeFormatChange(rPr, rPrChange);
                     if (!string.IsNullOrEmpty(changeDescription))
                         formatChangeSpan.Add(new XAttribute("title", changeDescription));
+                    // A list number only shows its paragraph mark's formatting: no balloon of its own.
+                    formatChangeSpan.Add(isListMarker ? null : BalloonData(rPrChange));
 
                     if (settings.IncludeRevisionMetadata)
                     {

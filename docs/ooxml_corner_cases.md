@@ -3549,6 +3549,47 @@ The Docxodus rule is `laterNotesClosed` in `PaginationEngine.flowToPages`
 `prepareCurrentContinuation` moves the notes deferred to a page on with a carried note that runs on
 again; `finishPage` hands them back when the last body page lets the carried note end.
 
+## Revisions: how Word prints All Markup with balloons (issue #1300)
+
+**Reproducer.** Track one bold change and one indent change:
+
+```xml
+<w:p><w:r><w:rPr><w:b/><w:rPrChange w:id="1" w:author="Alice" w:date="2025-01-02T09:00:00Z"><w:rPr/></w:rPrChange></w:rPr><w:t>buyer</w:t></w:r></w:p>
+<w:p><w:pPr><w:ind w:left="720"/><w:pPrChange w:id="2" w:author="Alice" w:date="2025-01-02T09:00:00Z"><w:pPr/></w:pPrChange></w:pPr><w:r><w:t>Indented clause.</w:t></w:r></w:p>
+```
+
+Then print or save as PDF with All Markup and "Show only comments and formatting in balloons".
+
+| | Word | Docxodus before | Docxodus now (`commentColumnPlacement: "balloons"`) |
+|---|---|---|---|
+| Paper | Source size. The page is shrunk beside a 3.7in grey area. | Margin column inside the page, or an extra panel beside it | As Word |
+| Bold change | `Formatted: Font: Bold` balloon | Change bar; `title="Bold added"` | As Word |
+| Indent change | `Formatted: Indent: Left: 0.5"` balloon | Change bar; `title="Paragraph formatting changed"` | As Word |
+| Insertions and deletions | Inline | Inline | Inline |
+
+**Measured from Word-printed All Markup PDFs.**
+
+- **Shrinking.** Word shrinks the page as far as its text column's right edge plus the 266.4pt
+  (3.7in) area, to the paper's width. The shrunken page stands at the paper's foot, 10.8pt above it.
+  The grey area starts 9pt right of the text column.
+- **Balloons.**
+  - The left edge is 31.6pt past the text column.
+  - Borders are 0.5pt in the author's colour, with 3pt corners.
+  - Balloons are 1pt apart.
+  - Labels and wording use the Balloon Text style, else Segoe UI 9pt; comment text keeps its own
+    font.
+- **Leaders and marks.** Hairline leaders run along the anchor's line, then to the balloon.
+  Formatting changes are marked with a small triangle.
+- **Colours.** Authors take `#0078D4`, then `#D13438`. Comment authors are numbered on their own.
+  The change bar sits 30pt left of the text.
+- **One balloon per formatting revision.** Runs that share the wording and the recorded properties
+  get a single balloon. A move to another level of the same list is undescribed.
+
+**Docxodus.** `Internal/WordFormatWording.cs` writes the wording, `npm/src/markup-balloons.ts` lays
+the balloons out, and `docs/architecture/all_markup_layout.md` gives the design. **Pending:** what
+Word does when a page's balloons cannot fit beside it. Docxodus keeps them on the page and cuts the
+tallest to whole lines.
+
 ## Contributing
 
 When adding new corner cases to this document:
