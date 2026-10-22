@@ -43,7 +43,10 @@ const WORD = {
   markSize: 3,
   grey: "#F2F2F2",
   font: { family: "Segoe UI", sizePt: 9 },
-  /** The Word presentation's author colours, for HTML that does not carry them. */
+  /**
+   * The Word presentation's author colours (WmlToHtmlConverter.WordAuthorPalette), for HTML that does
+   * not carry them. Only the first two are Word's; the rest are this implementation's choice.
+   */
   palette: ["#0078D4", "#D13438", "#5C2E91", "#038387", "#CA5010", "#498205", "#C239B3", "#986F0B"],
   /** Word's pale comment fills for its first two author colours. */
   paleFills: { "#0078D4": "#D5EDFF", "#D13438": "#F8DCDD" } as Record<string, string>,
@@ -90,23 +93,43 @@ export function readMarkupBalloonComments(registry: Element | null): {
   return { comments, commentPrefix };
 }
 
+/** The attribute that scopes the balloon rules to the pagination using them. */
+const SCOPE = "data-docx-markup-balloons";
+
 /**
- * Rules that change line breaks, so they go in before anything is measured: Word prints no comment
- * reference mark, and paints the commented range itself (see `layoutMarkupBalloons`).
+ * Turns the balloon rules on or off for one pagination's staging and page containers. On, they go in
+ * before anything is measured, because they change line breaks: Word prints no comment reference
+ * mark, and paints the commented range itself (see `layoutMarkupBalloons`). The rules apply only
+ * inside elements carrying the scope attribute, so a later pagination in the same document is not
+ * affected, and turning them off for its containers clears any attribute left behind.
  */
-export function installMarkupBalloonStyle(document: Document, commentPrefix: string, cssPrefix: string): void {
-  if (document.querySelector("style[data-docx-markup-balloons]")) return;
+export function scopeMarkupBalloons(
+  document: Document, containers: HTMLElement[], on: boolean, commentPrefix = "comment-", cssPrefix = "page-",
+): void {
+  for (const container of containers) container.toggleAttribute(SCOPE, on);
+  const key = `${commentPrefix} ${cssPrefix}`;
+  if (!on || Array.from(document.querySelectorAll(`style[${SCOPE}]`)).some((style) => style.getAttribute(SCOPE) === key)) return;
   const rules = document.createElement("style");
-  rules.dataset.docxMarkupBalloons = "";
+  rules.setAttribute(SCOPE, key);
   rules.textContent = [
-    `a.${commentPrefix}marker { font-size: 0 !important; margin: 0 !important; padding: 0 !important; visibility: hidden !important; }`,
-    `span.${commentPrefix}highlight { background: none !important; border: 0 !important; }`,
-    `.${cssPrefix}balloon { position: absolute; box-sizing: border-box; border: ${WORD.border}pt solid;` +
+    `[${SCOPE}] a.${commentPrefix}marker { font-size: 0 !important; margin: 0 !important; padding: 0 !important; visibility: hidden !important; }`,
+    `[${SCOPE}] span.${commentPrefix}highlight { background: none !important; border: 0 !important; }`,
+    `[${SCOPE}] .${cssPrefix}balloon { position: absolute; box-sizing: border-box; border: ${WORD.border}pt solid;` +
       ` border-radius: ${WORD.corner}pt; padding: ${WORD.padBlock}pt ${WORD.padInline}pt; line-height: ${WORD.leading};` +
       " color: #000; text-align: left; overflow: hidden; overflow-wrap: anywhere; }",
-    `.${cssPrefix}balloon b { font-weight: bold; }`,
+    `[${SCOPE}] .${cssPrefix}balloon b { font-weight: bold; }`,
   ].join("\n");
   document.head.append(rules);
+}
+
+/** What a balloon layout could not print in full. */
+export interface MarkupBalloonResult {
+  /** Comments whose balloons were cut short to fit beside their page. */
+  truncatedCommentIds: string[];
+  /** Formatting balloons cut short to fit. */
+  truncatedFormatting: number;
+  /** Comments marked on a page that got no balloon at all. */
+  unplacedCommentIds: string[];
 }
 
 /** A balloon to place: what it says, how it is drawn, and the line it belongs to. */
@@ -121,6 +144,7 @@ interface Entry {
   lineTop: number;
   /** Where the leader leaves the text. */
   from: { x: number; y: number };
+  commentId?: string;
   element?: HTMLElement;
   height: number;
   top: number;
@@ -136,13 +160,14 @@ export function layoutMarkupBalloons(options: {
   commentPrefix: string;
   cssPrefix: string;
   font?: { family: string; sizePt: number };
-}): void {
+}): MarkupBalloonResult {
   const { document, pages, comments, commentPrefix, cssPrefix } = options;
+  const result: MarkupBalloonResult = { truncatedCommentIds: [], truncatedFormatting: 0, unplacedCommentIds: [] };
   const font = options.font && options.font.sizePt > 0 ? options.font : WORD.font;
   const anchored = pages.map((page) =>
     Array.from(page.element.querySelectorAll<HTMLElement>("[data-comment-id], [data-format-description]")));
   // Word prints a document without comments or formatting changes as it is.
-  if (anchored.every((elements) => elements.length === 0)) return;
+  if (anchored.every((elements) => elements.length === 0)) return result;
 
   // The registry lists a root before its replies, so each reply's thread is already known.
   const thread = new Map<string, string>();
@@ -162,12 +187,19 @@ export function layoutMarkupBalloons(options: {
       if (root) span.style.setProperty("background-color", paleFill(colorOf(root)), "important");
     }
   }
-  // A paragraph's balloon goes on the page with its last fragment, where its mark is.
-  const markPage = new Map<string, HTMLElement>();
+  // Headers and footers print on every page, and their balloons with them. In the body, a
+  // paragraph's balloon goes on the page holding its mark (its last fragment), and a comment's on
+  // the page where its range ends, as its leader starts there.
+  const repeats = (element: Element) => element.closest(`.${cssPrefix}header, .${cssPrefix}footer`) !== null;
+  const lastPage = new Map<string, number>();
   pages.forEach((page, index) => anchored[index].forEach((element) => {
-    if (isBlock(element) && element.dataset.sourceAnchorId) markPage.set(element.dataset.sourceAnchorId, page.element);
+    if (repeats(element)) return;
+    if (isBlock(element) && element.dataset.sourceAnchorId) lastPage.set(`p:${element.dataset.sourceAnchorId}`, index);
+    const root = thread.get(element.dataset.commentId ?? "");
+    if (root !== undefined && element.matches(`span.${commentPrefix}highlight`)) lastPage.set(`c:${root}`, index);
   }));
 
+  const seen = new Set<string>();
   const printed = new Set<string>();
   pages.forEach((page, pageIndex) => {
     const sheet = new MarkupSheet(document, page, cssPrefix);
@@ -182,24 +214,29 @@ export function layoutMarkupBalloons(options: {
       }
     };
 
+    const printedHere = new Set<string>();
     for (const element of anchored[pageIndex]) {
       // A paragraph's balloon follows the balloons of the runs inside it.
       leaveBlocksBefore(element);
       if (element.dataset.commentId !== undefined) {
         const rootId = thread.get(element.dataset.commentId);
-        if (rootId === undefined || printed.has(rootId)) continue;
-        printed.add(rootId);
-        const spans = rangeSpans(page.element, rootId);
-        const first = sheet.box(lines(spans[0] ?? element)[0]);
-        const last = sheet.box(lines(spans[spans.length - 1] ?? element).pop());
+        if (rootId === undefined) continue;
+        const everyPage = repeats(element);
+        if (!everyPage) seen.add(rootId);
+        if (printedHere.has(rootId) || (!everyPage && (printed.has(rootId) || (lastPage.get(`c:${rootId}`) ?? pageIndex) !== pageIndex))) continue;
+        const spans = rangeSpans(page.element, rootId).filter((span) => repeats(span) === everyPage);
+        // A point or empty-range comment has only its (hidden) reference mark: anchor on its line.
+        const first = sheet.box(spans.length > 0 ? lines(spans[0])[0] : markerLine(document, element));
+        const last = sheet.box(spans.length > 0 ? lines(spans[spans.length - 1]).pop() : markerLine(document, element));
         if (!first || !last) continue;
+        (everyPage ? printedHere : printed).add(rootId);
         for (const comment of comments.filter((candidate) => thread.get(candidate.id) === rootId)) {
           const color = colorOf(comment);
           const reply = comment.parentId !== undefined ? `R${comments.indexOf(byId.get(comment.parentId)!) + 1}` : "";
           entries.push({
             label: `Commented [${comment.initials || initialsOf(comment.author)}${comments.indexOf(comment) + 1}${reply}]:`,
             text: comment.paragraphs, color, fill: paleFill(color), textFont: comment.fontFamily, order: order++,
-            lineTop: last.top, from: { x: last.right, y: last.bottom }, height: 0, top: 0,
+            lineTop: last.top, from: { x: last.right, y: last.bottom }, height: 0, top: 0, commentId: comment.id,
           });
         }
         if (spans.length > 0) {
@@ -217,7 +254,7 @@ export function layoutMarkupBalloons(options: {
       if (isBlock(element)) {
         const anchorId = element.dataset.sourceAnchorId;
         const line = sheet.box(lines(element, document).pop());
-        if ((anchorId !== undefined && markPage.get(anchorId) !== page.element) || !line) continue;
+        if ((anchorId !== undefined && !repeats(element) && lastPage.get(`p:${anchorId}`) !== pageIndex) || !line) continue;
         const y = (line.top + line.bottom) / 2;
         // Marked at the text column's edge, level with the paragraph's last line.
         marks.push({ d: arrowhead(sheet.columnRight, y, "left"), color, filled: true });
@@ -254,11 +291,21 @@ export function layoutMarkupBalloons(options: {
       const bottom = sheet.pageTop + page.dimensions.pageHeight - WORD.pageInset;
       fit(entries, bottom - top, font.sizePt * WORD.leading, sheet);
       stack(entries, top, bottom);
-      for (const entry of entries) entry.element!.style.top = `${entry.top}pt`;
+      for (const entry of entries) {
+        entry.element!.style.top = `${entry.top}pt`;
+        // Past the page's foot a balloon is cut off by the paper's edge.
+        if (entry.top + entry.height > bottom + 0.01) entry.element!.dataset.balloonTruncated = "true";
+        if (entry.element!.dataset.balloonTruncated !== "true") continue;
+        if (entry.commentId === undefined) result.truncatedFormatting++;
+        else if (!result.truncatedCommentIds.includes(entry.commentId)) result.truncatedCommentIds.push(entry.commentId);
+      }
       connect(document, sheet, entries, marks, left);
     }
     sheet.shrink();
   });
+  result.unplacedCommentIds = comments.filter((comment) => seen.has(thread.get(comment.id)!) && !printed.has(thread.get(comment.id)!))
+    .map((comment) => comment.id);
+  return result;
 }
 
 /**
@@ -360,15 +407,26 @@ function fit(entries: Entry[], room: number, lineHeight: number, sheet: MarkupSh
     const content = tallest.element!.firstElementChild as HTMLElement;
     content.style.cssText = `display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;-webkit-line-clamp:${keep}`;
     tallest.element!.dataset.balloonTruncated = "true";
+    const before = tallest.height;
     tallest.height = sheet.height(tallest.element!);
+    // Text that will not wrap to fewer lines cannot be shortened this way.
+    if (tallest.height >= before) return;
   }
 }
 
-/** Down the page: no balloon above its line or over the previous one. Then up from the foot. */
+/**
+ * Down the page: no balloon above its line or over the previous one. Then up from the foot as far as
+ * the room above allows, and down once more so that balloons that still do not fit run off the foot
+ * rather than overlap.
+ */
 function stack(entries: Entry[], top: number, bottom: number): void {
-  entries.reduce((floor, entry) => (entry.top = Math.max(entry.lineTop, floor)) + entry.height + WORD.between, top);
+  const pushDown = () => entries.reduce((floor, entry) =>
+    (entry.top = Math.max(entry.top, floor)) + entry.height + WORD.between, top);
+  for (const entry of entries) entry.top = entry.lineTop;
+  pushDown();
   entries.reduceRight((ceiling, entry) =>
     (entry.top = Math.max(top, Math.min(entry.top, ceiling - entry.height))) - WORD.between, bottom);
+  pushDown();
 }
 
 /** Hairline leaders, one per balloon, and the range brackets and change marks. */
@@ -453,6 +511,22 @@ function paleFill(color: string): string {
 
 function fontStack(family: string): string {
   return `${JSON.stringify(family)}, sans-serif`;
+}
+
+/**
+ * The line a hidden reference mark sits on: the mark's own position, with the height of the text
+ * line around it (the mark itself is drawn at zero size).
+ */
+function markerLine(document: Document, marker: Element): DOMRect | undefined {
+  const at = marker.getBoundingClientRect();
+  const block = marker.closest("p, li, h1, h2, h3, h4, h5, h6") ?? marker.parentElement;
+  if (!block) return undefined;
+  const middle = at.top + at.height / 2;
+  const rows = lines(block, document);
+  const row = rows.find((rect) => middle >= rect.top - 1 && middle <= rect.bottom + 1)
+    ?? rows.reduce<DOMRect | undefined>((best, rect) =>
+      !best || Math.abs(rect.top - middle) < Math.abs(best.top - middle) ? rect : best, undefined);
+  return row && new DOMRect(at.left, row.top, 0, row.height);
 }
 
 /** The line boxes of an element, or of its text when given the document (a block's own box is one rect). */

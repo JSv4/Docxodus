@@ -13,7 +13,7 @@ import { prepareWordText, paintWordText } from "./word-text.js";
 import { preserveClippedExactRowText } from "./exact-row-text.js";
 import { prepareParagraphBorders, paintParagraphBorders } from "./paragraph-borders.js";
 import { measureRenderedSource, PaginationEngine, type PageMap } from "./pagination.js";
-import { installMarkupBalloonStyle } from "./markup-balloons.js";
+import { scopeMarkupBalloons } from "./markup-balloons.js";
 export { renderedSourceMeasurerExpression } from "./pagination.js";
 import {
   createWorkerDocxodus,
@@ -3707,7 +3707,7 @@ export async function convertDocxToPaginatedHtml(
         // down the page (issue #850). Fix each line's height before anything is measured; both
         // attempts start from pristine HTML, so both apply it identically.
         // Word prints no comment reference marks in balloons, so their rules apply before measuring too.
-        if (options.commentColumnPlacement === "balloons") installMarkupBalloonStyle(renderDocument, "comment-", "page-");
+        scopeMarkupBalloons(renderDocument, [staging, container], options.commentColumnPlacement === "balloons");
         applyUnroundedNormalLineHeights(renderDocument.body);
         prepareWordText(renderDocument.body, () => checkpointWordText(state));
         prepareParagraphBorders(renderDocument.body);
@@ -3845,7 +3845,24 @@ export async function convertDocxToPaginatedHtml(
     await runPhase(state, "output_verification", ["paragraph borders"], () =>
       paintParagraphBorders(renderDocument.getElementById("pagination-container") as HTMLElement));
     // The markup area shrinks each page's content, so it comes after every pass that measures it.
-    await runPhase(state, "output_verification", ["markup balloons"], () => engine.layoutMarkupBalloons());
+    const balloons = await runPhase(state, "output_verification", ["markup balloons"], () => engine.layoutMarkupBalloons());
+    if (balloons && balloons.unplacedCommentIds.length > 0) {
+      // Under balloons the comment sources are not in the PageMap, so this is the coverage check.
+      fail("output_verification_failure", "output_verification",
+        `Comments ${balloons.unplacedCommentIds.join(", ")} are marked in the document but got no balloon.`,
+        "Report the source document to Docxodus, or export with the margin placement.");
+    }
+    if (balloons && (balloons.truncatedCommentIds.length > 0 || balloons.truncatedFormatting > 0)) {
+      addWarning(state, {
+        code: "comment_balloon_truncated",
+        severity: "warning",
+        phase: "output_verification",
+        message: `Balloons too many to fit beside their page were cut short: ${balloons.truncatedCommentIds.length} ` +
+          `comment(s) and ${balloons.truncatedFormatting} formatting change(s).`,
+        remediation: "Use the margin placement with the endnotes comment profile to print every comment in full.",
+        ...(balloons.truncatedCommentIds.length > 0 ? { resource: balloons.truncatedCommentIds.join(",") } : {}),
+      });
+    }
     const renderer = await runPhase(state, "output_verification", ["renderer identity"], () =>
       rendererIdentity(
         renderDocument,

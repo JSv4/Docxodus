@@ -78,18 +78,23 @@ one, and otherwise default to Segoe UI 9 pt.
 
 **The Word presentation itself.**
 
-- Its author palette starts `#0078D4`, `#D13438`; Word's next hues follow: `#5C2E91`, `#038387`,
-  `#CA5010`, `#498205`, `#C239B3`, `#986F0B`.
+- Its author palette starts with Word's first two author colours, `#0078D4` and `#D13438`. The other
+  six (`#5C2E91`, `#038387`, `#CA5010`, `#498205`, `#C239B3`, `#986F0B`) are this implementation's
+  choice and were not measured from Word.
 - Its change bar sits 30pt left of the text column.
 
 These apply with or without balloons, so they are listed under `### Changed`.
 
 ### Paginator: lays out (`npm/src/markup-balloons.ts`)
 
-Before measuring, `paginate()` (and the export, before its own measuring passes) installs two rules:
+Before measuring, `paginate()` (and the export, before its own measuring passes) turns on two rules:
 
 - comment reference marks take no width, because Word prints none;
 - the commented range loses the converter's highlight.
+
+The rules apply only inside elements carrying `data-docx-markup-balloons`, which `scopeMarkupBalloons`
+puts on that pagination's staging and page containers. A later pagination with another placement
+removes the attribute from its containers, so the rules never leak into it.
 
 After the page tree is final, `layoutMarkupBalloons()` runs. It is called at the end of `paginate()`,
 or explicitly with `deferMarkupBalloons` after the export's text and border painting. If the
@@ -115,8 +120,12 @@ document has no comment or formatting change, the pages are left as they are. Ot
 - One balloon per formatting revision: consecutive changes with the same wording, colour and
   recorded properties share a balloon across list numbers and untracked paragraph marks.
   Description: `Formatted:` followed by the wording. A paragraph's balloon follows its runs'.
-- A comment thread's balloons are anchored at the end of its range. A run change is anchored at its
-  first line. A paragraph change is anchored at its last line, on the page that holds it.
+- A comment thread's balloons are anchored where its range ends, on the page and line holding that
+  end, since Word's leader starts there. A point comment, an empty-range comment, or a reply with no
+  range of its own is anchored at its reference mark's line. A run change is anchored at its first
+  line. A paragraph change is anchored at its last line, on the page that holds its mark.
+- Changes and comments in a header or footer get balloons on every page that header or footer
+  prints on, because it renders there.
 - Geometry, in page points before shrinking:
 
   | Property | Value |
@@ -139,9 +148,11 @@ document has no comment or formatting change, the pages are left as they are. Ot
 
 - Balloons are sorted by line, then by document order within a line.
 - Each sits level with its anchor's line where room allows, pushed down past the one above, then
-  pulled up from the page's foot.
-- If they still cannot fit, the tallest balloon loses a line at a time until they do
-  (`data-balloon-truncated`). No page is added. Word's own overflow behaviour is *pending*.
+  pulled up from the page's foot as far as the room above allows. Balloons never overlap.
+- If they still cannot fit, the tallest balloon loses a line at a time until they do. Balloons that
+  cannot shrink further run off the page's foot and are cut there. Either way the balloon is marked
+  `data-balloon-truncated`, and `layoutMarkupBalloons()` reports it. No page is added. Word's own
+  overflow behaviour is *pending*.
 
 **Leaders and marks.**
 
@@ -165,6 +176,13 @@ with `"outside"`. Comment citations are therefore unavailable under this placeme
 - Balloons put the converter in the Word presentation for every review profile.
 - The report and the layout digest name the option only when it is `"balloons"`, so default reports
   and digests are unchanged. `render-report-v2.schema.json` lists the key.
+- **Fail-closed.** The comment sources are excluded from the PageMap under this placement, so the
+  export checks balloon coverage itself. If a comment marked in the document got no balloon, the
+  export fails with `output_verification_failure`.
+- **Truncation warning.** If any balloon was cut short, the report carries a
+  `comment_balloon_truncated` warning. Its `resource` lists the comment ids, and its message counts
+  comments and formatting changes. Warning codes are open strings in the report schema, so the
+  schema itself did not change.
 - No C#, WASM, stdio-host, Python or MCP surface changes: `RevisionPresentation` already flows
   through all of them.
 

@@ -2,7 +2,19 @@ import { test, expect } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
-import { markupBalloonsFixture } from './docx-markup-balloons-fixture.js';
+import {
+  anchorlessCommentsFixture, balloonDocx, crowdedCommentsFixture, formatted, markupBalloonsFixture, plain, reformatted,
+} from './docx-markup-balloons-fixture.js';
+
+async function pdfText(pdf: Uint8Array): Promise<string> {
+  const task = getDocument({ data: new Uint8Array(pdf), verbosity: 0 });
+  try {
+    const document = await task.promise;
+    const pages = await Promise.all(Array.from({ length: document.numPages }, (_, i) => document.getPage(i + 1)));
+    const contents = await Promise.all(pages.map(page => page.getTextContent()));
+    return contents.flatMap(content => content.items.filter(item => 'str' in item).map(item => item.str)).join(' ').replace(/\s+/g, ' ');
+  } finally { await task.destroy(); }
+}
 
 test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}),
@@ -47,6 +59,51 @@ test('the final profile prints comment balloons and no formatting balloons', asy
     expect(text).toContain('Commented [AA1]:');
     expect(text).not.toContain('Formatted');
   } finally { await task.destroy(); }
+});
+
+test('point, empty-range and ranged comments all print, with no truncation warning', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const result = await renderDocxArtifacts(anchorlessCommentsFixture(), {
+    browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'margin', commentColumnPlacement: 'balloons',
+    timeoutMs: 120_000,
+  });
+  const text = await pdfText(result.pdf!);
+  for (const expected of ['Commented [AA1]: PointNote', 'Commented [BB2]: EmptyNote', 'Commented [AA3]: RangeNote']) {
+    expect(text).toContain(expected);
+  }
+  expect(result.warnings.map(w => w.code)).not.toContain('comment_balloon_truncated');
+});
+
+test('formatting changes in a header print their balloons on every page', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const header = `<w:p>${formatted(21, 'Header run')}</w:p>${reformatted(22, 'Header paragraph', '<w:jc w:val="center"/>')}`;
+  const body = Array.from({ length: 60 }, (_, i) => plain(`Body line ${i + 1}.`)).join('');
+  const result = await renderDocxArtifacts(balloonDocx({ body, header }), {
+    browser, outputs: ['pdf'], reviewProfile: 'markup', markupPresentation: 'word', commentProfile: 'hidden',
+    commentColumnPlacement: 'balloons', timeoutMs: 120_000,
+  });
+  const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
+  try {
+    const pdf = await task.promise;
+    expect(pdf.numPages).toBe(2);
+    for (let number = 1; number <= 2; number++) {
+      const content = await (await pdf.getPage(number)).getTextContent();
+      const text = content.items.filter(item => 'str' in item).map(item => item.str).join(' ').replace(/\s+/g, ' ');
+      expect(text).toContain('Formatted: Font: Bold');
+      expect(text).toContain('Formatted: Centered');
+    }
+  } finally { await task.destroy(); }
+});
+
+test('balloons cut to fit the page are reported', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const result = await renderDocxArtifacts(crowdedCommentsFixture(25, 1, 'a long remark that wraps over several balloon lines. '.repeat(6)), {
+    browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'margin', commentColumnPlacement: 'balloons',
+    timeoutMs: 120_000,
+  });
+  const warning = result.warnings.find(w => w.code === 'comment_balloon_truncated');
+  expect(warning).toBeDefined();
+  expect(warning!.resource).toMatch(/^\d+(,\d+)*$/);
 });
 
 test('the default export names no comment column placement', async ({ browser }) => {

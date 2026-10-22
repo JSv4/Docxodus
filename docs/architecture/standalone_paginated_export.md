@@ -753,7 +753,9 @@ with `markup`, `markupPresentation: "word"`; otherwise it is `invalid_argument`.
 boxes keep the paper size, so PageMap pages and the print checks are unchanged; the balloons, like
 the outside comment panel, are excluded from the PageMap. The report's options name
 `commentColumnPlacement` only when it is `balloons`, and only then does it enter the layout digest.
-The CLI flag is `--comment-column-placement`.
+The CLI flag is `--comment-column-placement`. A comment marked in the document that gets no balloon
+fails the export (`output_verification_failure`). Balloons cut short to fit beside their page are
+reported in a `comment_balloon_truncated` warning.
 
 Comments are orthogonal: `hidden`, `inline`, `endnotes`, or `margin`. A visible profile retains
 range, body, author, and date in body, headers, footers, footnotes, and endnotes, and draws the

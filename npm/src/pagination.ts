@@ -19,10 +19,11 @@ import {
 import type { PageBands, PageDimensions } from "./page-geometry.js";
 import { EXACT_ROW_CELL } from "./exact-row-text.js";
 import {
-  installMarkupBalloonStyle,
   layoutMarkupBalloons,
   readMarkupBalloonComments,
+  scopeMarkupBalloons,
   type MarkupBalloonComment,
+  type MarkupBalloonResult,
 } from "./markup-balloons.js";
 
 export type { PageBands, PageDimensions } from "./page-geometry.js";
@@ -736,7 +737,7 @@ export class PaginationEngine {
   private pageGap: number;
   private commentColumnPlacement: "margin" | "outside" | "balloons";
   private deferMarkupBalloons: boolean;
-  private markupBalloons?: { comments: MarkupBalloonComment[]; commentPrefix: string; laidOut: boolean };
+  private markupBalloons?: { comments: MarkupBalloonComment[]; commentPrefix: string; result?: MarkupBalloonResult };
   private commentColumnWidthPt: number;
   private commentColumnGapPt: number;
   private fragmentParagraphs: boolean;
@@ -861,11 +862,14 @@ export class PaginationEngine {
       let pageNumber = 1;
 
     // The balloon layout hides comment reference marks, which changes line breaks: before measuring.
-    if (this.commentColumnPlacement === "balloons") {
+    // Any other placement clears what an earlier balloon pagination left on these containers.
+    const balloons = this.commentColumnPlacement === "balloons";
+    if (balloons) {
       const registry = this.stagingElement.querySelector("#pagination-comment-margin-registry");
-      this.markupBalloons = { ...readMarkupBalloonComments(registry), laidOut: false };
-      installMarkupBalloonStyle(this.document, this.markupBalloons.commentPrefix, this.cssPrefix);
+      this.markupBalloons = readMarkupBalloonComments(registry);
     }
+    scopeMarkupBalloons(this.document, [this.stagingElement, this.containerElement], balloons,
+      this.markupBalloons?.commentPrefix, this.cssPrefix);
 
     // Chromium rounds a `line-height: normal` line to a whole pixel, so single-spaced text
     // advanced 12.75pt where Word advances 12.65pt for 11pt Times New Roman, and the error
@@ -1128,14 +1132,14 @@ export class PaginationEngine {
 
   /**
    * With "balloons" placement, lays out Word's markup area and balloons on the finished pages
-   * (once; later calls do nothing). Runs inside paginate() unless deferMarkupBalloons is set.
+   * (once; later calls return the first result). Runs inside paginate() unless deferMarkupBalloons
+   * is set. Returns what could not be printed in full; undefined under other placements.
    */
-  layoutMarkupBalloons(): void {
-    if (!this.markupBalloons || this.markupBalloons.laidOut) return;
+  layoutMarkupBalloons(): MarkupBalloonResult | undefined {
+    if (!this.markupBalloons || this.markupBalloons.result) return this.markupBalloons?.result;
     if (this.lastPages.length === 0) throw new Error("paginate() must complete before layoutMarkupBalloons()");
-    this.markupBalloons.laidOut = true;
     const font = this.stagingElement.dataset;
-    layoutMarkupBalloons({
+    return this.markupBalloons.result = layoutMarkupBalloons({
       document: this.document,
       pages: this.lastPages,
       comments: this.markupBalloons.comments,

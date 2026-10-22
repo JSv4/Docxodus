@@ -3587,8 +3587,9 @@ Then print or save as PDF with All Markup and "Show only comments and formatting
 
 **Docxodus.** `Internal/WordFormatWording.cs` writes the wording, `npm/src/markup-balloons.ts` lays
 the balloons out, and `docs/architecture/all_markup_layout.md` gives the design. **Pending:** what
-Word does when a page's balloons cannot fit beside it. Docxodus keeps them on the page and cuts the
-tallest to whole lines.
+Word does when a page's balloons cannot fit beside it. Docxodus never overlaps them: it shortens the
+tallest a line at a time, lets any that still do not fit run off the page's foot, and reports every
+cut balloon in a `comment_balloon_truncated` export warning.
 
 ## Contributing
 
