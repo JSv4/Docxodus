@@ -1972,9 +1972,11 @@ public sealed partial class DocxSession : IDisposable
         RestorePreservedMarkerPositions(paragraph, markers);
     }
 
-    private void ApplyReplaceTextTracked(XElement paragraph, IReadOnlyList<Internal.ParsedBlock> blocks)
+    /// <summary>Replace a paragraph's text with <paramref name="runElements"/> as a tracked
+    /// deletion plus insertion stamped <paramref name="stamp"/>; a caller replacing several
+    /// paragraphs as one action passes them all the same stamp.</summary>
+    private void ApplyReplaceTextTracked(XElement paragraph, IReadOnlyList<XElement> runElements, RevisionStamp stamp)
     {
-        var stamp = NewRevisionStamp();
 
         // Delete the live content in place — inside hyperlinks, fields, inline controls and
         // other authors' insertions (w:ins > w:del) — so a reject puts every run back exactly
@@ -1984,8 +1986,8 @@ public sealed partial class DocxSession : IDisposable
         // where they sit rather than being lifted out and re-placed.
         MarkParagraphAsTrackedDeleted(paragraph, stamp, preserveParagraphMark: true, retainInlineStructure: true);
 
-        if (blocks.Count == 0 || blocks[0].RunElements.Count == 0) return;
-        var inserted = WrapPayloadAsInserted(blocks[0].RunElements, stamp);
+        if (runElements.Count == 0) return;
+        var inserted = WrapPayloadAsInserted(runElements, stamp);
 
         // The replacement precedes the paragraph's trailing markers — the references and range
         // ends after its last text-bearing run, wherever they sit, and the carrier that holds

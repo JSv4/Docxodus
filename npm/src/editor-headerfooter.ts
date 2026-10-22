@@ -62,6 +62,9 @@ export interface HeaderFooterRegionCallbacks {
   remount: () => void;
   /** The story host that is active changed (null = the caret left every story). */
   onActiveChange?: (host: HTMLElement | null, which: BandWhich | null) => void;
+  /** Read a mutation's result JSON the way body edits are read (DocxEditor.parseEdit), so a
+   *  refusal reaches the host's `onEditFailed` instead of being dropped here. */
+  parseEdit: (json: string) => { success: boolean };
 }
 
 interface HeaderFooterRefLite {
@@ -185,15 +188,18 @@ export class HeaderFooterRegion {
 
   /** Select (and, if absent, create) the story kind a continuous band shows. */
   setKind(which: BandWhich, kind: HeaderFooterKind): void {
-    this.kinds[which] = kind;
-    if (!this.partUriFor(which, kind)) this.seedStory(which, kind);
     // Selecting first/even IS the user saying "use a different first/even page", so the
     // section's flag must be set even when the part already exists: Word leaves first/even parts
     // behind when those options are switched off, so a real document commonly has the reference
-    // WITHOUT the flag; without this the typed story is saved but never rendered.
-    if (this.bodyAnchorId && kind !== "default") {
-      this.bridge.EnsureHeaderFooterVisible(this.handle, this.bodyAnchorId, kind);
+    // WITHOUT the flag; without this the typed story is saved but never rendered. The flag goes
+    // first: when the engine refuses it (the even/odd setting under tracked changes), nothing is
+    // seeded and the band stays on the kind it showed.
+    if (this.bodyAnchorId && kind !== "default"
+      && !this.callbacks.parseEdit(this.bridge.EnsureHeaderFooterVisible(this.handle, this.bodyAnchorId, kind)).success) {
+      return;
     }
+    this.kinds[which] = kind;
+    if (!this.partUriFor(which, kind)) this.seedStory(which, kind);
     this.refresh(which);
   }
 
@@ -223,17 +229,19 @@ export class HeaderFooterRegion {
   setKindEnabled(kind: "first" | "even", enabled: boolean): boolean {
     if (!this.bodyAnchorId) return false;
     if (enabled) {
+      // The flag first, so a refusal (the even/odd setting under tracked changes) is reported
+      // once and leaves no seeded stories behind.
+      const res = this.callbacks.parseEdit(this.bridge.EnsureHeaderFooterVisible(this.handle, this.bodyAnchorId, kind));
+      if (!res.success) return false;
       for (const which of ["header", "footer"] as BandWhich[]) {
         // The odd/all-pages story too: once the option is on, its pages need somewhere to
         // type as much as the first/even ones do (Word shows an empty area for both).
         if (!this.partUriFor(which, "default")) this.seedStory(which, "default");
         if (!this.partUriFor(which, kind)) this.seedStory(which, kind);
       }
-      const res = parseResult(this.bridge.EnsureHeaderFooterVisible(this.handle, this.bodyAnchorId, kind));
-      if (!res.success) return false;
     } else {
       if (!this.bridge.SetHeaderFooterKindEnabled) return false;
-      const res = parseResult(this.bridge.SetHeaderFooterKindEnabled(this.handle, this.bodyAnchorId, kind, false));
+      const res = this.callbacks.parseEdit(this.bridge.SetHeaderFooterKindEnabled(this.handle, this.bodyAnchorId, kind, false));
       if (!res.success) return false;
       for (const which of ["header", "footer"] as BandWhich[]) {
         if (this.kinds[which] === kind) this.kinds[which] = "default";
@@ -262,7 +270,7 @@ export class HeaderFooterRegion {
    *  Deliberately a PLAIN field (no `\*` switch), exactly as Word inserts one, so it follows the
    *  section's page-number format — see {@link setPageNumbering}. */
   insertPageNumber(which: BandWhich, anchorId: string, field: "currentPage" | "totalPages" | "pageOfTotal"): boolean {
-    const res = parseResult(this.bridge.InsertPageNumberField(this.handle, anchorId, field, ""));
+    const res = this.callbacks.parseEdit(this.bridge.InsertPageNumberField(this.handle, anchorId, field, ""));
     if (!res.success) return false;
     this.refresh(which);
     return true;
@@ -289,7 +297,7 @@ export class HeaderFooterRegion {
   /** Set this section's page numbering (`w:pgNumType`) — Word's *Format Page Numbers…*. */
   setPageNumbering(op: { start?: number; format?: NumberFormat }): boolean {
     if (!this.bodyAnchorId) return false;
-    const res = parseResult(this.bridge.SetPageNumbering(this.handle, this.bodyAnchorId, JSON.stringify(op)));
+    const res = this.callbacks.parseEdit(this.bridge.SetPageNumbering(this.handle, this.bodyAnchorId, JSON.stringify(op)));
     if (!res.success) return false;
     this.reloadSection();
     return true;
@@ -303,7 +311,7 @@ export class HeaderFooterRegion {
   /** Remove this section's page-numbering start/format. */
   clearPageNumbering(): boolean {
     if (!this.bodyAnchorId) return false;
-    const res = parseResult(this.bridge.ClearPageNumbering(this.handle, this.bodyAnchorId));
+    const res = this.callbacks.parseEdit(this.bridge.ClearPageNumbering(this.handle, this.bodyAnchorId));
     if (!res.success) return false;
     this.reloadSection();
     return true;
@@ -662,7 +670,7 @@ export class HeaderFooterRegion {
   private seedStory(which: BandWhich, kind: HeaderFooterKind): void {
     if (!this.bodyAnchorId) return;
     const set = which === "header" ? this.bridge.SetHeaderText : this.bridge.SetFooterText;
-    const res = parseResult(set(this.handle, this.bodyAnchorId, kind, ""));
+    const res = this.callbacks.parseEdit(set(this.handle, this.bodyAnchorId, kind, ""));
     if (!res.success) return;
     this.callbacks.refreshAnchorMap();
     this.sectionInfo = this.readSectionInfo(this.bodyAnchorId);
@@ -847,12 +855,4 @@ function caretFromPoint(doc: Document, x: number, y: number): { node: Node; offs
   if (position) return { node: position.offsetNode, offset: position.offset };
   const range = d.caretRangeFromPoint?.(x, y);
   return range ? { node: range.startContainer, offset: range.startOffset } : null;
-}
-
-function parseResult(json: string): { success: boolean } {
-  try {
-    return JSON.parse(json) as { success: boolean };
-  } catch {
-    return { success: false };
-  }
 }
