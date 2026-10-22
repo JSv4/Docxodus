@@ -3549,6 +3549,42 @@ The Docxodus rule is `laterNotesClosed` in `PaginationEngine.flowToPages`
 `prepareCurrentContinuation` moves the notes deferred to a page on with a carried note that runs on
 again; `finishPage` hands them back when the last body page lets the carried note end.
 
+## Splitting a paragraph: the new paragraph mark ends the first half (issues #1297, #1298)
+
+Word's tracked Enter marks the pilcrow that now ends the text *before* the cursor as inserted.
+`TestFiles/RP/RP006-Inserted-Paragraph-Mark.docx` shows the shape:
+
+```xml
+<w:p>
+  <w:pPr><w:rPr><w:ins w:id="0" w:author="Eric White" w:date="2017-03-24T21:58:00Z"/></w:rPr></w:pPr>
+  <w:r><w:t xml:space="preserve">Video provides a powerful way to help you prove your point. </w:t></w:r>
+</w:p>
+<w:p><w:r><w:t>When you click Online Video, …</w:t></w:r></w:p>
+```
+
+So the original mark goes on ending the second half, together with everything that belongs to
+it: its own revision (`w:pPr/w:rPr/w:ins` or `w:del`) and the properties a reject keeps.
+Rejecting an inserted mark joins its paragraph into the next one, and the joined paragraph keeps
+the **next** paragraph's properties (`RevisionOps.MergeParagraphWithNext`, and
+`RevisionProcessor`'s coalescing, which takes the last member's `w:pPr`).
+
+| Split of a paragraph whose mark Alice inserted | Mark revision on | Reject everything |
+|---|---|---|
+| Copied onto both marks (Docxodus before #1297) | both, one shared `w:id` | ambiguous; nothing resolves individually |
+| Left on the first half's new mark | first half | undoes the user's untracked split, keeps Alice's break |
+| On the second half's original mark (Docxodus now) | second half | keeps the untracked split, removes Alice's break |
+
+The same rule explains Enter at the end of a heading: the empty second paragraph holds the
+heading's original mark in the heading's next style. Rejecting Alice's insertion of that mark
+joins the empty paragraph into the following one, and the heading keeps its style. Under
+tracking, Docxodus records whatever the split changed on the second half (the page break left
+on the first half, the next style, the dropped mark formatting) as the editor's
+`w:pPrChange`/`w:rPrChange`. Rejecting everything then restores the original paragraph's
+properties. A pending property change the paragraph already had keeps its baseline instead.
+
+Code: `DocxSession.SplitParagraph`, `TrackSplitOffProperties`, `RemoveParagraphMarkRevisions`.
+Tests: `DocxSessionClonedRevisionTests` (RID003, RID004, RID007, RID010, RID011).
+
 ## Contributing
 
 When adding new corner cases to this document:

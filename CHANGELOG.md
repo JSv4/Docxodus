@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `SplitParagraph`, the editor's Enter key, works with tracked changes on and inside a tracked
+  insertion (#1298). Under `TrackedChangeMode.RenderInline` it was refused on every document; it now
+  records the break as Word does, as an insertion of the paragraph mark that ends the first half,
+  and also tracks what the split changes on the second half (the page break that stays on the first
+  half, a heading's next style), so rejecting everything gives back the original paragraph. An
+  offset inside a `w:ins` was refused in every mode; the insertion is now cut in two, each part still
+  the original author's under its own `w:id`. `InsertFootnote`, `InsertEndnote` and
+  `InsertCrossReference` share that boundary and now place their reference inside an insertion
+  instead of refusing. Offsets inside a `w:moveTo` are still refused.
+
 - `DocxSession` edits that copy a run's, paragraph's or cell's properties no longer copy the
   tracked-change ids inside them (#1297). Formatting part of a run, a tracked replacement inside a
   run, `SplitParagraph`, a tracked `MoveBlock` (including the comments it copies), a tracked

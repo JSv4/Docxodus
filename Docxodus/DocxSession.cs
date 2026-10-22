@@ -2726,12 +2726,17 @@ public sealed partial class DocxSession : IDisposable
     private static int InlineChildTextLength(XElement child) =>
         string.Concat(child.DescendantsAndSelf(W.t).Select(t => (string)t)).Length;
 
+    /// <summary>The top-level inline containers <see cref="SplitInlineContainersAtOffset"/> can cut
+    /// in two around their direct runs: a hyperlink, whose halves link to the same target, and
+    /// a tracked insertion, whose halves stay the same author's insertion under their own ids.</summary>
+    private static readonly HashSet<XName> SplittableInlineContainers = new() { W.hyperlink, W.ins };
+
     /// <summary>
     /// Whether inserting a new top-level paragraph child at <paramref name="offset"/> would
     /// silently move it away from the requested visible-text position. Plain runs are split by
-    /// <see cref="SplitRunsAtOffset"/>. A top-level hyperlink containing direct runs is split by
-    /// <see cref="SplitInlineContainersAtOffset"/>. Every other container — including
-    /// <c>w:ins</c>/<c>w:moveTo</c> — is atomic because splitting it requires revision- or
+    /// <see cref="SplitRunsAtOffset"/>. A top-level hyperlink or <c>w:ins</c> containing direct
+    /// runs is split by <see cref="SplitInlineContainersAtOffset"/>. Every other container —
+    /// including <c>w:moveTo</c> — is atomic because splitting it requires revision- or
     /// field-specific semantics.
     /// </summary>
     private static bool HasUnsupportedInlineInsertionBoundary(XElement paragraph, int offset)
@@ -2743,17 +2748,17 @@ public sealed partial class DocxSession : IDisposable
             if (consumed < offset && offset < consumed + length)
             {
                 if (child.Name == W.r) return false;
-                if (child.Name != W.hyperlink) return true;
+                if (!SplittableInlineContainers.Contains(child.Name)) return true;
 
                 int localOffset = offset - consumed;
-                int hyperlinkConsumed = 0;
+                int containerConsumed = 0;
                 foreach (var nested in child.Elements().Where(IsInlineChild))
                 {
                     int nestedLength = InlineChildTextLength(nested);
-                    if (hyperlinkConsumed < localOffset
-                        && localOffset < hyperlinkConsumed + nestedLength)
+                    if (containerConsumed < localOffset
+                        && localOffset < containerConsumed + nestedLength)
                         return nested.Name != W.r;
-                    hyperlinkConsumed += nestedLength;
+                    containerConsumed += nestedLength;
                 }
                 return false;
             }
@@ -2806,9 +2811,9 @@ public sealed partial class DocxSession : IDisposable
 
     /// <summary>
     /// Ensures no top-level inline child straddles <paramref name="offset"/>: if a
-    /// hyperlink (or other splittable container) crosses the boundary, it's split
-    /// into two sibling containers sharing the same attributes (e.g. <c>r:id</c>),
-    /// each holding half the runs. After this call, <see cref="MoveInlineChildrenAfter"/>
+    /// hyperlink or tracked insertion crosses the boundary, it's split into two sibling
+    /// containers sharing the same attributes (e.g. <c>r:id</c>, or the insertion's author
+    /// and date under a fresh <c>w:id</c>), each holding half the runs. After this call, <see cref="MoveInlineChildrenAfter"/>
     /// can move whole-child elements without slicing through anything.
     /// </summary>
     internal static void SplitInlineContainersAtOffset(XElement paragraph, int offset, Func<int> nextRevisionId)
@@ -2821,25 +2826,25 @@ public sealed partial class DocxSession : IDisposable
             if (consumed == offset) return; // boundary already clean
             int local = offset - consumed;
 
-            if (child.Name == W.hyperlink)
-                SplitHyperlinkAt(child, local, nextRevisionId);
+            if (SplittableInlineContainers.Contains(child.Name))
+                SplitInlineContainerAt(child, local, nextRevisionId);
             // For <w:r>: SplitRunsAtOffset already handled it. For sdt/fldSimple/smartTag and
-            // revision wrappers: treat as atomic — callers that insert a top-level child must
+            // other revision wrappers: treat as atomic — callers that insert a top-level child must
             // reject an interior boundary with HasUnsupportedInlineInsertionBoundary before
             // reaching this helper.
             return;
         }
     }
 
-    private static void SplitHyperlinkAt(XElement hyperlink, int localOffset, Func<int> nextRevisionId)
+    private static void SplitInlineContainerAt(XElement container, int localOffset, Func<int> nextRevisionId)
     {
-        // Split runs inside the hyperlink at the local offset (works because SplitRunsAtOffset
+        // Split runs inside the container at the local offset (works because SplitRunsAtOffset
         // walks descendants through container types).
-        SplitRunsAtOffset(hyperlink, localOffset, nextRevisionId);
+        SplitRunsAtOffset(container, localOffset, nextRevisionId);
 
         int consumed = 0;
         var movedChildren = new List<XElement>();
-        foreach (var child in hyperlink.Elements().ToList())
+        foreach (var child in container.Elements().ToList())
         {
             int len = IsInlineChild(child) ? InlineChildTextLength(child) : 0;
             if (consumed >= localOffset) movedChildren.Add(child);
@@ -2847,16 +2852,18 @@ public sealed partial class DocxSession : IDisposable
         }
         if (movedChildren.Count == 0) return;
 
-        var newLink = new XElement(W.hyperlink);
-        // Every attribute EXCEPT the Unid: that one is this hyperlink's identity, and the public
-        // hl:<scope>:<unid> id is derived from it. Cloning it would give the two halves the same id,
-        // so FindHyperlinkElement would match only the first and Update/RemoveHyperlink would
-        // silently act on half the link.
-        foreach (var a in hyperlink.Attributes())
-            if (a.Name != PtOpenXml.Unid) newLink.SetAttributeValue(a.Name, a.Value);
-        newLink.SetAttributeValue(PtOpenXml.Unid, UnidHelper.GenerateUnid());
-        foreach (var child in movedChildren) { child.Remove(); newLink.Add(child); }
-        hyperlink.AddAfterSelf(newLink);
+        var second = new XElement(container.Name);
+        // Every attribute EXCEPT the Unid: that one is this container's identity, and a
+        // hyperlink's public hl:<scope>:<unid> id is derived from it. Cloning it would give the
+        // two halves the same id, so FindHyperlinkElement would match only the first and
+        // Update/RemoveHyperlink would silently act on half the link. An insertion's w:id is
+        // likewise its own (issue #1298).
+        foreach (var a in container.Attributes())
+            if (a.Name != PtOpenXml.Unid) second.SetAttributeValue(a.Name, a.Value);
+        second.SetAttributeValue(PtOpenXml.Unid, UnidHelper.GenerateUnid());
+        Internal.RevisionOps.RenumberCopiedRevisions(second, nextRevisionId);
+        foreach (var child in movedChildren) { child.Remove(); second.Add(child); }
+        container.AddAfterSelf(second);
     }
 
     /// <summary>

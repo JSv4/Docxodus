@@ -455,8 +455,17 @@ public sealed partial class DocxSession
             if (deleting) ConvertTextToDeletedText(element);
         }
 
+        return preserveParagraphMark
+            ? paragraph.Element(W.pPr)
+            : MarkParagraphMark(paragraph, wrapperName, author, date);
+    }
+
+    /// <summary>Mark <paramref name="paragraph"/>'s own paragraph mark with a
+    /// <paramref name="wrapperName"/> revision (<c>w:pPr/w:rPr/w:ins</c> and its siblings),
+    /// unless it already carries one, and return its <c>w:pPr</c>.</summary>
+    private XElement MarkParagraphMark(XElement paragraph, XName wrapperName, string author, string date)
+    {
         var pPr = paragraph.Element(W.pPr);
-        if (preserveParagraphMark) return pPr;
         if (pPr is null)
         {
             pPr = new XElement(W.pPr);
@@ -702,6 +711,27 @@ public sealed partial class DocxSession
         if (pPr.Element(W.rPr) is { HasElements: false } markProperties) markProperties.Remove();
     }
 
+    /// <summary>
+    /// Rejecting a tracked split joins the first half into the second, which keeps the original
+    /// paragraph mark and so keeps its own properties. Record whatever the split changed there
+    /// (the page break left on the first half, the next style a heading's Enter starts, a mark
+    /// formatting the fresh paragraph drops) as this edit's property changes, so rejecting
+    /// everything gives back the original paragraph's properties. A pending change already
+    /// copied from the original keeps its baseline, which is what a reject restores anyway.
+    /// </summary>
+    private void TrackSplitOffProperties(XElement originalPPr, XElement secondPPr, RevisionStamp stamp)
+    {
+        var markRevisions = Internal.RevisionOps.RevWrapperNames;
+        var oldMark = PropertySnapshot(originalPPr.Element(W.rPr), W.rPr, W.rPrChange, markRevisions);
+        if (secondPPr.Element(W.rPr)?.Element(W.rPrChange) is null
+            && !PropertySnapshotEquals(oldMark, secondPPr.Element(W.rPr), W.rPrChange, markRevisions))
+            WordprocessingMLUtil.InsertRPrChildInOrder(GetOrCreatePPrChild(secondPPr, W.rPr),
+                CreateRevisionEnvelope(W.rPrChange, stamp, oldMark));
+        if (secondPPr.Element(W.pPrChange) is null)
+            TrackPropertyMutation(secondPPr, originalPPr, W.pPrChange, stamp.Author, stamp.Date,
+                W.rPr, W.sectPr);
+    }
+
     public EditResult SplitParagraph(string anchorId, int characterOffset)
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
@@ -725,8 +755,6 @@ public sealed partial class DocxSession
             return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
                 "SplitParagraph offset falls inside a revision or unsupported inline container; " +
                 "choose a boundary before or after that container", anchorId);
-        if (_trackedChanges == TrackedChangeMode.RenderInline)
-            return TrackedStructureUnsupported("SplitParagraph", anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -796,6 +824,15 @@ public sealed partial class DocxSession
                 // (jc, ind, numPr, ...) don't carry the original's Unid onto a second element.
                 foreach (var el in newPPr.DescendantsAndSelf())
                     el.Attributes(PtOpenXml.Unid).Remove();
+            }
+
+            if (_trackedChanges == TrackedChangeMode.RenderInline)
+            {
+                // Word's tracked Enter: the new mark that ends the first half is an insertion.
+                var stamp = NewRevisionStamp();
+                if (pPr is not null && newPPr is not null)
+                    TrackSplitOffProperties(pPr, newPPr, stamp);
+                MarkParagraphMark(element, W.ins, stamp.Author, stamp.Date);
             }
 
             UnidHelper.AssignToSelfAndDescendants(second);
