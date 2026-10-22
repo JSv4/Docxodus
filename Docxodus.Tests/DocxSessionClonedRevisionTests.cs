@@ -496,6 +496,41 @@ public class DocxSessionClonedRevisionTests
             rejected: new[] { "p: Pay |^|of invoice." });
     }
 
+    /// <summary>
+    /// One author's table edits within one timestamp (Word dates have minute resolution) list as
+    /// one revision only when together they are a column resize: the grid, and every cell's width
+    /// alone, with the table's width or layout at most. A shading of every cell made in the same
+    /// minute is a revision of its own, and so is a row change.
+    /// </summary>
+    [Theory]
+    [InlineData("<w:tcW w:w=\"3000\" w:type=\"dxa\"/>", false, false, 1)]
+    [InlineData("<w:tcW w:w=\"3000\" w:type=\"dxa\"/>", true, false, 1)]
+    [InlineData("<w:tcW w:w=\"2000\" w:type=\"dxa\"/><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FF0000\"/>",
+        false, false, 2)]
+    [InlineData("<w:tcW w:w=\"2000\" w:type=\"dxa\"/><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FF0000\"/>",
+        false, true, 3)]
+    public void RID028_SameStampTableEdits_ListAsOneRevisionOnlyWhenTheyAreAColumnResize(
+        string cellProperties, bool tableWidthChange, bool rowChange, int expectedRevisions)
+    {
+        int id = 20;
+        string Change(string name, string baseline) => $"<w:{name} w:id=\"{id++}\" {Alice}>{baseline}</w:{name}>";
+        string Cell(string text) =>
+            $"<w:tc><w:tcPr>{cellProperties}{Change("tcPrChange", "<w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr>")}" +
+            $"</w:tcPr><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        var body =
+            "<w:tbl><w:tblPr><w:tblW w:w=\"6000\" w:type=\"dxa\"/>" +
+            (tableWidthChange ? Change("tblPrChange", "<w:tblPr><w:tblW w:w=\"4000\" w:type=\"dxa\"/></w:tblPr>") : "") +
+            "</w:tblPr><w:tblGrid><w:gridCol w:w=\"3000\"/><w:gridCol w:w=\"3000\"/>" +
+            Change("tblGridChange", "<w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/></w:tblGrid>") +
+            "</w:tblGrid><w:tr>" +
+            (rowChange ? $"<w:trPr><w:cantSplit/>{Change("trPrChange", "<w:trPr/>")}</w:trPr>" : "") +
+            Cell("a") + Cell("b") + "</w:tr></w:tbl><w:p/>";
+        using var session = Open(body, TrackedChangeMode.Accept);
+
+        Assert.Equal(expectedRevisions, session.ListRevisions().Count);
+        AssertRevisionIdsDistinct(session, expectedCount: null);
+    }
+
     [Fact]
     public void RID013_CrossReferenceInsideATrackedInsertion_LandsAtTheOffset()
     {
