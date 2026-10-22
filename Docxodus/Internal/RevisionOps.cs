@@ -114,7 +114,7 @@ internal static class RevisionOps
         public XElement? PointParagraph { get; init; }
     }
 
-    private static readonly XName[] RevWrapperNames = { W.ins, W.del, W.moveFrom, W.moveTo };
+    internal static readonly XName[] RevWrapperNames = { W.ins, W.del, W.moveFrom, W.moveTo };
 
     /// <summary>
     /// Every element name whose <c>w:id</c> can end up in a group's constituent ids — the
@@ -135,6 +135,41 @@ internal static class RevisionOps
         W.customXmlMoveFromRangeStart, W.customXmlMoveFromRangeEnd,
         W.customXmlMoveToRangeStart, W.customXmlMoveToRangeEnd,
     };
+
+    /// <summary>
+    /// Give each of <paramref name="carriers"/> a fresh <c>w:id</c> from
+    /// <paramref name="nextRevisionId"/>. Carriers that shared an old id (a range pair, or a legal
+    /// role reuse inside one revision) share the new one; a carrier with no id gets its own.
+    /// <paramref name="renumbered"/> sees each carrier with its old and new id.
+    /// </summary>
+    internal static void RenumberRevisionCarriers(IEnumerable<XElement> carriers,
+        Func<int> nextRevisionId, Action<XElement, string?, string>? renumbered = null)
+    {
+        Dictionary<string, string>? fresh = null;
+        foreach (var carrier in carriers)
+        {
+            var old = (string?)carrier.Attribute(W.id);
+            fresh ??= new Dictionary<string, string>(StringComparer.Ordinal);
+            if (old is null || !fresh.TryGetValue(old, out var assigned))
+            {
+                assigned = nextRevisionId().ToString(System.Globalization.CultureInfo.InvariantCulture);
+                if (old is not null) fresh[old] = assigned;
+            }
+            carrier.SetAttributeValue(W.id, assigned);
+            renumbered?.Invoke(carrier, old, assigned);
+        }
+    }
+
+    /// <summary>
+    /// Renumber every revision marker in <paramref name="copy"/>, one of two live copies of run
+    /// or paragraph markup that an edit leaves in the same part. Two markers sharing a
+    /// <c>w:id</c> make each revision carrying it ambiguous, so neither could be accepted or
+    /// rejected on its own (issue #1297). Comment and bookmark ids are a separate space and stay.
+    /// </summary>
+    internal static void RenumberCopiedRevisions(XElement copy, Func<int> nextRevisionId) =>
+        RenumberRevisionCarriers(
+            copy.DescendantsAndSelf().Where(element => RevisionIdBearingNames.Contains(element.Name)),
+            nextRevisionId);
 
     /// <summary>The largest numeric <c>w:id</c> already used by revision markup under
     /// <paramref name="root"/>, or 0 when there is none. Non-numeric ids (which the registry

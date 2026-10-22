@@ -97,8 +97,8 @@ public sealed partial class DocxSession
             // exists so the run renders monospace instead of pointing at a phantom style.
             if (op.Code is true) Internal.StyleFactory.EnsureCodeCharacterStyle(_doc!);
 
-            SplitRunsAtOffset(element, actualSpan.Start);
-            SplitRunsAtOffset(element, actualSpan.Start + actualSpan.Length);
+            SplitRunsAtOffset(element, actualSpan.Start, NextRevisionId);
+            SplitRunsAtOffset(element, actualSpan.Start + actualSpan.Length, NextRevisionId);
 
             var trackFormatChanges = _trackedChanges == TrackedChangeMode.RenderInline;
             var revisionAuthor = _revisionAuthor ?? "docxodus";

@@ -450,7 +450,7 @@ public sealed partial class DocxSession
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            if (splitRun) SplitRunsAtOffset(element, offset);
+            if (splitRun) SplitRunsAtOffset(element, offset, NextRevisionId);
             var run = new XElement(W.r, rPr,
                 new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), replace));
             XElement node = run;
@@ -1118,9 +1118,9 @@ public sealed partial class DocxSession
     }
 
     /// <summary>Create a text-only run that retains the source run's formatting/rsid
-    /// attributes but gets its own internal Unid. <paramref name="textName"/> is
+    /// attributes but gets its own internal Unid and revision ids. <paramref name="textName"/> is
     /// <c>w:t</c> for ordinary/inserted text and <c>w:delText</c> for deletions.</summary>
-    private static XElement CloneRunWithRevisionText(XElement source, XName textName, string text)
+    private XElement CloneRunWithRevisionText(XElement source, XName textName, string text)
     {
         var clone = new XElement(W.r,
             source.Attributes()
@@ -1131,6 +1131,7 @@ public sealed partial class DocxSession
                 new XAttribute(XNamespace.Xml + "space", "preserve"),
                 text));
         UnidHelper.AssignToSelfAndDescendants(clone);
+        Internal.RevisionOps.RenumberCopiedRevisions(clone, NextRevisionId);
         return clone;
     }
 

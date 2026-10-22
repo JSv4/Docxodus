@@ -97,20 +97,9 @@ internal static class RevisionRepairOps
         {
             case RevisionRepairKind.AssignIdentity:
             {
-                // Markers sharing one old id (a range pair, or a legal role reuse inside the
-                // entry) keep sharing the new one; carriers with no usable id each get their own.
-                var fresh = new Dictionary<string, int>(StringComparer.Ordinal);
-                foreach (var carrier in Carriers(group))
-                {
-                    var old = (string?)carrier.Attribute(W.id);
-                    int assigned = old is not null && fresh.TryGetValue(old, out var mapped)
-                        ? mapped
-                        : nextRevisionId();
-                    if (old is not null) fresh[old] = assigned;
-                    carrier.SetAttributeValue(W.id, assigned);
-                    identities.Add(new RevisionCarrierIdentity(CarrierKey(carrier), old,
-                        assigned.ToString(System.Globalization.CultureInfo.InvariantCulture)));
-                }
+                RevisionOps.RenumberRevisionCarriers(Carriers(group), nextRevisionId,
+                    (carrier, old, assigned) =>
+                        identities.Add(new RevisionCarrierIdentity(CarrierKey(carrier), old, assigned)));
                 break;
             }
             case RevisionRepairKind.ReattachNumberingChange:
