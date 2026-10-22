@@ -174,11 +174,13 @@ internal static class CommentOps
             .SelectMany(r => r!.Descendants(W.commentReference))
             .Any(r => (string?)r.Attribute(W.id) == commentId);
 
+    private static readonly HashSet<XName> RevisionWrappers = new() { W.ins, W.del, W.moveFrom, W.moveTo };
+
     /// <summary>
     /// Add the body-side reference for a reply after the last reference already in its parent's
     /// thread (so replies read in the order they were added). Word's native threaded shape keeps the
-    /// range markers on the thread root and gives replies only a <c>w:commentReference</c>; <c>w15:paraIdParent</c> supplies the relationship and
-    /// makes every descendant share that root range. This also makes replying to an existing reply
+    /// range markers on the thread root and gives replies only a <c>w:commentReference</c>;
+    /// <c>w15:paraIdParent</c> supplies the relationship and makes every descendant share that root range. This also makes replying to an existing reply
     /// work when (as Word writes it) the immediate parent has no range markers of its own.
     /// </summary>
     internal static IReadOnlyList<XElement> InsertReplyReference(
@@ -225,12 +227,18 @@ internal static class CommentOps
         {
             var replyRun = BuildReferenceRun(replyId);
             UnidHelper.AssignToSelfAndDescendants(replyRun);
-            // A thread sibling's run can sit inside a tracked-change or hyperlink wrapper; the new run
-            // goes after that wrapper, level with the parent's run, so accept/reject cannot drop it.
-            var lastSibling = threadRuns
-                .Select(r => r.AncestorsAndSelf().FirstOrDefault(a => a.Parent == parentRun.Parent))
-                .LastOrDefault(a => a is not null);
-            (lastSibling ?? parentRun).AddAfterSelf(replyRun);
+            // Reviewers' w:ins/w:del/move wrappers can enclose the parent's and the thread's runs
+            // (each reference of a compared-in thread has its own). The new run goes at the level
+            // above those wrappers, after whichever thread run comes last, so accepting or rejecting
+            // all changes cannot drop it.
+            var container = parentRun.Parent;
+            while (container is not null && RevisionWrappers.Contains(container.Name))
+                container = container.Parent;
+            var lastInThread = threadRuns.Append(parentRun)
+                .Select(r => r.AncestorsAndSelf().FirstOrDefault(a => a.Parent == container))
+                .Where(a => a is not null)
+                .Aggregate((last, a) => XNode.DocumentOrderComparer.Compare(a, last) > 0 ? a : last);
+            lastInThread!.AddAfterSelf(replyRun);
         }
 
         return hostParagraphs;

@@ -1038,20 +1038,20 @@ public class DocxSessionCommentAuthoringTests
     }
 
     [Fact]
-    public void DS410_AddCommentReply_KeepsReferencesInTheOrderRepliesWereAdded()
+    public void DS490_AddCommentReply_KeepsReferencesInTheOrderRepliesWereAdded()
     {
         Assert.Equal(new[] { "Root comment." }.Concat(ReplyTexts), ReferenceOrder(BuildThreadOfThreeReplies()));
     }
 
     [Fact]
-    public void DS411_AddCommentReply_ToAReply_GoesAfterTheWholeThread()
+    public void DS491_AddCommentReply_ToAReply_GoesAfterTheWholeThread()
     {
         Assert.Equal(new[] { "Root comment." }.Concat(ReplyTexts).Append("Nested reply."),
             ReferenceOrder(BuildThreadOfThreeReplies(nestedReply: true)));
     }
 
     [Fact]
-    public void DS412_AddCommentReply_RendersTheThreadInTheOrderRepliesWereAdded()
+    public void DS492_AddCommentReply_RendersTheThreadInTheOrderRepliesWereAdded()
     {
         using var ms = new MemoryStream();
         var bytes = BuildThreadOfThreeReplies();
@@ -1069,7 +1069,7 @@ public class DocxSessionCommentAuthoringTests
     [Theory]
     [InlineData("ins")]
     [InlineData("del")]
-    public void DS413_AddCommentReply_AfterATrackedReply_StaysOutsideItsRevisionWrapper(string wrapper)
+    public void DS493_AddCommentReply_AfterATrackedReply_StaysOutsideItsRevisionWrapper(string wrapper)
     {
         // A reviewer's reply reference sits inside w:ins / w:del. The new reply must land beside that
         // wrapper, not inside it, or accepting (del) / rejecting (ins) all changes would drop it.
@@ -1083,5 +1083,33 @@ public class DocxSessionCommentAuthoringTests
             ReferenceOrder(saved));
         Assert.Contains("Fourth reply.", ReferenceOrder(Docxodus.Internal.DocxDiffOps.AcceptRevisions(saved)));
         Assert.Contains("Fourth reply.", ReferenceOrder(Docxodus.Internal.DocxDiffOps.RejectRevisions(saved)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DS494_AddCommentReply_ToAThreadInsideATrackedRevision_KeepsOrderAndSurvivesAcceptAndReject(bool threadDeleted)
+    {
+        // DocxCompare wraps each reference of a thread one reviewer added (or deleted) in its own
+        // w:ins (w:del). The reply must still follow the thread's last reference, outside every wrapper.
+        using var threadSession = new DocxSession(BuildSingleParagraphDoc("The seller delivers the goods."));
+        var rootAnchor = threadSession.AddComment(FirstBodyParagraph(threadSession), null, "Ann", "Root comment.")
+            .Created.First(a => a.Kind == "cmt").Id;
+        Assert.True(threadSession.AddCommentReply(rootAnchor, "Ben", "First reply.").Success);
+        var withThread = threadSession.Save();
+        var without = BuildSingleParagraphDoc("The seller delivers the goods.");
+
+        var redline = threadDeleted
+            ? DocxCompare.Compare(new WmlDocument("a.docx", withThread), new WmlDocument("b.docx", without))
+            : DocxCompare.Compare(new WmlDocument("a.docx", without), new WmlDocument("b.docx", withThread));
+        using var session = new DocxSession(redline.DocumentByteArray);
+        var root = session.ListComments().First(c => c.ParentAnchorId is null).DefAnchorId;
+        Assert.True(session.AddCommentReply(root, "Me", "New reply.").Success);
+        var saved = session.Save();
+
+        var tag = threadDeleted ? " [del]" : " [ins]";
+        Assert.Equal(new[] { "Root comment." + tag, "First reply." + tag, "New reply." }, ReferenceOrder(saved));
+        Assert.Contains("New reply.", ReferenceOrder(Docxodus.Internal.DocxDiffOps.AcceptRevisions(saved)));
+        Assert.Contains("New reply.", ReferenceOrder(Docxodus.Internal.DocxDiffOps.RejectRevisions(saved)));
     }
 }
