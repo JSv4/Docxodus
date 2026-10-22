@@ -1,5 +1,6 @@
 #nullable enable
 
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -494,7 +495,8 @@ internal static class CommentOps
     /// originals.
     /// </para>
     /// </remarks>
-    internal static void CloneCommentsForMoveSource(MainDocumentPart main, XElement source)
+    internal static void CloneCommentsForMoveSource(MainDocumentPart main, XElement source,
+        Func<int> nextRevisionId)
     {
         static bool IsMarker(XElement e) =>
             e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference;
@@ -534,6 +536,8 @@ internal static class CommentOps
                 el.Attributes(W14.paraId).Remove();
                 el.Attributes(PtOpenXml.Unid).Remove();
             }
+            // Both definitions stay live, so a revision inside the comment body needs its own id.
+            RevisionOps.RenumberCopiedRevisions(clone, nextRevisionId);
             commentsRoot.Add(clone);
 
             var newId = (string)clone.Attribute(W.id)!;

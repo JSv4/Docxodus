@@ -81,6 +81,16 @@ public sealed partial class DocxSession
         stream?.Dispose();
     }
 
+    /// <summary>Prepare caller-authored markup for the document: stamp it for the projection
+    /// index, and make the revision id allocator re-seed on next use, because the markup can
+    /// carry <c>w:id</c> values above the counter that a later revision must not reuse
+    /// (issue #1297). Re-seeding only ever raises the counter.</summary>
+    private void AdmitRawMarkup(XElement parsed)
+    {
+        UnidHelper.AssignToSelfAndDescendants(parsed);
+        _revisionCounterSeeded = false;
+    }
+
     internal EditResult RawInsertXmlInternal(string anchorId, Position pos, string xml)
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
@@ -99,7 +109,7 @@ public sealed partial class DocxSession
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            UnidHelper.AssignToSelfAndDescendants(parsedXml);
+            AdmitRawMarkup(parsedXml);
             if (pos == Position.Before) element.AddBeforeSelf(parsedXml);
             else element.AddAfterSelf(parsedXml);
 
@@ -151,7 +161,7 @@ public sealed partial class DocxSession
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            UnidHelper.AssignToSelfAndDescendants(parsedXml);
+            AdmitRawMarkup(parsedXml);
             element.ReplaceWith(parsedXml);
 
             if (_settings.ValidateRawOps && CountRealValidationErrors() > baselineErrors)

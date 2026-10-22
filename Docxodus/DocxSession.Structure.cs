@@ -106,7 +106,7 @@ public sealed partial class DocxSession
             // be split. The move SOURCE takes the clones (see CloneCommentsForMoveSource), leaving
             // the destination wired to the original comments and their threads.
             if (_doc!.MainDocumentPart is { } commentHost)
-                Internal.CommentOps.CloneCommentsForMoveSource(commentHost, source);
+                Internal.CommentOps.CloneCommentsForMoveSource(commentHost, source, NextRevisionId);
 
             var author = _revisionAuthor ?? "docxodus";
             var date = RevisionDateNow();
@@ -740,11 +740,12 @@ public sealed partial class DocxSession
                 second.Add(newPPr);
                 // Both halves keep any pending property change, each under its own id. The new
                 // mark ends the first half, as Word's Enter does, and the original mark goes on
-                // ending the second, so a revision of the mark stays there alone: the new mark
-                // of an untracked split is ordinary content, and a copy of the revision on it
-                // would let a reject also take back the split (issue #1297).
-                Internal.RevisionOps.RenumberCopiedRevisions(newPPr, NextRevisionId);
+                // ending the second, so a revision of the mark stays there alone, and so do the
+                // original ids: the new mark of an untracked split is ordinary content, and a
+                // copy of the revision on it would let a reject also take back the split
+                // (issue #1297).
                 RemoveParagraphMarkRevisions(pPr);
+                Internal.RevisionOps.RenumberCopiedRevisions(pPr, NextRevisionId);
             }
 
             // Split any run that straddles the offset (descends into hyperlinks/sdts),

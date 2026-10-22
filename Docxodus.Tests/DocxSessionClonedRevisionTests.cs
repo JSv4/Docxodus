@@ -80,7 +80,9 @@ public class DocxSessionClonedRevisionTests
         AssertRevisionIdsDistinct(session, expectedCount: 3);
         var paragraphs = Body(session).Elements(W.p).ToList();
         Assert.Null(paragraphs[0].Element(W.pPr)?.Element(W.rPr)?.Element(W.ins));
-        Assert.NotNull(paragraphs[1].Element(W.pPr)?.Element(W.rPr)?.Element(W.ins));
+        // The second half keeps the original mark, so its revisions keep their ids.
+        Assert.Equal("50", (string?)paragraphs[1].Element(W.pPr)?.Element(W.rPr)?.Element(W.ins)?.Attribute(W.id));
+        Assert.Equal("51", (string?)paragraphs[1].Element(W.pPr)?.Element(W.pPrChange)?.Attribute(W.id));
         AssertOutcomes(session,
             accepted: new[] { "p[center]: first ", "p[center]: second", "p: after" },
             rejected: new[] { "p: first ", "p: second|after" });
@@ -203,6 +205,64 @@ public class DocxSessionClonedRevisionTests
 
         Assert.True(result.Success, result.Error?.Message);
         AssertRevisionIdsDistinct(session, expectedCount: 2);
+        AssertOutcomes(session, accepted: new[] { "FF0000", "FF0000" }, rejected: new[] { "none", "none" },
+            describe: body => body.Descendants(W.tc)
+                .Select(tc => (string?)tc.Element(W.tcPr)?.Element(W.shd)?.Attribute(W.fill) ?? "none").ToArray());
+    }
+
+    [Fact]
+    public void RID018_TrackedMove_GivesTheCopiedCommentsRevisionsTheirOwnIds()
+    {
+        byte[] commented;
+        using (var author = Open("<w:p><w:r><w:t>moved</w:t></w:r></w:p><w:p><w:r><w:t>after</w:t></w:r></w:p>",
+                   TrackedChangeMode.Accept, "Alice"))
+        {
+            Assert.True(author.AddComment(FirstParagraph(author), null, "Alice", "note").Success);
+            commented = author.Save();
+        }
+        var withRevision = WithPart(commented, document => document.MainDocumentPart!.WordprocessingCommentsPart!,
+            root => root.Descendants(W.p).First().Add(XElement.Parse(
+                $"<w:ins xmlns:w=\"{W.w}\" w:id=\"80\" {Alice}><w:r><w:t> extra</w:t></w:r></w:ins>")));
+        using var bob = new DocxSession(withRevision, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Bob",
+        });
+        var paragraphs = bob.Project().AnchorIndex.Values.Select(v => v.Anchor)
+            .Where(a => a.Kind == "p" && a.Scope == "body").Select(a => a.Id).ToList();
+
+        var result = bob.MoveBlock(paragraphs[0], paragraphs[1], Position.After);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var commentInsertions = Part(bob.Save(), document => document.MainDocumentPart!.WordprocessingCommentsPart!)
+            .Descendants(W.ins).Select(ins => (string?)ins.Attribute(W.id)).ToList();
+        Assert.Equal(2, commentInsertions.Count);
+        Assert.Equal(2, commentInsertions.Distinct().Count());
+        Assert.All(bob.ListRevisions(),
+            revision => Assert.Equal(RevisionResolutionStatus.Supported, revision.ResolutionStatus));
+    }
+
+    /// <summary>Raw XML can bring in revision ids above the session's counter; the next id the
+    /// session mints must still be unused.</summary>
+    [Fact]
+    public void RID019_RawMarkupAfterTheCounterIsSeeded_IsNotReusedByTheNextCopy()
+    {
+        using var session = Open(PendingBoldRun + "<w:p><w:r><w:t>zzz</w:t></w:r></w:p>", TrackedChangeMode.Accept);
+        var paragraphs = session.Project().AnchorIndex.Values.Select(v => v.Anchor)
+            .Where(a => a.Kind == "p").Select(a => a.Id).ToList();
+        Assert.True(session.ApplyFormat(paragraphs[0], new CharSpan(3, 3), new FormatOp { Italic = true }).Success);
+        // The counter is now seeded and has handed out 1001 and 1002 to the split slices; occupy
+        // the next ids it would hand out. (Nothing may save the session in between: a save
+        // re-seeds the counter and would hide the defect.)
+        var runs = string.Concat(Enumerable.Range(1003, 10).Select(id =>
+            $"<w:r><w:rPr><w:b/><w:rPrChange w:id=\"{id}\" w:author=\"Carol\" w:date=\"2025-01-02T09:00:00Z\">" +
+            "<w:rPr/></w:rPrChange></w:rPr><w:t>raw</w:t></w:r>"));
+        Assert.True(session.Raw.InsertXml(paragraphs[1], Position.After, $"<w:p xmlns:w=\"{W.w}\">{runs}</w:p>").Success);
+
+        var result = session.SplitParagraph(paragraphs[0], 1);
+
+        Assert.True(result.Success, result.Error?.Message);
+        AssertRevisionIdsDistinct(session, expectedCount: null);
     }
 
     // ─── Shared fixture plumbing ──────────────────────────────────────────
@@ -252,12 +312,15 @@ public class DocxSessionClonedRevisionTests
         return stream.ToArray();
     }
 
-    private static XElement Body(byte[] bytes)
+    private static XElement Body(byte[] bytes) =>
+        Part(bytes, document => document.MainDocumentPart!).Element(W.body)!;
+
+    private static XElement Part(byte[] bytes, Func<WordprocessingDocument, OpenXmlPart> part)
     {
         using var stream = new MemoryStream(bytes);
         using var document = WordprocessingDocument.Open(stream, false);
-        using var reader = document.MainDocumentPart!.GetStream();
-        return XDocument.Load(reader).Root!.Element(W.body)!;
+        using var reader = part(document).GetStream();
+        return XDocument.Load(reader).Root!;
     }
 
     /// <summary>Every revision marker in the body has its own id, and the session can resolve
@@ -280,16 +343,17 @@ public class DocxSessionClonedRevisionTests
     /// <summary>Accepting and rejecting the edited document, all at once and one revision at a
     /// time, produce the expected bodies.</summary>
     internal static void AssertOutcomes(DocxSession session,
-        string[] accepted, string[] rejected)
+        string[] accepted, string[] rejected, Func<XElement, string[]>? describe = null)
     {
         var edited = session.Save();
-        Assert.Equal(accepted, Resolve(edited, accept: true, oneAtATime: false));
-        Assert.Equal(accepted, Resolve(edited, accept: true, oneAtATime: true));
-        Assert.Equal(rejected, Resolve(edited, accept: false, oneAtATime: false));
-        Assert.Equal(rejected, Resolve(edited, accept: false, oneAtATime: true));
+        describe ??= body => body.Elements(W.p).Select(Describe).ToArray();
+        Assert.Equal(accepted, describe(Resolve(edited, accept: true, oneAtATime: false)));
+        Assert.Equal(accepted, describe(Resolve(edited, accept: true, oneAtATime: true)));
+        Assert.Equal(rejected, describe(Resolve(edited, accept: false, oneAtATime: false)));
+        Assert.Equal(rejected, describe(Resolve(edited, accept: false, oneAtATime: true)));
     }
 
-    private static string[] Resolve(byte[] bytes, bool accept, bool oneAtATime)
+    private static XElement Resolve(byte[] bytes, bool accept, bool oneAtATime)
     {
         using var session = new DocxSession(bytes);
         if (oneAtATime)
@@ -308,7 +372,7 @@ public class DocxSessionClonedRevisionTests
             Assert.True(all.Success, all.Error?.Message);
         }
         Assert.Empty(session.ListRevisions());
-        return Body(session).Elements(W.p).Select(Describe).ToArray();
+        return Body(session);
     }
 
     /// <summary>"p[Heading1,center]: abc{b,i}|def": the style and justification, then each run's text with the

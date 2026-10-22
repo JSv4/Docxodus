@@ -8,13 +8,18 @@ All notable changes to this project will be documented in this file.
 
 - `DocxSession` edits that copy a run's, paragraph's or cell's properties no longer copy the
   tracked-change ids inside them (#1297). Formatting part of a run, a tracked replacement inside a
-  run, `SplitParagraph`, a tracked `MoveBlock`, a tracked plain-text content-control fill, a new
-  table row or column beside a cell with a pending property change, and the tracked picture edits
-  each left two live `w:rPrChange`, `w:pPrChange`, `w:tcPrChange` or paragraph-mark `w:ins`/`w:del`
-  markers sharing one `w:id`, so every revision carrying it was listed as ambiguous and could be
-  neither accepted nor rejected on its own. Each copy now takes a fresh id from the session's
-  allocator. A split paragraph keeps a revision of its paragraph mark only on the original mark,
-  which now ends the second half, so rejecting that revision no longer also undoes the split.
+  run, `SplitParagraph`, a tracked `MoveBlock` (including the comments it copies), a tracked
+  plain-text content-control fill, a new table row or column beside a cell with a pending property
+  change, and the tracked picture edits each left two live `w:rPrChange`, `w:pPrChange`,
+  `w:tcPrChange` or paragraph-mark `w:ins`/`w:del` markers sharing one `w:id`, so every revision
+  carrying it was listed as ambiguous and could be neither accepted nor rejected on its own. The
+  copy now takes a fresh id from the session's allocator, while the part that continues the
+  original (the text after a run split, the second half of a split paragraph) keeps the original
+  ids, so a revision id a caller already holds still resolves. Raw XML inserted through
+  `Raw.InsertXml`/`Raw.ReplaceXml` now makes the allocator re-scan the document, so it never hands
+  out an id that markup brought in. A split paragraph keeps a revision of its paragraph mark only
+  on the original mark, which ends the second half, so rejecting that revision no longer also
+  undoes the split.
 
 ## [14.1.0] - 2026-10-21
 
