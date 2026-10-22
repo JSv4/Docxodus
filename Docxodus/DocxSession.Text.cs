@@ -1071,6 +1071,23 @@ public sealed partial class DocxSession
     /// <c>xsd:dateTime</c> the schema and every reader expect.</summary>
     private static string RevisionDateNow() => Internal.CommentOps.FormatDate(DateTime.UtcNow);
 
+    /// <summary>
+    /// Credit a pending property change that this edit folded more formatting into to this
+    /// edit. Its baseline stays, so a reject still returns to the original properties, but the
+    /// author and date become this edit's; another author's change also takes a fresh id, since
+    /// it now records a different person's revision (issue #1295). The same author's change
+    /// keeps its id.
+    /// </summary>
+    private void CreditFoldedChange(XElement change, string author, string date)
+    {
+        if (!string.Equals((string?)change.Attribute(W.author), author, StringComparison.Ordinal))
+        {
+            change.SetAttributeValue(W.id, NextRevisionId());
+            change.SetAttributeValue(W.author, author);
+        }
+        change.SetAttributeValue(W.date, date);
+    }
+
     private XElement CreateRevisionEnvelope(
         XName name, RevisionStamp stamp, params object[] content) =>
         CreateRevisionEnvelope(name, stamp.Author, stamp.Date, content);

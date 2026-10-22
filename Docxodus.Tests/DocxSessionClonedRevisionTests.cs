@@ -550,6 +550,81 @@ public class DocxSessionClonedRevisionTests
             field => field.IsAfter(insertions[0]) && field.IsBefore(insertions[1]));
     }
 
+    // ─── Folding into another author's pending property change (#1295) ───
+
+    /// <summary>A run keeps one <c>w:rPrChange</c>, so Bob's formatting folds into Alice's: the
+    /// baseline stays her original properties, and the marker now records the latest edit.</summary>
+    [Fact]
+    public void RID014_TrackedFormatOverAnotherAuthorsPendingChange_CreditsTheLatestEditor()
+    {
+        var before = DateTime.UtcNow.AddMinutes(-1);
+        using var session = Open(PendingBoldRun, TrackedChangeMode.RenderInline);
+
+        var result = session.ApplyFormat(FirstParagraph(session), null, new FormatOp { Underline = true });
+
+        Assert.True(result.Success, result.Error?.Message);
+        var change = Body(session).Descendants(W.rPrChange).Single();
+        Assert.Equal("Bob", (string?)change.Attribute(W.author));
+        Assert.True(DateTime.Parse((string)change.Attribute(W.date)!).ToUniversalTime() >= before);
+        Assert.NotEqual("40", (string?)change.Attribute(W.id));
+        Assert.False(change.Element(W.rPr)!.HasElements);
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.Equal("Bob", revision.Author);
+        AssertRevisionIdsDistinct(session, expectedCount: 1);
+        AssertOutcomes(session, accepted: new[] { "p: abcdefghi{b,u}" }, rejected: new[] { "p: abcdefghi" });
+    }
+
+    [Fact]
+    public void RID015_TrackedFormatOverYourOwnPendingChange_KeepsItsIdAndRefreshesTheDate()
+    {
+        using var session = Open(PendingBoldRun, TrackedChangeMode.RenderInline, author: "Alice");
+
+        var result = session.ApplyFormat(FirstParagraph(session), null, new FormatOp { Underline = true });
+
+        Assert.True(result.Success, result.Error?.Message);
+        var change = Body(session).Descendants(W.rPrChange).Single();
+        Assert.Equal("Alice", (string?)change.Attribute(W.author));
+        Assert.Equal("40", (string?)change.Attribute(W.id));
+        Assert.NotEqual("2025-01-02T09:00:00Z", (string?)change.Attribute(W.date));
+    }
+
+    /// <summary>Formatting part of the run moves only that slice to Bob; the slices he did not
+    /// touch stay Alice's, each under its own id.</summary>
+    [Fact]
+    public void RID016_TrackedFormatOverPartOfAnotherAuthorsPendingChange_CreditsOnlyThatSlice()
+    {
+        using var session = Open(PendingBoldRun, TrackedChangeMode.RenderInline);
+
+        var result = session.ApplyFormat(FirstParagraph(session), new CharSpan(3, 3), new FormatOp { Italic = true });
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Equal(new[] { "abc:Alice", "def:Bob", "ghi:Alice" }, Body(session).Descendants(W.r).Select(run =>
+            $"{string.Concat(run.Elements(W.t).Select(t => t.Value))}:{(string?)run.Element(W.rPr)!.Element(W.rPrChange)!.Attribute(W.author)}"));
+        AssertRevisionIdsDistinct(session, expectedCount: 3);
+    }
+
+    /// <summary>The same fold happens when a tracked split changes a second half that already
+    /// carries Alice's pending paragraph change: the change is now Bob's too.</summary>
+    [Fact]
+    public void RID017_TrackedSplitOverAnotherAuthorsPendingParagraphChange_CreditsTheSplitsEditor()
+    {
+        using var session = Open(
+            "<w:p><w:pPr><w:pageBreakBefore/><w:jc w:val=\"center\"/>" +
+            "<w:pPrChange w:id=\"51\" " + Alice + "><w:pPr/></w:pPrChange></w:pPr>" +
+            "<w:r><w:t>Termsapply</w:t></w:r></w:p>",
+            TrackedChangeMode.RenderInline);
+
+        var result = session.SplitParagraph(FirstParagraph(session), 5);
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Equal(new[] { "Alice", "Bob" }, Body(session).Elements(W.p)
+            .Select(p => (string?)p.Element(W.pPr)!.Element(W.pPrChange)!.Attribute(W.author)));
+        AssertRevisionIdsDistinct(session, expectedCount: 3);
+        AssertOutcomes(session,
+            accepted: new[] { "p[center,pageBreakBefore]: Terms", "p[center]: apply" },
+            rejected: new[] { "p: Terms|apply" });
+    }
+
     // ─── Shared fixture plumbing ──────────────────────────────────────────
 
     /// <summary>A heading whose next style is Normal, as in Word's built-in styles.</summary>
@@ -672,7 +747,7 @@ public class DocxSessionClonedRevisionTests
         {
             var text = string.Concat(run.Elements(W.t).Select(t => t.Value))
                 + (run.Element(W.footnoteReference) is null ? "" : "^");
-            var toggles = new[] { W.b, W.i }.Where(name => run.Element(W.rPr)?.Element(name) is not null)
+            var toggles = new[] { W.b, W.i, W.u }.Where(name => run.Element(W.rPr)?.Element(name) is not null)
                 .Select(name => name.LocalName).ToList();
             return toggles.Count == 0 ? text : $"{text}{{{string.Join(",", toggles)}}}";
         }).Where(text => text.Length > 0);

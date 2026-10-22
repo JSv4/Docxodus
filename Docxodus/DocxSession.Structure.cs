@@ -718,20 +718,31 @@ public sealed partial class DocxSession
     /// paragraph mark and so keeps its own properties. Record whatever the split changed there
     /// (the page break left on the first half, the next style a heading's Enter starts, a mark
     /// formatting the fresh paragraph drops) as this edit's property changes, so rejecting
-    /// everything gives back the original paragraph's properties. A pending change already
-    /// copied from the original keeps its baseline, which is what a reject restores anyway.
+    /// everything gives back the original paragraph's properties. A pending change copied from
+    /// the original keeps its baseline, which is what a reject restores anyway, and is credited
+    /// to this edit like any other fold.
     /// </summary>
     private void TrackSplitOffProperties(XElement originalPPr, XElement secondPPr, RevisionStamp stamp)
     {
         var markRevisions = Internal.RevisionOps.RevWrapperNames;
         var oldMark = PropertySnapshot(originalPPr.Element(W.rPr), W.rPr, W.rPrChange, markRevisions);
-        if (secondPPr.Element(W.rPr)?.Element(W.rPrChange) is null
-            && !PropertySnapshotEquals(oldMark, secondPPr.Element(W.rPr), W.rPrChange, markRevisions))
-            WordprocessingMLUtil.InsertRPrChildInOrder(GetOrCreatePPrChild(secondPPr, W.rPr),
-                CreateRevisionEnvelope(W.rPrChange, stamp, oldMark));
-        if (secondPPr.Element(W.pPrChange) is null)
-            TrackPropertyMutation(secondPPr, originalPPr, W.pPrChange, stamp.Author, stamp.Date,
-                W.rPr, W.sectPr);
+        if (!PropertySnapshotEquals(oldMark, secondPPr.Element(W.rPr), W.rPrChange, markRevisions))
+            TrackOrCreditPropertyChange(GetOrCreatePPrChild(secondPPr, W.rPr), W.rPrChange, oldMark, stamp);
+        var oldParagraph = PropertySnapshot(originalPPr, W.pPr, W.pPrChange, W.rPr, W.sectPr);
+        if (!PropertySnapshotEquals(oldParagraph, secondPPr, W.pPrChange, W.rPr, W.sectPr))
+            TrackOrCreditPropertyChange(secondPPr, W.pPrChange, oldParagraph, stamp);
+    }
+
+    /// <summary>Record <paramref name="baseline"/> as <paramref name="properties"/>' pending
+    /// change, or credit the change it already has to this edit. The change is the last child
+    /// of both <c>w:pPr</c> and a paragraph mark's <c>w:rPr</c>.</summary>
+    private void TrackOrCreditPropertyChange(XElement properties, XName changeName, XElement baseline,
+        RevisionStamp stamp)
+    {
+        if (properties.Element(changeName) is { } existing)
+            CreditFoldedChange(existing, stamp.Author, stamp.Date);
+        else
+            properties.Add(CreateRevisionEnvelope(changeName, stamp, baseline));
     }
 
     public EditResult SplitParagraph(string anchorId, int characterOffset)

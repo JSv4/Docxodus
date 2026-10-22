@@ -1888,7 +1888,12 @@ on/off:
   `SmallCaps`.
 
 Tracked mode (`ApplyFormatToRunTracked`) delegates to the same writer, so every field records
-into the run's `w:rPrChange` baseline identically.
+into the run's `w:rPrChange` baseline identically. A run holds one `w:rPrChange`, so formatting a
+run that already has a pending change folds into it: the baseline stays the run's original
+properties, and the change is credited to the latest edit, with that edit's author and date. When
+the change was another author's it also takes a fresh `w:id`; the same author's keeps its id
+(issue #1295). A tracked split that changes a paragraph already carrying a pending
+`w:pPrChange` folds the same way.
 
 The substring + `TextMatch` overloads exist because computing a `CharSpan` by hand is fragile when an auto-number prefix (`# Fourth The total…`) shifts the visible text relative to the run-text indices the `CharSpan` overload expects — see issue #138. Both convenience overloads just resolve to a `CharSpan` and call the underlying overload.
 
