@@ -6096,20 +6096,21 @@ namespace Docxodus
         /// Adds pagination-related data attributes to the HTML paragraph element.
         /// These attributes help the client-side pagination engine make better decisions.
         /// A block merged through hidden paragraph marks starts at <paramref name="firstParagraph"/> and ends
-        /// at <paramref name="lastParagraph"/> (the same element when nothing was merged): properties that
-        /// anchor to the block's start come from the first, while the keep properties come from the last,
-        /// whose paragraph mark is the one that sits before the next block.
+        /// at <paramref name="lastParagraph"/> (the same element when nothing was merged): the keep
+        /// properties come from the last, whose paragraph mark is the one that sits before the next block,
+        /// and the page break before, which belongs to the block's start, from the first. The remaining
+        /// properties are read from the first paragraph.
         /// </summary>
         private static void AddPaginationDataAttributes(XElement firstParagraph, XElement lastParagraph, XElement htmlParagraph)
         {
             var closingPPr = lastParagraph.Element(W.pPr);
 
             // w:keepNext - keep this paragraph with the next one on the same page
-            if (IsOn(closingPPr?.Element(W.keepNext)))
+            if (IsOnOffPropertyEnabled(closingPPr?.Element(W.keepNext)))
                 htmlParagraph.Add(new XAttribute("data-keep-with-next", "true"));
 
             // w:keepLines - keep all lines of this paragraph together on one page
-            if (IsOn(closingPPr?.Element(W.keepLines)))
+            if (IsOnOffPropertyEnabled(closingPPr?.Element(W.keepLines)))
                 htmlParagraph.Add(new XAttribute("data-keep-lines", "true"));
 
             var pPr = firstParagraph.Element(W.pPr);
@@ -6132,9 +6133,6 @@ namespace Docxodus
                 htmlParagraph.Add(new XAttribute("data-widow-control", isEnabled ? "true" : "false"));
             }
         }
-
-        private static bool IsOn(XElement? toggle) =>
-            toggle != null && ((string?)toggle.Attribute(W.val) == null || toggle.Attribute(W.val).ToBoolean() == true);
 
         // Parses an OOXML table/cell width value (w:w on w:tblW / w:tcW, schema type
         // ST_TblWidth / ST_MeasurementOrPercent). The value is normally a plain integer,

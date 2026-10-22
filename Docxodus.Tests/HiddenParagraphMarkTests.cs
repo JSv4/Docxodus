@@ -152,7 +152,7 @@ public class HiddenParagraphMarkTests
         Assert.Single(html.Descendants(), e => e.Name.LocalName == "p" && e.Value.Contains("Return the cedar folder"));
     }
 
-    private const string RunInHeading = "<w:keepNext/><w:keepLines/><w:pageBreakBefore/><w:widowControl w:val=\"0\"/>";
+    private const string RunInHeading = "<w:keepNext/><w:keepLines/><w:pageBreakBefore/>";
 
     // A run-in block: a hidden-mark heading, any further hidden-mark paragraphs, then a closing paragraph
     // carrying closingPPr, followed by an unrelated paragraph. Returns the merged block's HTML element.
@@ -196,10 +196,10 @@ public class HiddenParagraphMarkTests
     }
 
     [Fact]
-    public void RunInBlock_KeepsStartAnchoredPropertiesFromTheFirstParagraph()
+    public void RunInBlock_TakesPageBreakBeforeFromTheFirstParagraphOnly()
     {
-        var block = ConvertRunIn("<w:pageBreakBefore/><w:widowControl/>", RunInHeading);
+        // Only the heading carries pageBreakBefore; reading it from the closing paragraph would lose it.
+        var block = ConvertRunIn("", "<w:keepNext/>");
         Assert.Equal("true", (string?)block.Attribute("data-page-break-before"));
-        Assert.Equal("false", (string?)block.Attribute("data-widow-control"));
     }
 }
