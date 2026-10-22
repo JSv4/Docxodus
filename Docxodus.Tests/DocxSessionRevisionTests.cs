@@ -942,7 +942,7 @@ public class DocxSessionRevisionTests
     }
 
     [Fact]
-    public void DS393_ApplyFormat_Tracked_PreservesExistingRevisionBaselineAndMetadata()
+    public void DS393_ApplyFormat_Tracked_PreservesExistingRevisionBaselineAndCreditsTheLaterEditor()
     {
         using var s = new DocxSession(BuildFormatChangeDoc(),
             new DocxSessionSettings
@@ -957,11 +957,13 @@ public class DocxSessionRevisionTests
         Assert.True(result.Success, result.Error?.Message);
 
         // OOXML allows one rPrChange only. The later edit folds into Carol's pending
-        // change so reject still reaches the original empty formatting baseline.
+        // change so reject still reaches the original empty formatting baseline, and the
+        // folded change is now the later reviewer's, under a fresh id (issue #1295).
         var listed = Assert.Single(s.ListRevisions());
         Assert.StartsWith("rev2-", listed.Id);
-        Assert.Equal(new[] { "401" }, listed.ConstituentIds);
-        Assert.Equal("Carol", listed.Author);
+        var freshId = Assert.Single(listed.ConstituentIds);
+        Assert.NotEqual("401", freshId);
+        Assert.Equal("Later Reviewer", listed.Author);
 
         using (var trackedMs = new MemoryStream(s.Save()))
         using (var trackedDoc = WordprocessingDocument.Open(trackedMs, false))
@@ -972,14 +974,14 @@ public class DocxSessionRevisionTests
             Assert.NotNull(rPr.Element(W.b));
             Assert.NotNull(rPr.Element(W.i));
             var change = Assert.Single(rPr.Elements(W.rPrChange));
-            Assert.Equal("401", (string?)change.Attribute(W.id));
-            Assert.Equal("Carol", (string?)change.Attribute(W.author));
+            Assert.Equal(freshId, (string?)change.Attribute(W.id));
+            Assert.Equal("Later Reviewer", (string?)change.Attribute(W.author));
             Assert.Empty(change.Element(W.rPr)!.Elements());
             Assert.Empty(change.Element(W.rPr)!.Descendants(W.rPrChange));
             Assert.Equal(W.rPrChange, rPr.Elements().Last().Name);
         }
 
-        Assert.True(s.RejectRevision("rev401").Success);
+        Assert.True(s.RejectRevision(listed.Id).Success);
         using var rejectedMs = new MemoryStream(s.Save());
         using var rejectedDoc = WordprocessingDocument.Open(rejectedMs, false);
         var rejectedRun = rejectedDoc.MainDocumentPart!.GetXDocument().Root!

@@ -550,6 +550,158 @@ public class DocxSessionClonedRevisionTests
             field => field.IsAfter(insertions[0]) && field.IsBefore(insertions[1]));
     }
 
+    // ─── Folding into another author's pending property change (#1295) ───
+
+    /// <summary>A run keeps one <c>w:rPrChange</c>, so Bob's formatting folds into Alice's: the
+    /// baseline stays her original properties, and the marker now records the latest edit.</summary>
+    [Fact]
+    public void RID014_TrackedFormatOverAnotherAuthorsPendingChange_CreditsTheLatestEditor()
+    {
+        var before = DateTime.UtcNow.AddMinutes(-1);
+        using var session = Open(PendingBoldRun, TrackedChangeMode.RenderInline);
+
+        var result = session.ApplyFormat(FirstParagraph(session), null, new FormatOp { Underline = true });
+
+        Assert.True(result.Success, result.Error?.Message);
+        var change = Body(session).Descendants(W.rPrChange).Single();
+        Assert.Equal("Bob", (string?)change.Attribute(W.author));
+        Assert.True(DateTime.Parse((string)change.Attribute(W.date)!).ToUniversalTime() >= before);
+        Assert.NotEqual("40", (string?)change.Attribute(W.id));
+        Assert.False(change.Element(W.rPr)!.HasElements);
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.Equal("Bob", revision.Author);
+        AssertRevisionIdsDistinct(session, expectedCount: 1);
+        AssertOutcomes(session, accepted: new[] { "p: abcdefghi{b,u}" }, rejected: new[] { "p: abcdefghi" });
+    }
+
+    [Fact]
+    public void RID015_TrackedFormatOverYourOwnPendingChange_KeepsItsIdAndRefreshesTheDate()
+    {
+        using var session = Open(PendingBoldRun, TrackedChangeMode.RenderInline, author: "Alice");
+
+        var result = session.ApplyFormat(FirstParagraph(session), null, new FormatOp { Underline = true });
+
+        Assert.True(result.Success, result.Error?.Message);
+        var change = Body(session).Descendants(W.rPrChange).Single();
+        Assert.Equal("Alice", (string?)change.Attribute(W.author));
+        Assert.Equal("40", (string?)change.Attribute(W.id));
+        Assert.NotEqual("2025-01-02T09:00:00Z", (string?)change.Attribute(W.date));
+    }
+
+    /// <summary>Formatting part of the run moves only that slice to Bob; the slices he did not
+    /// touch stay Alice's, each under its own id.</summary>
+    [Fact]
+    public void RID016_TrackedFormatOverPartOfAnotherAuthorsPendingChange_CreditsOnlyThatSlice()
+    {
+        using var session = Open(PendingBoldRun, TrackedChangeMode.RenderInline);
+
+        var result = session.ApplyFormat(FirstParagraph(session), new CharSpan(3, 3), new FormatOp { Italic = true });
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Equal(new[] { "abc:Alice", "def:Bob", "ghi:Alice" }, Body(session).Descendants(W.r).Select(run =>
+            $"{string.Concat(run.Elements(W.t).Select(t => t.Value))}:{(string?)run.Element(W.rPr)!.Element(W.rPrChange)!.Attribute(W.author)}"));
+        AssertRevisionIdsDistinct(session, expectedCount: 3);
+        AssertOutcomes(session,
+            accepted: new[] { "p: abc{b}|def{b,i}|ghi{b}" },
+            rejected: new[] { "p: abc|def|ghi" });
+    }
+
+    /// <summary>A tracked split that changes nothing on the second half leaves Alice's pending
+    /// paragraph or mark change hers, on both halves.</summary>
+    [Theory]
+    [InlineData("<w:jc w:val=\"center\"/><w:pPrChange w:id=\"51\" " + Alice + "><w:pPr/></w:pPrChange>")]
+    [InlineData("<w:jc w:val=\"center\"/><w:rPr><w:b/><w:rPrChange w:id=\"52\" " + Alice +
+        "><w:rPr/></w:rPrChange></w:rPr>")]
+    public void RID025_TrackedSplitThatChangesNothing_LeavesAPendingChangeWithItsAuthor(string paragraphProperties)
+    {
+        using var session = Open($"<w:p><w:pPr>{paragraphProperties}</w:pPr><w:r><w:t>Termsapply</w:t></w:r></w:p>",
+            TrackedChangeMode.RenderInline);
+
+        var result = session.SplitParagraph(FirstParagraph(session), 5);
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Equal(new[] { "Alice", "Alice" }, Body(session).Elements(W.p).Select(p => (string?)p.Element(W.pPr)!
+            .Descendants().Single(e => e.Name == W.pPrChange || e.Name == W.rPrChange).Attribute(W.author)));
+    }
+
+    /// <summary>A split that takes the second half back to the baseline of Alice's pending change
+    /// resolves that change there, as a formatting edit does: accepting and rejecting it would
+    /// give the same paragraph.</summary>
+    [Fact]
+    public void RID026_TrackedSplitBackToAPendingChangesBaseline_ResolvesItOnTheSecondHalf()
+    {
+        using var session = Open(
+            "<w:p><w:pPr><w:pageBreakBefore/><w:pPrChange w:id=\"51\" " + Alice + "><w:pPr/></w:pPrChange></w:pPr>" +
+            "<w:r><w:t>Termsapply</w:t></w:r></w:p>", TrackedChangeMode.RenderInline);
+
+        var result = session.SplitParagraph(FirstParagraph(session), 5);
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Null(Body(session).Elements(W.p).Last().Element(W.pPr)?.Element(W.pPrChange));
+        AssertOutcomes(session,
+            accepted: new[] { "p[pageBreakBefore]: Terms", "p: apply" },
+            rejected: new[] { "p: Terms|apply" });
+    }
+
+    /// <summary>Crediting a folded change records a revision, so the document is left with Track
+    /// Changes on, as every new revision leaves it.</summary>
+    [Fact]
+    public void RID027_CreditingAFoldedChange_TurnsTrackChangesOn()
+    {
+        using var session = Open(PendingBoldRun, TrackedChangeMode.RenderInline);
+
+        Assert.True(session.ApplyFormat(FirstParagraph(session), null, new FormatOp { Underline = true }).Success);
+
+        Assert.NotNull(Part(session.Save(), document => document.MainDocumentPart!.DocumentSettingsPart!)
+            .Element(W.trackRevisions));
+    }
+
+    /// <summary>The same fold happens when a tracked split changes a second half that already
+    /// carries Alice's pending paragraph change: the change is now Bob's too.</summary>
+    [Fact]
+    public void RID017_TrackedSplitOverAnotherAuthorsPendingParagraphChange_CreditsTheSplitsEditor()
+    {
+        using var session = Open(
+            "<w:p><w:pPr><w:pageBreakBefore/><w:jc w:val=\"center\"/>" +
+            "<w:pPrChange w:id=\"51\" " + Alice + "><w:pPr/></w:pPrChange></w:pPr>" +
+            "<w:r><w:t>Termsapply</w:t></w:r></w:p>",
+            TrackedChangeMode.RenderInline);
+
+        var result = session.SplitParagraph(FirstParagraph(session), 5);
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Equal(new[] { "Alice", "Bob" }, Body(session).Elements(W.p)
+            .Select(p => (string?)p.Element(W.pPr)!.Element(W.pPrChange)!.Attribute(W.author)));
+        AssertRevisionIdsDistinct(session, expectedCount: 3);
+        AssertOutcomes(session,
+            accepted: new[] { "p[center,pageBreakBefore]: Terms", "p[center]: apply" },
+            rejected: new[] { "p: Terms|apply" });
+    }
+
+    /// <summary>Section edits fold by the same rule as formatting: Bob reworking his own pending
+    /// section change keeps its id and takes the edit's date, and the baseline stays.</summary>
+    [Fact]
+    public void RID029_TrackedSectionEditOverYourOwnPendingChange_KeepsItsIdAndRefreshesTheDate()
+    {
+        const string letter = "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>";
+        using var session = Open(
+            "<w:p><w:r><w:t>Body text.</w:t></w:r></w:p><w:sectPr>" + letter +
+            "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"720\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/>" +
+            $"<w:sectPrChange w:id=\"77\" w:author=\"Bob\" w:date=\"2026-01-01T00:00:00Z\"><w:sectPr>{letter}</w:sectPr></w:sectPrChange>" +
+            "</w:sectPr>",
+            TrackedChangeMode.RenderInline);
+
+        var result = session.SetPageSetup(FirstParagraph(session), new PageSetupOp { Landscape = true });
+
+        Assert.True(result.Success, result.Error?.Message);
+        var change = Body(session).Element(W.sectPr)!.Element(W.sectPrChange)!;
+        Assert.Equal(("77", "Bob"), ((string?)change.Attribute(W.id), (string?)change.Attribute(W.author)));
+        Assert.NotEqual("2026-01-01T00:00:00Z", (string?)change.Attribute(W.date));
+        Assert.True(XNode.DeepEquals(
+            XElement.Parse($"<w:sectPrChange xmlns:w=\"{W.w}\"><w:sectPr>{letter}</w:sectPr></w:sectPrChange>").Element(W.sectPr),
+            change.Element(W.sectPr)), change.ToString());
+    }
+
     // ─── Shared fixture plumbing ──────────────────────────────────────────
 
     /// <summary>A heading whose next style is Normal, as in Word's built-in styles.</summary>
@@ -672,7 +824,7 @@ public class DocxSessionClonedRevisionTests
         {
             var text = string.Concat(run.Elements(W.t).Select(t => t.Value))
                 + (run.Element(W.footnoteReference) is null ? "" : "^");
-            var toggles = new[] { W.b, W.i }.Where(name => run.Element(W.rPr)?.Element(name) is not null)
+            var toggles = new[] { W.b, W.i, W.u }.Where(name => run.Element(W.rPr)?.Element(name) is not null)
                 .Select(name => name.LocalName).ToList();
             return toggles.Count == 0 ? text : $"{text}{{{string.Join(",", toggles)}}}";
         }).Where(text => text.Length > 0);

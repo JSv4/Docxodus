@@ -2304,9 +2304,9 @@ public sealed partial class DocxSession : IDisposable
     /// Apply a run-format mutation using Word's native tracked-format representation:
     /// the run keeps its new properties while <c>w:rPr/w:rPrChange/w:rPr</c> stores
     /// the old properties for reject. A run may carry only one direct rPrChange. When
-    /// it already has one, preserve that marker (including its original baseline and
-    /// attribution) and fold the new formatting into the same pending revision; replacing
-    /// its baseline with the intermediate format would make reject-all stop halfway.
+    /// it already has one, keep that marker's original baseline and fold the new formatting
+    /// into the same pending revision, credited to this edit; replacing its baseline with
+    /// the intermediate format would make reject-all stop halfway.
     /// </summary>
     private void ApplyFormatToRunTracked(
         XElement run, FormatOp op, string revisionAuthor, string revisionDate)
@@ -2363,15 +2363,11 @@ public sealed partial class DocxSession : IDisposable
             return;
         }
 
-        if (existingChange is not null)
-        {
-            WordprocessingMLUtil.InsertRPrChildInOrder(currentRPr, existingChange);
-            return;
-        }
-
-        WordprocessingMLUtil.InsertRPrChildInOrder(currentRPr,
-            CreateRevisionEnvelope(
-                W.rPrChange, revisionAuthor, revisionDate, oldProperties));
+        // The resolve and no-op outcomes above are SettlePropertyChange's, taken early so the
+        // run gets back its exact stored XML.
+        if (existingChange is not null) WordprocessingMLUtil.InsertRPrChildInOrder(currentRPr, existingChange);
+        SettlePropertyChange(currentRPr, W.rPrChange, existingChange, oldProperties,
+            new RevisionStamp(revisionAuthor, revisionDate), changed: true, atBaseline: false);
     }
 
     /// <summary>

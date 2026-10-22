@@ -1071,6 +1071,44 @@ public sealed partial class DocxSession
     /// <c>xsd:dateTime</c> the schema and every reader expect.</summary>
     private static string RevisionDateNow() => Internal.CommentOps.FormatDate(DateTime.UtcNow);
 
+    /// <summary>
+    /// The one rule for a tracked edit to properties that can hold a single pending change
+    /// (<c>w:rPrChange</c>, <c>w:pPrChange</c> and their siblings; issue #1295):
+    /// <list type="bullet">
+    /// <item>a <paramref name="pending"/> change the edit brought back to its baseline is
+    /// resolved, since accepting and rejecting it would give the same properties;</item>
+    /// <item>an edit that <paramref name="changed"/> nothing leaves everything as it was;</item>
+    /// <item>otherwise a pending change keeps its baseline, so a reject still returns to the
+    /// original properties, and is credited to this edit: its date becomes the edit's, and
+    /// another author's change also takes this author and a fresh id, since it now records a
+    /// different person's revision (the same author's keeps its id);</item>
+    /// <item>without a pending change, <paramref name="before"/> is recorded as a new one.</item>
+    /// </list>
+    /// A change is always the last child of its properties element.
+    /// </summary>
+    private void SettlePropertyChange(XElement properties, XName changeName, XElement? pending,
+        XElement before, RevisionStamp stamp, bool changed, bool atBaseline)
+    {
+        if (pending is not null && atBaseline)
+        {
+            pending.Remove();
+            return;
+        }
+        if (!changed) return;
+        if (pending is null)
+        {
+            properties.Add(CreateRevisionEnvelope(changeName, stamp, before));
+            return;
+        }
+        EnsureTrackRevisionsEnabled();
+        if (!string.Equals((string?)pending.Attribute(W.author), stamp.Author, StringComparison.Ordinal))
+        {
+            pending.SetAttributeValue(W.id, NextRevisionId());
+            pending.SetAttributeValue(W.author, stamp.Author);
+        }
+        pending.SetAttributeValue(W.date, stamp.Date);
+    }
+
     private XElement CreateRevisionEnvelope(
         XName name, RevisionStamp stamp, params object[] content) =>
         CreateRevisionEnvelope(name, stamp.Author, stamp.Date, content);

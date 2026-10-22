@@ -31,6 +31,17 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Tracked formatting of a run that already has another author's pending format change is now
+  credited to the person who made it (#1295). The session folded the new formatting into the
+  existing `w:rPrChange` but left that change's author, date and `w:id` alone, so `ListRevisions()`
+  reported the edit as the first author's, made at the first author's time. The change keeps its
+  original baseline, so rejecting it still returns the run to where it started, but now carries the
+  latest editor's name and the edit's date, and a fresh id when the author changes. The same applies
+  when a tracked `SplitParagraph` changes a paragraph with a pending `w:pPrChange`; a split that takes
+  the paragraph back to that change's baseline resolves it instead, as formatting already did. Tracked
+  section and header/footer paragraph edits (#1299) now share that one rule, so the same author
+  reworking their own pending change keeps its id and takes the edit's date there too.
+
 - `SplitParagraph`, the editor's Enter key, works with tracked changes on and inside a tracked
   insertion (#1298). Under `TrackedChangeMode.RenderInline` it was refused on every document; it now
   records the break as Word does, as an insertion of the paragraph mark that ends the first half,

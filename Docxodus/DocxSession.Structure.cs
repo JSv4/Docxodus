@@ -718,20 +718,21 @@ public sealed partial class DocxSession
     /// paragraph mark and so keeps its own properties. Record whatever the split changed there
     /// (the page break left on the first half, the next style a heading's Enter starts, a mark
     /// formatting the fresh paragraph drops) as this edit's property changes, so rejecting
-    /// everything gives back the original paragraph's properties. A pending change already
-    /// copied from the original keeps its baseline, which is what a reject restores anyway.
+    /// everything gives back the original paragraph's properties. A pending change copied from
+    /// the original keeps its baseline, which is what a reject restores anyway, and is credited
+    /// to this edit like any other fold.
     /// </summary>
     private void TrackSplitOffProperties(XElement originalPPr, XElement secondPPr, RevisionStamp stamp)
     {
         var markRevisions = Internal.RevisionOps.RevWrapperNames;
-        var oldMark = PropertySnapshot(originalPPr.Element(W.rPr), W.rPr, W.rPrChange, markRevisions);
-        if (secondPPr.Element(W.rPr)?.Element(W.rPrChange) is null
-            && !PropertySnapshotEquals(oldMark, secondPPr.Element(W.rPr), W.rPrChange, markRevisions))
-            WordprocessingMLUtil.InsertRPrChildInOrder(GetOrCreatePPrChild(secondPPr, W.rPr),
-                CreateRevisionEnvelope(W.rPrChange, stamp, oldMark));
-        if (secondPPr.Element(W.pPrChange) is null)
-            TrackPropertyMutation(secondPPr, originalPPr, W.pPrChange, stamp.Author, stamp.Date,
-                W.rPr, W.sectPr);
+        var mark = secondPPr.Element(W.rPr) ?? new XElement(W.rPr);
+        TrackPropertyEdit(mark, W.rPrChange,
+            PropertySnapshot(originalPPr.Element(W.rPr), W.rPr, W.rPrChange, markRevisions), stamp, markRevisions);
+        // The mark's rPr is attached only when it holds something: a resolved change can empty it.
+        if (mark.Parent is null && mark.HasElements) GetOrCreatePPrChild(secondPPr, W.rPr).Add(mark.Elements());
+        else if (mark.Parent is not null && !mark.HasElements) mark.Remove();
+        TrackPropertyEdit(secondPPr, W.pPrChange,
+            PropertySnapshot(originalPPr, W.pPr, W.pPrChange, W.rPr, W.sectPr), stamp, W.rPr, W.sectPr);
     }
 
     public EditResult SplitParagraph(string anchorId, int characterOffset)

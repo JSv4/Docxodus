@@ -311,13 +311,9 @@ public sealed partial class DocxSession
     }
 
     /// <summary>Run <paramref name="mutate"/> on a live properties element and, under tracking,
-    /// record the result as its native <paramref name="changeName"/> revision holding the
-    /// properties as they stood before. An element that already carries a pending change keeps
-    /// its stored original baseline, so a later reject still restores the original properties;
-    /// when that pending change is another author's and this edit actually changed the properties,
-    /// it is re-credited to this edit's author, date and a fresh id, since it now carries this
-    /// edit too. An edit that brings the properties back
-    /// to that baseline resolves the pending change.</summary>
+    /// settle the result through <see cref="TrackPropertyEdit"/>: a new native
+    /// <paramref name="changeName"/> revision holding the properties as they stood before, or the
+    /// one <see cref="SettlePropertyChange"/> rule for a pending change already there.</summary>
     private void MutateTrackedProperties(XElement properties, XName changeName, RevisionStamp stamp,
         Action mutate, params XName[] excluded)
     {
@@ -326,36 +322,24 @@ public sealed partial class DocxSession
             mutate();
             return;
         }
-        // Compared and stored without the projector's pt: bookkeeping on the children: a child
-        // removed and re-created carries no Unid, yet is the same property as its stored twin.
-        XElement Snapshot(XElement source)
-        {
-            var snapshot = PropertySnapshot(source, properties.Name, changeName, excluded);
-            foreach (var child in snapshot.Descendants())
-                child.Attributes().Where(a => a.Name.Namespace == PtOpenXml.pt).Remove();
-            return snapshot;
-        }
-        var pending = properties.Element(changeName);
-        var baseline = Snapshot(pending?.Element(properties.Name) ?? properties);
-        var before = Snapshot(properties);
+        var before = PropertySnapshot(properties, properties.Name, changeName, excluded);
         mutate();
-        var after = Snapshot(properties);
-        bool atBaseline = XNode.DeepEquals(baseline, after);
-        if (pending is not null)
-        {
-            if (atBaseline)
-                pending.Remove();
-            else if (!XNode.DeepEquals(before, after)
-                && !string.Equals((string?)pending.Attribute(W.author), stamp.Author, StringComparison.Ordinal))
-                // Another author's pending change now also carries this edit: credit it to the
-                // latest editor (this edit's author, date and a fresh id), keeping the stored
-                // original baseline exactly as it was.
-                pending.ReplaceWith(CreateRevisionEnvelope(changeName, stamp,
-                    pending.Elements().Select(e => new XElement(e)).ToArray()));
-            return;
-        }
-        // Every *PrChange is the last child of its properties element, so appending is schema order.
-        if (!atBaseline) properties.Add(CreateRevisionEnvelope(changeName, stamp, baseline));
+        TrackPropertyEdit(properties, changeName, before, stamp, excluded);
+    }
+
+    /// <summary>Settle a tracked edit that took <paramref name="properties"/> from
+    /// <paramref name="before"/> (a <see cref="PropertySnapshot"/> with the same exclusions) to
+    /// what they are now, through <see cref="SettlePropertyChange"/>.</summary>
+    private void TrackPropertyEdit(XElement properties, XName changeName, XElement before,
+        RevisionStamp stamp, params XName[] excluded)
+    {
+        var pending = properties.Element(changeName);
+        var after = PropertySnapshot(properties, properties.Name, changeName, excluded);
+        var baseline = pending is null
+            ? before
+            : PropertySnapshot(pending.Element(properties.Name), properties.Name, changeName, excluded);
+        SettlePropertyChange(properties, changeName, pending, before, stamp,
+            changed: !XNode.DeepEquals(before, after), atBaseline: XNode.DeepEquals(baseline, after));
     }
 
     private void MarkRowAsTrackedRevision(XElement row, bool inserted, string author, string date,
