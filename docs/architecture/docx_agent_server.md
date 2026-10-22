@@ -369,6 +369,11 @@ server composes one from the paragraph op and the markdown subset's ATX-heading 
 - `set_header_text` / `set_footer_text`: `bodyAnchorId` selects the governing section,
   `kind: default|first|even` selects its running story, and `markdown` replaces that story's
   content. The result's `created` list contains the new `p:hdr*`/`p:ftr*` paragraph anchor.
+  Under tracked changes over an existing story, the story's last paragraph is kept and takes the
+  new text, so it comes back in `modified` (and `created` holds only paragraphs added before it);
+  take the page-number target from `modified` in that case. A tracked `even` story while
+  odd/even pages is off, or a story the section inherits from an earlier one, is refused with
+  `tracked_operation_unsupported`.
 - `ensure_header_footer_visible`: `bodyAnchorId` + `kind` enables Word's first-page or even-page
   visibility flag for a story already referenced by that section (default is a successful no-op).
 

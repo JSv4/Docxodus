@@ -27,7 +27,9 @@ public sealed partial class DocxSession
     // the same way GetSectionInfo resolves it (a mid-document section break, else the body's
     // trailing sectPr, creating one if the body has none). The created header/footer paragraph
     // anchors come back in EditResult.Created with a hdr{N}/ftr{N} scope, so a page-number field
-    // can then be inserted into them with InsertPageNumberField. Undo/redo of the part creation
+    // can then be inserted into them with InsertPageNumberField (under tracked changes over an
+    // existing story, the kept last paragraph comes back in Modified instead and is the one to
+    // use). Undo/redo of the part creation
     // is handled by the header/footer reconcile in RestoreSnapshot.
 
     /// <summary>
@@ -40,6 +42,17 @@ public sealed partial class DocxSession
     /// <c>w:evenAndOddHeaders</c> in the settings part. Returns the created header-paragraph anchors
     /// (scope <c>hdr{N}</c>) in <see cref="EditResult.Created"/>.
     /// </summary>
+    /// <remarks>
+    /// Under <see cref="TrackedChangeMode.RenderInline"/> the existing content is kept as a tracked
+    /// deletion and the new content is a tracked insertion. The existing story's final paragraph
+    /// stays and takes the last payload paragraph's content, so it is reported in
+    /// <see cref="EditResult.Modified"/> and only the paragraphs placed before it in
+    /// <see cref="EditResult.Created"/>. A <c>w:titlePg</c> it sets is a tracked section change. An
+    /// even story while <c>w:evenAndOddHeaders</c> is off is refused with
+    /// <see cref="EditErrorCode.TrackedOperationUnsupported"/>: that setting has no revision form.
+    /// So is a story the section inherits from an earlier one, because giving the section its own
+    /// adds a reference no revision can record.
+    /// </remarks>
     public EditResult SetHeaderText(string anchorId, HeaderFooterKind kind, string markdownPayload)
         => SetHeaderFooterText(isHeader: true, anchorId, kind, markdownPayload);
 
@@ -48,7 +61,8 @@ public sealed partial class DocxSession
     /// Behaves exactly like <see cref="SetHeaderText"/> but for the footer part / <c>w:footerReference</c>;
     /// the created footer-paragraph anchors (scope <c>ftr{N}</c>) come back in
     /// <see cref="EditResult.Created"/> — insert a page number into one with
-    /// <see cref="InsertPageNumberField"/>.
+    /// <see cref="InsertPageNumberField"/>. Under tracked changes over an existing footer, the kept
+    /// last paragraph comes back in <see cref="EditResult.Modified"/>; insert the number there.
     /// </summary>
     public EditResult SetFooterText(string anchorId, HeaderFooterKind kind, string markdownPayload)
         => SetHeaderFooterText(isHeader: false, anchorId, kind, markdownPayload);
@@ -76,6 +90,12 @@ public sealed partial class DocxSession
     /// See <see cref="SetHeaderText"/> for the <c>w:evenAndOddHeaders</c> caveat: it is
     /// document-global and governs footers too, so enabling it without an even FOOTER means even
     /// pages show no footer at all.
+    /// </para>
+    /// <para>
+    /// Under <see cref="TrackedChangeMode.RenderInline"/>, <c>w:titlePg</c> is written as a tracked
+    /// <c>w:sectPrChange</c>; switching <c>w:evenAndOddHeaders</c> is refused with
+    /// <see cref="EditErrorCode.TrackedOperationUnsupported"/>, because a settings change has no
+    /// revision form. <see cref="SetHeaderFooterKindEnabled"/> follows the same rule.
     /// </para>
     /// </remarks>
     public EditResult EnsureHeaderFooterVisible(string anchorId, HeaderFooterKind kind)
@@ -115,11 +135,13 @@ public sealed partial class DocxSession
                 && WordprocessingMLUtil.GetBoolProp(settingsRootForCheck, W.evenAndOddHeaders);
         if (alreadySet)
             return new EditResult { Success = true, Modified = new[] { target.Anchor } };
+        if (kind == HeaderFooterKind.Even && RefuseTrackedEvenAndOddHeaders(anchorId) is { } evenRefusal)
+            return evenRefusal;
 
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            if (kind == HeaderFooterKind.First) InsertSectPrTitlePg(sectPr);
+            if (kind == HeaderFooterKind.First) MutateSectionProperties(sectPr, () => InsertSectPrTitlePg(sectPr));
             else WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
             InvalidateProjectionCache();
             return new EditResult { Success = true, Modified = new[] { target.Anchor } };
@@ -178,19 +200,23 @@ public sealed partial class DocxSession
         var settingsRoot = settingsPart?.GetXDocument().Root;
 
         // Already off? Return BEFORE snapshotting (same reasoning as EnsureHeaderFooterVisible).
-        // The element is removed whatever its w:val, so "present" is the test, not "on".
+        // Off is the flag's VALUE, as there: Word writes <w:titlePg w:val="0"/> when the box is
+        // cleared, and removing that changes nothing a reader sees (under tracking it would record
+        // a revision whose accept and reject look the same).
         bool alreadyOff = kind == HeaderFooterKind.First
-            ? sectPr?.Element(W.titlePg) is null
-            : settingsRoot?.Element(W.evenAndOddHeaders) is null;
+            ? sectPr is null || !WordprocessingMLUtil.GetBoolProp(sectPr, W.titlePg)
+            : settingsRoot is null || !WordprocessingMLUtil.GetBoolProp(settingsRoot, W.evenAndOddHeaders);
         if (alreadyOff)
             return new EditResult { Success = true, Modified = new[] { target.Anchor } };
+        if (kind == HeaderFooterKind.Even && RefuseTrackedEvenAndOddHeaders(anchorId) is { } evenRefusal)
+            return evenRefusal;
 
         _history.RecordPreOp(TakeSnapshot());
         try
         {
             if (kind == HeaderFooterKind.First)
             {
-                sectPr!.Elements(W.titlePg).Remove();
+                MutateSectionProperties(sectPr!, () => sectPr!.Elements(W.titlePg).Remove());
             }
             else
             {
@@ -241,6 +267,24 @@ public sealed partial class DocxSession
             return linkError;
         ApplyHeaderFooterStyle(paras, isHeader);
 
+        // Writing an even story also switches on the document-global even/odd setting, which has
+        // no tracked form; refuse that before anything changes.
+        bool tracked = _trackedChanges == TrackedChangeMode.RenderInline;
+        if (kind == HeaderFooterKind.Even
+            && !(main.DocumentSettingsPart?.GetXDocument().Root is { } settingsRoot
+                && WordprocessingMLUtil.GetBoolProp(settingsRoot, W.evenAndOddHeaders))
+            && RefuseTrackedEvenAndOddHeaders(anchorId) is { } evenRefusal)
+            return evenRefusal;
+
+        // A section with no story of this kind of its own shows the nearest earlier section's.
+        // Giving it its own story adds a header/footer reference, which no revision can record,
+        // so a reject could never bring the inherited story back.
+        if (tracked && Internal.BlockMetadataOps.GetSectionInfo(_doc!, target) is { } section
+            && (isHeader ? section.HeaderRefs : section.FooterRefs).Any(r => r.Kind == kind && r.Inherited))
+            return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
+                $"this section inherits its {kind} {(isHeader ? "header" : "footer")} from an earlier section; giving it its own adds a reference that cannot be tracked. No changes were made.",
+                anchorId);
+
         // Resolve an existing same-kind story before snapshotting so replacing its root cannot
         // silently remove one end of a cross-boundary bookmark or a still-targeted bookmark.
         var currentSectPr = Internal.BlockMetadataOps.FindGoverningSectPr(element);
@@ -255,9 +299,13 @@ public sealed partial class DocxSession
                 foreach (var pp in main.Parts)
                     if (pp.RelationshipId == currentRid) { currentPart = pp.OpenXmlPart; break; }
             bool currentTypeMatches = isHeader ? currentPart is HeaderPart : currentPart is FooterPart;
-            if (currentTypeMatches && currentPart?.GetXDocument().Root is { } oldRoot
-                && ValidateBookmarkRemoval(new[] { oldRoot }, anchorId) is { } bookmarkError)
-                return bookmarkError;
+            if (currentTypeMatches && currentPart?.GetXDocument().Root is { } oldRoot)
+            {
+                if (ValidateBookmarkRemoval(new[] { oldRoot }, anchorId) is { } bookmarkError)
+                    return bookmarkError;
+                if (tracked && RefuseTrackedStoryReplacement(oldRoot, anchorId) is { } storyRefusal)
+                    return storyRefusal;
+            }
         }
 
         _history.RecordPreOp(TakeSnapshot());
@@ -305,26 +353,35 @@ public sealed partial class DocxSession
             // Stamp Unids so the new paragraphs can be reported as anchors after re-projection.
             foreach (var p in paras) UnidHelper.AssignToSelfAndDescendants(p);
 
-            var newRoot = new XElement(isHeader ? W.hdr : W.ftr,
-                new XAttribute(XNamespace.Xmlns + "w", W.w),
-                new XAttribute(XNamespace.Xmlns + "r", R.r),
-                paras);
-            part.PutXDocument(new XDocument(newRoot));
-            foreach (var p in paras) PromoteHyperlinkRelationships(p);
+            // Untracked, the story is replaced wholesale. Tracked, the new content is recorded
+            // against whatever story is already there (none, for a newly added part).
+            var root = tracked && reuse is not null && typeMatches && part.GetXDocument().Root is { } liveRoot
+                ? liveRoot
+                : new XElement(isHeader ? W.hdr : W.ftr,
+                    new XAttribute(XNamespace.Xmlns + "w", W.w),
+                    new XAttribute(XNamespace.Xmlns + "r", R.r));
+            var retained = tracked ? ReplaceStoryContentTracked(root, paras) : null;
+            if (!tracked) root.Add(paras);
+            part.PutXDocument(root.Document ?? new XDocument(root));
+            // A retained final paragraph took over the last payload paragraph's content; the
+            // payload paragraphs that were placed in the story are the created ones.
+            var createdParagraphs = retained is null ? paras : paras.Take(paras.Count - 1).ToList();
+            foreach (var p in createdParagraphs) PromoteHyperlinkRelationships(p);
+            if (retained is not null) PromoteHyperlinkRelationships(retained);
             foreach (var relationshipId in oldHyperlinkIds)
                 Internal.OwnedPartRelationships.DeleteReferenceRelationshipIfOrphaned(part, relationshipId, R.id);
             Internal.OwnedPartRelationships.SweepOrphanedImages(part);
 
             // Visibility flags so Word actually shows the First/Even stories.
             if (kind == HeaderFooterKind.First && !WordprocessingMLUtil.GetBoolProp(sectPr, W.titlePg))
-                InsertSectPrTitlePg(sectPr);
+                MutateSectionProperties(sectPr, () => InsertSectPrTitlePg(sectPr));
             else if (kind == HeaderFooterKind.Even)
                 WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
 
             InvalidateProjectionCache();
             var index = AnchorIndex();
             var created = new List<Anchor>();
-            foreach (var p in paras)
+            foreach (var p in createdParagraphs)
             {
                 var unid = (string?)p.Attribute(PtOpenXml.Unid);
                 if (unid is null) continue;
@@ -336,6 +393,10 @@ public sealed partial class DocxSession
             {
                 Success = true,
                 Created = created,
+                Modified = retained is not null
+                    && AnchorForUnid((string?)retained.Attribute(PtOpenXml.Unid), PartUriOf(retained)) is { } kept
+                    ? new[] { kept }
+                    : Array.Empty<Anchor>(),
                 Patch = PatchFor(target),
             };
         }
@@ -343,6 +404,88 @@ public sealed partial class DocxSession
         {
             return FailInternal(ex, anchorId);
         }
+    }
+
+    /// <summary>Why a tracked replacement of <paramref name="storyRoot"/> cannot be recorded, or
+    /// null when it can. Content the tracked deleter cannot mark (see
+    /// <see cref="FirstUnrecordableInlineContent"/>) would survive the deletion. The story's final
+    /// paragraph takes the new content the way a tracked <see cref="ReplaceText"/> does, so it must
+    /// exist (the story ends in a paragraph) and meet that operation's no-bookmark condition.</summary>
+    private static EditResult? RefuseTrackedStoryReplacement(XElement storyRoot, string anchorId)
+    {
+        if (FirstUnrecordableInlineContent(storyRoot.Elements()) is { } unrecordable)
+            return EditResult.Fail(EditErrorCode.IncompatibleElementType,
+                $"Tracked header/footer replacement does not support {unrecordable} inside the existing story; no changes were made.",
+                anchorId);
+        var lastBlock = storyRoot.Elements().LastOrDefault(e =>
+            e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt || e.Name == W.customXml);
+        if (lastBlock is null) return null;
+        if (lastBlock.Name != W.p)
+            return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
+                "the existing header/footer story does not end in a paragraph, so its replacement cannot be tracked; no changes were made.",
+                anchorId);
+        return lastBlock.Descendants().Any(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd)
+            ? EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
+                "tracked header/footer replacement whose last paragraph holds bookmark markers is unsupported; edit the story's paragraphs instead. No changes were made.",
+                anchorId)
+            : null;
+    }
+
+    /// <summary>
+    /// Record replacing a running story's content with <paramref name="paras"/> as one tracked
+    /// revision, laid out as Word records typing over a whole story. Every old block except the
+    /// final paragraph is deleted, paragraph marks included. The new paragraphs except the last
+    /// are inserted, marks included, before that final paragraph. The final paragraph keeps its
+    /// mark (a story always ends in one): its old runs are deleted, the last new paragraph's runs
+    /// inserted, and that paragraph's properties applied as a tracked <c>w:pPrChange</c>. Reject
+    /// therefore restores exactly the old story and accept leaves exactly the new one. A new story
+    /// has no final paragraph, so the last new paragraph keeps an untracked mark of its own and
+    /// rejecting leaves the story as one empty paragraph. Returns the retained final paragraph, or
+    /// null when every payload paragraph was placed in the story.
+    /// </summary>
+    private XElement? ReplaceStoryContentTracked(XElement root, List<XElement> paras)
+    {
+        var stamp = NewDistinctRevisionStamp();
+        var oldBlocks = root.Elements().ToList();
+        var final = oldBlocks.LastOrDefault(e => e.Name == W.p);
+        foreach (var block in oldBlocks)
+            if (block != final) MarkTrackedStructuredContentChild(block, stamp);
+
+        if (final is null)
+        {
+            foreach (var p in paras)
+            {
+                MarkParagraphContentAndMark(p, W.ins, stamp.Author, stamp.Date,
+                    preserveParagraphMark: ReferenceEquals(p, paras[^1]));
+                root.Add(p);
+            }
+            return null;
+        }
+
+        var leading = paras.Take(paras.Count - 1).ToList();
+        foreach (var p in leading)
+        {
+            MarkParagraphContentAndMark(p, W.ins, stamp.Author, stamp.Date);
+            final.AddBeforeSelf(p);
+        }
+
+        var last = paras[^1];
+        ApplyReplaceTextTracked(final, last.Elements().Where(e => e.Name != W.pPr).ToList(), stamp);
+        var pPr = final.Element(W.pPr);
+        if (pPr is null)
+        {
+            pPr = new XElement(W.pPr);
+            final.AddFirst(pPr);
+        }
+        var newProperties = last.Element(W.pPr)?.Elements().Where(e => e.Name != W.rPr).ToList()
+            ?? new List<XElement>();
+        MutateTrackedProperties(pPr, W.pPrChange, stamp, () =>
+        {
+            // CT_PPr: base properties, then the mark's rPr, sectPr and pPrChange, which stay.
+            pPr.Elements().Where(e => e.Name != W.rPr && e.Name != W.sectPr && e.Name != W.pPrChange).Remove();
+            pPr.AddFirst(newProperties);
+        }, W.rPr, W.sectPr);
+        return final;
     }
 
     /// <summary>
@@ -387,11 +530,13 @@ public sealed partial class DocxSession
             var runs = field == PageNumberField.PageOfTotal
                 ? BuildPageOfTotalRuns(element, format)
                 : BuildPageNumberFieldRuns(field, format);
-            foreach (var r in runs)
-            {
-                UnidHelper.AssignToSelfAndDescendants(r);
-                element.Add(r);
-            }
+            foreach (var r in runs) UnidHelper.AssignToSelfAndDescendants(r);
+            // Tracked: the field is the author's insertion, the shape in
+            // TestFiles/FA/RevTracking/008-InsertedFieldCode.docx.
+            if (_trackedChanges == TrackedChangeMode.RenderInline)
+                element.Add(CreateRevisionEnvelope(W.ins, NewDistinctRevisionStamp(), runs));
+            else
+                element.Add(runs);
 
             InvalidateProjectionCache();
             return new EditResult
@@ -765,7 +910,7 @@ public sealed partial class DocxSession
                 sectPr = new XElement(W.sectPr);
                 body.Add(sectPr);
             }
-            mutate(sectPr);
+            MutateSectionProperties(sectPr, () => mutate(sectPr));
             InvalidateProjectionCache();
             return succeeded;
         }
@@ -774,6 +919,27 @@ public sealed partial class DocxSession
             return FailInternal(ex, anchorId);
         }
     }
+
+    /// <summary>Apply <paramref name="mutate"/> to a live section's properties, as a tracked
+    /// <c>w:sectPrChange</c> when tracking is on (the form Word writes, see
+    /// TestFiles/FA/RevTracking/020-SectionPropertiesChange.docx). The header/footer references
+    /// are not section properties in that sense — <c>CT_SectPrBase</c>, the stored before-image,
+    /// has no place for them — so they are left out of the comparison and the payload, and a
+    /// reject keeps the current ones.</summary>
+    private void MutateSectionProperties(XElement sectPr, Action mutate) =>
+        MutateTrackedProperties(sectPr, W.sectPrChange, NewDistinctRevisionStamp(), mutate,
+            W.headerReference, W.footerReference);
+
+    /// <summary>The refusal for switching "Different odd and even pages" while tracking is on.
+    /// The switch is <c>w:evenAndOddHeaders</c> in <c>settings.xml</c>; OOXML's revision markup
+    /// covers story content and property elements, never settings, so the change could only be
+    /// made invisibly. Null when tracking is off.</summary>
+    private EditResult? RefuseTrackedEvenAndOddHeaders(string anchorId) =>
+        _trackedChanges == TrackedChangeMode.RenderInline
+            ? EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
+                "'Different odd and even pages' (w:evenAndOddHeaders) is a document setting with no tracked-change form; turn tracked changes off to switch it. No changes were made.",
+                anchorId)
+            : null;
 
     /// <summary>Turn the section's "Different first page" flag on. An existing
     /// <c>w:titlePg</c> loses its <c>w:val</c> (Word writes <c>w:val="0"</c> when the box is
