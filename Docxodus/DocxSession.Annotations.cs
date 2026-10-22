@@ -42,7 +42,7 @@ public sealed partial class DocxSession
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var result = Internal.AnnotationOps.Add(_doc!, anchor, span, annotation);
+            var result = Internal.AnnotationOps.Add(_doc!, anchor, span, annotation, NextRevisionId);
             if (result.Success) InvalidateProjectionCache();
             else _ = _history.PopForUndo();
             return result;
@@ -104,7 +104,7 @@ public sealed partial class DocxSession
         try
         {
             var result = Internal.AnnotationOps.Move(
-                _doc!, annotationId, anchor, newSpan, CanonicalizeAnchorByUnid);
+                _doc!, annotationId, anchor, newSpan, NextRevisionId, CanonicalizeAnchorByUnid);
             if (result.Success) InvalidateProjectionCache();
             else _ = _history.PopForUndo();
             return result;

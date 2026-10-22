@@ -25,7 +25,8 @@ internal static class AnnotationOps
         WordprocessingDocument doc,
         AnchorTarget anchor,
         CharSpan? span,
-        DocumentAnnotation annotation)
+        DocumentAnnotation annotation,
+        Func<int> nextRevisionId)
     {
         ArgumentNullException.ThrowIfNull(annotation);
 
@@ -79,7 +80,7 @@ internal static class AnnotationOps
         var bookmarkName = AnnotationManager.BookmarkPrefix + id;
         var bookmarkId = NextBookmarkId(block.Document!.Root!);
 
-        var (startRunInsert, endRunInsert) = SplitRunsForSpan(block, spanStart, spanLength);
+        var (startRunInsert, endRunInsert) = SplitRunsForSpan(block, spanStart, spanLength, nextRevisionId);
 
         var bookmarkStart = new XElement(W + "bookmarkStart",
             new XAttribute(W + "id", bookmarkId),
@@ -182,6 +183,7 @@ internal static class AnnotationOps
         string annotationId,
         AnchorTarget newAnchor,
         CharSpan? newSpan,
+        Func<int> nextRevisionId,
         Func<string, Anchor?>? canonicalize = null)
     {
         var existing = AnnotationsCustomXml.FindById(doc, annotationId);
@@ -238,7 +240,7 @@ internal static class AnnotationOps
 
         // Reinsert with a fresh bookmark id at the new range.
         var bookmarkId = NextBookmarkId(newBlock.Document!.Root!);
-        var (startRunInsert, endRunInsert) = SplitRunsForSpan(newBlock, s, l);
+        var (startRunInsert, endRunInsert) = SplitRunsForSpan(newBlock, s, l, nextRevisionId);
         startRunInsert.AddBeforeSelf(new XElement(W + "bookmarkStart",
             new XAttribute(W + "id", bookmarkId),
             new XAttribute(W + "name", bookmarkName!)));
@@ -299,14 +301,14 @@ internal static class AnnotationOps
     /// boundaries always land on a run-element boundary after the splits run.
     /// </summary>
     internal static (XElement startRun, XElement endRun) SplitRunsForSpan(
-        XElement block, int start, int length)
+        XElement block, int start, int length, Func<int> nextRevisionId)
     {
         // Split at the END boundary first — if start == end - 0 length would be illegal,
         // but length > 0 is guaranteed by the caller. Splitting end first keeps the
         // start offset valid (the left-of-start text is unchanged by an end-side split).
         int endOffset = start + length;
-        DocxSession.SplitRunsAtOffset(block, endOffset);
-        DocxSession.SplitRunsAtOffset(block, start);
+        DocxSession.SplitRunsAtOffset(block, endOffset, nextRevisionId);
+        DocxSession.SplitRunsAtOffset(block, start, nextRevisionId);
 
         // After both splits, every run boundary in the span [start, end) falls on a
         // run-element boundary. Rebuild the text map and pick the first/last segment

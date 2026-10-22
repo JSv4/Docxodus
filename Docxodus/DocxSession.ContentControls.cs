@@ -313,6 +313,7 @@ public sealed partial class DocxSession
                 replacement.Descendants(A.blip).Single()
                     .SetAttributeValue(ImageR + "embed", relationship.RelationshipId);
                 AssignFreshDocumentPropertyIds(replacement);
+                Internal.RevisionOps.RenumberCopiedRevisions(replacement, NextRevisionId);
                 var stamp = NewRevisionStamp();
                 var deletion = CreateRevisionEnvelope(W.del, stamp);
                 run.ReplaceWith(deletion);
@@ -498,8 +499,9 @@ public sealed partial class DocxSession
 
     /// <summary>The plain-text payload the fill writes: one run (inline) or one paragraph (block),
     /// carrying the first replaced run's properties — and, for a block, the first replaced
-    /// paragraph's properties — so a fill keeps the control's existing formatting.</summary>
-    private static XElement PlainTextPayloadNode(ContentControlPlacement placement,
+    /// paragraph's properties — so a fill keeps the control's existing formatting. A tracked fill
+    /// keeps the replaced run live inside its deletion, so the copy takes its own revision ids.</summary>
+    private XElement PlainTextPayloadNode(ContentControlPlacement placement,
         IReadOnlyList<XElement> replaced, string text)
     {
         var oldRunProperties = replaced.SelectMany(node => node.DescendantsAndSelf(W.r))
@@ -507,6 +509,7 @@ public sealed partial class DocxSession
         var run = new XElement(W.r,
             oldRunProperties is null ? null : new XElement(oldRunProperties),
             new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), text));
+        Internal.RevisionOps.RenumberCopiedRevisions(run, NextRevisionId);
         if (placement == ContentControlPlacement.Inline) return run;
         var oldParagraphProperties = replaced.Where(node => node.Name == W.p)
             .Select(paragraph => paragraph.Element(W.pPr)).FirstOrDefault(value => value is not null);

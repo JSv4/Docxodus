@@ -1,5 +1,6 @@
 #nullable enable
 
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -174,11 +175,13 @@ internal static class CommentOps
             .SelectMany(r => r!.Descendants(W.commentReference))
             .Any(r => (string?)r.Attribute(W.id) == commentId);
 
+    private static readonly HashSet<XName> RevisionWrappers = new() { W.ins, W.del, W.moveFrom, W.moveTo };
+
     /// <summary>
-    /// Add the body-side reference for a reply immediately after its parent's reference. Word's
-    /// native threaded shape keeps the range markers on the thread root and gives replies only an
-    /// adjacent <c>w:commentReference</c>; <c>w15:paraIdParent</c> supplies the relationship and
-    /// makes every descendant share that root range. This also makes replying to an existing reply
+    /// Add the body-side reference for a reply after the last reference already in its parent's
+    /// thread (so replies read in the order they were added). Word's native threaded shape keeps the
+    /// range markers on the thread root and gives replies only a <c>w:commentReference</c>;
+    /// <c>w15:paraIdParent</c> supplies the relationship and makes every descendant share that root range. This also makes replying to an existing reply
     /// work when (as Word writes it) the immediate parent has no range markers of its own.
     /// </summary>
     internal static IReadOnlyList<XElement> InsertReplyReference(
@@ -211,14 +214,89 @@ internal static class CommentOps
             .Distinct()
             .ToList();
 
+        // Replies read in the order they were added, so the new reference goes after the thread's
+        // last one (the converter orders a thread by reference position), not straight after the parent.
+        var threadIds = ThreadCommentIds(main, parentId);
+        var threadRuns = roots.SelectMany(r => r.Descendants(W.commentReference))
+            .Where(e => threadIds.Contains((string?)e.Attribute(W.id) ?? ""))
+            .Select(e => e.AncestorsAndSelf(W.r).FirstOrDefault())
+            .Where(r => r is not null)
+            .Select(r => r!)
+            .ToList();
+
         foreach (var parentRun in referenceRuns)
         {
             var replyRun = BuildReferenceRun(replyId);
             UnidHelper.AssignToSelfAndDescendants(replyRun);
-            parentRun.AddAfterSelf(replyRun);
+            // Reviewers' w:ins/w:del/move wrappers can enclose the parent's and the thread's runs
+            // (each reference of a compared-in thread has its own). The new run goes at the level
+            // above those wrappers, after whichever thread run comes last, so accepting or rejecting
+            // all changes cannot drop it.
+            var container = parentRun.Parent;
+            while (container is not null && RevisionWrappers.Contains(container.Name))
+                container = container.Parent;
+            var lastInThread = threadRuns.Append(parentRun)
+                .Select(r => r.AncestorsAndSelf().FirstOrDefault(a => a.Parent == container))
+                .Where(a => a is not null)
+                .Aggregate((last, a) => XNode.DocumentOrderComparer.Compare(a, last) > 0 ? a : last);
+            lastInThread!.AddAfterSelf(replyRun);
         }
 
         return hostParagraphs;
+    }
+
+    /// <summary>
+    /// The ids of every comment in the thread containing <paramref name="commentId"/>: its root
+    /// (found by following <c>w15:paraIdParent</c> upward) and everything below that root.
+    /// A comment with no threading metadata is a thread of one.
+    /// </summary>
+    private static HashSet<string> ThreadCommentIds(MainDocumentPart main, string commentId)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal) { commentId };
+        var comments = main.WordprocessingCommentsPart?.GetXDocument().Root?.Elements(W.comment).ToList();
+        var exEntries = main.WordprocessingCommentsExPart?.GetXDocument().Root?.Elements(W15 + "commentEx").ToList();
+        if (comments is null || exEntries is null) return ids;
+
+        string? ParaIdOf(XElement c) => (string?)c.Elements(W.p).LastOrDefault()?.Attribute(W14.paraId);
+        var start = comments.FirstOrDefault(c => (string?)c.Attribute(W.id) == commentId);
+        var rootParaId = start is null ? null : ParaIdOf(start);
+        if (rootParaId is null) return ids;
+
+        var parentOf = exEntries
+            .Where(e => e.Attribute(W15 + "paraId") is not null && e.Attribute(W15 + "paraIdParent") is not null)
+            .GroupBy(e => (string)e.Attribute(W15 + "paraId")!)
+            .ToDictionary(g => g.Key, g => (string)g.First().Attribute(W15 + "paraIdParent")!);
+        var seen = new HashSet<string>(StringComparer.Ordinal) { rootParaId };
+        while (parentOf.TryGetValue(rootParaId, out var up) && seen.Add(up))
+            rootParaId = up;
+
+        var threadParaIds = WithDescendantParaIds(exEntries, rootParaId);
+        foreach (var c in comments)
+            if (ParaIdOf(c) is { } paraId && threadParaIds.Contains(paraId))
+                ids.Add((string?)c.Attribute(W.id) ?? "");
+        return ids;
+    }
+
+    /// <summary>
+    /// <paramref name="paraId"/> plus the paraId of every <c>commentEx</c> entry whose
+    /// <c>w15:paraIdParent</c> chain leads to it: the paraIds of the subtree rooted at that comment.
+    /// </summary>
+    internal static HashSet<string> WithDescendantParaIds(IReadOnlyList<XElement> exEntries, string paraId)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal) { paraId };
+        bool expanded;
+        do
+        {
+            expanded = false;
+            foreach (var entry in exEntries)
+            {
+                var child = (string?)entry.Attribute(W15 + "paraId");
+                var parent = (string?)entry.Attribute(W15 + "paraIdParent");
+                if (child is not null && parent is not null && result.Contains(parent) && result.Add(child))
+                    expanded = true;
+            }
+        } while (expanded);
+        return result;
     }
 
     /// <summary>The body-side reference run: <c>w:r[rStyle=CommentReference]/w:commentReference</c>.</summary>
@@ -494,7 +572,8 @@ internal static class CommentOps
     /// originals.
     /// </para>
     /// </remarks>
-    internal static void CloneCommentsForMoveSource(MainDocumentPart main, XElement source)
+    internal static void CloneCommentsForMoveSource(MainDocumentPart main, XElement source,
+        Func<int> nextRevisionId)
     {
         static bool IsMarker(XElement e) =>
             e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference;
@@ -534,6 +613,8 @@ internal static class CommentOps
                 el.Attributes(W14.paraId).Remove();
                 el.Attributes(PtOpenXml.Unid).Remove();
             }
+            // Both definitions stay live, so a revision inside the comment body needs its own id.
+            RevisionOps.RenumberCopiedRevisions(clone, nextRevisionId);
             commentsRoot.Add(clone);
 
             var newId = (string)clone.Attribute(W.id)!;

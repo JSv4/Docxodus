@@ -542,7 +542,7 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | `ClearListStartOverride(li)` | — | — | every member of the item's numbering instance (all repointed together) | the anchored item |
 | `ReplaceCellContent(tc, md)` | — | descendant inline anchors (rare) | `tc` | `tc` |
 | table row/column CRUD, merge/unmerge | new `tr`/`tc` identities where applicable | invalidated `tr`/`tc` identities | addressed `tc` where applicable | enclosing `tbl`; full structural map in `TableAnchors` |
-| `SetHeaderText(p, kind, md)` / `SetFooterText(...)` | the new header/footer paragraph anchors (scope `hdr{N}`/`ftr{N}`) | — (reused-part old paragraphs cease to exist; not separately reported in v1) | — | whole document |
+| `SetHeaderText(p, kind, md)` / `SetFooterText(...)` | the new header/footer paragraph anchors (scope `hdr{N}`/`ftr{N}`); under `RenderInline` over an existing story, all but the last | — (reused-part old paragraphs cease to exist; not separately reported in v1; under `RenderInline` they stay live as tracked deletions) | under `RenderInline` over an existing story, the story's final paragraph, which keeps its mark and takes the last payload paragraph's content | whole document |
 | `InsertPageNumberField(p, field?)` | — | — | `p` (the paragraph the field is appended to) | `p` |
 | `InsertFootnote(p, offset, md)` / `InsertEndnote(...)` | the note definition (`fn`/`en`) + its paragraphs (scope `fn`/`en`) | — | `p` (the citing paragraph) | whole document |
 | `AddComment(p, span?, author, md, …)` | the comment definition (`cmt`) + its paragraphs (kind `p`, scope `cmt`) | — | `p` (the commented paragraph) | `p` |
@@ -561,6 +561,16 @@ Each mutation reports which anchors it created, removed, or modified. This table
 Two conventions worth pinning down because they affect agent reasoning:
 
 - **`SplitParagraph` keeps the original Unid on the first half.** Reason: external systems (LLM context windows, search indices) bias toward the pre-split anchor position; keeping the prefix-half stable minimizes invalidation downstream.
+- **A split leaves a paragraph-mark revision on the mark it describes.** As with Word's Enter, the
+  new paragraph mark ends the first half and the original one goes on ending the second, even when
+  the split is at the very end and the second half starts empty in the next style. A pending
+  `w:pPr/w:rPr/w:ins` or `w:del` stays on the original mark only. Both halves keep a pending
+  `w:pPrChange`. Every copied revision marker gets its own `w:id` from
+  `RevisionOps.RenumberCopiedRevisions` (issue #1297), as in every other edit that copies run,
+  paragraph or cell properties: run splits, tracked replacements and fills, tracked moves (and the
+  comments they copy), new table cells and the tracked picture edits. The copy, not the original,
+  takes the new ids: the second half of a split paragraph and the text after a run split keep
+  theirs. Raw XML edits make the allocator re-scan the document before its next id.
 - **`MergeParagraphs` lets the first anchor absorb the second.** Symmetric reason: the first anchor is to the left in reading order and is more likely to be the one a caller has cached.
 
 **Tracked-change mode shifts the semantics for `ReplaceText` and block deletion (`DeleteBlock`, `DeleteRange`, and `DeleteSection`).** When `Settings.TrackedChanges = RenderInline`, supported deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. `ReplaceText` deletes each live run where it sits — inside hyperlinks, fields, inline controls and other authors' insertions (`w:ins > w:del`, so the deletion rejects on its own) — un-inserts the session author's own pending runs, keeps zero-width markers (bookmark/comment ranges, note and comment reference runs) in place, and inserts the replacement after the last superseded run, ahead of any trailing markers. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged. The mode is switchable mid-session — see "Switching tracked-changes mode mid-session" below.
@@ -1071,7 +1081,9 @@ yields one empty story paragraph.
 
 **Return shape.** `SetHeaderText`/`SetFooterText` report the new story paragraphs in
 `EditResult.Created` (scope `hdr{N}`/`ftr{N}`, 1-based by part-collection order) — pass
-one to `InsertPageNumberField`. `InsertPageNumberField` reports the target paragraph in
+one to `InsertPageNumberField`. Under tracked changes over an existing story, the story's
+final paragraph keeps its paragraph mark and takes the last payload paragraph's content, so it
+comes back in `Modified` and `Created` holds only the paragraphs inserted before it. `InsertPageNumberField` reports the target paragraph in
 `Modified`. The field is a native complex field (`fldChar`/`instrText`, cached "1"
 result), so it renders and updates like a hand-authored field.
 
@@ -1536,9 +1548,9 @@ resolution replay) still strips it (DS430/DS434 vs DS418).
 
 | Under `RenderInline` | Operations |
 |---|---|
-| Record as native revisions | `ReplaceText` (and `ReplaceMatch`/`ReplaceInner`/`ReplaceTextAtSpan`), `DeleteBlock`, `DeleteRange`, `DeleteSection`, `InsertParagraph`, `SplitParagraph`, `MergeParagraphs`, `MoveBlock`, `InsertHorizontalRule`, `InsertFootnote`, `InsertEndnote`, the formatting ops (`*PrChange`), and the table row/column ops |
-| Refuse with `TrackedOperationUnsupported` | `InsertTable`, `ApplyListFormatRange`, and every image mutation — no reversible native encoding exists, so nothing is written rather than something that cannot be taken back |
-| Apply untracked | The running-story and document-setup ops: `SetHeaderText`, `SetFooterText`, `EnsureHeaderFooterVisible`, `InsertPageNumberField`, `SetPageNumbering`, `ClearPageNumbering`. Word does not redline header/footer authoring either; a document opened for review shows the new running story, not a revision. Comments and annotations are likewise not revisions, by design |
+| Record as native revisions | `ReplaceText` (and `ReplaceMatch`/`ReplaceInner`/`ReplaceTextAtSpan`), `DeleteBlock`, `DeleteRange`, `DeleteSection`, `InsertParagraph`, `SplitParagraph`, `MergeParagraphs`, `MoveBlock`, `InsertHorizontalRule`, `InsertFootnote`, `InsertEndnote`, the formatting ops (`*PrChange`), and the table row/column ops. The running-story and section ops record too (issue #1299): `InsertPageNumberField` puts the field's runs in one `w:ins`, as Word records an inserted field; `SetHeaderText`/`SetFooterText` record the new story content as an insertion and any existing content as a deletion (the story's final paragraph mark is kept, so reject gives back exactly the old story and accept exactly the new one); and `SetPageSetup`, `SetPageNumbering`, `ClearPageNumbering` and the first-page flag (`EnsureHeaderFooterVisible`/`SetHeaderFooterKindEnabled` with `First`, or writing a first-page story) record a `w:sectPrChange`. A section that already has a pending `w:sectPrChange` keeps it, so its stored before-image stays the original section; an edit that puts the section back the way it was resolves it. When that pending change is another author's and the edit actually changes the properties, the fold re-credits it to the latest editor (this edit's author and date, a fresh id) while the stored baseline stays the original; a fold into the session author's own pending change leaves its attribution alone |
+| Refuse with `TrackedOperationUnsupported` | `InsertTable`, `ApplyListFormatRange`, and every image mutation — no reversible native encoding exists, so nothing is written rather than something that cannot be taken back. Also every change to "Different odd and even pages" (`EnsureHeaderFooterVisible`/`SetHeaderFooterKindEnabled` with `Even`, or a `SetHeaderText`/`SetFooterText` even story while the setting is off): `w:evenAndOddHeaders` is a document setting in `settings.xml`, and OOXML has no revision element for settings. A tracked `SetHeaderText`/`SetFooterText` is refused the same way when the existing story does not end in a paragraph (for example a story ending in a block content control), when its last paragraph holds bookmark markers (the condition tracked `ReplaceText` refuses), or when the section has no story of that kind of its own but inherits one from an earlier section — giving it its own adds a header/footer reference, and no revision can record that, so a reject could never bring the inherited story back. Each refusal writes nothing |
+| Apply untracked | Comments and annotations, which are not revisions, by design |
 
 Anything that writes package state under recording belongs in exactly one of those three rows.
 The failure #614 fixed was a fourth, unwritten one — writing content that reject-all could not

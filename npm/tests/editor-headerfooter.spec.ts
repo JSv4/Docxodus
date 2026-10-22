@@ -39,6 +39,20 @@ function readZipEntry(zip: Buffer, name: string): string {
   throw new Error(`entry not found: ${name}`);
 }
 
+/** The entry names of a DOCX (zip), sorted, from its central directory. */
+function zipEntryNames(zip: Buffer): string[] {
+  const eocd = zip.lastIndexOf(Buffer.from('PK\x05\x06', 'latin1'));
+  if (eocd < 0) throw new Error('not a zip');
+  const names: string[] = [];
+  let p = zip.readUInt32LE(eocd + 16);
+  for (let i = zip.readUInt16LE(eocd + 10); i > 0; i--) {
+    const nameLen = zip.readUInt16LE(p + 28);
+    names.push(zip.toString('latin1', p + 46, p + 46 + nameLen));
+    p += 46 + nameLen + zip.readUInt16LE(p + 30) + zip.readUInt16LE(p + 32);
+  }
+  return names.sort();
+}
+
 function readTestFile(relativePath: string): number[] {
   // Plain array: page.evaluate serializes structured-clone data, and a Uint8Array survives the
   // hop as a plain object, so hand over an array and rebuild it in the page.
@@ -378,6 +392,58 @@ test.describe('DocxEditor — header/footer region', () => {
     const zip = Buffer.from(res.b64, 'base64');
     expect(readZipEntry(zip, 'word/settings.xml')).toMatch(/<w:evenAndOddHeaders\b/);
     expect(readZipEntry(zip, 'word/document.xml')).not.toMatch(/<w:titlePg\b/);
+  });
+
+  // Issue #1299: under tracked changes the engine refuses the even/odd switch (a settings.xml
+  // flag with no revision form). The refusal must reach the host through onEditFailed, as a
+  // refused body edit does, exactly once per click, and leave the package as it was: the
+  // control asks for the flag before seeding any story, so a refusal seeds nothing.
+  test('a refused header/footer option reaches onEditFailed once and changes nothing', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const w = window as any;
+      const failures: any[] = [];
+      const { container, editor } = w.__hfMount(
+        w.Docxodus.DocxSessionBridge.CreateBlankDocx(),
+        { headerFooter: true, trackedChanges: 1, onEditFailed: (info: unknown) => failures.push(info) },
+      );
+      const encode = (bytes: Uint8Array) => {
+        let b = '';
+        for (let i = 0; i < bytes.length; i++) b += String.fromCharCode(bytes[i]);
+        return btoa(b);
+      };
+      const before = encode(editor.save());
+      const evenOn = editor.setHeaderFooterKindEnabled('even', true);
+      const afterToggle = failures.length;
+      editor.setHeaderFooterKind('header', 'even');
+      const out = {
+        evenOn,
+        afterToggle,
+        failures,
+        enabled: editor.headerFooterKindEnabled('even'),
+        kindShown: editor.headerFooterKind('header'),
+        before,
+        after: encode(editor.save()),
+      };
+      editor.close();
+      container.remove();
+      return out;
+    });
+
+    expect(res.evenOn).toBe(false);
+    expect(res.enabled).toBe(false);
+    expect(res.afterToggle).toBe(1);
+    // Choosing the even story directly is refused the same way, once, and the band stays put.
+    expect(res.failures).toHaveLength(2);
+    for (const failure of res.failures) {
+      expect(failure).toMatchObject({ code: 'tracked_operation_unsupported' });
+    }
+    expect(res.kindShown).toBe('default');
+
+    const before = Buffer.from(res.before, 'base64');
+    const after = Buffer.from(res.after, 'base64');
+    expect(zipEntryNames(after)).toEqual(zipEntryNames(before));
+    expect(readZipEntry(after, 'word/document.xml')).toBe(readZipEntry(before, 'word/document.xml'));
+    expect(readZipEntry(after, 'word/settings.xml')).toBe(readZipEntry(before, 'word/settings.xml'));
   });
 
   /**

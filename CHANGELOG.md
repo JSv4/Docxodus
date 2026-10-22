@@ -7,6 +7,44 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Paginated HTML: a block merged through hidden paragraph marks (a run-in heading) now takes `data-keep-with-next` and `data-keep-lines` from its closing paragraph instead of the first, so consecutive run-in sections no longer chain into one unbreakable group, and an explicit `keepNext`/`keepLines` off on the closing paragraph is honored (#1294).
+- `DocxSession` edits that copy a run's, paragraph's or cell's properties no longer copy the
+  tracked-change ids inside them (#1297). Formatting part of a run, a tracked replacement inside a
+  run, `SplitParagraph`, a tracked `MoveBlock` (including the comments it copies), a tracked
+  plain-text content-control fill, a new table row or column beside a cell with a pending property
+  change, and the tracked picture edits each left two live `w:rPrChange`, `w:pPrChange`,
+  `w:tcPrChange` or paragraph-mark `w:ins`/`w:del` markers sharing one `w:id`, so every revision
+  carrying it was listed as ambiguous and could be neither accepted nor rejected on its own. The
+  copy now takes a fresh id from the session's allocator, while the part that continues the
+  original (the text after a run split, the second half of a split paragraph) keeps the original
+  ids, so a revision id a caller already holds still resolves. Raw XML inserted through
+  `Raw.InsertXml`/`Raw.ReplaceXml` now makes the allocator re-scan the document, so it never hands
+  out an id that markup brought in. A split paragraph keeps a revision of its paragraph mark only
+  on the original mark, which ends the second half, so rejecting that revision no longer also
+  undoes the split.
+- With tracked changes on, the header/footer and section operations now leave a revision a reviewer
+  can see and reject, instead of writing their change directly (#1299). `InsertPageNumberField`
+  records the field as an insertion. `SetPageSetup`, `SetPageNumbering`, `ClearPageNumbering` and
+  turning "Different first page" on or off record a `w:sectPrChange` holding the section's previous
+  properties; several edits to one section stay one revision whose reject restores the original
+  section, and an edit that puts the section back resolves it. `SetHeaderText`/`SetFooterText`
+  record the old story content as a deletion and the new content as an insertion, so rejecting
+  brings back the old header or footer. "Different odd and even pages" is a document setting with
+  no revision form in OOXML, so switching it (including writing an even story while it is off) is
+  refused with `TrackedOperationUnsupported` and nothing changes. In the browser editor these
+  refusals now reach `onEditFailed`, as refused body edits do, once per action, and the editor
+  asks for the even/odd or first-page setting before creating any story, so a refusal leaves the
+  document unchanged. A tracked story write is also refused, with nothing changed, when the
+  section inherits that story from an earlier section, and a section edit that folds into another
+  author's pending section change re-credits it to the latest editor.
+- `DocxSession.AddCommentReply` now places the new reply's `w:commentReference` after the last reference already in the thread (the root and all its replies, including replies to replies) instead of straight after the parent. Replies keep the order they were added in, in `document.xml` and in the rendered thread, and a new reply no longer reorders the earlier ones (#1296).
+
+### Changed
+
+- Header/footer authoring is no longer applied untracked when tracked changes are on (#1299).
+  A tracked `SetHeaderText`/`SetFooterText` over an existing story reports the story's kept last
+  paragraph, which takes the new text, in `EditResult.Modified` rather than `Created`; `Created`
+  lists only the paragraphs added before it. Use that paragraph as the `InsertPageNumberField`
+  target. Untracked results are unchanged.
 
 ## [14.1.0] - 2026-10-21
 

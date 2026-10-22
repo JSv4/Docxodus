@@ -2709,6 +2709,7 @@ export class DocxEditor {
           this.activeStory = which;
           this.options.onStoryChange?.(which);
         },
+        parseEdit: (json) => this.parseEdit(json),
       },
     );
   }
@@ -4263,7 +4264,9 @@ export class DocxEditor {
    * Select which story kind a band edits (`"default"` / `"first"` / `"even"`). A kind with no
    * existing part is created empty, so the band always presents something editable. `"first"`
    * sets the section's `w:titlePg`; `"even"` sets the document-global `w:evenAndOddHeaders`
-   * (which also governs footers — the band surfaces that caveat inline).
+   * (which also governs footers — the band surfaces that caveat inline). Under tracked changes
+   * the engine refuses `"even"` (that setting has no revision form): the refusal reaches
+   * `onEditFailed` and the band keeps the kind it showed.
    */
   setHeaderFooterKind(which: BandWhich, kind: HeaderFooterKind): void {
     this.assertOpen();
@@ -4993,7 +4996,8 @@ export class DocxEditor {
 
   // ─── Header & footer (extended) ──────────────────────────────────────
 
-  /** Word's "Different first page" (`first`) / "Different odd & even pages" (`even`). */
+  /** Word's "Different first page" (`first`) / "Different odd & even pages" (`even`). Under
+   *  tracked changes `even` is refused (reported through `onEditFailed`, returns false). */
   setHeaderFooterKindEnabled(kind: "first" | "even", enabled: boolean): boolean {
     this.assertOpen();
     return this.region?.setKindEnabled(kind, enabled) ?? false;

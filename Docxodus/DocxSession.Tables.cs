@@ -304,6 +304,54 @@ public sealed partial class DocxSession
         current.Add(CreateRevisionEnvelope(changeName, author, date, oldBase));
     }
 
+    /// <summary>Run <paramref name="mutate"/> on a live properties element and, under tracking,
+    /// record the result as its native <paramref name="changeName"/> revision holding the
+    /// properties as they stood before. An element that already carries a pending change keeps
+    /// its stored original baseline, so a later reject still restores the original properties;
+    /// when that pending change is another author's and this edit actually changed the properties,
+    /// it is re-credited to this edit's author, date and a fresh id, since it now carries this
+    /// edit too. An edit that brings the properties back
+    /// to that baseline resolves the pending change.</summary>
+    private void MutateTrackedProperties(XElement properties, XName changeName, RevisionStamp stamp,
+        Action mutate, params XName[] excluded)
+    {
+        if (_trackedChanges != TrackedChangeMode.RenderInline)
+        {
+            mutate();
+            return;
+        }
+        // Compared and stored without the projector's pt: bookkeeping on the children: a child
+        // removed and re-created carries no Unid, yet is the same property as its stored twin.
+        XElement Snapshot(XElement source)
+        {
+            var snapshot = PropertySnapshot(source, properties.Name, changeName, excluded);
+            foreach (var child in snapshot.Descendants())
+                child.Attributes().Where(a => a.Name.Namespace == PtOpenXml.pt).Remove();
+            return snapshot;
+        }
+        var pending = properties.Element(changeName);
+        var baseline = Snapshot(pending?.Element(properties.Name) ?? properties);
+        var before = Snapshot(properties);
+        mutate();
+        var after = Snapshot(properties);
+        bool atBaseline = XNode.DeepEquals(baseline, after);
+        if (pending is not null)
+        {
+            if (atBaseline)
+                pending.Remove();
+            else if (!XNode.DeepEquals(before, after)
+                && !string.Equals((string?)pending.Attribute(W.author), stamp.Author, StringComparison.Ordinal))
+                // Another author's pending change now also carries this edit: credit it to the
+                // latest editor (this edit's author, date and a fresh id), keeping the stored
+                // original baseline exactly as it was.
+                pending.ReplaceWith(CreateRevisionEnvelope(changeName, stamp,
+                    pending.Elements().Select(e => new XElement(e)).ToArray()));
+            return;
+        }
+        // Every *PrChange is the last child of its properties element, so appending is schema order.
+        if (!atBaseline) properties.Add(CreateRevisionEnvelope(changeName, stamp, baseline));
+    }
+
     private void MarkRowAsTrackedRevision(XElement row, bool inserted, string author, string date,
         bool markContent = true)
     {
@@ -329,7 +377,7 @@ public sealed partial class DocxSession
     /// valign). Merge markup is always dropped — a clone is a fresh cell, never half of somebody
     /// else's merge — except <c>w:gridSpan</c> when <paramref name="keepSpan"/> is set, which a new
     /// row needs so its cells still line up with w:tblGrid.</summary>
-    private static XElement NewEmptyCellLike(XElement referenceCell, bool keepSpan = false)
+    private XElement NewEmptyCellLike(XElement referenceCell, bool keepSpan = false)
     {
         var tcPr = referenceCell.Element(W.tcPr);
         var tc = new XElement(W.tc);
@@ -339,6 +387,7 @@ public sealed partial class DocxSession
             clone.Elements(W.vMerge).Remove();
             clone.Elements(W.hMerge).Remove();
             if (!keepSpan) clone.Elements(W.gridSpan).Remove();
+            Internal.RevisionOps.RenumberCopiedRevisions(clone, NextRevisionId);
             tc.Add(clone);
         }
         tc.Add(new XElement(W.p));

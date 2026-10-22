@@ -200,8 +200,8 @@ public sealed partial class DocxSession
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            SplitRunsAtOffset(paragraph, span.Start + span.Length);
-            SplitRunsAtOffset(paragraph, span.Start);
+            SplitRunsAtOffset(paragraph, span.Start + span.Length, NextRevisionId);
+            SplitRunsAtOffset(paragraph, span.Start, NextRevisionId);
             var splitMap = RunTextMap.Build(paragraph);
             var selected = splitMap.Segments
                 .Where(s => s.StartOffsetInBlock >= span.Start && s.EndOffsetInBlock <= span.Start + span.Length)
@@ -382,8 +382,8 @@ public sealed partial class DocxSession
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            SplitRunsAtOffset(element, characterOffset);
-            SplitInlineContainersAtOffset(element, characterOffset);
+            SplitRunsAtOffset(element, characterOffset, NextRevisionId);
+            SplitInlineContainersAtOffset(element, characterOffset, NextRevisionId);
             var cachedText = new XElement(W.t, cached);
             if (cached.Length == 0 || char.IsWhiteSpace(cached[0]) || char.IsWhiteSpace(cached[^1]))
                 cachedText.SetAttributeValue(XNamespace.Xml + "space", "preserve");
@@ -994,7 +994,7 @@ public sealed partial class DocxSession
         return false;
     }
 
-    private static void InsertRangeMarkers(ValidatedRange range, string bookmarkId, string name)
+    private void InsertRangeMarkers(ValidatedRange range, string bookmarkId, string name)
     {
         var start = new XElement(W.bookmarkStart,
             new XAttribute(W.id, bookmarkId), new XAttribute(W.name, name));
@@ -1012,20 +1012,20 @@ public sealed partial class DocxSession
             start);
     }
 
-    private static void InsertCollapsedBookmarkAtOffset(
+    private void InsertCollapsedBookmarkAtOffset(
         XElement paragraph, int offset, XElement start, XElement end)
     {
         InsertMarkersAtOffset(paragraph, offset, new[] { start, end });
     }
 
-    private static void InsertMarkerAtOffset(XElement paragraph, int offset, XElement marker)
+    private void InsertMarkerAtOffset(XElement paragraph, int offset, XElement marker)
         => InsertMarkersAtOffset(paragraph, offset, new[] { marker });
 
-    private static void InsertMarkersAtOffset(
+    private void InsertMarkersAtOffset(
         XElement paragraph, int offset, IReadOnlyList<XElement> markers)
     {
-        SplitRunsAtOffset(paragraph, offset);
-        SplitInlineContainersAtOffset(paragraph, offset);
+        SplitRunsAtOffset(paragraph, offset, NextRevisionId);
+        SplitInlineContainersAtOffset(paragraph, offset, NextRevisionId);
         var map = RunTextMap.Build(paragraph);
         var right = map.Segments.FirstOrDefault(s => s.StartOffsetInBlock >= offset).Run;
         if (right is not null)
