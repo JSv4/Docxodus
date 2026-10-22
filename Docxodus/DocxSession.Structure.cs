@@ -813,12 +813,18 @@ public sealed partial class DocxSession
                     var nextStyle = ResolveNextParagraphStyle(curStyle);
                     if (nextStyle is not null && !string.Equals(nextStyle, curStyle, StringComparison.Ordinal))
                     {
+                        // What the mark owns comes along. Under tracking, so do the pending
+                        // changes a reject must still be able to undo: TrackSplitOffProperties
+                        // then keeps their baselines instead of recording the heading as one.
+                        var tracked = _trackedChanges == TrackedChangeMode.RenderInline;
+                        var markProperties = ParagraphMarkRevisions(newPPr)
+                            .Concat(tracked ? newPPr.Elements(W.rPr).Elements(W.rPrChange) : Enumerable.Empty<XElement>())
+                            .ToList();
                         var rebuilt = new XElement(W.pPr,
                             new XElement(W.pStyle, new XAttribute(W.val, nextStyle)),
-                            ParagraphMarkRevisions(newPPr).Any()
-                                ? new XElement(W.rPr, ParagraphMarkRevisions(newPPr))
-                                : null,
-                            newPPr.Element(W.sectPr));
+                            markProperties.Count > 0 ? new XElement(W.rPr, markProperties) : null,
+                            newPPr.Element(W.sectPr),
+                            tracked ? newPPr.Element(W.pPrChange) : null);
                         newPPr.ReplaceWith(rebuilt);
                         newPPr = rebuilt;
                     }

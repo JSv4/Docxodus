@@ -3566,9 +3566,19 @@ So the original mark goes on ending the second half, together with what belongs 
 alone: its own revision (`w:pPr/w:rPr/w:ins` or `w:del`) and, for a paragraph that ends a section,
 the section's `w:sectPr` (a copy on the first half would add a section). Ordinary paragraph
 properties apply to both halves.
-Rejecting an inserted mark joins its paragraph into the next one, and the joined paragraph keeps
-the **next** paragraph's properties (`RevisionOps.MergeParagraphWithNext`, and
-`RevisionProcessor`'s coalescing, which takes the last member's `w:pPr`).
+Rejecting an inserted mark joins its paragraph into the next one. Which paragraph's properties
+the joined paragraph keeps differs between implementations:
+
+| Reject an inserted mark between P1 (`jc=center`, mark inserted) and P2 (`jc=right`) | Joined paragraph keeps |
+|---|---|
+| Word | unmeasured: RP006 and RP008 have the same properties on both sides, so they cannot tell |
+| LibreOffice (measured in review with the repository's headless listener) | P1's `w:pPr` (`center`) |
+| Docxodus (`RevisionOps.MergeParagraphWithNext`; `RevisionProcessor`'s coalescing takes the last member's `w:pPr`) | P2's `w:pPr` (`right`) |
+
+The split design gives the same answer either way. The first half keeps the original paragraph's
+properties, the ones LibreOffice keeps. Whatever the split changed on the second half, the one
+Docxodus keeps, is recorded as the editor's own property change, which reject-all undoes. So on
+every row of issues #1297 and #1298, reject-all gives back the original paragraph in both.
 
 | Split of a paragraph whose mark Alice inserted | Mark revision on | Reject everything |
 |---|---|---|
@@ -3582,10 +3592,12 @@ joins the empty paragraph into the following one, and the heading keeps its styl
 tracking, Docxodus records whatever the split changed on the second half (the page break left
 on the first half, the next style, the dropped mark formatting) as the editor's
 `w:pPrChange`/`w:rPrChange`. Rejecting everything then restores the original paragraph's
-properties. A pending property change the paragraph already had keeps its baseline instead.
+properties. A pending property change the paragraph already had keeps its baseline instead, and
+it survives the next-style rebuild for that reason; otherwise the editor's change would record the
+heading as the baseline, and reject would keep the heading that the pending change should undo.
 
 Code: `DocxSession.SplitParagraph`, `TrackSplitOffProperties`, `RemoveMarkOwnedProperties`.
-Tests: `DocxSessionClonedRevisionTests` (RID003, RID004, RID007, RID010, RID011, RID020).
+Tests: `DocxSessionClonedRevisionTests` (RID003, RID004, RID007, RID010, RID011, RID020, RID022).
 
 ## Contributing
 

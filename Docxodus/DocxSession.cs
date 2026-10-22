@@ -2734,10 +2734,11 @@ public sealed partial class DocxSession : IDisposable
     /// <summary>
     /// Whether inserting a new top-level paragraph child at <paramref name="offset"/> would
     /// silently move it away from the requested visible-text position. Plain runs are split by
-    /// <see cref="SplitRunsAtOffset"/>. A top-level hyperlink or <c>w:ins</c> containing direct
-    /// runs is split by <see cref="SplitInlineContainersAtOffset"/>. Every other container —
-    /// including <c>w:moveTo</c> — is atomic because splitting it requires revision- or
-    /// field-specific semantics.
+    /// <see cref="SplitRunsAtOffset"/>. A hyperlink or <c>w:ins</c> is split by
+    /// <see cref="SplitInlineContainersAtOffset"/> when the offset falls in one of its runs or in
+    /// another such container inside it (Word writes <c>w:hyperlink &gt; w:ins</c> for text typed
+    /// into a link under tracking). Every other container — including <c>w:moveTo</c> — is
+    /// atomic because splitting it requires revision- or field-specific semantics.
     /// </summary>
     private static bool HasUnsupportedInlineInsertionBoundary(XElement paragraph, int offset)
     {
@@ -2746,22 +2747,9 @@ public sealed partial class DocxSession : IDisposable
         {
             int length = InlineChildTextLength(child);
             if (consumed < offset && offset < consumed + length)
-            {
-                if (child.Name == W.r) return false;
-                if (!SplittableInlineContainers.Contains(child.Name)) return true;
-
-                int localOffset = offset - consumed;
-                int containerConsumed = 0;
-                foreach (var nested in child.Elements().Where(IsInlineChild))
-                {
-                    int nestedLength = InlineChildTextLength(nested);
-                    if (containerConsumed < localOffset
-                        && localOffset < containerConsumed + nestedLength)
-                        return nested.Name != W.r;
-                    containerConsumed += nestedLength;
-                }
-                return false;
-            }
+                return child.Name != W.r
+                    && (!SplittableInlineContainers.Contains(child.Name)
+                        || HasUnsupportedInlineInsertionBoundary(child, offset - consumed));
             consumed += length;
         }
         return false;
@@ -2839,8 +2827,10 @@ public sealed partial class DocxSession : IDisposable
     private static void SplitInlineContainerAt(XElement container, int localOffset, Func<int> nextRevisionId)
     {
         // Split runs inside the container at the local offset (works because SplitRunsAtOffset
-        // walks descendants through container types).
+        // walks descendants through container types), then a nested container that still
+        // straddles it, such as the w:ins Word writes inside a hyperlink.
         SplitRunsAtOffset(container, localOffset, nextRevisionId);
+        SplitInlineContainersAtOffset(container, localOffset, nextRevisionId);
 
         int consumed = 0;
         var movedChildren = new List<XElement>();

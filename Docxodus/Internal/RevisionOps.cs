@@ -1650,12 +1650,12 @@ internal static class RevisionOps
                 .Where(cell => cell is not null)
                 .Select(cell => cell!)
                 .ToHashSet();
+            // A column-width edit always changes the grid and every cell; the table's own
+            // properties change only when its total width or layout did, so they may be absent.
             bool completeColumnWidthTopology = tableCells.Count > 0
                 && tableCells.SetEquals(changedCells)
                 && tableLevel.Any(group => group.Units.Any(unit =>
-                    unit.Element.Name == W.tblGridChange))
-                && tableLevel.Any(group => group.Units.Any(unit =>
-                    unit.Element.Name == W.tblPrChange));
+                    unit.Element.Name == W.tblGridChange));
             if (completeColumnWidthTopology)
             {
                 var structural = remaining.Where(group => group.Units.All(unit =>

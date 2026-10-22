@@ -14,7 +14,8 @@ All notable changes to this project will be documented in this file.
   offset inside a `w:ins` was refused in every mode; the insertion is now cut in two, each part still
   the original author's under its own `w:id`. `InsertFootnote`, `InsertEndnote` and
   `InsertCrossReference` share that boundary and now place their reference inside an insertion
-  instead of refusing. Offsets inside a `w:moveTo` are still refused. Splitting the last paragraph
+  instead of refusing; that includes the `w:hyperlink > w:ins` Word writes for text typed into a link
+  under tracking. Offsets inside a `w:moveTo` are still refused. Splitting the last paragraph
   of a section, tracked or not, no longer copies its `w:sectPr` onto both halves, which added a
   section; the break stays with the second half, which keeps the original paragraph mark.
 
