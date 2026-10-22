@@ -507,6 +507,26 @@ public class DocxSessionTrackedHeaderFooterTests
     }
 
     [Fact]
+    public void TrackedHeaderReplacement_ThatLeavesAnotherAuthorsPendingFormatAlone_KeepsItTheirs()
+    {
+        // Alice's pending paragraph-format change sits on the header's last paragraph. Bob's
+        // replacement keeps that paragraph's properties exactly as they are, so the format change
+        // is still Alice's alone and must not be re-credited to Bob.
+        using var s = TrackedSession(Package(
+            $"<w:p><w:r><w:t>Body text.</w:t></w:r></w:p><w:sectPr><w:headerReference w:type=\"default\" r:id=\"{{header}}\"/>{LetterPage}</w:sectPr>",
+            "<w:p><w:pPr><w:pStyle w:val=\"Header\"/>"
+            + "<w:pPrChange w:id=\"5\" w:author=\"Alice\" w:date=\"2026-01-01T00:00:00Z\"><w:pPr/></w:pPrChange>"
+            + "</w:pPr><w:r><w:t>Old header</w:t></w:r></w:p>"));
+
+        Assert.True(s.SetHeaderText(BodyAnchor(s, "Body text."), HeaderFooterKind.Default, "New header").Success);
+
+        var change = Root(s.Save(), m => m.HeaderParts.Single()).Descendants(W + "pPrChange").Single();
+        Assert.Equal("Alice", (string?)change.Attribute(W + "author"));
+        Assert.Equal("5", (string?)change.Attribute(W + "id"));
+        Assert.Equal("2026-01-01T00:00:00Z", (string?)change.Attribute(W + "date"));
+    }
+
+    [Fact]
     public void TrackedFirstPageOff_OnAFlagThatIsAlreadyOff_RecordsNothing()
     {
         // Word writes <w:titlePg w:val="0"/> when the box is cleared: the flag is present but off.

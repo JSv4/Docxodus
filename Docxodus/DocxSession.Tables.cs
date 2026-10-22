@@ -308,8 +308,9 @@ public sealed partial class DocxSession
     /// record the result as its native <paramref name="changeName"/> revision holding the
     /// properties as they stood before. An element that already carries a pending change keeps
     /// its stored original baseline, so a later reject still restores the original properties;
-    /// when that pending change is another author's it is re-credited to this edit's author, date
-    /// and a fresh id, since it now carries this edit too. An edit that brings the properties back
+    /// when that pending change is another author's and this edit actually changed the properties,
+    /// it is re-credited to this edit's author, date and a fresh id, since it now carries this
+    /// edit too. An edit that brings the properties back
     /// to that baseline resolves the pending change.</summary>
     private void MutateTrackedProperties(XElement properties, XName changeName, RevisionStamp stamp,
         Action mutate, params XName[] excluded)
@@ -330,13 +331,16 @@ public sealed partial class DocxSession
         }
         var pending = properties.Element(changeName);
         var baseline = Snapshot(pending?.Element(properties.Name) ?? properties);
+        var before = Snapshot(properties);
         mutate();
-        bool atBaseline = XNode.DeepEquals(baseline, Snapshot(properties));
+        var after = Snapshot(properties);
+        bool atBaseline = XNode.DeepEquals(baseline, after);
         if (pending is not null)
         {
             if (atBaseline)
                 pending.Remove();
-            else if (!string.Equals((string?)pending.Attribute(W.author), stamp.Author, StringComparison.Ordinal))
+            else if (!XNode.DeepEquals(before, after)
+                && !string.Equals((string?)pending.Attribute(W.author), stamp.Author, StringComparison.Ordinal))
                 // Another author's pending change now also carries this edit: credit it to the
                 // latest editor (this edit's author, date and a fresh id), keeping the stored
                 // original baseline exactly as it was.
