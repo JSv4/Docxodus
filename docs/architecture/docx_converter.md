@@ -197,7 +197,10 @@ Paragraphs (`w:p`) are converted based on their style's outline level:
 Hidden paragraph marks (`w:pPr/w:rPr/w:vanish`) and style separators (`w:specVanish`)
 render following paragraph text as a `<span>` within the first paragraph or heading. Explicit off
 values preserve separate blocks. Joining stops at another block container or a section boundary;
-range markers such as bookmarks do not create a physical boundary. Paragraph-mark visibility
+range markers such as bookmarks do not create a physical boundary. In paginated mode the merged block takes `data-keep-with-next` and
+`data-keep-lines` from its last paragraph (the mark that precedes the next block, so a run-in
+heading's own `keepNext` does not chain the block to what follows), and start-anchored
+properties such as `data-page-break-before` from its first. Paragraph-mark visibility
 does not hide the generated list number; run defaults, run styles, and numbering-level visibility
 still apply to the number.
 

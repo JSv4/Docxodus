@@ -151,4 +151,55 @@ public class HiddenParagraphMarkTests
         Assert.DoesNotContain("Return the cedar folder", html.Descendants().Single(e => e.Name.LocalName == "h2").Value);
         Assert.Single(html.Descendants(), e => e.Name.LocalName == "p" && e.Value.Contains("Return the cedar folder"));
     }
+
+    private const string RunInHeading = "<w:keepNext/><w:keepLines/><w:pageBreakBefore/><w:widowControl w:val=\"0\"/>";
+
+    // A run-in block: a hidden-mark heading, any further hidden-mark paragraphs, then a closing paragraph
+    // carrying closingPPr, followed by an unrelated paragraph. Returns the merged block's HTML element.
+    private static XElement ConvertRunIn(string closingPPr, params string[] middlePPrs)
+    {
+        static Wp.Paragraph Para(string pPr, string text, bool hiddenMark) => new()
+        {
+            InnerXml = $"<w:pPr>{pPr}{(hiddenMark ? "<w:rPr><w:vanish/></w:rPr>" : "")}</w:pPr><w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r>",
+        };
+        var body = new Wp.Body(new[] { Para(RunInHeading, "Term.", true) }
+            .Concat(middlePPrs.Select((pPr, i) => Para(pPr, $" Middle{i}.", true)))
+            .Append(Para(closingPPr, " The agreement starts.", false))
+            .Append(Para("", "Next section.", false)));
+        body.Append(new Wp.SectionProperties());
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            main.Document = new Wp.Document(body);
+            doc.Save();
+        }
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("run-in.docx", stream.ToArray()),
+            new WmlToHtmlConverterSettings { RenderPagination = PaginationMode.Paginated });
+        return html.Descendants().Single(e => e.Name.LocalName == "p" && e.Value.Contains("agreement starts"));
+    }
+
+    [Theory]
+    [InlineData("", false, false)]
+    [InlineData("<w:keepNext/><w:keepLines/>", true, true)]
+    [InlineData("<w:keepNext w:val=\"0\"/><w:keepLines/>", false, true)]
+    [InlineData("<w:keepNext/><w:keepLines w:val=\"false\"/>", true, false)]
+    public void RunInBlock_TakesKeepPropertiesFromTheClosingParagraph(string closingPPr, bool keepNext, bool keepLines)
+    {
+        foreach (var block in new[] { ConvertRunIn(closingPPr), ConvertRunIn(closingPPr, RunInHeading) })
+        {
+            Assert.Equal(keepNext, block.Attribute("data-keep-with-next") != null);
+            Assert.Equal(keepLines, block.Attribute("data-keep-lines") != null);
+        }
+    }
+
+    [Fact]
+    public void RunInBlock_KeepsStartAnchoredPropertiesFromTheFirstParagraph()
+    {
+        var block = ConvertRunIn("<w:pageBreakBefore/><w:widowControl/>", RunInHeading);
+        Assert.Equal("true", (string?)block.Attribute("data-page-break-before"));
+        Assert.Equal("false", (string?)block.Attribute("data-widow-control"));
+    }
 }

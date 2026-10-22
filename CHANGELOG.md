@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Paginated HTML: a block merged through hidden paragraph marks (a run-in heading) now takes `data-keep-with-next` and `data-keep-lines` from its closing paragraph instead of the first, so consecutive run-in sections no longer chain into one unbreakable group, and an explicit `keepNext`/`keepLines` off on the closing paragraph is honored (#1294).
+
 ## [14.1.0] - 2026-10-21
 
 ### Added
