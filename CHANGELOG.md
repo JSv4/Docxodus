@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- With tracked changes on, the header/footer and section operations now leave a revision a reviewer
+  can see and reject, instead of writing their change directly (#1299). `InsertPageNumberField`
+  records the field as an insertion. `SetPageSetup`, `SetPageNumbering`, `ClearPageNumbering` and
+  turning "Different first page" on or off record a `w:sectPrChange` holding the section's previous
+  properties; several edits to one section stay one revision whose reject restores the original
+  section, and an edit that puts the section back resolves it. `SetHeaderText`/`SetFooterText`
+  record the old story content as a deletion and the new content as an insertion, so rejecting
+  brings back the old header or footer. "Different odd and even pages" is a document setting with
+  no revision form in OOXML, so switching it (including writing an even story while it is off) is
+  refused with `TrackedOperationUnsupported` and nothing changes. In the browser editor these
+  refusals now reach `onEditFailed`, as refused body edits do, instead of being dropped.
+
 ## [14.1.0] - 2026-10-21
 
 ### Added

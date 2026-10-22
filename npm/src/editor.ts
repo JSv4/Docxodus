@@ -2709,6 +2709,7 @@ export class DocxEditor {
           this.activeStory = which;
           this.options.onStoryChange?.(which);
         },
+        parseEdit: (json) => this.parseEdit(json),
       },
     );
   }

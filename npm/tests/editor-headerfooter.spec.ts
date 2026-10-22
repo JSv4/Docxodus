@@ -380,6 +380,32 @@ test.describe('DocxEditor — header/footer region', () => {
     expect(readZipEntry(zip, 'word/document.xml')).not.toMatch(/<w:titlePg\b/);
   });
 
+  // Issue #1299: under tracked changes the engine refuses the even/odd switch (a settings.xml
+  // flag with no revision form). The region used to read only `success` and drop the refusal;
+  // it must reach the host through onEditFailed like a refused body edit does.
+  test('a refused header/footer option reaches onEditFailed', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const w = window as any;
+      const failures: any[] = [];
+      const { container, editor } = w.__hfMount(
+        w.Docxodus.DocxSessionBridge.CreateBlankDocx(),
+        { headerFooter: true, trackedChanges: 1, onEditFailed: (info: unknown) => failures.push(info) },
+      );
+      const evenOn = editor.setHeaderFooterKindEnabled('even', true);
+      const out = { evenOn, enabled: editor.headerFooterKindEnabled('even'), failures };
+      editor.close();
+      container.remove();
+      return out;
+    });
+
+    expect(res.evenOn).toBe(false);
+    expect(res.enabled).toBe(false);
+    expect(res.failures.length).toBeGreaterThan(0);
+    for (const failure of res.failures) {
+      expect(failure).toMatchObject({ code: 'tracked_operation_unsupported' });
+    }
+  });
+
   /**
    * Regression pin for a bug the live GUI smoke test found on a real Word document.
    *

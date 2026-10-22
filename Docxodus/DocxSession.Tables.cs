@@ -304,6 +304,42 @@ public sealed partial class DocxSession
         current.Add(CreateRevisionEnvelope(changeName, author, date, oldBase));
     }
 
+    /// <summary>Run <paramref name="mutate"/> on a live properties element and, under tracking,
+    /// record the result as its native <paramref name="changeName"/> revision holding the
+    /// properties as they stood before. An element that already carries a pending change keeps
+    /// it, original baseline and attribution alike, so a later reject still restores the original
+    /// properties (the folding <see cref="ApplyFormatToRunTracked"/> does for run formatting); an
+    /// edit that brings the properties back to that baseline resolves the pending change.</summary>
+    private void MutateTrackedProperties(XElement properties, XName changeName, RevisionStamp stamp,
+        Action mutate, params XName[] excluded)
+    {
+        if (_trackedChanges != TrackedChangeMode.RenderInline)
+        {
+            mutate();
+            return;
+        }
+        // Compared and stored without the projector's pt: bookkeeping on the children: a child
+        // removed and re-created carries no Unid, yet is the same property as its stored twin.
+        XElement Snapshot(XElement source)
+        {
+            var snapshot = PropertySnapshot(source, properties.Name, changeName, excluded);
+            foreach (var child in snapshot.Descendants())
+                child.Attributes().Where(a => a.Name.Namespace == PtOpenXml.pt).Remove();
+            return snapshot;
+        }
+        var pending = properties.Element(changeName);
+        var baseline = Snapshot(pending?.Element(properties.Name) ?? properties);
+        mutate();
+        bool atBaseline = XNode.DeepEquals(baseline, Snapshot(properties));
+        if (pending is not null)
+        {
+            if (atBaseline) pending.Remove();
+            return;
+        }
+        // Every *PrChange is the last child of its properties element, so appending is schema order.
+        if (!atBaseline) properties.Add(CreateRevisionEnvelope(changeName, stamp, baseline));
+    }
+
     private void MarkRowAsTrackedRevision(XElement row, bool inserted, string author, string date,
         bool markContent = true)
     {
