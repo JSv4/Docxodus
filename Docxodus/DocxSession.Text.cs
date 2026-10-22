@@ -1072,20 +1072,41 @@ public sealed partial class DocxSession
     private static string RevisionDateNow() => Internal.CommentOps.FormatDate(DateTime.UtcNow);
 
     /// <summary>
-    /// Credit a pending property change that this edit folded more formatting into to this
-    /// edit. Its baseline stays, so a reject still returns to the original properties, but the
-    /// author and date become this edit's; another author's change also takes a fresh id, since
-    /// it now records a different person's revision (issue #1295). The same author's change
-    /// keeps its id.
+    /// The one rule for a tracked edit to properties that can hold a single pending change
+    /// (<c>w:rPrChange</c>, <c>w:pPrChange</c> and their siblings; issue #1295):
+    /// <list type="bullet">
+    /// <item>a <paramref name="pending"/> change the edit brought back to its baseline is
+    /// resolved, since accepting and rejecting it would give the same properties;</item>
+    /// <item>an edit that <paramref name="changed"/> nothing leaves everything as it was;</item>
+    /// <item>otherwise a pending change keeps its baseline, so a reject still returns to the
+    /// original properties, and is credited to this edit: its date becomes the edit's, and
+    /// another author's change also takes this author and a fresh id, since it now records a
+    /// different person's revision (the same author's keeps its id);</item>
+    /// <item>without a pending change, <paramref name="before"/> is recorded as a new one.</item>
+    /// </list>
+    /// A change is always the last child of its properties element.
     /// </summary>
-    private void CreditFoldedChange(XElement change, string author, string date)
+    private void SettlePropertyChange(XElement properties, XName changeName, XElement? pending,
+        XElement before, RevisionStamp stamp, bool changed, bool atBaseline)
     {
-        if (!string.Equals((string?)change.Attribute(W.author), author, StringComparison.Ordinal))
+        if (pending is not null && atBaseline)
         {
-            change.SetAttributeValue(W.id, NextRevisionId());
-            change.SetAttributeValue(W.author, author);
+            pending.Remove();
+            return;
         }
-        change.SetAttributeValue(W.date, date);
+        if (!changed) return;
+        if (pending is null)
+        {
+            properties.Add(CreateRevisionEnvelope(changeName, stamp, before));
+            return;
+        }
+        EnsureTrackRevisionsEnabled();
+        if (!string.Equals((string?)pending.Attribute(W.author), stamp.Author, StringComparison.Ordinal))
+        {
+            pending.SetAttributeValue(W.id, NextRevisionId());
+            pending.SetAttributeValue(W.author, stamp.Author);
+        }
+        pending.SetAttributeValue(W.date, stamp.Date);
     }
 
     private XElement CreateRevisionEnvelope(

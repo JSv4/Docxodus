@@ -2363,16 +2363,11 @@ public sealed partial class DocxSession : IDisposable
             return;
         }
 
-        if (existingChange is not null)
-        {
-            CreditFoldedChange(existingChange, revisionAuthor, revisionDate);
-            WordprocessingMLUtil.InsertRPrChildInOrder(currentRPr, existingChange);
-            return;
-        }
-
-        WordprocessingMLUtil.InsertRPrChildInOrder(currentRPr,
-            CreateRevisionEnvelope(
-                W.rPrChange, revisionAuthor, revisionDate, oldProperties));
+        // The resolve and no-op outcomes above are SettlePropertyChange's, taken early so the
+        // run gets back its exact stored XML.
+        if (existingChange is not null) WordprocessingMLUtil.InsertRPrChildInOrder(currentRPr, existingChange);
+        SettlePropertyChange(currentRPr, W.rPrChange, existingChange, oldProperties,
+            new RevisionStamp(revisionAuthor, revisionDate), changed: true, atBaseline: false);
     }
 
     /// <summary>

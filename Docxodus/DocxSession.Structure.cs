@@ -725,24 +725,29 @@ public sealed partial class DocxSession
     private void TrackSplitOffProperties(XElement originalPPr, XElement secondPPr, RevisionStamp stamp)
     {
         var markRevisions = Internal.RevisionOps.RevWrapperNames;
-        var oldMark = PropertySnapshot(originalPPr.Element(W.rPr), W.rPr, W.rPrChange, markRevisions);
-        if (!PropertySnapshotEquals(oldMark, secondPPr.Element(W.rPr), W.rPrChange, markRevisions))
-            TrackOrCreditPropertyChange(GetOrCreatePPrChild(secondPPr, W.rPr), W.rPrChange, oldMark, stamp);
-        var oldParagraph = PropertySnapshot(originalPPr, W.pPr, W.pPrChange, W.rPr, W.sectPr);
-        if (!PropertySnapshotEquals(oldParagraph, secondPPr, W.pPrChange, W.rPr, W.sectPr))
-            TrackOrCreditPropertyChange(secondPPr, W.pPrChange, oldParagraph, stamp);
+        var mark = secondPPr.Element(W.rPr) ?? new XElement(W.rPr);
+        TrackPropertyEdit(mark, W.rPrChange,
+            PropertySnapshot(originalPPr.Element(W.rPr), W.rPr, W.rPrChange, markRevisions), stamp, markRevisions);
+        // The mark's rPr is attached only when it holds something: a resolved change can empty it.
+        if (mark.Parent is null && mark.HasElements) GetOrCreatePPrChild(secondPPr, W.rPr).Add(mark.Elements());
+        else if (mark.Parent is not null && !mark.HasElements) mark.Remove();
+        TrackPropertyEdit(secondPPr, W.pPrChange,
+            PropertySnapshot(originalPPr, W.pPr, W.pPrChange, W.rPr, W.sectPr), stamp, W.rPr, W.sectPr);
     }
 
-    /// <summary>Record <paramref name="baseline"/> as <paramref name="properties"/>' pending
-    /// change, or credit the change it already has to this edit. The change is the last child
-    /// of both <c>w:pPr</c> and a paragraph mark's <c>w:rPr</c>.</summary>
-    private void TrackOrCreditPropertyChange(XElement properties, XName changeName, XElement baseline,
-        RevisionStamp stamp)
+    /// <summary>Settle a tracked edit that took <paramref name="properties"/> from
+    /// <paramref name="before"/> (a <see cref="PropertySnapshot"/> with the same exclusions) to
+    /// what they are now, through <see cref="SettlePropertyChange"/>.</summary>
+    private void TrackPropertyEdit(XElement properties, XName changeName, XElement before,
+        RevisionStamp stamp, params XName[] excluded)
     {
-        if (properties.Element(changeName) is { } existing)
-            CreditFoldedChange(existing, stamp.Author, stamp.Date);
-        else
-            properties.Add(CreateRevisionEnvelope(changeName, stamp, baseline));
+        var pending = properties.Element(changeName);
+        var after = PropertySnapshot(properties, properties.Name, changeName, excluded);
+        var baseline = pending is null
+            ? before
+            : PropertySnapshot(pending.Element(properties.Name), properties.Name, changeName, excluded);
+        SettlePropertyChange(properties, changeName, pending, before, stamp,
+            changed: !XNode.DeepEquals(before, after), atBaseline: XNode.DeepEquals(baseline, after));
     }
 
     public EditResult SplitParagraph(string anchorId, int characterOffset)

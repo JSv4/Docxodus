@@ -601,6 +601,59 @@ public class DocxSessionClonedRevisionTests
         Assert.Equal(new[] { "abc:Alice", "def:Bob", "ghi:Alice" }, Body(session).Descendants(W.r).Select(run =>
             $"{string.Concat(run.Elements(W.t).Select(t => t.Value))}:{(string?)run.Element(W.rPr)!.Element(W.rPrChange)!.Attribute(W.author)}"));
         AssertRevisionIdsDistinct(session, expectedCount: 3);
+        AssertOutcomes(session,
+            accepted: new[] { "p: abc{b}|def{b,i}|ghi{b}" },
+            rejected: new[] { "p: abc|def|ghi" });
+    }
+
+    /// <summary>A tracked split that changes nothing on the second half leaves Alice's pending
+    /// paragraph or mark change hers, on both halves.</summary>
+    [Theory]
+    [InlineData("<w:jc w:val=\"center\"/><w:pPrChange w:id=\"51\" " + Alice + "><w:pPr/></w:pPrChange>")]
+    [InlineData("<w:jc w:val=\"center\"/><w:rPr><w:b/><w:rPrChange w:id=\"52\" " + Alice +
+        "><w:rPr/></w:rPrChange></w:rPr>")]
+    public void RID025_TrackedSplitThatChangesNothing_LeavesAPendingChangeWithItsAuthor(string paragraphProperties)
+    {
+        using var session = Open($"<w:p><w:pPr>{paragraphProperties}</w:pPr><w:r><w:t>Termsapply</w:t></w:r></w:p>",
+            TrackedChangeMode.RenderInline);
+
+        var result = session.SplitParagraph(FirstParagraph(session), 5);
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Equal(new[] { "Alice", "Alice" }, Body(session).Elements(W.p).Select(p => (string?)p.Element(W.pPr)!
+            .Descendants().Single(e => e.Name == W.pPrChange || e.Name == W.rPrChange).Attribute(W.author)));
+    }
+
+    /// <summary>A split that takes the second half back to the baseline of Alice's pending change
+    /// resolves that change there, as a formatting edit does: accepting and rejecting it would
+    /// give the same paragraph.</summary>
+    [Fact]
+    public void RID026_TrackedSplitBackToAPendingChangesBaseline_ResolvesItOnTheSecondHalf()
+    {
+        using var session = Open(
+            "<w:p><w:pPr><w:pageBreakBefore/><w:pPrChange w:id=\"51\" " + Alice + "><w:pPr/></w:pPrChange></w:pPr>" +
+            "<w:r><w:t>Termsapply</w:t></w:r></w:p>", TrackedChangeMode.RenderInline);
+
+        var result = session.SplitParagraph(FirstParagraph(session), 5);
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Null(Body(session).Elements(W.p).Last().Element(W.pPr)?.Element(W.pPrChange));
+        AssertOutcomes(session,
+            accepted: new[] { "p[pageBreakBefore]: Terms", "p: apply" },
+            rejected: new[] { "p: Terms|apply" });
+    }
+
+    /// <summary>Crediting a folded change records a revision, so the document is left with Track
+    /// Changes on, as every new revision leaves it.</summary>
+    [Fact]
+    public void RID027_CreditingAFoldedChange_TurnsTrackChangesOn()
+    {
+        using var session = Open(PendingBoldRun, TrackedChangeMode.RenderInline);
+
+        Assert.True(session.ApplyFormat(FirstParagraph(session), null, new FormatOp { Underline = true }).Success);
+
+        Assert.NotNull(Part(session.Save(), document => document.MainDocumentPart!.DocumentSettingsPart!)
+            .Element(W.trackRevisions));
     }
 
     /// <summary>The same fold happens when a tracked split changes a second half that already
