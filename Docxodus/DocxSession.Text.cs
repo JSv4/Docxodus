@@ -1060,6 +1060,11 @@ public sealed partial class DocxSession
 
     private RevisionStamp NewRevisionStamp() => new(_revisionAuthor ?? "docxodus", RevisionDateNow());
 
+    /// <summary>A stamp whose date is unique per call (<see cref="NextTrackedFormatRevisionDate"/>),
+    /// so two quick same-author operations stay two separately reviewable revisions.</summary>
+    private RevisionStamp NewDistinctRevisionStamp() =>
+        new(_revisionAuthor ?? "docxodus", NextTrackedFormatRevisionDate());
+
     /// <summary>The <c>w:date</c> of a revision recorded now, formatted under the invariant
     /// culture. A culture-sensitive format swaps the time separator (fi-FI writes
     /// <c>14.27.09</c>) or the calendar (th-TH writes year 2569), neither of which is the
@@ -1403,7 +1408,9 @@ public sealed partial class DocxSession
         {
             if (_trackedChanges == TrackedChangeMode.RenderInline)
             {
-                ApplyReplaceTextTracked(element, parsed.Blocks);
+                ApplyReplaceTextTracked(element,
+                    parsed.Blocks.Count == 0 ? Array.Empty<XElement>() : parsed.Blocks[0].RunElements,
+                    NewRevisionStamp());
             }
             else
             {
