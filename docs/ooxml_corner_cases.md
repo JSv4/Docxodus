@@ -3562,8 +3562,10 @@ Word's tracked Enter marks the pilcrow that now ends the text *before* the curso
 <w:p><w:r><w:t>When you click Online Video, …</w:t></w:r></w:p>
 ```
 
-So the original mark goes on ending the second half, together with everything that belongs to
-it: its own revision (`w:pPr/w:rPr/w:ins` or `w:del`) and the properties a reject keeps.
+So the original mark goes on ending the second half, together with what belongs to the mark
+alone: its own revision (`w:pPr/w:rPr/w:ins` or `w:del`) and, for a paragraph that ends a section,
+the section's `w:sectPr` (a copy on the first half would add a section). Ordinary paragraph
+properties apply to both halves.
 Rejecting an inserted mark joins its paragraph into the next one, and the joined paragraph keeps
 the **next** paragraph's properties (`RevisionOps.MergeParagraphWithNext`, and
 `RevisionProcessor`'s coalescing, which takes the last member's `w:pPr`).
@@ -3582,8 +3584,8 @@ on the first half, the next style, the dropped mark formatting) as the editor's
 `w:pPrChange`/`w:rPrChange`. Rejecting everything then restores the original paragraph's
 properties. A pending property change the paragraph already had keeps its baseline instead.
 
-Code: `DocxSession.SplitParagraph`, `TrackSplitOffProperties`, `RemoveParagraphMarkRevisions`.
-Tests: `DocxSessionClonedRevisionTests` (RID003, RID004, RID007, RID010, RID011).
+Code: `DocxSession.SplitParagraph`, `TrackSplitOffProperties`, `RemoveMarkOwnedProperties`.
+Tests: `DocxSessionClonedRevisionTests` (RID003, RID004, RID007, RID010, RID011, RID020).
 
 ## Contributing
 

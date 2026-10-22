@@ -564,7 +564,8 @@ Two conventions worth pinning down because they affect agent reasoning:
 - **A split leaves a paragraph-mark revision on the mark it describes.** As with Word's Enter, the
   new paragraph mark ends the first half and the original one goes on ending the second, even when
   the split is at the very end and the second half starts empty in the next style. A pending
-  `w:pPr/w:rPr/w:ins` or `w:del` stays on the original mark only. Both halves keep a pending
+  `w:pPr/w:rPr/w:ins` or `w:del` stays on the original mark only, as does the `w:sectPr` of a
+  paragraph that ends a section (issue #1298). Both halves keep a pending
   `w:pPrChange`. Every copied revision marker gets its own `w:id` from
   `RevisionOps.RenumberCopiedRevisions` (issue #1297), as in every other edit that copies run,
   paragraph or cell properties: run splits, tracked replacements and fills, tracked moves (and the

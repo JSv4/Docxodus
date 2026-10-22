@@ -310,6 +310,12 @@ public class DocxSessionClonedRevisionTests
     [InlineData("<w:pStyle w:val=\"Heading1\"/><w:rPr><w:b/></w:rPr>", 10,
         new[] { "p[Heading1]: Termsapply", "p[Normal]:", "p: after" },
         new[] { "p[Heading1]: Termsapply", "p: after" })]
+    [InlineData("<w:pStyle w:val=\"Heading1\"/><w:rPr><w:b/></w:rPr>", 5,
+        new[] { "p[Heading1]: Terms", "p[Heading1]: apply", "p: after" },
+        new[] { "p[Heading1]: Terms|apply", "p: after" })]
+    [InlineData("<w:pStyle w:val=\"Heading1\"/><w:rPr><w:b/></w:rPr>", 0,
+        new[] { "p[Heading1]:", "p[Heading1]: Termsapply", "p: after" },
+        new[] { "p[Heading1]: Termsapply", "p: after" })]
     public void RID011_TrackedSplit_RejectRestoresTheOriginalParagraphProperties(
         string paragraphProperties, int offset, string[] accepted, string[] rejected)
     {
@@ -349,6 +355,32 @@ public class DocxSessionClonedRevisionTests
         AssertOutcomes(session,
             accepted: new[] { "p: Pay |within ", "p: thirty days |of invoice." },
             rejected: rejected);
+    }
+
+    /// <summary>A paragraph that ends a section carries the section's <c>w:sectPr</c> on its mark.
+    /// The original mark ends the second half, so the section break goes there alone; a copy on
+    /// the first half too would add a section.</summary>
+    [Theory]
+    [InlineData(TrackedChangeMode.Accept, "", 3)]
+    [InlineData(TrackedChangeMode.RenderInline, "", 3)]
+    [InlineData(TrackedChangeMode.Accept, "<w:pStyle w:val=\"Heading1\"/>", 6)]
+    [InlineData(TrackedChangeMode.RenderInline, "<w:pStyle w:val=\"Heading1\"/>", 6)]
+    public void RID020_SplitOfASectionsLastParagraph_KeepsOneSectionBreakOnTheSecondHalf(
+        TrackedChangeMode mode, string style, int offset)
+    {
+        using var session = Open(
+            $"<w:p><w:pPr>{style}<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr></w:pPr>" +
+            "<w:r><w:t>abcdef</w:t></w:r></w:p><w:p><w:r><w:t>after</w:t></w:r></w:p>", mode, stylesXml: HeadingStyles);
+
+        var result = session.SplitParagraph(FirstParagraph(session), offset);
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Equal(new[] { false, true, false }, Body(session).Elements(W.p)
+            .Select(p => p.Element(W.pPr)?.Element(W.sectPr) is not null));
+        if (mode != TrackedChangeMode.RenderInline) return;
+        Assert.True(session.RejectAllRevisions().Success);
+        Assert.Equal(new[] { true, false }, Body(session).Elements(W.p)
+            .Select(p => p.Element(W.pPr)?.Element(W.sectPr) is not null));
     }
 
     [Fact]

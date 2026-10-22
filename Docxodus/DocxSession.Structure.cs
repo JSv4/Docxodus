@@ -703,12 +703,14 @@ public sealed partial class DocxSession
     private static IEnumerable<XElement> ParagraphMarkRevisions(XElement pPr) =>
         pPr.Elements(W.rPr).Elements().Where(e => Internal.RevisionOps.RevWrapperNames.Contains(e.Name));
 
-    /// <summary>Drop <see cref="ParagraphMarkRevisions"/> from <paramref name="pPr"/>, and the
-    /// mark's <c>w:rPr</c> when nothing else is left in it.</summary>
-    private static void RemoveParagraphMarkRevisions(XElement pPr)
+    /// <summary>Drop what belongs to the paragraph mark alone from <paramref name="pPr"/>: the
+    /// <see cref="ParagraphMarkRevisions"/>, then the mark's <c>w:rPr</c> when nothing else is
+    /// left in it, and the section break (<c>w:sectPr</c>) the mark ends.</summary>
+    private static void RemoveMarkOwnedProperties(XElement pPr)
     {
         ParagraphMarkRevisions(pPr).Remove();
         if (pPr.Element(W.rPr) is { HasElements: false } markProperties) markProperties.Remove();
+        pPr.Elements(W.sectPr).Remove();
     }
 
     /// <summary>
@@ -771,8 +773,9 @@ public sealed partial class DocxSession
                 // ending the second, so a revision of the mark stays there alone, and so do the
                 // original ids: the new mark of an untracked split is ordinary content, and a
                 // copy of the revision on it would let a reject also take back the split
-                // (issue #1297).
-                RemoveParagraphMarkRevisions(pPr);
+                // (issue #1297). The section break the mark ends stays with it too: a copy
+                // would add a section (issue #1298).
+                RemoveMarkOwnedProperties(pPr);
                 Internal.RevisionOps.RenumberCopiedRevisions(pPr, NextRevisionId);
             }
 
@@ -814,7 +817,8 @@ public sealed partial class DocxSession
                             new XElement(W.pStyle, new XAttribute(W.val, nextStyle)),
                             ParagraphMarkRevisions(newPPr).Any()
                                 ? new XElement(W.rPr, ParagraphMarkRevisions(newPPr))
-                                : null);
+                                : null,
+                            newPPr.Element(W.sectPr));
                         newPPr.ReplaceWith(rebuilt);
                         newPPr = rebuilt;
                     }
