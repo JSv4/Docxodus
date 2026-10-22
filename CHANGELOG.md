@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Word's All Markup print layout for the paginated view and the PDF export (#1300):
+  `commentColumnPlacement: "balloons"` (`--comment-column-placement balloons` in the export CLI) keeps
+  each page's paper size and shrinks the page beside a markup area, where comments, their replies and
+  formatting changes become balloons level with their lines and joined to them by leader lines, while
+  insertions and deletions stay inline. Formatting balloons state the change in Word's wording, for
+  example `Formatted: Font: Bold` or `Formatted: Indent: Left: 0.5"`. Geometry, fonts and colours follow
+  Word-printed All Markup PDFs. In the Word revision presentation the HTML converter records this as
+  inert data attributes; the default output is unchanged.
+
+### Changed
+
+- The Word revision presentation's first two author colours are now Word's, `#0078D4` and `#D13438`
+  (were `#C00000` and `#0070C0`), and its change bar sits 30pt left of the text column (was 0.25in), as
+  measured from Word-printed All Markup PDFs (#1300). Its other six colours change too and remain this
+  implementation's choice. In that presentation a formatting change's tooltip is now its balloon's
+  text, for example `Formatted: Font: Bold` (was `Bold added`). `AuthorColors` still overrides the
+  palette.
+- Header/footer authoring is no longer applied untracked when tracked changes are on (#1299).
+  A tracked `SetHeaderText`/`SetFooterText` over an existing story reports the story's kept last
+  paragraph, which takes the new text, in `EditResult.Modified` rather than `Created`; `Created`
+  lists only the paragraphs added before it. Use that paragraph as the `InsertPageNumberField`
+  target. Untracked results are unchanged.
+
 ### Fixed
 
 - Paginated HTML: a block merged through hidden paragraph marks (a run-in heading) now takes `data-keep-with-next` and `data-keep-lines` from its closing paragraph instead of the first, so consecutive run-in sections no longer chain into one unbreakable group, and an explicit `keepNext`/`keepLines` off on the closing paragraph is honored (#1294).
@@ -37,14 +62,6 @@ All notable changes to this project will be documented in this file.
   section inherits that story from an earlier section, and a section edit that folds into another
   author's pending section change re-credits it to the latest editor.
 - `DocxSession.AddCommentReply` now places the new reply's `w:commentReference` after the last reference already in the thread (the root and all its replies, including replies to replies) instead of straight after the parent. Replies keep the order they were added in, in `document.xml` and in the rendered thread, and a new reply no longer reorders the earlier ones (#1296).
-
-### Changed
-
-- Header/footer authoring is no longer applied untracked when tracked changes are on (#1299).
-  A tracked `SetHeaderText`/`SetFooterText` over an existing story reports the story's kept last
-  paragraph, which takes the new text, in `EditResult.Modified` rather than `Created`; `Created`
-  lists only the paragraphs added before it. Use that paragraph as the `InsertPageNumberField`
-  target. Untracked results are unchanged.
 
 ## [14.1.0] - 2026-10-21
 

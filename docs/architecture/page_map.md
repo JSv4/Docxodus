@@ -41,7 +41,9 @@ An available paginated map contains:
   table-cell ownership.
 
 Geometry is normalized against the known page box, so it is independent of CSS pixels, browser
-zoom, and `PaginationOptions.scale`.
+zoom, and `PaginationOptions.scale`. With `commentColumnPlacement: "balloons"` (Word's All Markup
+layout, `all_markup_layout.md`) the page box stays paper-sized while its content is shrunk beside a
+markup area, so fragments record where the shrunken content prints on the paper.
 
 The browser producer inventories addressable source IDs before pagination moves content out of
 staging. It separately inventories cited footnote definitions and the header/footer variants
@@ -65,7 +67,8 @@ and the drawings promoted out of it, each clipped along its own ancestor chain â
 reported as missing (issue #849).
 
 Read-only `paginateHtml()` defaults to a scrollable comment panel outside each page. The source
-comment subtree and its outside presentation carry `data-page-map-exclude="true"`: they remain
+comment subtree and its outside presentation, like the `"balloons"` placement's markup area, balloons
+and leaders, carry `data-page-map-exclude="true"`: they remain
 readable UI, but have no physical page substrate. Body and running-story coverage is still required.
 The lower-level `PaginationEngine` and standalone export retain physical-margin placement; callers
 can also select it explicitly with `commentColumnPlacement: "margin"` when comment page citations

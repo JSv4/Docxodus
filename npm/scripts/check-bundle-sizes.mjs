@@ -12,8 +12,9 @@ const budgetsKiB = {
   'embed.bundle.js': 135,
   'embed.iife.js': 135,
   'editor.bundle.js': 112,
-  // Floating frames, review columns and citing-table pagination measure 24.0 KiB gzip.
-  'pagination.bundle.js': 25,
+  // Floating frames, review columns and citing-table pagination measure 24.0 KiB gzip; Word's All
+  // Markup balloon layout (#1300) brings it to 27.6 KiB.
+  'pagination.bundle.js': 29,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,

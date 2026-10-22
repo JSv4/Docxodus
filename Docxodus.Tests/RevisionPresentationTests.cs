@@ -37,8 +37,8 @@ public class RevisionPresentationTests
         var del = html.Descendants(X + "del").First();
         Assert.Contains("rev-author-0", Classes(ins));
         Assert.Contains("rev-author-1", Classes(del));
-        Assert.Contains(".rev-author-0 { color: #C00000; }", css);
-        Assert.Contains(".rev-author-1 { color: #0070C0; }", css);
+        Assert.Contains(".rev-author-0 { color: #0078D4; }", css);
+        Assert.Contains(".rev-author-1 { color: #D13438; }", css);
         Assert.Contains("ins.rev-ins { text-decoration: underline; }", css);
         Assert.Contains("del.rev-del { text-decoration: line-through; }", css);
         Assert.DoesNotContain("#e6ffe6", css);
@@ -52,7 +52,7 @@ public class RevisionPresentationTests
             authorColors: new Dictionary<string, string> { ["Bob"] = "teal" });
 
         Assert.Contains(".rev-author-1 { color: teal; }", css);
-        Assert.Contains(".rev-author-0 { color: #C00000; }", css);
+        Assert.Contains(".rev-author-0 { color: #0078D4; }", css);
     }
 
     [Fact]

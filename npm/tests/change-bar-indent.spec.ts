@@ -20,7 +20,7 @@ for (const paginated of [false, true]) for (const classes of [false, true]) {
           paragraphLeft: p.getBoundingClientRect().left }));
     }, { bytes: Array.from(changeBarFixture()), paginated, classes });
     expect(observed).toHaveLength(2);
-    expect(observed.map(p => p.left)).toEqual([-24, -72]);
+    expect(observed.map(p => p.left)).toEqual([-40, -88]);
     expect(observed[0].paragraphLeft + observed[0].left)
       .toBeCloseTo(observed[1].paragraphLeft + observed[1].left, 1);
   });

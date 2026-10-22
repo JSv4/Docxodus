@@ -33,6 +33,9 @@ Options:
   --markup-presentation <docxodus|word>
                                      How --review-profile markup draws tracked changes
                                      (default docxodus; word = Word's All Markup style)
+  --comment-column-placement <margin|balloons>
+                                     Where margin comments go (default margin; balloons =
+                                     Word's All Markup print layout, with formatting balloons)
   --document-version <integer>       Immutable source version (default: 0)
   --expected-source-digest <sha256>  Required source digest
   --unsupported-content <warn|strict>
@@ -151,6 +154,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
         output: { type: "string", short: "o" },
         "review-profile": { type: "string" },
         "markup-presentation": { type: "string" },
+        "comment-column-placement": { type: "string" },
         comments: { type: "string" },
         "document-version": { type: "string" },
         "expected-source-digest": { type: "string" },
@@ -232,6 +236,10 @@ export async function runCli(argv: readonly string[]): Promise<number> {
           "--markup-presentation"),
       }),
       commentProfile,
+      ...(parsed.values["comment-column-placement"] === undefined ? {} : {
+        commentColumnPlacement: oneOf(parsed.values["comment-column-placement"], ["margin", "balloons"] as const,
+          "--comment-column-placement"),
+      }),
       documentVersion: integer(parsed.values["document-version"], "--document-version"),
       expectedSourceDigest: parsed.values["expected-source-digest"],
       unsupportedContent: parsed.values["unsupported-content"] === undefined
