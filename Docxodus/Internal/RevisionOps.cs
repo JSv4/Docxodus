@@ -1615,11 +1615,6 @@ internal static class RevisionOps
         && (marker.Ancestors(W.del).Any(represented.Contains)
             || marker.Ancestors(W.moveFrom).Any(represented.Contains));
 
-    /// <summary>
-    /// Coalesce only property revisions that have a concrete table-operation topology. This
-    /// preserves one-operation/one-entry semantics for row shading and column-width edits without
-    /// folding unrelated run or paragraph formatting merely because Word reused a timestamp.
-    /// </summary>
     /// <summary>Whether the properties a <c>*PrChange</c> sits in differ from its stored baseline
     /// only in <paramref name="names"/>.</summary>
     private static bool ChangesOnly(XElement change, params XName[] names)
@@ -1636,6 +1631,11 @@ internal static class RevisionOps
         return live is not null && XNode.DeepEquals(Rest(live), Rest(change.Element(live.Name)));
     }
 
+    /// <summary>
+    /// Coalesce only property revisions that have a concrete table-operation topology. This
+    /// preserves one-operation/one-entry semantics for row shading and column-width edits without
+    /// folding unrelated run or paragraph formatting merely because Word reused a timestamp.
+    /// </summary>
     private static void CoalesceTablePropertyGroups(List<RevisionGroup> groups, int partIndex)
     {
         var propertyGroups = groups.Where(group => group.PartIndex == partIndex
