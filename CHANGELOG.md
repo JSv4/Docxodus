@@ -31,6 +31,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Paginated HTML: a block merged through hidden paragraph marks (a run-in heading) now takes `data-keep-with-next` and `data-keep-lines` from its closing paragraph instead of the first, so consecutive run-in sections no longer chain into one unbreakable group, and an explicit `keepNext`/`keepLines` off on the closing paragraph is honored (#1294).
 - `DocxSession` edits that copy a run's, paragraph's or cell's properties no longer copy the
   tracked-change ids inside them (#1297). Formatting part of a run, a tracked replacement inside a
   run, `SplitParagraph`, a tracked `MoveBlock` (including the comments it copies), a tracked
