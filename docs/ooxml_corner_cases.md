@@ -3599,6 +3599,36 @@ heading as the baseline, and reject would keep the heading that the pending chan
 Code: `DocxSession.SplitParagraph`, `TrackSplitOffProperties`, `RemoveMarkOwnedProperties`.
 Tests: `DocxSessionClonedRevisionTests` (RID003, RID004, RID007, RID010, RID011, RID020, RID022).
 
+## Hidden paragraph mark: which paragraph's keep properties govern the joined block (issue #1294)
+
+A paragraph whose mark is hidden (`w:pPr/w:rPr/w:vanish`) is joined to the paragraph after it, the
+usual run-in heading construction. Minimal reproducer (Letter page; headings repeated so the
+sections sit at the end of a page):
+
+```xml
+<w:p><w:pPr><w:keepNext/><w:keepLines/><w:rPr><w:b/><w:vanish/></w:rPr></w:pPr>
+  <w:r><w:t>Term.</w:t></w:r></w:p>
+<w:p><w:pPr><w:keepLines/></w:pPr><w:r><w:t xml:space="preserve"> The clause text.</w:t></w:r></w:p>
+```
+
+Three such sections, with room for two on page 1 (benchmark case `paragraph-mark-hidden-run-in-keep`):
+
+| | Section 1 | Section 2 | Section 3 |
+|---|---|---|---|
+| Behaviour Docxodus #1294 specifies | page 1 | page 1 | page 2 |
+| LibreOffice 25.8.7.3 | page 2 | page 2 | page 2 |
+| Word | pending: Word reference PDFs available here cannot adjudicate a hidden-mark join | | |
+| Docxodus before the fix | chained onto page 2 as one group (the block took the heading's `keepNext`) | | |
+
+**Rule.** The joined block takes `data-keep-with-next` and `data-keep-lines` from its last paragraph.
+A heading's `keepNext` is satisfied by the text it runs into, so the closing paragraph's mark is the
+one that governs what follows the block, including an explicit `keepNext`/`keepLines` off there.
+`data-page-break-before`, which belongs to the block's start, still comes from the first paragraph.
+This is the behaviour the issue specifies; it has not been checked against Word.
+
+**Code.** `WmlToHtmlConverter.AddPaginationDataAttributes`, called from `ProcessParagraph` with the
+first and last paragraph of the join. Tests: `HiddenParagraphMarkTests.RunInBlock_*`.
+
 ## Revisions: how Word prints All Markup with balloons (issue #1300)
 
 **Reproducer.** Track one bold change and one indent change:

@@ -5935,7 +5935,7 @@ namespace Docxodus
             // Add pagination-related data attributes when pagination is enabled
             if (settings.RenderPagination == PaginationMode.Paginated)
             {
-                AddPaginationDataAttributes(element, paragraph);
+                AddPaginationDataAttributes(element, joinedElement, paragraph);
                 if ((string?)paragraph.Attribute("data-keep-lines") == "true")
                     paragraph.Annotation<Dictionary<string, string>>()!["break-inside"] = "avoid";
                 return SplitColumnBreakParagraph(paragraph);
@@ -6142,25 +6142,26 @@ namespace Docxodus
         /// <summary>
         /// Adds pagination-related data attributes to the HTML paragraph element.
         /// These attributes help the client-side pagination engine make better decisions.
+        /// A block merged through hidden paragraph marks starts at <paramref name="firstParagraph"/> and ends
+        /// at <paramref name="lastParagraph"/> (the same element when nothing was merged): the keep
+        /// properties come from the last, whose paragraph mark is the one that sits before the next block,
+        /// and the page break before, which belongs to the block's start, from the first. The remaining
+        /// properties are read from the first paragraph.
         /// </summary>
-        private static void AddPaginationDataAttributes(XElement wordParagraph, XElement htmlParagraph)
+        private static void AddPaginationDataAttributes(XElement firstParagraph, XElement lastParagraph, XElement htmlParagraph)
         {
-            var pPr = wordParagraph.Element(W.pPr);
-            if (pPr == null) return;
+            var closingPPr = lastParagraph.Element(W.pPr);
 
             // w:keepNext - keep this paragraph with the next one on the same page
-            var keepNext = pPr.Element(W.keepNext);
-            if (keepNext != null && ((string?)keepNext.Attribute(W.val) == null || keepNext.Attribute(W.val).ToBoolean() == true))
-            {
+            if (IsOnOffPropertyEnabled(closingPPr?.Element(W.keepNext)))
                 htmlParagraph.Add(new XAttribute("data-keep-with-next", "true"));
-            }
 
             // w:keepLines - keep all lines of this paragraph together on one page
-            var keepLines = pPr.Element(W.keepLines);
-            if (keepLines != null && ((string?)keepLines.Attribute(W.val) == null || keepLines.Attribute(W.val).ToBoolean() == true))
-            {
+            if (IsOnOffPropertyEnabled(closingPPr?.Element(W.keepLines)))
                 htmlParagraph.Add(new XAttribute("data-keep-lines", "true"));
-            }
+
+            var pPr = firstParagraph.Element(W.pPr);
+            if (pPr == null) return;
 
             // w:pageBreakBefore - force a page break before this paragraph
             var pageBreakBefore = pPr.Element(W.pageBreakBefore);
