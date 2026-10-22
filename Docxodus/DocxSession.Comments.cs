@@ -501,20 +501,7 @@ public sealed partial class DocxSession
             var exPart = main.WordprocessingCommentsExPart!;
             var exEntries = exPart.GetXDocument().Root!
                 .Elements(Internal.CommentOps.W15 + "commentEx").ToList();
-            var affectedParaIds = new HashSet<string>(StringComparer.Ordinal) { rootParaId };
-            bool expanded;
-            do
-            {
-                expanded = false;
-                foreach (var entry in exEntries)
-                {
-                    var paraId = (string?)entry.Attribute(Internal.CommentOps.W15 + "paraId");
-                    var parentParaId = (string?)entry.Attribute(Internal.CommentOps.W15 + "paraIdParent");
-                    if (paraId is not null && parentParaId is not null
-                        && affectedParaIds.Contains(parentParaId) && affectedParaIds.Add(paraId))
-                        expanded = true;
-                }
-            } while (expanded);
+            var affectedParaIds = Internal.CommentOps.WithDescendantParaIds(exEntries, rootParaId);
 
             foreach (var entry in exEntries.Where(e =>
                          affectedParaIds.Contains((string?)e.Attribute(Internal.CommentOps.W15 + "paraId") ?? "")))
