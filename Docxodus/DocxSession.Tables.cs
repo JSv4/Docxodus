@@ -329,7 +329,7 @@ public sealed partial class DocxSession
     /// valign). Merge markup is always dropped — a clone is a fresh cell, never half of somebody
     /// else's merge — except <c>w:gridSpan</c> when <paramref name="keepSpan"/> is set, which a new
     /// row needs so its cells still line up with w:tblGrid.</summary>
-    private static XElement NewEmptyCellLike(XElement referenceCell, bool keepSpan = false)
+    private XElement NewEmptyCellLike(XElement referenceCell, bool keepSpan = false)
     {
         var tcPr = referenceCell.Element(W.tcPr);
         var tc = new XElement(W.tc);
@@ -339,6 +339,7 @@ public sealed partial class DocxSession
             clone.Elements(W.vMerge).Remove();
             clone.Elements(W.hMerge).Remove();
             if (!keepSpan) clone.Elements(W.gridSpan).Remove();
+            Internal.RevisionOps.RenumberCopiedRevisions(clone, NextRevisionId);
             tc.Add(clone);
         }
         tc.Add(new XElement(W.p));

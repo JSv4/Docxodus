@@ -1929,7 +1929,7 @@ public sealed partial class DocxSession : IDisposable
         return result;
     }
 
-    private static void RestorePreservedMarkerPositions(
+    private void RestorePreservedMarkerPositions(
         XElement paragraph, IReadOnlyList<PreservedMarkerPosition> markers)
     {
         int length = ParagraphText(paragraph).Length;
@@ -1960,7 +1960,7 @@ public sealed partial class DocxSession : IDisposable
         return after;
     }
 
-    private static void ApplyReplaceTextAccept(XElement paragraph, IReadOnlyList<Internal.ParsedBlock> blocks)
+    private void ApplyReplaceTextAccept(XElement paragraph, IReadOnlyList<Internal.ParsedBlock> blocks)
     {
         var pPr = paragraph.Element(W.pPr);
         var markers = CapturePreservedMarkerPositions(paragraph);
@@ -2765,9 +2765,10 @@ public sealed partial class DocxSession : IDisposable
     /// at that offset. Walks runs inside hyperlinks/sdts/etc. too, so the boundary
     /// is clean regardless of which container the run lives in. The new sibling run
     /// is inserted into the same parent as the original (preserving hyperlink/sdt
-    /// membership for the keep-half).
+    /// membership for the keep-half). The run before the split takes fresh revision ids
+    /// from <paramref name="nextRevisionId"/>.
     /// </summary>
-    internal static void SplitRunsAtOffset(XElement paragraph, int offset)
+    internal static void SplitRunsAtOffset(XElement paragraph, int offset, Func<int> nextRevisionId)
     {
         int consumed = 0;
         foreach (var run in InlineRuns(paragraph).ToList())
@@ -2787,7 +2788,13 @@ public sealed partial class DocxSession : IDisposable
 
             var rPr = run.Element(W.rPr);
             var newRun = new XElement(W.r);
-            if (rPr is not null) newRun.Add(new XElement(rPr));
+            if (rPr is not null)
+            {
+                // Both halves stay live, so one needs new revision ids: the text after the
+                // split keeps the originals.
+                newRun.Add(new XElement(rPr));
+                Internal.RevisionOps.RenumberCopiedRevisions(rPr, nextRevisionId);
+            }
             newRun.Add(new XElement(W.t,
                 new XAttribute(XNamespace.Xml + "space", "preserve"), move));
             run.AddAfterSelf(newRun);
@@ -2802,7 +2809,7 @@ public sealed partial class DocxSession : IDisposable
     /// each holding half the runs. After this call, <see cref="MoveInlineChildrenAfter"/>
     /// can move whole-child elements without slicing through anything.
     /// </summary>
-    internal static void SplitInlineContainersAtOffset(XElement paragraph, int offset)
+    internal static void SplitInlineContainersAtOffset(XElement paragraph, int offset, Func<int> nextRevisionId)
     {
         int consumed = 0;
         foreach (var child in paragraph.Elements().Where(IsInlineChild).ToList())
@@ -2813,7 +2820,7 @@ public sealed partial class DocxSession : IDisposable
             int local = offset - consumed;
 
             if (child.Name == W.hyperlink)
-                SplitHyperlinkAt(child, local);
+                SplitHyperlinkAt(child, local, nextRevisionId);
             // For <w:r>: SplitRunsAtOffset already handled it. For sdt/fldSimple/smartTag and
             // revision wrappers: treat as atomic — callers that insert a top-level child must
             // reject an interior boundary with HasUnsupportedInlineInsertionBoundary before
@@ -2822,11 +2829,11 @@ public sealed partial class DocxSession : IDisposable
         }
     }
 
-    private static void SplitHyperlinkAt(XElement hyperlink, int localOffset)
+    private static void SplitHyperlinkAt(XElement hyperlink, int localOffset, Func<int> nextRevisionId)
     {
         // Split runs inside the hyperlink at the local offset (works because SplitRunsAtOffset
         // walks descendants through container types).
-        SplitRunsAtOffset(hyperlink, localOffset);
+        SplitRunsAtOffset(hyperlink, localOffset, nextRevisionId);
 
         int consumed = 0;
         var movedChildren = new List<XElement>();

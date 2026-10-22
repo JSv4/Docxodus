@@ -163,8 +163,8 @@ public sealed partial class DocxSession
             // from where this citation lands among the existing ones (see NextNoteIdInReferenceOrder).
             // Split before inserting so no run or hyperlink straddles the offset: the same offset
             // mechanism SplitParagraph and ApplyFormat use, not a second walker.
-            SplitRunsAtOffset(element, characterOffset);
-            SplitInlineContainersAtOffset(element, characterOffset);
+            SplitRunsAtOffset(element, characterOffset, NextRevisionId);
+            SplitInlineContainersAtOffset(element, characterOffset, NextRevisionId);
             var refRun = BuildNoteReferenceRun(isFootnote, NoteIdPlaceholder);
             UnidHelper.AssignToSelfAndDescendants(refRun);
 

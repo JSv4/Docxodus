@@ -188,7 +188,7 @@ public sealed partial class DocxSession
                 // Splits route through the same offset mechanism every other span op uses
                 // (AnnotationOps.SplitRunsForSpan).
                 var (startRun, endRun) = Internal.AnnotationOps.SplitRunsForSpan(
-                    element, spanStart, spanLength);
+                    element, spanStart, spanLength, NextRevisionId);
                 InsertCommentMarkers(id, startRun, endRun);
             },
             modified: new[] { target.Anchor },

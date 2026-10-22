@@ -100,6 +100,7 @@ public sealed partial class DocxSession
             var destination = new XElement(source);
             foreach (var el in destination.DescendantsAndSelf())
                 el.Attributes(PtOpenXml.Unid).Remove();
+            Internal.RevisionOps.RenumberCopiedRevisions(destination, NextRevisionId);
 
             // Both copies are live while the revision is pending, so the shared comment ids have to
             // be split. The move SOURCE takes the clones (see CloneCommentsForMoveSource), leaving
@@ -688,6 +689,19 @@ public sealed partial class DocxSession
         }
     }
 
+    /// <summary>The paragraph mark's own insertion, deletion or move markers
+    /// (<c>w:pPr/w:rPr/w:ins</c> and its siblings).</summary>
+    private static IEnumerable<XElement> ParagraphMarkRevisions(XElement pPr) =>
+        pPr.Elements(W.rPr).Elements().Where(e => Internal.RevisionOps.RevWrapperNames.Contains(e.Name));
+
+    /// <summary>Drop <see cref="ParagraphMarkRevisions"/> from <paramref name="pPr"/>, and the
+    /// mark's <c>w:rPr</c> when nothing else is left in it.</summary>
+    private static void RemoveParagraphMarkRevisions(XElement pPr)
+    {
+        ParagraphMarkRevisions(pPr).Remove();
+        if (pPr.Element(W.rPr) is { HasElements: false } markProperties) markProperties.Remove();
+    }
+
     public EditResult SplitParagraph(string anchorId, int characterOffset)
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
@@ -724,13 +738,20 @@ public sealed partial class DocxSession
             {
                 newPPr = new XElement(pPr);
                 second.Add(newPPr);
+                // Both halves keep any pending property change, each under its own id. The new
+                // mark ends the first half, as Word's Enter does, and the original mark goes on
+                // ending the second, so a revision of the mark stays there alone: the new mark
+                // of an untracked split is ordinary content, and a copy of the revision on it
+                // would let a reject also take back the split (issue #1297).
+                Internal.RevisionOps.RenumberCopiedRevisions(newPPr, NextRevisionId);
+                RemoveParagraphMarkRevisions(pPr);
             }
 
             // Split any run that straddles the offset (descends into hyperlinks/sdts),
             // then split any container (hyperlink) that still straddles, then move all
             // inline children + markers at-or-past the offset to `second`.
-            SplitRunsAtOffset(element, characterOffset);
-            SplitInlineContainersAtOffset(element, characterOffset);
+            SplitRunsAtOffset(element, characterOffset, NextRevisionId);
+            SplitInlineContainersAtOffset(element, characterOffset, NextRevisionId);
             MoveInlineChildrenAfter(element, characterOffset, second);
 
             if (newPPr is not null)
@@ -761,7 +782,10 @@ public sealed partial class DocxSession
                     if (nextStyle is not null && !string.Equals(nextStyle, curStyle, StringComparison.Ordinal))
                     {
                         var rebuilt = new XElement(W.pPr,
-                            new XElement(W.pStyle, new XAttribute(W.val, nextStyle)));
+                            new XElement(W.pStyle, new XAttribute(W.val, nextStyle)),
+                            ParagraphMarkRevisions(newPPr).Any()
+                                ? new XElement(W.rPr, ParagraphMarkRevisions(newPPr))
+                                : null);
                         newPPr.ReplaceWith(rebuilt);
                         newPPr = rebuilt;
                     }

@@ -466,6 +466,7 @@ public sealed partial class DocxSession
                 else
                 {
                     var copy = new XElement(run);
+                    Internal.RevisionOps.RenumberCopiedRevisions(copy, NextRevisionId);
                     var inserted = CreateRevisionEnvelope(W.ins, stamp);
                     run.ReplaceWith(deleted, inserted);
                     deleted.Add(run);
@@ -502,7 +503,7 @@ public sealed partial class DocxSession
 
     /// <summary>Move any run content that is not the picture into sibling runs carrying the same
     /// properties, so the revision envelopes wrap the picture alone.</summary>
-    private static XElement IsolateImageRun(XElement outer)
+    private XElement IsolateImageRun(XElement outer)
     {
         var run = outer.Parent!;
         var others = run.Elements()
@@ -526,6 +527,7 @@ public sealed partial class DocxSession
             if (before) run.AddBeforeSelf(sibling);
             else run.AddAfterSelf(sibling);
             UnidHelper.AssignToSelfAndDescendants(sibling);
+            Internal.RevisionOps.RenumberCopiedRevisions(sibling, NextRevisionId);
         }
         return run;
     }
@@ -1259,10 +1261,10 @@ public sealed partial class DocxSession
         return offset;
     }
 
-    private static void InsertInlineElementAtOffset(XElement paragraph, int offset, XElement element)
+    private void InsertInlineElementAtOffset(XElement paragraph, int offset, XElement element)
     {
-        SplitRunsAtOffset(paragraph, offset);
-        SplitInlineContainersAtOffset(paragraph, offset);
+        SplitRunsAtOffset(paragraph, offset, NextRevisionId);
+        SplitInlineContainersAtOffset(paragraph, offset, NextRevisionId);
         var map = RunTextMap.Build(paragraph);
         var right = map.Segments.FirstOrDefault(segment => segment.StartOffsetInBlock >= offset).Run;
         if (right is not null)
