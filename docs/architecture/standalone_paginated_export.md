@@ -50,6 +50,7 @@ interface ExportOptions {
   reviewProfileAlreadyApplied?: boolean;
   markupPresentation?: MarkupPresentation; // markup only; default "docxodus"
   commentProfile: CommentProfile;
+  commentColumnPlacement?: "margin" | "balloons"; // default "margin"
   title?: string;
   additionalCss?: string; // appended before pagination; default empty
   unsupportedContent?: "warn" | "strict";
@@ -734,13 +735,27 @@ properties changed. `word` is close to what Word prints with All Markup:
 - moves green with double underline and double strikethrough;
 - Word's default shading for inserted, deleted and merged cells;
 - no pilcrow, and no inline marker for formatting or section changes;
-- one change bar in the left margin, 0.25in left of the text column, beside every paragraph that
+- one change bar in the left margin, 30pt left of the text column, beside every paragraph that
   holds a revision.
 
-The palette, the bar offset and the shading values are this implementation's choice in Word's
-style. They were not sampled from Word. `word` with any profile other than `markup` is
+The first two palette colours and the bar offset were measured from Word-printed All Markup PDFs
+(issue #1300); the rest of the palette and the shading values are this implementation's choice in
+Word's style. `word` with any profile other than `markup` is
 `invalid_argument`. The report's options name `markupPresentation` only when it is `word`, and
 only then does it enter the layout digest, so every default report and digest is unchanged.
+
+`commentColumnPlacement: "balloons"` prints Word's All Markup layout (issue #1300, design in
+`all_markup_layout.md`): each page keeps its paper size and is shrunk beside a grey markup area whose
+balloons hold the margin comments and, with the Word presentation, the formatting changes in Word's
+wording; insertions and deletions stay inline. It needs the `margin` or `hidden` comment profile and,
+with `markup`, `markupPresentation: "word"`; otherwise it is `invalid_argument`. In `final` and
+`original` the converter still runs in the Word presentation, for the comments' balloon data. Page
+boxes keep the paper size, so PageMap pages and the print checks are unchanged; the balloons, like
+the outside comment panel, are excluded from the PageMap. The report's options name
+`commentColumnPlacement` only when it is `balloons`, and only then does it enter the layout digest.
+The CLI flag is `--comment-column-placement`. A comment marked in the document that gets no balloon
+fails the export (`output_verification_failure`). Balloons cut short to fit beside their page are
+reported in a `comment_balloon_truncated` warning.
 
 Comments are orthogonal: `hidden`, `inline`, `endnotes`, or `margin`. A visible profile retains
 range, body, author, and date in body, headers, footers, footnotes, and endnotes, and draws the

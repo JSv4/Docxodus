@@ -417,6 +417,15 @@ describe("@docxodus/export", { concurrency: false }, () => {
         && error.code === "invalid_argument"
         && error.phase === "input_validation",
     );
+    // The export prints the margin or Word's balloons, which show margin comments only.
+    for (const options of [{ commentColumnPlacement: "outside" }, { commentColumnPlacement: "balloons", commentProfile: "inline" }]) {
+      await assert.rejects(
+        convertDocxToPdf(source, { ...baseOptions, ...options }),
+        (error) => error instanceof DocxodusExportError
+          && error.code === "invalid_argument"
+          && error.phase === "input_validation",
+      );
+    }
     await assert.rejects(
       convertDocxToPdf(source, {
         ...baseOptions,

@@ -654,6 +654,10 @@
             "description": "Present only when the markup profile drew tracked changes in Word's All Markup style (issue #851); absent means Docxodus's own style.",
             "const": "word"
           },
+          "commentColumnPlacement": {
+            "description": "Present only when the export printed Word's All Markup balloon layout (issue #1300): each page shrunk beside a markup area holding its comments and formatting changes; absent means comments in the page margin.",
+            "const": "balloons"
+          },
           "commentProfile": {
             "enum": [
               "hidden",
