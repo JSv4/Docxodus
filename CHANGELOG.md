@@ -40,6 +40,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- HTML to DOCX now adds a nested element's `text-decoration` lines to those of the elements around it
+  instead of replacing them (#1280). The converter treated `text-decoration` as an inherited property,
+  so a struck span inside an underlined span produced only `<w:strike/>`, and a DOCX → HTML → DOCX round
+  trip dropped the underline of any run whose underline and strikethrough differ in style or colour
+  (the DOCX-to-HTML converter writes those as an underlined outer span around a struck inner span). As
+  in CSS, a run now carries every line drawn by its ancestors, each line takes its style from the
+  nearest element that draws it, and `text-decoration: none` on a child no longer removes an
+  ancestor's line. Underline colour is still not mapped back to `w:u w:color`.
+
 - Tracked formatting of a run that already has another author's pending format change is now
   credited to the person who made it (#1295). The session folded the new formatting into the
   existing `w:rPrChange` but left that change's author, date and `w:id` alone, so `ListRevisions()`

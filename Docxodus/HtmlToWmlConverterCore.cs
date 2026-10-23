@@ -2926,7 +2926,6 @@ namespace Docxodus.HtmlToWml
             var outermostScript = element.AncestorsAndSelf()
                 .LastOrDefault(e => e.Name == XhtmlNoNamespace.sup || e.Name == XhtmlNoNamespace.sub);
             CssExpression? fontSizeProperty = (outermostScript?.Parent ?? element).GetProp("font-size");
-            CssExpression textDecorationProperty = element.GetProp("text-decoration")!;
             CssExpression fontStyleProperty = element.GetProp("font-style")!;
             CssExpression fontWeightProperty = element.GetProp("font-weight")!;
             CssExpression backgroundColorProperty = element.GetProp("background-color")!;
@@ -2937,9 +2936,16 @@ namespace Docxodus.HtmlToWml
             string? fontFamilyString = GetUsedFontFromFontFamilyProperty(fontFamilyProperty);
             TPoint? fontSizeTPoint = GetUsedSizeFromFontSizeProperty(fontSizeProperty);
             // text-decoration lists its lines and an optional style in any order, e.g. "underline double"
-            // for w:u double and "line-through double" for w:dstrike (issue #1273).
-            var decorations = textDecorationProperty.Terms
-                .Select(t => t.Value?.ToLowerInvariant()).ToHashSet();
+            // for w:u double and "line-through double" for w:dstrike (issue #1273). CSS draws an element's
+            // lines across all its descendants' text, so a run carries the lines of every element around
+            // it, and a nested value (even "none") cannot replace or remove an ancestor's line. Each line
+            // takes its style from the nearest element that draws it (issue #1280).
+            var decorations = element.AncestorsAndSelf()
+                .Select(e => e.GetProp("text-decoration")?.Terms.Select(t => t.Value?.ToLowerInvariant()).ToHashSet())
+                .OfType<HashSet<string?>>()
+                .ToList();
+            var underlineDecoration = decorations.FirstOrDefault(d => d.Contains("underline"));
+            var strikeDecoration = decorations.FirstOrDefault(d => d.Contains("line-through"));
             string fontStyleString = fontStyleProperty.ToString();
             string fontWeightString = fontWeightProperty.ToString().ToLower();
             string backgroundColorString = backgroundColorProperty.ToString().ToLower();
@@ -2995,8 +3001,8 @@ namespace Docxodus.HtmlToWml
             }
 
             XElement? strike = null;
-            if (decorations.Contains("line-through"))
-                strike = new XElement(decorations.Contains("double") ? W.dstrike : W.strike);
+            if (strikeDecoration != null)
+                strike = new XElement(strikeDecoration.Contains("double") ? W.dstrike : W.strike);
             else if (sAncestor)
                 strike = new XElement(W.strike);
 
@@ -3017,12 +3023,12 @@ namespace Docxodus.HtmlToWml
             }
 
             XElement? underline = null;
-            if (decorations.Contains("underline"))
+            if (underlineDecoration != null)
                 underline = new XElement(W.u, new XAttribute(W.val,
-                    decorations.Contains("double") ? "double" :
-                    decorations.Contains("dotted") ? "dotted" :
-                    decorations.Contains("dashed") ? "dash" :
-                    decorations.Contains("wavy") ? "wave" : "single"));
+                    underlineDecoration.Contains("double") ? "double" :
+                    underlineDecoration.Contains("dotted") ? "dotted" :
+                    underlineDecoration.Contains("dashed") ? "dash" :
+                    underlineDecoration.Contains("wavy") ? "wave" : "single"));
             else if (uAncestor)
                 underline = new XElement(W.u, new XAttribute(W.val, "single"));
 
