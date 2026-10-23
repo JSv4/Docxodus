@@ -334,6 +334,20 @@ Content inside DrawingML shapes (`a:txBody`, `wps:txbx`) may not be fully extrac
 - Nested text frames in complex drawings may be missed
 - No CSS positioning to reflect shape placement
 
+Inline shapes that are not text boxes (`wps:wsp`, `wpg:wgp` groups, `wpc:wpc` canvases) render as
+SVG sized to their `wp:extent` (`WmlToHtmlConverter.Shapes.cs`, issue #1270). Preset `rect`,
+`roundRect`, `ellipse`, `line` and `straightConnector1` geometry is drawn with its fill and outline,
+from `wps:spPr` or the `wps:style` theme references, honouring `rot`/`flipH`/`flipV`; a group is an
+SVG group whose transform maps its child coordinate space onto its frame. Coordinates stay in EMUs
+under one root scale, with no viewBox, so a zero-height line extent still draws. Other geometry (`custGeom`, the
+remaining presets), pictures inside groups and text inside grouped text boxes are not drawn, but the
+extent is still reserved. Any inline drawing nothing else rendered gets an empty `<svg
+data-docx-shape="unrendered">` box of its extent, because the empty-paragraph pass counts an inline
+`w:drawing` as content: a drawing that rendered to nothing used to leave its paragraph with no line
+box and fail PageMap verification. Floating (`wp:anchor`) shapes are still not drawn: faithful
+output needs their stacking order (`behindDoc`) and text wrapping, and a decorative background
+rectangle drawn over the text would be worse than none.
+
 ---
 
 ### 23. Tracked Changes - Partial Property Support

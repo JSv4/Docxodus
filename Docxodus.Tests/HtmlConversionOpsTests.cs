@@ -702,8 +702,8 @@ public class HtmlConversionOpsTests
     [Fact]
     public void HCO098_UnsupportedChartFamily_DegradesToBlankExtentWithoutCrash()
     {
-        // Scatter has no cached-values projection; the drawing must degrade to the established
-        // no-chart output (blank extent) rather than fail the whole conversion.
+        // Scatter has no cached-values projection; the drawing must degrade to a blank box of its
+        // extent (issue #1270) rather than fail the whole conversion.
         var c = ChartC;
         string html = HtmlConversionOps.ConvertToHtml(GeneratedChartDocxBytes(
                 new XElement(c + "scatterChart",
@@ -711,8 +711,11 @@ public class HtmlConversionOpsTests
                     GeneratedChartSeries(0, "North", new[] { 2.0, 4.0, 3.0 }))),
             new HtmlConversionOptions { FabricateCssClasses = false });
 
-        Assert.DoesNotContain(XElement.Parse(html).Descendants(),
+        var svg = Assert.Single(XElement.Parse(html).Descendants(),
             element => element.Name.LocalName == "svg");
+        Assert.Null(svg.Attribute("data-chart-type"));
+        Assert.Equal("unrendered", (string?)svg.Attribute("data-docx-shape"));
+        Assert.Empty(svg.Elements());
     }
 
     [Fact]

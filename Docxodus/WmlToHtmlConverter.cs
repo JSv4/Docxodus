@@ -11286,7 +11286,8 @@ namespace Docxodus
                     if (image != null)
                         return image;
                 }
-                return ProcessTextBox(wordDoc, element, settings);
+                return ProcessTextBox(wordDoc, element, settings)
+                    ?? ProcessDrawingShape(wordDoc, element, imageHandler != null);
             }
             if (element.Name == W.pict || element.Name == W._object)
             {

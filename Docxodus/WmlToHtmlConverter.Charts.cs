@@ -790,41 +790,10 @@ namespace Docxodus
             // color on the stroke (a:ln/a:solidFill) instead.
             var fill = shapeProperties?.Element(A.solidFill)
                 ?? shapeProperties?.Element(A.ln)?.Element(A.solidFill);
-            var rgb = (string?)fill?.Element(A.srgbClr)?.Attribute("val");
-            var schemeColor = fill?.Element(A.schemeClr);
-            if (!IsHexColor(rgb) && schemeColor != null)
+            return ResolveDrawingColor(fill, theme) ?? "#" + new[]
             {
-                var name = (string?)schemeColor.Attribute("val");
-                if (!string.IsNullOrEmpty(name))
-                    theme?.Colors.TryGetValue(name, out rgb);
-                if (IsHexColor(rgb))
-                    // IsHexColor(rgb) verified rgb is a non-null 6-digit hex string.
-                    rgb = ApplyChartLuminosity(rgb!, schemeColor);
-            }
-
-            if (!IsHexColor(rgb))
-            {
-                var defaults = new[]
-                {
-                    "5B9BD5", "ED7D31", "A5A5A5", "FFC000", "4472C4", "70AD47",
-                };
-                rgb = defaults[seriesIndex % defaults.Length];
-            }
-
-            // Either branch above leaves rgb as a verified hex string or a hardcoded default.
-            return "#" + rgb!.ToUpperInvariant();
-        }
-
-        private static string ApplyChartLuminosity(string color, XElement schemeColor)
-        {
-            var red = int.Parse(color.Substring(0, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-            var green = int.Parse(color.Substring(2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-            var blue = int.Parse(color.Substring(4, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-            var lumMod = ReadDoubleAttribute(schemeColor.Element(A.lumMod), "val") ?? 100000;
-            var lumOff = ReadDoubleAttribute(schemeColor.Element(A.lumOff), "val") ?? 0;
-            int Apply(int channel) => (int)Math.Round(Math.Clamp(
-                channel * lumMod / 100000 + 255 * lumOff / 100000, 0, 255));
-            return $"{Apply(red):X2}{Apply(green):X2}{Apply(blue):X2}";
+                "5B9BD5", "ED7D31", "A5A5A5", "FFC000", "4472C4", "70AD47",
+            }[seriesIndex % 6];
         }
 
         private static bool IsDeleted(XElement element) =>

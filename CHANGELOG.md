@@ -178,6 +178,22 @@ All notable changes to this project will be documented in this file.
     whole, even when its mark shares a run, hyperlink or tracked insertion with the text beyond it;
     before, a split right after the field moved its `end` mark to the next paragraph. A field
     that already spans paragraphs, such as a table of contents, can still be split inside.
+
+- DrawingML shapes and groups that are not text boxes no longer disappear from the HTML, and PDF
+  export of a document holding one no longer fails (#1270). Only pictures, charts and text boxes were
+  drawn, so a plain `wps:wsp` rectangle or a `wpg:wgp` group produced no HTML; its paragraph, still
+  counted as holding content, got no line box, and the PDF export's PageMap check failed with
+  `output_verification_failure: source anchor … has no measurable fragment`. Inline shapes now render
+  as SVG at their `wp:extent`: rectangles, rounded rectangles, ellipses and lines with their fill
+  and outline (explicit, or from the shape style's theme references), rotated and flipped as written,
+  and a group's children placed through its child coordinate space (`a:chOff`/`a:chExt`). A tracked
+  deletion around the drawing stays visible in markup mode. Geometry that is not drawn, and any other
+  inline drawing nothing could render (an unsupported chart type, SmartArt, a picture whose image part
+  is missing or unusable), now leaves an empty box of its extent instead of nothing; a picture is still
+  omitted when the caller passes no image handler. Floating (`wp:anchor`) shapes are still not drawn.
+  Chart colours given as `tx1`/`bg1`/`tx2`/`bg2`, as a system colour, or with a shade or tint now
+  resolve too.
+
 - HTML to DOCX now adds a nested element's `text-decoration` lines to those of the elements around it
   instead of replacing them (#1280). The converter treated `text-decoration` as an inherited property,
   so a struck span inside an underlined span produced only `<w:strike/>`, and a DOCX → HTML → DOCX round
