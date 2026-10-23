@@ -85,8 +85,10 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      # Six shards: with four, each shard's test step was ~5 minutes on top of a ~1-minute
+      # setup and the ~5-minute build it waits for; more shards shorten only the first of those.
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
 
     steps:
       - name: Checkout

@@ -30,13 +30,20 @@ runs:
         path: ~/.cache/ms-playwright
         key: ms-playwright-${{ runner.os }}-${{ steps.versions.outputs.playwright }}-${{ inputs.browsers }}
 
-    # apt downloads as its own unprivileged user, so the directory is left writable for it.
+    # apt downloads as its own unprivileged user, so the directory is left writable for it. The
+    # mirror's stalls show up as two-minute silences in the middle of a package, which is apt's
+    # default transfer timeout; a short one with retries turns each stall into a reconnect.
     - name: Point apt at a cached package archive
       shell: bash
       run: |
         mkdir -p "$HOME/.cache/apt-archives/partial"
         chmod -R a+rwX "$HOME/.cache/apt-archives"
-        echo "Dir::Cache::archives \"$HOME/.cache/apt-archives/\";" | sudo tee /etc/apt/apt.conf.d/99docxodus-archives > /dev/null
+        {
+          echo "Dir::Cache::archives \"$HOME/.cache/apt-archives/\";"
+          echo 'Acquire::http::Timeout "20";'
+          echo 'Acquire::https::Timeout "20";'
+          echo 'Acquire::Retries "5";'
+        } | sudo tee /etc/apt/apt.conf.d/99docxodus-archives > /dev/null
 
     - name: Restore cached apt packages
       uses: actions/cache@v6

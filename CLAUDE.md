@@ -177,7 +177,7 @@ several workers) and the serial lane (one worker) for the specs that assert a la
 or frame-rate bound, which another worker's WASM boot would inflate. A new spec of that kind goes in
 `serialLaneSpecs` in `npm/scripts/playwright-lanes.mjs`; `npm run test:lanes` fails when a spec file
 is in both lanes or neither. CI runs each lane as its own job with `DOCXODUS_PLAYWRIGHT_LANE`, the
-pool as four shards.
+pool as six shards.
 
 **Allocation gate.** On pull requests that touch `Docxodus/`, `perf.yml` runs the DocxDiff stress
 and complex-form benchmarks against the base commit's library and the PR's, and fails when a case

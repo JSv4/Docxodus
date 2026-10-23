@@ -89,10 +89,10 @@ export default defineConfig({
   fullyParallel: false, // a spec file's tests run in order on one worker; files spread across workers
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  // Pool lane: three workers on a 4-vCPU hosted runner, Playwright's default (half the cores)
-  // elsewhere — four workers on an 8-core host ran the pool 3.3x faster than one. Any other
-  // lane, or none, keeps one worker: see the lane comment above.
-  workers: lane === 'pool' ? (process.env.CI ? 3 : undefined) : 1,
+  // Pool lane: four workers on a 4-vCPU hosted runner, Playwright's default (half the cores)
+  // elsewhere — four workers on an 8-core host ran the pool 3.3x faster than one, and three on
+  // the hosted runner 2.25x. Any other lane, or none, keeps one worker: see the lane comment above.
+  workers: lane === 'pool' ? (process.env.CI ? 4 : undefined) : 1,
   // Lane-specific folders, so `npm test` running the two lanes back to back keeps both
   // reports and both sets of traces; CI merges the lanes' blob reports into one HTML report.
   reporter: [['html', { outputFolder: lane === 'serial' ? 'playwright-report-serial' : 'playwright-report' }]],
