@@ -719,6 +719,28 @@ public class HtmlConversionOpsTests
     }
 
     [Fact]
+    public void HCO103_ChartSeriesColor_AppliesShadeToAnSrgbColor()
+    {
+        // The shared DrawingML color resolver (issue #1270) applies modifiers to sRGB colors too:
+        // accent blue at 50% shade is Word's 2F528F, not the unmodified 4472C4.
+        var c = ChartC;
+        XNamespace a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        var series = GeneratedChartSeries(0, "North", new[] { 2.0, 4.0, 3.0 });
+        series.Element(c + "tx")!.AddAfterSelf(new XElement(c + "spPr",
+            new XElement(a + "solidFill", new XElement(a + "srgbClr", new XAttribute("val", "4472C4"),
+                new XElement(a + "shade", new XAttribute("val", 50000))))));
+        var svg = ConvertChartSvg(GeneratedChartDocxBytes(
+            new XElement(c + "barChart",
+                new XElement(c + "barDir", new XAttribute("val", "col")),
+                new XElement(c + "grouping", new XAttribute("val", "clustered")),
+                series),
+            new XElement(c + "valAx", new XElement(c + "scaling"))));
+
+        Assert.All(svg.Descendants().Where(element => (string?)element.Attribute("class") == "docx-chart-bar"),
+            bar => Assert.Equal("#2F528F", (string?)bar.Attribute("fill")));
+    }
+
+    [Fact]
     public void HCO020_BulletListMarker_RendersUnicodeBullet()
     {
         // A bullet list item carries the Symbol-font glyph U+F0B7, which renders as a blank box in a

@@ -21,6 +21,7 @@ for (const variant of SHAPE_VARIANTS) {
     });
 
     expect(result.pageCount).toBe(1);
+    expect(result.warnings.filter((warning) => warning.phase === 'chart_svg_materialization')).toEqual([]);
     expect(result.pdf!.byteLength).toBeGreaterThan(0);
     expect(result.html).toContain('fill="#19647E"');
     // The rectangle's paragraph is at least the rectangle's 72pt tall.

@@ -25,7 +25,8 @@ public class HtmlDrawingShapeTests
         "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
         "xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\" " +
         "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" " +
-        "xmlns:wpg=\"http://schemas.microsoft.com/office/word/2010/wordprocessingGroup\"";
+        "xmlns:wpg=\"http://schemas.microsoft.com/office/word/2010/wordprocessingGroup\" " +
+        "xmlns:wpc=\"http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas\"";
 
     private const string ShapeUri = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
     private const string GroupUri = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup";
@@ -110,6 +111,7 @@ public class HtmlDrawingShapeTests
         var box = (string?)svg.Parent!.Attribute("style");
         Assert.Contains("width: 144pt", box);
         Assert.Contains("height: 72pt", box);
+        Assert.Equal(("192", "96"), ((string?)svg.Attribute("width"), (string?)svg.Attribute("height")));
         var rect = Assert.Single(Drawn(svg, "rect"));
         Assert.Equal("#19647E", (string?)rect.Attribute("fill"));
         Assert.Equal(deleted, svg.Ancestors().Any(a => a.Name.LocalName == "del"));
@@ -128,6 +130,18 @@ public class HtmlDrawingShapeTests
         Assert.Equal("matrix(2 0 0 2 -2000 -2000)", (string?)group.Attribute("transform"));
         var rect = Assert.Single(Drawn(group, "rect"));
         Assert.Equal("1000", (string?)rect.Attribute("x"));
+        Assert.Equal("457200", (string?)rect.Attribute("width"));
+    }
+
+    [Fact]
+    public void CanvasChildren_ArePlacedInTheDrawingsOwnCoordinates()
+    {
+        var child = Shape(cx: 457200, cy: 457200).Replace("<a:off x=\"0\" y=\"0\"/>", "<a:off x=\"914400\" y=\"0\"/>");
+        var svg = OnlySvg(MiddleParagraph(Docx(InlineDrawing(
+            "http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas", $"<wpc:wpc><wpc:bg/><wpc:whole/>{child}</wpc:wpc>"))));
+
+        var rect = Assert.Single(Drawn(svg, "rect"));
+        Assert.Equal("914400", (string?)rect.Attribute("x"));
         Assert.Equal("457200", (string?)rect.Attribute("width"));
     }
 
@@ -169,6 +183,8 @@ public class HtmlDrawingShapeTests
 
         Assert.Contains("height: 0pt", (string?)svg.Parent!.Attribute("style"));
         Assert.Null(svg.Attribute("viewBox"));
+        // A degenerate viewBox would disable rendering; the export needs a positive size to lay it out.
+        Assert.Equal("1", (string?)svg.Attribute("height"));
         var line = Assert.Single(Drawn(svg, "line"));
         Assert.Equal("0", (string?)line.Attribute("y2"));
         Assert.Equal("1828800", (string?)line.Attribute("x2"));

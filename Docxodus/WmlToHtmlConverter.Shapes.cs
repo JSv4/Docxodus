@@ -59,11 +59,15 @@ namespace Docxodus
             // The SVG has no viewBox: a zero extent (a horizontal or vertical line) would make one
             // degenerate, which disables rendering. Drawing coordinates are EMUs, scaled to the
             // SVG's CSS pixels (9525 EMUs each) by the root group; overflow keeps outlines whole.
+            // Explicit dimensions, at least a pixel each, are what the PDF export requires of an
+            // inline SVG before it will lay one out.
             var svg = new XElement(Svg + "svg",
+                new XAttribute("width", Format(Math.Max(width / 9525.0, 1))),
+                new XAttribute("height", Format(Math.Max(height / 9525.0, 1))),
                 new XAttribute("overflow", "visible"),
                 new XAttribute("role", "img"),
                 new XAttribute("aria-label", altText),
-                new XAttribute("style", "display: block; width: 100%; height: 100%;"));
+                new XAttribute("style", "display: block;"));
             if (payload == null)
                 svg.Add(new XAttribute("data-docx-shape", "unrendered"));
             else
