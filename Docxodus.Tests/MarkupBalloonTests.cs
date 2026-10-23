@@ -103,8 +103,15 @@ public class MarkupBalloonTests
 
         var changes = html.Descendants(Html + "span").Where(e => HasClass(e, "rev-format-change")).ToList();
         Assert.Equal("Underline", Data(changes[0], "format-description"));
-        var number = changes.Single(e => e.Descendants().Any(d => d.Attribute("data-list-marker") != null));
-        Assert.Null(Data(number, "format-description"));
+        // The number and its suffix tab can each retain a styled run wrapper. Neither generated
+        // part should advertise a formatting balloon of its own.
+        var markerParts = changes.Where(e => e.Descendants().Any(d => d.Attribute("data-list-marker") != null)).ToList();
+        Assert.NotEmpty(markerParts);
+        Assert.All(markerParts, part =>
+        {
+            Assert.Null(Data(part, "format-description"));
+            Assert.Null(Data(part, "format-key"));
+        });
     }
 
     [Fact]
