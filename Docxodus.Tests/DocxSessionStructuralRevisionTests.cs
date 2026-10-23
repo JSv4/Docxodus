@@ -10,6 +10,7 @@ using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using Docxodus;
+using Docxodus.Tests.Ir;
 using Xunit;
 
 namespace Docxodus.Tests;
@@ -163,6 +164,147 @@ public class DocxSessionStructuralRevisionTests
         Assert.True(XNode.DeepEquals(MainRoot(expected), MainRoot(actual)),
             FirstDifference(MainRoot(expected), MainRoot(actual)));
         Assert.Equal(ValidationErrors(expected), ValidationErrors(actual));
+    }
+
+    /// <summary>
+    /// A 2x2 table whose first cell carries another reviewer's pending width change. CT_TcPr puts
+    /// <c>w:cellIns</c> before <c>w:tcPrChange</c>, and <c>w:tblGridChange</c> carries only
+    /// <c>w:id</c>, so a tracked insertion next to that cell exposes both schema rules at once.
+    /// </summary>
+    private static byte[] BuildTableWithPendingCellChange(bool pending) =>
+        IrTestDocuments.FromBodyXml(
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/></w:tblGrid>"
+            + "<w:tr><w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/>"
+            + (pending
+                ? "<w:tcPrChange w:id=\"5\" w:author=\"Alice\" w:date=\"2025-01-01T00:00:00Z\">"
+                    + "<w:tcPr><w:tcW w:w=\"2500\" w:type=\"dxa\"/></w:tcPr></w:tcPrChange>"
+                : "")
+            + "</w:tcPr><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc>"
+            + "<w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc></w:tr>"
+            + "<w:tr><w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>A2</w:t></w:r></w:p></w:tc>"
+            + "<w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>B2</w:t></w:r></w:p></w:tc></w:tr>"
+            + "</w:tbl><w:p><w:r><w:t>after</w:t></w:r></w:p>").DocumentByteArray;
+
+    private static string CellAnchor(DocxSession session, string text) =>
+        session.Project().AnchorIndex.Values
+            .First(a => a.Anchor.Kind == "tc" && a.TextPreview.StartsWith(text, StringComparison.Ordinal))
+            .Anchor.Id;
+
+    private static string[] Office2019Errors(byte[] bytes) =>
+        PackageValidation.Errors(bytes, DocumentFormat.OpenXml.FileFormatVersions.Office2019)
+            .Select(PackageValidation.Keys.IdDescriptionXPath)
+            .ToArray();
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DS45540_TrackedColumnInsert_WritesSchemaValidMarkup(bool pendingNeighbourChange)
+    {
+        var baseline = BuildTableWithPendingCellChange(pendingNeighbourChange);
+        Assert.Empty(Office2019Errors(baseline));
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Bob",
+        });
+
+        var result = session.InsertTableColumn(CellAnchor(session, "A1"), Position.Before);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var saved = session.Save();
+        Assert.Empty(Office2019Errors(saved));
+        var gridChange = Assert.Single(MainRoot(saved).Descendants(W.tblGridChange));
+        Assert.Equal(new[] { W.id }, gridChange.Attributes().Select(a => a.Name));
+    }
+
+    /// <summary>A new cell is a fresh cell: it copies its neighbour's live shell, never the
+    /// neighbour's pending property revision, so nothing credits Alice with a cell she never saw.
+    /// Rejecting Bob's one revision restores the original table with Alice's change intact.</summary>
+    [Theory]
+    [InlineData("insert_column", RevisionFamily.CellInsert)]
+    [InlineData("insert_row", RevisionFamily.RowInsert)]
+    public void DS45541_TrackedInsertNextToPendingCellChange_DoesNotCopyTheNeighboursRevision(
+        string operation, RevisionFamily family)
+    {
+        var baseline = BuildTableWithPendingCellChange(pending: true);
+        using var session = new DocxSession(baseline,
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline, RevisionAuthor = "Bob" });
+
+        var result = InsertBeforeFirstCell(session, operation);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var saved = session.Save();
+        Assert.Empty(Office2019Errors(saved));
+        var aliceChange = Assert.Single(MainRoot(saved).Descendants(W.tcPrChange));
+        Assert.Equal("5", (string?)aliceChange.Attribute(W.id));
+        var bob = Assert.Single(session.ListRevisions(), r => r.Author == "Bob");
+        Assert.Equal(family, bob.Family);
+        Assert.Equal(RevisionResolutionStatus.Supported, bob.ResolutionStatus);
+
+        Assert.True(session.RejectRevision(bob.Id).Success);
+        Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())),
+            FirstDifference(MainRoot(baseline), MainRoot(session.Save())));
+    }
+
+    /// <summary>
+    /// A tracked column insertion stamps the grid, every row whose <c>w:gridBefore</c> grows and
+    /// every merged cell it widens. Each of those holds at most one pending property revision, so
+    /// when one already carries another reviewer's the insertion is refused and nothing is written.
+    /// </summary>
+    [Theory]
+    [InlineData("pending_grid_change")]
+    [InlineData("widened_merged_cell")]
+    [InlineData("grown_grid_before")]
+    public void DS45543_TrackedColumnInsert_RefusesOverAPendingChangeItWouldStamp(string shape)
+    {
+        const string Alice = "w:id=\"5\" w:author=\"Alice\" w:date=\"2025-01-01T00:00:00Z\"";
+        string Cell(string text, string properties = "<w:tcW w:w=\"2000\" w:type=\"dxa\"/>") =>
+            $"<w:tc><w:tcPr>{properties}</w:tcPr><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        var firstRow = shape switch
+        {
+            "pending_grid_change" => Cell("A1") + Cell("B1"),
+            "widened_merged_cell" => Cell("Merged", "<w:tcW w:w=\"4000\" w:type=\"dxa\"/><w:gridSpan w:val=\"2\"/>"
+                + $"<w:tcPrChange {Alice}><w:tcPr><w:tcW w:w=\"4500\" w:type=\"dxa\"/><w:gridSpan w:val=\"2\"/></w:tcPr></w:tcPrChange>"),
+            "grown_grid_before" => "<w:trPr><w:gridBefore w:val=\"1\"/>"
+                + $"<w:trPrChange {Alice}><w:trPr><w:gridBefore w:val=\"1\"/><w:cantSplit/></w:trPr></w:trPrChange></w:trPr>"
+                + Cell("B1"),
+            _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+        };
+        var gridChange = shape == "pending_grid_change"
+            ? "<w:tblGridChange w:id=\"5\"><w:tblGrid><w:gridCol w:w=\"3000\"/><w:gridCol w:w=\"1000\"/></w:tblGrid></w:tblGridChange>"
+            : "";
+        var baseline = IrTestDocuments.FromBodyXml(
+            $"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/>{gridChange}</w:tblGrid>"
+            + $"<w:tr>{firstRow}</w:tr><w:tr>{Cell("A2")}{Cell("B2")}</w:tr></w:tbl><w:p/>").DocumentByteArray;
+        Assert.Empty(Office2019Errors(baseline));
+        using var session = new DocxSession(baseline,
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline, RevisionAuthor = "Bob" });
+        long version = session.Version;
+        if (shape == "pending_grid_change")
+        {
+            // Refused before anything is recorded, so an undone edit can still be redone.
+            Assert.True(session.InsertParagraph(CellAnchor(session, "A2"), Position.After, "redo me").Success);
+            Assert.True(session.Undo());
+            version = session.Version;
+        }
+
+        var result = session.InsertTableColumn(CellAnchor(session, "A2"),
+            shape == "grown_grid_before" ? Position.Before : Position.After);
+
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.UnresolvedStructuralRevision, result.Error!.Code);
+        Assert.Equal(version, session.Version);
+        Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())),
+            FirstDifference(MainRoot(baseline), MainRoot(session.Save())));
+        if (shape == "pending_grid_change") Assert.True(session.Redo());
+    }
+
+    private static EditResult InsertBeforeFirstCell(DocxSession session, string operation)
+    {
+        var anchor = CellAnchor(session, "A1");
+        return operation == "insert_column"
+            ? session.InsertTableColumn(anchor, Position.Before)
+            : session.InsertTableRow(anchor, Position.Before);
     }
 
     [Fact]

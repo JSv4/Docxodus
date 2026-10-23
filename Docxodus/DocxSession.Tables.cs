@@ -366,7 +366,11 @@ public sealed partial class DocxSession
     /// <summary>An empty clone of <paramref name="referenceCell"/>'s shell (width, borders, shading,
     /// valign). Merge markup is always dropped — a clone is a fresh cell, never half of somebody
     /// else's merge — except <c>w:gridSpan</c> when <paramref name="keepSpan"/> is set, which a new
-    /// row needs so its cells still line up with w:tblGrid.</summary>
+    /// row needs so its cells still line up with w:tblGrid. Under tracking the reference cell's
+    /// pending revisions (<c>w:tcPrChange</c>, <c>w:cellIns</c>/<c>cellDel</c>/<c>cellMerge</c>) are
+    /// dropped too: the new cell is this author's insertion, and a copy would credit another
+    /// author with a change to it (and put its <c>w:cellIns</c> after a <c>w:tcPrChange</c>).
+    /// Untracked, copies keep their own fresh ids.</summary>
     private XElement NewEmptyCellLike(XElement referenceCell, bool keepSpan = false)
     {
         var tcPr = referenceCell.Element(W.tcPr);
@@ -374,9 +378,11 @@ public sealed partial class DocxSession
         if (tcPr is not null)
         {
             var clone = new XElement(tcPr);
-            clone.Elements(W.vMerge).Remove();
-            clone.Elements(W.hMerge).Remove();
-            if (!keepSpan) clone.Elements(W.gridSpan).Remove();
+            bool tracked = _trackedChanges == TrackedChangeMode.RenderInline;
+            clone.Elements().Where(e => e.Name == W.vMerge || e.Name == W.hMerge
+                || (!keepSpan && e.Name == W.gridSpan)
+                || (tracked && (e.Name == W.tcPrChange || e.Name == W.cellIns
+                    || e.Name == W.cellDel || e.Name == W.cellMerge))).Remove();
             Internal.RevisionOps.RenumberCopiedRevisions(clone, NextRevisionId);
             tc.Add(clone);
         }
@@ -457,6 +463,11 @@ public sealed partial class DocxSession
         if (ResolveCell(cellAnchorId, out _, out var tc, out var tr, out var tbl, out var target) is { } err)
             return err;
         if (RefuseUnresolvedTableStructure(tbl!, cellAnchorId) is { } pending) return pending;
+        // Every tracked insertion stamps the grid, so a pending grid change is refused up front;
+        // the rows and cells it stamps are known only once the insertion is laid out (below).
+        if (RefuseNestedTrackedPropertyChange(new[] { (tbl!.Element(W.tblGrid), W.tblGridChange) },
+                cellAnchorId) is { } pendingGrid)
+            return pendingGrid;
 
         var anchorCell = RowGrid(tr!).First(g => g.Tc == tc);
         int boundary = pos == Position.Before ? anchorCell.Start : anchorCell.End;
@@ -527,24 +538,39 @@ public sealed partial class DocxSession
 
             if (tracked)
             {
-                var author = _revisionAuthor ?? "docxodus";
-                var date = NextTrackedFormatRevisionDate();
                 var trackedGrid = tbl.Element(W.tblGrid)
                     ?? throw new InvalidOperationException("tracked column insertion has no table grid");
-                trackedGrid.Add(CreateRevisionEnvelope(W.tblGridChange, author, date, oldGrid!));
-
-                foreach (var pair in oldRows!)
+                var changedRows = oldRows!.Where(pair => !PropertySnapshotEquals(pair.Value,
+                    pair.Key.Element(W.trPr), W.trPrChange, W.ins, W.del)).ToList();
+                var changedCells = oldCells!.Where(pair => !PropertySnapshotEquals(pair.Value,
+                    pair.Key.Element(W.tcPr), W.tcPrChange, W.cellIns, W.cellDel, W.cellMerge)).ToList();
+                // Each property element holds at most one *PrChange, so a row or cell this
+                // insertion must stamp that already carries another reviewer's is refused, as
+                // SetColumnWidths does, and the layout above is rolled back.
+                if (RefuseNestedTrackedPropertyChange(
+                        changedRows.Select(pair => (pair.Key.Element(W.trPr), W.trPrChange))
+                            .Concat(changedCells.Select(pair => (pair.Key.Element(W.tcPr), W.tcPrChange))),
+                        cellAnchorId) is { } nested)
                 {
-                    if (PropertySnapshotEquals(pair.Value, pair.Key.Element(W.trPr), W.trPrChange,
-                        W.ins, W.del)) continue;
+                    RollbackFailedOp();
+                    return nested;
+                }
+                var author = _revisionAuthor ?? "docxodus";
+                var date = NextTrackedFormatRevisionDate();
+                // CT_TblGridChange is CT_Markup: only w:id. The registry credits the bare grid
+                // change to the cell insertion it travels with.
+                EnsureTrackRevisionsEnabled();
+                trackedGrid.Add(new XElement(W.tblGridChange,
+                    new XAttribute(W.id, NextRevisionId()), oldGrid!));
+
+                foreach (var pair in changedRows)
+                {
                     var trPr = pair.Key.Element(W.trPr) ?? new XElement(W.trPr);
                     if (trPr.Parent is null) pair.Key.AddFirst(trPr);
                     trPr.Add(CreateRevisionEnvelope(W.trPrChange, author, date, pair.Value));
                 }
-                foreach (var pair in oldCells!)
+                foreach (var pair in changedCells)
                 {
-                    if (PropertySnapshotEquals(pair.Value, pair.Key.Element(W.tcPr), W.tcPrChange,
-                        W.cellIns, W.cellDel, W.cellMerge)) continue;
                     var tcPr = GetOrCreateTcPr(pair.Key);
                     tcPr.Add(CreateRevisionEnvelope(W.tcPrChange, author, date, pair.Value));
                 }

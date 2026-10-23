@@ -593,6 +593,12 @@ removal, and level changes emit `numPr/w:ins` or `pPrChange`. Shapes without a s
 encoding—tracked column deletion, merge/unmerge, range list formatting, and list-start
 overrides—return `TrackedOperationUnsupported` without mutation or history. A table with a live
 cell structural revision returns `UnresolvedStructuralRevision` before another structural edit.
+A tracked column insertion writes its `w:tblGridChange` with only `w:id` (the schema gives that
+element no author or date; the registry credits it to the insertion's cells), and it returns
+`UnresolvedStructuralRevision` when the grid, a row whose `w:gridBefore`/`w:gridAfter` it grows, or a
+merged cell it widens already holds a pending property change, since each holds at most one. A
+tracked new row's or column's cells copy their neighbour's live cell properties but never its
+pending `w:tcPrChange` or cell marks (issue #1309).
 
 **`ReplaceText` quietly strips a leading auto-number prefix from the payload.** When the target paragraph carries `w:numPr` (numbered heading or list item), the projector emits the resolved number inline (`## Fourth The total number…`) so a human can read what Word renders. An agent that echoes the visible heading back as its `ReplaceText` payload would otherwise see `Fourth Fourth: …` in the saved DOCX — the auto-number is still applied by Word, *and* the new run text now also starts with the prefix. The session resolves the number via the shared `Internal.ListNumberResolver` and strips a matching prefix (plus one optional separator: space, tab, or NBSP) from the payload before parsing. Idempotent — if the agent skipped the prefix, nothing is stripped. Documented in `DS091`/`DS091b`.
 
