@@ -6326,8 +6326,14 @@ namespace Docxodus
                     var marker = (tblPrChange ?? tblGridChange)!;
                     if (settings.IncludeRevisionMetadata)
                     {
-                        var changeAuthor = (string?)marker.Attribute(W.author);
-                        var changeDate = (string?)marker.Attribute(W.date);
+                        // w:tblGridChange carries only w:id. A bare one that travels with
+                        // inserted cells (a tracked column insertion) is theirs, so their mark
+                        // supplies the author and date.
+                        var attributed = marker.Attribute(W.author) is not null ? marker
+                            : element.Elements(W.tr).Elements(W.tc).Elements(W.tcPr)
+                                .Elements(W.cellIns).FirstOrDefault() ?? marker;
+                        var changeAuthor = (string?)attributed.Attribute(W.author);
+                        var changeDate = (string?)attributed.Attribute(W.date);
                         if (changeAuthor != null && table.Attribute("data-author") == null)
                             table.Add(new XAttribute("data-author", changeAuthor));
                         if (changeDate != null && table.Attribute("data-date") == null)

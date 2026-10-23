@@ -125,6 +125,20 @@ All notable changes to this project will be documented in this file.
   text box, or the earlier properties a pending `w:pPrChange` keeps, is not a section break, so
   `ListBlocks` and the windowed editor's chrome render also no longer start an extra section at a
   table containing one, matching the full render.
+
+- Tracked `InsertTableColumn` writes schema-valid revisions (#1309). Its `w:tblGridChange` carried
+  `w:author` and `w:date`, which the schema does not allow on that element, so every tracked column
+  insertion failed Open XML validation; it now carries only `w:id`. A new cell, in a new column or a
+  new row, copied its neighbour's pending `w:tcPrChange`, so it claimed a property change by an
+  author who never touched it, and in a new column the `w:cellIns` landed after that change, out of
+  schema order; under tracked changes new cells now copy only the neighbour's live properties. A
+  tracked column insertion that would have to add a second property change to the grid, a row or a
+  widened merged cell that already has one is refused with `UnresolvedStructuralRevision` before
+  anything is written or recorded in the undo history, instead of writing two. A grid change Word
+  writes alongside a tracked table, row or cell property edit, whose old grid is the live grid, records
+  nothing; the insertion replaces it rather than being refused. The HTML converter's tracked table
+  mark takes its author and date from the inserted cells when the grid change carries none.
+
 - Tracked formatting of a run that already has another author's pending format change is now
   credited to the person who made it (#1295). The session folded the new formatting into the
   existing `w:rPrChange` but left that change's author, date and `w:id` alone, so `ListRevisions()`
