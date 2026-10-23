@@ -979,11 +979,11 @@ public sealed partial class DocxSession
             // (issue #1316). A run it empties goes, with any envelope that leaves empty.
             if (OwnPendingInsertion(run, author) is { } ownInsertion)
             {
-                var kept = before + (i == 0 ? replace : string.Empty) + after;
-                if (kept.Length > 0 || HasNonTextRunContent(run))
-                    SetRunText(run, kept.Length > 0 ? kept : null);
-                else
+                var inserted = i == 0 ? replace : string.Empty;
+                if (before.Length + inserted.Length + after.Length == 0 && !HasNonTextRunContent(run))
                     RemoveFromInsertion(run, ownInsertion);
+                else
+                    ReplaceRunTextRange(run, start, len, inserted);
                 continue;
             }
 
@@ -1215,6 +1215,33 @@ public sealed partial class DocxSession
             run.Add(new XElement(W.t,
                 new XAttribute(XNamespace.Xml + "space", "preserve"),
                 text));
+    }
+
+    /// <summary>Replace <paramref name="length"/> characters at <paramref name="start"/> of
+    /// <paramref name="run"/>'s <c>w:t</c> text with <paramref name="replacement"/>, editing only
+    /// the text nodes the range overlaps; the replacement goes into the one holding
+    /// <paramref name="start"/>. A tab, break or reference between two text nodes keeps its
+    /// place, and a text node left empty is removed.</summary>
+    private static void ReplaceRunTextRange(XElement run, int start, int length, string replacement)
+    {
+        int consumed = 0;
+        foreach (var t in run.Elements(W.t).ToList())
+        {
+            var value = t.Value;
+            int from = consumed;
+            consumed += value.Length;
+            int cutFrom = Math.Clamp(start - from, 0, value.Length);
+            int cutTo = Math.Clamp(start + length - from, 0, value.Length);
+            bool holdsStart = start >= from && start < from + value.Length;
+            if (cutFrom == cutTo && !holdsStart) continue;
+            var edited = value[..cutFrom] + (holdsStart ? replacement : string.Empty) + value[cutTo..];
+            if (edited.Length == 0) t.Remove();
+            else
+            {
+                t.Value = edited;
+                t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+            }
+        }
     }
 
     private static bool HasNonTextRunContent(XElement run) =>

@@ -94,6 +94,106 @@ public class DocxSessionSpanRevisionTests
         Assert.Equal("\"Parties \" moveTo:Pat[\"binding\" del:Pat[\"g\"]]", Shape(session, p));
     }
 
+    [Theory]
+    [InlineData(4, 1, "", "\"Pa \" ins:Pat[\"a⇥cd\"]")]
+    [InlineData(5, 1, "X", "\"Pa \" ins:Pat[\"ab⇥Xd\"]")]
+    public void EditInOwnPendingInsertion_KeepsATabBetweenTwoTextNodesInPlace(int start, int length, string replace, string shape)
+    {
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat", Run("Pa "), Ins("Pat", 1,
+            new XElement(W.r, new XElement(W.t, "ab"), new XElement(W.tab), new XElement(W.t, "cd"))));
+
+        Assert.True(session.ReplaceTextAtSpan(p, start, length, replace).Success);
+
+        Assert.Equal(shape, Shape(session, p));
+    }
+
+    [Fact]
+    public void EditInOwnPendingInsertion_KeepsABreakBetweenTwoTextNodesInPlace()
+    {
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat", Run("Pa "), Ins("Pat", 1,
+            new XElement(W.r, new XElement(W.t, "ab"), new XElement(W.br), new XElement(W.t, "cd"))));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 3, 2, "").Success);
+
+        Assert.Equal("\"Pa \" ins:Pat[\"↵cd\"]", Shape(session, p));
+    }
+
+    [Fact]
+    public void ReplaceTextRangeAndReplaceMatch_InOwnPendingInsertion_EditItInPlace()
+    {
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat", Run("Fee: "));
+        Assert.True(session.ReplaceTextAtSpan(p, 5, 0, "teh clause").Success);
+
+        Assert.True(Assert.Single(session.ReplaceTextRange(p, "teh", "the")).Success);
+        Assert.True(session.ReplaceMatch(Assert.Single(session.Grep("clause")), "term").Success);
+
+        Assert.Equal("\"Fee: \" ins:Pat[\"the term\"]", Shape(session, p));
+        Assert.Equal(new[] { "insert:Pat:the term" }, Revisions(session));
+    }
+
+    [Fact]
+    public void BackspaceInOwnPendingInsertion_UndoesAndRedoes()
+    {
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat", Run("Parties "));
+        Assert.True(session.ReplaceTextAtSpan(p, 8, 0, "bindingg").Success);
+        var typed = Shape(session, p);
+
+        Assert.True(session.ReplaceTextAtSpan(p, 15, 1, "").Success);
+        Assert.True(session.Undo());
+        Assert.Equal(typed, Shape(session, p));
+        Assert.True(session.Redo());
+
+        Assert.Equal("\"Parties \" ins:Pat[\"binding\"]", Shape(session, p));
+    }
+
+    [Fact]
+    public void BackspaceInOwnPendingInsertionInsideAHyperlink_RemovesTheCharacter()
+    {
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat", Run("See "),
+            new XElement(W.hyperlink, new XAttribute(W.anchor, "terms"), Ins("Pat", 1, Run("termss"))));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 9, 1, "").Success);
+
+        Assert.Equal("\"See \" hyperlink[ins:Pat[\"terms\"]]", Shape(session, p));
+    }
+
+    [Fact]
+    public void EditInOwnPendingInsertion_KeepsABookmarkInside()
+    {
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat", Run("Pa "),
+            Ins("Pat", 1, Bookmark(W.bookmarkStart), Run("bindingg"), Bookmark(W.bookmarkEnd)));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 10, 1, "").Success);
+
+        Assert.Equal("\"Pa \" ins:Pat[bookmarkStart[] \"binding\" bookmarkEnd[]]", Shape(session, p));
+    }
+
+    [Fact]
+    public void RemovingAPictureFromAnotherAuthorsInsertion_IsNotTreatedAsOwn()
+    {
+        // Alex inserts a picture under tracking; Pat then tries to remove it with tracking on.
+        byte[] bytes;
+        using (var alex = new DocxSession(Build(Run("Logo: ")), new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline, RevisionAuthor = "Alex",
+        }))
+        {
+            var anchor = alex.Project().AnchorIndex.Values.Single(a => a.Anchor.Kind == "p").Anchor.Id;
+            Assert.True(alex.InsertImage(anchor, 6, DocxSessionImageTests.Png(2, 3)).Success);
+            bytes = alex.Save();
+        }
+        using var pat = new DocxSession(bytes, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline, RevisionAuthor = "Pat",
+        });
+        var before = pat.GetPackageContentHash();
+
+        var removed = pat.RemoveImage(Assert.Single(pat.ListImages()).Id);
+
+        Assert.False(removed.Success);
+        Assert.Equal(before, pat.GetPackageContentHash());
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     private static XElement Run(string text, bool bold = false) => new(W.r,
@@ -111,8 +211,23 @@ public class DocxSessionSpanRevisionTests
     private static XElement Del(string author, int id, string text) => new(W.del, Stamp(author, id),
         new XElement(W.r, new XElement(W.delText, new XAttribute(XNamespace.Xml + "space", "preserve"), text)));
 
+    private static XElement Bookmark(XName marker) => marker == W.bookmarkStart
+        ? new XElement(marker, new XAttribute(W.id, 10), new XAttribute(W.name, "_Toc1"))
+        : new XElement(marker, new XAttribute(W.id, 10));
+
     private static (DocxSession Session, string Anchor) Open(
         TrackedChangeMode tracking, string author, params object[] paragraphContent)
+    {
+        var session = new DocxSession(Build(paragraphContent), new DocxSessionSettings
+        {
+            TrackedChanges = tracking,
+            RevisionAuthor = author,
+        });
+        return (session, session.Project().AnchorIndex.Values.Single(a => a.Anchor.Kind == "p").Anchor.Id);
+    }
+
+    /// <summary>A document whose body is one paragraph holding <paramref name="paragraphContent"/>.</summary>
+    internal static byte[] Build(params object[] paragraphContent)
     {
         using var stream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -124,12 +239,7 @@ public class DocxSessionSpanRevisionTests
                 new XAttribute(XNamespace.Xmlns + "w", W.w),
                 new XElement(W.body, new XElement(W.p, paragraphContent)))));
         }
-        var session = new DocxSession(stream.ToArray(), new DocxSessionSettings
-        {
-            TrackedChanges = tracking,
-            RevisionAuthor = author,
-        });
-        return (session, session.Project().AnchorIndex.Values.Single(a => a.Anchor.Kind == "p").Anchor.Id);
+        return stream.ToArray();
     }
 
     /// <summary>The paragraph's content as runs and revision envelopes, ignoring properties,
@@ -140,7 +250,8 @@ public class DocxSessionSpanRevisionTests
     private static string Shape(XElement container) => string.Join(" ", container.Elements()
         .Where(e => e.Name != W.pPr && e.Name != W.rPr)
         .Select(e => e.Name == W.r
-            ? "\"" + string.Concat(e.Elements().Where(t => t.Name == W.t || t.Name == W.delText).Select(t => t.Value)) + "\""
+            ? "\"" + string.Concat(e.Elements().Select(t => t.Name == W.t || t.Name == W.delText ? t.Value
+                : t.Name == W.tab ? "⇥" : t.Name == W.br ? "↵" : "")) + "\""
             : $"{e.Name.LocalName}{(e.Attribute(W.author) is { } a ? ":" + a.Value : "")}[{Shape(e)}]"));
 
     private static string[] Revisions(DocxSession session) =>
