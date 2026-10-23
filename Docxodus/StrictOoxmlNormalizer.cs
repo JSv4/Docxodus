@@ -87,6 +87,23 @@ internal static class StrictOoxmlNormalizer
         return IsStrict(docxBytes) ? NormalizeStrict(docxBytes) : docxBytes;
     }
 
+    /// <summary>
+    /// <see cref="NormalizeToTransitional(byte[])"/> for code about to open the package to read or
+    /// change its content. A package too damaged to convert is returned unchanged, so the open that
+    /// follows reports the damage exactly as it did before conversion existed.
+    /// </summary>
+    internal static byte[] NormalizeForReading(byte[] docxBytes)
+    {
+        try
+        {
+            return NormalizeToTransitional(docxBytes);
+        }
+        catch (Exception e) when (e is InvalidDataException or IOException)
+        {
+            return docxBytes;
+        }
+    }
+
     private static byte[] NormalizeStrict(byte[] documentBytes)
     {
         using var ms = new MemoryStream();
@@ -100,8 +117,18 @@ internal static class StrictOoxmlNormalizer
                     continue;
 
                 string text;
-                using (var reader = new StreamReader(entry.Open(), Encoding.UTF8))
+                try
+                {
+                    using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
                     text = reader.ReadToEnd();
+                }
+                catch (InvalidDataException)
+                {
+                    // A damaged entry is copied through unchanged: a reader that never opens it
+                    // still gets the rest of the package converted, and one that does fails on it
+                    // as it would have without the conversion.
+                    continue;
+                }
                 if (!text.Contains(StrictMarker, StringComparison.Ordinal))
                     continue;
 
@@ -213,9 +240,12 @@ internal static class StrictOoxmlNormalizer
             var main = FindMainDocumentEntry(zip);
             if (main is null)
                 return false;
+            // Only the root element's namespace decides, so read just its start tag: this check
+            // runs on every package the WmlDocument pipelines open, transitional or not.
             using var stream = main.Open();
-            var root = XDocument.Load(stream).Root;
-            return root is not null && root.Name.Namespace == StrictW;
+            using var reader = System.Xml.XmlReader.Create(stream);
+            return reader.MoveToContent() == System.Xml.XmlNodeType.Element &&
+                   reader.NamespaceURI == StrictW.NamespaceName;
         }
         catch (InvalidDataException)
         {

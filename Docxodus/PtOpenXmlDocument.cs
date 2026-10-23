@@ -78,6 +78,15 @@ namespace Docxodus
         public string? FileName { get; set; }
         public byte[] DocumentByteArray { get; set; }
 
+        /// <summary>
+        /// The package in the Transitional conformance class that every XML pipeline here matches: a
+        /// STRICT package is converted (issue #1268); a transitional or unconvertible one is returned
+        /// as is (same array). Code that opens the package to read or change its content goes through
+        /// this; code that reports on the package itself (hashes, manifests, verification) reads
+        /// <see cref="DocumentByteArray"/>.
+        /// </summary>
+        internal byte[] GetTransitionalBytes() => StrictOoxmlNormalizer.NormalizeForReading(DocumentByteArray);
+
         public static DocxodusDocument FromFileName(string fileName)
         {
             byte[] bytes = File.ReadAllBytes(fileName);
@@ -388,9 +397,13 @@ namespace Docxodus
         {
             Document = doc;
             DocMemoryStream = new MemoryStream();
-            DocMemoryStream.Write(doc.DocumentByteArray, 0, doc.DocumentByteArray.Length);
             try
             {
+                // Every pipeline that reads a package through this wrapper matches transitional
+                // W.* names, so a STRICT package is converted on the way in (issue #1268); a
+                // transitional one is written through unchanged.
+                var bytes = doc.GetTransitionalBytes();
+                DocMemoryStream.Write(bytes, 0, bytes.Length);
                 DocPackage = Package.Open(DocMemoryStream, FileMode.Open);
             }
             catch (Exception e)

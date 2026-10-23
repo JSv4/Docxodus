@@ -323,7 +323,8 @@ AAAAAAAAAAAAAAAANi8AAGRvY1Byb3BzL2FwcC54bWxQSwUGAAAAAAwADAAJAwAA3DEAAAAA";
             HtmlToWmlConverterSettings settings = new HtmlToWmlConverterSettings();
             using (MemoryStream ms = new MemoryStream())
             {
-                ms.Write(wmlDocument.DocumentByteArray, 0, wmlDocument.DocumentByteArray.Length);
+                var bytes = wmlDocument.GetTransitionalBytes();
+                ms.Write(bytes, 0, bytes.Length);
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, false))
                 {
                     string? majorLatinFont, minorLatinFont;

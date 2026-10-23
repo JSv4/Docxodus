@@ -207,6 +207,25 @@ All notable changes to this project will be documented in this file.
   its result gives up its own link, and a bookmark target inside it keeps its id on a `<span>`. The
   anchors generated for a note reference or comment marker inside a link stay anchors, as before. A
   TOC deleted whole keeps its entries' TOC presentation.
+
+- Strict Open XML documents (Word's "Strict Open XML Document" format) are now read like ordinary ones
+  by the `WmlDocument` APIs and `DocxSession` (#1268). Their XML uses different namespace URIs, which
+  only the comparison engine and the byte-based HTML entry points converted. Elsewhere a Strict package
+  went unrecognised: `RevisionProcessor.AcceptRevisions`/`RejectRevisions` and the session's
+  `AcceptAllRevisions`/`RejectAllRevisions` left every insertion and deletion in place,
+  `HasTrackedRevisions` returned `false`, `WmlToHtmlConverter.ConvertToHtml(WmlDocument, …)` and
+  `DocumentStructureAnalyzer.Analyze` threw `NullReferenceException`, the markdown projection and
+  `OpenContractExporter.Export` were empty, `MetricsGetter` reported partial metrics, and
+  `GetSemanticChanges` on an unedited session reported changes. Code that opens a `WmlDocument` to read
+  or change it now converts a Strict package to the transitional namespaces first, so these behave as
+  they do for the equivalent transitional document. `DocumentBuilder` therefore accepts Strict sources
+  (it threw "saved in strict mode, not supported"), keeping their glossary and normalizing their style
+  ids. A session opened on Strict bytes works on the conversion but keeps the caller's exact bytes as
+  its opening package, so its delivery source and verification baseline are unchanged;
+  `SemanticDiff` compares a Strict package's conversion at package level, so that session's semantic
+  changes and delivery receipt report only its edits. The
+  `WordprocessingDocument` overloads take a package that is already open and are not converted, and
+  Strict value spaces such as `w:jc="start"` are not rewritten.
 - Tracked formatting of a run that already has another author's pending format change is now
   credited to the person who made it (#1295). The session folded the new formatting into the
   existing `w:rPrChange` but left that change's author, date and `w:id` alone, so `ListRevisions()`

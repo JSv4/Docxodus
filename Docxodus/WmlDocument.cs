@@ -21,7 +21,7 @@ namespace Docxodus
         {
             get
             {
-                using (MemoryStream ms = new MemoryStream(ParentWmlDocument.DocumentByteArray))
+                using (MemoryStream ms = new MemoryStream(ParentWmlDocument.GetTransitionalBytes()))
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, false))
                 {
                     WordprocessingCommentsPart? commentsPart = wDoc.MainDocumentPart!.WordprocessingCommentsPart;
@@ -68,7 +68,7 @@ namespace Docxodus
         {
             get
             {
-                using (MemoryStream ms = new MemoryStream(this.DocumentByteArray))
+                using (MemoryStream ms = new MemoryStream(this.GetTransitionalBytes()))
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, false))
                 {
                     XElement partElement = wDoc.MainDocumentPart!.GetXDocument().Root!;

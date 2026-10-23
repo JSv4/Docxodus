@@ -4092,3 +4092,56 @@ A run that sits between `w:moveToRangeStart` and `w:moveToRangeEnd` but outside 
 | `DocxSession.RejectAllRevisions` | keeps `XY` (only `w:moveTo` content is moved) |
 
 Splitting the range in two around the text (two ranges with the same `w:name`) satisfies both resolvers' text, but the session's registry flags it as `ambiguous_move_topology` and refuses to resolve it. So the session avoids writing either shape within one paragraph: `ReplaceTextAtSpan` refuses text strictly inside a `w:moveTo`, as `SplitParagraph` does, and text typed at a move's edge goes past the range marker when that marker is in the same paragraph (`DocxSession.Text.cs`, `InsertTextAtBoundary` and `PastMoveRangeMarker`). A moved range that spans paragraphs is not covered yet: text typed at the end of the first moved paragraph, or the start of a later one, still lands inside the range (see #1340). Documents that already hold the first shape still resolve differently; see #1340.
+
+---
+
+## Strict conformance: the same markup under different namespace URIs (issue #1268)
+
+ISO/IEC 29500 Strict packages, which Word writes as "Strict Open XML Document", spell every
+WordprocessingML name and relationship type in the `http://purl.oclc.org/ooxml/` family instead of
+the transitional `http://schemas.openxmlformats.org/` one. For this reproducer the markup is otherwise
+identical:
+
+```xml
+<w:document xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main"><w:body><w:p>
+  <w:del w:id="31" w:author="Review Example"><w:r><w:delText>Amber prism</w:delText></w:r></w:del>
+  <w:ins w:id="32" w:author="Review Example"><w:r><w:t>Indigo prism</w:t></w:r></w:ins>
+</w:p></w:body></w:document>
+```
+
+with `_rels/.rels` naming the main part through
+`http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument`.
+
+| Consumer | Strict input |
+|---|---|
+| Open XML SDK 3.5.1 validator (Office 2021) | 0 findings, as for the transitional twin |
+| LibreOffice | renders the revisions as it does for the transitional twin |
+| Word | converts Strict to transitional on open (not re-run for this reproducer) |
+| Docxodus before #1268 | `DocxDiff`/`DocxCompare` and `HtmlConversionOps` converted; every other entry point matched transitional `W.*` names against Strict XML and found nothing — accept/reject left the markup, `HasTrackedRevisions` was `false`, `WmlToHtmlConverter.ConvertToHtml(WmlDocument)` threw because it found no `w:document` |
+| Docxodus after | identical results to the transitional twin |
+
+**Why.** The XDocument pipelines compare element names, and an element in a different namespace is a
+different name. The Open XML SDK converts the namespaces when the package is written back, which is why accept/reject
+returned a transitional package that still held the unresolved `w:ins`/`w:del`: the translation came
+after the revision transforms had already skipped them.
+
+**Code.** `StrictOoxmlNormalizer` rewrites the URIs. Code that opens a `WmlDocument` to read or change
+its content takes the bytes from `DocxodusDocument.GetTransitionalBytes()`: the
+`OpenXmlMemoryStreamDocument` constructor, `DocumentBuilder` (which converts each Strict source once on
+entry), `DocumentStructureAnalyzer`, `MetricsGetter`, `OpenContractExporter`, `WmlDocument.MainDocumentPart`
+and the rest. Code that reports on the package itself (hashes, manifests, deliverable verification)
+keeps reading `DocumentByteArray`. `DocxSession` opens its live package from the conversion, keeps the
+caller's exact bytes as the opening package (delivery source, verification baseline). `SemanticDiff`
+runs its bounded package inspection on the bytes as given, then compares a Strict side's conversion,
+so the semantic changes and delivery receipt of a session opened on Strict bytes show only its edits.
+The Strict test reads only the main part's root start tag, so a transitional package costs one small
+read. A damaged zip entry is copied through unconverted, and a package the conversion cannot read at
+all is opened as it is, so damage fails where and how it did before the conversion existed. The `WordprocessingDocument` overloads receive a package the
+caller already opened and are not converted. Tests: `StrictOoxmlRevisionTests`.
+
+**Known limitation: value spaces.** `StrictOoxmlNormalizer` rewrites namespace and relationship URIs
+only. Strict also narrows some value spaces, and those values pass through unchanged: `w:jc` is
+`start`/`end` rather than `left`/`right`, `w:ind` uses `w:start`/`w:end`, and percentage widths are
+written as `"50%"`. Docxodus already reads the `w:ind` and percent-suffixed spellings (see the sections
+on each), but `WmlToHtmlConverter.CreateStyleFromJc` maps only `left`, `right`, `center` and `both`,
+so a Strict `start`/`end` paragraph alignment is not rendered.

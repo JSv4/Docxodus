@@ -1945,7 +1945,8 @@ listSeparator
         {
             using (MemoryStream ms = new MemoryStream())
             {
-                ms.Write(source.DocumentByteArray, 0, source.DocumentByteArray.Length);
+                var bytes = source.GetTransitionalBytes();
+                ms.Write(bytes, 0, bytes.Length);
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
                 {
                     var efpp = wDoc.ExtendedFilePropertiesPart;

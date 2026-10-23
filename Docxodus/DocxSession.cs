@@ -153,8 +153,11 @@ public sealed partial class DocxSession : IDisposable
             onRecordPreOp: _ => OnHistoryRecordPreOp(),
             onPopUndo: snapshot => OnHistoryPopUndo(snapshot),
             sharedPayloadsOf: static snapshot => snapshot.SharedPayloads);
+        // Every op matches transitional W.* names, so a STRICT package is opened as its transitional
+        // conversion (issue #1268). The caller's exact bytes stay the retained opening package below.
+        var packageBytes = StrictOoxmlNormalizer.NormalizeForReading(docxBytes);
         _stream = new MemoryStream();
-        _stream.Write(docxBytes, 0, docxBytes.Length);
+        _stream.Write(packageBytes, 0, packageBytes.Length);
         _stream.Position = 0;
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
         // Stamp list numbering's inputs before anything counts a list, so the first edit can tell

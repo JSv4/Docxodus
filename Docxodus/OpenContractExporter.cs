@@ -399,7 +399,7 @@ public static class OpenContractExporter
     {
         if (doc == null) throw new ArgumentNullException(nameof(doc));
 
-        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var ms = new MemoryStream(doc.GetTransitionalBytes());
         using var wordDoc = WordprocessingDocument.Open(ms, false);
 
         return Export(wordDoc);
