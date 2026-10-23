@@ -928,7 +928,10 @@ public sealed partial class DocxSession
     /// Tracked-change counterpart to <see cref="ApplyFragmentReplacement"/>. Each selected
     /// run slice becomes a formatting-preserving <c>w:r/w:delText</c> inside one or more
     /// <c>w:del</c> envelopes, while the replacement is a single <c>w:r/w:t</c> inside
-    /// <c>w:ins</c> and inherits the first affected run's <c>w:rPr</c>. Runs are split at
+    /// <c>w:ins</c> and inherits the first affected run's <c>w:rPr</c>. A slice of the session
+    /// author's own pending insertion is the exception: it is removed outright, and a replacement
+    /// starting in one is written into it, as <see cref="DeleteInlineElementInPlace"/> does for
+    /// whole runs. Runs are split at
     /// the selection boundaries so untouched prefixes/suffixes remain ordinary text.
     /// Zero-width siblings (bookmarks, comment ranges, note-reference runs, proofing markers)
     /// are never moved into revision envelopes; when one separates selected runs it simply
@@ -970,6 +973,19 @@ public sealed partial class DocxSession
             var before = concat[..start];
             var removed = concat.Substring(start, len);
             var after = concat[(start + len)..];
+
+            // The session author's own pending insertion is a draft, as in Word: text removed
+            // from it is cut out with no trace, and a replacement that starts in it joins it
+            // (issue #1316). A run it empties goes, with any envelope that leaves empty.
+            if (OwnPendingInsertion(run, author) is { } ownInsertion)
+            {
+                var inserted = i == 0 ? replace : string.Empty;
+                if (before.Length + inserted.Length + after.Length == 0 && !HasNonTextRunContent(run))
+                    RemoveFromInsertion(run, ownInsertion);
+                else
+                    ReplaceRunTextRange(run, start, len, inserted);
+                continue;
+            }
 
             // Snapshot the original formatting before changing/reusing the live run.
             var deletedRun = CloneRunWithRevisionText(run, W.delText, removed);
@@ -1199,6 +1215,33 @@ public sealed partial class DocxSession
             run.Add(new XElement(W.t,
                 new XAttribute(XNamespace.Xml + "space", "preserve"),
                 text));
+    }
+
+    /// <summary>Replace <paramref name="length"/> characters at <paramref name="start"/> of
+    /// <paramref name="run"/>'s <c>w:t</c> text with <paramref name="replacement"/>, editing only
+    /// the text nodes the range overlaps; the replacement goes into the one holding
+    /// <paramref name="start"/>. A tab, break or reference between two text nodes keeps its
+    /// place, and a text node left empty is removed.</summary>
+    private static void ReplaceRunTextRange(XElement run, int start, int length, string replacement)
+    {
+        int consumed = 0;
+        foreach (var t in run.Elements(W.t).ToList())
+        {
+            var value = t.Value;
+            int from = consumed;
+            consumed += value.Length;
+            int cutFrom = Math.Clamp(start - from, 0, value.Length);
+            int cutTo = Math.Clamp(start + length - from, 0, value.Length);
+            bool holdsStart = start >= from && start < from + value.Length;
+            if (cutFrom == cutTo && !holdsStart) continue;
+            var edited = value[..cutFrom] + (holdsStart ? replacement : string.Empty) + value[cutTo..];
+            if (edited.Length == 0) t.Remove();
+            else
+            {
+                t.Value = edited;
+                t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+            }
+        }
     }
 
     private static bool HasNonTextRunContent(XElement run) =>

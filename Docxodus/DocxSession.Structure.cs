@@ -494,10 +494,7 @@ public sealed partial class DocxSession
         bool marker = IsMarkerOnlyRun(element);
         if (keepMarkers && marker) return;
         if (element.Ancestors().Any(e => e.Name == W.del || e.Name == W.moveFrom)) return;
-        if (!marker
-            && element.Ancestors().FirstOrDefault(e => e.Name == W.ins || e.Name == W.moveTo) is { } insertion
-            && insertion.Name == W.ins
-            && string.Equals((string?)insertion.Attribute(W.author), stamp.Author, StringComparison.Ordinal))
+        if (!marker && OwnPendingInsertion(element, stamp.Author) is { } insertion)
         {
             RemoveFromInsertion(element, insertion);
             return;
@@ -558,14 +555,22 @@ public sealed partial class DocxSession
         insertion is not null
         && string.Equals((string?)insertion.Attribute(W.author), author, StringComparison.Ordinal);
 
+    /// <summary>The <c>w:ins</c> that most closely encloses <paramref name="element"/> when it is
+    /// <paramref name="author"/>'s own; null when the nearest insertion-like ancestor is another
+    /// author's or a move destination (which is never un-inserted), or there is none.</summary>
+    private static XElement? OwnPendingInsertion(XElement element, string author) =>
+        element.Ancestors().FirstOrDefault(e => e.Name == W.ins || e.Name == W.moveTo) is { } insertion
+        && insertion.Name == W.ins && IsOwnInsertion(insertion, author)
+            ? insertion
+            : null;
+
     /// <summary>Whether a tracked deletion of <paramref name="root"/> removes content outright
     /// rather than marking it: a run (other than a marker-only one) inside the session author's
     /// own pending insertion, which <see cref="DeleteInlineElementInPlace"/> un-inserts.</summary>
     private static bool HasOwnInsertedContent(XElement root, string author) =>
         root.Descendants(W.r).Any(run => !IsMarkerOnlyRun(run)
             && !run.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom)
-            && run.Ancestors().FirstOrDefault(a => a.Name == W.ins || a.Name == W.moveTo) is { } insertion
-            && insertion.Name == W.ins && IsOwnInsertion(insertion, author));
+            && OwnPendingInsertion(run, author) is not null);
 
     /// <summary>Whether <paramref name="paragraph"/> is, in its entirety, the session author's
     /// own pending insertion: its pilcrow carries the author's <c>w:ins</c> and every child is

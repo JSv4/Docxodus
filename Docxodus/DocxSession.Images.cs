@@ -453,7 +453,8 @@ public sealed partial class DocxSession
         try
         {
             var outer = candidate.Outer;
-            if (_trackedChanges == TrackedChangeMode.RenderInline && !InsideOwnInsertion(outer, paragraph))
+            if (_trackedChanges == TrackedChangeMode.RenderInline
+                && OwnPendingInsertion(outer, _revisionAuthor ?? "docxodus") is null)
             {
                 var run = IsolateImageRun(outer);
                 var stamp = NewRevisionStamp();
@@ -496,10 +497,6 @@ public sealed partial class DocxSession
 
     private static XElement ImageIdentityElement(XElement outer) =>
         outer.Name == MC.AlternateContent ? outer.Descendants(W.drawing).First() : outer;
-
-    private static bool InsideOwnInsertion(XElement outer, XElement paragraph) =>
-        outer.Ancestors().TakeWhile(element => !ReferenceEquals(element, paragraph))
-            .Any(element => element.Name == W.ins);
 
     /// <summary>Move any run content that is not the picture into sibling runs carrying the same
     /// properties, so the revision envelopes wrap the picture alone.</summary>

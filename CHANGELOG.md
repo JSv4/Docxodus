@@ -40,6 +40,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Under tracked changes, deleting or replacing text in the session author's own pending insertion through
+  `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`) now removes it from the insertion instead of
+  recording a deletion nested inside it (#1316). A Backspace in text still being typed left a struck
+  fragment and a second revision behind, and correcting `teh` to `the` left three. The span path now
+  matches `ReplaceText` and the block deletions: the removed text goes outright and a replacement that
+  starts in the author's own insertion joins it. Original text and other authors' insertions are deleted
+  as before, and a move destination is never un-inserted.
+
 - A tracked deletion or move source nested in a hyperlink, content control, simple field or smart tag no
   longer counts toward a paragraph's text in `DocxSession` when its runs hold `w:t` (#1282). Word writes a
   move source that way (`TestFiles/RA001-Tracked-Revisions-01.docx`, `RP015-MoveFrom-MoveTo.docx`), so
