@@ -18,8 +18,8 @@ function deletionFixture(): Uint8Array {
       + `<w:ins w:id="2" ${REVISION}><w:r><w:t xml:space="preserve"> each spring</w:t></w:r></w:ins>`
       + '<w:r><w:t>.</w:t></w:r></w:p>',
     // A move source inside a hyperlink, written as Word writes it (w:t, not w:delText). It is not a
-    // direct child of the paragraph, so the paragraph stays editable, and the session reads its
-    // text, so the editor must keep counting it.
+    // direct child of the paragraph, so the paragraph stays editable. Its text is gone from the
+    // paragraph a reader sees, so neither the session nor the editor counts it (issue #1282).
     '<w:p><w:r><w:t xml:space="preserve">See </w:t></w:r><w:hyperlink w:anchor="terms">'
       + `<w:moveFromRangeStart w:id="3" w:name="move1" ${REVISION}/>`
       + `<w:moveFrom w:id="4" ${REVISION}><w:r><w:t xml:space="preserve">the terms </w:t></w:r></w:moveFrom>`
@@ -54,6 +54,10 @@ function deletionFixture(): Uint8Array {
       + `<w:del w:id="17" ${REVISION}><w:r><w:delText>XX</w:delText></w:r></w:del><w:r><w:t>Tail6</w:t></w:r></w:p>`,
     '<w:p><w:r><w:t>Ahead</w:t></w:r>'
       + `<w:del w:id="18" ${REVISION}><w:r><w:delText>XX</w:delText></w:r></w:del><w:r><w:tab/><w:t>Tail7</w:t></w:r></w:p>`,
+    // The same nested move source written as Docxodus's own move marking writes it (w:delText).
+    '<w:p><w:r><w:t xml:space="preserve">Read </w:t></w:r><w:hyperlink w:anchor="notes">'
+      + `<w:moveFrom w:id="19" ${REVISION}><w:r><w:delText xml:space="preserve">the notes </w:delText></w:r></w:moveFrom>`
+      + '<w:r><w:t>here</w:t></w:r></w:hyperlink><w:r><w:t xml:space="preserve"> today.</w:t></w:r></w:p>',
   ].join('');
   return storedZip(Object.entries({
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>',
@@ -153,7 +157,7 @@ test.describe('DocxEditor — offsets to the right of a rendered deletion (#1278
     await openTracked(page);
     const blocks = await page.evaluate(() => {
       const w = window as any;
-      return ['The tenant', 'See', 'Joined', 'Plain control'].map((t) => {
+      return ['The tenant', 'See', 'Joined', 'Plain control', 'Read'].map((t) => {
         const block: HTMLElement = w.block(t);
         return {
           editable: block.getAttribute('contenteditable'),
@@ -165,13 +169,14 @@ test.describe('DocxEditor — offsets to the right of a rendered deletion (#1278
       });
     });
     // The fixture renders as intended: editable paragraphs that show the deleted text.
-    expect(blocks.map((b) => b.editable)).toEqual(['true', 'true', 'true', 'true']);
-    expect(blocks.map((b) => b.deleted)).toEqual([['promptly '], ['the terms '], ['¶'], []]);
+    expect(blocks.map((b) => b.editable)).toEqual(['true', 'true', 'true', 'true', 'true']);
+    expect(blocks.map((b) => b.deleted)).toEqual([['promptly '], ['the terms '], ['¶'], [], ['the notes ']]);
     expect(blocks.map((b) => b.baseline)).toEqual([
       'The tenant shall repaint the fence each spring.',
-      'See the terms below now.',
+      'See below now.',
       'Joined to the next.',
       'Plain control paragraph.',
+      'Read here today.',
     ]);
   });
 
@@ -209,18 +214,22 @@ test.describe('DocxEditor — offsets to the right of a rendered deletion (#1278
     expect(out.accepted[0]).toBe('The tenant shall repainted the fence each spring.');
   });
 
-  test('control: typing after a nested move source, whose text the session reads, is recorded', async ({ page }) => {
-    await openTracked(page);
-    await caretAfter(page, 'See', 'below');
-    await page.keyboard.type('!');
-    await blur(page);
-    const out = await page.evaluate(() => ({
-      failures: (window as any).failures,
-      accepted: (window as any).acceptedText(),
-    }));
-    expect(out.failures).toEqual([]);
-    expect(out.accepted).toContain('See below! now.');
-  });
+  // Word writes a move source's text as w:t, Docxodus's own move marking as w:delText; both render
+  // as the same <del>, so the offsets must not depend on which (issue #1282).
+  for (const [block, after, accepted] of [['See', 'below', 'See below! now.'], ['Read', 'here', 'Read here! today.']]) {
+    test(`typing after a move source nested in a hyperlink ("${block}") lands where the caret was`, async ({ page }) => {
+      await openTracked(page);
+      await caretAfter(page, block, after);
+      await page.keyboard.type('!');
+      await blur(page);
+      const out = await page.evaluate(() => ({
+        failures: (window as any).failures,
+        accepted: (window as any).acceptedText(),
+      }));
+      expect(out.failures).toEqual([]);
+      expect(out.accepted).toContain(accepted);
+    });
+  }
 
   test('typing at the end of a paragraph whose mark is deleted is recorded', async ({ page }) => {
     await openTracked(page);

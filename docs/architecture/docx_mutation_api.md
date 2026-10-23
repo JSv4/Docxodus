@@ -1426,7 +1426,8 @@ notes as ordinary editable content, which took three things:
   displayed number is computed by the renderer from document order, and the note backref (`↩`) is
   generated too. None of it is in the session's run text, so the editor excludes all of it from its
   content-offset space via one `GENERATED_CHROME_SELECTOR` (shared with generated list markers and
-  with tracked deletions rendered inline, whose deleted text the session's run text also omits).
+  with tracked deletions and move sources rendered inline, whose text the session's run text also
+  omits).
   Each place that has to honour it fails differently if missed: offsets drift (`OffsetOutOfRange`,
   silently dropped edits); the display number gets **committed as literal text**, destroying the
   citation run; or the user deletes a marker outright and orphans its note.
@@ -2189,6 +2190,13 @@ This pattern collapses the 200-line context-needle-disambiguation script the Blu
 - `Fragments` — one `RunFragment` per `<w:r>` the match spans, in document order. Each fragment names the run's Unid, the slice of the match it contributes, the offset+length inside the run, and the run's visible `Formatting` (bold/italic/strike/underline/code/color/hyperlink/runStyle).
 - `ContextBefore` / `ContextAfter` — up to `contextChars` (default 40) of surrounding text from the same block.
 - `Groups` — regex capture groups.
+
+A block's flat text is the text a reader sees, and it is the offset space every offset-addressed op
+(`ReplaceTextAtSpan`, `ApplyFormat`, `SplitParagraph`, …) works in. Text in a tracked insertion or
+move destination (`w:ins`, `w:moveTo`) counts. Text in a tracked deletion or move source (`w:del`,
+`w:moveFrom`) does not, including one nested in a hyperlink, content control, simple field or smart
+tag, whether its runs hold `w:delText` or `w:t`. Word writes a move source's text as `w:t`; before
+issue #1282 the session counted that form when it was nested, so offsets to its right were too large.
 
 The fragment breakdown is the whole point: Word splits paragraph text into many `<w:r>` elements at every formatting boundary, so a placeholder like `[_______________]` routinely spans 2–3 runs. Without the fragment list, an agent doing search/replace has to either flatten runs (losing per-fragment formatting) or skip split matches (missing real text). `Grep` does the walk once and hands back the breakdown so callers can preserve each fragment's formatting when rewriting.
 

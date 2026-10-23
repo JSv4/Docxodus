@@ -557,6 +557,52 @@ public class DocxSessionSurgicalTrackedChangesTests
         Assert.Empty(session.Grep("per the schedule"));
     }
 
+    /// <summary>
+    /// The same contract holds when the removed text sits inside a transparent container: a
+    /// <c>w:del</c> or <c>w:moveFrom</c> nested in a hyperlink, content control, simple field or
+    /// smart tag is gone from the text a reader sees, whether its runs hold <c>w:delText</c> (as
+    /// Docxodus writes a move source) or <c>w:t</c> (as Word writes one). Counting the Word form
+    /// put every offset to its right past the visible text (issue #1282).
+    /// </summary>
+    [Theory]
+    [InlineData("hyperlink", "moveFrom", "t")]
+    [InlineData("hyperlink", "moveFrom", "delText")]
+    [InlineData("hyperlink", "del", "t")]
+    [InlineData("hyperlink", "del", "delText")]
+    [InlineData("sdt", "moveFrom", "t")]
+    [InlineData("fldSimple", "moveFrom", "t")]
+    [InlineData("smartTag", "moveFrom", "t")]
+    public void DS411_RemovedTextNestedInAContainer_IsNotVisibleText(
+        string container, string wrapper, string textElement)
+    {
+        var removed = new XElement(wrapper == "del" ? W.del : W.moveFrom,
+            new XAttribute(W.id, 4), new XAttribute(W.author, "A"),
+            new XAttribute(W.date, "2026-05-01T09:00:00Z"),
+            new XElement(W.r, new XElement(textElement == "t" ? W.t : W.delText,
+                new XAttribute(Xml + "space", "preserve"), "the terms ")));
+        object[] inner = { removed, Run("below") };
+        var wrapped = container switch
+        {
+            "hyperlink" => new XElement(W.hyperlink, new XAttribute(W.anchor, "terms"), inner),
+            "sdt" => new XElement(W.sdt, new XElement(W.sdtPr), new XElement(W.sdtContent, inner)),
+            "fldSimple" => new XElement(W.fldSimple, new XAttribute(W.instr, " DOCPROPERTY Title "), inner),
+            "smartTag" => new XElement(W.smartTag, new XAttribute(W.element, "place"), inner),
+            _ => throw new ArgumentOutOfRangeException(nameof(container)),
+        };
+        var source = BuildDocument(new XElement(W.p, Run("See "), wrapped, Run(" now.")));
+        using var session = new DocxSession(source,
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+        var anchor = session.Project().AnchorIndex.Values.Single(a => a.Anchor.Kind == "p").Anchor.Id;
+
+        Assert.Equal("See below now.", string.Concat(session.GetFormatting(anchor)!.Runs.Select(r => r.Text)));
+        Assert.Empty(session.Grep("the terms"));
+
+        // Offset 9 is just after "below" in the visible text.
+        var edit = session.ReplaceTextAtSpan(anchor, 9, 0, "!");
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal("See below! now.", AcceptedText(session.Save()));
+    }
+
     private static byte[] BuildMarkerDocument()
     {
         using var stream = new MemoryStream();

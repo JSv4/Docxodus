@@ -40,6 +40,16 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A tracked deletion or move source nested in a hyperlink, content control, simple field or smart tag no
+  longer counts toward a paragraph's text in `DocxSession` when its runs hold `w:t` (#1282). Word writes a
+  move source that way (`TestFiles/RA001-Tracked-Revisions-01.docx`, `RP015-MoveFrom-MoveTo.docx`), so
+  `Grep`, `GetFormatting` and every offset-addressed op (`ReplaceTextAtSpan`, `ApplyFormat`,
+  `SplitParagraph`, …) counted text that had been moved away, and offsets to its right addressed a
+  position the reader does not see. **Offsets change on every transport for paragraphs of that shape:**
+  they now match the accepted text, as they already did for the `w:delText` form Docxodus writes. The
+  browser editor no longer counts a rendered move source (`del.rev-move-from`) either, so typing beside
+  one lands where the caret was.
+
 - HTML to DOCX now adds a nested element's `text-decoration` lines to those of the elements around it
   instead of replacing them (#1280). The converter treated `text-decoration` as an inherited property,
   so a struck span inside an underlined span produced only `<w:strike/>`, and a DOCX → HTML → DOCX round
