@@ -249,7 +249,9 @@ public class DocxSessionStructuralRevisionTests
     /// <summary>
     /// A tracked column insertion stamps the grid, every row whose <c>w:gridBefore</c> grows and
     /// every merged cell it widens. Each of those holds at most one pending property revision, so
-    /// when one already carries another reviewer's the insertion is refused and nothing is written.
+    /// when one already carries another reviewer's the insertion is refused before anything is
+    /// written or recorded: with a one-step history, an earlier edit can still be undone and an
+    /// undone one redone.
     /// </summary>
     [Theory]
     [InlineData("pending_grid_change")]
@@ -275,18 +277,20 @@ public class DocxSessionStructuralRevisionTests
             : "";
         var baseline = IrTestDocuments.FromBodyXml(
             $"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/>{gridChange}</w:tblGrid>"
-            + $"<w:tr>{firstRow}</w:tr><w:tr>{Cell("A2")}{Cell("B2")}</w:tr></w:tbl><w:p/>").DocumentByteArray;
+            + $"<w:tr>{firstRow}</w:tr><w:tr>{Cell("A2")}{Cell("B2")}</w:tr></w:tbl>"
+            + "<w:p><w:r><w:t>after</w:t></w:r></w:p>").DocumentByteArray;
         Assert.Empty(Office2019Errors(baseline));
-        using var session = new DocxSession(baseline,
-            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline, RevisionAuthor = "Bob" });
-        long version = session.Version;
-        if (shape == "pending_grid_change")
+        using var session = new DocxSession(baseline, new DocxSessionSettings
         {
-            // Refused before anything is recorded, so an undone edit can still be redone.
-            Assert.True(session.InsertParagraph(CellAnchor(session, "A2"), Position.After, "redo me").Success);
-            Assert.True(session.Undo());
-            version = session.Version;
-        }
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Bob",
+            UndoDepth = 1,
+        });
+        var after = session.Project().AnchorIndex.Values
+            .First(a => a.Anchor.Kind == "p" && a.TextPreview.StartsWith("after", StringComparison.Ordinal)).Anchor.Id;
+        Assert.True(session.InsertParagraph(after, Position.After, "earlier edit").Success);
+        var edited = session.Save();
+        long version = session.Version;
 
         var result = session.InsertTableColumn(CellAnchor(session, "A2"),
             shape == "grown_grid_before" ? Position.Before : Position.After);
@@ -294,9 +298,123 @@ public class DocxSessionStructuralRevisionTests
         Assert.False(result.Success);
         Assert.Equal(EditErrorCode.UnresolvedStructuralRevision, result.Error!.Code);
         Assert.Equal(version, session.Version);
+        Assert.True(XNode.DeepEquals(MainRoot(edited), MainRoot(session.Save())),
+            FirstDifference(MainRoot(edited), MainRoot(session.Save())));
+        Assert.True(session.Undo());
         Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())),
             FirstDifference(MainRoot(baseline), MainRoot(session.Save())));
-        if (shape == "pending_grid_change") Assert.True(session.Redo());
+        Assert.True(session.Redo());
+    }
+
+    /// <summary>
+    /// Word writes a grid change whose old grid is the live grid alongside any tracked table, row
+    /// or cell property edit. It records nothing, so a tracked column insertion replaces it with
+    /// its own instead of being refused. The other author's property revisions are untouched:
+    /// rejecting the insertion gives back the original document (less that no-op grid change),
+    /// and accepting everything gives what accepting everything after the untracked insertion does.
+    /// </summary>
+    [Theory]
+    [InlineData("RP/RP029-Table-Row-Props-Change.docx")]
+    [InlineData("FA/RevTracking/023-CellPropertiesChange.docx")]
+    public void DS45544_TrackedColumnInsert_ReplacesWordsNoOpGridChange(string relative)
+    {
+        var baseline = File.ReadAllBytes(Fixture(relative));
+        Assert.Contains(MainRoot(baseline).Descendants(W.tblGridChange), IsNoOpGridChange);
+        byte[] untracked;
+        using (var direct = new DocxSession(baseline))
+        {
+            Assert.True(direct.InsertTableColumn(FirstCellAnchor(direct), Position.After).Success);
+            untracked = direct.Save();
+        }
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Bob",
+        });
+        // The no-op grid change lists as an unattributed entry of its own; it is the one replaced.
+        var others = OtherAuthorsRevisions(session).Where(k => !k.StartsWith('|')).ToArray();
+
+        var result = session.InsertTableColumn(FirstCellAnchor(session), Position.After);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var saved = session.Save();
+        PackageValidation.AssertValid(saved, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
+        PackageValidation.AssertValid(saved, DocumentFormat.OpenXml.FileFormatVersions.Office2021);
+        // A new cell between two of the other author's changed cells can split their entry in
+        // two, so only their authorship and status are compared until Bob's cells are rejected.
+        Assert.All(session.ListRevisions(), r => Assert.Equal(RevisionResolutionStatus.Supported, r.ResolutionStatus));
+        Assert.Equal(others.Distinct(), OtherAuthorsRevisions(session).Distinct());
+        var bob = session.ListRevisions().Where(r => r.Author == "Bob").ToList();
+        Assert.NotEmpty(bob);
+
+        foreach (var revision in bob) Assert.True(session.RejectRevision(revision.Id).Success);
+        Assert.Equal(others, OtherAuthorsRevisions(session));
+        Assert.Equal(WithoutNoOpGridChanges(baseline).ToString(), WithoutNoOpGridChanges(session.Save()).ToString());
+
+        // Untracked, the new cells carry copies of the other author's pending changes (RID009)
+        // and Word's grid change stays as it was, so the accepted outcomes are compared.
+        using var accepting = new DocxSession(saved);
+        Assert.True(accepting.AcceptAllRevisions().Success);
+        using var acceptedDirect = new DocxSession(untracked);
+        Assert.True(acceptedDirect.AcceptAllRevisions().Success);
+        Assert.Equal(MainRoot(acceptedDirect.Save()).ToString(), MainRoot(accepting.Save()).ToString());
+    }
+
+    /// <summary>A grid change that did change the grid is still refused, so the reject that
+    /// restores the other author's widths is never overwritten.</summary>
+    [Theory]
+    [InlineData("RP/RP032-Table-Prop-Change.docx")]
+    [InlineData("FA/RevTracking/021-TableGridChange.docx")]
+    public void DS45546_TrackedColumnInsert_StillRefusesWordsRealGridChange(string relative)
+    {
+        var baseline = File.ReadAllBytes(Fixture(relative));
+        Assert.DoesNotContain(MainRoot(baseline).Descendants(W.tblGridChange), IsNoOpGridChange);
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Bob",
+        });
+
+        var result = session.InsertTableColumn(FirstCellAnchor(session), Position.After);
+
+        Assert.Equal(EditErrorCode.UnresolvedStructuralRevision, result.Error?.Code);
+        Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())));
+    }
+
+    /// <summary>The non-Bob revisions as (author, family, kind): ids derive from the content
+    /// around a revision, so they change when the table does.</summary>
+    private static string[] OtherAuthorsRevisions(DocxSession session) =>
+        session.ListRevisions().Where(r => r.Author != "Bob")
+            .Select(r => $"{r.Author}|{r.Family}|{r.Type}").OrderBy(k => k, StringComparer.Ordinal).ToArray();
+
+    private static bool IsNoOpGridChange(XElement change) =>
+        XNode.DeepEquals(
+            new XElement(W.tblGrid, change.Parent!.Elements(W.gridCol)),
+            new XElement(W.tblGrid, change.Element(W.tblGrid)?.Elements(W.gridCol)));
+
+    private static XElement WithoutNoOpGridChanges(byte[] bytes)
+    {
+        var root = MainRoot(bytes);
+        root.Descendants(W.tblGridChange).Where(IsNoOpGridChange).ToList().Remove();
+        return root;
+    }
+
+    /// <summary>The HTML table mark for a tracked column insertion names its author: the bare
+    /// grid change has none, so the converter takes it from the inserted cells.</summary>
+    [Fact]
+    public void DS45545_TrackedColumnInsert_HtmlTableMarkNamesTheInsertingAuthor()
+    {
+        using var session = new DocxSession(BuildTableWithPendingCellChange(pending: false),
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline, RevisionAuthor = "Bob" });
+        Assert.True(session.InsertTableColumn(CellAnchor(session, "A1"), Position.Before).Success);
+
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("t.docx", session.Save()),
+            new WmlToHtmlConverterSettings { RenderTrackedChanges = true, IncludeRevisionMetadata = true });
+
+        var table = Assert.Single(html.Descendants(), e => e.Name.LocalName == "table"
+            && ((string?)e.Attribute("class") ?? "").Contains("table-format-change", StringComparison.Ordinal));
+        Assert.Equal("Bob", (string?)table.Attribute("data-author"));
+        Assert.NotNull(table.Attribute("data-date"));
     }
 
     private static EditResult InsertBeforeFirstCell(DocxSession session, string operation)

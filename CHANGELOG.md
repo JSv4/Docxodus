@@ -102,10 +102,13 @@ All notable changes to this project will be documented in this file.
   insertion failed Open XML validation; it now carries only `w:id`. A new cell, in a new column or a
   new row, copied its neighbour's pending `w:tcPrChange`, so it claimed a property change by an
   author who never touched it, and in a new column the `w:cellIns` landed after that change, out of
-  schema order; under tracked changes new cells now copy only the neighbour's live properties. A tracked
-  column insertion that would have to add a second property change to the grid, a row or a widened
-  merged cell that already has one is refused with `UnresolvedStructuralRevision`, leaving the
-  document unchanged, instead of writing two.
+  schema order; under tracked changes new cells now copy only the neighbour's live properties. A
+  tracked column insertion that would have to add a second property change to the grid, a row or a
+  widened merged cell that already has one is refused with `UnresolvedStructuralRevision` before
+  anything is written or recorded in the undo history, instead of writing two. A grid change Word
+  writes alongside a tracked table, row or cell property edit, whose old grid is the live grid, records
+  nothing; the insertion replaces it rather than being refused. The HTML converter's tracked table
+  mark takes its author and date from the inserted cells when the grid change carries none.
 
 - Tracked formatting of a run that already has another author's pending format change is now
   credited to the person who made it (#1295). The session folded the new formatting into the

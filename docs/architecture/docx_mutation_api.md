@@ -596,9 +596,11 @@ cell structural revision returns `UnresolvedStructuralRevision` before another s
 A tracked column insertion writes its `w:tblGridChange` with only `w:id` (the schema gives that
 element no author or date; the registry credits it to the insertion's cells), and it returns
 `UnresolvedStructuralRevision` when the grid, a row whose `w:gridBefore`/`w:gridAfter` it grows, or a
-merged cell it widens already holds a pending property change, since each holds at most one. A
-tracked new row's or column's cells copy their neighbour's live cell properties but never its
-pending `w:tcPrChange` or cell marks (issue #1309).
+merged cell it widens already holds a pending property change, since each holds at most one; the
+check runs on the table as it stands, before the undo history is touched. A grid change whose old
+grid equals the live grid, which Word writes beside any tracked table, row or cell property edit,
+records nothing and is replaced rather than refused. A tracked new row's or column's cells copy
+their neighbour's live cell properties but never its pending `w:tcPrChange` (issue #1309).
 
 **`ReplaceText` quietly strips a leading auto-number prefix from the payload.** When the target paragraph carries `w:numPr` (numbered heading or list item), the projector emits the resolved number inline (`## Fourth The total number…`) so a human can read what Word renders. An agent that echoes the visible heading back as its `ReplaceText` payload would otherwise see `Fourth Fourth: …` in the saved DOCX — the auto-number is still applied by Word, *and* the new run text now also starts with the prefix. The session resolves the number via the shared `Internal.ListNumberResolver` and strips a matching prefix (plus one optional separator: space, tab, or NBSP) from the payload before parsing. Idempotent — if the agent skipped the prefix, nothing is stripped. Documented in `DS091`/`DS091b`.
 
