@@ -167,11 +167,6 @@ jobs:
       - name: Check AOT profile cache invalidation
         run: node --test scripts/aot-profile-cache.test.mjs
 
-      # The Playwright lanes must partition the spec files (npm/playwright.config.ts); a spec in
-      # both lanes runs twice, one in neither never runs.
-      - name: Check the Playwright lane split
-        run: cd npm && npm run test:lanes
-
       - name: TypeScript type check
         run: cd npm && npx tsc --noEmit
 

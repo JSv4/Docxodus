@@ -39,8 +39,15 @@ function listSpecFiles(lane) {
   const result = spawnSync(process.execPath, [playwrightCli, 'test', '--list', '--reporter=json'], {
     cwd: npmDir, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
-  assert.equal(result.status, 0, result.stderr);
-  const report = JSON.parse(result.stdout);
+  let report;
+  try { report = JSON.parse(result.stdout); } catch { report = undefined; }
+  if (result.status !== 0) {
+    // Listing loads every spec file, so a spec whose import is missing (an unbuilt companion,
+    // say) fails here; the JSON report carries those load errors, stderr usually nothing.
+    const errors = (report?.errors ?? []).map(error => error.message ?? error.value ?? '').join('\n');
+    assert.fail(`playwright test --list exited ${result.status}\n${errors}\n${result.stderr}`);
+  }
+  assert.ok(report, 'playwright test --list printed no JSON report');
   const filesByProject = new Map(report.config.projects.map(project => [project.name, new Set()]));
   const visit = (suite, file) => {
     for (const child of suite.suites ?? []) visit(child, file);

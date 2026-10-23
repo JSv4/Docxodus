@@ -63,6 +63,11 @@ jobs:
       - name: Stage test pages and run the pre-test checks
         run: cd npm && npm run pretest
 
+      # The lanes must partition the spec files: a spec in both lanes runs twice, one in neither
+      # never runs. Listing the specs loads them, so this needs the export companion built above.
+      - name: Check the Playwright lane split
+        run: cd npm && npm run test:lanes
+
       - name: Upload the built package for the lanes
         uses: actions/upload-artifact@v7
         with:
