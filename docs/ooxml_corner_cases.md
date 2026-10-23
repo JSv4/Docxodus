@@ -2873,7 +2873,10 @@ w:hanging="648"`, Letter page, one-inch margins, so the line ends at 8496 twips)
 | Word | Not measured | | |
 
 LibreOffice keeps text after the left stop at 8900 on the line only while it fits before the column
-edge (9360); a wider word moves to the next line, behind a leader. Docxodus keeps it on the line.
+edge (9360); a wider word moves to the next line, behind a leader. Forcing a 24-word suffix into the
+nowrap tail extended it beyond the page; only seven words fit within the column. The tab-width pass
+now identifies overflowing text after that final left tab and keeps the paragraph on its ordinary
+wrapping path. All 24 words then stay in the column on four lines, as in LibreOffice. Word is unmeasured.
 
 Causes and fixes, all in `Docxodus/WmlToHtmlConverter.cs`:
 

@@ -119,6 +119,8 @@ All notable changes to this project will be documented in this file.
   the stop, with the leader from the title's end; the number had dropped to a line of its own. And a tab
   after a stretch right-aligned on a stop inside the right indent stays on the line, on its own stop,
   instead of sending the paragraph's tab stretches to the next line.
+  Longer text after the final left stop keeps the ordinary wrapping path, so keeping a short suffix
+  beside an overhanging stop does not force long text past the page.
 
 - HTML output now draws an underline or strikethrough across a tab in an underlined or struck run,
   such as the signature line in `By: ____`; it drew no line, because CSS does not decorate the tab's

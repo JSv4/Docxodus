@@ -257,6 +257,17 @@ test.describe('tab leader and signature lines (#1285)', () => {
     expect(find(rightLeft, 'Ra').left).toBeCloseTo(8900 / 15, 0);
   });
 
+  test('long text after a stop in the right indent wraps inside the column', async ({ page }) => {
+    const tail = Array.from({ length: 24 }, (_, i) => `TailWord${String(i).padStart(2, '0')}`).join(' ');
+    const stops = '<w:tab w:val="left" w:pos="1296"/><w:tab w:val="right" w:leader="dot" w:pos="8800"/><w:tab w:val="left" w:pos="8900"/>';
+    await layOutBody(page, entry(run('2.1.') + tab() + run('Spillway') + tab() + run('12') + tab() + run(tail), stops));
+    const [line] = await words(page);
+    const tailWords = line.filter(word => word.text.startsWith('TailWord'));
+    expect(tailWords).toHaveLength(24);
+    expect(new Set(tailWords.map(word => word.top)).size).toBeGreaterThan(1);
+    expect(Math.max(...tailWords.map(word => word.right))).toBeLessThanOrEqual(COLUMN_PX + 0.5);
+  });
+
   test('a bookmark inside a link keeps the whole entry inside that link and on its stops', async ({ page }) => {
     const linked = (bookmark: string) => entry(`<w:hyperlink w:anchor="_Toc9">${bookmark}${run('2.1.')}${tab()}${run('Spillway')}<w:r><w:tab/><w:t>12</w:t></w:r></w:hyperlink>`);
     await layOutBody(page, linked('<w:bookmarkStart w:id="1" w:name="_Toc1"/><w:bookmarkEnd w:id="1"/>') + linked(''));

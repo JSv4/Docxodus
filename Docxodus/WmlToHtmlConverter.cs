@@ -7556,8 +7556,9 @@ namespace Docxodus
             // Text that wraps before a tab keeps the run-aware path, unless it is the last tab and a
             // right one whose wrapped text can wrap inside its segment (see below).
             bool AfterUnsupportedWrap(XElement r) =>
+                r.Element(W.tab)!.Attribute(TabFollowingTextWrapsAttribute) != null ||
                 r.Element(W.tab)!.Attribute(PtOpenXml.TabAfterWrappedText) != null &&
-                (r != tabRuns[^1] || r.Element(W.tab)!.Attribute(TabWrappedSegmentWidthAttribute) == null);
+                    (r != tabRuns[^1] || r.Element(W.tab)!.Attribute(TabWrappedSegmentWidthAttribute) == null);
             if (tabRuns.Count == 0 || content.Any(Unsupported) || tabRuns.Any(CutsAWrappedField) ||
                 tabRuns.Any(r => r.Elements().Count(e => e.Name != W.rPr) != 1 || AfterUnsupportedWrap(r) ||
                     ((string?)r.Element(W.tab)!.Attribute(PtOpenXml.TabAlignment) ?? "left") is not ("left" or "right")))
@@ -9098,6 +9099,7 @@ namespace Docxodus
         private static readonly XName TabFollowingWidthAttribute = PtOpenXml.pt + "TabFollowingWidth";
         private static readonly XName TabOverhangAttribute = PtOpenXml.pt + "TabOverhang";
         private static readonly XName TabWrappedSegmentWidthAttribute = PtOpenXml.pt + "TabWrappedSegmentWidth";
+        private static readonly XName TabFollowingTextWrapsAttribute = PtOpenXml.pt + "TabFollowingTextWraps";
 
         /// <summary>Gets the DocumentSettingsPart's XDocument, or null if the part is absent.
         /// DocumentSettingsPart is optional in OOXML — Word opens packages without
@@ -9571,6 +9573,7 @@ namespace Docxodus
             var rightStopReached = 0;
             // Where the text since the last tab or break began; null until that text starts.
             int? stretchStart = firstInTwips;
+            XElement? lastTab = null;
             var contentToMeasure = element.DescendantsTrimmed(z => z.Name == W.txbxContent || z.Name == W.pPr || z.Name == W.rPr).ToArray();
             var currentElementIdx = 0;
             while (true)
@@ -9593,6 +9596,7 @@ namespace Docxodus
 
                 if (currentElement.Name == W.tab)
                 {
+                    lastTab = currentElement;
                     var runContainingTabToReplace = currentElement.Parent!; // a w:tab always has a w:r parent
                     var fontNameAtt = runContainingTabToReplace.Attribute(PtOpenXml.pt + "FontName") ??
                                       runContainingTabToReplace.Ancestors(W.p).FirstOrDefault()?.Attribute(PtOpenXml.pt + "FontName");
@@ -9865,6 +9869,14 @@ namespace Docxodus
                 if (currentElementIdx >= contentToMeasure.Length)
                     break; // we're done
             }
+
+            // A short stretch after an overhanging right stop can stay beside it, but longer text
+            // after the final left tab must wrap back into the column. Keep that paragraph on the
+            // ordinary flow path instead of putting its tail in an unbounded no-wrap box.
+            if (lastTab != null && (string?)lastTab.Attribute(PtOpenXml.TabAlignment) == "left" &&
+                lineWidthTwips is { } columnEnd && lineEndTwips is { } paragraphEnd &&
+                rightStopReached > paragraphEnd && twipCounter > columnEnd)
+                lastTab.SetAttributeValue(TabFollowingTextWrapsAttribute, true);
 
             return new XElement(element.Name,
                 element.Attributes(),

@@ -309,10 +309,12 @@ stops and page-number right edges follow actual glyph widths. The same grouping 
 `w:hyperlink`. Bookmarks, non-breaking hyphens and underlined or struck tab runs stay on the flex path. A
 right stop past the line end (inside the paragraph's right indent, or past the column edge) gives its segment
 a negative `margin-right` equal to the overhang, so the segment fits on its line and still ends on the stop.
-Past the line end the line has no room left, yet LibreOffice keeps a later tab stretch on the same line, so
-everything after such a segment goes in one nowrap, content-wide box whose left margin undoes that overhang and whose `-100%` right margin takes it off the line; a
+Past the line end the line has no room left, yet LibreOffice keeps a short later tab stretch on the same line, so
+the following content goes in one nowrap, content-wide box whose left margin undoes that overhang and whose `-100%` right margin takes it off the line; a
 second right or left stop inside the indent then lands on its own stop (issue #1285). A pen past the line
 end only because a right-aligned stretch ended on such a stop does not count as wrapped text.
+If text after the final left tab would exceed the column edge, the paragraph keeps the ordinary wrapping
+path. Forcing that text into the same nowrap box would send it past the page and lose visible words.
 
 Complex fields stay on the flex path: their begin, instruction, separator and end runs draw nothing, so a
 table-of-contents page number held in a `PAGEREF` field ends on the stop like plain text (issue #1285).

@@ -251,6 +251,20 @@ public class RightTabLeaderLineTests
         Assert.DoesNotContain(html.Descendants(), e => Style(e, "width") == "max-content");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LongTextAfterTheOverhangingStop_KeepsTheWrappingPath(bool longTail)
+    {
+        var tail = longTail ? string.Join(" ", Enumerable.Range(0, 24).Select(i => $"TailWord{i:00}")) : "A";
+        var source = Package(Entry(LeftStop + "<w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"8800\"/><w:tab w:val=\"left\" w:pos=\"8900\"/>",
+            $"<w:r><w:t>2.1.</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>Spillway</w:t></w:r><w:r><w:tab/><w:t>12</w:t></w:r><w:r><w:tab/><w:t>{tail}</w:t></w:r>"));
+        var html = Html(source);
+
+        Assert.Equal(!longTail, html.Descendants().Any(e => Style(e, "width") == "max-content"));
+        Assert.Contains(tail, html.Value);
+    }
+
     private const string LongTitle = "Culvert Inspection, Annual Load Ratings and Scour Monitoring for the Northern Spillway Approach";
 
     [Fact]
