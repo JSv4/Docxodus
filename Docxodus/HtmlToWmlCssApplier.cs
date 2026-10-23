@@ -404,7 +404,9 @@ namespace Docxodus.HtmlToWml
             new PropertyInfo
             {
                 Names = new[] { "text-decoration" },
-                Inherits = true,   // todo need to read css 16.3.1 in full detail to understand how this is implemented.
+                // Not inherited: CSS 2.1 16.3.1 instead draws an element's lines across all its
+                // descendants' text, which GetRunProperties does by reading every ancestor's value.
+                Inherits = false,
                 Includes = (e, settings) => true,
                 InitialValue = (element, settings) => new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "none", Type = Docxodus.HtmlToWml.CSS.CssTermType.String, } } },
                 ComputedValue = null,

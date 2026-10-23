@@ -23,8 +23,8 @@ public class HtmlToWmlTextDecorationTests
         return run.Element(W + "rPr") ?? new XElement(W + "rPr");
     }
 
-    private static XElement Convert(string bodyHtml, string text) =>
-        RunProperties(HtmlToWmlConverter.ConvertHtmlToWml("", "", "",
+    private static XElement Convert(string bodyHtml, string text, string defaultCss = "") =>
+        RunProperties(HtmlToWmlConverter.ConvertHtmlToWml(defaultCss, "", "",
             XElement.Parse($"<html><body>{bodyHtml}</body></html>"), HtmlToWmlConverter.GetDefaultSettings()), text);
 
     private static string Describe(XElement rPr) =>
@@ -59,6 +59,58 @@ public class HtmlToWmlTextDecorationTests
     public void UnderlineAndStrikeElements_KeepTheirSingleLines(string inner, string expected) =>
         Assert.Equal(expected, Describe(Convert($"<p>{inner}</p>", "x")));
 
+    /// <summary>
+    /// An element's lines add to the lines of the elements around it (issue #1280): CSS draws a
+    /// decoration across all descendant text, so a nested value cannot replace or remove an ancestor's
+    /// line. Each line keeps the style of the element that draws it.
+    /// </summary>
+    [Theory]
+    [InlineData("underline", "line-through", "strike u=single")]
+    [InlineData("line-through", "underline", "strike u=single")]
+    [InlineData("underline double", "line-through", "strike u=double")]
+    [InlineData("line-through double", "underline", "dstrike u=single")]
+    [InlineData("underline", "none", "u=single")]
+    [InlineData("underline double", "underline dotted", "u=dotted")]
+    [InlineData("underline double", "inherit", "u=double")]
+    public void NestedTextDecoration_AddsToTheOuterLines(string outer, string inner, string expected) =>
+        Assert.Equal(expected, Describe(Convert(
+            $"<p><span style='text-decoration: {outer}'><span style='text-decoration: {inner}'>x</span></span></p>", "x")));
+
+    [Theory]
+    [InlineData("<p><span style='text-decoration: underline'><span>x</span></span></p>", "u=single")]
+    [InlineData("<p style='text-decoration: line-through'><span>x</span></p>", "strike")]
+    [InlineData("<p><span style='text-decoration: underline'>a</span><span>x</span></p>", "")]
+    public void SingleDecoration_ReachesOnlyItsOwnText(string body, string expected) =>
+        Assert.Equal(expected, Describe(Convert(body, "x")));
+
+    [Theory]
+    [InlineData("<p style='text-decoration: underline'><span style='text-decoration: line-through'>x</span></p>", "strike u=single")]
+    [InlineData("<ul><li style='text-decoration: underline'><span style='text-decoration: line-through'>x</span></li></ul>", "strike u=single")]
+    [InlineData("<table><tr><td style='text-decoration: underline'><p><span style='text-decoration: line-through'>x</span></p></td></tr></table>", "strike u=single")]
+    public void BlockDecoration_AddsToANestedSpansLines(string body, string expected) =>
+        Assert.Equal(expected, Describe(Convert(body, "x")));
+
+    /// <summary>
+    /// An ancestor's lines do not reach the text of an inline-block, a float or an absolutely
+    /// positioned box, though such a box still draws its own lines.
+    /// </summary>
+    [Theory]
+    [InlineData("display: inline-block; text-decoration: line-through", "strike")]
+    [InlineData("display: inline-block", "")]
+    [InlineData("float: left", "")]
+    [InlineData("position: absolute", "")]
+    [InlineData("position: relative", "u=single")]
+    public void OutOfFlowOrAtomicBox_StopsAncestorLines(string innerStyle, string expected) =>
+        Assert.Equal(expected, Describe(Convert(
+            $"<p><span style='text-decoration: underline'><span style='{innerStyle}'>x</span></span></p>", "x")));
+
+    [Theory]
+    [InlineData("<span style='text-decoration: line-through'><a href='http://example.com/'>x</a></span>", "strike u=single")]
+    [InlineData("<a href='http://example.com/'>x</a>", "u=single")]
+    [InlineData("<a href='http://example.com/' style='text-decoration: none'>x</a>", "")]
+    public void LinkUnderline_AddsToTheTextAroundIt(string inner, string expected) =>
+        Assert.Equal(expected, Describe(Convert($"<p>{inner}</p>", "x", "a { text-decoration: underline }")));
+
     private static byte[] Docx(string rPr)
     {
         using var stream = new MemoryStream();
@@ -83,6 +135,9 @@ public class HtmlToWmlTextDecorationTests
     [InlineData("<w:dstrike/>", "dstrike")]
     [InlineData("<w:strike/><w:u w:val=\"single\"/>", "strike u=single")]
     [InlineData("<w:dstrike/><w:u w:val=\"double\"/>", "dstrike u=double")]
+    [InlineData("<w:strike/><w:u w:val=\"single\" w:color=\"FF0000\"/>", "strike u=single")]
+    [InlineData("<w:strike/><w:u w:val=\"double\"/>", "strike u=double")]
+    [InlineData("<w:dstrike/><w:u w:val=\"single\"/>", "dstrike u=single")]
     public void DocxToHtmlToDocx_KeepsTheRunsLines(string rPr, string expected)
     {
         var html = XElement.Parse(HtmlConversionOps.ConvertToHtml(Docx(rPr),
