@@ -7629,16 +7629,18 @@ namespace Docxodus
                 start = nextTab;
                 // Past the line end the line has no room left, but LibreOffice keeps what follows on
                 // it, the next stop included (issue #1285). So everything after this segment goes in
-                // one box that takes no room, starting where the segment ends: its margins undo the
-                // overhang the segment handed back.
+                // one box that starts where the segment ends (its left margin undoes the overhang the
+                // segment handed back) and takes no room on the line (its right margin is at least
+                // its own width). The box is as wide as its content, so the text in it cannot wrap,
+                // even in a run whose own white-space allows it.
                 if (overhang != null && tail == null && start < content.Count)
                 {
                     tail = new XElement(Xhtml.span);
                     tail.AddAnnotation(new Dictionary<string, string>
                     {
-                        { "display", "inline-block" }, { "width", "0" }, { "white-space", "nowrap" },
+                        { "display", "inline-block" }, { "width", "max-content" }, { "white-space", "nowrap" },
                         { "text-indent", "0" },
-                        { "margin-left", InchesCss(overhang.Value) }, { "margin-right", InchesCss(-overhang.Value) },
+                        { "margin-left", InchesCss(overhang.Value) }, { "margin-right", "-100%" },
                     });
                     result.Add(tail);
                 }

@@ -229,12 +229,12 @@ public class RightTabLeaderLineTests
         Assert.All(tabs, tab => Assert.Contains("width: 100%", (string?)tab.Attribute("style") ?? ""));
 
         // The first segment gives back its 304-twip (15.2pt) overhang. Everything after it sits in
-        // one box that takes no room and starts where that segment ends, and the second segment,
+        // one box that takes no room on the line and starts where that segment ends, and the second segment,
         // 9360 - 8800 = 560 twips (28pt) wide, then ends on its own stop.
         var first = RightSegment(html, "12");
         Assert.Equal("-15.2pt", Style(first, "margin-right"));
         var tail = (XElement)first.NextNode!;
-        Assert.Equal(("0", "15.2pt", "-15.2pt"), (Style(tail, "width"), Style(tail, "margin-left"), Style(tail, "margin-right")));
+        Assert.Equal(("max-content", "15.2pt", "-100%"), (Style(tail, "width"), Style(tail, "margin-left"), Style(tail, "margin-right")));
         var second = RightSegment(html, "34");
         Assert.Equal(tail, second.Parent);
         Assert.Equal("28pt", Style(second, "width"));
@@ -248,7 +248,7 @@ public class RightTabLeaderLineTests
         var html = Html(Package(Entry(LeftStop + "<w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"8000\"/><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"8400\"/>",
             "<w:r><w:t>2.1.</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>Spillway</w:t></w:r><w:r><w:tab/><w:t>12</w:t></w:r><w:r><w:tab/><w:t>34</w:t></w:r>")));
         Assert.Equal(RightSegment(html, "12").Parent, RightSegment(html, "34").Parent);
-        Assert.DoesNotContain(html.Descendants(), e => Style(e, "width") == "0");
+        Assert.DoesNotContain(html.Descendants(), e => Style(e, "width") == "max-content");
     }
 
     private const string LongTitle = "Culvert Inspection, Annual Load Ratings and Scour Monitoring for the Northern Spillway Approach";

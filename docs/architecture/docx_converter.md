@@ -310,7 +310,7 @@ stops and page-number right edges follow actual glyph widths. The same grouping 
 right stop past the line end (inside the paragraph's right indent, or past the column edge) gives its segment
 a negative `margin-right` equal to the overhang, so the segment fits on its line and still ends on the stop.
 Past the line end the line has no room left, yet LibreOffice keeps a later tab stretch on the same line, so
-everything after such a segment goes in one zero-width, nowrap box whose margins undo that overhang; a
+everything after such a segment goes in one nowrap, content-wide box whose left margin undoes that overhang and whose `-100%` right margin takes it off the line; a
 second right or left stop inside the indent then lands on its own stop (issue #1285). A pen past the line
 end only because a right-aligned stretch ended on such a stop does not count as wrapped text.
 

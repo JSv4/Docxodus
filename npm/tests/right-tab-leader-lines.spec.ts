@@ -96,9 +96,24 @@ function entry(content: string, stops = '<w:tab w:val="left" w:pos="1296"/><w:ta
 
 interface Word { text: string; left: number; right: number; top: number }
 
-/** Convert, parse with the browser's HTML parser, and lay out in a 6.5in column. */
-async function layOutBody(page: Page, bodyXml: string) {
+/** Convert, parse with the browser's HTML parser, and lay out in a 6.5in column, or paginate. */
+async function layOutBody(page: Page, bodyXml: string, paginated = false) {
   const bytes = Array.from(leaderDocx(bodyXml));
+  if (paginated) {
+    await page.addScriptTag({ url: '/pagination.bundle.js' });
+    await page.evaluate(async (values) => {
+      const html = (window as any).Docxodus.DocumentConverter.ConvertDocxToHtmlComplete(
+        new Uint8Array(values), 'Leader lines', 'docx-', true, '', -1, 'comment-',
+        1, 1, 'page-', false, 0, 'annot-', true, true, false, false, false);
+      if (html.startsWith('{')) throw new Error(html);
+      document.body.style.cssText = 'margin:0;padding:0';
+      document.body.innerHTML = '<main id="pages"></main>';
+      (window as any).DocxodusPagination.paginateHtml(html, document.getElementById('pages'),
+        { scale: 1, showPageNumbers: false, pageGap: 0 });
+      await document.fonts.ready;
+    }, bytes);
+    return;
+  }
   const result = await page.evaluate((values) =>
     (window as any).DocxodusTests.convertToHtml(new Uint8Array(values)), bytes);
   expect(result.error).toBeUndefined();
@@ -110,11 +125,13 @@ async function layOutBody(page: Page, bodyXml: string) {
   }, result.html!);
 }
 
-/** Every word of every paragraph, in px from the column's left edge and top. */
+/** Every word of every paragraph, in px from the column's left edge and top. A paginated view's
+ * column is its first page's content box; its hidden staging copy is skipped. */
 function words(page: Page): Promise<Word[][]> {
   return page.evaluate(() => {
-    const column = document.body.getBoundingClientRect();
-    return Array.from(document.querySelectorAll('p')).map((p) => {
+    const content = document.querySelector('.page-box .page-content');
+    const column = (content ?? document.body).getBoundingClientRect();
+    return Array.from((content ?? document).querySelectorAll('p')).map((p) => {
       const found: { text: string; left: number; right: number; top: number }[] = [];
       const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -223,21 +240,21 @@ test.describe('tab leader and signature lines (#1285)', () => {
     expect(leader.left).toBeCloseTo(find(line, 'Approach').right, 0);
   });
 
-  test('a second tab after a stretch that reaches into the right indent stays on the line', async ({ page }) => {
+  for (const paginated of [false, true]) test(`a second tab after a stretch that reaches into the right indent stays on the line (paginated ${paginated})`, async ({ page }) => {
     const stops = (next: string) => `<w:tab w:val="left" w:pos="1296"/><w:tab w:val="right" w:leader="dot" w:pos="8800"/>${next}`;
-    const content = (last: string) => `${run('2.1.')}${tab()}${run('Spillway')}<w:r><w:tab/><w:t>12</w:t></w:r><w:r><w:tab/><w:t>${last}</w:t></w:r>`;
+    const content = (last: string) => `${run('2.1.')}${tab()}${run('Spillway')}<w:r><w:tab/><w:t>12</w:t></w:r><w:r><w:tab/></w:r>${run(last)}`;
     await layOutBody(page,
       entry(content('34'), stops('<w:tab w:val="right" w:leader="dot" w:pos="9360"/>')) +
-      entry(content('A'), stops('<w:tab w:val="left" w:pos="8900"/>')));
+      entry(content('Ra'), stops('<w:tab w:val="left" w:pos="8900"/>')), paginated);
     const [rightRight, rightLeft] = await words(page);
-    // LibreOffice: "12" ends on the 8800 stop (586.7px), then "34" ends on 9360 (624px), or "A"
+    // LibreOffice: "12" ends on the 8800 stop (586.7px), then "34" ends on 9360 (624px), or "Ra"
     // starts on 8900 (593.3px), all on the first line.
     for (const line of [rightRight, rightLeft]) {
       expect(new Set(line.map((w) => w.top)).size).toBe(1);
       expect(find(line, '12').right).toBeCloseTo(8800 / 15, 0);
     }
     expect(find(rightRight, '34').right).toBeCloseTo(COLUMN_PX, 0);
-    expect(find(rightLeft, 'A').left).toBeCloseTo(8900 / 15, 0);
+    expect(find(rightLeft, 'Ra').left).toBeCloseTo(8900 / 15, 0);
   });
 
   test('a bookmark inside a link keeps the whole entry inside that link and on its stops', async ({ page }) => {

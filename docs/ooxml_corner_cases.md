@@ -2887,7 +2887,8 @@ Causes and fixes, all in `Docxodus/WmlToHtmlConverter.cs`:
   end without any wrap; the pass now allows the pen to reach the furthest such stop. In
   `ConvertAlignedTabRuns`, the segment that ends there hands its overhang back with a negative
   `margin-right`, which would also pull everything after it left by that much. So what follows goes in
-  one zero-width, nowrap box whose margins undo the overhang.
+  one nowrap, content-wide box whose left margin undoes the overhang and whose `-100%` right margin
+  takes it off the line (a zero-width box let a `pre-wrap` run wrap inside it in the paginated view).
 - A right tab after wrapped text kept the fixed path, sized from an estimate of where the last line
   ends. When the wrapped text began at the left indent, where its later lines also begin, the pass
   records the stop's distance from that indent (`pt:TabWrappedSegmentWidth`). The segment then spans
