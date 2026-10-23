@@ -149,11 +149,10 @@ public class TableHorizontalPlacementTests
     }
 
     [Theory]
-    [InlineData("<w:jc w:val=\"center\"/>")]
-    [InlineData("<w:jc w:val=\"right\"/>")]
+    [InlineData("<w:jc w:val=\"center\"/>")] // measured: Word centres the table and keeps its cell margin
+    [InlineData("<w:jc w:val=\"right\"/>")]  // unmeasured: left alone too
     public void Before_mode_15_a_table_that_is_not_start_aligned_is_not_pulled_out(string jc)
     {
-        // Provisional: Word's placement of these has not been measured, so they keep the mode 15 placement.
         var html = Convert(Table(props: jc + "<w:tblInd w:w=\"0\" w:type=\"dxa\"/>" + Margins108), mode: "14");
         Assert.Equal("0", Table(html)["margin-left"]);
     }
@@ -161,7 +160,7 @@ public class TableHorizontalPlacementTests
     [Fact]
     public void Before_mode_15_a_nested_table_is_not_pulled_out()
     {
-        // Provisional, as for aligned tables: only the outer table moves.
+        // Measured: a nested table's cell text sits a full margin and border inside the outer cell.
         var inner = Table(props: "<w:tblInd w:w=\"0\" w:type=\"dxa\"/>" + Margins108);
         var outer = Table(props: "<w:tblInd w:w=\"0\" w:type=\"dxa\"/>" + Margins108)
             .Replace("<w:p><w:r><w:t>Juniper cell.</w:t></w:r></w:p></w:tc>", inner + "<w:p/></w:tc>");
@@ -169,6 +168,24 @@ public class TableHorizontalPlacementTests
         Assert.Equal(2, tables.Count);
         Assert.Equal("-5.9pt", tables[0]["margin-left"]);
         Assert.Equal("0", tables[1]["margin-left"]);
+    }
+
+    [Fact]
+    public void Before_mode_15_a_named_style_that_states_no_indent_or_margins_does_not_pull_the_table()
+    {
+        // Word puts the text of such a table half a border right of the margin, where an unstyled table's
+        // goes, not on it as for a stated indent. The table's own margins do not change that.
+        var styles = "<w:style w:type=\"table\" w:styleId=\"Grid\"><w:name w:val=\"Grid\"/><w:tblPr/></w:style>";
+        var html = Convert(Table(props: "<w:tblStyle w:val=\"Grid\"/>" + Margins108), mode: "14", styles: styles);
+        Assert.Equal("-0.5pt", Table(html)["margin-left"]);
+    }
+
+    [Fact]
+    public void Before_mode_15_a_first_row_with_grid_before_is_still_pulled_out_by_its_first_cell()
+    {
+        var html = Convert(Table(props: "<w:tblInd w:w=\"0\" w:type=\"dxa\"/>" + Margins108)
+            .Replace("<w:tr>", "<w:tr><w:trPr><w:gridBefore w:val=\"1\"/></w:trPr>"), mode: "14");
+        Assert.Equal("-5.9pt", Table(html)["margin-left"]);
     }
 
     [Fact]

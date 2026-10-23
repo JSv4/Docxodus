@@ -7355,11 +7355,12 @@ namespace Docxodus
         /// table wherever the table states none. A document with no default table style has no cell
         /// margins to inherit, and its cells have none. Before compatibility mode 15 (and when the
         /// document states no mode at all) Word aligns the first cell's text, not the table edge, with
-        /// the indent whenever the table states <c>w:tblInd</c> or a table style governs it; otherwise
-        /// it centres the leading border on the indent. That choice is recorded for
-        /// <see cref="ProcessTable"/> on top-level, start-aligned tables only: nested and centred or
-        /// end-aligned tables have not been measured, so they keep the mode 15 placement. It runs
-        /// before formatting assembly, which removes the <c>w:tblStyle</c> reference this depends on.
+        /// the indent whenever the table states <c>w:tblInd</c> or the table style that governs it (its
+        /// own or the default one) states an indent or cell margins; otherwise it centres the leading
+        /// border on the indent. That choice is recorded for <see cref="ProcessTable"/> on top-level
+        /// tables aligned at the start: Word places nested and centred tables as in mode 15 (measured),
+        /// and end-aligned ones are left alone too, unmeasured. It runs before formatting assembly,
+        /// which removes the <c>w:tblStyle</c> reference this depends on.
         /// </remarks>
         private static void ResolveTableIndentInputs(WordprocessingDocument wordDoc)
         {
@@ -7380,6 +7381,7 @@ namespace Docxodus
                 .FirstOrDefault(s => (string?)s.Attribute(W.name) == "compatibilityMode")?
                 .Attribute(W.val);
             var legacy = !int.TryParse(mode, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) || number < 15;
+            var namedTblPr = new Dictionary<string, XElement?>(StringComparer.Ordinal);
 
             var parts = wordDoc.ContentParts().Append(wordDoc.MainDocumentPart.WordprocessingCommentsPart).OfType<OpenXmlPart>();
             foreach (var part in parts)
@@ -7390,10 +7392,12 @@ namespace Docxodus
                     if (tblPr == null)
                         tbl.AddFirst(tblPr = new XElement(W.tblPr));
                     var styleId = (string?)tblPr.Elements(W.tblStyle).Attributes(W.val).FirstOrDefault();
-                    var styled = styleId != null && tableStyleIds.Contains(styleId);
-                    if (!styled && defaultTblPr != null)
+                    var styleTblPr = styleId != null && tableStyleIds.Contains(styleId)
+                        ? (namedTblPr.TryGetValue(styleId, out var known) ? known
+                            : namedTblPr[styleId] = FormattingAssembler.ResolveTableStyle(wordDoc, styleId).Element(W.tblPr))
+                        : defaultTblPr;
+                    if (styleTblPr == defaultTblPr && defaultTblPr != null)
                     {
-                        styled = true;
                         if (tblPr.Element(W.tblInd) == null && defaultTblPr.Element(W.tblInd) is { } indent)
                             tblPr.Add(new XElement(indent));
                         if (defaultTblPr.Element(W.tblCellMar) is { } inherited)
@@ -7410,10 +7414,12 @@ namespace Docxodus
                                 margins.Add(new XElement(side));
                         }
                     }
+                    // Measured: nested and centred tables are not pulled out; end-aligned ones are unmeasured.
                     var jc = (string?)tblPr.Elements(W.jc).Attributes(W.val).FirstOrDefault();
+                    var stylePlaces = styleTblPr?.Element(W.tblInd) != null || styleTblPr?.Element(W.tblCellMar) != null;
                     if (legacy && !tbl.Ancestors(W.tbl).Any() && jc is null or "left" or "start")
                         tbl.SetAttributeValue(LegacyTableIndentAttribute,
-                            styled || tblPr.Element(W.tblInd) != null ? "text" : "border");
+                            stylePlaces || tblPr.Element(W.tblInd) != null ? "text" : "border");
                 }
             }
         }

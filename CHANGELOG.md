@@ -45,11 +45,12 @@ All notable changes to this project will be documented in this file.
   no table style the text sat about 5pt right of Word's in the HTML, the paginated view and the PDF
   export. Word's usual 5.4pt comes from the document's default table style, which the converter now
   applies to a table that names no style. Documents in compatibility mode 14 or earlier, or that state no
-  mode, also place a table that states an indent or has a style so that its first cell's text, not its
-  border, starts at the indent; the converter now pulls such a table out by that cell's margin. Mode 15
-  documents (Word 2013 and later) keep the table edge at the indent. Floating tables are unchanged, and so,
-  provisionally, are nested and centred or end-aligned tables, whose legacy placement is unmeasured. A table
-  that names a style the document does not define takes the default table style, as one naming none does.
+  mode, also place a top-level, start-aligned table that states an indent, or whose table style states
+  an indent or cell margins, so that its first cell's text, not its border, starts at the indent; the
+  converter now pulls such a table out by that cell's margin. Mode 15 documents (Word 2013 and later)
+  keep the table edge at the indent. Floating, nested and centred tables are not pulled (measured), and
+  neither are end-aligned ones. A table that names a style the document does not define takes the
+  default table style, as one naming none does.
   The Word for the web measurements are in `docs/ooxml_corner_cases.md`.
 - Under tracked changes, deleting or replacing text in the session author's own pending insertion through
   `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`) now removes it from the insertion instead of

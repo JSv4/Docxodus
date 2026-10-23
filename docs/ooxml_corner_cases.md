@@ -2759,9 +2759,12 @@ from authored one-cell tables, US Letter with 72pt margins and 1pt (`w:sz="8"`) 
    is at the indent (`w:tblInd`, zero when absent), and the text follows at the cell margin, counted
    from the border's centre line.
 3. **Before mode 15 the text goes to the indent.** In modes 14 and 12, and when the settings state no
-   mode at all, Word pulls the table out by the first cell's own left margin whenever the table states
-   `w:tblInd` or a table style governs it (its own or the default one), so the first cell's text
-   starts exactly at the indent. A table with neither has its leading border centred on the indent.
+   mode at all, Word pulls a top-level, start-aligned table out by its first cell's own left margin, so
+   that cell's text starts exactly at the indent. It does this whenever the table states `w:tblInd`, or
+   the table style governing it (its own or the default one) states an indent or cell margins. A table
+   with none of these has its leading border centred on the indent. A centred table and a nested
+   table are placed as in mode 15, and a first row that starts with `w:gridBefore`, or a 100%-wide
+   table, is still pulled.
 
 ```xml
 <w:settings><w:compat><w:compatSetting w:name="compatibilityMode"
@@ -2788,6 +2791,11 @@ view and the PDF export:
 | names no style; default style has 108 only | — | 0.0 | 6.1 | — | 0.3 |
 | 3pt border, no indent, 108 | 7.0 | 5.5 | 8.4 | 8.4 | 6.9 |
 | 3pt border, `tblInd` 0, margins 0 | 3.0 | 0.0 | 3.0 | 3.0 | 1.5 |
+| named style with no indent and no margins | 1.0 | 0.5 | 6.1 | 0.8 | 0.3 |
+| default style; first row `w:gridBefore` 1000 twips | — | 0.0 | — | — | 0.3 |
+| default style; `w:tblW` 5000 pct (100%) | — | 0.0 | — | — | 0.3 |
+| default style; nested table, from the outer cell's text | — | 6.0 | — | — | 6.4 |
+| default style; `w:jc="center"` 250pt table, from the margin | — | 114.6 | — | — | (centred, not pulled) |
 
 The PDFs' vector borders confirm rule 2's geometry: with a 3pt border the mode 15 table's left border
 spans 72.0–75.0pt (outer edge at the margin) and the mode 14 table's 70.5–73.5pt (centred on it).
@@ -2796,12 +2804,12 @@ spans 72.0–75.0pt (outer edge at the margin) and the mode 14 table's 70.5–73
 there. A table that names no style, or names one the document does not define, gets the default table
 style's `w:tblInd` and side cell margins wherever it states none. Before mode 15 the pass also records
 whether the table is pulled out to its text or only centres its border. It does this only for
-top-level tables aligned at the start: nested tables and centred or end-aligned tables keep the mode 15
-placement until Word's handling of them is measured.
+top-level tables aligned at the start; end-aligned tables are left alone too, though Word's handling of
+them is unmeasured. A document with no settings part at all is treated like one whose settings state
+no mode, which is also unmeasured.
 
-Two further cases are inferred, not measured:
-- A table naming a defined style whose chain states no cell margins gets none.
-- A document with no settings part at all is treated like one whose settings state no mode. `CellMarginTwips` is the one margin lookup (cell, then table, then zero); the
+The rows from "named style" down were captured on October 23, 2026 from six further fixtures
+(`i1219b-*`). In the centred row, a pulled table would put its text at about 109pt. `CellMarginTwips` is the one margin lookup (cell, then table, then zero); the
 cell padding and the tab-stop wrap width both use it. `ProcessTable` moves the table edge out by the
 first cell's margin and half its leading border, in the table's leading direction; a floating table
 (`w:tblpPr`) is placed by its own properties and is left alone. The 5.4pt padding the converter used to
