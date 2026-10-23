@@ -1069,6 +1069,7 @@ namespace Docxodus
             MarkupSimplifier.SimplifyMarkup(wordDoc, simplifyMarkupSettings);
 
             MarkStructuralTableEndParagraphs(wordDoc);
+            ResolveTableIndentInputs(wordDoc);
             // Balloon wording compares direct properties, which assembly replaces (issue #1300).
             if (htmlConverterSettings is { RenderTrackedChanges: true, RevisionPresentation: RevisionPresentation.Word })
             {
@@ -6248,29 +6249,41 @@ namespace Docxodus
             // auto layout, so pairing them is what makes the declaration load-bearing.
             if (IsFixedLayoutTable(element) && style.ContainsKey("width"))
                 style.AddIfMissing("table-layout", "fixed");
+            var tblpPr = element.Elements(W.tblPr).Elements(W.tblpPr).FirstOrDefault();
             var tblInd = element.Elements(W.tblPr).Elements(W.tblInd).FirstOrDefault();
-            if (tblInd != null)
+            var indent = (string?)tblInd?.Attribute(W.type) == "dxa"
+                ? WordprocessingMLUtil.AttributeToTwips(tblInd!.Attribute(W._w)) / 20m
+                : null;
+            var leadingEdge = indent;
+            if (tblpPr == null && (string?)element.Attribute(LegacyTableIndentAttribute) is { } legacyIndent)
             {
-                var tblIndType = (string?)tblInd.Attribute(W.type);
-                if (tblIndType != null)
-                {
-                    if (tblIndType == "dxa")
-                    {
-                        var width = WordprocessingMLUtil.AttributeToTwips(tblInd.Attribute(W._w));
-                        if (width != null)
-                        {
-                            // The indent is relative to the table's leading edge. Negative
-                            // values pull it into that page margin, including RTL tables (#827).
-                            style.AddIfMissing(bidiVisual ? "margin-right" : "margin-left",
-                                width != 0m
-                                    ? string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", width / 20m)
-                                    : "0");
-                        }
-                    }
-                }
+                // Before compatibility mode 15 Word centres the leading border on the indent, and when
+                // the table states an indent or has a style it also pulls the table out by the first
+                // cell's margin so that cell's text sits at the indent (issue #1219). CSS puts the
+                // border's centre at the table's margin edge and the text half a border plus the
+                // padding inside it, so the edge moves out by both. A floating table is placed by
+                // w:tblpPr instead.
+                var firstCell = element.Elements(W.tr).Elements(W.tc).FirstOrDefault();
+                var leadingSide = bidiVisual ? W.right : W.left;
+                var border = firstCell?.Elements(W.tcPr).Elements(W.tcBorders).Elements(leadingSide).FirstOrDefault();
+                var borderType = (string?)border?.Attribute(W.val);
+                var halfBorder = border == null || borderType is "nil" or "none"
+                    ? 0m
+                    : BorderWidthInPoints(borderType, (int?)border.Attribute(W.sz) ?? 0) / 2m;
+                var cellMargin = legacyIndent == "text" && firstCell != null ? CellMarginTwips(firstCell, leadingSide) / 20m : 0m;
+                if (halfBorder + cellMargin != 0m)
+                    leadingEdge = (indent ?? 0m) - halfBorder - cellMargin;
+            }
+            if (leadingEdge != null)
+            {
+                // The indent is relative to the table's leading edge. Negative
+                // values pull it into that page margin, including RTL tables (#827).
+                style.AddIfMissing(bidiVisual ? "margin-right" : "margin-left",
+                    leadingEdge != 0m
+                        ? string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", leadingEdge)
+                        : "0");
             }
             // Handle table spacing from w:tblpPr (floating table positioning properties)
-            var tblpPr = element.Elements(W.tblPr).Elements(W.tblpPr).FirstOrDefault();
             if (tblpPr != null)
             {
                 var topFromText = WordprocessingMLUtil.AttributeToTwips(tblpPr.Attribute(W.topFromText));
@@ -6555,26 +6568,9 @@ namespace Docxodus
                 if (gridSpan != null)
                     colSpan = new XAttribute("colspan", (int) gridSpan);
             }
-            style.AddIfMissing("padding-top", "0");
-            style.AddIfMissing("padding-bottom", "0");
-
-            var table = element.Ancestors(W.tbl).FirstOrDefault();
-            var rtlTable = IsOnOffPropertyEnabled(table?.Element(W.tblPr)?.Element(W.bidiVisual));
             foreach (var side in new[] { W.top, W.right, W.bottom, W.left })
-            {
-                var logical = side == W.left ? (rtlTable ? W.end : W.start)
-                    : side == W.right ? (rtlTable ? W.start : W.end) : side;
-                var cellMargins = tcPr?.Element(W.tcMar);
-                var tableMargins = table?.Element(W.tblPr)?.Element(W.tblCellMar);
-                var margin = cellMargins?.Element(logical) ?? cellMargins?.Element(side)
-                    ?? tableMargins?.Element(logical) ?? tableMargins?.Element(side);
-                if ((string?)margin?.Attribute(W.type) is "dxa" or "nil")
-                {
-                    decimal? twips = (string?)margin.Attribute(W.type) == "nil" ? 0 : WordprocessingMLUtil.AttributeToTwips(margin.Attribute(W._w));
-                    if (twips != null)
-                        style["padding-" + side.LocalName] = string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", twips / 20m);
-                }
-            }
+                style["padding-" + side.LocalName] = string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt",
+                    CellMarginTwips(element, side) / 20m);
 
             var cell = new XElement(Xhtml.td,
                 rowSpan,
@@ -7338,6 +7334,72 @@ namespace Docxodus
         private const string ExactLineSpacingCssProperty = "--docx-exact-line-height";
         private static readonly XName StructuralTableEndParagraphAttribute =
             XName.Get("table-end-paragraph", "urn:docxodus:rendering");
+
+        /// <summary>
+        /// Where Word puts a table's first cell text before compatibility mode 15, when the table is
+        /// pulled out of its indent: <c>text</c> (at the indent) or <c>border</c> (the leading border
+        /// centred on it). Absent in mode 15 and later, where the table edge sits at the indent.
+        /// </summary>
+        private static readonly XName LegacyTableIndentAttribute =
+            XName.Get("legacy-table-indent", "urn:docxodus:rendering");
+
+        /// <summary>
+        /// States on each table the two inputs to Word's horizontal table placement that the converter
+        /// cannot read from the table alone (issue #1219; measured in <c>docs/ooxml_corner_cases.md</c>).
+        /// </summary>
+        /// <remarks>
+        /// A table that names no style is formatted by the document's default table style, so that
+        /// style's indent and cell margins are copied onto the table wherever the table states none —
+        /// a document with no default table style has no cell margins to inherit, and its cells have
+        /// none. Before compatibility mode 15 (and when the document states no mode at all) Word
+        /// aligns the first cell's text, not the table edge, with the indent whenever the table states
+        /// <c>w:tblInd</c> or a table style governs it; otherwise it centres the leading border on the
+        /// indent. That choice is recorded for <see cref="ProcessTable"/>. It runs before formatting
+        /// assembly, which removes the <c>w:tblStyle</c> reference this depends on.
+        /// </remarks>
+        private static void ResolveTableIndentInputs(WordprocessingDocument wordDoc)
+        {
+            var defaultStyleId = (string?)wordDoc.MainDocumentPart!.StyleDefinitionsPart?.GetXDocument().Root?
+                .Elements(W.style)
+                .FirstOrDefault(s => (string?)s.Attribute(W.type) == "table" && s.Attribute(W._default).ToBoolean() == true)?
+                .Attribute(W.styleId);
+            var defaultTblPr = defaultStyleId == null
+                ? null
+                : FormattingAssembler.TableStyleRollup(wordDoc, defaultStyleId).Element(W.tblPr);
+            var mode = (string?)wordDoc.MainDocumentPart.DocumentSettingsPart?.GetXDocument().Root?
+                .Elements(W.compat).Elements(W.compatSetting)
+                .FirstOrDefault(s => (string?)s.Attribute(W.name) == "compatibilityMode")?
+                .Attribute(W.val);
+            var legacy = !int.TryParse(mode, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) || number < 15;
+
+            foreach (var part in wordDoc.ContentParts())
+            {
+                foreach (var tbl in part.GetXDocument().Descendants(W.tbl))
+                {
+                    var tblPr = tbl.Element(W.tblPr);
+                    if (tblPr == null)
+                        tbl.AddFirst(tblPr = new XElement(W.tblPr));
+                    var styled = tblPr.Element(W.tblStyle) != null;
+                    if (!styled && defaultTblPr != null)
+                    {
+                        styled = true;
+                        if (tblPr.Element(W.tblInd) == null && defaultTblPr.Element(W.tblInd) is { } indent)
+                            tblPr.Add(new XElement(indent));
+                        if (defaultTblPr.Element(W.tblCellMar) is { } inherited)
+                        {
+                            var margins = tblPr.Element(W.tblCellMar);
+                            if (margins == null)
+                                tblPr.Add(margins = new XElement(W.tblCellMar));
+                            foreach (var side in inherited.Elements().Where(side => margins.Element(side.Name) == null))
+                                margins.Add(new XElement(side));
+                        }
+                    }
+                    if (legacy)
+                        tbl.SetAttributeValue(LegacyTableIndentAttribute,
+                            styled || tblPr.Element(W.tblInd) != null ? "text" : "border");
+                }
+            }
+        }
 
         private static void MarkStructuralTableEndParagraphs(WordprocessingDocument wordDoc)
         {
@@ -9749,9 +9811,32 @@ namespace Docxodus
         }
 
         /// <summary>
+        /// A table cell's margin on one physical side, in twips: its <c>w:tcMar</c>, else its table's
+        /// <c>w:tblCellMar</c>, else zero. The table's margins already carry its style's, and those of
+        /// the document's default table style when it names none (<see cref="ResolveTableIndentInputs"/>);
+        /// Word gives a cell that inherits no margin from anywhere none at all (issue #1219). Left and
+        /// right also answer to the logical <c>w:start</c>/<c>w:end</c>, which swap in an RTL table.
+        /// </summary>
+        private static decimal CellMarginTwips(XElement tc, XName side)
+        {
+            var table = tc.Ancestors(W.tbl).FirstOrDefault();
+            var rtlTable = IsOnOffPropertyEnabled(table?.Element(W.tblPr)?.Element(W.bidiVisual));
+            var logical = side == W.left ? (rtlTable ? W.end : W.start)
+                : side == W.right ? (rtlTable ? W.start : W.end) : side;
+            var cellMargins = tc.Element(W.tcPr)?.Element(W.tcMar);
+            var tableMargins = table?.Element(W.tblPr)?.Element(W.tblCellMar);
+            var margin = new[] { cellMargins?.Element(logical), cellMargins?.Element(side),
+                    tableMargins?.Element(logical), tableMargins?.Element(side) }
+                .FirstOrDefault(m => m != null && (string?)m.Attribute(W.type) is null or "dxa" or "nil");
+            return (string?)margin?.Attribute(W.type) == "nil"
+                ? 0m
+                : WordprocessingMLUtil.AttributeToTwips(margin?.Attribute(W._w)) ?? 0m;
+        }
+
+        /// <summary>
         /// The width a table cell's paragraphs wrap at, in twips: the grid columns the cell spans
         /// (or its <c>w:tcW</c> when the grid does not cover it), less its left and right margins
-        /// from <c>w:tcMar</c>, else the table's <c>w:tblCellMar</c>, else Word's default 108.
+        /// (<see cref="CellMarginTwips"/>).
         /// Null when neither the grid nor an absolute <c>w:tcW</c> gives a width.
         /// </summary>
         private static int? CellTextWidthTwips(XElement tc)
@@ -9784,16 +9869,7 @@ namespace Docxodus
             else
                 return null;
 
-            int Margin(XName side, XName logicalSide)
-            {
-                var margin = tc.Elements(W.tcPr).Elements(W.tcMar).Elements().FirstOrDefault(e => e.Name == side || e.Name == logicalSide)
-                             ?? tbl.Elements(W.tblPr).Elements(W.tblCellMar).Elements().FirstOrDefault(e => e.Name == side || e.Name == logicalSide);
-                return margin != null && ((string?)margin.Attribute(W.type) ?? "dxa") == "dxa"
-                    ? (int)(WordprocessingMLUtil.AttributeToTwips(margin.Attribute(W._w)) ?? 108)
-                    : 108;
-            }
-
-            return Math.Max(width - Margin(W.left, W.start) - Margin(W.right, W.end), 0);
+            return Math.Max(width - (int)(CellMarginTwips(tc, W.left) + CellMarginTwips(tc, W.right)), 0);
         }
 
         /// <summary>
@@ -10663,9 +10739,6 @@ namespace Docxodus
             if (pBdr == null)
             {
                 style.Add("border-" + whichSide, "none");
-                if (borderType == BorderType.Cell &&
-                    (whichSide == "left" || whichSide == "right"))
-                    style.Add("padding-" + whichSide, "5.4pt");
                 return;
             }
 
@@ -10673,24 +10746,19 @@ namespace Docxodus
             if (side == null)
             {
                 style.Add("border-" + whichSide, "none");
-                if (borderType == BorderType.Cell &&
-                    (whichSide == "left" || whichSide == "right"))
-                    style.Add("padding-" + whichSide, "5.4pt");
                 return;
             }
+            // A cell's padding is its margin, which ProcessTableCell sets; w:space spaces only a
+            // paragraph border from its text.
             var type = (string?)side.Attribute(W.val);
             if (type == "nil" || type == "none")
             {
                 style.Add("border-" + whichSide + "-style", "none");
 
                 var space = (decimal?)side.Attribute(W.space) ?? 0;
-                if (borderType == BorderType.Cell &&
-                    (whichSide == "left" || whichSide == "right"))
-                    if (space < 5.4m)
-                        space = 5.4m;
-                style.Add("padding-" + whichSide,
-                    space == 0 ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", space));
-
+                if (borderType != BorderType.Cell)
+                    style.Add("padding-" + whichSide,
+                        space == 0 ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", space));
             }
             else
             {
@@ -10724,13 +10792,9 @@ namespace Docxodus
                     borderType == BorderType.Paragraph ? "{0:0.##}pt" : "{0:0.0}pt", borderWidthInPoints);
 
                 style.Add("border-" + whichSide, borderStyle + " " + color + " " + borderWidth);
-                if (borderType == BorderType.Cell &&
-                    (whichSide == "left" || whichSide == "right"))
-                    if (space < 5.4m)
-                        space = 5.4m;
-
-                style.Add("padding-" + whichSide,
-                    space == 0 ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", space));
+                if (borderType != BorderType.Cell)
+                    style.Add("padding-" + whichSide,
+                        space == 0 ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", space));
             }
         }
 

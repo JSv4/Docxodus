@@ -40,6 +40,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Table cell text now starts where Word starts it (#1219). The HTML converter gave every cell a 5.4pt
+  left and right margin when nothing stated one; Word gives none, so in a table with no cell margins and
+  no table style the text sat about 5pt right of Word's in the HTML, the paginated view and the PDF
+  export. Word's usual 5.4pt comes from the document's default table style, which the converter now
+  applies to a table that names no style. Documents in compatibility mode 14 or earlier, or that state no
+  mode, also place a table that states an indent or has a style so that its first cell's text, not its
+  border, starts at the indent; the converter now pulls such a table out by that cell's margin. Mode 15
+  documents (Word 2013 and later) keep the table edge at the indent. Floating tables are unchanged. The
+  Word for the web measurements are in `docs/ooxml_corner_cases.md`.
 - Under tracked changes, deleting or replacing text in the session author's own pending insertion through
   `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`) now removes it from the insertion instead of
   recording a deletion nested inside it (#1316). A Backspace in text still being typed left a struck

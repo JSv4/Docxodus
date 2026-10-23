@@ -2745,6 +2745,71 @@ merges, actual clipping at the paper edges and body bottom, and PageMap geometry
 - Tests: `HCO099_TableIndent_UsesLeadingMargin`,
   `npm/tests/pagination-negative-table-indent.spec.ts`.
 
+## Tables: where the first cell's text starts (issue #1219)
+
+Three rules decide how far right of the indent a table's first cell text starts. They were measured in
+PDFs exported by Word for the web (File > Export > Download as PDF, October 23, 2026; no build reported)
+from authored one-cell tables, US Letter with 72pt margins and 1pt (`w:sz="8"`) borders:
+
+1. **A cell margin no one states is zero.** With no `w:tcMar`, no `w:tblCellMar` and no table style,
+   the text sits just inside the border. The 108-twip (5.4pt) margin a new Word table shows comes from
+   the document's default table style ("Normal Table", `w:default="1"`), which also formats every
+   table that names no style.
+2. **Mode 15 puts the table at the indent.** In compatibility mode 15 the leading border's outer edge
+   is at the indent (`w:tblInd`, zero when absent), and the text follows at the cell margin, counted
+   from the border's centre line.
+3. **Before mode 15 the text goes to the indent.** In modes 14 and 12, and when the settings state no
+   mode at all, Word pulls the table out by the first cell's own left margin whenever the table states
+   `w:tblInd` or a table style governs it (its own or the default one), so the first cell's text
+   starts exactly at the indent. A table with neither has its leading border centred on the indent.
+
+```xml
+<w:settings><w:compat><w:compatSetting w:name="compatibilityMode"
+  w:uri="http://schemas.microsoft.com/office/word" w:val="14"/></w:compat></w:settings>
+<w:tblPr><w:tblW w:w="5000" w:type="dxa"/><w:tblInd w:w="0" w:type="dxa"/>
+  <w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr>
+```
+
+First-cell text start, in points right of the body text edge (Word's PDF positions sit on a 0.5pt
+grid). Docxodus is the HTML converter's output laid out by Chromium, the engine behind the paginated
+view and the PDF export:
+
+| Table | Word, mode 15 | Word, mode 14/12/none | Docxodus before | Docxodus after, 15 | Docxodus after, 14/12/none |
+|---|---:|---:|---:|---:|---:|
+| no indent, 108-twip margins | 6.0 | 5.5 | 6.1 | 6.1 | 5.7 |
+| `tblInd` 0, 108 | 6.0 | 0.0 | 6.1 | 6.1 | 0.3 |
+| `tblInd` 720, 108 | 42.0 | 36.0 | 42.1 | 42.1 | 36.2 |
+| `tblInd` -720, 108 | -30.0 | -36.0 | -29.9 | -29.9 | -35.8 |
+| no indent, margins 0 | 1.0 | 0.5 | 0.8 | 0.8 | 0.3 |
+| no indent, no margins, no table style | 1.0 | 0.5 | 6.1 | 0.8 | 0.3 |
+| `tblInd` 0, first cell `tcMar` 288 | 15.0 | 0.0 | 15.1 | 15.1 | 0.3 |
+| table style with `tblInd` 0 and 108 | 6.0 | 0.0 | 6.1 | 6.1 | 0.3 |
+| names no style; default style has 108 and `tblInd` 0 | 6.0 | 0.0 | 6.1 | 6.1 | 0.3 |
+| names no style; default style has 108 only | — | 0.0 | 6.1 | — | 0.3 |
+| 3pt border, no indent, 108 | 7.0 | 5.5 | 8.4 | 8.4 | 6.9 |
+| 3pt border, `tblInd` 0, margins 0 | 3.0 | 0.0 | 3.0 | 3.0 | 1.5 |
+
+The PDFs' vector borders confirm rule 2's geometry: with a 3pt border the mode 15 table's left border
+spans 72.0–75.0pt (outer edge at the margin) and the mode 14 table's 70.5–73.5pt (centred on it).
+
+**Docxodus.** `ResolveTableIndentInputs` runs before formatting assembly, while `w:tblStyle` is still
+there: a table that names no style gets the default table style's `w:tblInd` and side cell margins
+wherever it states none, and before mode 15 it records whether the table is pulled out to its text or
+only centres its border. `CellMarginTwips` is the one margin lookup (cell, then table, then zero); the
+cell padding and the tab-stop wrap width both use it. `ProcessTable` moves the table edge out by the
+first cell's margin and half its leading border, in the table's leading direction; a floating table
+(`w:tblpPr`) is placed by its own properties and is left alone. The 5.4pt padding the converter used to
+give every cell is gone.
+
+**Remaining difference.** Word measures a cell margin from the border's centre line and never lets text
+start under the border; CSS pads from the border's inner edge. With a 1pt border that leaves Docxodus's
+text about 0.25pt right of Word's in every mode; with a 3pt border, about 1.5pt.
+
+- Code: `Docxodus/WmlToHtmlConverter.cs` (`ResolveTableIndentInputs`, `CellMarginTwips`,
+  `ProcessTable`).
+- Tests: `TableHorizontalPlacementTests`, `npm/tests/export-table-indent.spec.ts`; bench cases
+  `tables-cell-margin-*` and `tables-indent-mode-*` (core-v51).
+
 ## `w:rtl` and `w:bidiVisual` are on/off values, and Google Docs writes them switched off
 
 Both are `ST_OnOff` properties. Google Docs' `.docx` export writes the run-level one, switched off, on almost
