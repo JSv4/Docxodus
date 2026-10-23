@@ -451,3 +451,27 @@ test.describe('DocxEditor — typing inside a tracked move destination (#1319)',
     });
   }
 });
+
+test.describe('DocxEditor — typing inside a tracked insertion (#1318)', () => {
+  // The engine used to refuse an offset inside another author's insertion, and the editor's
+  // fallback then struck the neighbouring character and retyped it with the keystroke. Word
+  // splits the insertion around the typist's own instead.
+  test('typing inside another author\'s insertion splits it without retyping a character', async ({ page }) => {
+    await openTracked(page);
+    const deletions = () => page.evaluate(() => (window as any).editor.listRevisions()
+      .map((r: any) => `${r.type}:${r.text}`).filter((r: string) => r.startsWith('delete:')));
+    const before = await deletions();
+    await caretAfter(page, 'The tenant', 'each');
+    await page.keyboard.type('Z');
+    await blur(page);
+    const out = await page.evaluate(() => ({
+      failures: (window as any).failures,
+      revisions: (window as any).editor.listRevisions().map((r: any) => `${r.type}:${r.text}`),
+      accepted: (window as any).acceptedText(),
+    }));
+    expect(out.failures).toEqual([]);
+    expect(await deletions()).toEqual(before);
+    expect(out.revisions).toEqual(expect.arrayContaining(['insert: each', 'insert:Z', 'insert: spring']));
+    expect(out.accepted[0]).toBe('The tenant shall repaint the fence eachZ spring.');
+  });
+});

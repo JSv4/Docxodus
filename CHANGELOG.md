@@ -40,6 +40,16 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Under tracked changes, text inserted through `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`)
+  that would land strictly inside another author's tracked insertion now splits their insertion and goes
+  between the halves in the session author's own `w:ins`, as Word does (#1318). A zero-length insert inside
+  one of their runs was refused, and the browser editor's fallback then struck the neighbouring character
+  and retyped it with the keystroke inside their insertion; between two of their runs, or through a span
+  replacement, the new `w:ins` was nested inside theirs and listed as their text. The insertion is split
+  in place inside a hyperlink, content control or smart tag, as with tracking off (#1319); a content
+  control or simple field inside the insertion still cannot be split, and text typed there stays nested.
+  Inside the session author's own insertion the text now extends it.
+
 - A table no longer starts 7.5pt below a paragraph that has no space after it, or below another table
   (#1244). The HTML converter gave such a table a top margin of its own "for visual separation", which
   moved the first row and everything after it down in the HTML, the paginated view and the PDF export.

@@ -383,6 +383,119 @@ public class DocxSessionSpanRevisionTests
         if (mode == TrackedChangeMode.Accept) Assert.Equal("Fee XY due", Rejected(session));
     }
 
+    // ─── Tracked typing strictly inside an insertion (issue #1318) ───
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Tracked_TextTypedInsideAnotherAuthorsInsertion_SplitsItAroundOurs(bool twoRuns)
+    {
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat", FeeAmountDue("Alex", twoRuns));
+
+        var edit = session.ReplaceTextAtSpan(p, 7, 0, "XY");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal("\"Fee \" ins:Alex[\"amo\"] ins:Pat[\"XY\"] ins:Alex[\"unt\"] \" due\"", Shape(session, p));
+        var insertions = XElement.Parse(session.Raw.GetXml(p)).Elements(W.ins).ToArray();
+        Assert.Equal(3, insertions.Select(i => (string?)i.Attribute(W.id)).Distinct().Count());
+        Assert.Equal(("Alex", Date), ((string?)insertions[2].Attribute(W.author), (string?)insertions[2].Attribute(W.date)));
+        Assert.Equal(new[] { "insert:Alex:amo", "insert:Pat:XY", "insert:Alex:unt" }, Revisions(session));
+        Assert.Equal("Fee amoXYunt due", Accepted(session));
+        Assert.Equal("Fee  due", Rejected(session));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Tracked_TextTypedInsideAnotherAuthorsInsertionInAHyperlink_SplitsOnlyTheirInsertion(bool twoRuns)
+    {
+        var amount = (XElement)FeeAmountDue("Alex", twoRuns)[1];
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat",
+            Run("Fee "), new XElement(W.hyperlink, new XAttribute(W.anchor, "fees"), amount), Run(" due"));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 7, 0, "XY").Success);
+
+        Assert.Equal("\"Fee \" hyperlink[ins:Alex[\"amo\"] ins:Pat[\"XY\"] ins:Alex[\"unt\"]] \" due\"", Shape(session, p));
+        Assert.Contains("insert:Pat:XY", Revisions(session));
+    }
+
+    [Fact]
+    public void Tracked_TextTypedInsideAnotherAuthorsInsertionInAContentControl_SplitsOnlyTheirInsertion()
+    {
+        var amount = (XElement)FeeAmountDue("Alex", twoRuns: true)[1];
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat",
+            Run("Fee "), new XElement(W.sdt, new XElement(W.sdtPr), new XElement(W.sdtContent, amount)), Run(" due"));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 7, 0, "XY").Success);
+
+        Assert.Equal("\"Fee \" sdt[sdtPr[] sdtContent[ins:Alex[\"amo\"] ins:Pat[\"XY\"] ins:Alex[\"unt\"]]] \" due\"", Shape(session, p));
+    }
+
+    [Fact]
+    public void Tracked_ReplacementInsideAnotherAuthorsInsertion_PutsOursBesideTheirs()
+    {
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat", FeeAmountDue("Alex", twoRuns: false));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 6, 2, "XY").Success);
+
+        Assert.Equal("\"Fee \" ins:Alex[\"am\" del:Pat[\"ou\"]] ins:Pat[\"XY\"] ins:Alex[\"nt\"] \" due\"", Shape(session, p));
+        Assert.Equal("Fee amXYnt due", Accepted(session));
+        Assert.Equal("Fee  due", Rejected(session));
+    }
+
+    [Theory]
+    [InlineData(false, "\"Fee \" ins:Pat[\"amoXYunt\"] \" due\"")]
+    [InlineData(true, "\"Fee \" ins:Pat[\"amoXY\" \"unt\"] \" due\"")]
+    public void Tracked_TextTypedInsideOwnInsertion_ExtendsIt(bool twoRuns, string shape)
+    {
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat", FeeAmountDue("Pat", twoRuns));
+
+        var edit = session.ReplaceTextAtSpan(p, 7, 0, "XY");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal(shape, Shape(session, p));
+        Assert.Equal(new[] { "insert:Pat:amoXYunt" }, Revisions(session));
+    }
+
+    [Fact]
+    public void Tracked_TextTypedInsideOwnInsertion_DoesNotTakeAnotherReviewersFormatChange()
+    {
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat", Run("Fee "), Ins("Pat", 1,
+            new XElement(W.r, new XElement(W.rPr, new XElement(W.b), new XElement(W.rPrChange, Stamp("Bob", 2), new XElement(W.rPr))),
+                new XElement(W.t, "amount"))), Run(" due"));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 7, 0, "XY").Success);
+
+        Assert.Equal("\"Fee \" ins:Pat[\"amo\" \"XY\" \"unt\"] \" due\"", Shape(session, p));
+        var xy = XElement.Parse(session.Raw.GetXml(p)).Descendants(W.r).Single(r => r.Value == "XY");
+        Assert.NotNull(xy.Element(W.rPr)?.Element(W.b));
+        Assert.Null(xy.Descendants(W.rPrChange).FirstOrDefault());
+    }
+
+    [Fact]
+    public void Tracked_FormattedTextTypedInsideAnotherAuthorsInsertion_FormatsOnlyTheNewText()
+    {
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat", FeeAmountDue("Alex", twoRuns: false));
+
+        var edit = session.ReplaceTextAtSpanWithFormat(p, 7, 0, "XY", new FormatOp { Bold = true });
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        var runs = session.GetFormatting(p)!.Runs;
+        Assert.Equal("Fee amoXYunt due", string.Concat(runs.Select(r => r.Text)));
+        Assert.Equal("XY", string.Concat(runs.Where(r => r.Effective.Bold is true).Select(r => r.Text)));
+        Assert.Equal("\"Fee \" ins:Alex[\"amo\"] ins:Pat[\"XY\"] ins:Alex[\"unt\"] \" due\"", Shape(session, p));
+    }
+
+    [Fact]
+    public void Control_TrackedTextAtTheEndOfAnotherAuthorsInsertion_IsASiblingInsertion()
+    {
+        var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat", FeeAmountDue("Alex", twoRuns: false));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 10, 0, "XY").Success);
+
+        Assert.Equal("\"Fee \" ins:Alex[\"amount\"] ins:Pat[\"XY\"] \" due\"", Shape(session, p));
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     private static XElement Run(string text, bool bold = false) => new(W.r,

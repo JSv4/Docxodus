@@ -3262,11 +3262,15 @@ export class DocxEditor {
 
     if (len === 0) {
       // A pure insertion. The engine inserts a NEW run at a run boundary (and steps outside a
-      // field's chrome, so typing after "Page X of Y" never lands inside the NUMPAGES result);
-      // an offset inside a run's text is not a boundary and is refused, as is the op on an
-      // older engine build. Then anchor a neighbour char so the span is non-empty and the
+      // field's chrome, so typing after "Page X of Y" never lands inside the NUMPAGES result) or
+      // inside an ordinary text run, and inside a tracked insertion it splits another author's
+      // insertion around the new text or extends the typist's own (issue #1318). It refuses an
+      // offset inside a hyperlink, field or other inline container or a mixed-content run, as
+      // does an older engine build. Then anchor a neighbour char so the span is non-empty and the
       // inserted text inherits an adjacent run's rPr (the LEFT run when there is one, matching
-      // contenteditable; the first run at the very start).
+      // contenteditable; the first run at the very start). Under tracking that records the
+      // neighbour as deleted and retyped: the accepted and rejected text are right, but the
+      // markup has one extra pair of revisions.
       const inserted = this.parseEdit(
         this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, start, 0, middle),
         { expectRejection: true }, // a refusal here only selects the fallback below
