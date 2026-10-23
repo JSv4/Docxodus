@@ -240,6 +240,25 @@ public class DocxSessionTrackedEditGapTests
             withField.Descendants(W.fldChar).Select(f => (string?)f.Attribute(W.fldCharType)));
     }
 
+    /// <summary>Enter at the end of a line that ends in a field (a cross-reference, a page
+    /// number): the new paragraph starts empty and the field stays whole on the line above.</summary>
+    [Theory]
+    [InlineData(TrackedChangeMode.Accept)]
+    [InlineData(TrackedChangeMode.RenderInline)]
+    public void SplitAtTheEndOfAParagraphEndingInAField_LeavesTheFieldWhole(TrackedChangeMode mode)
+    {
+        using var session = Open(FieldParagraph.Replace(
+            "<w:r><w:t xml:space=\"preserve\"> now</w:t></w:r>", ""), mode);
+
+        var result = session.SplitParagraph(FirstParagraph(session), 17);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var paragraphs = Body(session).Elements(W.p).ToList();
+        Assert.Equal(new[] { "begin", "separate", "end" },
+            paragraphs[0].Descendants(W.fldChar).Select(f => (string?)f.Attribute(W.fldCharType)));
+        Assert.Empty(paragraphs[1].Descendants(W.fldChar));
+    }
+
     /// <summary>Control: a field that already runs on into the next paragraph (a table of contents,
     /// say) is not this paragraph's to keep whole, so a split inside its result still goes ahead.</summary>
     [Fact]
