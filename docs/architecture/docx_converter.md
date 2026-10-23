@@ -309,7 +309,27 @@ stops and page-number right edges follow actual glyph widths. The same grouping 
 `w:hyperlink`. Bookmarks, non-breaking hyphens and underlined or struck tab runs stay on the flex path. A
 right stop past the line end (inside the paragraph's right indent, or past the column edge) gives its segment
 a negative `margin-right` equal to the overhang, so the segment fits on its line and still ends on the stop.
-Bidirectional paragraphs, complex fields, breaks, active comment/annotation ranges (including a bookmark
+Past the line end the line has no room left, yet LibreOffice keeps a short later tab stretch on the same line, so
+the following content goes in one nowrap, content-wide box whose left margin undoes that overhang and whose `-100%` right margin takes it off the line; a
+second right or left stop inside the indent then lands on its own stop (issue #1285). A pen past the line
+end only because a right-aligned stretch ended on such a stop does not count as wrapped text.
+If text after the final left tab would exceed the column edge, the paragraph keeps the ordinary wrapping
+path. Forcing that text into the same nowrap box would send it past the page and lose visible words.
+
+Complex fields stay on the flex path: their begin, instruction, separator and end runs draw nothing, so a
+table-of-contents page number held in a `PAGEREF` field ends on the stop like plain text (issue #1285).
+Each stretch converts its fields on its own, so a field open across a tab would be cut in two; a field the
+converter wraps whole (a `HYPERLINK` link, or a `PAGE`/`NUMPAGES` marker) therefore keeps the run-aware
+path when it is cut. A form field's begin carries form data that renders, and also keeps that path.
+
+Text before a right tab that runs past the line end usually keeps the run-aware path (issue #891). When
+that text began at the left indent, where its later lines begin too (a long hanging-indent TOC title), the
+segment instead starts at the left indent and reaches the stop. The text wraps inside it at the line end,
+and the segment aligns its last line with the following text (`align-items: last baseline`), so the page
+number ends on the stop beside the last title line. The tab takes no room after the title's last word;
+its leader is as wide as the segment and is clipped (`overflow-x: clip`) where the number begins.
+
+Bidirectional paragraphs, breaks, active comment/annotation ranges (including a bookmark
 that opens a rendered annotation) and tab runs with visibility, revision or exceptional geometry retain
 the run-aware path and its conservative following-text reservations. Leader rules inherit the tab run's resolved foreground color.
 

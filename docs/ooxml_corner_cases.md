@@ -2853,6 +2853,56 @@ Two separate causes:
   `ConvertAlignedTabRuns`, `CanFlexTabRun`.
 - Tests: `Docxodus.Tests/RightTabLeaderLineTests.cs`, `npm/tests/right-tab-leader-lines.spec.ts`.
 
+## Leader lines with field page numbers, wrapping titles, and a second stop in the indent (issue #1285)
+
+Three more shapes of the entry above (left stop at 1296, `w:ind w:left="1296" w:right="864"
+w:hanging="648"`, Letter page, one-inch margins, so the line ends at 8496 twips):
+
+- The page number is a `PAGEREF` complex field (`w:fldChar` begin, `w:instrText`, separate, result,
+  end), as in every Word-built table of contents.
+- The title runs past the line end and wraps, so the page number belongs on its last line.
+- A first right stop at 8800 lies inside the right indent, and a second stop follows it: a right stop
+  at 9360 or a left stop at 8900.
+
+| Shape | LibreOffice 25.8.7.3 | Docxodus (before) | Docxodus (after) |
+|---|---|---|---|
+| `PAGEREF` number | One line, number ending on the stop (540pt) | Fixed server-estimated tab: number on the next line (with `w:right`), or ending at 609.5px and 617px instead of 624px (without) | One line, number ending at 624px |
+| Wrapping title | Title on two lines, number at the end of line 2 on the stop (540.1pt), leader from the title's last word | Number on a third line, at 528–544px | Title on two lines, number at the end of line 2 ending at 624px, leader from the last word |
+| Right 8800, then right 9360 | One line: "12" ends at 512pt (8800), "34" at 540.1pt (9360) | Both numbers on line 2, at 86–160px | One line: "12" ends at 586.7px, "34" at 624px |
+| Right 8800, then left 8900 | One line: "A" starts at 517.1pt (8900) | Line 2 | One line: "A" starts at 593.3px |
+| Word | Not measured | | |
+
+LibreOffice keeps text after the left stop at 8900 on the line only while it fits before the column
+edge (9360); a wider word moves to the next line, behind a leader. Forcing a 24-word suffix into the
+nowrap tail extended it beyond the page; only seven words fit within the column. The tab-width pass
+now identifies overflowing text after that final left tab and keeps the paragraph on its ordinary
+wrapping path. All 24 words then stay in the column. The preceding number retains the ordinary path's
+different placement from LibreOffice, visible in the benchmark captures. Word is unmeasured.
+
+Causes and fixes, all in `Docxodus/WmlToHtmlConverter.cs`:
+
+- `ConvertAlignedTabRuns` refused every run that held a `w:fldChar` or `w:instrText`, so every field
+  paragraph used the fixed tab widths. Those runs draw nothing, so they now stay on the flex path. A
+  stretch converts its fields on its own, so a field open across a tab is cut in two; a `HYPERLINK`
+  (rendered as one link) or a `PAGE`/`NUMPAGES` marker cut that way keeps the old path, as does a form
+  field, whose begin carries form data.
+- `CalculateSpanWidthTransform` marked any tab whose pen was past the line end as following wrapped
+  text (issue #891). After a right stretch ends on a stop inside the indent, the pen is past the line
+  end without any wrap; the pass now allows the pen to reach the furthest such stop. In
+  `ConvertAlignedTabRuns`, the segment that ends there hands its overhang back with a negative
+  `margin-right`, which would also pull everything after it left by that much. So what follows goes in
+  one nowrap, content-wide box whose left margin undoes the overhang and whose `-100%` right margin
+  takes it off the line (a zero-width box let a `pre-wrap` run wrap inside it in the paginated view).
+- A right tab after wrapped text kept the fixed path, sized from an estimate of where the last line
+  ends. When the wrapped text began at the left indent, where its later lines also begin, the pass
+  records the stop's distance from that indent (`pt:TabWrappedSegmentWidth`). The segment then spans
+  from the indent to the stop: the text wraps inside it at the line end, `align-items: last baseline`
+  puts the number on the text's last line, and the tab, which takes no room after the last word,
+  draws a leader as wide as the segment, clipped (`overflow-x: clip`) where the number begins.
+  Wrapped text that began elsewhere keeps the fixed path.
+
+- Tests: `Docxodus.Tests/RightTabLeaderLineTests.cs`, `npm/tests/right-tab-leader-lines.spec.ts`.
+
 ## `w:defaultTabStop` of 0 or a few twips: automatic stops past the pen, and none at 0 (issue #1269)
 
 Automatic tab stops are the interval multiples that follow the paragraph's last custom stop.
