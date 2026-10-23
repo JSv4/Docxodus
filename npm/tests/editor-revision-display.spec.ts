@@ -219,7 +219,8 @@ test.describe('DocxEditor — showing revisions apart from recording them (#1279
     await page.keyboard.press('Backspace');
 
     expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
-    expect(await paragraphs()).toEqual(['First.', 'Second.']);
+    // The first paragraph ends in the inserted separator space and its deleted, struck mark.
+    expect(await paragraphs()).toEqual(['First. ¶', 'Second.']);
     expect(await page.evaluate(() => (window as any).editor.listRevisions().length)).toBeGreaterThan(0);
     expect(await page.evaluate(() => (window as any).editor.acceptAllRevisions())).toBe(true);
     expect(await paragraphs()).toEqual(['First. Second.']);
