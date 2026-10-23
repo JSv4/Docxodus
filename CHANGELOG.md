@@ -70,6 +70,31 @@ All notable changes to this project will be documented in this file.
   move's destination is not orphaned: removed text that led the paragraph stays first, any other
   follows the new text.
 
+- DrawingML shapes and groups that are not text boxes no longer disappear from the HTML, and PDF
+  export of a document holding one no longer fails (#1270). Only pictures, charts and text boxes were
+  drawn, so a plain `wps:wsp` rectangle or a `wpg:wgp` group produced no HTML; its paragraph, still
+  counted as holding content, got no line box, and the PDF export's PageMap check failed with
+  `output_verification_failure: source anchor … has no measurable fragment`. Inline shapes now render
+  as SVG at their `wp:extent`: rectangles, rounded rectangles, ellipses and lines with their fill
+  (solid, translucent, a gradient's first stop, a pattern's foreground or the group's fill) and outline
+  (explicit, or from the shape style's theme references), rotated and flipped as written, and a group's
+  children placed through its child coordinate space (`a:chOff`/`a:chExt`) without scaling their
+  outlines. A tracked deletion around the drawing stays visible in markup mode. Not drawn: other
+  geometry, preset colours, arrowheads, dashes and effects, and pictures inside groups.
+  Any inline drawing that cannot be drawn (that geometry, SmartArt, a chart type that is not projected,
+  a picture whose image is missing or linked) now keeps its extent instead of collapsing: a blank box
+  marked `data-docx-shape="unrendered"`, or, with unsupported-content placeholders on, the standard
+  placeholder at that size. The PDF export therefore reports such a drawing as an
+  `unsupported_content_placeholder` warning and **rejects it under `unsupportedContent: 'strict'`**,
+  including documents that used to export under strict because the drawing silently vanished beside
+  other text. Partly drawn groups and unsupported shape fills are reported too. A picture is still
+  omitted when the caller passes no image handler. The empty-paragraph
+  check now also follows the `mc:AlternateContent` branch the converter renders, so a drawing in an
+  unselected `mc:Choice` no longer leaves its paragraph without a line. Floating (`wp:anchor`) shapes
+  are still not drawn (#1346). Charts share the shapes' colour resolver, so a series colour's shade or
+  tint now applies (on an sRGB colour too, as do luminance modifiers), and `tx1`/`bg1`/`tx2`/`bg2`,
+  system, scRGB and HSL colours resolve.
+
 - Under tracked changes, text inserted through `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`)
   that would land strictly inside another author's tracked insertion now splits their insertion and goes
   between the halves in the session author's own `w:ins`, as Word does (#1318). A zero-length insert inside

@@ -334,6 +334,31 @@ Content inside DrawingML shapes (`a:txBody`, `wps:txbx`) may not be fully extrac
 - Nested text frames in complex drawings may be missed
 - No CSS positioning to reflect shape placement
 
+Inline shapes that are not text boxes (`wps:wsp`, `wpg:wgp` groups, `wpc:wpc` canvases) render as
+SVG sized to their `wp:extent` (`WmlToHtmlConverter.Shapes.cs`, issue #1270). Preset `rect`,
+`roundRect`, `ellipse`, `line` and `straightConnector1` geometry is drawn with its fill and outline,
+from `wps:spPr` or the `wps:style` theme references, honouring `rot`/`flipH`/`flipV`. Colours may be
+sRGB, theme, system, scRGB or HSL, with luminance, shade, tint and alpha modifiers; a gradient is drawn
+as its first stop, a pattern as its foreground, and `a:grpFill` as the enclosing group's fill. A
+group's child coordinate space is mapped onto its frame in the geometry itself, not by an SVG
+transform, so outlines keep their width as Word and LibreOffice draw them; a rotated shape inside a
+non-uniformly scaled group is rotated in the scaled space (an approximation). Coordinates are EMUs
+under one root scale, with no viewBox, so a zero-height line extent still draws.
+
+Not drawn: other preset and custom geometry, preset colours (`a:prstClr`), picture fills, line
+arrowheads (`a:headEnd`/`a:tailEnd`), dash patterns, effects and the extra space `wp:effectExtent`
+reserves for them, pictures/charts/ink inside a group, and a canvas's own background and outline
+(`wpc:bg`, `wpc:whole`). What cannot be drawn keeps its extent and is marked; see
+[Unsupported Content Placeholders](./unsupported_content_placeholders.md#inline-drawings).
+
+A group that contains a text box is still rendered by the text-box path, unchanged by #1270: the whole
+group becomes one box at the group's extent, styled with the first shape's fill and outline and holding
+only the text box's text; the group's other shapes are not drawn.
+
+Floating (`wp:anchor`) shapes are still not drawn (#1346): faithful output needs their stacking order
+(`behindDoc`) and text wrapping, and a decorative background rectangle drawn over the text would be
+worse than none.
+
 ---
 
 ### 23. Tracked Changes - Partial Property Support
