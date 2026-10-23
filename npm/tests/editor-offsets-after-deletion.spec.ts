@@ -69,17 +69,17 @@ function deletionFixture(): Uint8Array {
   }).map(([name, value]) => ({ name, data: xml(value) })));
 }
 
-async function openTracked(page: Page, fixture = deletionFixture(), options: Record<string, unknown> = {}) {
+async function openTracked(page: Page, fixture = deletionFixture(), options: Record<string, unknown> = {}, tracked = true) {
   await page.goto('/test-harness.html');
   await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 30000 });
-  await page.evaluate(({ bytes, options }) => {
+  await page.evaluate(({ bytes, options, tracked }) => {
     const w = window as any;
     const D = w.Docxodus;
     const container = document.createElement('div');
     document.body.appendChild(container);
     w.failures = [] as unknown[];
     w.editor = D.DocxEditor.open(container, new Uint8Array(bytes), D, {
-      trackedChanges: 1, // TrackedChangeMode.RenderInline
+      ...(tracked ? { trackedChanges: 1 } : {}), // TrackedChangeMode.RenderInline, or the default
       onEditFailed: (info: unknown) => w.failures.push(info),
       ...options,
     });
@@ -98,7 +98,7 @@ async function openTracked(page: Page, fixture = deletionFixture(), options: Rec
       view.remove();
       return texts;
     };
-  }, { bytes: Array.from(fixture), options });
+  }, { bytes: Array.from(fixture), options, tracked });
 }
 
 /** Put the caret in the block holding `text`, just after the first text node occurrence of `at`. */
@@ -425,6 +425,29 @@ test.describe('DocxEditor — offsets after a deleted PAGE field in the page vie
       }));
       expect(out.failures).toEqual([]);
       expect(out.accepted).toContain(`${block}  ${tail}!`);
+    });
+  }
+});
+
+test.describe('DocxEditor — typing inside a tracked move destination (#1319)', () => {
+  // The engine refuses text strictly inside a w:moveTo (its resolvers disagree about text in a move
+  // range, #1340), on the zero-length path and on the editor's replacement fallback alike. The
+  // editor must report the refusal once and put the block back as the session holds it.
+  for (const tracked of [true, false]) {
+    test(`typing inside moved text is refused cleanly (${tracked ? 'tracked' : 'untracked'})`, async ({ page }) => {
+      await openTracked(page, deletionFixture(), {}, tracked);
+      const before = await page.evaluate(() => (window as any).acceptedText());
+      await caretAfter(page, 'Moved here', 'the');
+      await page.keyboard.type('Z');
+      await blur(page);
+      const out = await page.evaluate(() => ({
+        failures: (window as any).failures.map((f: any) => f.code),
+        shown: ((window as any).block('Moved here')?.textContent ?? '').replace(/ /g, ' '),
+        accepted: (window as any).acceptedText(),
+      }));
+      expect(out.failures).toEqual(['unsupported_inline_boundary']);
+      expect(out.shown).not.toContain('Z');
+      expect(out.accepted).toEqual(before);
     });
   }
 });
