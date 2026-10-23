@@ -513,6 +513,57 @@ public class DocxSessionSpanRevisionTests
         Assert.DoesNotContain(Revisions(session), r => r.StartsWith("insert:", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(TrackedChangeMode.Accept, "Alex", false)]
+    [InlineData(TrackedChangeMode.Accept, "Alex", true)]
+    [InlineData(TrackedChangeMode.Accept, "Pat", false)]
+    [InlineData(TrackedChangeMode.Accept, "Pat", true)]
+    [InlineData(TrackedChangeMode.RenderInline, "Alex", false)]
+    [InlineData(TrackedChangeMode.RenderInline, "Alex", true)]
+    [InlineData(TrackedChangeMode.RenderInline, "Pat", false)]
+    [InlineData(TrackedChangeMode.RenderInline, "Pat", true)]
+    public void TypingInsideAnInsertionInASimpleField_IsRefusedWithoutMutation(
+        TrackedChangeMode tracking, string insertionAuthor, bool twoRuns)
+    {
+        var insertion = (XElement)FeeAmountDue(insertionAuthor, twoRuns)[1];
+        var (session, p) = Open(tracking, "Pat", Run("Fee "),
+            new XElement(W.fldSimple, new XAttribute(W.instr, " DOCPROPERTY Title "), insertion), Run(" due"));
+        var before = session.Raw.GetXml(p);
+        var version = session.Version;
+        var revisions = Revisions(session);
+
+        var edit = session.ReplaceTextAtSpan(p, 7, 0, "XY");
+
+        Assert.False(edit.Success);
+        Assert.Equal(EditErrorCode.OffsetOutOfRange, edit.Error?.Code);
+        Assert.Equal(before, session.Raw.GetXml(p));
+        Assert.Equal(version, session.Version);
+        Assert.Equal(revisions, Revisions(session));
+    }
+
+    [Theory]
+    [InlineData(TrackedChangeMode.Accept, 4)]
+    [InlineData(TrackedChangeMode.Accept, 10)]
+    [InlineData(TrackedChangeMode.RenderInline, 4)]
+    [InlineData(TrackedChangeMode.RenderInline, 10)]
+    public void TypingAtASimpleFieldEdge_GoesOutsideTheCachedResult(TrackedChangeMode tracking, int offset)
+    {
+        var field = new XElement(W.fldSimple, new XAttribute(W.instr, " DOCPROPERTY Title "),
+            Ins("Alex", 1, Run("amount")));
+        var (session, p) = Open(tracking, "Pat", Run("Fee "), field, Run(" due"));
+
+        var edit = session.ReplaceTextAtSpan(p, offset, 0, "XY");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        var paragraph = XElement.Parse(session.Raw.GetXml(p));
+        Assert.Equal("amount", paragraph.Element(W.fldSimple)?.Value);
+        Assert.Equal(offset == 4 ? "Fee XYamount due" : "Fee amountXY due", Accepted(session));
+        if (tracking == TrackedChangeMode.RenderInline)
+            Assert.Equal("Fee  due", Rejected(session));
+        else
+            Assert.Equal("Fee XY due", Rejected(session));
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     private static XElement Run(string text, bool bold = false) => new(W.r,

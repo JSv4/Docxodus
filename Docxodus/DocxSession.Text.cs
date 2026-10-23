@@ -420,6 +420,11 @@ public sealed partial class DocxSession
         // (the resolvers disagree on text there; see docs/ooxml_corner_cases.md). At its edge the
         // text goes past the move's range marker too, so it is outside the moved range.
         if ((after ?? before) is { } edge && InsideMoveDestination(edge, element)) return MoveDestinationRefusal(anchorId);
+        // A tracked insertion does not make a field's cached result an editable text container.
+        // At the field's edges the container step above has already moved the anchor outside it.
+        if ((after ?? before)?.Ancestors(W.fldSimple).Any() == true)
+            return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                "text cannot be inserted inside a simple field's result; type before or after the field", anchorId);
         if (after is not null && after.Name == W.moveTo) after = PastMoveRangeMarker(after, forward: true);
         if (before is not null && before.Name == W.moveTo) before = PastMoveRangeMarker(before, forward: false);
 
@@ -486,8 +491,8 @@ public sealed partial class DocxSession
             // out of edges above, is strictly inside it: untracked text is nobody's change (issue
             // #1319), so the insertion is cut there and the text goes between the halves. It is cut
             // at the node the boundary resolved to, not by offset, so a field's zero-width end run
-            // stays with the field it closes. Inside a content control or simple field that sits in
-            // the insertion nothing can be cut, and the text stays where it lands, as before.
+            // stays with the field it closes. Inside a content control that sits in the insertion
+            // nothing can be cut, and the text stays where it lands, as before.
             if ((after ?? before) is { } placeAt
                 && NeedsToLeaveInsertion(element, placeAt, mayJoin) == true
                 && OutsideForeignInsertion(element, placeAt, after is not null, mayJoin) is { } placed)
@@ -597,12 +602,12 @@ public sealed partial class DocxSession
         || e.Name == W.proofErr;
 
     /// <summary>Climb from <paramref name="node"/> through every <see cref="BoundaryContainers"/>
-    /// ancestor (short of <paramref name="paragraph"/>) in which it is the last content, so an
+    /// ancestor or simple field (short of <paramref name="paragraph"/>) in which it is the last content, so an
     /// insert "after" it lands after the container.</summary>
     private static XElement StepOutOfContainersAtEnd(XElement node, XElement paragraph)
     {
         while (node.Parent is { } parent && !ReferenceEquals(parent, paragraph)
-            && BoundaryContainers.Contains(parent.Name)
+            && (BoundaryContainers.Contains(parent.Name) || parent.Name == W.fldSimple)
             && !node.ElementsAfterSelf().Any(e => !IsInlineMarker(e)))
             node = parent;
         return node;
@@ -613,7 +618,7 @@ public sealed partial class DocxSession
     private static XElement StepOutOfContainersAtStart(XElement node, XElement paragraph)
     {
         while (node.Parent is { } parent && !ReferenceEquals(parent, paragraph)
-            && BoundaryContainers.Contains(parent.Name)
+            && (BoundaryContainers.Contains(parent.Name) || parent.Name == W.fldSimple)
             && !node.ElementsBeforeSelf().Any(e => !IsInlineMarker(e)))
             node = parent;
         return node;

@@ -47,7 +47,8 @@ All notable changes to this project will be documented in this file.
   and retyped it with the keystroke inside their insertion; between two of their runs, or through a span
   replacement, the new `w:ins` was nested inside theirs and listed as their text. The insertion is split
   in place inside a hyperlink, content control or smart tag, as with tracking off (#1319); a content
-  control or simple field inside the insertion still cannot be split, and text typed there stays nested.
+  control inside the insertion still cannot be split. A zero-length insertion inside a simple field's
+  cached result is refused even inside a tracked insertion; typing at the field's edge lands outside it.
   Inside the session author's own insertion the text now extends it. Replacing or deleting every
   character of an insertion that also wraps a bookmark or other range marker now unwraps it instead of
   leaving an empty insertion listed with no text.
