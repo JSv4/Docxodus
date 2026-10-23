@@ -25,8 +25,9 @@ public class TabAfterWrappingTextTests
     private const string Sentence =
         "the parties agree that the supplier shall deliver the services described in the schedule within thirty days";
 
-    /// <summary>4680 dxa (3.25in) less Word's default 108 dxa cell margin on each side.</summary>
-    private const decimal CellTextWidthInches = (4680m - 2 * 108m) / 1440m;
+    /// <summary>4680 dxa (3.25in): the table states no cell margins and the document has no table
+    /// styles, so the cell has none (issue #1219).</summary>
+    private const decimal CellTextWidthInches = 4680m / 1440m;
 
     /// <summary>US Letter with one-inch margins.</summary>
     private const decimal BodyTextWidthInches = 6.5m;
@@ -39,6 +40,21 @@ public class TabAfterWrappingTextTests
         AssertNoBoxWiderThan(html, CellTextWidthInches);
         Assert.Contains(Sentence, html.Value);
         Assert.Contains("12.50", html.Value);
+    }
+
+    [Fact]
+    public void TableCell_LongTextBeforeTab_WrapsInsideTheCellsStatedMargins()
+    {
+        // One-inch margins each side leave 1800 dxa of the 4680-dxa cell for text (issue #1219): the
+        // tab lands where it does in a 1800-dxa cell with no margins, not where it does in the wide cell.
+        static decimal TabWidth(XElement html) => decimal.Parse(
+            (string)html.Descendants().Single(e => e.Attribute("data-docx-tab") != null).Attribute("data-docx-tab-width")!,
+            CultureInfo.InvariantCulture);
+        var inset = TabWidth(Html(Table(TabParagraph(Sentence),
+            "<w:tblCellMar><w:left w:w='1440' w:type='dxa'/><w:right w:w='1440' w:type='dxa'/></w:tblCellMar>")));
+
+        Assert.Equal(TabWidth(Html(Table(TabParagraph(Sentence), cellWidth: 1800))), inset);
+        Assert.NotEqual(TabWidth(Html(Table(TabParagraph(Sentence)))), inset);
     }
 
     [Fact]
@@ -112,11 +128,11 @@ public class TabAfterWrappingTextTests
     private static string TabParagraph(string before) =>
         $"<w:p><w:r><w:t>{before}</w:t></w:r><w:r><w:tab/><w:t>12.50</w:t></w:r></w:p>";
 
-    private static string Table(string firstCell)
+    private static string Table(string firstCell, string tableProperties = "", int cellWidth = 4680)
     {
-        static string Cell(string inner) => $"<w:tc><w:tcPr><w:tcW w:w='4680' w:type='dxa'/></w:tcPr>{inner}</w:tc>";
-        return "<w:tbl><w:tblPr><w:tblW w:w='5000' w:type='pct'/></w:tblPr>" +
-               "<w:tblGrid><w:gridCol w:w='4680'/><w:gridCol w:w='4680'/></w:tblGrid>" +
+        string Cell(string inner) => $"<w:tc><w:tcPr><w:tcW w:w='{cellWidth}' w:type='dxa'/></w:tcPr>{inner}</w:tc>";
+        return $"<w:tbl><w:tblPr><w:tblW w:w='5000' w:type='pct'/>{tableProperties}</w:tblPr>" +
+               $"<w:tblGrid><w:gridCol w:w='{cellWidth}'/><w:gridCol w:w='{cellWidth}'/></w:tblGrid>" +
                $"<w:tr>{Cell(firstCell)}{Cell("<w:p><w:r><w:t>Second cell</w:t></w:r></w:p>")}</w:tr></w:tbl>";
     }
 
