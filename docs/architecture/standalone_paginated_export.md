@@ -760,8 +760,11 @@ reported in a `comment_balloon_truncated` warning.
 Comments are orthogonal: `hidden`, `inline`, `endnotes`, or `margin`. A visible profile retains
 range, body, author, and date in body, headers, footers, footnotes, and endnotes, and draws the
 topology recorded in `commentsExtended` — threaded replies and resolved state (see "Revision and
-comment rendering under the profiles" below). An unsupported story produces a structured warning
-naming it; strict unsupported-content policy fails. HTML, PDF, CLI, and #465 use these exact
+comment rendering under the profiles" below). Since issue #1310 every story renders its comments
+(design in `comment_rendering.md`, "Comments outside the body"): a header or footer comment's
+margin note or balloon prints on every page that story prints on, and the comments section lists it
+once. An unsupported story would produce a structured warning naming it, and strict
+unsupported-content policy would fail; none remains. HTML, PDF, CLI, and #465 use these exact
 strings.
 
 ## Readiness and diagnostics

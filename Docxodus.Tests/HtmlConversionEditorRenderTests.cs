@@ -360,4 +360,33 @@ public class HtmlConversionEditorRenderTests
             DocxSessionOps.CloseSession(handle);
         }
     }
+
+    [Fact]
+    public void HER007_FooterAndFootnoteComments_HighlightInTheFullRenderAndMatchTheBlockRender()
+    {
+        // Issue #1310: the paginated full render converts running stories and notes from their
+        // own parts, where the comment state was missing. The block path clones a story block
+        // into the shell body and always had it; the two must now agree.
+        const string paged = "{\"comments\":true,\"paginated\":true}";
+        int handle = DocxSessionOps.OpenSession(StoryCommentRenderingTests.StoryCommentsDocx(), null);
+        try
+        {
+            var session = SessionRegistry.Get(handle);
+            var full = DocxSessionOps.RenderEditorHtml(handle, paged);
+            foreach (var (scope, id) in new[] { ("hdr1", 1), ("ftr1", 2) })
+            {
+                var paragraph = session.Project().AnchorIndex.Values
+                    .Single(t => t.Anchor.Scope == scope && t.Anchor.Kind == "p").Anchor.Id;
+                var block = XElement.Parse(DocxSessionOps.RenderEditorBlockHtml(handle, paragraph, paged));
+                Assert.Contains($"data-comment-id=\"{id}\"", block.ToString());
+                AssertSameFragment(FullRenderBlock(full, paragraph), block, scope + " paragraph");
+            }
+            Assert.Contains("data-comment-id=\"3\"", full);
+            Assert.Contains("data-comment-id=\"4\"", full);
+        }
+        finally
+        {
+            DocxSessionOps.CloseSession(handle);
+        }
+    }
 }

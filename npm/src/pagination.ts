@@ -1093,8 +1093,15 @@ export class PaginationEngine {
       );
       const header = this.selectHeader(page.sectionIndex, pageInSection, displayedPageNumber);
       const footer = this.selectFooter(page.sectionIndex, pageInSection, displayedPageNumber);
-      if (header) this.collectExpectedSourceAnchors(header, this.expectedPageMapAnchorIds);
-      if (footer) this.collectExpectedSourceAnchors(footer, this.expectedPageMapAnchorIds);
+      for (const story of [header, footer]) {
+        if (!story) continue;
+        this.collectExpectedSourceAnchors(story, this.expectedPageMapAnchorIds);
+        // The story's margin comments materialize with it (issue #1310).
+        for (const reference of Array.from(story.querySelectorAll<HTMLElement>("[data-comment-id]"))) {
+          const source = this.commentMarginRegistry.get(reference.dataset.commentId ?? "");
+          if (source) this.collectExpectedSourceAnchors(source, this.expectedPageMapAnchorIds);
+        }
+      }
     }
 
     // Establish one active editor anchor and page-qualify every presentation fragment.
@@ -5451,11 +5458,15 @@ export class PaginationEngine {
     }
 
     // Materialize margin comments after footnotes exist so markers inside a
-    // note participate in the same page-owned comment story as body markers.
+    // note participate in the same page-owned comment story as body markers. The page's header
+    // and footer count too: a running story's comment prints on every page that story prints on,
+    // as its balloon does (issue #1310). The footer is placed below, so read it from its source.
+    const footerSource = isSectionFiller
+      ? undefined
+      : this.selectFooter(sectionIndex, pageInSection, displayedPageNumber);
     const pageCommentIds: string[] = [];
-    for (const marker of Array.from(
-      pageBox.querySelectorAll<HTMLElement>("[data-comment-id]"),
-    )) {
+    for (const marker of [pageBox, footerSource].flatMap((story) =>
+      Array.from(story?.querySelectorAll<HTMLElement>("[data-comment-id]") ?? []))) {
       if (marker.closest(`.${this.cssPrefix}comment-margin`)) continue;
       const id = marker.dataset.commentId;
       if (id && this.commentMarginRegistry.has(id) && !pageCommentIds.includes(id)) {
@@ -5503,9 +5514,6 @@ export class PaginationEngine {
     }
 
     // Add footer if available for this section/page
-    const footerSource = isSectionFiller
-      ? undefined
-      : this.selectFooter(sectionIndex, pageInSection, displayedPageNumber);
     if (footerSource) {
       const footerDiv = this.document.createElement("div");
       footerDiv.className = `${this.cssPrefix}footer`;
