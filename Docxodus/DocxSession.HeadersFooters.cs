@@ -406,34 +406,36 @@ public sealed partial class DocxSession
         }
     }
 
-    /// <summary>Why a tracked replacement of <paramref name="storyRoot"/> cannot be recorded, or
-    /// null when it can. Content the tracked deleter cannot mark (see
-    /// <see cref="FirstUnrecordableInlineContent"/>) would survive the deletion. The story's final
-    /// paragraph takes the new content the way a tracked <see cref="ReplaceText"/> does, so it must
-    /// exist (the story ends in a paragraph) and meet that operation's no-bookmark condition.</summary>
-    private static EditResult? RefuseTrackedStoryReplacement(XElement storyRoot, string anchorId)
+    /// <summary>Why a tracked replacement of <paramref name="storyRoot"/> (a running story, or a
+    /// table cell named by <paramref name="story"/>) cannot be recorded, or null when it can.
+    /// Content the tracked deleter cannot mark (see <see cref="FirstUnrecordableInlineContent"/>)
+    /// would survive the deletion. The final paragraph takes the new content the way a tracked
+    /// <see cref="ReplaceText"/> does, so it must exist (the content ends in a paragraph) and meet
+    /// that operation's no-bookmark condition.</summary>
+    private static EditResult? RefuseTrackedStoryReplacement(XElement storyRoot, string anchorId,
+        string story = "header/footer story")
     {
         if (FirstUnrecordableInlineContent(storyRoot.Elements()) is { } unrecordable)
             return EditResult.Fail(EditErrorCode.IncompatibleElementType,
-                $"Tracked header/footer replacement does not support {unrecordable} inside the existing story; no changes were made.",
+                $"Tracked replacement of a {story} does not support {unrecordable} inside it; no changes were made.",
                 anchorId);
         var lastBlock = storyRoot.Elements().LastOrDefault(e =>
             e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt || e.Name == W.customXml);
         if (lastBlock is null) return null;
         if (lastBlock.Name != W.p)
             return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
-                "the existing header/footer story does not end in a paragraph, so its replacement cannot be tracked; no changes were made.",
+                $"the existing {story} does not end in a paragraph, so its replacement cannot be tracked; no changes were made.",
                 anchorId);
         return lastBlock.Descendants().Any(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd)
             ? EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
-                "tracked header/footer replacement whose last paragraph holds bookmark markers is unsupported; edit the story's paragraphs instead. No changes were made.",
+                $"tracked replacement of a {story} whose last paragraph holds bookmark markers is unsupported; edit its paragraphs instead. No changes were made.",
                 anchorId)
             : null;
     }
 
     /// <summary>
-    /// Record replacing a running story's content with <paramref name="paras"/> as one tracked
-    /// revision, laid out as Word records typing over a whole story. Every old block except the
+    /// Record replacing a running story's or table cell's content with <paramref name="paras"/> as
+    /// one tracked revision, laid out as Word records typing over a whole story. Every old block except the
     /// final paragraph is deleted, paragraph marks included. The new paragraphs except the last
     /// are inserted, marks included, before that final paragraph. The final paragraph keeps its
     /// mark (a story always ends in one): its old runs are deleted, the last new paragraph's runs

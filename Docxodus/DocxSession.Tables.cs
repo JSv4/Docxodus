@@ -32,10 +32,23 @@ public sealed partial class DocxSession
         if (ValidatePendingHyperlinks(parsed.Blocks.SelectMany(b => b.RunElements), cellAnchorId) is { } linkError)
             return linkError;
 
-        // Replacing cell content removes every block in the cell, including nested tables and
-        // structured wrappers; validate the whole cell subtree rather than only direct paragraphs.
+        // Bookmarks are validated over the whole cell subtree, a conservative superset of the
+        // direct paragraphs the edit replaces.
         if (ValidateBookmarkRemoval(new[] { cell! }, cellAnchorId) is { } bookmarkError)
             return bookmarkError;
+        // Tracked, the cell's content is recorded as replaced the way a running story's is. The
+        // untracked edit replaces only the cell's direct paragraphs and keeps any other block
+        // beside them (a nested table, a block-level content control), which the tracked
+        // replacement would delete, so a cell holding one is refused. Content inside a paragraph,
+        // such as an inline content control, is replaced with its paragraph in both modes.
+        var tracked = _trackedChanges == TrackedChangeMode.RenderInline;
+        if (tracked && cell!.Elements().FirstOrDefault(e => e.Name == W.tbl || e.Name == W.sdt
+                || e.Name == W.customXml || e.Name == W.altChunk) is { } otherBlock)
+            return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
+                $"the cell holds a block-level {otherBlock.Name.LocalName} besides its paragraphs, which the untracked edit keeps, so replacing its content cannot be tracked; no changes were made.",
+                cellAnchorId);
+        if (tracked && RefuseTrackedStoryReplacement(cell!, cellAnchorId, "table cell") is { } cellRefusal)
+            return cellRefusal;
         var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, cell!);
         var oldHyperlinkIds = cell!.Descendants(W.hyperlink)
             .Select(h => (string?)h.Attribute(R.id)).Where(id => !string.IsNullOrEmpty(id)).Cast<string>().ToList();
@@ -43,16 +56,32 @@ public sealed partial class DocxSession
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            foreach (var p in cell!.Elements(W.p).ToList()) p.Remove();
-
             var lists = new PayloadListState(parsed.Blocks);
+            var paras = new List<XElement>();
             foreach (var block in parsed.Blocks)
             {
                 var p = BuildParagraphFromParsedBlock(block);
                 AssignPayloadListNumbering(p, block, lists);
                 UnidHelper.AssignToSelfAndDescendants(p);
-                cell.Add(p);
-                PromoteHyperlinkRelationships(p);
+                paras.Add(p);
+            }
+            if (tracked)
+            {
+                // The cell's last paragraph keeps its mark and takes the last new paragraph's
+                // runs, so an empty payload still needs one (empty) paragraph to give it.
+                if (paras.Count == 0) paras.Add(new XElement(W.p));
+                var retained = ReplaceStoryContentTracked(cell, paras);
+                foreach (var p in retained is null ? paras : paras.SkipLast(1).Append(retained))
+                    PromoteHyperlinkRelationships(p);
+            }
+            else
+            {
+                foreach (var p in cell.Elements(W.p).ToList()) p.Remove();
+                foreach (var p in paras)
+                {
+                    cell.Add(p);
+                    PromoteHyperlinkRelationships(p);
+                }
             }
             if (hyperlinkOwner is { } owner)
             {

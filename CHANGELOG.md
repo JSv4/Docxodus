@@ -141,6 +141,19 @@ All notable changes to this project will be documented in this file.
   `ListBlocks` and the windowed editor's chrome render also no longer start an extra section at a
   table containing one, matching the full render.
 
+- `ReplaceCellContent` no longer replaces a cell's content untracked while tracked changes are on
+  (#1311). Under `TrackedChangeMode.RenderInline` it reported success, wrote the new paragraphs
+  directly and recorded nothing, so the old text was gone and could not be rejected. It now records
+  the old content as a deletion and the new as an insertion, as a tracked `SetHeaderText` does for a
+  story, so `ListRevisions()` shows the deletion and insertion, reject-all gives back the original
+  cell and accept-all leaves the new content. As when typing over a cell in Word, what a deletion
+  does not remove survives an accept: the cell's last paragraph keeps its mark and that mark's run
+  formatting, bookmark, comment and permission range markers stay where they were, and an inline
+  content control keeps its (now empty) shell. A cell that holds a nested table or a block-level
+  content control besides its paragraphs (which the untracked edit keeps), or whose last paragraph
+  holds a bookmark, is refused with `TrackedOperationUnsupported` and nothing is written. Untracked
+  behaviour is unchanged.
+
 - Tracked `InsertTableColumn` writes schema-valid revisions (#1309). Its `w:tblGridChange` carried
   `w:author` and `w:date`, which the schema does not allow on that element, so every tracked column
   insertion failed Open XML validation; it now carries only `w:id`. A new cell, in a new column or a
