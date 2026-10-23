@@ -1264,8 +1264,7 @@ public sealed partial class DocxSession
                         : wrapperLocked ? "content-control wrapper is locked"
                         : ancestorBound ? "inside a data-bound ancestor"
                         : targetBound ? "target is data-bound; explicit detach_target is required" : null),
-                    Text = string.Concat(element.Element(W.sdtContent)?.Descendants(W.t)
-                        .Select(text => (string)text) ?? Enumerable.Empty<string>()),
+                    Text = element.Element(W.sdtContent) is { } sdtContent ? VisibleText(sdtContent) : string.Empty,
                     ItemValues = items,
                 };
                 result.Add(new ContentControlCandidate(owner, element, byElement[element], info,

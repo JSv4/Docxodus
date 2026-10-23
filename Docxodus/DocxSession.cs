@@ -2729,6 +2729,13 @@ public sealed partial class DocxSession : IDisposable
     internal static string ParagraphText(XElement paragraph) =>
         string.Concat(InlineRuns(paragraph).Select(RunText));
 
+    /// <summary>The text of every <c>w:t</c> under <paramref name="element"/> that is not removed
+    /// text (inside a <c>w:del</c> or <c>w:moveFrom</c> below it), whatever the element is: a
+    /// paragraph, a table, a content control. The preview, precondition and control texts read
+    /// this, so they agree with the offsets <see cref="InlineRuns"/> gives (issue #1282).</summary>
+    internal static string VisibleText(XElement element) =>
+        string.Concat(element.Descendants(W.t).Where(t => !IsInsideNestedRemoval(t, element)).Select(t => (string)t));
+
     internal static string RunText(XElement run) =>
         string.Concat(run.Elements(W.t).Select(t => (string)t));
 

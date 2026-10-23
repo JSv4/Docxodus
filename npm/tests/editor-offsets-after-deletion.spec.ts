@@ -256,6 +256,11 @@ test.describe('DocxEditor — offsets to the right of a rendered deletion (#1278
       accepted: 'Keep thi' },
     { key: 'Backspace', block: 'Smile', caret: 'End', shown: ' gone', accepted: 'Smile' },
     { key: 'Delete', block: 'Wave', caret: { node: 'Wave', side: 'end' }, shown: ' gone', accepted: 'Wave!' },
+    // A move source nested in a link, in each form, is stepped over the same way (#1282).
+    { key: 'Backspace', block: 'See', caret: { node: 'below', side: 'start' }, shown: 'the terms ',
+      accepted: 'Seebelow now.' },
+    { key: 'Delete', block: 'Read', caret: { node: 'Read', side: 'end' }, shown: 'the notes ',
+      accepted: 'Read ere today.' },
     // A deleted paragraph mark: End puts the caret after the pilcrow.
     { key: 'Backspace', block: 'Joined', caret: 'End', shown: '¶',
       accepted: 'Joined to the nextPlain control paragraph.' },

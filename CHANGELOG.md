@@ -48,7 +48,10 @@ All notable changes to this project will be documented in this file.
   position the reader does not see. **Offsets change on every transport for paragraphs of that shape:**
   they now match the accepted text, as they already did for the `w:delText` form Docxodus writes. The
   browser editor no longer counts a rendered move source (`del.rev-move-from`) either, so typing beside
-  one lands where the caret was.
+  one lands where the caret was. The anchor preview (`TextPreview`), `AnchorInfo.VisibleText` (which
+  `ExpectedText`/`ExpectedTextRange` preconditions are measured against) and a content control's `Text`
+  now leave out text in a tracked deletion or move source too, nested or directly in the paragraph, so a
+  `Grep` span can guard the next edit without a spurious precondition failure.
 
 - HTML to DOCX now adds a nested element's `text-decoration` lines to those of the elements around it
   instead of replacing them (#1280). The converter treated `text-decoration` as an inherited property,

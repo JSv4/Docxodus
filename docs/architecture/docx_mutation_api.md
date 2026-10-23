@@ -2197,6 +2197,8 @@ move destination (`w:ins`, `w:moveTo`) counts. Text in a tracked deletion or mov
 `w:moveFrom`) does not, including one nested in a hyperlink, content control, simple field or smart
 tag, whether its runs hold `w:delText` or `w:t`. Word writes a move source's text as `w:t`; before
 issue #1282 the session counted that form when it was nested, so offsets to its right were too large.
+The anchor preview, `AnchorInfo.VisibleText` (the text `ExpectedTextRange` is measured against) and a
+content control's `Text` follow the same rule, so a `Grep` span is also a valid precondition range.
 
 The fragment breakdown is the whole point: Word splits paragraph text into many `<w:r>` elements at every formatting boundary, so a placeholder like `[_______________]` routinely spans 2–3 runs. Without the fragment list, an agent doing search/replace has to either flatten runs (losing per-fragment formatting) or skip split matches (missing real text). `Grep` does the walk once and hands back the breakdown so callers can preserve each fragment's formatting when rewriting.
 

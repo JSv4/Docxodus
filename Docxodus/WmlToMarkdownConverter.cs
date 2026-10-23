@@ -384,7 +384,7 @@ public static class WmlToMarkdownConverter
 
     private static string ComputeTextPreview(XElement element)
     {
-        var text = string.Concat(element.Descendants(W.t).Select(t => (string)t));
+        var text = DocxSession.VisibleText(element);
         return text.Length > TextPreviewMaxLength
             ? text.Substring(0, TextPreviewMaxLength) + "…"
             : text;
