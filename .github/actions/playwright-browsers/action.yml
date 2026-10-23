@@ -1,0 +1,49 @@
+name: Install Playwright browsers
+description: >-
+  Install the Playwright browsers a job needs, with their system packages, from the Actions
+  cache where possible. The browser builds are keyed by the installed Playwright version. The
+  apt packages that `--with-deps` installs (fonts, xvfb, shared libraries) are kept in a cached
+  archive directory that apt is pointed at system-wide, so Playwright's own apt-get install finds
+  them already downloaded; the Azure apt mirror has stalled for 6–11 minutes on the CJK font
+  packages in a third of recent runs, and every lane job would otherwise pay that independently.
+  apt still checks the package index, so a package whose version moved is fetched fresh.
+inputs:
+  browsers:
+    description: Space-separated browsers to install, as `playwright install` names them.
+    required: false
+    default: chromium
+runs:
+  using: composite
+  steps:
+    # The runner image version stands in for the apt index below: a new image can carry new
+    # package versions, and a stale archive is then simply not used (and re-saved under the new key).
+    - name: Read the installed Playwright version and the runner image version
+      id: versions
+      shell: bash
+      run: |
+        echo "playwright=$(node -p "require('./npm/node_modules/@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+        echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore cached browser builds
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: ms-playwright-${{ runner.os }}-${{ steps.versions.outputs.playwright }}-${{ inputs.browsers }}
+
+    # apt downloads as its own unprivileged user, so the directory is left writable for it.
+    - name: Point apt at a cached package archive
+      shell: bash
+      run: |
+        mkdir -p "$HOME/.cache/apt-archives/partial"
+        chmod -R a+rwX "$HOME/.cache/apt-archives"
+        echo "Dir::Cache::archives \"$HOME/.cache/apt-archives/\";" | sudo tee /etc/apt/apt.conf.d/99docxodus-archives > /dev/null
+
+    - name: Restore cached apt packages
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/apt-archives
+        key: apt-archives-${{ steps.versions.outputs.image }}-playwright-${{ steps.versions.outputs.playwright }}-${{ inputs.browsers }}
+
+    - name: Install browsers and system packages
+      shell: bash
+      run: cd npm && npx playwright install --with-deps ${{ inputs.browsers }}

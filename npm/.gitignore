@@ -7,9 +7,12 @@ dist/
 # TypeScript
 *.tsbuildinfo
 
-# Playwright
+# Playwright (each lane keeps its own report and output folders; CI merges blob reports)
 playwright-report/
+playwright-report-serial/
 test-results/
+test-results-serial/
+blob-report/
 
 # OS files
 .DS_Store
