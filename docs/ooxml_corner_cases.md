@@ -3800,7 +3800,7 @@ paragraph's properties the joined paragraph keeps:
 | Word | unmeasured |
 | LibreOffice | unmeasured |
 | Docxodus (`RevisionOps.MergeParagraphWithNext`) | P2's `w:pPr` (`right`), the surviving mark's |
-| Untracked `DocxSession.MergeParagraphs` | P1's `w:pPr` (`center`) |
+| Untracked `DocxSession.MergeParagraphs` | P1's formatting (`center`); P2's section boundary |
 
 The tracked merge does not depend on the answer. It writes P1's properties onto P2 as the editor's
 own `w:pPrChange`, and P1's mark formatting as the editor's `w:rPrChange` on P2's mark. The only
@@ -3810,8 +3810,12 @@ same result. Rejecting everything resolves the property changes and restores the
 paragraphs come back exactly. What belongs to P2's mark alone (its own revision, its section break)
 is not touched, so a section break that P2 ends stays where it was.
 
-A mark that ends a section is refused rather than deleted. Accepting the deletion would remove the
-section break with the mark, but an untracked merge keeps the break on the joined paragraph.
+A tracked merge whose first mark ends a section remains unsupported. An untracked merge removes
+that boundary and keeps the second mark's entire `w:sectPr`, including its pending section-property
+change, if present (#1350). Previously it kept the first boundary and discarded the second; merging
+two paragraphs before the next section could silently make both sections use the final section's
+layout. The first paragraph's other properties still survive. Word and LibreOffice section-boundary
+behaviour has not been measured for this reproducer.
 
 The copy of P1's properties is one value, so it cannot follow a pending change to them. Say Alice
 centred P1 (`w:pPrChange`, before: `left`) and Bob then merges. Bob's copy is `center`. Reject
