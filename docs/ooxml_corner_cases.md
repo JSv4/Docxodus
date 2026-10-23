@@ -2869,6 +2869,12 @@ negative) interval is read as if the element were absent, the 720-twip default. 
 spec's default and LibreOffice's choice of keeping its own default for 0. Word's handling of 0 was
 not checked.
 
+What remains at 12 twips: the tab pass chooses each stop from its own estimate of the preceding
+text's width. In the browser export, where no font metrics are available to that pass, the estimate
+ran about 10pt wide on the lead text, so each word sits several points right of where LibreOffice
+puts it (`TabNorth` at 237.6pt against 226.9pt). A half-inch grid absorbs that error, so the 720
+control matches LibreOffice to 0.1pt; a 12-twip grid cannot.
+
 - Code: `Docxodus/WmlToHtmlConverter.cs`: `CalculateSpanWidthForTabs` (interval), `CalculateSpanWidthTransform` (stop lookup).
 - Tests: `Docxodus.Tests/DefaultTabStopIntervalTests.cs`.
 
