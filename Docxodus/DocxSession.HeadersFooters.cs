@@ -435,8 +435,7 @@ public sealed partial class DocxSession
 
     /// <summary>
     /// Record replacing a running story's or table cell's content with <paramref name="paras"/> as
-    /// one tracked revision, laid out as Word records typing over a whole story (a cell's
-    /// <c>w:tcPr</c> is its properties, not content, and is left alone). Every old block except the
+    /// one tracked revision, laid out as Word records typing over a whole story. Every old block except the
     /// final paragraph is deleted, paragraph marks included. The new paragraphs except the last
     /// are inserted, marks included, before that final paragraph. The final paragraph keeps its
     /// mark (a story always ends in one): its old runs are deleted, the last new paragraph's runs
@@ -449,7 +448,7 @@ public sealed partial class DocxSession
     private XElement? ReplaceStoryContentTracked(XElement root, List<XElement> paras)
     {
         var stamp = NewDistinctRevisionStamp();
-        var oldBlocks = root.Elements().Where(e => e.Name != W.tcPr).ToList();
+        var oldBlocks = root.Elements().ToList();
         var final = oldBlocks.LastOrDefault(e => e.Name == W.p);
         foreach (var block in oldBlocks)
             if (block != final) MarkTrackedStructuredContentChild(block, stamp);

@@ -143,8 +143,8 @@ public class DocxSessionTrackedCellContentTests
         Assert.Equal(CellXml(baseline), CellXml(session.Save()));
     }
 
-    /// <summary>Filling a row inserted under tracking: the new cell's paragraph is Bob's own
-    /// insertion, and reject-all still removes the whole row.</summary>
+    /// <summary>Control: filling a row inserted under tracking, where the new cell's paragraph is
+    /// Bob's own insertion, still rejects to the original table.</summary>
     [Fact]
     public void TrackedReplaceCellContent_InATrackedNewRow_RejectsToTheOriginalTable()
     {
@@ -175,10 +175,10 @@ public class DocxSessionTrackedCellContentTests
         Assert.Equal("New cell", string.Concat(cell.Descendants(W + "t").Select(t => t.Value)));
     }
 
-    /// <summary>Untracked replacement removes only the cell's own paragraphs, so a cell holding a
-    /// nested table or a content control has no tracked encoding whose accept matches it; one whose
-    /// last paragraph holds a bookmark cannot keep that paragraph's mark, as tracked
-    /// <c>ReplaceText</c> cannot. Each is refused and the document is left exactly as it was.</summary>
+    /// <summary>Untracked replacement removes only the cell's direct paragraphs and keeps a nested
+    /// table or block-level content control beside them, which the tracked replacement would
+    /// delete. A cell whose last paragraph holds a bookmark cannot keep that paragraph's mark, as
+    /// tracked <c>ReplaceText</c> cannot. Each is refused and the document is left as it was.</summary>
     [Theory]
     [InlineData("<w:p><w:r><w:t>Old</w:t></w:r></w:p>"
         + "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid>"
