@@ -40,6 +40,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A table no longer starts 7.5pt below a paragraph that has no space after it, or below another table
+  (#1244). The HTML converter gave such a table a top margin of its own "for visual separation", which
+  moved the first row and everything after it down in the HTML, the paginated view and the PDF export.
+  Word puts nothing there: measured in Word for the web, the first row starts where the paragraph's
+  line ends whether its after-spacing is absent, zero or inherited, with or without table borders, and
+  a table that directly follows another starts where that one ends. A paragraph's own after-spacing
+  still separates it from the table, and a floating table keeps its `w:tblpPr` distance from the text
+  above. The measurements are in `docs/ooxml_corner_cases.md`.
 - Under tracked changes, deleting or replacing text in the session author's own pending insertion through
   `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`) now removes it from the insertion instead of
   recording a deletion nested inside it (#1316). A Backspace in text still being typed left a struck

@@ -18,9 +18,8 @@ export interface BodyFillOptions {
   /** Use minimum spacing to exercise glyph overflow outside the exact-spacing contract. */
   lineRule?: 'exact' | 'atLeast';
   /**
-   * Put a one-row, one-cell table after the first paragraph. The converter gives a table that
-   * follows a paragraph with no space after it a 7.5pt top margin of its own (Word's implicit
-   * paragraph/table separation), which collapses through the table's wrapper `div`.
+   * Put a one-row, one-cell table after the first paragraph. Its `w:tblpPr/@w:topFromText` of
+   * 7.5pt becomes a top margin of the table's own, which collapses through its wrapper `div`.
    */
   tableAfterFirstParagraph?: boolean;
   /** Space before the first paragraph, in twips; shifts where the page boundary falls. */
@@ -39,7 +38,7 @@ export function bodyFillDocx(options: BodyFillOptions): Uint8Array {
   const paragraph = (text: string, before = 0) =>
     `<w:p>${pPr(before)}<w:r>${rPr}<w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
   const table = options.tableAfterFirstParagraph
-    ? '<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders>' +
+    ? '<w:tbl><w:tblPr><w:tblpPr w:topFromText="150" w:vertAnchor="text"/><w:tblW w:w="5000" w:type="pct"/><w:tblBorders>' +
       '<w:top w:val="single" w:sz="4"/><w:bottom w:val="single" w:sz="4"/></w:tblBorders></w:tblPr>' +
       '<w:tblGrid><w:gridCol w:w="9360"/></w:tblGrid>' +
       `<w:tr><w:tc><w:tcPr><w:tcW w:w="9360" w:type="dxa"/></w:tcPr>${paragraph('Table cell')}</w:tc></w:tr></w:tbl>`

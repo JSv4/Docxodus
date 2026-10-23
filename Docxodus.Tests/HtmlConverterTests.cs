@@ -3222,9 +3222,9 @@ namespace Docxodus.Tests
         }
 
         [Fact]
-        public void HC056_TablePrecededByParagraph_HasTopMargin()
+        public void HC056_TablePrecededByParagraph_HasNoImplicitTopMargin()
         {
-            // Test that a table preceded by a paragraph with no after-spacing gets a default margin-top
+            // Word adds no space between a paragraph with no after-spacing and the table after it (issue #1244)
             using (MemoryStream ms = new MemoryStream())
             {
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -3269,8 +3269,7 @@ namespace Docxodus.Tests
                     var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
                     var htmlString = html.ToString();
 
-                    // Table should have a margin-top for visual separation
-                    Assert.Contains("margin-top: 7.5pt", htmlString);
+                    Assert.DoesNotContain("margin-top: 7.5pt", htmlString);
                     Assert.Contains("Text before table", htmlString);
                     Assert.Contains("Table cell", htmlString);
                 }

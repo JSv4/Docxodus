@@ -3527,6 +3527,51 @@ A header row (`w:tblHeader`) repeats at the top of each page the table continues
 `w:hRule` (reported for Word in issue #1171; not yet measured here). Docxodus repeated no header row,
 whatever its rule, before that issue.
 
+## Tables: nothing separates a table from the block above it (issue #1244)
+
+Word starts a table's first row where the block above it ends. A paragraph's own after-spacing is the
+only gap; with none (absent, zero or inherited as zero) there is no gap at all, and a table that
+follows another table directly starts where that one ends. Compatibility mode 14 behaves the same.
+
+```xml
+<w:p><w:pPr><w:spacing w:after="0"/></w:pPr><w:r><w:t>WillowBefore boundary.</w:t></w:r></w:p>
+<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr>
+  <w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>
+  <w:tr><w:trPr><w:trHeight w:val="360" w:hRule="atLeast"/></w:trPr>
+    <w:tc><w:p><w:r><w:t>WillowCell content.</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+```
+
+Distance from the paragraph's line to the first cell's line, in points, with exact 16pt lines and
+18pt minimum rows. Word is a Word for the web PDF export (October 23, 2026; no build reported);
+Docxodus is the HTML converter's output laid out by Chromium:
+
+| Block above the table | Word | Docxodus before | Docxodus after |
+|---|---:|---:|---:|
+| paragraph, after-spacing absent | 16.0 | 23.5 | 16.0 |
+| paragraph, `w:after="0"` | 16.0 | 23.5 | 16.0 |
+| paragraph, `w:after="0"`, table with a 1pt top border | 17.0 | 24.25 | 16.75 |
+| paragraph, `w:after="120"` | 22.0 | 22.0 | 22.0 |
+| paragraph, `w:after="240"` | 28.0 | 28.0 | 28.0 |
+| paragraph, after-spacing 200 inherited from `w:docDefaults` | 26.0 | 26.0 | 26.0 |
+| paragraph, `w:after="0"`, compatibility mode 14 | 16.0 | 23.5 | 16.0 |
+| another table (first cell to second table's first cell) | 18.0 | 25.5 | 18.0 |
+
+The converter used to give a table a 7.5pt top margin of its own whenever the block before it was a
+paragraph without after-spacing, or anything other than a paragraph, to "separate" them (#108). Word
+has no such rule, so the margin is gone. A floating table's `w:tblpPr/@w:topFromText` still becomes its
+top margin.
+
+Two smaller differences remain. When the second of two adjacent tables has a top border, Word does not
+add the border's width between them (its first line is still 18.0pt below the first table's), where
+Docxodus adds 0.75pt. And Word gives the exact zero-height rows of
+`tables-row-height-exact-zero-borderless` and `tables-row-height-exact-zero-only` (docx-fidelity-bench)
+the height of their content: in the second, the paragraph after the table starts 58.5pt below the one
+before it, four 14.6pt lines for that paragraph and three rows. Neither is part of this fix.
+
+- Code: `Docxodus/WmlToHtmlConverter.cs` (`ProcessTable`).
+- Tests: `HtmlConverterBlockSiblingTests`, `HC056_TablePrecededByParagraph_HasNoImplicitTopMargin`,
+  `npm/tests/export-table-boundary.spec.ts`; bench cases `tables-boundary-*` (core-v51).
+
 ## Footnotes: how much of a page the note area takes (issue #1178)
 
 Four shapes, Letter page, 1in margins (648pt of body), Times New Roman 12pt single-spaced body
