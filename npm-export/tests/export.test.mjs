@@ -975,7 +975,10 @@ describe("@docxodus/export", { concurrency: false }, () => {
       {
         name: "nested table",
         options: {
-          firstRow: `<w:tr><w:trPr><w:trHeight w:val="860" w:hRule="exact"/></w:trPr>`
+          // 32pt holds the nested table's two lines and borders but not the trailing line, so the cell
+          // is clipped. (At 43pt it only overflowed while a table first in a cell took a 7.5pt top
+          // margin of its own, which Word does not give it: #1244.)
+          firstRow: `<w:tr><w:trPr><w:trHeight w:val="640" w:hRule="exact"/></w:trPr>`
             + exactRowCell(nestedTable + exactRowParagraph("Trailing nested cell line."))
             + exactRowCell(exactRowParagraph("Neighbour cell.")) + "</w:tr>",
         },

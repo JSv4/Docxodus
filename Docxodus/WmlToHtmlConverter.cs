@@ -6284,35 +6284,9 @@ namespace Docxodus
                         string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", bottomFromText / 20m));
             }
 
-            // Look for spacing from the preceding paragraph's w:spacing w:after.
-            // If the preceding sibling is a paragraph with no after-spacing (or zero),
-            // the table needs its own top margin for visual separation.
-            // Word applies implicit spacing between paragraphs and tables; replicate
-            // that by examining the preceding element's spacing.
-            if (!style.ContainsKey("margin-top"))
-            {
-                var precedingSibling = BlockSiblingIndex.Of(element).PreviousElement(element);
-                bool needsDefaultTopMargin = false;
-
-                if (precedingSibling != null && precedingSibling.Name == W.p)
-                {
-                    var precedingPPr = precedingSibling.Element(W.pPr);
-                    var precedingSpacing = precedingPPr?.Element(W.spacing);
-                    var afterVal = WordprocessingMLUtil.AttributeToTwips(precedingSpacing?.Attribute(W.after));
-
-                    // If preceding paragraph has no spacing-after or zero, table needs top margin
-                    if (precedingSpacing == null || afterVal == null || afterVal == 0)
-                        needsDefaultTopMargin = true;
-                }
-                else if (precedingSibling != null)
-                {
-                    // Non-paragraph preceding element (e.g., another table) also needs separation
-                    needsDefaultTopMargin = true;
-                }
-
-                if (needsDefaultTopMargin)
-                    style.AddIfMissing("margin-top", "7.5pt");
-            }
+            // Word puts nothing between a table and the block before it beyond that block's own
+            // spacing: after a paragraph with no space after, or after another table, the first row
+            // starts where the previous block ends (issue #1244; measured in docs/ooxml_corner_cases.md).
             style.AddIfMissing("margin-top", ".001pt");
 
             var tableDirection = bidiVisual ? new XAttribute("dir", "rtl") : new XAttribute("dir", "ltr");
@@ -6880,17 +6854,15 @@ namespace Docxodus
         /// </summary>
         private sealed class BlockSiblingIndex
         {
-            private readonly Dictionary<XElement, XElement?> _previousElement = new();
+            private readonly HashSet<XElement> _indexed = new();
             private readonly HashSet<XElement> _followsHiddenParagraphMark = new();
 
             private BlockSiblingIndex(XElement parent)
             {
-                XElement? previous = null;
                 XElement? previousParagraph = null;
                 foreach (var child in parent.Elements())
                 {
-                    _previousElement[child] = previous;
-                    previous = child;
+                    _indexed.Add(child);
                     if (child.Name != W.p)
                     {
                         if (!IsBlockBoundaryMarker(child)) previousParagraph = null;
@@ -6917,13 +6889,9 @@ namespace Docxodus
             // A child the index has never seen would mean the tree changed after it was built; answer
             // from the tree directly rather than from a stale index.
 
-            /// <summary>The element sibling immediately before <paramref name="child"/>, or null.</summary>
-            public XElement? PreviousElement(XElement child) =>
-                _previousElement.TryGetValue(child, out var previous) ? previous : child.ElementsBeforeSelf().LastOrDefault();
-
             /// <summary>True when the preceding block paragraph ends in a hidden paragraph mark.</summary>
             public bool FollowsHiddenParagraphMark(XElement paragraph) =>
-                _previousElement.ContainsKey(paragraph)
+                _indexed.Contains(paragraph)
                     ? _followsHiddenParagraphMark.Contains(paragraph)
                     : HasHiddenParagraphMark(paragraph.ElementsBeforeSelf().LastOrDefault(e => !IsBlockBoundaryMarker(e)));
         }

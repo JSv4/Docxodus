@@ -10,9 +10,9 @@ using Wp = DocumentFormat.OpenXml.Wordprocessing;
 namespace Docxodus.Tests;
 
 /// <summary>
-/// The two converter decisions that look at a block's preceding sibling: a paragraph that follows a
-/// style-separator paragraph is folded into it, and a table's top margin depends on what precedes it.
-/// Both now read a per-parent sibling index instead of walking siblings from the start each time.
+/// The converter decisions that look at a block's preceding sibling: a paragraph that follows a
+/// style-separator paragraph is folded into it (read from a per-parent sibling index instead of walking
+/// siblings from the start each time), and a table takes no top margin from what precedes it.
 /// </summary>
 public class HtmlConverterBlockSiblingTests
 {
@@ -35,22 +35,38 @@ public class HtmlConverterBlockSiblingTests
     }
 
     [Fact]
-    public void Table_top_margin_depends_on_the_preceding_sibling()
+    public void Table_takes_no_top_margin_from_the_preceding_sibling()
     {
+        // Word starts a table's first row where the previous block ends: it adds nothing after a
+        // paragraph with no space after, or after another table (issue #1244). Only the paragraph's
+        // own spacing separates them, and that is the paragraph's margin, not the table's.
         var html = Convert(
             Table("T1"),
             new Wp.Paragraph(new Wp.Run(new Wp.Text("unspaced"))),
             Table("T2"),
             new Wp.Paragraph(
+                new Wp.ParagraphProperties(new Wp.SpacingBetweenLines { After = "0" }),
+                new Wp.Run(new Wp.Text("zero"))),
+            Table("T3"),
+            new Wp.Paragraph(
                 new Wp.ParagraphProperties(new Wp.SpacingBetweenLines { After = "240" }),
                 new Wp.Run(new Wp.Text("spaced"))),
-            Table("T3"),
-            Table("T4"));
+            Table("T4"),
+            Table("T5"));
 
-        Assert.Equal(".001pt", TopMargin(html, "T1")); // first block: nothing before it
-        Assert.Equal("7.5pt", TopMargin(html, "T2"));  // after a paragraph with no space after
-        Assert.Equal(".001pt", TopMargin(html, "T3")); // after a paragraph that already spaces itself
-        Assert.Equal("7.5pt", TopMargin(html, "T4"));  // after another table
+        foreach (var table in new[] { "T1", "T2", "T3", "T4", "T5" })
+            Assert.Equal(".001pt", TopMargin(html, table));
+    }
+
+    [Fact]
+    public void Floating_table_keeps_its_distance_from_the_text_above()
+    {
+        var floating = Table("Floating");
+        floating.GetFirstChild<Wp.TableProperties>()!.PrependChild(
+            new Wp.TablePositionProperties { TopFromText = 200, VerticalAnchor = Wp.VerticalAnchorValues.Text });
+        var html = Convert(new Wp.Paragraph(new Wp.Run(new Wp.Text("unspaced"))), floating);
+
+        Assert.Equal("10pt", TopMargin(html, "Floating"));
     }
 
     private static Wp.Paragraph SeparatorParagraph(string text) => new(
