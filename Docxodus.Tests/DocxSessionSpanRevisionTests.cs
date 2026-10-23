@@ -496,6 +496,23 @@ public class DocxSessionSpanRevisionTests
         Assert.Equal("\"Fee \" ins:Alex[\"amount\"] ins:Pat[\"XY\"] \" due\"", Shape(session, p));
     }
 
+    [Theory]
+    [InlineData(TrackedChangeMode.Accept, "Alex", "XY", "\"Fee\" bookmarkStart[] \"XY\" bookmarkEnd[] \" due\"")]
+    [InlineData(TrackedChangeMode.RenderInline, "Pat", "", "\"Fee\" bookmarkStart[] bookmarkEnd[] \" due\"")]
+    public void RemovingAllOfAnInsertionAroundABookmark_LeavesNoEmptyInsertion(
+        TrackedChangeMode mode, string insertionAuthor, string replace, string shape)
+    {
+        // Untracked, Alex's whole insertion is typed over; tracked, Pat deletes all of her own.
+        var (session, p) = Open(mode, "Pat", Run("Fee"),
+            Ins(insertionAuthor, 1, Bookmark(W.bookmarkStart), Run(" amount"), Bookmark(W.bookmarkEnd)), Run(" due"));
+
+        var edit = session.ReplaceTextAtSpan(p, 3, 7, replace);
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal(shape, Shape(session, p));
+        Assert.DoesNotContain(Revisions(session), r => r.StartsWith("insert:", StringComparison.Ordinal));
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     private static XElement Run(string text, bool bold = false) => new(W.r,

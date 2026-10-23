@@ -1055,21 +1055,31 @@ public sealed partial class DocxSession
         var slice = SplitRunAtText(run, start);
         var tail = SplitRunAtText(slice, length);
         foreach (var t in slice.Elements(W.t).ToList()) t.Remove();
+        // The pieces left with no content go, with any envelope that leaves empty (an insertion
+        // left holding only range markers is unwrapped). The emptied slice stays for now: it marks
+        // where the replacement goes.
+        foreach (var piece in new[] { run, tail })
+            if (IsContentless(piece)) RemoveContentlessRun(piece);
 
         var rPr = run.Element(W.rPr) is { } source ? new XElement(source) : null;
         rPr?.Elements(W.rPrChange).Remove();
         var inserted = new XElement(W.r, rPr is { HasElements: true } ? rPr : null,
             new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), replace));
         UnidHelper.AssignToSelfAndDescendants(inserted);
-        var placed = OutsideForeignInsertion(paragraph, slice, true, _ => false)!.Value;
+        var placed = NeedsToLeaveInsertion(paragraph, slice, _ => false) == true
+            ? OutsideForeignInsertion(paragraph, slice, true, _ => false)!.Value
+            : (Anchor: slice, After: true);
         if (placed.After) placed.Anchor.AddAfterSelf(inserted);
         else placed.Anchor.AddBeforeSelf(inserted);
+        RemoveContentlessRun(slice);
+    }
 
-        // The pieces left with no content go, with any envelope that leaves empty.
-        foreach (var piece in new[] { run, slice, tail })
-            if (piece.Parent is not null && IsContentless(piece)
-                && piece.Ancestors().FirstOrDefault(a => a.Name == W.ins || a.Name == W.moveTo) is { } envelope)
-                RemoveFromInsertion(piece, envelope);
+    private static void RemoveContentlessRun(XElement run)
+    {
+        if (run.Parent is null) return;
+        if (run.Ancestors().FirstOrDefault(a => a.Name == W.ins || a.Name == W.moveTo) is { } envelope)
+            RemoveFromInsertion(run, envelope);
+        else run.Remove();
     }
 
     /// <summary>Cut <paramref name="run"/> at <paramref name="offset"/> of its <c>w:t</c> text:

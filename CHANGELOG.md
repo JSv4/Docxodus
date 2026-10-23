@@ -48,7 +48,14 @@ All notable changes to this project will be documented in this file.
   replacement, the new `w:ins` was nested inside theirs and listed as their text. The insertion is split
   in place inside a hyperlink, content control or smart tag, as with tracking off (#1319); a content
   control or simple field inside the insertion still cannot be split, and text typed there stays nested.
-  Inside the session author's own insertion the text now extends it.
+  Inside the session author's own insertion the text now extends it. Replacing or deleting every
+  character of an insertion that also wraps a bookmark or other range marker now unwraps it instead of
+  leaving an empty insertion listed with no text.
+
+- Since #1319 refuses new text strictly inside a tracked move destination, a `ReplaceTextRange` call
+  whose matches include one inside moved text now fails as a whole with `UnsupportedInlineBoundary` and
+  changes nothing, including its other matches. Replace those through `Grep` and `ReplaceMatch`, skipping
+  the match inside the move.
 
 - A table no longer starts 7.5pt below a paragraph that has no space after it, or below another table
   (#1244). The HTML converter gave such a table a top margin of its own "for visual separation", which
