@@ -54,6 +54,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `MergeParagraphs` keeps the second paragraph's section boundary, including its section properties,
+  instead of dropping it and applying the final section's layout to the merged text (#1350). A
+  section boundary on the first paragraph is removed with its mark. A non-paragraph anchor now
+  returns `AnchorWrongKind` without mutation in either tracking mode, rather than moving a table's
+  children into a paragraph or returning a tracking-specific refusal.
+
 - An untracked `ReplaceText` no longer drops a pending tracked deletion or move source in the paragraph
   (#1292), including one in an otherwise empty hyperlink, content control or simple field.
   Typing into a paragraph whose only text was deleted, in the browser editor's default mode

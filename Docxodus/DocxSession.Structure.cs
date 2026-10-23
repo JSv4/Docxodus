@@ -932,8 +932,6 @@ public sealed partial class DocxSession
     /// </summary>
     private EditResult? RefuseTrackedMerge(XElement first, XElement second, string anchorId)
     {
-        if (first.Name != W.p || second.Name != W.p)
-            return TrackedStructureUnsupported("MergeParagraphs", anchorId);
         var firstPPr = first.Element(W.pPr);
         var secondPPr = second.Element(W.pPr);
         if (firstPPr is not null && ParagraphMarkRevisions(firstPPr).FirstOrDefault(r => r.Name != W.ins) is { } firstMark)
@@ -968,7 +966,8 @@ public sealed partial class DocxSession
 
     /// <summary>
     /// Accepting a deleted paragraph mark joins its paragraph into the next one, which keeps its
-    /// own mark and so its own properties. An untracked merge keeps the first paragraph's, so a
+    /// own mark and so its own properties. An untracked merge keeps the first paragraph's other
+    /// properties and the second's section boundary, so a
     /// tracked merge gives the second paragraph the first's properties (its mark formatting
     /// included) as this edit's property changes: accepting everything gives what the untracked
     /// merge gives, and rejecting gives the second paragraph its own back. What belongs to the
@@ -1012,7 +1011,8 @@ public sealed partial class DocxSession
     /// Join the paragraph <paramref name="secondAnchorId"/> names onto the end of the one
     /// <paramref name="firstAnchorId"/> names, its immediate previous sibling, with a separating
     /// space when neither side has one. The joined paragraph keeps the first paragraph's
-    /// properties. Under <see cref="TrackedChangeMode.RenderInline"/> the join is recorded as Word
+    /// properties except for its section boundary, which comes from the second paragraph.
+    /// Under <see cref="TrackedChangeMode.RenderInline"/> the join is recorded as Word
     /// records it: the first paragraph's mark is deleted, both paragraphs stay until review (so
     /// both are in <see cref="EditResult.Modified"/>), and accepting gives the untracked result
     /// (issue #1313).
@@ -1031,6 +1031,11 @@ public sealed partial class DocxSession
         var secondEl = secondTarget.Resolve(_doc!);
         if (firstEl is null || secondEl is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null");
+
+        if (firstEl.Name != W.p)
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "first anchor must name a paragraph", firstAnchorId);
+        if (secondEl.Name != W.p)
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "second anchor must name a paragraph", secondAnchorId);
 
         if (!ReferenceEquals(firstEl.NextNode, secondEl))
             return EditResult.Fail(EditErrorCode.AnchorsNotAdjacent,
@@ -1078,13 +1083,28 @@ public sealed partial class DocxSession
                 };
             }
 
+            // The second mark survives the join, so its section boundary survives too.
+            // Removing the first mark removes its boundary even if the second has none.
+            firstEl.Element(W.pPr)?.Elements(W.sectPr).Remove();
+            if (secondEl.Element(W.pPr)?.Element(W.sectPr) is { } section)
+            {
+                section.Remove();
+                var pPr = firstEl.Element(W.pPr);
+                if (pPr is null)
+                {
+                    pPr = new XElement(W.pPr);
+                    firstEl.AddFirst(pPr);
+                }
+                SetPPrChildInOrder(pPr, section);
+            }
+
             // Move every paragraph-level child from secondEl into firstEl in document
             // order — runs, hyperlinks, sdts, fldSimples, bookmarkStart/End, comment
             // range markers, etc. The old implementation only moved direct <w:r>
             // children which silently discarded everything else.
             foreach (var child in secondEl.Elements().ToList())
             {
-                if (child.Name == W.pPr) continue; // second's pPr is dropped; first's wins
+                if (child.Name == W.pPr) continue; // other properties come from the first
                 child.Remove();
                 firstEl.Add(child);
             }

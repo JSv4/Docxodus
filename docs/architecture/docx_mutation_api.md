@@ -585,6 +585,10 @@ Two conventions worth pinning down because they affect agent reasoning:
   fresh `w:id`. Other revision wrappers (`w:moveTo`, `w:del`) stay atomic: an offset inside one is
   refused with `UnsupportedInlineBoundary`.
 - **`MergeParagraphs` lets the first anchor absorb the second.** Symmetric reason: the first anchor is to the left in reading order and is more likely to be the one a caller has cached.
+  Both anchors must name paragraphs (`p`, heading or list item); a table or other kind returns
+  `AnchorWrongKind` without mutation in either tracking mode. The first paragraph keeps its
+  formatting, while the section boundary comes from the second paragraph's surviving mark:
+  the second's entire `w:sectPr` moves to the joined paragraph and the first's is removed (#1350).
 - **A tracked merge is Word's tracked join.** Under `RenderInline` the first paragraph's mark is
   the editor's `w:pPr/w:rPr/w:del`, and the separator space, when one is added, is the editor's
   `w:ins`. Accepting the deleted mark joins the first paragraph into the second, which keeps its own
@@ -594,8 +598,8 @@ Two conventions worth pinning down because they affect agent reasoning:
   paragraphs. The second paragraph's section break stays with its mark. `Modified` reports both
   anchors as the document now has them: the second paragraph can change kind (`p` → `h`).
   The merge is refused, writing nothing, when it could not be reviewed on its own:
-  - `TrackedOperationUnsupported` when the first paragraph ends a section: accepting the deletion
-    would lose the section break that an untracked merge keeps.
+  - `TrackedOperationUnsupported` when the first paragraph ends a section; tracked merges across
+    section boundaries remain unsupported.
   - `UnresolvedStructuralRevision` when another revision already deleted or moved either
     paragraph's mark (a deleted second mark would join a third paragraph on accept).
   - `UnresolvedStructuralRevision` when the first paragraph has a pending `w:pPrChange` or its mark
