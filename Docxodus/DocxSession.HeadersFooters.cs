@@ -24,8 +24,8 @@ public sealed partial class DocxSession
     // Author the per-section running header/footer stories (which live in their own OOXML
     // parts, outside the body) and page-number fields. SetHeaderText/SetFooterText are
     // addressed by ANY body block in the target section — the governing w:sectPr is resolved
-    // the same way GetSectionInfo resolves it (a mid-document section break, else the body's
-    // trailing sectPr, creating one if the body has none). The created header/footer paragraph
+    // the same way GetSectionInfo resolves it (the first section break at or after the block,
+    // else a trailing sectPr created for a body that has none). The created header/footer paragraph
     // anchors come back in EditResult.Created with a hdr{N}/ftr{N} scope, so a page-number field
     // can then be inserted into them with InsertPageNumberField (under tracked changes over an
     // existing story, the kept last paragraph comes back in Modified instead and is the one to
