@@ -3192,9 +3192,7 @@ internal static partial class IrMarkupRenderer
             return null;
         // A w:sectPrChange's inner sectPr is change history, not a section — counting it mis-indexes
         // multi-section outputs.
-        var sectPrs = body.Descendants(W.sectPr)
-            .Where(s => s.Parent?.Name != W.sectPrChange)
-            .ToList();
+        var sectPrs = BlockMetadataOps.SectionBreaks(body).ToList();
         if (diff.SectionIndex >= sectPrs.Count)
             return null;
 
@@ -3241,9 +3239,7 @@ internal static partial class IrMarkupRenderer
         var body = rightMain.GetXDocument().Root?.Element(W.body);
         if (body is null)
             return false;
-        var sectPrs = body.Descendants(W.sectPr)
-            .Where(s => s.Parent?.Name != W.sectPrChange)
-            .ToList();
+        var sectPrs = BlockMetadataOps.SectionBreaks(body).ToList();
         return sectionIndex < sectPrs.Count && sectPrs[sectionIndex].Element(W.titlePg) is not null;
     }
 
@@ -3275,9 +3271,7 @@ internal static partial class IrMarkupRenderer
         var body = main.GetXDocument().Root?.Element(W.body);
         if (body is null)
             return;
-        var sectPrs = body.Descendants(W.sectPr)
-            .Where(s => s.Parent?.Name != W.sectPrChange)
-            .ToList();
+        var sectPrs = BlockMetadataOps.SectionBreaks(body).ToList();
         if (sectionIndex < 0 || sectionIndex >= sectPrs.Count)
             return;
 
@@ -3350,9 +3344,7 @@ internal static partial class IrMarkupRenderer
         var body = main.GetXDocument().Root?.Element(W.body);
         if (body is null)
             return;
-        var sectPrs = body.Descendants(W.sectPr)
-            .Where(s => s.Parent?.Name != W.sectPrChange)
-            .ToList();
+        var sectPrs = BlockMetadataOps.SectionBreaks(body).ToList();
         if (sectPrs.Count == 0)
             return;
         int idx = Math.Min(diff.SectionIndex, sectPrs.Count - 1);

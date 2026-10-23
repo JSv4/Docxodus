@@ -85,6 +85,24 @@ All notable changes to this project will be documented in this file.
     paragraph indented -360 twips now reaches the margin rather than 0.5in, and at -725 or -1080 twips
     it reaches -0.5in.
 
+- A pending section-property change no longer shows up as an extra section (#1314). A tracked
+  `w:sectPrChange` keeps the section's earlier properties as a nested `w:sectPr`, and the anchor
+  index listed that copy as one more `sec` anchor, so a document with two sections reported three
+  and a caller listing sections saw one that does not exist; a tracked `SetPageSetup` added one
+  each time. Other surfaces read the copy as a section too:
+  - the package manifest's `sectionCount` (npm `sectionCount`, Python `section_count`) counted it,
+    so a two-section document reported four;
+  - the OpenContracts export took a page size from it, exporting the earlier page size;
+  - the HTML converter laid out the last paragraph of the document with the earlier page geometry
+    whenever the final section had a pending change, so a page-anchored floating picture could flip
+    sides with tracked changes rendered;
+  - its tracked-changes view numbered footnotes and endnotes in the format the change replaced.
+
+  Every walk that counts or indexes sections now goes through one helper. It also leaves out a
+  `w:sectPr` inside a text box, which is no section break. The paginated HTML render, and with it
+  the page map, used to start an extra section at such a `w:sectPr`, laid out on the text box's
+  page size. That no longer happens, and the text box's `w:sectPr` is no longer a section or a
+  `sec` anchor on any surface.
 - Section reads and edits now act on the section an anchor names (#1308). A `sec` anchor of an
   earlier section resolved to the document's final section, so `GetSectionInfo` reported the last
   section's page and `SetPageSetup`, `SetPageNumbering` and the header/footer operations changed

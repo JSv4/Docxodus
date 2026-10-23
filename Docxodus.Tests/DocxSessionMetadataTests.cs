@@ -647,6 +647,36 @@ public class DocxSessionMetadataTests
             .ToArray();
     }
 
+    // Issue #1314: the index lists one sec anchor per section, never the earlier-properties copy a
+    // pending w:sectPrChange keeps, whether the change came in with the document or was just made.
+    [Fact]
+    public void BM027_AnchorIndex_DoesNotListAPendingSectionChangesCopyAsASection()
+    {
+        using var session = new DocxSession(BuildLiteralXmlDocument(
+            """
+            <w:body>
+              <w:p><w:pPr><w:sectPr><w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/>
+                <w:sectPrChange w:id="5" w:author="Alice" w:date="2025-01-01T00:00:00Z">
+                  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:sectPrChange>
+              </w:sectPr></w:pPr><w:r><w:t>One.</w:t></w:r></w:p>
+              <w:p><w:r><w:t>Two.</w:t></w:r></w:p>
+              <w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>
+            </w:body>
+            """,
+            """<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"""));
+        string[] SectionWidths() => session.Project().AnchorIndex.Values
+            .Where(v => v.Anchor.Kind == "sec")
+            .Select(v => $"{session.GetSectionInfo(v.Anchor.Id)!.PageWidthTwips}").ToArray();
+
+        Assert.Equal(new[] { "15840", "12240" }, SectionWidths());
+
+        session.SetTrackedChanges(TrackedChangeMode.RenderInline);
+        var final = session.Project().AnchorIndex.Values.Last(v => v.Anchor.Kind == "sec").Anchor.Id;
+        Assert.True(session.SetPageSetup(final, new PageSetupOp { MarginLeftTwips = 999 }).Success);
+
+        Assert.Equal(new[] { "15840", "12240" }, SectionWidths());
+    }
+
     /// <summary>Four sections: break A and break B on consecutive body paragraphs, break C on a
     /// paragraph inside a table cell, and the body-level final section. Each section has its own
     /// page width so a test can tell which one a lookup resolved to.</summary>

@@ -1092,6 +1092,35 @@ namespace Docxodus.Tests
         }
 
         [Fact]
+        public void HC008h_EndnoteMarkers_IgnoreAPendingSectionChangesEarlierFormat()
+        {
+            // Issue #1314: a tracked section-property change keeps the section's earlier properties
+            // as a nested w:sectPr inside w:sectPrChange. Here the earlier properties numbered
+            // endnotes in decimal and the current ones declare nothing, so the markers keep Word's
+            // lowerRoman default; the earlier copy must not be read as a section's own format.
+            byte[] byteArray = File.ReadAllBytes(Path.Combine("../../../../TestFiles/WC", "WC036-Endnote-With-Table-Before.docx"));
+            using MemoryStream ms = new MemoryStream();
+            ms.Write(byteArray, 0, byteArray.Length);
+            using WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true);
+            var mainXDoc = wDoc.MainDocumentPart!.GetXDocument();
+            mainXDoc.Root!.Element(W.body)!.Element(W.sectPr)!.Add(
+                new XElement(W.sectPrChange, new XAttribute(W.id, "9"), new XAttribute(W.author, "A"),
+                    new XElement(W.sectPr, new XElement(W.endnotePr,
+                        new XElement(W.numFmt, new XAttribute(W.val, "decimal"))))));
+            wDoc.MainDocumentPart.PutXDocument();
+
+            XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, new WmlToHtmlConverterSettings
+            {
+                RenderFootnotesAndEndnotes = true,
+                RenderTrackedChanges = true,
+            });
+
+            var endnoteRef = html.Descendants().First(e => e.Name.LocalName == "a" &&
+                ((string?)e.Attribute("class") ?? "").Contains("endnote-ref"));
+            Assert.Equal("i", endnoteRef.Value);
+        }
+
+        [Fact]
         public void HC009_HeadersAndFooters_CssEnabled()
         {
             // Test that header/footer CSS is generated when RenderHeadersAndFooters is true
