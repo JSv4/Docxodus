@@ -2830,6 +2830,48 @@ Two separate causes:
   `ConvertAlignedTabRuns`, `CanFlexTabRun`.
 - Tests: `Docxodus.Tests/RightTabLeaderLineTests.cs`, `npm/tests/right-tab-leader-lines.spec.ts`.
 
+## `w:defaultTabStop` of 0 or a few twips: automatic stops past the pen (issue #1269)
+
+Automatic tab stops are the interval multiples that follow the paragraph's last custom stop.
+ECMA-376 Part 1 §17.15.1.25 calls `w:defaultTabStop` "the multiplier to generate automatic tab
+stops", says that if it is omitted "automatic tab stops should be generated at 720 twentieths of a
+point (0.5") intervals across the displayed page", and types `w:val` as `ST_TwipsMeasure`, so 0 is
+schema-valid. Microsoft's implementer notes (MS-OI29500 §2.1.399) add only that Word reads the value
+as a `short` with a minimum of 0. Neither document says how a zero interval lays out.
+
+```xml
+<!-- settings.xml: 12, or 0 -->
+<w:defaultTabStop w:val="12"/>
+<!-- document.xml: no w:tabs, no indent -->
+<w:p>
+  <w:r><w:t>Observatory inventory</w:t></w:r><w:r><w:tab/></w:r>
+  <w:r><w:t>North</w:t></w:r><w:r><w:tab/></w:r>
+  <w:r><w:t>East</w:t></w:r><w:r><w:tab/></w:r>
+  <w:r><w:t>South</w:t></w:r><w:r><w:t>Copper lens</w:t></w:r>
+</w:p>
+```
+
+| Renderer | `w:val="12"` | `w:val="0"` | `w:val="720"` (control) |
+|---|---|---|---|
+| LibreOffice 25.8.7.3 (PDF export) | Each tab advances to the next 12-twip multiple, under 0.6pt: the words nearly touch | Tabs land on a 1.25cm grid, LibreOffice's own default interval (North at 141.9pt from the margin, East at 177.4pt, South at 212.8pt) | Tabs land on the half-inch grid (144pt, 180pt, 216pt) |
+| Word | Not measured | Not measured | — |
+| Docxodus (before) | `InvalidOperationException: Sequence contains no matching element` | Same exception | Half-inch grid |
+| Docxodus (after) | Each tab advances to the next 12-twip multiple (0.003in–0.007in) | Same stops as the 720 control | Unchanged |
+
+Why it threw: the tab pass generated only 100 automatic stops up front, which is 1,200 twips at a
+12-twip interval and nothing at all at 0 (every stop sat at position 0). Once the pen passed the last
+generated stop, the pass gave that tab a half-inch width and stopped measuring the paragraph, so the
+later tabs had no width, rendered no tab element, and the flexible-tab renderer failed looking for one.
+
+The fix: past the stops generated up front, the next automatic stop is computed on demand as the first
+interval multiple beyond the pen, so every tab is measured and the pass never stops early. A zero (or
+negative) interval is read as if the element were absent, the 720-twip default. That matches the
+spec's default and LibreOffice's choice of keeping its own default for 0. Word's handling of 0 was
+not checked.
+
+- Code: `Docxodus/WmlToHtmlConverter.cs`: `CalculateSpanWidthForTabs` (interval), `CalculateSpanWidthTransform` (stop lookup).
+- Tests: `Docxodus.Tests/DefaultTabStopIntervalTests.cs`.
+
 ## `w:ind` has two spellings for each edge: `w:start`/`w:left` and `w:end`/`w:right`
 
 ECMA-376 Part 1, §17.3.1.12 names a paragraph's indent edges `w:start` and `w:end`; the transitional
