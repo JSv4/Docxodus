@@ -27,7 +27,7 @@ public class RightTabLeaderLineTests
 
     /// <summary>Four entries on a Letter page with one-inch margins (a 9360-twip column): a left
     /// stop at 1296 and a right dot-leader stop at <paramref name="rightStop"/>.</summary>
-    private static byte[] Fixture(string variant, int? rightIndent, int rightStop = 9360)
+    private static byte[] Fixture(string variant, int? rightIndent, int rightStop = 9360, bool fieldLink = false)
     {
         var tabRPr = variant switch
         {
@@ -47,12 +47,15 @@ public class RightTabLeaderLineTests
             (variant == "toc-link-underline" && i == 0
                 ? "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> TOC \\o \"1-3\" \\h </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>"
                 : "") +
-            (variant is "linked-bookmark" or "toc-link-underline" ? $"<w:hyperlink w:anchor=\"_Ref{i}\">" : "") +
+            (variant is "linked-bookmark" or "toc-link-underline" ? fieldLink
+                ? $"<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText> HYPERLINK \"https://example.com/entry{i}\" </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>"
+                : $"<w:hyperlink w:anchor=\"_Ref{i}\">" : "") +
             (variant is "bookmark" or "linked-bookmark" ? $"<w:bookmarkStart w:id=\"{i}\" w:name=\"_Toc{i}\"/><w:bookmarkEnd w:id=\"{i}\"/>" : "") +
             $"<w:r><w:t>{e.Label}</w:t></w:r><w:r>{tabRPr}<w:tab/></w:r><w:r><w:t>{e.Title}</w:t></w:r>" +
             (variant == "hyphen" ? "<w:r><w:noBreakHyphen/><w:t>West</w:t></w:r>" : "") +
             $"<w:r>{tabRPr}<w:tab/><w:t>{e.Number}</w:t></w:r>" +
-            (variant is "linked-bookmark" or "toc-link-underline" ? "</w:hyperlink>" : "") +
+            (variant is "linked-bookmark" or "toc-link-underline" ? fieldLink
+                ? "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>" : "</w:hyperlink>" : "") +
             (variant == "toc-link-underline" && i == Entries.Length - 1 ? "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>" : "") +
             "</w:p>"));
 
@@ -155,19 +158,23 @@ public class RightTabLeaderLineTests
             Assert.Equal("-1pt", Style(segment, "margin-right"));
     }
 
-    [Fact]
-    public void BookmarkInsideALink_IsATargetThatDoesNotNestAnAnchor()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BookmarkInsideALink_IsATargetThatDoesNotNestAnAnchor(bool fieldLink)
     {
         // HTML forbids <a> inside <a>: a parser closes the link at the inner anchor and leaves the
         // label, title and number outside it (issue #1285).
-        var links = Html(Fixture("linked-bookmark", rightIndent: 864)).Descendants()
+        var html = Html(Fixture("linked-bookmark", rightIndent: 864, fieldLink: fieldLink));
+        var links = html.Descendants()
             .Where(e => e.Name.LocalName == "a").ToArray();
         Assert.Equal(Entries.Length, links.Length);
         foreach (var (link, i) in links.Select((link, i) => (link, i)))
         {
-            Assert.Equal($"#_Ref{i}", (string?)link.Attribute("href"));
+            Assert.Equal(fieldLink ? $"https://example.com/entry{i}" : $"#_Ref{i}", (string?)link.Attribute("href"));
             Assert.DoesNotContain(link.Descendants(), e => e.Name.LocalName == "a");
-            var target = link.Descendants().Single(e => (string?)e.Attribute("id") == $"_Toc{i}");
+            var target = link.Descendants().SingleOrDefault(e => (string?)e.Attribute("id") == $"_Toc{i}");
+            Assert.NotNull(target);
             Assert.Equal("span", target.Name.LocalName);
             Assert.Contains(Entries[i].Number, link.Value);
         }
@@ -220,6 +227,38 @@ public class RightTabLeaderLineTests
         var line = Html(Fixture("double-underline", rightIndent: null)).Descendants()
             .First(e => e.Attribute("data-docx-tab") != null).Elements().Single();
         Assert.Equal("#FF0000", Style(line, "border-top-color"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DecoratedTab_KeepsItsRunFontAndColorWithoutPrecedingText(bool leading)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Fixture("underline", rightIndent: null));
+        using (var document = WordprocessingDocument.Open(stream, true))
+        {
+            var part = document.MainDocumentPart!;
+            var xml = part.GetXDocument();
+            foreach (var paragraph in xml.Descendants(W.p))
+            {
+                if (leading) paragraph.Elements(W.r).First().Remove();
+                var tabRun = paragraph.Elements(W.r).First(r => r.Element(W.tab) != null);
+                tabRun.Element(W.rPr)!.ReplaceWith(new XElement(W.rPr,
+                    new XElement(W.color, new XAttribute(W.val, "123456")),
+                    new XElement(W.sz, new XAttribute(W.val, "48")),
+                    new XElement(W.u, new XAttribute(W.val, "single"))));
+            }
+            part.PutXDocument(xml);
+        }
+        var tabs = Html(stream.ToArray()).Descendants().Where(e => (string?)e.Attribute("data-docx-tab") == "left");
+        Assert.Equal(Entries.Length, tabs.Count());
+        foreach (var tab in tabs)
+        {
+            string? Inherited(string name) => tab.AncestorsAndSelf().Select(e => Style(e, name)).FirstOrDefault(s => s != null);
+            Assert.Equal("24pt", Inherited("font-size"));
+            Assert.Equal("#123456", Inherited("color"));
+        }
     }
 
     [Fact]

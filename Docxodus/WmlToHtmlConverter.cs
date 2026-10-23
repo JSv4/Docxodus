@@ -7338,13 +7338,10 @@ namespace Docxodus
                 ? paragraphContent.TakeWhile(e => e != firstTabRun).ToList()
                 : Enumerable.Empty<XElement>().ToList();
 
-            // TODO: Revisit
-            // For the time being, if a hyperlink field precedes the tab, we'll render it as before.
-            var hyperlinkPrecedesTab = elementsPrecedingTab
-                .Elements(W.r)
-                .Elements(W.instrText)
-                .Select(e => e.Value)
-                .Any(value => value != null && value.TrimStart().ToUpper().StartsWith("HYPERLINK"));
+            // Keep a HYPERLINK result whole across the tab: splitting it here would leave its
+            // leading text and bookmark targets outside the link. Reuse the field annotations
+            // rather than looking for instructions under the already-flattened run list.
+            var hyperlinkPrecedesTab = firstTabRun != null && FieldRetriever.IsFieldResult(firstTabRun, "HYPERLINK");
             if (hyperlinkPrecedesTab)
             {
                 var paraElement1 = new XElement(elementName,
@@ -7637,7 +7634,7 @@ namespace Docxodus
                     tabElement.Attribute(PtOpenXml.TabAfterWrappedText) == null &&
                     CanFlexTabRun(settings, firstTabRun!)
                     ? CreateFlexibleTabRun(wordDoc, settings, firstTabRun!)
-                    : ProcessTab(tabElement);
+                    : ConvertRun(wordDoc, settings, firstTabRun!);
             }
 
             // Text longer than its line wraps, so it cannot sit in a box pinned to the tab stop:

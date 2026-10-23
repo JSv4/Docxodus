@@ -117,7 +117,9 @@ All notable changes to this project will be documented in this file.
   such as the signature line in `By: ____`; it drew no line, because CSS does not decorate the tab's
   box (#1285). A bookmark inside a hyperlink no longer writes an `<a>` inside the link's `<a>`, which
   the HTML parser split apart, leaving the entry's text outside the link and off its tab stops; the
-  bookmark target is now an empty `<span id>` there (#1285).
+  bookmark target is now an empty `<span id>` there (#1285). A leading decorated tab keeps its run's
+  colour and font, and a complex HYPERLINK that spans a tab keeps its leading label and bookmark
+  targets inside the link.
 
 - A table no longer starts 7.5pt below a paragraph that has no space after it, or below another table
   (#1244). The HTML converter gave such a table a top margin of its own "for visual separation", which

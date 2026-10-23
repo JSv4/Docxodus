@@ -174,6 +174,20 @@ test.describe('tab leader and signature lines (#1285)', () => {
     expect(underlined.lines[0].top).toBeGreaterThan(struck.lines[0].top + 4);
   });
 
+  test('a leading decorated tab keeps its run color and font like one after text', async ({ page }) => {
+    const styledTab = tab('<w:color w:val="123456"/><w:sz w:val="48"/><w:u w:val="single"/>');
+    await layOutBody(page, `<w:p>${styledTab}${run('Name')}</w:p>`
+      + `<w:p>${run('By:')}${styledTab}${run('Name')}</w:p>`);
+    const lines = await page.locator('[data-docx-tab] > span').evaluateAll(elements => elements.map(line => {
+      const style = getComputedStyle(line);
+      return { color: style.borderTopColor, size: style.fontSize };
+    }));
+    expect(lines).toEqual([
+      { color: 'rgb(18, 52, 86)', size: '32px' },
+      { color: 'rgb(18, 52, 86)', size: '32px' },
+    ]);
+  });
+
   test('a bookmark inside a link keeps the whole entry inside that link and on its stops', async ({ page }) => {
     const linked = (bookmark: string) => entry(`<w:hyperlink w:anchor="_Toc9">${bookmark}${run('2.1.')}${tab()}${run('Spillway')}<w:r><w:tab/><w:t>12</w:t></w:r></w:hyperlink>`);
     await layOutBody(page, linked('<w:bookmarkStart w:id="1" w:name="_Toc1"/><w:bookmarkEnd w:id="1"/>') + linked(''));
@@ -190,5 +204,19 @@ test.describe('tab leader and signature lines (#1285)', () => {
       expect(find(line, '12').right).toBeCloseTo(COLUMN_PX, 0);
       expect(new Set(line.map((w) => w.top)).size).toBe(1);
     }
+  });
+
+  test('a complex HYPERLINK spanning a tab keeps its label and bookmark inside the link', async ({ page }) => {
+    const begin = '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+      + '<w:r><w:instrText> HYPERLINK "https://example.com/entry" </w:instrText></w:r>'
+      + '<w:r><w:fldChar w:fldCharType="separate"/></w:r>';
+    const end = '<w:r><w:fldChar w:fldCharType="end"/></w:r>';
+    await layOutBody(page, entry(begin + '<w:bookmarkStart w:id="1" w:name="_Toc1"/><w:bookmarkEnd w:id="1"/>'
+      + run('2.1.') + tab() + run('Spillway') + '<w:r><w:tab/><w:t>12</w:t></w:r>' + end));
+    const link = page.locator('a[href="https://example.com/entry"]');
+    await expect(link).toHaveCount(1);
+    await expect(link).toHaveText('2.1.Spillway12');
+    await expect(link.locator('span[id="_Toc1"]')).toHaveCount(1);
+    await expect(link.locator('a')).toHaveCount(0);
   });
 });
