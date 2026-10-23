@@ -47,8 +47,10 @@ All notable changes to this project will be documented in this file.
   applies to a table that names no style. Documents in compatibility mode 14 or earlier, or that state no
   mode, also place a table that states an indent or has a style so that its first cell's text, not its
   border, starts at the indent; the converter now pulls such a table out by that cell's margin. Mode 15
-  documents (Word 2013 and later) keep the table edge at the indent. Floating tables are unchanged. The
-  Word for the web measurements are in `docs/ooxml_corner_cases.md`.
+  documents (Word 2013 and later) keep the table edge at the indent. Floating tables are unchanged, and so,
+  provisionally, are nested and centred or end-aligned tables, whose legacy placement is unmeasured. A table
+  that names a style the document does not define takes the default table style, as one naming none does.
+  The Word for the web measurements are in `docs/ooxml_corner_cases.md`.
 - Under tracked changes, deleting or replacing text in the session author's own pending insertion through
   `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`) now removes it from the insertion instead of
   recording a deletion nested inside it (#1316). A Backspace in text still being typed left a struck

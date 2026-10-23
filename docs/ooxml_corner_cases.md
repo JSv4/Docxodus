@@ -2793,9 +2793,15 @@ The PDFs' vector borders confirm rule 2's geometry: with a 3pt border the mode 1
 spans 72.0–75.0pt (outer edge at the margin) and the mode 14 table's 70.5–73.5pt (centred on it).
 
 **Docxodus.** `ResolveTableIndentInputs` runs before formatting assembly, while `w:tblStyle` is still
-there: a table that names no style gets the default table style's `w:tblInd` and side cell margins
-wherever it states none, and before mode 15 it records whether the table is pulled out to its text or
-only centres its border. `CellMarginTwips` is the one margin lookup (cell, then table, then zero); the
+there. A table that names no style, or names one the document does not define, gets the default table
+style's `w:tblInd` and side cell margins wherever it states none. Before mode 15 the pass also records
+whether the table is pulled out to its text or only centres its border. It does this only for
+top-level tables aligned at the start: nested tables and centred or end-aligned tables keep the mode 15
+placement until Word's handling of them is measured.
+
+Two further cases are inferred, not measured:
+- A table naming a defined style whose chain states no cell margins gets none.
+- A document with no settings part at all is treated like one whose settings state no mode. `CellMarginTwips` is the one margin lookup (cell, then table, then zero); the
 cell padding and the tab-stop wrap width both use it. `ProcessTable` moves the table edge out by the
 first cell's margin and half its leading border, in the table's leading direction; a floating table
 (`w:tblpPr`) is placed by its own properties and is left alone. The 5.4pt padding the converter used to

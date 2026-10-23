@@ -1965,7 +1965,7 @@ namespace Docxodus
             return inside1;
         }
 
-        internal static XElement TableStyleRollup(WordprocessingDocument wDoc, string tblStyleName)
+        private static XElement TableStyleRollup(WordprocessingDocument wDoc, string tblStyleName)
         {
             var tblStyleChain = TableStyleStack(wDoc, tblStyleName)
                 .Reverse();

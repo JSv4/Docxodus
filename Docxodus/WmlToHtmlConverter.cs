@@ -7350,38 +7350,47 @@ namespace Docxodus
         /// cannot read from the table alone (issue #1219; measured in <c>docs/ooxml_corner_cases.md</c>).
         /// </summary>
         /// <remarks>
-        /// A table that names no style is formatted by the document's default table style, so that
-        /// style's indent and cell margins are copied onto the table wherever the table states none —
-        /// a document with no default table style has no cell margins to inherit, and its cells have
-        /// none. Before compatibility mode 15 (and when the document states no mode at all) Word
-        /// aligns the first cell's text, not the table edge, with the indent whenever the table states
-        /// <c>w:tblInd</c> or a table style governs it; otherwise it centres the leading border on the
-        /// indent. That choice is recorded for <see cref="ProcessTable"/>. It runs before formatting
-        /// assembly, which removes the <c>w:tblStyle</c> reference this depends on.
+        /// A table that names no style, or names one the document does not define, is formatted by the
+        /// document's default table style, so that style's indent and cell margins are copied onto the
+        /// table wherever the table states none. A document with no default table style has no cell
+        /// margins to inherit, and its cells have none. Before compatibility mode 15 (and when the
+        /// document states no mode at all) Word aligns the first cell's text, not the table edge, with
+        /// the indent whenever the table states <c>w:tblInd</c> or a table style governs it; otherwise
+        /// it centres the leading border on the indent. That choice is recorded for
+        /// <see cref="ProcessTable"/> on top-level, start-aligned tables only: nested and centred or
+        /// end-aligned tables have not been measured, so they keep the mode 15 placement. It runs
+        /// before formatting assembly, which removes the <c>w:tblStyle</c> reference this depends on.
         /// </remarks>
         private static void ResolveTableIndentInputs(WordprocessingDocument wordDoc)
         {
-            var defaultStyleId = (string?)wordDoc.MainDocumentPart!.StyleDefinitionsPart?.GetXDocument().Root?
-                .Elements(W.style)
+            var styles = wordDoc.MainDocumentPart!.StyleDefinitionsPart?.GetXDocument().Root;
+            var tableStyleIds = styles?.Elements(W.style)
+                .Where(s => (string?)s.Attribute(W.type) == "table")
+                .Select(s => (string?)s.Attribute(W.styleId))
+                .OfType<string>()
+                .ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>();
+            var defaultStyleId = (string?)styles?.Elements(W.style)
                 .FirstOrDefault(s => (string?)s.Attribute(W.type) == "table" && s.Attribute(W._default).ToBoolean() == true)?
                 .Attribute(W.styleId);
             var defaultTblPr = defaultStyleId == null
                 ? null
-                : FormattingAssembler.TableStyleRollup(wordDoc, defaultStyleId).Element(W.tblPr);
+                : FormattingAssembler.ResolveTableStyle(wordDoc, defaultStyleId).Element(W.tblPr);
             var mode = (string?)wordDoc.MainDocumentPart.DocumentSettingsPart?.GetXDocument().Root?
                 .Elements(W.compat).Elements(W.compatSetting)
                 .FirstOrDefault(s => (string?)s.Attribute(W.name) == "compatibilityMode")?
                 .Attribute(W.val);
             var legacy = !int.TryParse(mode, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) || number < 15;
 
-            foreach (var part in wordDoc.ContentParts())
+            var parts = wordDoc.ContentParts().Append(wordDoc.MainDocumentPart.WordprocessingCommentsPart).OfType<OpenXmlPart>();
+            foreach (var part in parts)
             {
                 foreach (var tbl in part.GetXDocument().Descendants(W.tbl))
                 {
                     var tblPr = tbl.Element(W.tblPr);
                     if (tblPr == null)
                         tbl.AddFirst(tblPr = new XElement(W.tblPr));
-                    var styled = tblPr.Element(W.tblStyle) != null;
+                    var styleId = (string?)tblPr.Elements(W.tblStyle).Attributes(W.val).FirstOrDefault();
+                    var styled = styleId != null && tableStyleIds.Contains(styleId);
                     if (!styled && defaultTblPr != null)
                     {
                         styled = true;
@@ -7392,22 +7401,28 @@ namespace Docxodus
                             var margins = tblPr.Element(W.tblCellMar);
                             if (margins == null)
                                 tblPr.Add(margins = new XElement(W.tblCellMar));
-                            // A side the table states under either of its names (left/start, right/end) is the table's.
+                            // A side the table states under either of its names is the table's. The pairs are
+                            // the ones CellMarginTwips reads together: left with start and right with end, but
+                            // left with end and right with start in a right-to-left (w:bidiVisual) table.
+                            var rtl = IsOnOffPropertyEnabled(tblPr.Element(W.bidiVisual));
                             foreach (var side in inherited.Elements().Where(side => margins.Element(side.Name) == null
-                                         && margins.Element(SideAlias(side.Name)) == null))
+                                         && margins.Element(SideAlias(side.Name, rtl)) == null))
                                 margins.Add(new XElement(side));
                         }
                     }
-                    if (legacy)
+                    var jc = (string?)tblPr.Elements(W.jc).Attributes(W.val).FirstOrDefault();
+                    if (legacy && !tbl.Ancestors(W.tbl).Any() && jc is null or "left" or "start")
                         tbl.SetAttributeValue(LegacyTableIndentAttribute,
                             styled || tblPr.Element(W.tblInd) != null ? "text" : "border");
                 }
             }
         }
 
-        private static XName SideAlias(XName side) =>
-            side == W.left ? W.start : side == W.start ? W.left
-            : side == W.right ? W.end : side == W.end ? W.right : side;
+        private static XName SideAlias(XName side, bool rtl) =>
+            side == W.left ? (rtl ? W.end : W.start)
+            : side == W.right ? (rtl ? W.start : W.end)
+            : side == W.start ? (rtl ? W.right : W.left)
+            : side == W.end ? (rtl ? W.left : W.right) : side;
 
         private static void MarkStructuralTableEndParagraphs(WordprocessingDocument wordDoc)
         {
