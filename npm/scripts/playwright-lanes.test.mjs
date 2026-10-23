@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { planLaneRuns, serialLaneSpecs } from './playwright-lanes.mjs';
+import { planLaneRuns, serialLaneSpecs, splitSpecFiles } from './playwright-lanes.mjs';
 
 const npmDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const playwrightCli = createRequire(join(npmDir, 'package.json')).resolve('@playwright/test/cli');
@@ -29,6 +29,39 @@ test('a narrowed run forwards the arguments to both lanes and tolerates an empty
 test('a run that already tolerates an empty lane is not told twice', () => {
   const runs = planLaneRuns(['--pass-with-no-tests', 'worker.spec.ts']);
   assert.deepEqual(runs[0].args, ['test', '--pass-with-no-tests', 'worker.spec.ts']);
+});
+
+test('a preset lane runs only that lane', () => {
+  assert.deepEqual(planLaneRuns([], { lanes: ['serial'] }).map(run => run.lane), ['serial']);
+});
+
+test('options alone do not narrow a run, so an empty lane still fails', () => {
+  const runs = planLaneRuns(['--reporter=blob', '--workers=2']);
+  assert.deepEqual(runs[0].args, ['test', '--reporter=blob', '--workers=2']);
+  assert.deepEqual(planLaneRuns(['--grep', 'footnote'])[0].args, ['test', '--grep', 'footnote', '--pass-with-no-tests']);
+});
+
+const five = ['a.spec.ts', 'b.spec.ts', 'c.spec.ts', 'd.spec.ts', 'e.spec.ts'];
+
+test('a split hands each spec file to exactly one shard, round-robin, in a stable order', () => {
+  const shards = [1, 2, 3].map(index => splitSpecFiles(five, index, 3));
+  assert.deepEqual(shards, [['a.spec.ts', 'd.spec.ts'], ['b.spec.ts', 'e.spec.ts'], ['c.spec.ts']]);
+  assert.deepEqual(shards.flat().sort(), five);
+});
+
+test('--split=i/N becomes that shard\'s file filters and is not passed on to Playwright', () => {
+  const runs = planLaneRuns(['--split=2/3', '--reporter=blob'], { lanes: ['pool'], specFiles: five });
+  assert.deepEqual(runs, [{
+    lane: 'pool',
+    env: { DOCXODUS_PLAYWRIGHT_LANE: 'pool' },
+    args: ['test', '/b\\.spec\\.ts$', '/e\\.spec\\.ts$', '--reporter=blob', '--pass-with-no-tests'],
+  }]);
+});
+
+test('a malformed split is refused', () => {
+  for (const bad of ['--split=0/3', '--split=4/3', '--split=2', '--split=a/b']) {
+    assert.throws(() => planLaneRuns([bad], { specFiles: five }), /--split/, bad);
+  }
 });
 
 // Ask Playwright itself which spec files each lane runs: the configuration is the only
@@ -64,23 +97,25 @@ const allSpecFiles = new Set(readdirSync(join(npmDir, 'tests')).filter(name => n
 test('the pool and serial lanes partition the spec files between their Chromium projects', () => {
   const pool = listSpecFiles('pool');
   const serial = listSpecFiles('serial');
-  assert.deepEqual([...pool.keys()], ['chromium', 'chromium-pixel5']);
-  assert.deepEqual([...serial.keys()], ['chromium-serial', 'firefox-cross-block-selection']);
+  assert.deepEqual([...pool.keys()], ['chromium']);
+  assert.deepEqual([...serial.keys()], ['chromium-serial', 'chromium-pixel5', 'firefox-cross-block-selection']);
 
-  const poolFiles = new Set([...pool.get('chromium'), ...pool.get('chromium-pixel5')]);
-  const serialFiles = serial.get('chromium-serial');
+  // Firefox re-runs one pool spec on purpose; the Chromium projects are the partition.
+  const poolFiles = pool.get('chromium');
+  const serialFiles = new Set([...serial.get('chromium-serial'), ...serial.get('chromium-pixel5')]);
   const inBoth = [...poolFiles].filter(file => serialFiles.has(file));
   assert.deepEqual(inBoth, [], 'a spec file must belong to one lane');
   const inNeither = [...allSpecFiles].filter(file => !poolFiles.has(file) && !serialFiles.has(file));
   assert.deepEqual(inNeither, [], 'every spec file must be run by one lane');
   // A misspelt entry would match no file and quietly leave that spec in the pool.
-  assert.deepEqual([...serialFiles].sort(), [...serialLaneSpecs].sort(), 'the serial lane runs exactly the listed specs');
+  assert.deepEqual([...serial.get('chromium-serial')].sort(), [...serialLaneSpecs].sort(),
+    'the serial lane runs exactly the listed specs');
   assert.ok(poolFiles.size > serialFiles.size, 'the serial lane is the exception, not the rule');
 });
 
 test('without a lane, an ad-hoc run still reaches every project', () => {
   const projects = [...listSpecFiles(undefined).keys()];
-  assert.deepEqual(projects, ['chromium', 'chromium-pixel5', 'chromium-serial', 'firefox-cross-block-selection']);
+  assert.deepEqual(projects, ['chromium', 'chromium-serial', 'chromium-pixel5', 'firefox-cross-block-selection']);
 });
 
 test('an unknown lane is refused instead of silently running nothing', () => {

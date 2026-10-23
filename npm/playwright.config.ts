@@ -55,25 +55,26 @@ const poolProjects = [
     testIgnore: [/demo-arcade-mobile\.spec\.ts/, serialLaneMatch],
     use: chromiumUse,
   },
-  {
-    // Phone-shaped rig for the mobile arcade garble (device-inflated text
-    // re-breaking lines the document authored at a fixed column width):
-    // mobile viewport, touch, and the fit-to-width CSS zoom that a phone
-    // actually exercises. Its spec recreates the platform's text inflation
-    // itself, so it runs here only and the desktop chromium project skips it.
-    name: 'chromium-pixel5',
-    testMatch: /demo-arcade-mobile\.spec\.ts/,
-    use: {
-      ...devices['Pixel 5'],
-      launchOptions: { ...chromiumExecutable },
-    },
-  },
 ];
 const serialProjects = [
   {
     name: 'chromium-serial',
     testMatch: serialLaneMatch,
     use: chromiumUse,
+  },
+  {
+    // Phone-shaped rig for the mobile arcade garble (device-inflated text
+    // re-breaking lines the document authored at a fixed column width):
+    // mobile viewport, touch, and the fit-to-width CSS zoom that a phone
+    // actually exercises. Its spec recreates the platform's text inflation
+    // itself, so it runs here only and the desktop chromium project skips it.
+    // It watches the arcade's frames move and hold still, so it is serial too.
+    name: 'chromium-pixel5',
+    testMatch: /demo-arcade-mobile\.spec\.ts/,
+    use: {
+      ...devices['Pixel 5'],
+      launchOptions: { ...chromiumExecutable },
+    },
   },
   {
     // Firefox is the canary for cross-contenteditable drag feedback: its native selection

@@ -125,11 +125,14 @@ jobs:
       - name: Permit Chromium's unprivileged user-namespace sandbox
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
+      # The lane runner's `--split` deals the spec files round-robin, so the heavy and
+      # alphabetically adjacent export specs spread across the shards; Playwright's own `--shard`
+      # hands each shard a contiguous run of files and left one shard three times another's work.
       - name: Run the pool lane, shard ${{ matrix.shard }} of ${{ strategy.job-total }}
         env:
           DOCXODUS_PLAYWRIGHT_LANE: pool
           PLAYWRIGHT_BLOB_OUTPUT_FILE: blob-report/pool-${{ matrix.shard }}.zip
-        run: cd npm && npx playwright test --shard=${{ matrix.shard }}/${{ strategy.job-total }} --reporter=blob
+        run: cd npm && node scripts/playwright-lanes.mjs --split=${{ matrix.shard }}/${{ strategy.job-total }} --reporter=blob
 
       # One directory per lane, so the artifact's layout is the same whether or not the lane
       # wrote any test output: an upload of several paths is rooted at their common ancestor,
@@ -196,7 +199,7 @@ jobs:
         env:
           DOCXODUS_PLAYWRIGHT_LANE: serial
           PLAYWRIGHT_BLOB_OUTPUT_FILE: blob-report/serial.zip
-        run: cd npm && npx playwright test --reporter=blob
+        run: cd npm && node scripts/playwright-lanes.mjs --reporter=blob
 
       - name: Collect this lane's report and test output
         if: always()

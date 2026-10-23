@@ -9,6 +9,7 @@
 // CI runs each lane as its own job with the same variable, so this is also the only
 // local command that exercises the same split.
 import { spawnSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,24 +37,59 @@ export const serialLaneSpecs = [
 ];
 
 /**
- * Plan one Playwright invocation per lane. A narrowed run (any argument at all — a spec
- * filter, a project, a grep) usually matches nothing in one of the two lanes, so it
- * tolerates an empty lane; a bare run does not, so a lane that runs nothing fails.
+ * Shard `index` (1-based) of `total`: every `total`-th spec file, so that files that are
+ * heavy and alphabetically adjacent (the export specs) spread across the shards. Playwright's
+ * own `--shard` hands each shard a contiguous run of files, which left one shard with three
+ * times another's work.
  */
-export function planLaneRuns(args, lanes = LANES) {
-  const tolerateEmpty = args.length > 0 && !args.includes('--pass-with-no-tests');
+export function splitSpecFiles(specFiles, index, total) {
+  return specFiles.filter((_, position) => position % total === index - 1);
+}
+
+const splitFlag = /^--split=(\d+)\/(\d+)$/;
+
+/**
+ * Plan one Playwright invocation per lane. A narrowed run (a spec filter, a grep, a
+ * `--split`) usually matches nothing in one of the two lanes, so it tolerates an empty lane;
+ * a run that only sets options (a reporter, say) does not, so a lane that runs nothing fails.
+ * `--split=i/N` is this script's own flag: it is replaced by anchored path filters for that
+ * shard's spec files.
+ */
+export function planLaneRuns(args, { lanes = LANES, specFiles = [] } = {}) {
+  const forwarded = [];
+  let narrowed = false;
+  for (const arg of args) {
+    const split = splitFlag.exec(arg);
+    if (!split && arg.startsWith('--split')) throw new Error(`${arg}: expected --split=<index>/<total>`);
+    if (!split) {
+      if (!arg.startsWith('-') || arg === '-g' || arg.startsWith('--grep')) narrowed = true;
+      forwarded.push(arg);
+      continue;
+    }
+    const [index, total] = [Number(split[1]), Number(split[2])];
+    if (total < 1 || index < 1 || index > total) throw new Error(`${arg}: --split index must be between 1 and the total`);
+    narrowed = true;
+    for (const file of splitSpecFiles(specFiles, index, total)) {
+      forwarded.push(`/${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
+    }
+  }
+  const tolerateEmpty = narrowed && !args.includes('--pass-with-no-tests');
   return lanes.map(lane => ({
     lane,
     env: { DOCXODUS_PLAYWRIGHT_LANE: lane },
-    args: ['test', ...args, ...(tolerateEmpty ? ['--pass-with-no-tests'] : [])],
+    args: ['test', ...forwarded, ...(tolerateEmpty ? ['--pass-with-no-tests'] : [])],
   }));
 }
 
 function main() {
   const npmDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const cli = createRequire(join(npmDir, 'package.json')).resolve('@playwright/test/cli');
+  // A preset lane (a CI lane job) runs that lane alone; `npm test` runs both.
+  const preset = process.env.DOCXODUS_PLAYWRIGHT_LANE;
+  const specFiles = readdirSync(join(npmDir, 'tests')).filter(name => name.endsWith('.spec.ts')).sort();
+  const runs = planLaneRuns(process.argv.slice(2), { lanes: preset ? [preset] : LANES, specFiles });
   const failed = [];
-  for (const run of planLaneRuns(process.argv.slice(2))) {
+  for (const run of runs) {
     console.log(`\n=== Playwright lane: ${run.lane} ===`);
     const result = spawnSync(process.execPath, [cli, ...run.args], {
       cwd: npmDir, stdio: 'inherit', env: { ...process.env, ...run.env },

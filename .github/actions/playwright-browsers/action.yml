@@ -22,7 +22,8 @@ runs:
       shell: bash
       run: |
         echo "playwright=$(node -p "require('./npm/node_modules/@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
-        echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+        echo "image-os=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+        echo "image-version=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
 
     - name: Restore cached browser builds
       uses: actions/cache@v6
@@ -30,9 +31,9 @@ runs:
         path: ~/.cache/ms-playwright
         key: ms-playwright-${{ runner.os }}-${{ steps.versions.outputs.playwright }}-${{ inputs.browsers }}
 
-    # apt downloads as its own unprivileged user, so the directory is left writable for it. The
-    # mirror's stalls show up as two-minute silences in the middle of a package, which is apt's
-    # default transfer timeout; a short one with retries turns each stall into a reconnect.
+    # apt downloads as its own unprivileged user, so the directory is left writable for it. A
+    # short transfer timeout with retries bounds a connection that stops; a mirror that merely
+    # trickles (58 kB/s for seven minutes, in one run) is only avoided by the cache.
     - name: Point apt at a cached package archive
       shell: bash
       run: |
@@ -45,12 +46,24 @@ runs:
           echo 'Acquire::Retries "5";'
         } | sudo tee /etc/apt/apt.conf.d/99docxodus-archives > /dev/null
 
+    # A new runner image gets the previous image's packages: apt checks each one against the
+    # index and fetches only those whose version moved, then the archive is saved under the new key.
     - name: Restore cached apt packages
       uses: actions/cache@v6
       with:
         path: ~/.cache/apt-archives
-        key: apt-archives-${{ steps.versions.outputs.image }}-playwright-${{ steps.versions.outputs.playwright }}-${{ inputs.browsers }}
+        key: apt-archives-${{ steps.versions.outputs.image-os }}-${{ steps.versions.outputs.image-version }}-playwright-${{ steps.versions.outputs.playwright }}-${{ inputs.browsers }}
+        restore-keys: |
+          apt-archives-${{ steps.versions.outputs.image-os }}-
 
     - name: Install browsers and system packages
       shell: bash
       run: cd npm && npx playwright install --with-deps ${{ inputs.browsers }}
+
+    # apt leaves a root-only lock file and partial directory behind, and the cache is saved by
+    # the runner user at the end of the job: without this the save fails and every run downloads.
+    - name: Leave the downloaded packages to the runner user
+      shell: bash
+      run: |
+        sudo rm -rf "$HOME/.cache/apt-archives/lock" "$HOME/.cache/apt-archives/partial"
+        sudo chown -R "$(id -u):$(id -g)" "$HOME/.cache/apt-archives"
