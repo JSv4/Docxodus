@@ -265,6 +265,28 @@ export function isPreservedExactLineInk(element: HTMLElement, content: HTMLEleme
     && ink.top >= clip.top - 0.02 && ink.bottom <= clip.bottom + 0.02;
 }
 
+/** Elements whose box, padding and border included, take part in line layout though they compute `display: inline`. */
+const REPLACED_ELEMENTS = new Set(["img", "svg", "canvas", "video", "object", "embed", "iframe", "input", "textarea", "select"]);
+
+/**
+ * How far down a page band an element's laid-out content reaches, in viewport pixels (issue #1271).
+ *
+ * This is its border box, except for an inline box, whose bottom padding and border are left out: CSS paints
+ * them below the box's text without making its line any taller, so they are decoration — the dotted rule under
+ * a formatting revision, a comment or annotation highlight's underline. A band that cuts them hides no text,
+ * though the decoration itself is cut at the band's edge. The box's text is still measured where it is (a
+ * lowered run moves its content box too), and so is a replaced element, whose padding and border are laid out.
+ */
+export function laidOutBottom(element: Element, band: HTMLElement): number {
+  const bottom = element.getBoundingClientRect().bottom;
+  const view = element.ownerDocument.defaultView;
+  if (!view || REPLACED_ELEMENTS.has(element.localName)) return bottom;
+  const style = view.getComputedStyle(element);
+  if (style.display !== "inline") return bottom;
+  const scale = band.getBoundingClientRect().width / band.offsetWidth || 1;
+  return bottom - (Number.parseFloat(style.paddingBottom) + Number.parseFloat(style.borderBottomWidth)) * scale;
+}
+
 /**
  * Put every exported baseline where Word puts it, to a fraction of a pixel (issue #942).
  *

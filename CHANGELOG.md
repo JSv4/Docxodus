@@ -71,6 +71,14 @@ All notable changes to this project will be documented in this file.
   end goes past its range marker; before, it landed inside the moved range, where `RevisionProcessor` drops
   it on reject (#1340).
 
+- PDF and standalone HTML export no longer fails with `pagination_failure` ("A footnote continuation is
+  clipped") for a fitting footnote whose text carries a formatting revision, a comment highlight or a custom
+  annotation (#1271). Those inline marks draw a border (and annotations some padding) below their text that
+  CSS does not make room for, and the clipping check counted it as clipped content. The check, for note
+  bands and body bands alike, now measures an inline box down to its text, leaving out its own bottom
+  padding and border; text, images and blocks are measured as before, so a note that really is cut off
+  still fails. The decoration is still cut at the band's edge: in the default markup presentation the dotted
+  rule under a formatting change on a note's last line does not appear in the PDF.
 - Under tracked changes, deleting or replacing text in the session author's own pending insertion through
   `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`) now removes it from the insertion instead of
   recording a deletion nested inside it (#1316). A Backspace in text still being typed left a struck
