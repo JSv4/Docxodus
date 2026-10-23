@@ -98,8 +98,11 @@ All notable changes to this project will be documented in this file.
     sides with tracked changes rendered;
   - its tracked-changes view numbered footnotes and endnotes in the format the change replaced.
 
-  Every walk that counts or indexes sections now goes through one helper, which also leaves out a
-  `w:sectPr` inside a text box, as the converter's section count already did.
+  Every walk that counts or indexes sections now goes through one helper. It also leaves out a
+  `w:sectPr` inside a text box, which is no section break. The paginated HTML render, and with it
+  the page map, used to start an extra section at such a `w:sectPr`, laid out on the text box's
+  page size. That no longer happens, and the text box's `w:sectPr` is no longer a section or a
+  `sec` anchor on any surface.
 - Section reads and edits now act on the section an anchor names (#1308). A `sec` anchor of an
   earlier section resolved to the document's final section, so `GetSectionInfo` reported the last
   section's page and `SetPageSetup`, `SetPageNumbering` and the header/footer operations changed

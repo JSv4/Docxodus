@@ -12,7 +12,8 @@ namespace Docxodus.Tests;
 /// Issue #1314: a pending section-property change (<c>w:sectPrChange</c>) keeps the section's
 /// earlier properties as a nested <c>w:sectPr</c>. That copy is change history, not a section, so
 /// no surface may count it as one or read its properties as the section's own. Each test pairs a
-/// document whose sections carry pending changes with the same document without them.
+/// document whose sections carry pending changes with the same document without them. The same
+/// holds for a <c>w:sectPr</c> inside a text box, which is no section break either.
 /// </summary>
 public class PendingSectionChangeTests
 {
@@ -72,6 +73,29 @@ public class PendingSectionChangeTests
 
         Assert.NotEmpty(Float(pending: false));
         Assert.Equal(Float(pending: false), Float(pending: true));
+    }
+
+    [Fact]
+    public void HtmlConverter_DoesNotStartASectionAtATextBoxSectPr()
+    {
+        // A w:sectPr inside a text box is no section break (its story is the text box). The
+        // paginated render has the document's two sections, not a third with the box's 20000-twip
+        // page between "Before box." and "End one.".
+        var doc = new WmlDocument("box.docx", Package(
+            "<w:p><w:r><w:t>Before box.</w:t></w:r></w:p>"
+            + "<w:p><w:r><w:pict><v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\" style=\"width:200pt;height:50pt\"><v:textbox><w:txbxContent>"
+            + "<w:p><w:pPr><w:sectPr><w:pgSz w:w=\"20000\" w:h=\"10000\"/></w:sectPr></w:pPr><w:r><w:t>In box.</w:t></w:r></w:p>"
+            + "</w:txbxContent></v:textbox></v:shape></w:pict></w:r><w:r><w:t>Host.</w:t></w:r></w:p>"
+            + "<w:p><w:pPr><w:sectPr><w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/></w:sectPr></w:pPr><w:r><w:t>End one.</w:t></w:r></w:p>"
+            + "<w:p><w:r><w:t>Two.</w:t></w:r></w:p>"
+            + "<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/></w:sectPr>"));
+
+        var html = WmlToHtmlConverter.ConvertToHtml(doc, new WmlToHtmlConverterSettings { RenderPagination = PaginationMode.Paginated });
+        var sections = html.Descendants().Where(e => e.Attribute("data-section-index") is not null).ToList();
+
+        Assert.Equal(2, sections.Count);
+        Assert.Contains("Before box.", sections[0].Value);
+        Assert.Contains("End one.", sections[0].Value);
     }
 
     private static byte[] FloatingPicture(bool pending)
