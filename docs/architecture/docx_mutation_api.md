@@ -2180,7 +2180,16 @@ A **zero-length** span is a pure insertion. At an ordinary character boundary in
 
 At a run boundary (the end of one run's text, the start of another's, offset 0, or the end of the paragraph), insertion copies the neighbouring run's formatting and can coalesce with an ordinary adjacent run. It steps outside any complex field whose chrome surrounds the boundary, so text inserted after `Page {PAGE} of {NUMPAGES}` follows the field's `end` run rather than joining the NUMPAGES result Word would discard on its next field update.
 
-Text inserted at the edge of a tracked insertion, hyperlink or smart tag lands outside it. With tracked changes off, an offset strictly inside a tracked insertion that sits directly in the paragraph (inside one of its runs, or between two of them) splits the insertion around a plain run, whoever its author: untracked text is nobody's change, so it must not be credited to the insertion's author or disappear when that insertion is rejected. The second half keeps the author and date under a fresh `w:id`, as a split paragraph's does (issue #1319). An insertion nested inside a hyperlink is not split.
+Text inserted at the edge of a tracked insertion, hyperlink or smart tag lands outside it; at the edge of a move destination it also goes past the move's range marker, so it is outside the moved range. With tracked changes off, new text that would land strictly inside a tracked insertion goes in its own plain run instead, whoever the insertion's author: untracked text is nobody's change, so it must not be credited to the insertion's author or disappear when that insertion is rejected (issue #1319). This holds for a zero-length insertion and for the replacement text of a non-empty span alike. What is cut, and what is not:
+
+| Where the new text lands | Result |
+|---|---|
+| Inside a `w:ins`, in a run or between runs | The insertion is cut at that point and the text goes between the halves. The second half keeps the author and date under a fresh `w:id`, as a split paragraph's does. A cut that would leave a half with no content is not made; the text goes at that edge instead. |
+| Inside a `w:ins` that is itself in a hyperlink, content control or smart tag (`w:hyperlink > w:ins`, which Word writes for text typed into a link under tracking) | Only the insertion is cut; the text stays inside the link or control. |
+| Inside a hyperlink or smart tag that is itself in a `w:ins` | The hyperlink or smart tag is cut along with the insertion, each half keeping its attributes. |
+| Inside a content control or simple field that is itself in a `w:ins` | Nothing can be cut, so the text stays where it lands, as before. |
+| Strictly inside a `w:moveTo` | Refused with `UnsupportedInlineBoundary` in every mode, as `SplitParagraph` refuses it: Docxodus's two resolvers disagree about plain text inside a move range (see `docs/ooxml_corner_cases.md`). |
+| Inside a `w:del` or `w:moveFrom` | Not reachable: removed text takes no room in the offsets. |
 
 ### Recipe: enumerate-and-fill via Grep + ReplaceMatch
 

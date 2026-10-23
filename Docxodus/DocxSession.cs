@@ -2857,6 +2857,65 @@ public sealed partial class DocxSession : IDisposable
         SplitContainerBefore(container, movedChildren, nextRevisionId);
     }
 
+    /// <summary>
+    /// Where new text goes so it does not join a tracked insertion it must not belong to (issues
+    /// #1319, #1318). <paramref name="anchor"/> is the node the text goes after
+    /// (<paramref name="afterAnchor"/>) or before. When a tracked insertion (<c>w:ins</c>; a
+    /// <c>w:moveTo</c> is atomic and refused by the callers) that <paramref name="mayJoin"/>
+    /// rejects encloses it, that insertion is cut
+    /// in two at the anchor, together with any hyperlink or smart tag between the anchor and it
+    /// (each half keeps its attributes; a revision half takes a fresh id), and the returned
+    /// position is between the halves, still inside whatever contains the envelope. A cut that
+    /// would leave a half with no content is not made: the position moves to that edge instead.
+    /// Null when another kind of container (a content control, simple field) lies between the
+    /// anchor and the envelope, which cannot be cut.
+    /// </summary>
+    private (XElement Anchor, bool After)? OutsideForeignInsertion(
+        XElement paragraph, XElement anchor, bool afterAnchor, Func<XElement, bool> mayJoin)
+    {
+        var envelope = anchor.Ancestors().TakeWhile(a => !ReferenceEquals(a, paragraph))
+            .LastOrDefault(a => a.Name == W.ins && !mayJoin(a));
+        if (envelope is null) return (anchor, afterAnchor);
+        var node = anchor;
+        bool after = afterAnchor;
+        while (!ReferenceEquals(node, envelope))
+        {
+            var container = node.Parent!;
+            if (!BoundaryContainers.Contains(container.Name)) return null;
+            var leading = after ? node.ElementsBeforeSelf().Append(node) : node.ElementsBeforeSelf();
+            var trailing = after ? node.ElementsAfterSelf() : node.ElementsAfterSelf().Prepend(node);
+            if (!trailing.All(IsContentless))
+            {
+                if (leading.All(IsContentless)) after = false;
+                else
+                {
+                    SplitContainerBefore(container, trailing.ToList(), NextRevisionId);
+                    after = true;
+                }
+            }
+            else after = true;
+            node = container;
+        }
+        return (node, after);
+    }
+
+    /// <summary>Whether <see cref="OutsideForeignInsertion"/> has an envelope to leave from
+    /// <paramref name="anchor"/>, and whether it can (null when it would need to cut a container
+    /// other than a hyperlink, smart tag or revision envelope).</summary>
+    private static bool? NeedsToLeaveInsertion(XElement paragraph, XElement anchor, Func<XElement, bool> mayJoin)
+    {
+        var path = anchor.Ancestors().TakeWhile(a => !ReferenceEquals(a, paragraph)).ToList();
+        int outer = path.FindLastIndex(a => a.Name == W.ins && !mayJoin(a));
+        if (outer < 0) return false;
+        return path.Take(outer + 1).All(a => BoundaryContainers.Contains(a.Name)) ? true : null;
+    }
+
+    /// <summary>A sibling that gives a container half no content of its own: a range or proofing
+    /// marker, or a run holding nothing but properties and empty text.</summary>
+    private static bool IsContentless(XElement e) =>
+        IsInlineMarker(e)
+        || (e.Name == W.r && e.Elements().All(c => c.Name == W.rPr || (c.Name == W.t && c.Value.Length == 0)));
+
     /// <summary>Move <paramref name="movedChildren"/> (the container's trailing children) into a
     /// copy of <paramref name="container"/> placed right after it. Nothing to move, nothing done.</summary>
     internal static void SplitContainerBefore(XElement container, IReadOnlyList<XElement> movedChildren, Func<int> nextRevisionId)

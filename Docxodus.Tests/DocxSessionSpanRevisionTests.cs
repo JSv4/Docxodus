@@ -252,6 +252,137 @@ public class DocxSessionSpanRevisionTests
     }
 
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Untracked_TextTypedInsideAnInsertionInAHyperlink_SplitsOnlyTheInsertion(bool twoRuns)
+    {
+        var amount = (XElement)FeeAmountDue("Alex", twoRuns)[1];
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat",
+            Run("Fee "), new XElement(W.hyperlink, new XAttribute(W.anchor, "fees"), amount), Run(" due"));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 7, 0, "XY").Success);
+
+        Assert.Equal("\"Fee \" hyperlink[ins:Alex[\"amo\"] \"XY\" ins:Alex[\"unt\"]] \" due\"", Shape(session, p));
+        Assert.Equal("Fee XY due", Rejected(session));
+    }
+
+    [Fact]
+    public void Untracked_TextTypedInsideAnInsertionInAContentControl_SplitsOnlyTheInsertion()
+    {
+        var amount = (XElement)FeeAmountDue("Alex", twoRuns: true)[1];
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat",
+            Run("Fee "), new XElement(W.sdt, new XElement(W.sdtPr), new XElement(W.sdtContent, amount)), Run(" due"));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 7, 0, "XY").Success);
+
+        Assert.Equal("\"Fee \" sdt[sdtPr[] sdtContent[ins:Alex[\"amo\"] \"XY\" ins:Alex[\"unt\"]]] \" due\"", Shape(session, p));
+    }
+
+    [Fact]
+    public void Untracked_TextTypedInsideAContentControlInAnInsertion_StaysWhereItLands()
+    {
+        // Nothing between the text and the insertion can be cut, so it behaves as before.
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", Run("Fee "), Ins("Alex", 1,
+            new XElement(W.sdt, new XElement(W.sdtPr), new XElement(W.sdtContent, Run("amo"), Run("unt", bold: true)))), Run(" due"));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 7, 0, "XY").Success);
+
+        Assert.Equal("\"Fee \" ins:Alex[sdt[sdtPr[] sdtContent[\"amo\" \"XY\" \"unt\"]]] \" due\"", Shape(session, p));
+    }
+
+    [Fact]
+    public void Untracked_ReplacementInsideAnInsertion_GoesOutsideIt()
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", FeeAmountDue("Alex", twoRuns: false));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 6, 2, "XY").Success);
+
+        Assert.Equal("\"Fee \" ins:Alex[\"am\"] \"XY\" ins:Alex[\"nt\"] \" due\"", Shape(session, p));
+        Assert.Equal("Fee amXYnt due", Accepted(session));
+        Assert.Equal("Fee XY due", Rejected(session));
+    }
+
+    [Fact]
+    public void Untracked_ReplacementInsideAnInsertion_KeepsATabOnItsSide()
+    {
+        // The editor's fallback for an offset the zero-length path refuses: a run with a tab after text.
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", Run("Fee "), Ins("Alex", 1,
+            new XElement(W.r, new XElement(W.t, "amo"), new XElement(W.tab), new XElement(W.t, "unt"))), Run(" due"));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 5, 1, "mXY").Success);
+
+        Assert.Equal("\"Fee \" ins:Alex[\"a\"] \"mXY\" ins:Alex[\"o⇥unt\"] \" due\"", Shape(session, p));
+    }
+
+    [Fact]
+    public void Untracked_ReplacementInAFieldResultInsideAnInsertion_SurvivesItsReject()
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", Run("Fee "), Ins("Alex", 1, Run("amo"),
+            FieldChar("begin"), new XElement(W.r, new XElement(W.instrText, " PAGE ")), FieldChar("separate"),
+            Run("12"), FieldChar("end")), Run(" due"));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 7, 1, "1XY").Success);
+
+        Assert.Equal("Fee 1XY due", Rejected(session));
+    }
+
+    [Fact]
+    public void Untracked_TextAtTheStartOfAnInsertionAfterAnEmptyRun_LeavesNoEmptyHalf()
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat",
+            Ins("Alex", 1, new XElement(W.r, new XElement(W.rPr, new XElement(W.b))), Run("amount")), Run(" due"));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 0, 0, "XY").Success);
+
+        Assert.Equal(new[] { "insert:Alex:amount" }, Revisions(session));
+    }
+
+    private static object[] FeeMovedAmountDue(bool twoRuns) => new object[]
+    {
+        Run("Fee "),
+        new XElement(W.moveToRangeStart, Stamp("Alex", 10), new XAttribute(W.name, "move1")),
+        new XElement(W.moveTo, Stamp("Alex", 11),
+            twoRuns ? new object[] { Run("amo"), Run("unt", bold: true) } : new object[] { Run("amount") }),
+        new XElement(W.moveToRangeEnd, new XAttribute(W.id, 10)),
+        Run(" due"),
+    };
+
+    [Theory]
+    [InlineData(TrackedChangeMode.Accept, false, 7, 0, "XY")]
+    [InlineData(TrackedChangeMode.Accept, true, 7, 0, "XY")]
+    [InlineData(TrackedChangeMode.Accept, false, 6, 1, "oXY")]
+    [InlineData(TrackedChangeMode.RenderInline, false, 7, 0, "XY")]
+    [InlineData(TrackedChangeMode.RenderInline, true, 7, 0, "XY")]
+    [InlineData(TrackedChangeMode.RenderInline, false, 6, 1, "oXY")]
+    public void TextInsideAMoveDestination_IsRefused(TrackedChangeMode mode, bool twoRuns, int start, int length, string text)
+    {
+        var (session, p) = Open(mode, "Pat", FeeMovedAmountDue(twoRuns));
+        var before = session.GetPackageContentHash();
+
+        var edit = session.ReplaceTextAtSpan(p, start, length, text);
+
+        Assert.False(edit.Success);
+        Assert.Equal(EditErrorCode.UnsupportedInlineBoundary, edit.Error!.Code);
+        Assert.Equal(before, session.GetPackageContentHash());
+    }
+
+    [Theory]
+    [InlineData(TrackedChangeMode.Accept)]
+    [InlineData(TrackedChangeMode.RenderInline)]
+    public void TextAtTheEndOfAMoveDestination_LandsOutsideTheMovedRange(TrackedChangeMode mode)
+    {
+        var (session, p) = Open(mode, "Pat", FeeMovedAmountDue(twoRuns: false));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 10, 0, "XY").Success);
+
+        var shape = Shape(session, p);
+        Assert.True(shape.IndexOf("moveToRangeEnd", StringComparison.Ordinal) < shape.IndexOf("XY", StringComparison.Ordinal), shape);
+        Assert.Equal("Fee amountXY due", Accepted(session));
+        // Untracked, the text is nobody's change and survives rejecting the move.
+        if (mode == TrackedChangeMode.Accept) Assert.Equal("Fee XY due", Rejected(session));
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     private static XElement Run(string text, bool bold = false) => new(W.r,
@@ -268,6 +399,9 @@ public class DocxSessionSpanRevisionTests
 
     private static XElement Del(string author, int id, string text) => new(W.del, Stamp(author, id),
         new XElement(W.r, new XElement(W.delText, new XAttribute(XNamespace.Xml + "space", "preserve"), text)));
+
+    private static XElement FieldChar(string type) =>
+        new(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, type)));
 
     private static XElement Bookmark(XName marker) => marker == W.bookmarkStart
         ? new XElement(marker, new XAttribute(W.id, 10), new XAttribute(W.name, "_Toc1"))
