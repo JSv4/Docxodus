@@ -574,6 +574,77 @@ public class DocxSessionMetadataTests
         Assert.Equal(2, sections.Count);
         Assert.All(sections, s => Assert.Same(s,
             BlockMetadataOps.FindGoverningSectPr(s.Element(W.sectPrChange)!.Element(W.sectPr)!)));
+
+        // Through the public entry: no anchor reports a stored earlier copy's page (9999/9998).
+        static string Pending(int width, int before) => Sect(width).Replace("</w:sectPr>",
+            $"<w:sectPrChange w:id=\"{before}\" w:author=\"Alice\"><w:sectPr><w:pgSz w:w=\"{before}\" w:h=\"15840\"/></w:sectPr></w:sectPrChange></w:sectPr>");
+        using var session = new DocxSession(BuildLiteralXmlDocument(
+            $"<w:body><w:p><w:pPr>{Pending(12240, 9999)}</w:pPr><w:r><w:t>One.</w:t></w:r></w:p><w:p><w:r><w:t>Two.</w:t></w:r></w:p>{Pending(15840, 9998)}</w:body>",
+            NormalStyles));
+        var widths = session.Project().AnchorIndex.Values.Where(v => v.Anchor.Scope == "body")
+            .Select(v => session.GetSectionInfo(v.Anchor.Id)!.PageWidthTwips).Distinct().OrderBy(w => w);
+        Assert.Equal(new[] { 12240, 15840 }, widths);
+    }
+
+    // A w:sectPr that is no section break (one inside a text box, or the earlier properties a
+    // w:pPrChange keeps) sits in a container between "A." and the real break that ends A's section.
+    // Lookups pass over it; an edit through A changes the real break, never the decoy (width 9999).
+    [Theory]
+    [InlineData("tbl")]
+    [InlineData("sdt")]
+    [InlineData("pPrChange")]
+    public void BM028_SectionLookups_SkipASectPrThatIsNoSectionBreak(string decoy)
+    {
+        string boxed = $"<w:r><w:pict><v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\"><v:textbox><w:txbxContent><w:p><w:pPr>{Sect(9999)}</w:pPr><w:r><w:t>Boxed.</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>";
+        string container = decoy switch
+        {
+            "tbl" => $"<w:tbl><w:tblGrid><w:gridCol w:w=\"5000\"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Held.</w:t></w:r>{boxed}</w:p></w:tc></w:tr></w:tbl>",
+            "sdt" => $"<w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>Held.</w:t></w:r>{boxed}</w:p></w:sdtContent></w:sdt>",
+            _ => $"<w:tbl><w:tblGrid><w:gridCol w:w=\"5000\"/></w:tblGrid><w:tr><w:tc><w:p><w:pPr><w:pPrChange w:id=\"5\" w:author=\"Alice\"><w:pPr>{Sect(9999)}</w:pPr></w:pPrChange></w:pPr><w:r><w:t>Held.</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+        };
+        using var session = new DocxSession(BuildLiteralXmlDocument(
+            $"<w:body><w:p><w:r><w:t>A.</w:t></w:r></w:p>{container}<w:p><w:pPr>{Sect(12240)}</w:pPr><w:r><w:t>B.</w:t></w:r></w:p>{Sect(15840)}</w:body>",
+            NormalStyles));
+        var anchor = session.Project().AnchorIndex.Values.First(v => v.Anchor.Kind == "p" && v.TextPreview == "A.").Anchor.Id;
+
+        Assert.Equal(12240, session.GetSectionInfo(anchor)!.PageWidthTwips);
+        Assert.All(session.ListBlocks().Body, unit => Assert.Equal(0, unit.Section));   // A, the container, B
+        var chrome = HtmlConversionOps.RenderChromeHtml(session, new HtmlConversionOptions { PaginationMode = 1 });
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(chrome, "<div[^>]*data-section-index=").Count);
+        Assert.True(session.SetPageSetup(anchor, new PageSetupOp { MarginLeftTwips = 999 }).Success);
+        Assert.Equal(new[] { ("9999", "1440"), ("12240", "999"), ("15840", "1440") }, SectionMargins(session.Save()));
+    }
+
+    // Content after the body's trailing w:sectPr (invalid, but seen in the wild) belongs to that
+    // section; an edit must change it rather than append a second body-level w:sectPr.
+    [Fact]
+    public void BM029_ContentAfterTheTrailingSectPr_EditsThatSection()
+    {
+        using var session = new DocxSession(BuildLiteralXmlDocument(
+            $"<w:body><w:p><w:r><w:t>A.</w:t></w:r></w:p>{Sect(15840)}<w:p><w:r><w:t>After.</w:t></w:r></w:p></w:body>",
+            NormalStyles));
+        var after = session.Project().AnchorIndex.Values.First(v => v.Anchor.Kind == "p" && v.TextPreview == "After.").Anchor.Id;
+
+        Assert.Equal(15840, session.GetSectionInfo(after)!.PageWidthTwips);
+        Assert.True(session.SetPageSetup(after, new PageSetupOp { MarginLeftTwips = 999 }).Success);
+        Assert.Equal(new[] { ("15840", "999") }, SectionMargins(session.Save()));
+    }
+
+    private const string NormalStyles =
+        """<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>""";
+
+    private static string Sect(int width) =>
+        $"<w:sectPr><w:pgSz w:w=\"{width}\" w:h=\"15840\"/>"
+        + "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/></w:sectPr>";
+
+    /// <summary>(page width, left margin) of every w:sectPr in the saved body, in document order.</summary>
+    private static (string, string)[] SectionMargins(byte[] saved)
+    {
+        using var stream = new MemoryStream(saved);
+        using var doc = WordprocessingDocument.Open(stream, false);
+        return doc.MainDocumentPart!.GetXDocument().Root!.Descendants(W.sectPr)
+            .Select(s => ((string?)s.Element(W.pgSz)?.Attribute(W._w) ?? "", (string?)s.Element(W.pgMar)?.Attribute(W.left) ?? ""))
+            .ToArray();
     }
 
     /// <summary>Four sections: break A and break B on consecutive body paragraphs, break C on a
@@ -581,9 +652,6 @@ public class DocxSessionMetadataTests
     /// page width so a test can tell which one a lookup resolved to.</summary>
     private static byte[] BuildFourSectionDocument()
     {
-        static string Sect(int width) =>
-            $"<w:sectPr><w:pgSz w:w=\"{width}\" w:h=\"15840\"/>"
-            + "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/></w:sectPr>";
         return BuildLiteralXmlDocument(
             $"""
             <w:body>

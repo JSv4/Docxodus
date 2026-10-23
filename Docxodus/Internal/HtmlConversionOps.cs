@@ -271,9 +271,7 @@ internal static class HtmlConversionOps
                     .Where(e => e.Name == W.footnoteReference || e.Name == W.endnoteReference)
                     .Select(e => new XElement(W.r, new XElement(e)))
                     .ToList();
-                var sectPr = child.Name == W.p
-                    ? child.Element(W.pPr)?.Element(W.sectPr)
-                    : child.Descendants(W.sectPr).FirstOrDefault(s => s.Parent?.Name == W.pPr);
+                var sectPr = BlockMetadataOps.SectionBreakIn(child);
                 if (references.Count == 0 && sectPr is null)
                 {
                     child.Remove();

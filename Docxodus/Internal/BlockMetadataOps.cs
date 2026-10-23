@@ -139,13 +139,13 @@ internal static class BlockMetadataOps
 
     /// <summary>
     /// The <c>w:sectPr</c> that governs <paramref name="element"/> (anything in the body): the
-    /// first section break at or after it in document order. A <c>sec</c> anchor's own
-    /// <c>w:sectPr</c> governs itself, a paragraph that carries a break belongs to the section
-    /// it ends, a table whose cell paragraph carries one belongs to that one, and content inside
-    /// a paragraph (a text box's) belongs to that paragraph's section. Returns <c>null</c> when
-    /// no break follows — a body with no section properties at all. Shared by every section
-    /// read and edit: <c>GetSectionInfo</c>, <c>SetPageSetup</c>, the page-numbering and
-    /// header/footer ops.
+    /// first section break (<see cref="IsSectionBreak"/>) at or after the main-story block holding
+    /// it. A <c>sec</c> anchor's own <c>w:sectPr</c> governs itself, a paragraph that carries a
+    /// break belongs to the section it ends, a table whose cell paragraph carries one belongs to
+    /// that one, and content inside a paragraph (a text box's, or properties a pending change
+    /// keeps) belongs to that paragraph's section. With no break after it, the body's trailing
+    /// <c>w:sectPr</c>; <c>null</c> only when the body has none. Shared by every section read and
+    /// edit: <c>GetSectionInfo</c>, <c>SetPageSetup</c>, the page-numbering and header/footer ops.
     /// </summary>
     internal static XElement? FindGoverningSectPr(XElement element)
     {
@@ -160,22 +160,27 @@ internal static class BlockMetadataOps
         for (var node = block; node != body; node = node.Parent!)
             foreach (var next in node.ElementsAfterSelf())
                 if (SectionBreakIn(next) is { } after) return after;
-        return null;
+        // Content after the trailing sectPr (invalid, but seen in the wild) still belongs to it.
+        return body.Element(W.sectPr);
     }
 
     /// <summary>The first section break <paramref name="block"/> carries: a paragraph's own
     /// <c>w:pPr/w:sectPr</c>, the body's trailing <c>w:sectPr</c> itself, or for a container (a
     /// table, a content control) the first break on a paragraph inside it.</summary>
     internal static XElement? SectionBreakIn(XElement block) =>
-        block.Name == W.p ? block.Element(W.pPr)?.Element(W.sectPr)
+        block.Name == W.p ? block.Element(W.pPr)?.Element(W.sectPr) is { } own && IsSectionBreak(own) ? own : null
         : block.Name == W.sectPr ? (IsSectionBreak(block) ? block : null)
         : block.Descendants(W.sectPr).FirstOrDefault(IsSectionBreak);
 
-    /// <summary>Whether <paramref name="sectPr"/> ends a section: a paragraph mark's
-    /// (<c>w:pPr/w:sectPr</c>, in the body or a table cell) or the body's trailing one. The copy
-    /// of a section's earlier properties inside <c>w:sectPrChange</c> is not one.</summary>
+    /// <summary>Whether <paramref name="sectPr"/> ends a section: the body's trailing one, or a
+    /// main-story paragraph mark's (<c>w:p/w:pPr/w:sectPr</c>, in the body, a table cell or a
+    /// content control). Not one: a paragraph's inside a text box (its own story), and the earlier
+    /// properties a <c>w:sectPrChange</c> or <c>w:pPrChange</c> keeps. Mirrors
+    /// <c>WmlToHtmlConverter.CollectSectionData</c>; see docs/ooxml_corner_cases.md.</summary>
     internal static bool IsSectionBreak(XElement sectPr) =>
-        sectPr.Parent?.Name == W.pPr || sectPr.Parent?.Name == W.body;
+        sectPr.Parent is { } parent
+        && (parent.Name == W.body
+            || parent.Name == W.pPr && parent.Parent?.Name == W.p && !parent.Ancestors(W.txbxContent).Any());
 
     /// <summary>
     /// Extend a section's own references with the ones it INHERITS. Per ECMA-376 §17.6.17 a
