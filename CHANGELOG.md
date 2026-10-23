@@ -51,6 +51,26 @@ All notable changes to this project will be documented in this file.
   follows another starts where that one ends. A paragraph's own after-spacing still separates it from
   the table, and a floating table keeps its `w:tblpPr` distance from the text above. The measurements
   are in `docs/ooxml_corner_cases.md`.
+
+- With tracked changes off, text inserted through `ReplaceTextAtSpan` at an offset strictly inside a tracked
+  insertion now splits the insertion around a plain run (#1319). Inside one of the insertion's runs the
+  call was refused, and the browser editor's fallback then grew the insertion's run; between two of its
+  runs the new run joined the insertion. Either way the text was credited to the insertion's author and
+  removed when that insertion was rejected. The second half keeps the author and date under a fresh
+  `w:id`, as `SplitParagraph` already does.
+
+- With tracked changes off, text inserted through `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`)
+  that would land strictly inside a tracked insertion now goes in its own plain run, splitting the insertion
+  (#1319). A zero-length insert inside one of the insertion's runs was refused, and the browser editor's
+  fallback then grew the insertion's run; between two of its runs, or through a span replacement (typing
+  over a selection), the text joined the insertion. Either way it was credited to the insertion's author and
+  removed when that insertion was rejected. The second half keeps the author and date under a fresh `w:id`,
+  as `SplitParagraph` already does. An insertion inside a hyperlink, content control or smart tag is split
+  inside that container. Text typed strictly inside a tracked move destination (`w:moveTo`) is now refused
+  with `UnsupportedInlineBoundary` in every mode, as `SplitParagraph` refuses it, and text typed at a move's
+  end goes past its range marker; before, it landed inside the moved range, where `RevisionProcessor` drops
+  it on reject (#1340).
+
 - Under tracked changes, deleting or replacing text in the session author's own pending insertion through
   `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`) now removes it from the insertion instead of
   recording a deletion nested inside it (#1316). A Backspace in text still being typed left a struck

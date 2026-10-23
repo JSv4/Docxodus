@@ -4072,3 +4072,23 @@ a paragraph whose run uses it (`w:rStyle="DocID"`); then the mirror case, an ori
 by a kept run and a revision inserting a paragraph with paragraph style `DocID`. Record whether Word drops,
 renames or merges the revised style, what the inserted run's or paragraph's style reference names, and
 whether `w:name` changes.
+
+### Plain text inside a move-destination range (issue #1340)
+
+A run that sits between `w:moveToRangeStart` and `w:moveToRangeEnd` but outside any `w:moveTo` is read two ways in Docxodus:
+
+```xml
+<w:moveToRangeStart w:id="3" w:name="move1" w:author="Alex" w:date="2026-05-01T09:00:00Z"/>
+<w:moveTo w:id="4" w:author="Alex" w:date="2026-05-01T09:00:00Z"><w:r><w:t>amount</w:t></w:r></w:moveTo>
+<w:r><w:t>XY</w:t></w:r>
+<w:moveToRangeEnd w:id="3"/>
+```
+
+| Reader | Reject all |
+|---|---|
+| Word | unverified |
+| LibreOffice | unverified |
+| `RevisionProcessor.RejectRevisions` | drops `XY` (the whole range is the moved content) |
+| `DocxSession.RejectAllRevisions` | keeps `XY` (only `w:moveTo` content is moved) |
+
+Splitting the range in two around the text (two ranges with the same `w:name`) satisfies both resolvers' text, but the session's registry flags it as `ambiguous_move_topology` and refuses to resolve it. So the session avoids writing either shape within one paragraph: `ReplaceTextAtSpan` refuses text strictly inside a `w:moveTo`, as `SplitParagraph` does, and text typed at a move's edge goes past the range marker when that marker is in the same paragraph (`DocxSession.Text.cs`, `InsertTextAtBoundary` and `PastMoveRangeMarker`). A moved range that spans paragraphs is not covered yet: text typed at the end of the first moved paragraph, or the start of a later one, still lands inside the range (see #1340). Documents that already hold the first shape still resolve differently; see #1340.
