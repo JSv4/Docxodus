@@ -2873,11 +2873,14 @@ later tabs had no width, rendered no tab element, and the flexible-tab renderer 
 
 The fix: past the stops generated up front, the next automatic stop is computed on demand as the first
 interval multiple beyond the pen, so every tab is measured and the pass never stops early. A zero
-interval generates no automatic stops, as in Word: custom stops (and the left-indent stop) still
-apply, and a tab past them advances nothing. A negative value is schema-invalid; it is read as 0,
-Word's minimum, rather than as an absent element. The next automatic stop after a position is the
-floor of position / interval, plus one, times the interval, so a pen left of the margin (a negative
-indent) does not skip the multiple just after it.
+interval generates no automatic stops, as in Word: a tab with no stop ahead of it advances nothing.
+Custom stops (and the left-indent stop) still apply, and a tab past them also advances nothing.
+That part is inferred, not measured: the Word captures above have no custom stops or indent. A
+negative value is schema-invalid; it is read as 0, Word's minimum, rather than as an absent element.
+The next automatic stop after a position is the floor of position / interval, plus one, times the
+interval, so a pen left of the margin (a negative indent) does not skip the multiple just after it.
+This rounding is also inferred: it matches LibreOffice and the spec's definition of automatic stops
+as interval multiples, but was not measured in Word.
 
 What remains: the tab pass chooses each stop from its own estimate of the preceding text's width. In
 the browser export, where no font metrics are available to that pass, the estimate ran about 10pt

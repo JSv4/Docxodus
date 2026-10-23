@@ -69,7 +69,13 @@ All notable changes to this project will be documented in this file.
   paragraph whose tabs fall on automatic stops when `w:defaultTabStop` is tiny or 0 (#1269). Automatic
   stops now continue past the pen for as long as the line needs them, so every tab is measured and
   positioned. A zero interval generates no automatic stops, as in Word: a tab past the last custom
-  stop has no width.
+  stop has no width. Two outputs change for documents that already converted:
+  - A paragraph with `w:defaultTabStop` 0 and custom tab stops or a left indent now gives zero-width
+    tabs after its last stop, instead of using the half-inch grid.
+  - In a negative-indent paragraph, the first automatic stop is now the next interval multiple to the
+    right of the indent, matching LibreOffice. For example, at the default interval a leading tab in a
+    paragraph indented -360 twips now reaches the margin rather than 0.5in, and at -725 or -1080 twips
+    it reaches -0.5in.
 
 - Tracked formatting of a run that already has another author's pending format change is now
   credited to the person who made it (#1295). The session folded the new formatting into the
