@@ -771,11 +771,12 @@ public sealed partial class DocxSession
             return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
                 "SplitParagraph offset falls inside a revision or unsupported inline container; " +
                 "choose a boundary before or after that container", anchorId);
-        // A field whose begin and end are both here stays whole: the offset is inside its
-        // result, and splitting there would carry the end mark into the next paragraph.
+        // A field whose begin and end are both here stays whole: an offset between its begin and
+        // end marks would leave one in each paragraph. Its edges stay splittable.
         if (SplitWouldCutAField(element, characterOffset))
             return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
-                "SplitParagraph offset falls inside a field's result; split before or after the field", anchorId);
+                "SplitParagraph offset falls between a field's begin and end marks; split before or after the field",
+                anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -911,24 +912,59 @@ public sealed partial class DocxSession
 
     /// <summary>
     /// Why a tracked merge of <paramref name="first"/> into the paragraph after it cannot be
-    /// recorded, or null when it can. The deleted mark that records the join needs two
-    /// paragraphs; a mark another revision has already deleted or moved is that revision's to
-    /// resolve first; and a mark that ends a section owns the section break, which accepting
-    /// the deletion would lose where an untracked merge keeps it.
+    /// recorded, or null when it can (issue #1313):
+    /// <list type="bullet">
+    /// <item>the deleted mark that records the join needs two paragraphs;</item>
+    /// <item>a mark another revision already deleted or moved, on either paragraph, is that
+    /// revision's to resolve first: a deleted second mark would join a third paragraph on accept;</item>
+    /// <item>a first mark that ends a section owns the section break, which accepting the deletion
+    /// would lose where an untracked merge keeps it;</item>
+    /// <item>a pending property change on the first paragraph (its <c>w:pPrChange</c> or its
+    /// mark's <c>w:rPrChange</c>, by anyone): the merge copies the first paragraph's properties
+    /// onto the second, and one copy cannot follow both outcomes of that change, so rejecting it
+    /// while accepting the merge would bring back the formatting it rejected;</item>
+    /// <item>a pending property change on the second paragraph, unless it is the editor's own
+    /// and the merge takes it back to its baseline (Enter then Backspace), which resolves it.
+    /// Otherwise the merge would fold into it and the one change would record both edits, so
+    /// neither could be reviewed on its own; and resolving another author's change would discard
+    /// it, so rejecting the merge would not bring it back.</item>
+    /// </list>
     /// </summary>
-    private static EditResult? RefuseTrackedMerge(XElement first, XElement second, string anchorId)
+    private EditResult? RefuseTrackedMerge(XElement first, XElement second, string anchorId)
     {
         if (first.Name != W.p || second.Name != W.p)
             return TrackedStructureUnsupported("MergeParagraphs", anchorId);
-        var pPr = first.Element(W.pPr);
-        if (pPr is not null && ParagraphMarkRevisions(pPr).FirstOrDefault(r => r.Name != W.ins) is { } pending)
-            return EditResult.Fail(EditErrorCode.UnresolvedStructuralRevision,
-                $"the first paragraph's mark has an unresolved {pending.Name.LocalName} revision; resolve it before merging",
-                anchorId);
-        return pPr?.Element(W.sectPr) is not null
-            ? TrackedStructureUnsupported("MergeParagraphs", anchorId)
-            : null;
+        var firstPPr = first.Element(W.pPr);
+        var secondPPr = second.Element(W.pPr);
+        if (firstPPr is not null && ParagraphMarkRevisions(firstPPr).FirstOrDefault(r => r.Name != W.ins) is { } firstMark)
+            return UnresolvedBeforeMerge($"the first paragraph's mark has an unresolved {firstMark.Name.LocalName} revision", anchorId);
+        if (secondPPr is not null && ParagraphMarkRevisions(secondPPr)
+                .FirstOrDefault(r => r.Name == W.del || r.Name == W.moveFrom) is { } secondMark)
+            return UnresolvedBeforeMerge($"the second paragraph's mark has an unresolved {secondMark.Name.LocalName} revision", anchorId);
+        if (firstPPr?.Element(W.sectPr) is not null)
+            return TrackedStructureUnsupported("MergeParagraphs", anchorId);
+        if ((firstPPr?.Element(W.pPrChange) ?? firstPPr?.Element(W.rPr)?.Element(W.rPrChange)) is { } firstChange)
+            return UnresolvedBeforeMerge($"the first paragraph has an unresolved {firstChange.Name.LocalName}", anchorId);
+
+        var author = _revisionAuthor ?? "docxodus";
+        var markRevisions = Internal.RevisionOps.RevWrapperNames;
+        bool Resolves(XElement change, XName propertyName, XElement? target, params XName[] excluded) =>
+            string.Equals((string?)change.Attribute(W.author), author, StringComparison.Ordinal)
+            && XNode.DeepEquals(
+                PropertySnapshot(change.Element(propertyName), propertyName, change.Name, excluded),
+                PropertySnapshot(target, propertyName, change.Name, excluded));
+        if (secondPPr?.Element(W.pPrChange) is { } secondChange
+            && !Resolves(secondChange, W.pPr, firstPPr, W.rPr, W.sectPr))
+            return UnresolvedBeforeMerge("the second paragraph has an unresolved pPrChange", anchorId);
+        if (secondPPr?.Element(W.rPr)?.Element(W.rPrChange) is { } secondMarkChange
+            && !Resolves(secondMarkChange, W.rPr, firstPPr?.Element(W.rPr), markRevisions))
+            return UnresolvedBeforeMerge("the second paragraph's mark has an unresolved rPrChange", anchorId);
+        return null;
     }
+
+    private static EditResult UnresolvedBeforeMerge(string what, string anchorId) =>
+        EditResult.Fail(EditErrorCode.UnresolvedStructuralRevision,
+            $"{what}; resolve it before a tracked MergeParagraphs", anchorId);
 
     /// <summary>
     /// Accepting a deleted paragraph mark joins its paragraph into the next one, which keeps its
@@ -1028,10 +1064,16 @@ public sealed partial class DocxSession
                 TrackMergedProperties(firstEl.Element(W.pPr), secondEl, stamp);
                 MarkParagraphMark(firstEl, W.del, stamp.Author, stamp.Date);
                 InvalidateProjectionCache();
+                // The second paragraph took the first's properties, so its kind can change
+                // (p → h, p → li): report the anchors as the fresh index has them.
                 return new EditResult
                 {
                     Success = true,
-                    Modified = new[] { firstTarget.Anchor, secondTarget.Anchor },
+                    Modified = new[]
+                    {
+                        AnchorForUnid(firstTarget.Unid, firstTarget.PartUri) ?? firstTarget.Anchor,
+                        AnchorForUnid(secondTarget.Unid, secondTarget.PartUri) ?? secondTarget.Anchor,
+                    },
                     Patch = PatchFor(firstTarget),
                 };
             }

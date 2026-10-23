@@ -739,7 +739,9 @@ const NOTE_NUMBER_SELECTOR = ".footnote-number, .endnote-number";
  * runs hold `w:t`, as Word writes it, or `w:delText` (issue #1282), so the editor does as well.
  */
 const RENDERED_TEXT_DELETION_SELECTOR = 'del[class*="-del"], del[class*="move-from"]';
-const RENDERED_DELETION_SELECTOR = RENDERED_TEXT_DELETION_SELECTOR + ', span[class*="para-mark-del"]';
+/** The pilcrow the renderer draws at the end of a paragraph whose mark is a pending deletion. */
+const DELETED_PARAGRAPH_MARK_SELECTOR = 'span[class*="para-mark-del"]';
+const RENDERED_DELETION_SELECTOR = RENDERED_TEXT_DELETION_SELECTOR + ", " + DELETED_PARAGRAPH_MARK_SELECTOR;
 
 const GENERATED_CHROME_SELECTOR =
   '[data-list-marker], a.footnote-ref, a.endnote-ref, a[class$="-backref"], a.comment-marker, '
@@ -3065,6 +3067,14 @@ export class DocxEditor {
         const prev = this.previousEditable(el);
         if (prev) {
           ev.preventDefault();
+          // The previous paragraph's mark is already a pending deletion (a tracked join waiting
+          // for review), so the two are joined already. As in Word, Backspace steps over the
+          // struck pilcrow and removes the live character before it, instead of joining again.
+          if (prev.querySelector(DELETED_PARAGRAPH_MARK_SELECTOR)) {
+            placeCaretAtOffset(prev, blockContentText(prev).length);
+            deleteLiveCharacterBeyond(prev, "deleteContentBackward");
+            return;
+          }
           this.mergeWithPrevious(prev, el);
         }
       }

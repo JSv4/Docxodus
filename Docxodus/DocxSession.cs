@@ -2925,18 +2925,25 @@ public sealed partial class DocxSession : IDisposable
     {
         if (movedChildren.Count == 0) return;
 
+        var second = SecondHalfOf(container, nextRevisionId);
+        foreach (var child in movedChildren) { child.Remove(); second.Add(child); }
+        container.AddAfterSelf(second);
+    }
+
+    /// <summary>An empty container to hold the second half of <paramref name="container"/> when it
+    /// is cut in two. Every attribute EXCEPT the Unid: that one is this container's identity, and a
+    /// hyperlink's public hl:&lt;scope&gt;:&lt;unid&gt; id is derived from it. Cloning it would give
+    /// the two halves the same id, so FindHyperlinkElement would match only the first and
+    /// Update/RemoveHyperlink would silently act on half the link. An insertion's w:id is likewise
+    /// its own (issue #1298).</summary>
+    private static XElement SecondHalfOf(XElement container, Func<int> nextRevisionId)
+    {
         var second = new XElement(container.Name);
-        // Every attribute EXCEPT the Unid: that one is this container's identity, and a
-        // hyperlink's public hl:<scope>:<unid> id is derived from it. Cloning it would give the
-        // two halves the same id, so FindHyperlinkElement would match only the first and
-        // Update/RemoveHyperlink would silently act on half the link. An insertion's w:id is
-        // likewise its own (issue #1298).
         foreach (var a in container.Attributes())
             if (a.Name != PtOpenXml.Unid) second.SetAttributeValue(a.Name, a.Value);
         second.SetAttributeValue(PtOpenXml.Unid, UnidHelper.GenerateUnid());
         Internal.RevisionOps.RenumberCopiedRevisions(second, nextRevisionId);
-        foreach (var child in movedChildren) { child.Remove(); second.Add(child); }
-        container.AddAfterSelf(second);
+        return second;
     }
 
     /// <summary>
@@ -2976,39 +2983,98 @@ public sealed partial class DocxSession : IDisposable
 
     /// <summary>Split the content of <paramref name="paragraph"/> at <paramref name="offset"/>,
     /// moving everything after it into <paramref name="destination"/>: the run and container
-    /// splits <see cref="MoveInlineChildrenAfter"/> needs, then the move itself.</summary>
+    /// splits <see cref="MoveInlineChildrenAfter"/> needs, then the move itself. A field whose
+    /// begin or end mark sits at the offset is first cut free of what shares its run, hyperlink or
+    /// insertion on the other side, so a split at the field's edge keeps the field whole.</summary>
     private static void SplitParagraphContent(XElement paragraph, int offset, XElement destination,
         Func<int> nextRevisionId)
     {
+        foreach (var field in ParagraphFields(paragraph))
+        {
+            if (field.BeginAt == offset) SeparateFieldMark(field.Begin, paragraph, before: true, nextRevisionId);
+            else if (field.EndAt == offset) SeparateFieldMark(field.End, paragraph, before: false, nextRevisionId);
+        }
         SplitRunsAtOffset(paragraph, offset, nextRevisionId);
         SplitInlineContainersAtOffset(paragraph, offset, nextRevisionId);
         MoveInlineChildrenAfter(paragraph, offset, destination);
     }
 
+    /// <summary>A complex field that begins and ends in one paragraph: its begin and end marks
+    /// and their text offsets, in the paragraph's <see cref="ParagraphText"/> coordinates.</summary>
+    private readonly record struct ParagraphField(XElement Begin, XElement End, int BeginAt, int EndAt);
+
     /// <summary>The complex fields (<c>w:fldChar</c> begin … end) that both begin and end in
-    /// <paramref name="paragraph"/>, nested ones included, as their begin and end marks. A field
-    /// that runs on from an earlier paragraph or into a later one (a table of contents) is not
-    /// listed; neither is a field in a text box's own paragraphs.</summary>
-    private static List<(XElement Begin, XElement End)> ParagraphFields(XElement paragraph)
+    /// <paramref name="paragraph"/>, nested ones included. A field that runs on from an earlier
+    /// paragraph or into a later one (a table of contents) is not listed; neither is a field in a
+    /// text box's own paragraphs.</summary>
+    private static List<ParagraphField> ParagraphFields(XElement paragraph)
     {
-        var fields = new List<(XElement Begin, XElement End)>();
-        var open = new Stack<XElement>();
-        foreach (var mark in paragraph.Descendants(W.fldChar))
+        var fields = new List<ParagraphField>();
+        if (!paragraph.Descendants(W.fldChar).Any()) return fields;
+        var textRuns = InlineRuns(paragraph).ToHashSet();
+        var open = new Stack<(XElement Mark, int At)>();
+        int at = 0;
+        foreach (var element in paragraph.Descendants())
         {
-            if (!ReferenceEquals(mark.Ancestors(W.p).FirstOrDefault(), paragraph)) continue;
-            switch ((string?)mark.Attribute(W.fldCharType))
+            if (element.Name == W.t && element.Parent is { } run && textRuns.Contains(run))
+                at += element.Value.Length;
+            if (element.Name != W.fldChar || !ReferenceEquals(element.Ancestors(W.p).FirstOrDefault(), paragraph))
+                continue;
+            switch ((string?)element.Attribute(W.fldCharType))
             {
-                case "begin": open.Push(mark); break;
-                case "end" when open.Count > 0: fields.Add((open.Pop(), mark)); break;
+                case "begin": open.Push((element, at)); break;
+                case "end" when open.Count > 0:
+                    var begin = open.Pop();
+                    fields.Add(new ParagraphField(begin.Mark, element, begin.At, at));
+                    break;
             }
         }
         return fields;
     }
 
+    /// <summary>
+    /// Cut the run holding a field's <paramref name="mark"/>, and each hyperlink or tracked
+    /// insertion around it, so that the mark starts (<paramref name="before"/>) or ends its
+    /// top-level paragraph child: Word may write a field's end mark and the text after it in one
+    /// run. Each cut is the one a text split makes, so the later half of a run keeps its revision
+    /// ids and the later half of a container takes fresh ones. Stops at any other container,
+    /// which a split keeps whole.
+    /// </summary>
+    private static void SeparateFieldMark(XElement mark, XElement paragraph, bool before, Func<int> nextRevisionId)
+    {
+        var node = mark;
+        while (node.Parent is { } parent && !ReferenceEquals(parent, paragraph))
+        {
+            if (parent.Name != W.r && !SplittableInlineContainers.Contains(parent.Name)) return;
+            var moving = (before ? node.ElementsAfterSelf().Prepend(node) : node.ElementsAfterSelf()).ToList();
+            bool nothingAhead = before && !node.ElementsBeforeSelf().Any(e => e.Name != W.rPr);
+            if (moving.Count == 0 || nothingAhead)
+            {
+                node = parent;
+                continue;
+            }
+            XElement second;
+            if (parent.Name == W.r)
+            {
+                second = new XElement(W.r);
+                if (parent.Element(W.rPr) is { } rPr)
+                {
+                    second.Add(new XElement(rPr));
+                    Internal.RevisionOps.RenumberCopiedRevisions(rPr, nextRevisionId);
+                }
+            }
+            else second = SecondHalfOf(parent, nextRevisionId);
+            foreach (var element in moving) { element.Remove(); second.Add(element); }
+            parent.AddAfterSelf(second);
+            node = before ? second : parent;
+        }
+    }
+
     /// <summary>Whether splitting <paramref name="paragraph"/> at <paramref name="offset"/> would
-    /// leave a field's begin in one paragraph and its end in the other — an offset inside the
-    /// field's result. Answered by splitting a copy, so every container the field's marks can
-    /// sit in (a tracked insertion, a hyperlink) is split exactly as the real split would.</summary>
+    /// leave a field's begin in one paragraph and its end in the other: an offset strictly inside
+    /// the field, or, at its edge, a mark held in a container the split keeps whole (a content
+    /// control). Answered by splitting a copy, so every container the field's marks can sit in (a
+    /// tracked insertion, a hyperlink) is split exactly as the real split would.</summary>
     private static bool SplitWouldCutAField(XElement paragraph, int offset)
     {
         if (ParagraphFields(paragraph).Count == 0) return false;

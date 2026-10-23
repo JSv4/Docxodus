@@ -532,7 +532,7 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | `InsertParagraph(p, pos, md)` | one anchor per new block | — | — | smallest enclosing common parent |
 | `SplitParagraph(p, offset)` | the **second** half | — | `p` (first half — convention) | enclosing parent |
 | `MergeParagraphs(a, b)`, untracked | — | `b` + descendants | `a` | `a` |
-| `MergeParagraphs(a, b)`, `RenderInline` | — | — (both stay until the deleted mark is accepted) | `a`, `b` | `a` |
+| `MergeParagraphs(a, b)`, `RenderInline` | — | — (both stay until the deleted mark is accepted) | `a`, `b` (as re-projected: `b`'s kind can change) | `a` |
 | `ApplyFormat(p, span?, op)` | — | — | `p` | `p` |
 | `SetParagraphStyle(p, style)` | — | — | `p` (kind prefix may flip) | `p` |
 | `SetListLevel(p, delta)` | — | — | `p` | enclosing list (downstream items renumber) |
@@ -591,19 +591,36 @@ Two conventions worth pinning down because they affect agent reasoning:
   mark and properties. An untracked merge keeps the first paragraph's properties, so the second
   paragraph takes them, its mark formatting included, as the editor's `w:pPrChange`/`w:rPrChange`.
   Accepting everything gives what an untracked merge gives, and rejecting everything gives back both
-  paragraphs. The second paragraph's section break stays with its mark. The merge is refused with
-  `TrackedOperationUnsupported` when the first paragraph ends a section: accepting the deletion
-  would lose the section break that an untracked merge keeps. It is refused with
-  `UnresolvedStructuralRevision` when another revision already deleted or moved the first
-  paragraph's mark. A mark the editor inserted (Enter then Backspace) takes the deletion beside its
-  insertion, and either review gives back the original paragraph (issue #1313). See
-  `docs/ooxml_corner_cases.md`, "Merging paragraphs under tracking".
-- **A split keeps a field whole.** An offset inside the result of a field whose `w:fldChar` begin
-  and end are both in the paragraph is refused with `UnsupportedInlineBoundary`, tracked or not,
-  because the begin would end up in one paragraph and the end in the other. Splitting just before or
-  just after the field is allowed, and the field's `end` mark, which has no text and so sits at the
-  offset, stays with the rest of the field. A field that already runs across paragraphs (a table of
-  contents) is not the paragraph's to keep whole, so a split inside it goes ahead (issue #1313).
+  paragraphs. The second paragraph's section break stays with its mark. `Modified` reports both
+  anchors as the document now has them: the second paragraph can change kind (`p` → `h`).
+  The merge is refused, writing nothing, when it could not be reviewed on its own:
+  - `TrackedOperationUnsupported` when the first paragraph ends a section: accepting the deletion
+    would lose the section break that an untracked merge keeps.
+  - `UnresolvedStructuralRevision` when another revision already deleted or moved either
+    paragraph's mark (a deleted second mark would join a third paragraph on accept).
+  - `UnresolvedStructuralRevision` when the first paragraph has a pending `w:pPrChange` or its mark
+    a pending `w:rPrChange`, whoever made it. The merge copies the first paragraph's properties
+    once, so rejecting that change while accepting the merge would bring back what was rejected.
+  - `UnresolvedStructuralRevision` when the second paragraph or its mark has a pending property
+    change, unless it is the editor's own and the merge takes it back to its baseline, which
+    resolves it (Enter at the end of a heading, then Backspace). The merge would otherwise fold into
+    it, so one change would record both edits; another author's change would be discarded.
+
+  A first mark that is a pending insertion, the editor's own (Enter then Backspace) or another
+  author's, takes the deletion beside its insertion; every order and outcome of reviewing the two
+  gives what applying the two decisions in turn gives (issue #1313). See
+  `docs/ooxml_corner_cases.md`, "Merging paragraphs under tracking". In the editor, Backspace at the
+  start of a paragraph whose predecessor's mark is already a pending deletion steps over the struck
+  pilcrow and removes the live character before it, as Word does, instead of joining again.
+- **A split keeps a field whole.** An offset strictly between the begin and end marks of a field
+  whose begin and end are both in the paragraph is refused with `UnsupportedInlineBoundary`,
+  tracked or not, because the begin would end up in one paragraph and the end in the other.
+  Splitting at the field's edges (just before its begin, just after its end) is allowed and keeps
+  the field whole: a mark that shares its run, hyperlink or tracked insertion with text on the
+  other side of the offset is first cut free of it, and the `end` mark, which has no text and so
+  sits at the offset, stays with the field. An edge inside a container a split keeps whole (a
+  content control) is refused like the inside. A field that already runs across paragraphs (a table
+  of contents) is not the paragraph's to keep whole, so a split inside it goes ahead (issue #1313).
 
 **Tracked-change mode shifts the semantics for `ReplaceText` and block deletion (`DeleteBlock`, `DeleteRange`, and `DeleteSection`).** When `Settings.TrackedChanges = RenderInline`, supported deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. `ReplaceText` deletes each live run where it sits — inside hyperlinks, fields, inline controls and other authors' insertions (`w:ins > w:del`, so the deletion rejects on its own) — un-inserts the session author's own pending runs, keeps zero-width markers (bookmark/comment ranges, note and comment reference runs) in place, and inserts the replacement after the last superseded run, ahead of any trailing markers. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged. The mode is switchable mid-session — see "Switching tracked-changes mode mid-session" below.
 

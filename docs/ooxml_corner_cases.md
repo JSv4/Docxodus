@@ -3813,8 +3813,19 @@ is not touched, so a section break that P2 ends stays where it was.
 A mark that ends a section is refused rather than deleted. Accepting the deletion would remove the
 section break with the mark, but an untracked merge keeps the break on the joined paragraph.
 
+The copy of P1's properties is one value, so it cannot follow a pending change to them. Say Alice
+centred P1 (`w:pPrChange`, before: `left`) and Bob then merges. Bob's copy is `center`. Reject
+Alice's change and accept Bob's merge, and the joined paragraph comes out `center`, the formatting
+Alice's rejection was meant to remove; rejecting her change first and then merging untracked gives
+`left`. So a tracked merge is refused (`UnresolvedStructuralRevision`) while P1 or its mark has a
+pending property change, whoever made it. A pending change on P2 is refused too: the merge would
+fold its own change into it, so one revision would record two edits, and a change of Alice's the
+merge took back to its baseline would simply be gone. The one exception is the editor's own change
+that the merge takes back to its baseline, the Enter-then-Backspace case, which is resolved.
+
 Code: `DocxSession.MergeParagraphs`, `RefuseTrackedMerge`, `TrackMergedProperties`.
-Tests: `DocxSessionTrackedEditGapTests` (`TrackedMerge_*`, `TrackedSplitThenMerge_*`).
+Tests: `DocxSessionTrackedEditGapTests` (`TrackedMerge_*`, `TrackedSplitThenMerge_*`,
+`TrackedEnterAfterAHeadingThenBackspace_*`).
 
 ## Splitting a paragraph inside a field's result (issue #1313)
 
@@ -3838,12 +3849,17 @@ the split offset moved to the second paragraph.
 | 10 (inside the result) | field cut in two | refused, `UnsupportedInlineBoundary` |
 | 17 (after the result) | field cut: `end` alone in the second paragraph | field whole in the first paragraph |
 
-Only a field whose begin and end are both in the paragraph is kept whole. A field that already runs
-across paragraphs is not the paragraph's to keep whole, so a split inside it goes ahead. The check
-splits a copy of the paragraph and compares where each field's marks land, so a field inside a
-tracked insertion or a hyperlink, which the split itself can cut, is covered as well.
+Only an offset strictly between a field's begin and end marks is refused, and only for a field
+whose begin and end are both in the paragraph. A field that already runs across paragraphs is not
+the paragraph's to keep whole, so a split inside it goes ahead. Word may write a mark in the same
+run as text on the far side of an edge (`<w:r><w:fldChar w:fldCharType="end"/><w:t> now</w:t></w:r>`),
+or inside the same hyperlink or tracked insertion as that text. A split at that edge first cuts the
+run and each such container at the mark, as a text split cuts them, so the field stays whole on its
+side. The check splits a copy of the paragraph and compares where each field's marks land, so a
+field inside a tracked insertion or a hyperlink is covered as well; an edge inside a container a
+split keeps whole (a content control) is refused like the inside.
 
-Code: `DocxSession.SplitWouldCutAField`, `ParagraphFields`, `MoveInlineChildrenAfter`.
+Code: `DocxSession.SplitWouldCutAField`, `ParagraphFields`, `SeparateFieldMark`, `MoveInlineChildrenAfter`.
 Tests: `DocxSessionTrackedEditGapTests` (`Split*Field*`).
 
 ## Hidden paragraph mark: which paragraph's keep properties govern the joined block (issue #1294)

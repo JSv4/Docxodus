@@ -151,16 +151,22 @@ All notable changes to this project will be documented in this file.
     paragraph's mark (`w:pPr/w:rPr/w:del`). The separator space it adds is an insertion. The second
     paragraph takes the first's properties as a tracked property change. Accepting everything gives
     what an untracked merge gives; rejecting gives back both paragraphs unchanged. Both paragraphs
-    stay until review, so `EditResult.Modified` lists both and `Removed` is empty. The editor's
-    Backspace at the start of a paragraph, which did nothing while tracking, now records the join
-    and keeps both paragraphs on the page. A tracked merge is refused when the first paragraph ends
-    a section (`TrackedOperationUnsupported`). It is also refused when another revision already
-    deleted or moved the first paragraph's mark (`UnresolvedStructuralRevision`).
-  - `SplitParagraph` no longer cuts a field in two. A split at an offset inside a field's result,
-    with the field's begin and end both in the paragraph, is refused with
+    stay until review, so `EditResult.Modified` lists both, as the document now has them (the
+    second paragraph can change kind), and `Removed` is empty. The editor's Backspace at the start
+    of a paragraph, which did nothing while tracking, now records the join and keeps both
+    paragraphs on the page; a second Backspace there steps over the struck pilcrow and removes the
+    live character before it, as Word does. A tracked merge is refused, writing nothing, when the
+    first paragraph ends a section (`TrackedOperationUnsupported`), and with
+    `UnresolvedStructuralRevision` when another revision already deleted or moved either
+    paragraph's mark, when the first paragraph or its mark has a pending property change, or when
+    the second has one the merge would not simply take back to its baseline: one copy of the first
+    paragraph's properties cannot follow both outcomes of such a change.
+  - `SplitParagraph` no longer cuts a field in two. A split at an offset strictly between a
+    field's begin and end marks, with both in the paragraph, is refused with
     `UnsupportedInlineBoundary`, tracked or untracked. Before, the field's begin went to one
-    paragraph and its end to the other. A split right after the field now keeps the field's `end`
-    mark with the rest of the field; before, the `end` mark moved to the next paragraph. A field
+    paragraph and its end to the other. A split right before or after the field keeps the field
+    whole, even when its mark shares a run, hyperlink or tracked insertion with the text beyond it;
+    before, a split right after the field moved its `end` mark to the next paragraph. A field
     that already spans paragraphs, such as a table of contents, can still be split inside.
 - HTML to DOCX now adds a nested element's `text-decoration` lines to those of the elements around it
   instead of replacing them (#1280). The converter treated `text-decoration` as an inherited property,
