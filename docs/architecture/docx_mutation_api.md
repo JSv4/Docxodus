@@ -645,6 +645,13 @@ grid equals the live grid, which Word writes beside any tracked table, row or ce
 records nothing and is replaced rather than refused. A tracked new row's or column's cells copy
 their neighbour's live cell properties but never its pending `w:tcPrChange` (issue #1309).
 
+Tracked `SetColumnWidths` uses the same bare grid-change encoding (#1322). The registry credits
+the grid to its associated table/cell width changes and exposes one revision, including a change
+to only some columns. An unchanged cell must span the same total width in both grids before its
+missing property revision can be treated as part of that operation. Mixed shading changes,
+missing width changes under another author's stamp, separate tables and unrelated no-op grids
+stay separate. Nested tables retain their own grids.
+
 **`ReplaceText` quietly strips a leading auto-number prefix from the payload.** When the target paragraph carries `w:numPr` (numbered heading or list item), the projector emits the resolved number inline (`## Fourth The total number…`) so a human can read what Word renders. An agent that echoes the visible heading back as its `ReplaceText` payload would otherwise see `Fourth Fourth: …` in the saved DOCX — the auto-number is still applied by Word, *and* the new run text now also starts with the prefix. The session resolves the number via the shared `Internal.ListNumberResolver` and strips a matching prefix (plus one optional separator: space, tab, or NBSP) from the payload before parsing. Idempotent — if the agent skipped the prefix, nothing is stripped. Documented in `DS091`/`DS091b`.
 
 ## When to use what

@@ -1631,6 +1631,30 @@ internal static class RevisionOps
         return live is not null && XNode.DeepEquals(Rest(live), Rest(change.Element(live.Name)));
     }
 
+    private static bool ColumnWidthCellsAccountForGridChange(
+        XElement table, HashSet<XElement> changedCells, XElement gridChange)
+    {
+        var cells = table.Elements(W.tr).SelectMany(TableGridModel.RowGrid).ToList();
+        if (cells.Count == 0 || changedCells.Count == 0) return false;
+        if (cells.All(cell => changedCells.Contains(cell.Tc))) return true;
+
+        static int? Width(XElement column) =>
+            int.TryParse((string?)column.Attribute(W._w), out var width) && width >= 0 ? width : null;
+        var oldWidths = gridChange.Element(W.tblGrid)?.Elements(W.gridCol).Select(Width).ToArray();
+        var widths = table.Element(W.tblGrid)?.Elements(W.gridCol).Select(Width).ToArray();
+        if (oldWidths is null || widths is null || oldWidths.Length != widths.Length
+            || widths.Any(width => width is null) || oldWidths.Any(width => width is null)
+            || oldWidths.SequenceEqual(widths))
+            return false;
+
+        // Cells without a property revision must span the same total width in both grids.
+        // Otherwise a different stamp's cell edit would be missing from this operation.
+        return cells.Where(cell => !changedCells.Contains(cell.Tc)).All(cell =>
+            cell.Start >= 0 && cell.End >= cell.Start && cell.End <= widths.Length
+            && oldWidths.Skip(cell.Start).Take(cell.Span).Sum(width => (long)width!.Value)
+                == widths.Skip(cell.Start).Take(cell.Span).Sum(width => (long)width!.Value));
+    }
+
     /// <summary>
     /// Coalesce only property revisions that have a concrete table-operation topology. This
     /// preserves one-operation/one-entry semantics for row shading and column-width edits without
@@ -1654,38 +1678,44 @@ internal static class RevisionOps
         }))
         {
             var remaining = byStamp.Where(groups.Contains).ToList();
-            var tableLevel = remaining.Where(group => group.Units.All(unit =>
+            // A schema-valid grid change has no stamp. Consider the table's single bare grid
+            // only for the complete column-width topology below; unrelated property edits must
+            // never acquire it just because they sit in the same table.
+            var bareGrids = propertyGroups.Where(group => groups.Contains(group)
+                && ReferenceEquals(group.Units[0].Table, byStamp.Key.Table)
+                && string.IsNullOrEmpty(group.Author) && group.Date is null && group.DateUtc is null
+                && group.Units.All(unit => unit.Element.Name == W.tblGridChange)).ToList();
+            var widthGroups = bareGrids.Count == 1 ? remaining.Union(bareGrids).ToList() : remaining;
+            var tableLevel = widthGroups.Where(group => group.Units.All(unit =>
                     unit.Element.Name == W.tblGridChange
                     || unit.Element.Name == W.tblPrChange
                     || unit.Element.Name == W.tblPrExChange))
                 .ToList();
-            var tableCells = byStamp.Key.Table!.Descendants(W.tc).ToHashSet();
             var changedCells = remaining.SelectMany(group => group.Units)
                 .Where(unit => unit.Element.Name == W.tcPrChange)
                 .Select(unit => unit.MarkedCell)
                 .Where(cell => cell is not null)
                 .Select(cell => cell!)
                 .ToHashSet();
-            // A column-width edit changes the grid and every cell's width and nothing else of the
-            // cells; the table's own properties change only when its total width or layout did,
+            // A column-width edit changes the grid and the affected cells' widths and nothing else
+            // of the cells; the table's own properties change only when its total width or layout did,
             // so they may be absent. Anything more under the same stamp (Word dates have minute
             // resolution) is a separate edit, such as shading the whole table.
-            var stampUnits = remaining.SelectMany(group => group.Units).ToList();
-            bool completeColumnWidthTopology = tableCells.Count > 0
-                && tableCells.SetEquals(changedCells)
-                && tableLevel.Any(group => group.Units.Any(unit =>
-                    unit.Element.Name == W.tblGridChange))
+            var stampUnits = widthGroups.SelectMany(group => group.Units).ToList();
+            var gridChanges = tableLevel.SelectMany(group => group.Units)
+                .Where(unit => unit.Element.Name == W.tblGridChange).ToList();
+            bool completeColumnWidthTopology = gridChanges.Count == 1
+                && ColumnWidthCellsAccountForGridChange(byStamp.Key.Table!, changedCells, gridChanges[0].Element)
                 && stampUnits.Where(unit => unit.Element.Name == W.tcPrChange)
                     .All(unit => ChangesOnly(unit.Element, W.tcW))
                 && stampUnits.Where(unit => unit.Element.Name == W.tblPrChange)
                     .All(unit => ChangesOnly(unit.Element, W.tblW, W.tblLayout));
             if (completeColumnWidthTopology)
             {
-                var structural = remaining.Where(group => group.Units.All(unit =>
+                var structural = widthGroups.Where(group => group.Units.All(unit =>
                         unit.Element.Name == W.tblGridChange
                         || unit.Element.Name == W.tblPrChange
                         || unit.Element.Name == W.tblPrExChange
-                        || unit.Element.Name == W.trPrChange
                         || unit.Element.Name == W.tcPrChange))
                     .ToList();
                 MergeGroups(structural, groups);

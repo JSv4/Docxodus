@@ -54,6 +54,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Tracked `SetColumnWidths` writes a schema-valid `w:tblGridChange` with only `w:id` (#1322).
+  The revision registry joins it to the matching table and cell width changes, including edits
+  that leave some columns unchanged, so one edit still accepts or rejects as one revision.
+
 - Semantic comparison applies package size and compression limits to the caller's original bytes
   (#1352). Strict-to-Transitional namespace expansion no longer rejects an input that passed those
   limits. The package supplement and IR reader reuse one conversion of each Strict input.
