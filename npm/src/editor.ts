@@ -908,7 +908,8 @@ function contentOffsetOf(block: HTMLElement, container: Node, offset: number): n
   let done = false;
   const walk = (node: Node): void => {
     if (done) return;
-    if (isField(node)) {
+    // A field inside a rendered deletion is deleted text: the walk below skips it like any other.
+    if (isField(node) && !isInMarker(node)) {
       // Atomic: a point inside a field resolves to the field's end; the field counts its
       // cached text either way.
       const inside = node === container || node.contains(container);
@@ -951,7 +952,7 @@ function caretOffsetIn(block: HTMLElement): number | null {
 function blockContentText(block: HTMLElement): string {
   let out = "";
   const walk = (node: Node): void => {
-    if (isField(node)) {
+    if (isField(node) && !isInMarker(node)) {
       out += stripBidi(fieldText(node));
     } else if (node.nodeType === 3 /* TEXT_NODE */) {
       if (!isInMarker(node)) out += stripBidi(node.textContent ?? "");
@@ -1024,7 +1025,7 @@ function contentPositionIn(el: HTMLElement, offset: number): { node: Node; offse
   let lastText: Node | null = null;
   const walk = (node: Node): void => {
     if (result) return;
-    if (isField(node)) {
+    if (isField(node) && !isInMarker(node)) {
       // Never land inside a field: an offset at its start sits before it, anything up to its
       // cached length sits after it.
       const len = stripBidi(fieldText(node)).length;

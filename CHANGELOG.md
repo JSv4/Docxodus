@@ -154,6 +154,26 @@ All notable changes to this project will be documented in this file.
   nothing; the insertion replaces it rather than being refused. The HTML converter's tracked table
   mark takes its author and date from the inserted cells when the grid change carries none.
 
+- A PAGE or NUMPAGES field that is deleted or inserted as a whole under tracked changes now shows
+  each page its own number in paginated markup (#1272). A deleted field keeps its code in
+  `w:delInstrText`, which the field reader ignored, and the fields inside a `w:del`, `w:ins`,
+  `w:moveFrom` or `w:moveTo` were never grouped as fields at all, so the page-number marker was
+  missing and every page repeated the cached result, for example "Folio 1 / 2". The field still
+  renders inside the deletion or insertion, including when Word writes it as one deletion per run,
+  and has no marker when deleted content is hidden. The deleted code is read only for a deleted
+  field, so a live field whose code was edited under tracking still means its new code. The accepted
+  view, and markup with deleted content hidden, are unchanged: a deleted field is not shown there. A
+  live page field whose cached result alone is deleted now prints its page number struck through,
+  inside that deletion. The editor no longer counts a deleted page field's result in its caret
+  offsets.
+- A HYPERLINK field now renders its result's own markup inside the link (#1272): a tracked deletion
+  or insertion there stays a `<del>` or `<ins>`, and a bookmark or comment range inside the link is
+  kept, where the link used to flatten its runs to plain text and drop them. A HYPERLINK field
+  inserted or deleted whole now renders as a link inside its `<ins>` or `<del>` (was plain text), but
+  never as a link inside a link: inside a `w:hyperlink` it is that link's content, a `w:hyperlink` in
+  its result gives up its own link, and a bookmark target inside it keeps its id on a `<span>`. The
+  anchors generated for a note reference or comment marker inside a link stay anchors, as before. A
+  TOC deleted whole keeps its entries' TOC presentation.
 - Tracked formatting of a run that already has another author's pending format change is now
   credited to the person who made it (#1295). The session folded the new formatting into the
   existing `w:rPrChange` but left that change's author, date and `w:id` alone, so `ListRevisions()`

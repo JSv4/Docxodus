@@ -54,6 +54,12 @@ namespace Docxodus
                 })
                 .ToList();
 
+            // A deleted field (its begin character is in a w:del or w:moveFrom) keeps its code in
+            // w:delInstrText, or in w:instrText inside a move source. A live field means only its
+            // live code: one whose code was edited under tracking holds the old code as
+            // w:delInstrText beside the new code as w:instrText, and the field means the new code.
+            var deletedField = IsDeletedField(root, id);
+
             var instrText = groupedSubFields
                 .Select(g =>
                 {
@@ -66,7 +72,7 @@ namespace Docxodus
                             // Id == id (namely e's own entry) is guaranteed present.
                             var stackElement = s.FirstOrDefault(z => z.Id == id)!;
                             if (stackElement.FieldElementType == FieldElementTypeEnum.InstrText &&
-                                e.Name == w + "instrText")
+                                (e.Name == w + "instrText" || (deletedField && e.Name == w + "delInstrText")))
                                 return e.Value;
                             return "";
                         })
@@ -261,12 +267,16 @@ namespace Docxodus
             //}
 
             var cachedAnnotationInformation = new Dictionary<int, List<XElement>>();
+            var deletedFields = new DeletedFieldIds();
             foreach (var desc in root.DescendantsTrimmed(d => d.Name == W.rPr || d.Name == W.pPr))
             {
                 Stack<FieldElementTypeInfo>? s = desc.Annotation<Stack<FieldElementTypeInfo>>();
 
                 if (s != null )
                 {
+                    if (desc.Name == W.fldChar && s.TryPeek(out var top) && top.FieldElementType == FieldElementTypeEnum.Begin
+                        && desc.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom))
+                        deletedFields.Add(top.Id);
                     foreach (var item in s)
                     {
                         if (item.FieldElementType == FieldElementTypeEnum.InstrText)
@@ -284,6 +294,16 @@ namespace Docxodus
                 }
             }
             root.AddAnnotation(cachedAnnotationInformation);
+            root.AddAnnotation(deletedFields);
+        }
+
+        /// <summary>Whether field <paramref name="id"/>'s begin character is deleted or moved away.</summary>
+        internal static bool IsDeletedField(XElement root, int id) =>
+            root.Annotation<DeletedFieldIds>()?.Contains(id) == true;
+
+        /// <summary>The ids of the fields whose begin character is deleted or moved away.</summary>
+        private sealed class DeletedFieldIds : HashSet<int>
+        {
         }
 
         private enum State

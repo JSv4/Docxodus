@@ -3293,6 +3293,46 @@ the whole marked result (`substitutePageNumberFields`), so the cached run's form
 intentionally not reproduced. A `\* MERGEFORMAT` result that should keep prior formatting, and Word's
 own output, still need a Word capture before Docxodus models them. Evidence: docx-fidelity-bench
 `paragraphs-page-number-*` cases (bench issue #26).
+
+## Fields: a deleted `PAGE` field keeps its code in `w:delInstrText` (issue #1272)
+
+**Status:** fixed; Docxodus matches LibreOffice; Word not yet captured (October 2026)
+
+A field deleted under tracked changes moves its instruction from `w:instrText` to `w:delInstrText`,
+just as its text moves from `w:t` to `w:delText`:
+
+```xml
+<w:del w:id="31" w:author="Review Example" w:date="2026-09-12T10:00:00Z">
+  <w:r><w:delText xml:space="preserve">Folio </w:delText></w:r>
+  <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+  <w:r><w:delInstrText xml:space="preserve"> PAGE </w:delInstrText></w:r>
+  <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+  <w:r><w:delText>1</w:delText></w:r>
+  <w:r><w:fldChar w:fldCharType="end"/></w:r>
+</w:del>
+```
+
+| Two-page footer, markup view | Word | LibreOffice | Docxodus before #1272 | Docxodus now |
+|---|---|---|---|---|
+| Deleted `Folio {PAGE} / {NUMPAGES}` | Not yet captured | `Folio 1 / 2`, `Folio 2 / 2` | `Folio 1 / 2` on both pages | `Folio 1 / 2`, `Folio 2 / 2`, struck through |
+| Same footer, not deleted (control) | Not yet captured | `Folio 1 / 2`, `Folio 2 / 2` | `Folio 1 / 2`, `Folio 2 / 2` | unchanged |
+
+`FieldRetriever.InstrText` read only `w:instrText`, and `WmlToHtmlConverter`'s revision wrappers
+(`w:del`, `w:ins`, `w:moveFrom`, `w:moveTo`) converted their children run by run, so a field wholly
+inside one was never grouped and never got its `data-field` marker. The field reader now reads
+`w:delInstrText` for a deleted field, one whose begin character is inside a `w:del` or `w:moveFrom`
+(a move source may also keep its code as `w:instrText`, as Word writes it). A live field still means
+only its live `w:instrText`: one whose code was edited under tracking carries the old code as
+`w:delInstrText` beside the new code as `w:instrText`, and a live field whose whole code was deleted
+has no code at all. A wrapper that wholly contains a field groups it like paragraph content; a wrapper
+inside an open field, or one a field crosses, does not, because the enclosing content already grouped
+that field. Word often writes a deleted field as one `w:del` per run, each with its own id and
+sometimes its own date. When every part of the field that shows text is the same kind of revision
+(deletion or insertion), the marker is placed inside the revision that holds the result, because the
+paginator replaces the marker's text and would otherwise drop the deletion styling. With deleted
+content hidden, a deleted field shows nothing and gets no marker. The accepted view never sees the deleted
+field: revisions are accepted before conversion. Evidence: docx-fidelity-bench `paragraphs-page-number-deleted-field` and its `-control`.
+
 ## Footnotes: how much of a page a long note may take (issue #1119)
 
 **Status:** Docxodus matches LibreOffice; Word not yet captured (October 2026)
