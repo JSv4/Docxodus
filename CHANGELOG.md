@@ -85,6 +85,12 @@ All notable changes to this project will be documented in this file.
     paragraph indented -360 twips now reaches the margin rather than 0.5in, and at -725 or -1080 twips
     it reaches -0.5in.
 
+- A pending section-property change no longer shows up as an extra section (#1314). A tracked
+  `w:sectPrChange` keeps the section's earlier properties as a nested `w:sectPr`, and the anchor
+  index listed that copy as one more `sec` anchor, so a document with two sections reported three
+  and a caller listing sections saw one that does not exist; a tracked `SetPageSetup` added one
+  each time. The HTML converter's tracked-changes view also read the copy's footnote/endnote
+  number format as the section's own, numbering notes in the format the change replaced.
 - Section reads and edits now act on the section an anchor names (#1308). A `sec` anchor of an
   earlier section resolved to the document's final section, so `GetSectionInfo` reported the last
   section's page and `SetPageSetup`, `SetPageNumbering` and the header/footer operations changed

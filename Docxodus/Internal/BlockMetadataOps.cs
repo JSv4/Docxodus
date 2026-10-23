@@ -199,7 +199,7 @@ internal static class BlockMetadataOps
 
         // Every sectPr in document order — inline section breaks (w:pPr/w:sectPr) followed by the
         // body's trailing one, which is exactly the order sections apply in.
-        var all = body.Descendants(W.sectPr).ToList();
+        var all = body.Descendants(W.sectPr).Where(IsSectionBreak).ToList();
         int idx = all.IndexOf(governing);
         if (idx <= 0) return (ownHeaders, ownFooters);
 

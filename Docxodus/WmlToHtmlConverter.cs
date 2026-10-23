@@ -8796,6 +8796,7 @@ namespace Docxodus
         {
             var body = wordDoc.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
             var sectionFormat = body?.Descendants(W.sectPr)
+                .Where(Internal.BlockMetadataOps.IsSectionBreak)   // not a pending change's earlier copy
                 .Select(sectPr => (string?)sectPr.Element(notePrName)?.Element(W.numFmt)?.Attribute(W.val))
                 .FirstOrDefault(v => v != null);
             if (sectionFormat != null)

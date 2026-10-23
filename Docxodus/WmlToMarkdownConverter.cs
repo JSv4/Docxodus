@@ -620,7 +620,8 @@ public static class WmlToMarkdownConverter
         if (n == W.tr) return "tr";
         if (n == W.tc) return "tc";
         if (n == W.gridCol) return "col";
-        if (n == W.sectPr) return "sec";
+        // The earlier properties a pending w:sectPrChange keeps are a w:sectPr too, but no section.
+        if (n == W.sectPr) return el.Parent?.Name == W.sectPrChange ? null : "sec";
         if (n == W.footnote) return "fn";
         if (n == W.endnote) return "en";
         if (n == W.comment) return "cmt";
