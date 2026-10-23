@@ -44,7 +44,8 @@
         { "name": "anchorId", "type": "anchor", "required": true },
         { "name": "spanStart", "type": "int", "required": true },
         { "name": "spanLength", "type": "int", "required": true },
-        { "name": "replace", "type": "string", "required": true }
+        { "name": "replace", "type": "string", "required": true },
+        { "name": "deletedTextSide", "type": "string", "required": false }
       ],
       "transports": {
         "wasm": { "method": "ReplaceTextAtSpan" },
@@ -63,7 +64,8 @@
         { "name": "spanStart", "type": "int", "required": true },
         { "name": "spanLength", "type": "int", "required": true },
         { "name": "replace", "type": "string", "required": true },
-        { "name": "format", "type": "object", "required": false, "default": {} }
+        { "name": "format", "type": "object", "required": false, "default": {} },
+        { "name": "deletedTextSide", "type": "string", "required": false }
       ],
       "transports": {
         "wasm": { "method": "ReplaceTextAtSpanWithFormat" },

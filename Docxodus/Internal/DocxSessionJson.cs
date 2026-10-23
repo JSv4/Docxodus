@@ -127,6 +127,10 @@ internal static class DocxSessionJson
     public static Position? ParseOptionalPos(string? s) => ParseToken<Position?>(s, "position", null,
         ("before", Position.Before), ("after", Position.After));
 
+    /// <summary>"before" | "after"; absent → null, the engine's own placement beside deleted text.</summary>
+    public static DeletedTextSide? ParseDeletedTextSide(string? s) => ParseToken<DeletedTextSide?>(s, "deleted text side", null,
+        ("before", DeletedTextSide.Before), ("after", DeletedTextSide.After));
+
     /// <summary>
     /// Parse the numeric grep options object the stdio host and the WASM bridge share:
     /// <c>{ regexOptions?, scope?, contextChars?, whitespace?, boundary?, maxResults?, citation? }</c>,

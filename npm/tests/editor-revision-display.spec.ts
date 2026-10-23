@@ -145,7 +145,8 @@ test.describe('DocxEditor — showing revisions apart from recording them (#1279
     await page.keyboard.type('New');
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
-    expect(await page.evaluate(() => (window as any).revisions())).toEqual(['delete:Gone clause', 'insert:New']);
+    // Typed after Home, so before the deletion (#1290).
+    expect(await page.evaluate(() => (window as any).revisions())).toEqual(['insert:New', 'delete:Gone clause']);
   });
 
   test('control: untracked, typing into a paragraph that shows only its deleted mark keeps the mark deleted', async ({ page }) => {

@@ -73,6 +73,7 @@ export interface DocxEditorExports {
       spanStart: number,
       spanLength: number,
       replace: string,
+      deletedTextSide?: string,
     ) => string;
     SplitParagraph: (handle: number, anchor: string, offset: number) => string;
     MergeParagraphs: (handle: number, first: string, second: string) => string;
@@ -945,6 +946,38 @@ function caretOffsetIn(block: HTMLElement): number | null {
   const range = sel.getRangeAt(0);
   if (!block.contains(range.startContainer)) return null;
   return contentOffsetOf(block, range.startContainer, range.startOffset);
+}
+
+/**
+ * Which side of a rendered tracked deletion the text the user typed sits on, for an insertion of
+ * `length` characters at content offset `start` of the block's current text. Deleted text takes no
+ * room in the content offsets, so the offset alone names both sides of it, and the commit runs on
+ * blur, when the caret is gone; where the typed characters landed in the DOM still says (issue
+ * #1290). Undefined when no deletion touches the insertion, or one touches each side.
+ */
+function deletedTextSideOf(block: HTMLElement, start: number, length: number): "before" | "after" | undefined {
+  let before = false;
+  let after = false;
+  // Only whitespace may separate the deletion from the typed text: an empty paragraph's
+  // placeholder space can sit between them, on either side.
+  const text = blockContentText(block);
+  const blank = (from: number, to: number) => from <= to && text.slice(from, to).trim().length === 0;
+  for (const deletion of Array.from(block.querySelectorAll(RENDERED_TEXT_DELETION_SELECTOR))) {
+    const parent = deletion.parentNode;
+    if (!parent) continue;
+    const at = contentOffsetOf(block, parent, Array.prototype.indexOf.call(parent.childNodes, deletion));
+    if (blank(at, start)) after = true;
+    else if (blank(start + length, at)) before = true;
+  }
+  return before === after ? undefined : before ? "before" : "after";
+}
+
+/** True when nothing in `block` would serialize as inline markdown: no bold, italic, link or
+ *  line break, so its text can go in as a plain span insertion without losing anything. */
+function holdsOnlyPlainText(block: HTMLElement): boolean {
+  const segs: InlineSeg[] = [];
+  collectInlineSegments(block, segs);
+  return segs.every((seg) => !seg.bold && !seg.italic && seg.href === null && seg.text !== "\n");
 }
 
 /** Visible content text of `block`, excluding generated list-marker text (the same content
@@ -3234,7 +3267,13 @@ export class DocxEditor {
       // typed text then goes in as a plain insertion at its start, which cannot carry a line
       // break or inline formatting.
       const tracked = this.options.trackedChanges === TrackedChangeMode.RenderInline;
-      if (tracked || !el.querySelector(RENDERED_TEXT_DELETION_SELECTOR)) {
+      const typed = next.trim() + (keepsTrailingSpace(el) ? " " : "");
+      // The side of a shown deletion the text was typed on. A whole-paragraph rewrite would put
+      // it after the deletion whichever side that was, so plain text goes in as a span insertion
+      // on its own side; a line break or inline formatting still needs the rewrite.
+      const side = deletedTextSideOf(el, next.indexOf(typed.trimEnd()), typed.trimEnd().length);
+      const besideShownDeletion = side !== undefined && holdsOnlyPlainText(el);
+      if (!besideShownDeletion && (tracked || !el.querySelector(RENDERED_TEXT_DELETION_SELECTOR))) {
         const whole = this.parseEdit(
           this.exports.DocxSessionBridge.ReplaceText(this.handle, fullId, serializeInlineMarkdown(el)),
           { expectRejection: true },
@@ -3244,9 +3283,8 @@ export class DocxEditor {
           return whole;
         }
       }
-      const typed = next.trim() + (keepsTrailingSpace(el) ? " " : "");
       return this.parseEdit(
-        this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, 0, 0, typed),
+        this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, 0, 0, typed, side ?? ""),
       );
     }
 
@@ -3271,8 +3309,10 @@ export class DocxEditor {
       // contenteditable; the first run at the very start). Under tracking that records the
       // neighbour as deleted and retyped: the accepted and rejected text are right, but the
       // markup has one extra pair of revisions.
+      // Beside a shown deletion, the side the text was typed on decides where it goes (#1290).
+      const side = deletedTextSideOf(el, start, middle.length) ?? "";
       const inserted = this.parseEdit(
-        this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, start, 0, middle),
+        this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, start, 0, middle, side),
         { expectRejection: true }, // a refusal here only selects the fallback below
       );
       if (inserted.success) return inserted;

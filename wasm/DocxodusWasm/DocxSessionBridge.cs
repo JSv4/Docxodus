@@ -1147,17 +1147,22 @@ public static partial class DocxSessionBridge
     /// <summary>
     /// Bridge for <see cref="DocxSession.ReplaceTextAtSpan"/> — the span-addressable
     /// variant that lets JS callers replace a specific Grep match (by its EnclosingAnchor
-    /// id + Span coordinates) instead of every occurrence of its text.
+    /// id + Span coordinates) instead of every occurrence of its text. <paramref name="deletedTextSide"/>
+    /// ("before" | "after"; empty or omitted for the engine's own placement) puts a zero-length
+    /// insertion beside tracked deleted text on the side the caret was on.
     /// </summary>
     [JSExport]
-    public static string ReplaceTextAtSpan(int h, string anchor, int spanStart, int spanLength, string replace) =>
-        DocxSessionOps.ReplaceTextAtSpan(h, anchor, spanStart, spanLength, replace);
+    public static string ReplaceTextAtSpan(
+        int h, string anchor, int spanStart, int spanLength, string replace, string? deletedTextSide) =>
+        DocxSessionOps.ReplaceTextAtSpan(h, anchor, spanStart, spanLength, replace,
+            deletedTextSide: DocxSessionJson.ParseDeletedTextSide(deletedTextSide));
 
     [JSExport]
     public static string ReplaceTextAtSpanWithFormat(
-        int h, string anchor, int spanStart, int spanLength, string replace, string formatJson) =>
+        int h, string anchor, int spanStart, int spanLength, string replace, string formatJson, string? deletedTextSide) =>
         DocxSessionOps.ReplaceTextAtSpanWithFormat(
-            h, anchor, spanStart, spanLength, replace, DocxSessionJson.ParseFormatOp(formatJson));
+            h, anchor, spanStart, spanLength, replace, DocxSessionJson.ParseFormatOp(formatJson),
+            deletedTextSide: DocxSessionJson.ParseDeletedTextSide(deletedTextSide));
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.ReplaceInner(TextMatch, string)"/>. Takes the
