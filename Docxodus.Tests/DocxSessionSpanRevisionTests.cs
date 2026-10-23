@@ -832,6 +832,35 @@ public class DocxSessionSpanRevisionTests
         Assert.Equal(!startInsideDeletion, savedEnd.Parent?.Name == W.del);
     }
 
+    [Theory]
+    [InlineData("hyperlink")]
+    [InlineData("content control")]
+    [InlineData("simple field")]
+    public void Untracked_ReplaceText_KeepsADeletionInsideAnOtherwiseEmptyContainer(string kind)
+    {
+        var deletion = Del("Reviewer", 1, "Gone clause");
+        var container = kind switch
+        {
+            "hyperlink" => new XElement(W.hyperlink, new XAttribute(W.anchor, "fees"), deletion),
+            "content control" => new XElement(W.sdt, new XElement(W.sdtPr), new XElement(W.sdtContent, deletion)),
+            _ => new XElement(W.fldSimple, new XAttribute(W.instr, " DOCPROPERTY Title "), deletion),
+        };
+        var bytes = Build(container);
+        using (var input = WordprocessingDocument.Open(new MemoryStream(bytes), false))
+            Assert.Empty(new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(input));
+        using var session = new DocxSession(bytes, new DocxSessionSettings { TrackedChanges = TrackedChangeMode.Accept });
+        var p = session.Project().AnchorIndex.Values.Single(a => a.Anchor.Kind == "p").Anchor.Id;
+        var before = XElement.Parse(session.Raw.GetXml(p)).Descendants(W.del).Single().ToString();
+
+        var edit = session.ReplaceText(p, "New text");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal(before, XElement.Parse(session.Raw.GetXml(p)).Descendants(W.del).Single().ToString());
+        Assert.Equal(new[] { "delete:Reviewer:Gone clause" }, Revisions(session));
+        Assert.Equal("New text", Accepted(session));
+        Assert.Equal("Gone clauseNew text", Rejected(session));
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     internal static XElement Run(string text, bool bold = false) => new(W.r,

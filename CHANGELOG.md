@@ -55,7 +55,8 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - An untracked `ReplaceText` no longer drops a pending tracked deletion or move source in the paragraph
-  (#1292). Typing into a paragraph whose only text was deleted, in the browser editor's default mode
+  (#1292), including one in an otherwise empty hyperlink, content control or simple field.
+  Typing into a paragraph whose only text was deleted, in the browser editor's default mode
   (edits untracked, revisions hidden), rewrote the paragraph and removed the deletion, so rejecting
   revisions could no longer restore its text and the revision list lost it, with no edit failure
   reported. Nested range markers stay with the removed text, and an outside end follows its start

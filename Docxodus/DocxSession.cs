@@ -1900,15 +1900,16 @@ public sealed partial class DocxSession : IDisposable
     };
 
     /// <summary>A paragraph child a replacement keeps where it sits: a bare range/marker
-    /// element, a marker-only run, or an envelope or carrier containing nothing else.</summary>
+    /// element, a marker-only run, removed text, or a carrier containing only those.</summary>
     private static bool IsZeroWidthMarker(XElement e) =>
-        PreservedMarkerNames.Contains(e.Name)
+        PreservedMarkerNames.Contains(e.Name) || IsRemovedText(e)
         || (e.Name == W.r ? IsMarkerOnlyRun(e)
             : e.Name == W.sdt ? e.Element(W.sdtContent) is not { } content || IsZeroWidthMarker(content)
             : ZeroWidthCarrierNames.Contains(e.Name) && e.Elements().All(IsZeroWidthMarker));
 
     private static bool IsPendingRemoval(XElement e) =>
-        e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd;
+        IsRemovedText(e) || e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd
+        || (IsZeroWidthMarker(e) && e.Descendants().Any(IsRemovedText));
 
     private sealed record PreservedMarkerPosition(XElement Element, int Offset, int Order);
 
