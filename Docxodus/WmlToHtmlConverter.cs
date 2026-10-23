@@ -9289,6 +9289,11 @@ namespace Docxodus
                 if (defaultTabStopValue != null)
                     defaultTabStop = WordprocessingMLUtil.StringToTwips(defaultTabStopValue);
             }
+            // A zero interval means no automatic stops: Word gives a tab past the last custom stop
+            // no width (issue #1269, docs/ooxml_corner_cases.md). A negative value is schema-invalid
+            // (ST_TwipsMeasure) and Word's minimum is 0, so it is read as 0.
+            if (defaultTabStop < 0)
+                defaultTabStop = 0;
 
             // The width a paragraph's lines wrap at. Body paragraphs take their own section's
             // text width (resolved at w:body); running stories and notes take the final section's.
@@ -9380,11 +9385,7 @@ namespace Docxodus
             {
                 if (leftInTwips == 0)
                 {
-                    tabs = new XElement(W.tabs,
-                        Enumerable.Range(1, 100)
-                            .Select(r => new XElement(W.tab,
-                                new XAttribute(W.val, "left"),
-                                new XAttribute(W.pos, r * defaultTabStop))));
+                    tabs = new XElement(W.tabs, AutomaticTabStops(0, defaultTabStop));
                 }
                 else
                 {
@@ -9453,18 +9454,16 @@ namespace Docxodus
 
                     var testAmount = twipCounter;
 
+                    // Automatic stops continue across the line without end: past the ones generated
+                    // up front, the next is the first interval multiple beyond the pen. With a zero
+                    // interval there is none, and the tab advances nothing (issue #1269).
                     var tabAfterText = tabs
                         .Elements(W.tab)
-                        .FirstOrDefault(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)!) > testAmount);
-
-                    if (tabAfterText == null)
-                    {
-                        // something has gone wrong, so put 1/2 inch in
-                        if (currentElement.Attribute(PtOpenXml.TabWidth) == null)
-                            currentElement.Add(
-                                new XAttribute(PtOpenXml.TabWidth, TabWidthValue(720m)));
-                        break;
-                    }
+                        .FirstOrDefault(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)!) > testAmount)
+                        ?? AutomaticTabStops(testAmount, defaultTabStop).FirstOrDefault()
+                        ?? new XElement(W.tab,
+                            new XAttribute(W.val, "left"),
+                            new XAttribute(W.pos, testAmount));
 
                     var tabVal = (string?)tabAfterText.Attribute(W.val);
                     if (tabVal == "right" || tabVal == "end")
@@ -9866,29 +9865,33 @@ namespace Docxodus
                 .LastOrDefault();
             if (lastTabElement != null)
             {
-                if (defaultTabStop == 0)
-                    defaultTabStop = DefaultTabStopTwips;
-                var rangeStart = WordprocessingMLUtil.StringToTwips((string)lastTabElement.Attribute(W.pos)!) / defaultTabStop + 1;
                 var tempTabs = new XElement(W.tabs,
                     tabs.Elements().Where(t => (string?)t.Attribute(W.val) != "clear" && (string?)t.Attribute(W.val) != "bar"),
-                    Enumerable.Range(rangeStart, 100)
-                    .Select(r => new XElement(W.tab,
-                        new XAttribute(W.val, "left"),
-                        new XAttribute(W.pos, r * defaultTabStop))));
+                    AutomaticTabStops(WordprocessingMLUtil.StringToTwips((string)lastTabElement.Attribute(W.pos)!), defaultTabStop));
                 tempTabs = new XElement(W.tabs,
                     tempTabs.Elements().OrderBy(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)!)));
                 return tempTabs;
             }
             else
             {
-                tabs = new XElement(W.tabs,
-                    Enumerable.Range(1, 100)
-                    .Select(r => new XElement(W.tab,
-                        new XAttribute(W.val, "left"),
-                        new XAttribute(W.pos, r * defaultTabStop))));
+                tabs = new XElement(W.tabs, AutomaticTabStops(0, defaultTabStop));
             }
             return tabs;
         }
+
+        /// <summary>
+        /// The first 100 automatic tab stops after <paramref name="afterTwips"/>: left stops at the
+        /// following multiples of the <c>w:defaultTabStop</c> interval. A zero interval has none.
+        /// The first index is the floor of the quotient plus one, so a position left of the margin
+        /// (a negative indent) does not skip the multiple just after it.
+        /// </summary>
+        private static IEnumerable<XElement> AutomaticTabStops(int afterTwips, int defaultTabStop) =>
+            defaultTabStop <= 0
+                ? Enumerable.Empty<XElement>()
+                : Enumerable.Range((int)Math.Floor((double)afterTwips / defaultTabStop) + 1, 100)
+                    .Select(r => new XElement(W.tab,
+                        new XAttribute(W.val, "left"),
+                        new XAttribute(W.pos, r * defaultTabStop)));
 
         private static HashSet<string> KnownFamilies => FontFamilyHelper.KnownFamilies;
 
