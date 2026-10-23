@@ -3796,10 +3796,12 @@ internal static partial class IrMarkupRenderer
                 rightPackagePart, outputPackagePart, clone, skipDanglingRelationships: true,
                 skipHeaderFooterReferences: true);
 
+        var threadParaIds = new HashSet<string>(addedParaIds, StringComparer.OrdinalIgnoreCase);
+        LinkRepliesToOriginalParents(main, rightMain!, outRoot, addedDefinitions, addedParaIds, threadParaIds, renamedParaIds);
         main.WordprocessingCommentsPart!.PutXDocument();
 
         // Carry threading metadata for the merged comments (paraId-keyed), so a right-added reply keeps its link.
-        if (addedParaIds.Count > 0)
+        if (threadParaIds.Count > 0)
         {
             // Guard the commentsExtended merge on the right actually HAVING that part (mirrors the commentsIds
             // guard below). Otherwise the eager `?? AddNewPart<…>()` creates an empty /word/commentsExtended.xml on
@@ -3811,22 +3813,84 @@ internal static partial class IrMarkupRenderer
                     main.WordprocessingCommentsExPart
                         ?? main.AddDeterministicPart<WordprocessingCommentsExPart>("rIdCommentsEx"),
                     rightMain.WordprocessingCommentsExPart,
-                    W15ns + "commentsEx", W15ns + "commentEx", W15ns + "paraId", addedParaIds, renamedParaIds,
+                    W15ns + "commentsEx", W15ns + "commentEx", W15ns + "paraId", threadParaIds, renamedParaIds,
                     $"<w15:commentsEx xmlns:w=\"{W.w.NamespaceName}\" xmlns:w15=\"{W15ns.NamespaceName}\"/>");
             if (rightMain.WordprocessingCommentsIdsPart != null)
                 MergeRightThreadingEntries(
                     main.WordprocessingCommentsIdsPart
                         ?? main.AddDeterministicPart<WordprocessingCommentsIdsPart>("rIdCommentsIds"),
                     rightMain.WordprocessingCommentsIdsPart,
-                    W16cidNs + "commentsIds", W16cidNs + "commentId", W16cidNs + "paraId", addedParaIds, renamedParaIds,
+                    W16cidNs + "commentsIds", W16cidNs + "commentId", W16cidNs + "paraId", threadParaIds, renamedParaIds,
                     $"<w16cid:commentsIds xmlns:w=\"{W.w.NamespaceName}\" xmlns:w16cid=\"{W16cidNs.NamespaceName}\"/>");
+        }
+    }
+
+    /// <summary>
+    /// A right-added reply names its parent by the parent's <c>w14:paraId</c> in the RIGHT package, but a parent
+    /// the output already holds is the LEFT's definition, which may carry no paraId (a tool that writes none) or
+    /// a different one (an editor that renumbers paraIds on save) — so the reply's link would name nothing, or
+    /// another comment (issue #1312). <see cref="Internal.CommentOps.AlignIds"/> has already given matching
+    /// comments one <c>w:id</c>, so follow the parent through it: the right comment holding that paraId, then
+    /// the output definition with the same id. Its last paragraph's paraId (minted when absent) becomes the
+    /// parent the reply's threading entry is renamed to, and the parent's own right threading entries are
+    /// carried under that paraId unless the output already has them (so its own parent is followed the same way).
+    /// A parent the output does not hold at all leaves the reply top-level rather than pointing at nothing.
+    /// </summary>
+    private static void LinkRepliesToOriginalParents(MainDocumentPart main, MainDocumentPart rightMain,
+        XElement outRoot, List<XElement> addedDefinitions, HashSet<string> addedParaIds,
+        HashSet<string> threadParaIds, Dictionary<string, string> renamedParaIds)
+    {
+        var rightExRoot = rightMain.WordprocessingCommentsExPart?.GetXDocument().Root;
+        var rightCommentsRoot = rightMain.WordprocessingCommentsPart?.GetXDocument().Root;
+        if (rightExRoot == null || rightCommentsRoot == null)
+            return;
+        // paraIds are hex, so a link may differ in case from the definition it names.
+        var added = new HashSet<string>(addedParaIds, StringComparer.OrdinalIgnoreCase);
+        var rightEntries = rightExRoot.Elements(W15ns + "commentEx")
+            .Where(e => e.Attribute(W15ns + "paraId") != null)
+            .GroupBy(e => (string)e.Attribute(W15ns + "paraId")!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => (string?)g.First().Attribute(W15ns + "paraIdParent"), StringComparer.OrdinalIgnoreCase);
+        // Every parent a merged reply names outside the merged comments, then (because each one's own entry is
+        // carried too) every ancestor above it.
+        var pending = new Queue<string>(rightEntries.Where(e => added.Contains(e.Key))
+            .Select(e => e.Value).OfType<string>());
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Internal.CommentOps.ParaIdAllocator? paraIds = null;
+        while (pending.TryDequeue(out var parent))
+        {
+            if (added.Contains(parent) || !visited.Add(parent))
+                continue;
+            var rightParentId = (string?)rightCommentsRoot.Elements(W.comment).FirstOrDefault(c =>
+                c.Descendants(W.p).Any(p => string.Equals((string?)p.Attribute(W14ns + "paraId"), parent,
+                    StringComparison.OrdinalIgnoreCase)))?.Attribute(W.id);
+            var outputParent = rightParentId == null ? null : outRoot.Elements(W.comment).FirstOrDefault(c =>
+                (string?)c.Attribute(W.id) == rightParentId && !addedDefinitions.Contains(c));
+            if (outputParent?.Elements(W.p).LastOrDefault() is not { } lastParagraph)
+            {
+                // Nothing in the output to thread under: MergeRightThreadingEntries drops a link renamed to "".
+                renamedParaIds[parent] = "";
+                continue;
+            }
+            if ((string?)lastParagraph.Attribute(W14ns + "paraId") is not { Length: > 0 } outputParaId)
+            {
+                // Built after every merged clone is in the comments part, so it cannot mint one of theirs.
+                outputParaId = (paraIds ??= new Internal.CommentOps.ParaIdAllocator(main)).Next();
+                PartNamespaces.EnsureIgnorablePrefix(outRoot, "w14", W14ns);
+                lastParagraph.SetAttributeValue(W14ns + "paraId", outputParaId);
+            }
+            threadParaIds.Add(parent);
+            if (!string.Equals(parent, outputParaId, StringComparison.OrdinalIgnoreCase))
+                renamedParaIds[parent] = outputParaId;
+            if (rightEntries.TryGetValue(parent, out var grandparent) && grandparent != null)
+                pending.Enqueue(grandparent);
         }
     }
 
     /// <summary>Copy every entry of <paramref name="rightPart"/> whose paraId attribute is in
     /// <paramref name="paraIds"/> into <paramref name="outPart"/> (seeded from <paramref name="seedXml"/> when
     /// empty), under the fresh paraId <paramref name="renamed"/> gave its definition, if any (a
-    /// <c>w15:paraIdParent</c> naming a renamed definition follows it too), skipping paraIds already present and
+    /// <c>w15:paraIdParent</c> naming a renamed definition follows it too, and one renamed to the empty string is
+    /// dropped), skipping paraIds already present and
     /// giving a <c>w16cid:durableId</c> the output already uses a fresh value.
     /// Shared by the <c>commentsExtended</c> + <c>commentsIds</c> threading merges.</summary>
     private static void MergeRightThreadingEntries(OpenXmlPart outPart, OpenXmlPart? rightPart,
@@ -3851,7 +3915,7 @@ internal static partial class IrMarkupRenderer
             var copy = new XElement(entry);
             copy.SetAttributeValue(paraIdAttr, key);
             if ((string?)copy.Attribute(W15ns + "paraIdParent") is { } parent && renamed.TryGetValue(parent, out var freshParent))
-                copy.SetAttributeValue(W15ns + "paraIdParent", freshParent);
+                copy.SetAttributeValue(W15ns + "paraIdParent", freshParent.Length == 0 ? null : freshParent);
             // A durable id names one comment across the package too: one the original already uses (the other
             // package numbered a different comment with it) is replaced by a fresh one.
             if ((string?)copy.Attribute(W16cidNs + "durableId") is { } durable && !durableIds.Add(durable))
