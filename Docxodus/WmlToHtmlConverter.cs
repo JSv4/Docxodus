@@ -6259,10 +6259,12 @@ namespace Docxodus
             {
                 // Before compatibility mode 15 Word centres the leading border on the indent, and when
                 // the table states an indent or has a style it also pulls the table out by the first
-                // cell's margin so that cell's text sits at the indent (issue #1219). CSS puts the
-                // border's centre at the table's margin edge and the text half a border plus the
-                // padding inside it, so the edge moves out by both. A floating table is placed by
-                // w:tblpPr instead.
+                // cell's margin so that cell's text sits at the indent (issue #1219). The browser draws
+                // a collapsed border from the table's margin edge inward, so moving that edge out by
+                // half the border (and the margin) puts the border where Word draws it. The text then
+                // sits half a border right of Word's, as it does in mode 15, because CSS pads from the
+                // border's inner edge where Word measures the margin from its centre. A floating table
+                // is placed by w:tblpPr instead.
                 var firstCell = element.Elements(W.tr).Elements(W.tc).FirstOrDefault();
                 var leadingSide = bidiVisual ? W.right : W.left;
                 var border = firstCell?.Elements(W.tcPr).Elements(W.tcBorders).Elements(leadingSide).FirstOrDefault();
@@ -7390,7 +7392,9 @@ namespace Docxodus
                             var margins = tblPr.Element(W.tblCellMar);
                             if (margins == null)
                                 tblPr.Add(margins = new XElement(W.tblCellMar));
-                            foreach (var side in inherited.Elements().Where(side => margins.Element(side.Name) == null))
+                            // A side the table states under either of its names (left/start, right/end) is the table's.
+                            foreach (var side in inherited.Elements().Where(side => margins.Element(side.Name) == null
+                                         && margins.Element(SideAlias(side.Name)) == null))
                                 margins.Add(new XElement(side));
                         }
                     }
@@ -7400,6 +7404,10 @@ namespace Docxodus
                 }
             }
         }
+
+        private static XName SideAlias(XName side) =>
+            side == W.left ? W.start : side == W.start ? W.left
+            : side == W.right ? W.end : side == W.end ? W.right : side;
 
         private static void MarkStructuralTableEndParagraphs(WordprocessingDocument wordDoc)
         {

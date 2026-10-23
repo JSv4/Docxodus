@@ -56,6 +56,15 @@ public class TableHorizontalPlacementTests
         Assert.Equal("5.4pt", Cell(html)["padding-right"]);
     }
 
+    [Fact]
+    public void Default_table_style_margin_does_not_override_the_tables_other_spelling_of_the_side()
+    {
+        var styles = DefaultTableStyle.Replace("<w:left ", "<w:start ");
+        var html = Convert(Table(props: "<w:tblCellMar><w:left w:w=\"288\" w:type=\"dxa\"/></w:tblCellMar>"),
+            mode: "15", styles: styles);
+        Assert.Equal("14.4pt", Cell(html)["padding-left"]);
+    }
+
     [Theory]
     [InlineData("14")]
     [InlineData("12")]
