@@ -1430,9 +1430,11 @@ public sealed partial class DocxSession
     {
         EnsureTrackRevisionsEnabled();
         var envelope = new XElement(name,
-            new XAttribute(W.id, NextRevisionId()),
-            new XAttribute(W.author, author),
-            new XAttribute(W.date, date));
+            new XAttribute(W.id, NextRevisionId()));
+        // CT_TblGridChange extends CT_Markup, which permits only w:id. Attribution comes
+        // from the associated cell/table property revisions when the registry groups the edit.
+        if (name != W.tblGridChange)
+            envelope.Add(new XAttribute(W.author, author), new XAttribute(W.date, date));
         envelope.Add(content);
         return envelope;
     }

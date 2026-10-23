@@ -763,6 +763,158 @@ public class DocxSessionStructuralRevisionTests
         Assert.Equal(ValidationErrors(expected), ValidationErrors(actual));
     }
 
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, true)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, true)]
+    public void ColumnWidthRevision_HasASchemaValidGridAndResolvesAsOneEdit(bool accept, bool wordStyleGrid, bool partial)
+    {
+        var baseline = BuildTableDocument();
+        byte[] expected = baseline;
+        if (accept)
+        {
+            using var direct = new DocxSession(baseline);
+            Assert.True(direct.SetColumnWidths(FirstCellAnchor(direct), new[] { partial ? 2400 : 2600, 3000 }).Success);
+            expected = direct.Save();
+        }
+        var pending = PendingColumnWidths(baseline, partial ? 2400 : 2600);
+        // Word emits a bare CT_Markup grid change too. Exercise registry inference separately
+        // from the session writer so restoring attribution cannot make the grouping test pass.
+        if (wordStyleGrid)
+            pending = MutateMain(pending, root => root.Descendants(W.tblGridChange)
+                .Attributes().Where(a => a.Name == W.author || a.Name == W.date).Remove());
+        var gridChange = Assert.Single(MainRoot(pending).Descendants(W.tblGridChange));
+        Assert.Equal(new[] { W.id }, gridChange.Attributes().Where(a => !a.IsNamespaceDeclaration).Select(a => a.Name));
+        Assert.Empty(PackageValidation.Errors(pending, DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+
+        using var reopened = new DocxSession(pending);
+        var revision = Assert.Single(reopened.ListRevisions());
+        Assert.Equal("Format Reviewer", revision.Author);
+        Assert.Equal(RevisionFamily.PropertiesChange, revision.Family);
+        Assert.True((accept ? reopened.AcceptRevision(revision.Id) : reopened.RejectRevision(revision.Id)).Success);
+        Assert.Empty(reopened.ListRevisions());
+        var actual = reopened.Save();
+        Assert.True(XNode.DeepEquals(MainRoot(expected), MainRoot(actual)), FirstDifference(MainRoot(expected), MainRoot(actual)));
+        Assert.Empty(PackageValidation.Errors(actual, DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+    }
+
+    [Fact]
+    public void UntrackedColumnWidths_StayRevisionFreeAndSchemaValid()
+    {
+        using var session = new DocxSession(BuildTableDocument());
+        Assert.True(ApplyPropertyMutation(session, "column_widths").Success);
+        Assert.Empty(session.ListRevisions());
+        Assert.Empty(PackageValidation.Errors(session.Save(), DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+    }
+
+    [Theory]
+    [InlineData("shading")]
+    [InlineData("other_author")]
+    public void BareGridChange_DoesNotJoinAnIncompleteOrMixedPropertyEdit(string shape)
+    {
+        var pending = PendingColumnWidths(BuildTableDocument());
+        pending = MutateMain(pending, root =>
+        {
+            var change = root.Descendants(W.tcPrChange).First();
+            if (shape == "shading")
+                change.Element(W.tcPr)!.Add(new XElement(W.shd,
+                    new XAttribute(W.val, "clear"), new XAttribute(W.fill, "ABCDEF")));
+            else
+                change.SetAttributeValue(W.author, "Other Reviewer");
+        });
+        Assert.Empty(PackageValidation.Errors(pending, DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+        using var session = new DocxSession(pending);
+        var revisions = session.ListRevisions();
+        Assert.True(revisions.Count > 1);
+        Assert.Contains(revisions, revision => string.IsNullOrEmpty(revision.Author) && revision.ConstituentIds.Count == 1);
+    }
+
+    [Fact]
+    public void ColumnWidthRevisions_InDifferentTablesRemainIndependentAtTheSameStamp()
+    {
+        var baseline = MutateMain(BuildTableDocument(), root =>
+        {
+            var table = root.Descendants(W.tbl).Single();
+            table.AddAfterSelf(new XElement(table));
+        });
+        var pending = PendingColumnWidths(baseline, 2600, 0, 4);
+        pending = MutateMain(pending, root =>
+        {
+            foreach (var change in root.Descendants().Where(e => e.Attribute(W.date) is not null))
+                change.SetAttributeValue(W.date, "2026-01-01T00:00:00Z");
+        });
+        Assert.Empty(PackageValidation.Errors(pending, DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+        using var session = new DocxSession(pending);
+        Assert.Equal(2, session.ListRevisions().Count);
+        Assert.True(session.AcceptRevision(session.ListRevisions()[0].Id).Success);
+        Assert.Single(MainRoot(session.Save()).Descendants(W.tblGridChange));
+        Assert.True(session.RejectRevision(Assert.Single(session.ListRevisions()).Id).Success);
+        Assert.Empty(session.ListRevisions());
+        var grids = MainRoot(session.Save()).Descendants(W.tbl).Select(table =>
+            string.Join(",", table.Element(W.tblGrid)!.Elements(W.gridCol).Select(col => (string?)col.Attribute(W._w)))).ToArray();
+        Assert.Contains("2400,3200", grids);
+        Assert.Contains("2600,3000", grids);
+        Assert.Empty(PackageValidation.Errors(session.Save(), DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+    }
+
+    private static byte[] PendingColumnWidths(byte[] baseline, int firstWidth = 2600, params int[] targetCells)
+    {
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Format Reviewer",
+        });
+        var cells = session.Project().AnchorIndex.Values.Where(a => a.Anchor.Kind == "tc").Select(a => a.Anchor.Id).ToArray();
+        foreach (var index in targetCells.DefaultIfEmpty(0))
+            Assert.True(session.SetColumnWidths(cells[index], new[] { firstWidth, 3000 }).Success);
+        return session.Save();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ColumnWidths_LeaveANestedTablesOwnGridAlone(bool accept)
+    {
+        var baseline = MutateMain(BuildTableDocument(), root =>
+        {
+            var table = root.Descendants(W.tbl).Single();
+            var nested = new XElement(table);
+            table.Descendants(W.tc).First().Add(nested, new XElement(W.p));
+        });
+        var pending = PendingColumnWidths(baseline);
+        using var session = new DocxSession(pending);
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.True((accept ? session.AcceptRevision(revision.Id) : session.RejectRevision(revision.Id)).Success);
+        var tables = MainRoot(session.Save()).Descendants(W.tbl).ToArray();
+        Assert.Equal("2400,3200", string.Join(",", tables[1].Element(W.tblGrid)!.Elements(W.gridCol).Select(col => (string?)col.Attribute(W._w))));
+        Assert.Empty(session.ListRevisions());
+        Assert.Empty(PackageValidation.Errors(session.Save(), DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+    }
+
+    [Fact]
+    public void ColumnWidthRevision_DoesNotAbsorbARowHeightEditAtTheSameStamp()
+    {
+        var pending = PendingColumnWidths(BuildTableDocument());
+        pending = MutateMain(pending, root =>
+        {
+            var stamp = root.Descendants(W.tcPrChange).First();
+            root.Descendants(W.tr).First().AddFirst(new XElement(W.trPr,
+                new XElement(W.trHeight, new XAttribute(W.val, 480)),
+                new XElement(W.trPrChange, new XAttribute(W.id, 9000),
+                    new XAttribute(W.author, (string)stamp.Attribute(W.author)!),
+                    new XAttribute(W.date, (string)stamp.Attribute(W.date)!),
+                    new XElement(W.trPr))));
+        });
+        Assert.Empty(PackageValidation.Errors(pending, DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+        using var session = new DocxSession(pending);
+        Assert.Equal(2, session.ListRevisions().Count);
+    }
+
     [Fact]
     public void DS45515_StableIdsAndSequentialRows_RemainIndependent()
     {
