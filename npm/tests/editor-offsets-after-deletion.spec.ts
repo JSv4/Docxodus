@@ -9,7 +9,7 @@ import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
 
 const REVISION = 'w:author="Counsel A" w:date="2026-05-01T09:00:00Z"';
 
-function deletionFixture(): Uint8Array {
+function deletionFixture(nestedDeletedOnly = false): Uint8Array {
   const body = [
     // A deletion between live runs, followed by an insertion.
     '<w:p><w:r><w:t xml:space="preserve">The tenant shall </w:t></w:r>'
@@ -37,7 +37,9 @@ function deletionFixture(): Uint8Array {
     '<w:p><w:bookmarkStart w:id="10" w:name="_Toc1"/>'
       + `<w:del w:id="11" ${REVISION}><w:r><w:delText>Gone heading</w:delText></w:r></w:del>`
       + '<w:bookmarkEnd w:id="10"/></w:p>',
-    `<w:p><w:del w:id="12" ${REVISION}><w:r><w:delText>Gone too</w:delText></w:r></w:del></w:p>`,
+    `<w:p>${nestedDeletedOnly ? '<w:hyperlink w:anchor="terms">' : ''}`
+      + `<w:del w:id="12" ${REVISION}><w:r><w:delText>Gone too</w:delText></w:r></w:del>`
+      + `${nestedDeletedOnly ? '</w:hyperlink>' : ''}</w:p>`,
     // A deletion at the end of a paragraph.
     '<w:p><w:r><w:t>Keep this</w:t></w:r>'
       + `<w:del w:id="13" ${REVISION}><w:r><w:delText xml:space="preserve"> tail</w:delText></w:r></w:del></w:p>`,
@@ -514,6 +516,36 @@ test.describe('DocxEditor — typing beside a deletion stays on the caret side (
       expect(at('<w:bookmarkStart')).toBeLessThan(at('<w:ins'));
       expect(at('</w:ins>')).toBeLessThan(at('<w:bookmarkEnd'));
       expect(key === 'Home' ? at('</w:ins>') < at('<w:del ') : at('</w:del>') < at('<w:ins')).toBe(true);
+    });
+  }
+});
+
+test.describe('DocxEditor — default options keep a hidden deletion (#1292)', () => {
+  // With the default options edits are untracked and existing revisions are not shown, so a
+  // paragraph whose only text is deleted renders empty, and the editor rewrites it whole. The
+  // rewrite used to drop the hidden deletion, so a reject could no longer restore its text.
+  for (const nested of [false, true]) {
+    test(`typing into a paragraph with a hidden deletion${nested ? ' inside a hyperlink' : ''} keeps the deletion`, async ({ page }) => {
+      await openTracked(page, deletionFixture(nested), {}, false);
+      const revisions = () => page.evaluate(() => (window as any).editor.listRevisions()
+        .map((r: any) => `${r.type}:${r.text}`).filter((r: string) => r.includes('Gone too')));
+      expect(await revisions()).toEqual(['delete:Gone too']);
+      const block = await page.evaluate(() => {
+        const w = window as any;
+        // The hidden deletion leaves the paragraph empty; it is the one after "Gone heading"'s.
+        const blocks = Array.from(w.container.querySelectorAll('p[data-anchor]')) as HTMLElement[];
+        const empty = blocks.filter((b) => (b.textContent ?? '').trim() === '');
+        empty[1].setAttribute('data-test-target', '1');
+        return empty.length;
+      });
+      expect(block).toBeGreaterThanOrEqual(2);
+      await page.locator('[data-test-target="1"]').click();
+      await page.keyboard.type('New text');
+      await blur(page);
+      expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+      expect(await revisions()).toEqual(['delete:Gone too']);
+      const accepted = await page.evaluate(() => (window as any).acceptedText());
+      expect(accepted).toContain('New text');
     });
   }
 });

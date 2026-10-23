@@ -737,6 +737,130 @@ public class DocxSessionSpanRevisionTests
         Assert.Equal(version, session.Version);
     }
 
+    // ─── Untracked whole-paragraph replacement keeps pending removed text (issue #1292) ───
+
+    [Fact]
+    public void Untracked_ReplaceTextOfAParagraphWhoseOnlyTextIsDeleted_KeepsTheDeletion()
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", Del("Reviewer", 1, "Gone clause"));
+
+        var edit = session.ReplaceText(p, "New text");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal("del:Reviewer[\"Gone clause\"] \"New text\"", Shape(session, p));
+        Assert.Equal(new[] { "delete:Reviewer:Gone clause" }, Revisions(session));
+        Assert.Equal("New text", Accepted(session));
+        Assert.Equal("Gone clauseNew text", Rejected(session));
+    }
+
+    [Fact]
+    public void Untracked_ReplaceText_PutsAMidParagraphDeletionAfterTheNewTextRatherThanInsideIt()
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", Run("Keep "), Del("Reviewer", 1, "gone "), Run("rest"));
+
+        Assert.True(session.ReplaceText(p, "New words").Success);
+
+        Assert.Equal("\"New words\" del:Reviewer[\"gone \"]", Shape(session, p));
+    }
+
+    [Fact]
+    public void Untracked_ReplaceText_KeepsAMoveSourceWithItsRange()
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat",
+            new XElement(W.moveFromRangeStart, new XAttribute(W.id, 5), new XAttribute(W.name, "move1")),
+            new XElement(W.moveFrom, Stamp("Reviewer", 6),
+                new XElement(W.r, new XElement(W.delText, new XAttribute(XNamespace.Xml + "space", "preserve"), "Moved"))),
+            new XElement(W.moveFromRangeEnd, new XAttribute(W.id, 5)));
+
+        Assert.True(session.ReplaceText(p, "New text").Success);
+
+        Assert.Equal("moveFromRangeStart[] moveFrom:Reviewer[\"Moved\"] moveFromRangeEnd[] \"New text\"", Shape(session, p));
+    }
+
+    [Fact]
+    public void Control_UntrackedReplaceText_StillReplacesLiveTextAndInsertions()
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", Run("Old "), Ins("Alex", 1, Run("words")));
+
+        Assert.True(session.ReplaceText(p, "New text").Success);
+
+        Assert.Equal("\"New text\"", Shape(session, p));
+        Assert.Empty(Revisions(session));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Untracked_ReplaceText_KeepsBookmarksInsideAPreservedDeletion(bool hasLivePrefix)
+    {
+        var deletion = new XElement(W.del, Stamp("Reviewer", 1), Bookmark(W.bookmarkStart),
+            new XElement(W.r, new XElement(W.delText, "Gone clause")), Bookmark(W.bookmarkEnd));
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat",
+            hasLivePrefix ? Run("Keep ") : null!, deletion);
+        var before = new XElement(XElement.Parse(session.Raw.GetXml(p)).Element(W.del)!);
+
+        var edit = session.ReplaceText(p, "New text");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        var paragraph = XElement.Parse(session.Raw.GetXml(p));
+        Assert.True(XNode.DeepEquals(before, paragraph.Element(W.del)), paragraph.ToString());
+        Assert.Empty(paragraph.Elements(W.bookmarkStart));
+        Assert.Empty(paragraph.Elements(W.bookmarkEnd));
+        Assert.Equal("New text", Accepted(session));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Untracked_ReplaceText_KeepsABookmarkSpanningPreservedRemovedAndLiveText(bool startInsideDeletion)
+    {
+        var start = Bookmark(W.bookmarkStart);
+        var end = Bookmark(W.bookmarkEnd);
+        var deletion = new XElement(W.del, Stamp("Reviewer", 1), startInsideDeletion ? start : null,
+            new XElement(W.r, new XElement(W.delText, "Gone clause")), startInsideDeletion ? null : end);
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", startInsideDeletion ? null! : start,
+            Run("Keep "), deletion, Run("rest"), startInsideDeletion ? end : null!);
+
+        var edit = session.ReplaceText(p, "New replacement words");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        var paragraph = XElement.Parse(session.Raw.GetXml(p));
+        var savedStart = paragraph.Descendants(W.bookmarkStart).Single();
+        var savedEnd = paragraph.Descendants(W.bookmarkEnd).Single();
+        Assert.True(XNode.DocumentOrderComparer.Compare(savedStart, savedEnd) < 0, paragraph.ToString());
+        Assert.Equal(startInsideDeletion, savedStart.Parent?.Name == W.del);
+        Assert.Equal(!startInsideDeletion, savedEnd.Parent?.Name == W.del);
+    }
+
+    [Theory]
+    [InlineData("hyperlink")]
+    [InlineData("content control")]
+    [InlineData("simple field")]
+    public void Untracked_ReplaceText_KeepsADeletionInsideAnOtherwiseEmptyContainer(string kind)
+    {
+        var deletion = Del("Reviewer", 1, "Gone clause");
+        var container = kind switch
+        {
+            "hyperlink" => new XElement(W.hyperlink, new XAttribute(W.anchor, "fees"), deletion),
+            "content control" => new XElement(W.sdt, new XElement(W.sdtPr), new XElement(W.sdtContent, deletion)),
+            _ => new XElement(W.fldSimple, new XAttribute(W.instr, " DOCPROPERTY Title "), deletion),
+        };
+        var bytes = Build(container);
+        using (var input = WordprocessingDocument.Open(new MemoryStream(bytes), false))
+            Assert.Empty(new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(input));
+        using var session = new DocxSession(bytes, new DocxSessionSettings { TrackedChanges = TrackedChangeMode.Accept });
+        var p = session.Project().AnchorIndex.Values.Single(a => a.Anchor.Kind == "p").Anchor.Id;
+        var before = XElement.Parse(session.Raw.GetXml(p)).Descendants(W.del).Single().ToString();
+
+        var edit = session.ReplaceText(p, "New text");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal(before, XElement.Parse(session.Raw.GetXml(p)).Descendants(W.del).Single().ToString());
+        Assert.Equal(new[] { "delete:Reviewer:Gone clause" }, Revisions(session));
+        Assert.Equal("New text", Accepted(session));
+        Assert.Equal("Gone clauseNew text", Rejected(session));
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     internal static XElement Run(string text, bool bold = false) => new(W.r,
