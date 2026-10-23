@@ -532,6 +532,14 @@ public sealed partial class DocxSession
             }
             emptied.Remove();
         }
+        // An insertion left holding only range markers (a bookmark it wrapped) would list as an
+        // insertion with no text: unwrap it, keeping the markers where they were.
+        if (parent is { Parent: not null } && parent.Name == W.ins && parent.Elements().All(IsContentless))
+        {
+            var kept = parent.Elements().ToList();
+            foreach (var child in kept) child.Remove();
+            parent.ReplaceWith(kept);
+        }
     }
 
     /// <summary>Convert a deleted run-level element's text to its deleted spelling in place,

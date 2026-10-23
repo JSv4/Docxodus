@@ -361,9 +361,13 @@ public sealed partial class DocxSession
         XElement? after = null;
         XElement? before = null;
         bool splitRun = false;
+        int splitAt = 0;
         bool tracked = _trackedChanges == TrackedChangeMode.RenderInline;
-        // Untracked text is nobody's change, so it joins no tracked insertion (issue #1319).
-        Func<XElement, bool> mayJoin = tracked ? _ => true : _ => false;
+        var author = _revisionAuthor ?? "docxodus";
+        // Untracked text is nobody's change, so it joins no tracked insertion (issue #1319);
+        // tracked text joins only the session author's own: Word never nests one author's
+        // insertion in another's (issue #1318).
+        Func<XElement, bool> mayJoin = tracked ? envelope => IsOwnInsertion(envelope, author) : _ => false;
         foreach (var seg in map.Segments)
         {
             if (seg.Length == 0) continue;
@@ -374,13 +378,15 @@ public sealed partial class DocxSession
                 if (InsideMoveDestination(seg.Run, element)) return MoveDestinationRefusal(anchorId);
                 if (!CanSplitTextRun(seg.Run)
                     || !(ReferenceEquals(seg.Run.Parent, element)
-                        || NeedsToLeaveInsertion(element, seg.Run, mayJoin) == true)
+                        || NeedsToLeaveInsertion(element, seg.Run, mayJoin) == true
+                        || (tracked && OwnPendingInsertion(seg.Run, author) is not null))
                     || IsInsideComplexField(seg.Run)
                     || !XmlText.IsCharacterBoundary(map.FlatText, offset))
                     return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
                         "interior insertion requires an ordinary character boundary in a text run with only optional leading tabs, outside fields and inline containers", anchorId);
                 after = seg.Run;
                 splitRun = true;
+                splitAt = offset - seg.StartOffsetInBlock;
                 break;
             }
         }
@@ -414,8 +420,18 @@ public sealed partial class DocxSession
         // (the resolvers disagree on text there; see docs/ooxml_corner_cases.md). At its edge the
         // text goes past the move's range marker too, so it is outside the moved range.
         if ((after ?? before) is { } edge && InsideMoveDestination(edge, element)) return MoveDestinationRefusal(anchorId);
+        // A tracked insertion does not make a field's cached result an editable text container.
+        // At the field's edges the container step above has already moved the anchor outside it.
+        if ((after ?? before)?.Ancestors(W.fldSimple).Any() == true)
+            return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                "text cannot be inserted inside a simple field's result; type before or after the field", anchorId);
         if (after is not null && after.Name == W.moveTo) after = PastMoveRangeMarker(after, forward: true);
         if (before is not null && before.Name == W.moveTo) before = PastMoveRangeMarker(before, forward: false);
+
+        // Tracked text typed inside the session author's own pending insertion extends it.
+        if (tracked && (after ?? before) is { } own && OwnPendingInsertion(own, author) is not null
+            && NeedsToLeaveInsertion(element, own, mayJoin) == false)
+            return ExtendOwnInsertion(target, splitRun ? after! : null, splitAt, after, before, rPr, replace);
 
         // Coalesce into the adjacent run rather than fragmenting the paragraph. Appending "foo"
         // after a run should extend that run's text, not drop a sibling run beside it: a separate
@@ -475,8 +491,8 @@ public sealed partial class DocxSession
             // out of edges above, is strictly inside it: untracked text is nobody's change (issue
             // #1319), so the insertion is cut there and the text goes between the halves. It is cut
             // at the node the boundary resolved to, not by offset, so a field's zero-width end run
-            // stays with the field it closes. Inside a content control or simple field that sits in
-            // the insertion nothing can be cut, and the text stays where it lands, as before.
+            // stays with the field it closes. Inside a content control that sits in the insertion
+            // nothing can be cut, and the text stays where it lands, as before.
             if ((after ?? before) is { } placeAt
                 && NeedsToLeaveInsertion(element, placeAt, mayJoin) == true
                 && OutsideForeignInsertion(element, placeAt, after is not null, mayJoin) is { } placed)
@@ -522,8 +538,8 @@ public sealed partial class DocxSession
     /// symbol or other run content. Only such a run can safely absorb inserted text by extending
     /// a <c>w:t</c>; anything else keeps the insertion in its own sibling run.
     /// </summary>
-    private static bool IsPlainTextRun(XElement run) =>
-        run.Name == W.r
+    private static bool IsPlainTextRun(XElement? run) =>
+        run is not null && run.Name == W.r
         && run.Elements().All(e => e.Name == W.rPr || e.Name == W.t)
         && run.Elements(W.t).Any();
 
@@ -586,12 +602,12 @@ public sealed partial class DocxSession
         || e.Name == W.proofErr;
 
     /// <summary>Climb from <paramref name="node"/> through every <see cref="BoundaryContainers"/>
-    /// ancestor (short of <paramref name="paragraph"/>) in which it is the last content, so an
+    /// ancestor or simple field (short of <paramref name="paragraph"/>) in which it is the last content, so an
     /// insert "after" it lands after the container.</summary>
     private static XElement StepOutOfContainersAtEnd(XElement node, XElement paragraph)
     {
         while (node.Parent is { } parent && !ReferenceEquals(parent, paragraph)
-            && BoundaryContainers.Contains(parent.Name)
+            && (BoundaryContainers.Contains(parent.Name) || parent.Name == W.fldSimple)
             && !node.ElementsAfterSelf().Any(e => !IsInlineMarker(e)))
             node = parent;
         return node;
@@ -602,7 +618,7 @@ public sealed partial class DocxSession
     private static XElement StepOutOfContainersAtStart(XElement node, XElement paragraph)
     {
         while (node.Parent is { } parent && !ReferenceEquals(parent, paragraph)
-            && BoundaryContainers.Contains(parent.Name)
+            && (BoundaryContainers.Contains(parent.Name) || parent.Name == W.fldSimple)
             && !node.ElementsBeforeSelf().Any(e => !IsInlineMarker(e)))
             node = parent;
         return node;
@@ -963,6 +979,44 @@ public sealed partial class DocxSession
         }
     }
 
+    /// <summary>Tracked typing strictly inside the session author's own pending insertion: the
+    /// text joins the run it lands in (<paramref name="split"/> at <paramref name="splitAt"/>, or
+    /// the end of <paramref name="after"/> / start of <paramref name="before"/> when that is a
+    /// plain text run), else a new run without an envelope goes beside it in the insertion.</summary>
+    private EditResult ExtendOwnInsertion(AnchorTarget target, XElement? split, int splitAt,
+        XElement? after, XElement? before, XElement? rPr, string replace)
+    {
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            // A run carrying a pending formatting change (another reviewer's, perhaps) does not
+            // absorb the text: that change is not the typist's. The text gets its own run, with
+            // the run's formatting minus the change.
+            static bool Absorbs(XElement? run) => run is not null && run.Element(W.rPr)?.Element(W.rPrChange) is null;
+            if (split is not null && Absorbs(split)) ReplaceRunTextRange(split, splitAt, 0, replace);
+            else if (split is null && IsPlainTextRun(after) && Absorbs(after)) after!.Elements(W.t).Last().Value += replace;
+            else if (split is null && after is null && IsPlainTextRun(before) && Absorbs(before))
+                before!.Elements(W.t).First().Value = replace + before.Elements(W.t).First().Value;
+            else
+            {
+                if (split is not null) SplitRunAtText(split, splitAt);
+                var run = new XElement(W.r, rPr,
+                    new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), replace));
+                UnidHelper.AssignToSelfAndDescendants(run);
+                if (after is not null) after.AddAfterSelf(run);
+                else before!.AddBeforeSelf(run);
+            }
+            foreach (var t in (split ?? after ?? before)!.Elements(W.t))
+                t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+            InvalidateProjectionCache();
+            return new EditResult { Success = true, Modified = new[] { target.Anchor }, Patch = PatchFor(target) };
+        }
+        catch (Exception ex)
+        {
+            return FailInternal(ex, target.Anchor.Id);
+        }
+    }
+
     /// <summary>Whether <paramref name="node"/> sits inside a tracked move destination below
     /// <paramref name="paragraph"/>.</summary>
     private static bool InsideMoveDestination(XElement node, XElement paragraph) =>
@@ -1006,21 +1060,31 @@ public sealed partial class DocxSession
         var slice = SplitRunAtText(run, start);
         var tail = SplitRunAtText(slice, length);
         foreach (var t in slice.Elements(W.t).ToList()) t.Remove();
+        // The pieces left with no content go, with any envelope that leaves empty (an insertion
+        // left holding only range markers is unwrapped). The emptied slice stays for now: it marks
+        // where the replacement goes.
+        foreach (var piece in new[] { run, tail })
+            if (IsContentless(piece)) RemoveContentlessRun(piece);
 
         var rPr = run.Element(W.rPr) is { } source ? new XElement(source) : null;
         rPr?.Elements(W.rPrChange).Remove();
         var inserted = new XElement(W.r, rPr is { HasElements: true } ? rPr : null,
             new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), replace));
         UnidHelper.AssignToSelfAndDescendants(inserted);
-        var placed = OutsideForeignInsertion(paragraph, slice, true, _ => false)!.Value;
+        var placed = NeedsToLeaveInsertion(paragraph, slice, _ => false) == true
+            ? OutsideForeignInsertion(paragraph, slice, true, _ => false)!.Value
+            : (Anchor: slice, After: true);
         if (placed.After) placed.Anchor.AddAfterSelf(inserted);
         else placed.Anchor.AddBeforeSelf(inserted);
+        RemoveContentlessRun(slice);
+    }
 
-        // The pieces left with no content go, with any envelope that leaves empty.
-        foreach (var piece in new[] { run, slice, tail })
-            if (piece.Parent is not null && IsContentless(piece)
-                && piece.Ancestors().FirstOrDefault(a => a.Name == W.ins || a.Name == W.moveTo) is { } envelope)
-                RemoveFromInsertion(piece, envelope);
+    private static void RemoveContentlessRun(XElement run)
+    {
+        if (run.Parent is null) return;
+        if (run.Ancestors().FirstOrDefault(a => a.Name == W.ins || a.Name == W.moveTo) is { } envelope)
+            RemoveFromInsertion(run, envelope);
+        else run.Remove();
     }
 
     /// <summary>Cut <paramref name="run"/> at <paramref name="offset"/> of its <c>w:t</c> text:
@@ -1199,6 +1263,14 @@ public sealed partial class DocxSession
             : firstEnvelope;
         var insertionEnvelope = CreateRevisionEnvelope(W.ins, author, date);
         insertionEnvelope.Add(insertedRun);
+        // Not inside another author's insertion: Word cuts theirs around the new one (#1318).
+        if (NeedsToLeaveInsertion(blockElement, insertionAnchor, e => IsOwnInsertion(e, author)) == true
+            && OutsideForeignInsertion(blockElement, insertionAnchor, true, e => IsOwnInsertion(e, author)) is { } placed)
+        {
+            if (placed.After) placed.Anchor.AddAfterSelf(insertionEnvelope);
+            else placed.Anchor.AddBeforeSelf(insertionEnvelope);
+            return;
+        }
         insertionAnchor.AddAfterSelf(insertionEnvelope);
     }
 

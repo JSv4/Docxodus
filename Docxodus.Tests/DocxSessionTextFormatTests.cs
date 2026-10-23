@@ -183,7 +183,6 @@ public class DocxSessionTextFormatTests
     [InlineData("deleted field end")]
     [InlineData("moved field end")]
     [InlineData("simple field")]
-    [InlineData("insertion")]
     [InlineData("mixed run")]
     [InlineData("trailing tab")]
     [InlineData("leading break")]
@@ -208,7 +207,6 @@ public class DocxSessionTextFormatTests
                 new XElement(W.p, FieldRun("end")),
             },
             "simple field" => new[] { new XElement(W.fldSimple, new XAttribute(W.instr, " DOCPROPERTY Title "), run) },
-            "insertion" => new[] { new XElement(W.ins, new XAttribute(W.id, "1"), new XAttribute(W.author, "Other"), run) },
             "mixed run" => new[] { new XElement(W.r, new XElement(W.t, "docu"), new XElement(W.tab), new XElement(W.t, "ment")) },
             "trailing tab" => new[] { new XElement(W.r, new XElement(W.t, "document"), new XElement(W.tab)) },
             "leading break" => new[] { new XElement(W.r, new XElement(W.br), new XElement(W.t, "document")) },

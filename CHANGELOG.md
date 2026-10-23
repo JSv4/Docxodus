@@ -40,6 +40,24 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Under tracked changes, text inserted through `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`)
+  that would land strictly inside another author's tracked insertion now splits their insertion and goes
+  between the halves in the session author's own `w:ins`, as Word does (#1318). A zero-length insert inside
+  one of their runs was refused, and the browser editor's fallback then struck the neighbouring character
+  and retyped it with the keystroke inside their insertion; between two of their runs, or through a span
+  replacement, the new `w:ins` was nested inside theirs and listed as their text. The insertion is split
+  in place inside a hyperlink, content control or smart tag, as with tracking off (#1319); a content
+  control inside the insertion still cannot be split. A zero-length insertion inside a simple field's
+  cached result is refused even inside a tracked insertion; typing at the field's edge lands outside it.
+  Inside the session author's own insertion the text now extends it. Replacing or deleting every
+  character of an insertion that also wraps a bookmark or other range marker now unwraps it instead of
+  leaving an empty insertion listed with no text.
+
+- Since #1319 refuses new text strictly inside a tracked move destination, a `ReplaceTextRange` call
+  whose matches include one inside moved text now fails as a whole with `UnsupportedInlineBoundary` and
+  changes nothing, including its other matches. Replace those through `Grep` and `ReplaceMatch`, skipping
+  the match inside the move.
+
 - A table no longer starts 7.5pt below a paragraph that has no space after it, or below another table
   (#1244). The HTML converter gave such a table a top margin of its own "for visual separation", which
   moved the first row and everything after it down in the HTML, the paginated view and the PDF export.
@@ -51,13 +69,6 @@ All notable changes to this project will be documented in this file.
   follows another starts where that one ends. A paragraph's own after-spacing still separates it from
   the table, and a floating table keeps its `w:tblpPr` distance from the text above. The measurements
   are in `docs/ooxml_corner_cases.md`.
-
-- With tracked changes off, text inserted through `ReplaceTextAtSpan` at an offset strictly inside a tracked
-  insertion now splits the insertion around a plain run (#1319). Inside one of the insertion's runs the
-  call was refused, and the browser editor's fallback then grew the insertion's run; between two of its
-  runs the new run joined the insertion. Either way the text was credited to the insertion's author and
-  removed when that insertion was rejected. The second half keeps the author and date under a fresh
-  `w:id`, as `SplitParagraph` already does.
 
 - With tracked changes off, text inserted through `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`)
   that would land strictly inside a tracked insertion now goes in its own plain run, splitting the insertion
