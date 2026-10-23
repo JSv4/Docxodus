@@ -69,10 +69,10 @@ function deletionFixture(): Uint8Array {
   }).map(([name, value]) => ({ name, data: xml(value) })));
 }
 
-async function openTracked(page: Page) {
+async function openTracked(page: Page, fixture = deletionFixture(), options: Record<string, unknown> = {}) {
   await page.goto('/test-harness.html');
   await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 30000 });
-  await page.evaluate((bytes) => {
+  await page.evaluate(({ bytes, options }) => {
     const w = window as any;
     const D = w.Docxodus;
     const container = document.createElement('div');
@@ -81,6 +81,7 @@ async function openTracked(page: Page) {
     w.editor = D.DocxEditor.open(container, new Uint8Array(bytes), D, {
       trackedChanges: 1, // TrackedChangeMode.RenderInline
       onEditFailed: (info: unknown) => w.failures.push(info),
+      ...options,
     });
     w.container = container;
     w.block = (text: string) => Array.from(container.querySelectorAll<HTMLElement>('p[data-anchor]'))
@@ -97,7 +98,7 @@ async function openTracked(page: Page) {
       view.remove();
       return texts;
     };
-  }, Array.from(deletionFixture()));
+  }, { bytes: Array.from(fixture), options });
 }
 
 /** Put the caret in the block holding `text`, just after the first text node occurrence of `at`. */
@@ -378,4 +379,52 @@ test.describe('DocxEditor — offsets to the right of a rendered deletion (#1278
     expect(out.failures).toEqual([]);
     expect(out.accepted[0]).toBe('QThe tenant shall repaint the fence each spring.');
   });
+});
+
+// The page view marks a PAGE field in the body. One deleted with its text — whole inside one
+// w:del, or run by run as Word often writes it, even with differing dates — is deleted text too, so the offsets after it must
+// not count its cached result (issue #1272).
+function deletedPageFieldFixture(): Uint8Array {
+  const field = (wrap: (run: string, index: number) => string) => [
+    '<w:r><w:fldChar w:fldCharType="begin"/></w:r>',
+    '<w:r><w:delInstrText xml:space="preserve"> PAGE </w:delInstrText></w:r>',
+    '<w:r><w:fldChar w:fldCharType="separate"/></w:r>',
+    '<w:r><w:delText>1</w:delText></w:r>',
+    '<w:r><w:fldChar w:fldCharType="end"/></w:r>',
+  ].map(wrap).join('');
+  const body = '<w:p><w:r><w:t xml:space="preserve">Sheet </w:t></w:r>'
+    + `<w:del w:id="1" ${REVISION}>${field((run) => run)}</w:del>`
+    + '<w:r><w:t xml:space="preserve"> follows</w:t></w:r></w:p>'
+    + '<w:p><w:r><w:t xml:space="preserve">Leaf </w:t></w:r>'
+    + field((run) => `<w:del w:id="2" ${REVISION}>${run}</w:del>`)
+    + '<w:r><w:t xml:space="preserve"> next</w:t></w:r></w:p>'
+    // Run by run again, each deletion with its own id, the result's a day later.
+    + '<w:p><w:r><w:t xml:space="preserve">Mark </w:t></w:r>'
+    + field((run, i) => `<w:del w:id="${10 + i}" w:author="Counsel A" w:date="2026-05-0${i >= 3 ? 2 : 1}T09:00:00Z">${run}</w:del>`)
+    + '<w:r><w:t xml:space="preserve"> last</w:t></w:r></w:p>';
+  return storedZip(Object.entries({
+    '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+    '_rels/.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rDoc" Type="${R_NS}/officeDocument" Target="word/document.xml"/></Relationships>`,
+    'word/document.xml': `<w:document xmlns:w="${W_NS}"><w:body>${body}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>`,
+  }).map(([name, value]) => ({ name, data: xml(value) })));
+}
+
+test.describe('DocxEditor — offsets after a deleted PAGE field in the page view (#1272)', () => {
+  for (const [block, tail] of [['Sheet', 'follows'], ['Leaf', 'next'], ['Mark', 'last']] as const) {
+    test(`typing after the deleted field in "${block}" lands where the caret was`, async ({ page }) => {
+      await openTracked(page, deletedPageFieldFixture(), { paginated: true });
+      // The fixture renders as intended: the field is marked, inside the deletion.
+      expect(await page.evaluate((b) => (window as any).block(b)
+        .querySelector('del [data-field="PAGE"]')?.textContent, block)).toBe('1');
+      await caretAfter(page, block, tail);
+      await page.keyboard.type('!');
+      await blur(page);
+      const out = await page.evaluate(() => ({
+        failures: (window as any).failures,
+        accepted: (window as any).acceptedText(),
+      }));
+      expect(out.failures).toEqual([]);
+      expect(out.accepted).toContain(`${block}  ${tail}!`);
+    });
+  }
 });

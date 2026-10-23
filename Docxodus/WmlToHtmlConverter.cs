@@ -3414,6 +3414,7 @@ namespace Docxodus
                         { "color", "inherit" },
                         { "text-decoration", "none" },
                     });
+                    a.AddAnnotation(WordHyperlinkAnchor.Instance);
                     return a;
                 }
                 catch (UriFormatException)
@@ -3783,7 +3784,15 @@ namespace Docxodus
             style.Add("color", "inherit");
             style.Add("text-decoration", "none");
             a.AddAnnotation(style);
+            a.AddAnnotation(WordHyperlinkAnchor.Instance);
             return a;
+        }
+
+        /// <summary>Marks the <c>&lt;a&gt;</c> a <c>w:hyperlink</c> renders as, as opposed to the
+        /// anchors the converter generates for note references, comment markers and bookmarks.</summary>
+        private sealed class WordHyperlinkAnchor
+        {
+            public static readonly WordHyperlinkAnchor Instance = new();
         }
 
         private static IEnumerable<object?> ConvertHyperlinkRuns(
@@ -3907,9 +3916,7 @@ namespace Docxodus
             }
 
             // Process children
-            var content = element.Elements()
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
-                .ToList();
+            var content = ConvertRevisionContent(wordDoc, settings, element, currentMarginLeft);
 
             ins.Add(content);
 
@@ -3918,6 +3925,29 @@ namespace Docxodus
                 ins.Add(new XText(""));
 
             return ins;
+        }
+
+        /// <summary>
+        /// Converts the children of a run-level revision wrapper (<c>w:ins</c>, <c>w:del</c>,
+        /// <c>w:moveFrom</c>, <c>w:moveTo</c>). A field that begins and ends inside the wrapper — a
+        /// PAGE field deleted or inserted whole — goes through the same field grouping as
+        /// paragraph content, so it keeps its field identity (issue #1272). A wrapper that sits
+        /// inside an open field, or that a field crosses, converts child by child as before: the
+        /// enclosing content already grouped that field, and grouping again would mark it twice.
+        /// </summary>
+        private static object ConvertRevisionContent(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            static bool NoOpenField(XElement e) =>
+                e.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>() is not { Count: > 0 };
+
+            if (element.Descendants(W.fldChar).Any() && NoOpenField(element)
+                && NoOpenField(element.DescendantsAndSelf().Last()))
+                return ConvertContentThatCanContainFields(wordDoc, settings, element.Elements());
+
+            return element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                .ToList();
         }
 
         private static object? ProcessDeletion(WordprocessingDocument wordDoc,
@@ -3959,9 +3989,7 @@ namespace Docxodus
             }
 
             // Process children - note: w:del contains w:delText instead of w:t
-            var content = element.Elements()
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
-                .ToList();
+            var content = ConvertRevisionContent(wordDoc, settings, element, currentMarginLeft);
 
             del.Add(content);
 
@@ -4020,9 +4048,7 @@ namespace Docxodus
             }
 
             // Process children - move source contains delText like w:del
-            var content = element.Elements()
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
-                .ToList();
+            var content = ConvertRevisionContent(wordDoc, settings, element, currentMarginLeft);
 
             del.Add(content);
 
@@ -4072,9 +4098,7 @@ namespace Docxodus
             }
 
             // Process children
-            var content = element.Elements()
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
-                .ToList();
+            var content = ConvertRevisionContent(wordDoc, settings, element, currentMarginLeft);
 
             ins.Add(content);
 
@@ -11116,22 +11140,41 @@ namespace Docxodus
                     if ((settings.RenderPagination == PaginationMode.Paginated || settings.StampPageNumberFields)
                         && Internal.PageNumberFieldInstr.TryParse(instrText) is { } pageField)
                     {
-                        return new XElement(Xhtml.span,
+                        var fieldContent = g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m));
+                        // With deleted content hidden, a deleted field shows nothing, so there is
+                        // no number for the paginator to fill in.
+                        if (!settings.ShowDeletedContent && FieldRetriever.IsDeletedField(g.First().Ancestors().Last(), (int)key))
+                            return fieldContent;
+                        return InsideRevision(new XElement(Xhtml.span,
                             new XAttribute("data-field", pageField.Kind),
                             pageField.FormatSwitch is null
                                 ? null
                                 : new XAttribute("data-field-format", pageField.FormatSwitch),
-                            g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m)));
+                            fieldContent));
                     }
 
+                    // A HYPERLINK field already inside a w:hyperlink renders as that link's content:
+                    // an anchor cannot hold another.
                     var parsed = FieldRetriever.ParseField(instrText);
-                    if (parsed.FieldType != "HYPERLINK")
+                    if (parsed.FieldType != "HYPERLINK" || g.First().Ancestors(W.hyperlink).Any())
                         return g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m));
 
-                    var content = g.DescendantsAndSelf(W.r).Select(run => ConvertRun(wordDoc, settings, run));
+                    // Convert the field's own children, as a w:hyperlink does, so a tracked change,
+                    // bookmark or comment range inside the link keeps its rendering.
+                    var content = g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m));
                     var a = parsed.Arguments.Length > 0
                         ? new XElement(Xhtml.a, new XAttribute("href", parsed.Arguments[0]), content)
                         : new XElement(Xhtml.a, content);
+                    // An anchor cannot hold another: a bookmark target inside the link keeps its id
+                    // on a span, and a w:hyperlink inside the result gives up its own link. The
+                    // anchors generated for note references and comment markers stay as they are.
+                    foreach (var inner in a.Descendants(Xhtml.a).ToList())
+                    {
+                        if (inner.Attributes().All(attribute => attribute.Name == "id"))
+                            inner.Name = Xhtml.span;
+                        else if (inner.Annotation<WordHyperlinkAnchor>() != null)
+                            inner.ReplaceWith(inner.Nodes());
+                    }
                     var a2 = a as XElement;
                     if (!a2.Nodes().Any())
                     {
@@ -11143,6 +11186,33 @@ namespace Docxodus
                 .ToList();
 
             return txformed;
+        }
+
+        /// <summary>
+        /// Word often writes a deleted or inserted field as one revision per run, each with its
+        /// own id and sometimes its own date, so the marker built around the field's runs holds a
+        /// row of <c>&lt;del&gt;</c> (or <c>&lt;ins&gt;</c>) elements. When every part that shows
+        /// text is the same kind of revision, the marker moves inside the one that holds the
+        /// result: the paginator replaces a marker's text, and outside the revision it would drop
+        /// the revision's styling, and the editor would count deleted text (issue #1272).
+        /// </summary>
+        private static XElement InsideRevision(XElement marker)
+        {
+            static bool IsRevision(XNode node) => node is XElement { Name.LocalName: "del" or "ins" };
+            var parts = marker.Nodes().ToList();
+            var shown = parts.Where(part => part is XElement e ? e.Value.Length > 0 : part is XText t && t.Value.Length > 0).ToList();
+            if (shown.Count == 0 || !shown.All(IsRevision)
+                || shown.Cast<XElement>().Any(part => part.Name != ((XElement)shown[0]).Name))
+                return marker;
+
+            var host = (XElement)shown[0];
+            var content = parts.SelectMany(part => IsRevision(part) ? ((XElement)part).Nodes() : new[] { part }).ToList();
+            foreach (var node in content)
+                node.Remove(); // detach, so the move keeps each node's style annotations
+            marker.RemoveNodes();
+            marker.Add(content);
+            host.Add(marker);
+            return host;
         }
 
         #region Image Processing
