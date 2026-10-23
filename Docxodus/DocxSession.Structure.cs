@@ -972,6 +972,15 @@ public sealed partial class DocxSession
         if (!pPr.HasElements) pPr.Remove();
     }
 
+    /// <summary>
+    /// Join the paragraph <paramref name="secondAnchorId"/> names onto the end of the one
+    /// <paramref name="firstAnchorId"/> names, its immediate previous sibling, with a separating
+    /// space when neither side has one. The joined paragraph keeps the first paragraph's
+    /// properties. Under <see cref="TrackedChangeMode.RenderInline"/> the join is recorded as Word
+    /// records it: the first paragraph's mark is deleted, both paragraphs stay until review (so
+    /// both are in <see cref="EditResult.Modified"/>), and accepting gives the untracked result
+    /// (issue #1313).
+    /// </summary>
     public EditResult MergeParagraphs(string firstAnchorId, string secondAnchorId)
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
