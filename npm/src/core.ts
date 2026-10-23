@@ -131,6 +131,7 @@ export type {
   BookmarkInfo,
   BookmarkRangeSegment,
   CharSpan,
+  DeletedTextSide,
   CommentListEntry,
   NoteListEntry,
   ContentControlBindingInfo,

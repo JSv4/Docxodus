@@ -241,6 +241,17 @@ class Position(str, Enum):
     AFTER = "after"
 
 
+class DeletedTextSide(str, Enum):
+    """Which side of tracked deleted text a zero-length span insertion goes on.
+
+    Deleted text takes no room in a paragraph's offsets, so an offset next to it names both
+    of its sides. With no deleted text at the offset the side has no effect.
+    """
+
+    BEFORE = "before"
+    AFTER = "after"
+
+
 class TableAnchorEntityKind(str, Enum):
     """Structural identity kind in a table-anchor mutation mapping."""
 

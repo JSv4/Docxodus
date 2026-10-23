@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `ReplaceTextAtSpan` and `ReplaceTextAtSpanWithFormat` take an optional side for a zero-length insertion
+  next to tracked deleted text (#1290): `DeletedTextSide.Before`/`After` through new .NET overloads,
+  `deletedTextSide: "before" | "after"` on the stdio host, MCP (`docxodus_edit
+  replace_text_at_span_with_format`), the WASM bridge and npm's `replaceMatch`, and `deleted_text_side`
+  in Python. Deleted text takes no room in a paragraph's offsets, so an offset beside it names both of
+  its sides, and the insertion went before it whichever side was meant. Range markers between the live
+  text and the deletion stay with the live text, so text typed into a heading whose only text is deleted
+  stays inside its TOC bookmark. Omitted, the placement is unchanged. The browser editor now sets the
+  side from where the text was typed, so typing right after a struck word under tracked changes no
+  longer shows the insertion before it. In a paragraph whose only text is a shown deletion, plain typed
+  text now goes in beside the deletion on that side instead of through a whole-paragraph rewrite.
+  A side hint changes no interior text offset and keeps new text outside a native move source's range.
+  A range boundary in another paragraph is refused rather than letting accept-all erase the new text.
+
 - Word's All Markup print layout for the paginated view and the PDF export (#1300):
   `commentColumnPlacement: "balloons"` (`--comment-column-placement balloons` in the export CLI) keeps
   each page's paper size and shrinks the page beside a markup area, where comments, their replies and

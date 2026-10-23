@@ -22,6 +22,22 @@ namespace Docxodus;
 public enum Position { Before, After }
 
 /// <summary>
+/// Which side of tracked deleted text (a <c>w:del</c> or <c>w:moveFrom</c>) a zero-length
+/// <see cref="DocxSession.ReplaceTextAtSpan(string, int, int, string, DeletedTextSide)"/> inserts
+/// on. Deleted text takes no room in a paragraph's offsets, so an offset next to it names both of
+/// its sides; an editor knows which side the caret was on. With no deleted text at the offset the
+/// side has no effect.
+/// </summary>
+public enum DeletedTextSide
+{
+    /// <summary>Immediately before the deleted text.</summary>
+    Before,
+
+    /// <summary>Immediately after the deleted text.</summary>
+    After,
+}
+
+/// <summary>
 /// How <see cref="DocxSession.Grep"/> and the <c>FindBy*</c> helpers treat Unicode
 /// whitespace variants (NBSP, narrow NBSP, thin space) when matching. Word documents
 /// routinely use NBSP between ordinals and colons (<c>First<NBSP>:</c>) so a needle

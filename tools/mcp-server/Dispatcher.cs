@@ -523,7 +523,8 @@ internal static partial class Dispatcher
         "replace_text" => DocxSessionOps.ReplaceText(session.Handle, Str(args, "anchorId"), Str(args, "markdown")),
         "replace_text_at_span_with_format" => DocxSessionOps.ReplaceTextAtSpanWithFormat(
             session.Handle, Str(args, "anchorId"), Int(args, "spanStart"), Int(args, "spanLength"),
-            Str(args, "replace"), ParseFormatOp(args), preconditions),
+            Str(args, "replace"), ParseFormatOp(args), preconditions,
+            DocxSessionJson.ParseDeletedTextSide(OptStr(args, "deletedTextSide"))),
         "replace_text_range" => DocxSessionOps.ReplaceTextRange(
             session.Handle, Str(args, "anchorId"), Str(args, "find"), Str(args, "replace"),
             DocxSessionJson.ParseReplaceOptions(ObjectArguments.Read(args, "docxodus_edit", "replace_text_range")),

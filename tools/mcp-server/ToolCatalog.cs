@@ -293,6 +293,7 @@ internal static class ToolCatalog
                 "replace": { "type": "string", "description": "replace_text_range / replace_text_at_span_with_format: replacement text." },
                 "spanStart": { "type": "integer", "description": "replace_text_at_span_with_format: start offset in paragraph text." },
                 "spanLength": { "type": "integer", "description": "replace_text_at_span_with_format: length to replace; zero inserts at a run boundary." },
+                "deletedTextSide": { "type": "string", "enum": ["before", "after"], "description": "replace_text_at_span_with_format: for a zero-length insertion next to tracked deleted text (which takes no room in the offsets), put it immediately before or after that text. Omit for the default placement." },
                 "format": { "type": "object", "description": "replace_text_at_span_with_format: FormatOp (same fields as docxodus_format, e.g. bold/italic). Applied only to the replacement as one atomic undo/version unit; empty replacement only deletes." },
                 "options": {
                   "type": "object",

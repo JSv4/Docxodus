@@ -475,3 +475,45 @@ test.describe('DocxEditor — typing inside a tracked insertion (#1318)', () => 
     expect(out.accepted[0]).toBe('The tenant shall repaint the fence eachZ spring.');
   });
 });
+
+test.describe('DocxEditor — typing beside a deletion stays on the caret side (#1290)', () => {
+  // Deleted text takes no room in the session's offsets, so the offset alone names both sides of
+  // it; the editor tells the session which side the text was typed on.
+  test('typing right after a deletion is shown after it', async ({ page }) => {
+    await openTracked(page);
+    await caretAtEdgeOf(page, 'The tenant', 'repaint', 'start');
+    await page.keyboard.type('Y');
+    await blur(page);
+    const out = await page.evaluate(() => ({
+      failures: (window as any).failures,
+      shown: ((window as any).block('The tenant')?.textContent ?? '').replace(/ /g, ' '),
+      accepted: (window as any).acceptedText(),
+    }));
+    expect(out.failures).toEqual([]);
+    expect(out.shown).toBe('The tenant shall promptly Yrepaint the fence each spring.');
+    expect(out.accepted[0]).toBe('The tenant shall Yrepaint the fence each spring.');
+  });
+
+  for (const [key, shown] of [['Home', 'XGone heading'], ['End', 'Gone headingX']] as const) {
+    test(`typing after ${key} in a deleted heading stays on that side, inside its bookmark`, async ({ page }) => {
+      await openTracked(page);
+      await page.evaluate(() => (window as any).block('Gone heading').focus());
+      await page.keyboard.press(key);
+      await page.keyboard.type('X');
+      await blur(page);
+      const out = await page.evaluate(() => {
+        const w = window as any;
+        const block: HTMLElement = w.block('Gone heading');
+        const xml: string = w.Docxodus.DocxSessionBridge.RawGetXml(
+          w.editor.handle, 'p:body:' + block.getAttribute('data-anchor'));
+        return { failures: w.failures, shown: (block.textContent ?? '').replace(/ /g, ' '), xml };
+      });
+      expect(out.failures).toEqual([]);
+      expect(out.shown).toBe(shown);
+      const at = (needle: string) => out.xml.indexOf(needle);
+      expect(at('<w:bookmarkStart')).toBeLessThan(at('<w:ins'));
+      expect(at('</w:ins>')).toBeLessThan(at('<w:bookmarkEnd'));
+      expect(key === 'Home' ? at('</w:ins>') < at('<w:del ') : at('</w:del>') < at('<w:ins')).toBe(true);
+    });
+  }
+});

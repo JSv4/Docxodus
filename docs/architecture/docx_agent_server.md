@@ -341,7 +341,9 @@ All search modes accept the exact citation token and attach a citation envelope 
 `insert_paragraph`, `replace_text`, `replace_text_range`, `delete_block`, `delete_range`,
 `replace_text_at_span_with_format`, `delete_section`, `split_paragraph`, `merge_paragraphs`,
 `undo`, `redo` → the identically-named
-(camelCase) `DocxSession` methods via `DocxSessionOps`. `markdown` payloads use the supported
+(camelCase) `DocxSession` methods via `DocxSessionOps`. `replace_text_at_span_with_format` takes an
+optional `deletedTextSide` (`before`/`after`) that puts a zero-length insertion on that side of tracked
+deleted text at the offset. `markdown` payloads use the supported
 subset documented in `docx_mutation_api.md` (ATX headings, bulleted/ordered lists, bold/italic/
 code/strike, links, hard breaks).
 

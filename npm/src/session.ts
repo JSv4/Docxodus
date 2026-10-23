@@ -2,6 +2,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 import type {
+  DeletedTextSide,
   AnchorInfo,
   AnchorRef,
   AnchorTargetRef,
@@ -1782,19 +1783,23 @@ export class DocxSession {
    * Pass `format` to replace text and format exactly the replacement atomically, with one
    * undo/version unit. This interactive path returns an ordinary EditResult and avoids the
    * package checkpoint/hash required by executeBatch's receipt. Empty replacements only delete.
+   *
+   * For a zero-length span (an insertion) next to tracked deleted text, `deletedTextSide` puts the
+   * new text immediately before or after that deleted text; omit it for the default placement.
    */
-  replaceMatch(match: TextMatch, replace: string, format?: FormatOp): EditResult {
+  replaceMatch(match: TextMatch, replace: string, format?: FormatOp, deletedTextSide?: DeletedTextSide): EditResult {
     if (format !== undefined) {
       if (!this.wasm.ReplaceTextAtSpanWithFormat) {
         throw new Error("This WASM bundle predates atomic text-plus-format edits; rebuild docxodus.");
       }
       return JSON.parse(this.wasm.ReplaceTextAtSpanWithFormat(
         this.handle, match.enclosingAnchor.id, match.span.start, match.span.length, replace,
-        JSON.stringify(format),
+        JSON.stringify(format), deletedTextSide ?? "",
       )) as EditResult;
     }
     return JSON.parse(
-      this.wasm.ReplaceTextAtSpan(this.handle, match.enclosingAnchor.id, match.span.start, match.span.length, replace)
+      this.wasm.ReplaceTextAtSpan(
+        this.handle, match.enclosingAnchor.id, match.span.start, match.span.length, replace, deletedTextSide ?? "")
     ) as EditResult;
   }
 

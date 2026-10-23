@@ -182,7 +182,16 @@ public sealed partial class DocxSession
     /// batch receipt. Use ExecuteBatch when those receipts or arbitrary compositions are needed.
     /// </remarks>
     public EditResult ReplaceTextAtSpanWithFormat(
-        string anchorId, int spanStart, int spanLength, string replace, FormatOp format)
+        string anchorId, int spanStart, int spanLength, string replace, FormatOp format) =>
+        ReplaceTextAtSpanWithFormat(anchorId, spanStart, spanLength, replace, format, null);
+
+    /// <summary>
+    /// <see cref="ReplaceTextAtSpanWithFormat(string, int, int, string, FormatOp)"/> with the side
+    /// of tracked deleted text a zero-length insertion goes on; see
+    /// <see cref="ReplaceTextAtSpan(string, int, int, string, DeletedTextSide)"/>.
+    /// </summary>
+    public EditResult ReplaceTextAtSpanWithFormat(
+        string anchorId, int spanStart, int spanLength, string replace, FormatOp format, DeletedTextSide? deletedTextSide)
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (format is null) return EditResult.Fail(EditErrorCode.MalformedMarkdown, "null format op", anchorId);
@@ -197,7 +206,7 @@ public sealed partial class DocxSession
         if (replace.Length > 0) _patchSuppression++;
         try
         {
-            result = ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace);
+            result = ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace, deletedTextSide);
         }
         finally
         {
@@ -246,7 +255,23 @@ public sealed partial class DocxSession
     /// even when several identical needles share the same paragraph (the template-filling
     /// case where five <c>[___]</c> placeholders each get a different value).
     /// </summary>
-    public EditResult ReplaceTextAtSpan(string anchorId, int spanStart, int spanLength, string replace)
+    public EditResult ReplaceTextAtSpan(string anchorId, int spanStart, int spanLength, string replace) =>
+        ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace, null);
+
+    /// <summary>
+    /// <see cref="ReplaceTextAtSpan(string, int, int, string)"/> for a zero-length span next to tracked
+    /// deleted text, which takes no room in the offsets: <paramref name="deletedTextSide"/> puts the
+    /// insertion immediately before or after that deleted text, so it lands on the side an editor's
+    /// caret was on (issue #1290). Range markers between the deleted text and the live text beside
+    /// it stay with the live text. With no deleted text at the offset, or a non-empty span, the side
+    /// has no effect.
+    /// </summary>
+    public EditResult ReplaceTextAtSpan(
+        string anchorId, int spanStart, int spanLength, string replace, DeletedTextSide deletedTextSide) =>
+        ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace, (DeletedTextSide?)deletedTextSide);
+
+    private EditResult ReplaceTextAtSpan(
+        string anchorId, int spanStart, int spanLength, string replace, DeletedTextSide? deletedTextSide)
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (XmlText.ValidatePayload(replace, anchorId) is { } textError) return EditResult.Fail(textError);
@@ -273,7 +298,7 @@ public sealed partial class DocxSession
                 "span boundaries must not split a UTF-16 surrogate pair", anchorId);
 
         if (spanLength == 0)
-            return InsertTextAtBoundary(target, element, map, spanStart, replace);
+            return InsertTextAtBoundary(target, element, map, spanStart, replace, deletedTextSide);
 
         var pieces = Internal.RunTextMap.ResolveRange(map, spanStart, spanLength);
         if (pieces.Count == 0)
@@ -349,7 +374,8 @@ public sealed partial class DocxSession
     /// move destination it is refused.
     /// </summary>
     private EditResult InsertTextAtBoundary(
-        AnchorTarget target, XElement element, Internal.RunTextMap.Map map, int offset, string replace)
+        AnchorTarget target, XElement element, Internal.RunTextMap.Map map, int offset, string replace,
+        DeletedTextSide? deletedTextSide)
     {
         var anchorId = target.Anchor.Id;
         if (replace.Length == 0)
@@ -427,6 +453,18 @@ public sealed partial class DocxSession
                 "text cannot be inserted inside a simple field's result; type before or after the field", anchorId);
         if (after is not null && after.Name == W.moveTo) after = PastMoveRangeMarker(after, forward: true);
         if (before is not null && before.Name == W.moveTo) before = PastMoveRangeMarker(before, forward: false);
+        if (!splitRun && deletedTextSide is { } side)
+        {
+            if (BesideDeletedText(element, after, before, side) is not { } beside)
+                return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
+                    "the requested side of a move source is outside this paragraph; resolve the move first", anchorId);
+            if (!ReferenceEquals(beside.After, after) || !ReferenceEquals(beside.Before, before))
+            {
+                // A run reached this way was not stepped to out of a field, so it may be extended.
+                (after, before) = beside;
+                (afterBeforeFieldStep, beforeBeforeFieldStep) = beside;
+            }
+        }
 
         // Tracked text typed inside the session author's own pending insertion extends it.
         if (tracked && (after ?? before) is { } own && OwnPendingInsertion(own, author) is not null
@@ -531,6 +569,53 @@ public sealed partial class DocxSession
             return FailInternal(ex, anchorId);
         }
     }
+
+    /// <summary>
+    /// Re-anchor a zero-length insertion so it sits immediately on <paramref name="side"/> of the
+    /// tracked deleted text (<c>w:del</c>, <c>w:moveFrom</c>) found among the zero-width siblings
+    /// between <paramref name="after"/> (the content ending at the offset) and the next content,
+    /// or before <paramref name="before"/>, or in a paragraph with no text at all. Range markers
+    /// passed over stay beside the live text. Unchanged when no deleted text is there.
+    /// </summary>
+    private static (XElement? After, XElement? Before)? BesideDeletedText(
+        XElement paragraph, XElement? after, XElement? before, DeletedTextSide side)
+    {
+        var zeroWidth = (after is not null ? after.ElementsAfterSelf()
+                : before is not null ? before.ElementsBeforeSelf().Reverse()
+                : paragraph.Elements().Where(e => e.Name != W.pPr))
+            .TakeWhile(e => IsInlineMarker(e) || IsRemovedText(e)
+                || e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd);
+        var removed = zeroWidth.Where(IsRemovedText).ToList();
+        if (removed.Count == 0) return (after, before);
+        // In document order, whichever direction the siblings were read in.
+        var first = before is not null && after is null ? removed[^1] : removed[0];
+        var last = before is not null && after is null ? removed[0] : removed[^1];
+        // Accepting a native move deletes everything between its source range markers, even
+        // plain text outside w:moveFrom. Stay outside that range, as for a move destination.
+        if (side == DeletedTextSide.Before && first.Name == W.moveFrom)
+        {
+            var start = PastMoveRangeMarker(first, forward: false);
+            if (ReferenceEquals(start, first)) return null;
+            first = start;
+        }
+        if (side == DeletedTextSide.After && last.Name == W.moveFrom)
+        {
+            var end = PastMoveRangeMarker(last, forward: true);
+            if (ReferenceEquals(end, last)) return null;
+            last = end;
+        }
+        // Already adjacent on the requested side: keep the run anchor, which an untracked
+        // insertion can extend instead of adding a run beside it.
+        if (side == DeletedTextSide.Before && after is not null && ReferenceEquals(after.ElementsAfterSelf().First(), first))
+            return (after, before);
+        if (side == DeletedTextSide.After && before is not null && ReferenceEquals(before.ElementsBeforeSelf().Last(), last))
+            return (after, before);
+        if (side == DeletedTextSide.After)
+            return last.ElementsAfterSelf().FirstOrDefault() is { } next && IsPlainTextRun(next) ? (null, next) : (last, null);
+        return (null, first);
+    }
+
+    private static bool IsRemovedText(XElement e) => e.Name == W.del || e.Name == W.moveFrom;
 
     /// <summary>
     /// True when <paramref name="run"/> is an ordinary text run — a <c>w:r</c> carrying only its
@@ -1035,12 +1120,14 @@ public sealed partial class DocxSession
             "text cannot be inserted inside a tracked move destination (w:moveTo); type before or after the moved text, or resolve the move first",
             anchorId);
 
-    /// <summary>The <c>w:moveToRangeEnd</c> (<paramref name="forward"/>) or
-    /// <c>w:moveToRangeStart</c> just past <paramref name="move"/>, across range markers only, so
+    /// <summary>The source or destination range end (<paramref name="forward"/>) or
+    /// start just past <paramref name="move"/>, across range markers only, so
     /// text placed beside the move lands outside its range; else the move itself.</summary>
     private static XElement PastMoveRangeMarker(XElement move, bool forward)
     {
-        var name = forward ? W.moveToRangeEnd : W.moveToRangeStart;
+        var name = move.Name == W.moveFrom
+            ? (forward ? W.moveFromRangeEnd : W.moveFromRangeStart)
+            : (forward ? W.moveToRangeEnd : W.moveToRangeStart);
         var siblings = forward ? move.ElementsAfterSelf() : move.ElementsBeforeSelf().Reverse();
         foreach (var sibling in siblings)
         {
