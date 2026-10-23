@@ -38,7 +38,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
     private const string AnnotationNamespace = "http://docxodus.dev/annotations/v1";
     private const string Word2010Namespace = "http://schemas.microsoft.com/office/word/2010/wordml";
 
-    public IReadOnlyList<SemanticChangeDraft> Compare(
+    public SemanticPackageComparison Compare(
         byte[] leftBytes,
         byte[] rightBytes,
         SemanticDiffOptions options)
@@ -50,13 +50,20 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             var rightManifest = PackageManifestGenerator.Generate(rightBytes, options.PackageOptions);
             EnsureValid(leftManifest, "left");
             EnsureValid(rightManifest, "right");
-            return Array.Empty<SemanticChangeDraft>();
+            return new SemanticPackageComparison(
+                StrictOoxmlNormalizer.NormalizeForReading(leftBytes),
+                StrictOoxmlNormalizer.NormalizeForReading(rightBytes),
+                Array.Empty<SemanticChangeDraft>());
         }
 
         var leftInspection = PackageManifestGenerator.Inspect(leftBytes, options.PackageOptions);
         var rightInspection = PackageManifestGenerator.Inspect(rightBytes, options.PackageOptions);
         EnsureValid(leftInspection.Manifest, "left");
         EnsureValid(rightInspection.Manifest, "right");
+        var normalizedLeft = StrictOoxmlNormalizer.NormalizeForReading(leftBytes);
+        var normalizedRight = StrictOoxmlNormalizer.NormalizeForReading(rightBytes);
+        leftInspection = InspectConversion(leftBytes, normalizedLeft, leftInspection, options.PackageOptions, "left");
+        rightInspection = InspectConversion(rightBytes, normalizedRight, rightInspection, options.PackageOptions, "right");
         var left = Read(leftInspection);
         var right = Read(rightInspection);
         var result = new List<SemanticChangeDraft>();
@@ -69,7 +76,31 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         CompareEntities(left.Annotations, right.Annotations, result);
         CompareEntities(left.RegistryParts, right.RegistryParts, result);
         CompareEntities(left.OpaqueParts, right.OpaqueParts, result);
-        return result;
+        return new SemanticPackageComparison(normalizedLeft, normalizedRight, result);
+    }
+
+    private static PackageManifestInspection InspectConversion(
+        byte[] original,
+        byte[] normalized,
+        PackageManifestInspection inspection,
+        PackageManifestOptions options,
+        string side)
+    {
+        if (ReferenceEquals(original, normalized)) return inspection;
+
+        // All caller limits have already been enforced on BOTH original inputs before conversion.
+        // Namespace expansion and ZIP recompression are our own transformation, not new untrusted
+        // input: do not reject its larger XML/entry sizes, aggregate size or compression ratio.
+        // Keep URI/count limits and every structural/XML validity check on the converted package.
+        var converted = PackageManifestGenerator.Inspect(normalized, options with
+        {
+            MaxXmlPartBytes = long.MaxValue,
+            MaxEntryUncompressedBytes = long.MaxValue,
+            MaxTotalUncompressedBytes = long.MaxValue,
+            MaxCompressionRatio = double.MaxValue,
+        });
+        EnsureValid(converted.Manifest, side);
+        return converted;
     }
 
     private static void EnsureValid(PackageManifest manifest, string side)
