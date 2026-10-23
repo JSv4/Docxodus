@@ -129,8 +129,7 @@ public sealed partial class DocxSession
         return result;
     }
 
-    private static string FlatElementText(XElement element) =>
-        string.Concat(element.Descendants(W.t).Select(t => (string)t));
+    private static string FlatElementText(XElement element) => VisibleText(element);
 
     private string ExactVisibleText(AnchorTarget target, XElement element)
     {

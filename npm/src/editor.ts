@@ -732,11 +732,12 @@ const NOTE_NUMBER_SELECTOR = ".footnote-number, .endnote-number";
 /**
  * A tracked deletion rendered inline (`<del>`) and the pilcrow shown for a deleted paragraph mark
  * are not run text either: the session reads only live `w:t`, so counting them put every offset to
- * their right past the session's (issue #1278). A move source is not listed. One directly in the
- * paragraph already makes the block read-only (see `wireBlock`), and the session does read the
- * `w:t` of one nested in a hyperlink, as Word writes it.
+ * their right past the session's (issue #1278). A move source (`<del class="rev-move-from">`) is
+ * removed text too. One directly in the paragraph makes the block read-only (see `wireBlock`); the
+ * session leaves one nested in a hyperlink or other inline container out of its text whether its
+ * runs hold `w:t`, as Word writes it, or `w:delText` (issue #1282), so the editor does as well.
  */
-const RENDERED_TEXT_DELETION_SELECTOR = 'del[class*="-del"]';
+const RENDERED_TEXT_DELETION_SELECTOR = 'del[class*="-del"], del[class*="move-from"]';
 const RENDERED_DELETION_SELECTOR = RENDERED_TEXT_DELETION_SELECTOR + ', span[class*="para-mark-del"]';
 
 const GENERATED_CHROME_SELECTOR =

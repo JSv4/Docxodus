@@ -1241,7 +1241,7 @@ public sealed partial class DocxSession
         int consumed = 0;
         foreach (var child in paragraph.Elements().Where(IsInlineChild))
         {
-            int length = string.Concat(child.DescendantsAndSelf(W.t).Select(text => (string)text)).Length;
+            int length = InlineChildTextLength(child);
             if (consumed < offset && offset < consumed + length && child.Name != W.r)
                 return "image insertion boundary is inside an unsupported inline container";
             consumed += length;

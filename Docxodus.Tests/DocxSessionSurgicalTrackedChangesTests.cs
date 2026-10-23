@@ -557,6 +557,115 @@ public class DocxSessionSurgicalTrackedChangesTests
         Assert.Empty(session.Grep("per the schedule"));
     }
 
+    /// <summary>
+    /// The same contract holds when the removed text sits inside a transparent container: a
+    /// <c>w:del</c> or <c>w:moveFrom</c> nested in a hyperlink, content control, simple field or
+    /// smart tag is gone from the text a reader sees, whether its runs hold <c>w:delText</c> (as
+    /// Docxodus writes a move source) or <c>w:t</c> (as Word writes one). Counting the Word form
+    /// put every offset to its right past the visible text (issue #1282).
+    /// </summary>
+    [Theory]
+    [InlineData("hyperlink", "moveFrom", "t")]
+    [InlineData("hyperlink", "moveFrom", "delText")]
+    [InlineData("hyperlink", "del", "t")]
+    [InlineData("hyperlink", "del", "delText")]
+    [InlineData("sdt", "moveFrom", "t")]
+    [InlineData("fldSimple", "moveFrom", "t")]
+    [InlineData("smartTag", "moveFrom", "t")]
+    public void DS437_RemovedTextNestedInAContainer_IsNotVisibleText(
+        string container, string wrapper, string textElement)
+    {
+        var removed = new XElement(wrapper == "del" ? W.del : W.moveFrom,
+            new XAttribute(W.id, 4), new XAttribute(W.author, "A"),
+            new XAttribute(W.date, "2026-05-01T09:00:00Z"),
+            new XElement(W.r, new XElement(textElement == "t" ? W.t : W.delText,
+                new XAttribute(Xml + "space", "preserve"), "the terms ")));
+        object[] inner = { removed, Run("below") };
+        var wrapped = container switch
+        {
+            "hyperlink" => new XElement(W.hyperlink, new XAttribute(W.anchor, "terms"), inner),
+            "sdt" => new XElement(W.sdt, new XElement(W.sdtPr), new XElement(W.sdtContent, inner)),
+            "fldSimple" => new XElement(W.fldSimple, new XAttribute(W.instr, " DOCPROPERTY Title "), inner),
+            "smartTag" => new XElement(W.smartTag, new XAttribute(W.element, "place"), inner),
+            _ => throw new ArgumentOutOfRangeException(nameof(container)),
+        };
+        var source = BuildDocument(new XElement(W.p, Run("See "), wrapped, Run(" now.")));
+        using var session = new DocxSession(source,
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+        var anchor = session.Project().AnchorIndex.Values.Single(a => a.Anchor.Kind == "p").Anchor.Id;
+
+        Assert.Equal("See below now.", string.Concat(session.GetFormatting(anchor)!.Runs.Select(r => r.Text)));
+        Assert.Equal("See below now.", session.Project().AnchorIndex[anchor].TextPreview);
+        Assert.Equal("See below now.", session.GetAnchorInfo(anchor)!.VisibleText);
+        if (container == "sdt") Assert.Equal("below", Assert.Single(session.ListContentControls()).Text);
+        Assert.Empty(session.Grep("the terms"));
+
+        // Offset 9 is just after "below" in the visible text.
+        var edit = session.ReplaceTextAtSpan(anchor, 9, 0, "!");
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal("See below! now.", AcceptedText(session.Save()));
+    }
+
+    /// <summary><c>See [link: (moved: the terms )below] now.</c>, the move source in Word's
+    /// <c>w:t</c> form, nested in the link or (<paramref name="nested"/> false) directly in the paragraph.</summary>
+    private static byte[] MovedTermsDocument(bool nested = true)
+    {
+        var moved = new XElement(W.moveFrom,
+            new XAttribute(W.id, 4), new XAttribute(W.author, "A"), new XAttribute(W.date, "2026-05-01T09:00:00Z"),
+            Run("the terms "));
+        return BuildDocument(nested
+            ? new XElement(W.p, Run("See "), new XElement(W.hyperlink, new XAttribute(W.anchor, "terms"), moved, Run("below")), Run(" now."))
+            : new XElement(W.p, Run("See "), moved, Run("below"), Run(" now.")));
+    }
+
+    /// <summary>
+    /// The container-length rule the split and boundary checks share counts the same text as the
+    /// offsets do, so a split or an image just after "below " lands there (issue #1282).
+    /// </summary>
+    [Theory]
+    [InlineData(10, "See below ", "now.")]
+    [InlineData(11, "See below n", "ow.")]
+    public void DS438_SplitBesideANestedMoveSource_LandsAtTheVisibleOffset(int offset, string first, string second)
+    {
+        using var session = new DocxSession(MovedTermsDocument());
+        var anchor = session.Project().AnchorIndex.Values.Single().Anchor.Id;
+
+        var split = session.SplitParagraph(anchor, offset);
+
+        Assert.True(split.Success, split.Error?.Message);
+        Assert.Equal(new[] { first, second },
+            session.Project().AnchorIndex.Values.Where(a => a.Anchor.Kind == "p").Select(a => a.TextPreview));
+    }
+
+    [Fact]
+    public void DS438_ImageBesideANestedMoveSource_IsInsertedAtTheVisibleOffset()
+    {
+        using var session = new DocxSession(MovedTermsDocument());
+        var anchor = session.Project().AnchorIndex.Values.Single().Anchor.Id;
+
+        var insert = session.InsertImage(anchor, 10, DocxSessionImageTests.Png(2, 3));
+
+        Assert.True(insert.Success, insert.Error?.Message);
+    }
+
+    /// <summary>A Grep offset can guard the next edit: the precondition text is measured over the
+    /// same visible text, for a move source in the paragraph or nested in a link.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DS439_GrepSpan_SatisfiesAnExpectedTextRangeGuard(bool nested)
+    {
+        using var session = new DocxSession(MovedTermsDocument(nested));
+        var match = Assert.Single(session.Grep("now"));
+
+        Assert.Equal(10, match.Span.Start);
+        Assert.Null(session.EvaluatePreconditions(new MutationPreconditions
+        {
+            AnchorId = match.EnclosingAnchor.Anchor.Id,
+            ExpectedTextRange = new TextRangePrecondition(match.Span.Start, match.Span.Length, "now"),
+        }));
+    }
+
     private static byte[] BuildMarkerDocument()
     {
         using var stream = new MemoryStream();

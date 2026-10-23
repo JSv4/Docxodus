@@ -2685,7 +2685,10 @@ public sealed partial class DocxSession : IDisposable
     // belongs in the flat text every offset-addressed op works over. Their deleting
     // counterparts w:del and w:moveFrom deliberately are NOT here — that content is
     // w:delText, which RunText does not read, so deleted text stays out of the visible
-    // string and offsets keep addressing what the document actually shows.
+    // string and offsets keep addressing what the document actually shows. The same holds
+    // for a w:del or w:moveFrom nested inside one of these containers, whatever its runs
+    // hold: Word writes a move source's text as w:t, so it is skipped by element, not by
+    // text name (issue #1282).
     private static readonly HashSet<XName> InlineContainerNames = new()
     {
         W.hyperlink, W.sdt, W.fldSimple, W.smartTag, W.ins, W.moveTo,
@@ -2709,18 +2712,35 @@ public sealed partial class DocxSession : IDisposable
             if (child.Name == W.r) yield return child;
             else if (InlineContainerNames.Contains(child.Name))
                 foreach (var run in child.Descendants(W.r))
-                    yield return run;
+                    if (!IsInsideNestedRemoval(run, child))
+                        yield return run;
         }
+    }
+
+    /// <summary>Whether <paramref name="node"/> sits in a <c>w:del</c> or <c>w:moveFrom</c>
+    /// below <paramref name="container"/>, so its text is gone from the visible text.</summary>
+    private static bool IsInsideNestedRemoval(XElement node, XElement container)
+    {
+        for (var ancestor = node.Parent; ancestor is not null && !ReferenceEquals(ancestor, container); ancestor = ancestor.Parent)
+            if (ancestor.Name == W.del || ancestor.Name == W.moveFrom) return true;
+        return false;
     }
 
     internal static string ParagraphText(XElement paragraph) =>
         string.Concat(InlineRuns(paragraph).Select(RunText));
 
+    /// <summary>The text of every <c>w:t</c> under <paramref name="element"/> that is not removed
+    /// text (inside a <c>w:del</c> or <c>w:moveFrom</c> below it), whatever the element is: a
+    /// paragraph, a table, a content control. The preview, precondition and control texts read
+    /// this, so they agree with the offsets <see cref="InlineRuns"/> gives (issue #1282).</summary>
+    internal static string VisibleText(XElement element) =>
+        string.Concat(element.Descendants(W.t).Where(t => !IsInsideNestedRemoval(t, element)).Select(t => (string)t));
+
     internal static string RunText(XElement run) =>
         string.Concat(run.Elements(W.t).Select(t => (string)t));
 
     private static int InlineChildTextLength(XElement child) =>
-        string.Concat(child.DescendantsAndSelf(W.t).Select(t => (string)t)).Length;
+        child.DescendantsAndSelf(W.t).Where(t => !IsInsideNestedRemoval(t, child)).Sum(t => ((string)t).Length);
 
     /// <summary>The top-level inline containers <see cref="SplitInlineContainersAtOffset"/> can cut
     /// in two around their direct runs: a hyperlink, whose halves link to the same target, and
