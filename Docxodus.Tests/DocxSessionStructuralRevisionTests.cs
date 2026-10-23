@@ -683,7 +683,6 @@ public class DocxSessionStructuralRevisionTests
     }
 
     [Theory]
-    [InlineData("merge")]
     [InlineData("insert_table")]
     public void DS45513_UnsafeTrackedStructuralOperations_FailTypedAndUndoFree(string operation)
     {
@@ -698,7 +697,6 @@ public class DocxSessionStructuralRevisionTests
 
         var result = operation switch
         {
-            "merge" => session.MergeParagraphs(paragraphs[0], paragraphs[1]),
             "insert_table" => session.InsertTable(paragraphs[0], Position.After, 1, 1),
             _ => throw new ArgumentOutOfRangeException(nameof(operation)),
         };

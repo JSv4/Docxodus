@@ -588,15 +588,21 @@ public sealed partial class DocxSession
             ? $" {name} \\* {sw} "
             : $" {name} ";
         var cached = format is { } cf ? Internal.NumberFormats.Render(1, cf) : "1";
-        return new[]
-        {
-            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"))),
-            new XElement(W.r, new XElement(W.instrText, new XAttribute(XNamespace.Xml + "space", "preserve"), instr)),
-            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate"))),
-            new XElement(W.r, new XElement(W.t, cached)),
-            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "end"))),
-        };
+        return ComplexFieldRuns(instr, new XElement(W.t, cached));
     }
+
+    /// <summary>The runs of a native complex field — begin, <paramref name="instruction"/>,
+    /// separate, the cached <paramref name="result"/> text, end — the form Word writes for a field
+    /// it inserts, and the only one a tracked insertion can hold (<c>w:ins</c> takes runs, not a
+    /// <c>w:fldSimple</c>).</summary>
+    private static XElement[] ComplexFieldRuns(string instruction, XElement result) => new[]
+    {
+        new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"))),
+        new XElement(W.r, new XElement(W.instrText, new XAttribute(XNamespace.Xml + "space", "preserve"), instruction)),
+        new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate"))),
+        new XElement(W.r, result),
+        new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "end"))),
+    };
 
     /// <summary>
     /// Word's "Page X of Y" gallery entry as runs: <c>Page </c>, a PAGE field, <c> of </c>, a

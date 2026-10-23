@@ -207,6 +207,24 @@ test.describe('DocxEditor — showing revisions apart from recording them (#1279
     expect(await shown(page)).toEqual({ ins: 1, del: 1, text: WITH_MARKUP, trackedChanges: 0 });
   });
 
+  // Backspace at a paragraph's start joins it to the one before. Recorded, the join is a deleted
+  // paragraph mark: both paragraphs stay, on the page too, until the deletion is accepted (#1313).
+  test('recording, Backspace at a paragraph start records the join and keeps both paragraphs until it is accepted', async ({ page }) => {
+    await openEditor(page, { trackedChanges: 1 }, revisionFixture(
+      '<w:p><w:r><w:t>First.</w:t></w:r></w:p><w:p><w:r><w:t>Second.</w:t></w:r></w:p>'));
+    const paragraphs = () => page.evaluate(() => Array.from(document.querySelectorAll('p[data-anchor]'))
+      .map((p) => (p.textContent ?? '').replace(/ /g, ' ').trim()));
+    await page.evaluate(() => document.querySelectorAll<HTMLElement>('p[data-anchor]')[1].focus());
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Backspace');
+
+    expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+    expect(await paragraphs()).toEqual(['First.', 'Second.']);
+    expect(await page.evaluate(() => (window as any).editor.listRevisions().length)).toBeGreaterThan(0);
+    expect(await page.evaluate(() => (window as any).editor.acceptAllRevisions())).toBe(true);
+    expect(await paragraphs()).toEqual(['First. Second.']);
+  });
+
   test('control: left unset, the display follows the recording mode as before', async ({ page }) => {
     await openEditor(page, {});
     await page.evaluate(() => (window as any).editor.setTrackedChanges(1));

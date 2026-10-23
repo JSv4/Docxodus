@@ -3205,8 +3205,10 @@ export class DocxEditor {
     if (!merged) return;
 
     // Merging list items renumbers the list, and merging across a border <div> boundary changes the
-    // border grouping — both need a whole-document re-render (caret at the merge boundary).
-    if (this.affectsList(res) || wrappedInBorder) {
+    // border grouping — both need a whole-document re-render (caret at the merge boundary). So does a
+    // tracked merge, which removes nothing: both paragraphs stay until the deleted paragraph mark
+    // is accepted, so the second must not be dropped from the page.
+    if (this.affectsList(res) || wrappedInBorder || !res.removed?.length) {
       this.refreshAfter(el, prevIdx, true);
       this.options.onEdit?.({ anchorId: merged.id, unid: merged.unid });
       return;

@@ -140,6 +140,28 @@ All notable changes to this project will be documented in this file.
   a paraId now has its own entry in each of the redline's `commentsExtended` and `commentsIds` parts,
   and an added comment renamed for a colliding paraId can no longer be given a paraId a later added
   comment holds, which had moved that comment's reply under the wrong parent.
+
+- Three session edits now honour tracked-change mode (#1313):
+  - With tracked changes on, `InsertCrossReference` records the REF field as an insertion. It is
+    written as complex-field runs inside one `w:ins`, the form Word records, because a `w:ins` cannot
+    hold the `w:fldSimple` an untracked insertion writes. Before, the field was written untracked,
+    so `ListRevisions` did not show it and `RejectAllRevisions` left it in place.
+  - Tracked `MergeParagraphs` now records Word's tracked join instead of failing with
+    `TrackedOperationUnsupported`, as the architecture doc already said it did. It deletes the first
+    paragraph's mark (`w:pPr/w:rPr/w:del`). The separator space it adds is an insertion. The second
+    paragraph takes the first's properties as a tracked property change. Accepting everything gives
+    what an untracked merge gives; rejecting gives back both paragraphs unchanged. Both paragraphs
+    stay until review, so `EditResult.Modified` lists both and `Removed` is empty. The editor's
+    Backspace at the start of a paragraph, which did nothing while tracking, now records the join
+    and keeps both paragraphs on the page. A tracked merge is refused when the first paragraph ends
+    a section (`TrackedOperationUnsupported`). It is also refused when another revision already
+    deleted or moved the first paragraph's mark (`UnresolvedStructuralRevision`).
+  - `SplitParagraph` no longer cuts a field in two. A split at an offset inside a field's result,
+    with the field's begin and end both in the paragraph, is refused with
+    `UnsupportedInlineBoundary`, tracked or untracked. Before, the field's begin went to one
+    paragraph and its end to the other. A split right after the field now keeps the field's `end`
+    mark with the rest of the field; before, the `end` mark moved to the next paragraph. A field
+    that already spans paragraphs, such as a table of contents, can still be split inside.
 - HTML to DOCX now adds a nested element's `text-decoration` lines to those of the elements around it
   instead of replacing them (#1280). The converter treated `text-decoration` as an inherited property,
   so a struck span inside an underlined span produced only `<w:strike/>`, and a DOCX → HTML → DOCX round

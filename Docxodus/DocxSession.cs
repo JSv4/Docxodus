@@ -2945,19 +2945,76 @@ public sealed partial class DocxSession : IDisposable
     /// <paramref name="paragraph"/> into <paramref name="destination"/>. Inline
     /// children advance the position counter by their text length; markers
     /// (bookmarkStart/End, comment range markers, etc.) advance it by 0 and so
-    /// inherit the position they're sandwiched between.
+    /// inherit the position they're sandwiched between. The exception is the end of a
+    /// field whose result ends at the offset: a field's <c>end</c> mark has no text, so it
+    /// sits at the offset too, and it stays with the field's <c>begin</c> (issue #1313).
     /// </summary>
     internal static void MoveInlineChildrenAfter(XElement paragraph, int offset, XElement destination)
     {
+        var endOf = ParagraphFields(paragraph).ToDictionary(field => field.Begin, field => field.End);
+        var awaitedEnds = new HashSet<XElement>();
         int consumed = 0;
         var toMove = new List<XElement>();
         foreach (var child in paragraph.Elements().ToList())
         {
             if (child.Name == W.pPr) continue;
             int len = IsInlineChild(child) ? InlineChildTextLength(child) : 0;
-            if (consumed >= offset) toMove.Add(child);
+            bool keep = consumed < offset || (consumed == offset && len == 0 && awaitedEnds.Count > 0);
+            if (!keep) toMove.Add(child);
+            else
+            {
+                foreach (var mark in child.DescendantsAndSelf(W.fldChar))
+                {
+                    if (endOf.TryGetValue(mark, out var end)) awaitedEnds.Add(end);
+                    else awaitedEnds.Remove(mark);
+                }
+            }
             consumed += len;
         }
         foreach (var c in toMove) { c.Remove(); destination.Add(c); }
+    }
+
+    /// <summary>Split the content of <paramref name="paragraph"/> at <paramref name="offset"/>,
+    /// moving everything after it into <paramref name="destination"/>: the run and container
+    /// splits <see cref="MoveInlineChildrenAfter"/> needs, then the move itself.</summary>
+    private static void SplitParagraphContent(XElement paragraph, int offset, XElement destination,
+        Func<int> nextRevisionId)
+    {
+        SplitRunsAtOffset(paragraph, offset, nextRevisionId);
+        SplitInlineContainersAtOffset(paragraph, offset, nextRevisionId);
+        MoveInlineChildrenAfter(paragraph, offset, destination);
+    }
+
+    /// <summary>The complex fields (<c>w:fldChar</c> begin … end) that both begin and end in
+    /// <paramref name="paragraph"/>, nested ones included, as their begin and end marks. A field
+    /// that runs on from an earlier paragraph or into a later one (a table of contents) is not
+    /// listed; neither is a field in a text box's own paragraphs.</summary>
+    private static List<(XElement Begin, XElement End)> ParagraphFields(XElement paragraph)
+    {
+        var fields = new List<(XElement Begin, XElement End)>();
+        var open = new Stack<XElement>();
+        foreach (var mark in paragraph.Descendants(W.fldChar))
+        {
+            if (!ReferenceEquals(mark.Ancestors(W.p).FirstOrDefault(), paragraph)) continue;
+            switch ((string?)mark.Attribute(W.fldCharType))
+            {
+                case "begin": open.Push(mark); break;
+                case "end" when open.Count > 0: fields.Add((open.Pop(), mark)); break;
+            }
+        }
+        return fields;
+    }
+
+    /// <summary>Whether splitting <paramref name="paragraph"/> at <paramref name="offset"/> would
+    /// leave a field's begin in one paragraph and its end in the other — an offset inside the
+    /// field's result. Answered by splitting a copy, so every container the field's marks can
+    /// sit in (a tracked insertion, a hyperlink) is split exactly as the real split would.</summary>
+    private static bool SplitWouldCutAField(XElement paragraph, int offset)
+    {
+        if (ParagraphFields(paragraph).Count == 0) return false;
+        var copy = new XElement(paragraph);
+        var fields = ParagraphFields(copy);
+        SplitParagraphContent(copy, offset, new XElement(W.p), () => 0);
+        return fields.Any(field => !ReferenceEquals(field.Begin.Ancestors(W.p).First(), field.End.Ancestors(W.p).First()));
     }
 }
