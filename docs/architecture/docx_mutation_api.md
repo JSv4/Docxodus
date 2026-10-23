@@ -2180,6 +2180,8 @@ A **zero-length** span is a pure insertion. At an ordinary character boundary in
 
 At a run boundary (the end of one run's text, the start of another's, offset 0, or the end of the paragraph), insertion copies the neighbouring run's formatting and can coalesce with an ordinary adjacent run. It steps outside any complex field whose chrome surrounds the boundary, so text inserted after `Page {PAGE} of {NUMPAGES}` follows the field's `end` run rather than joining the NUMPAGES result Word would discard on its next field update.
 
+Text inserted at the edge of a tracked insertion, hyperlink or smart tag lands outside it. With tracked changes off, an offset strictly inside a tracked insertion that sits directly in the paragraph (inside one of its runs, or between two of them) splits the insertion around a plain run, whoever its author: untracked text is nobody's change, so it must not be credited to the insertion's author or disappear when that insertion is rejected. The second half keeps the author and date under a fresh `w:id`, as a split paragraph's does (issue #1319). An insertion nested inside a hyperlink is not split.
+
 ### Recipe: enumerate-and-fill via Grep + ReplaceMatch
 
 ```csharp

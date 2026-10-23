@@ -196,6 +196,62 @@ public class DocxSessionSpanRevisionTests
         Assert.Equal(before, pat.GetPackageContentHash());
     }
 
+    // ─── Untracked typing strictly inside a tracked insertion (issue #1319) ───
+
+    /// <summary>Alex's insertion <c>amount</c> as one run, or as <c>amo</c> + bold <c>unt</c>.</summary>
+    private static object[] FeeAmountDue(string author, bool twoRuns) => new object[]
+    {
+        Run("Fee "),
+        Ins(author, 1, twoRuns ? new object[] { Run("amo"), Run("unt", bold: true) } : new object[] { Run("amount") }),
+        Run(" due"),
+    };
+
+    [Theory]
+    [InlineData("Alex", false)]
+    [InlineData("Alex", true)]
+    [InlineData("Pat", false)]
+    [InlineData("Pat", true)]
+    public void Untracked_TextTypedInsideAnInsertion_SplitsItAroundAPlainRun(string insertionAuthor, bool twoRuns)
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", FeeAmountDue(insertionAuthor, twoRuns));
+
+        var edit = session.ReplaceTextAtSpan(p, 7, 0, "XY");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal($"\"Fee \" ins:{insertionAuthor}[\"amo\"] \"XY\" ins:{insertionAuthor}[\"unt\"] \" due\"",
+            Shape(session, p));
+        var halves = XElement.Parse(session.Raw.GetXml(p)).Elements(W.ins).ToArray();
+        Assert.Equal(Date, (string?)halves[1].Attribute(W.date));
+        Assert.NotEqual((string?)halves[0].Attribute(W.id), (string?)halves[1].Attribute(W.id));
+        Assert.Equal("Fee amoXYunt due", Accepted(session));
+        Assert.Equal("Fee XY due", Rejected(session));
+    }
+
+    [Fact]
+    public void Untracked_SplitInsideAnInsertion_KeepsEachHalfsFormatting()
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", FeeAmountDue("Alex", twoRuns: true));
+
+        Assert.True(session.ReplaceTextAtSpan(p, 7, 0, "XY").Success);
+
+        var halves = XElement.Parse(session.Raw.GetXml(p)).Elements(W.ins).ToArray();
+        Assert.Null(halves[0].Element(W.r)!.Element(W.rPr));
+        Assert.NotNull(halves[1].Element(W.r)!.Element(W.rPr)?.Element(W.b));
+    }
+
+    [Theory]
+    [InlineData(4, "\"Fee XY\" ins:Alex[\"amount\"] \" due\"")]
+    [InlineData(10, "\"Fee \" ins:Alex[\"amount\"] \"XY\" \" due\"")]
+    public void Control_UntrackedTextAtAnInsertionsEdge_StaysOutsideIt(int offset, string shape)
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", FeeAmountDue("Alex", twoRuns: false));
+
+        Assert.True(session.ReplaceTextAtSpan(p, offset, 0, "XY").Success);
+
+        Assert.Equal(shape, Shape(session, p));
+    }
+
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     private static XElement Run(string text, bool bold = false) => new(W.r,

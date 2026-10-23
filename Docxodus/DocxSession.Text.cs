@@ -355,6 +355,7 @@ public sealed partial class DocxSession
         XElement? after = null;
         XElement? before = null;
         bool splitRun = false;
+        bool tracked = _trackedChanges == TrackedChangeMode.RenderInline;
         foreach (var seg in map.Segments)
         {
             if (seg.Length == 0) continue;
@@ -362,7 +363,9 @@ public sealed partial class DocxSession
             if (seg.StartOffsetInBlock == offset) { before = seg.Run; break; }
             if (seg.StartOffsetInBlock < offset && offset < seg.EndOffsetInBlock)
             {
-                if (!CanSplitTextRun(seg.Run) || !ReferenceEquals(seg.Run.Parent, element)
+                if (!CanSplitTextRun(seg.Run)
+                    || !(ReferenceEquals(seg.Run.Parent, element)
+                        || (!tracked && SplittableInsertion(seg.Run.Parent, element) is not null))
                     || IsInsideComplexField(seg.Run)
                     || !XmlText.IsCharacterBoundary(map.FlatText, offset))
                     return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
@@ -394,8 +397,14 @@ public sealed partial class DocxSession
         // wraps its runs in a hyperlink (every TOC entry does) is still stepped out of.
         var afterBeforeFieldStep = after;
         var beforeBeforeFieldStep = before;
-        if (after is not null) after = FieldEndRunOrSelf(StepOutOfContainersAtEnd(after, element));
+        // A run being split straddles the boundary, so it is no container's edge.
+        if (after is not null && !splitRun) after = FieldEndRunOrSelf(StepOutOfContainersAtEnd(after, element));
         if (before is not null) before = FieldBeginRunOrSelf(StepOutOfContainersAtStart(before, element));
+
+        // A boundary still inside a tracked insertion after that step is strictly inside it.
+        // Untracked text is nobody's change, so the insertion is split around it (issue #1319);
+        // the second half keeps its author and date under a fresh id.
+        var interiorInsertion = tracked ? null : SplittableInsertion((after ?? before)?.Parent, element);
 
         // Coalesce into the adjacent run rather than fragmenting the paragraph. Appending "foo"
         // after a run should extend that run's text, not drop a sibling run beside it: a separate
@@ -451,6 +460,16 @@ public sealed partial class DocxSession
         try
         {
             if (splitRun) SplitRunsAtOffset(element, offset, NextRevisionId);
+            if (interiorInsertion is not null)
+            {
+                // Cut at the node the boundary was resolved to, not by offset, so a field's
+                // zero-width end run stays with the field it closes.
+                SplitContainerBefore(interiorInsertion,
+                    after is not null ? after.ElementsAfterSelf().ToList() : before!.ElementsAfterSelf().Prepend(before).ToList(),
+                    NextRevisionId);
+                after = interiorInsertion;
+                before = null;
+            }
             var run = new XElement(W.r, rPr,
                 new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), replace));
             XElement node = run;
@@ -485,6 +504,11 @@ public sealed partial class DocxSession
             return FailInternal(ex, anchorId);
         }
     }
+
+    /// <summary>A tracked insertion directly in <paramref name="paragraph"/> that
+    /// <paramref name="node"/> is, or null.</summary>
+    private static XElement? SplittableInsertion(XElement? node, XElement paragraph) =>
+        node is not null && node.Name == W.ins && ReferenceEquals(node.Parent, paragraph) ? node : null;
 
     /// <summary>
     /// True when <paramref name="run"/> is an ordinary text run — a <c>w:r</c> carrying only its

@@ -827,8 +827,8 @@ public class DocxSessionEditorParityTests
         Assert.Equal(new[] { "r", "ins", "r" }, ChildNames(session, para));
         Assert.Equal("xBC", session.Project().AnchorIndex[para].TextPreview);
 
-        // But a boundary strictly inside the envelope stays inside it: with two runs in the
-        // insertion, the seam between them is B's content, and text typed there belongs to it.
+        // A boundary strictly inside the envelope splits it: untracked text is nobody's change, so
+        // it goes between two halves of B's insertion rather than into it (issue #1319).
         para = ReplaceFirstParagraph(session,
             "<w:ins w:id=\"8\" w:author=\"B\" w:date=\"2024-01-01T00:00:00Z\">"
             + "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
@@ -839,12 +839,13 @@ public class DocxSessionEditorParityTests
             + "<w:r><w:t>D</w:t></w:r></w:ins>");
         var inside = session.ReplaceTextAtSpan(para, 1, 0, "y");
         Assert.True(inside.Success, inside.Error?.Message);
-        Assert.Equal(new[] { "ins" }, ChildNames(session, para));
-        // ...and it still stepped out of the field to reach that seam.
-        var runs = XElement.Parse(session.Raw.GetXml(para)).Element(W + "ins")!.Elements(W + "r").ToList();
-        Assert.Equal("end", (string?)runs[^3].Element(W + "fldChar")?.Attribute(W + "fldCharType"));
-        Assert.Equal("y", runs[^2].Element(W + "t")?.Value);
-        Assert.Equal("D", runs[^1].Element(W + "t")?.Value);
+        Assert.Equal(new[] { "ins", "r", "ins" }, ChildNames(session, para));
+        // ...and it still stepped out of the field to reach that seam: the field closes in the
+        // first half.
+        var halves = XElement.Parse(session.Raw.GetXml(para)).Elements(W + "ins").ToList();
+        Assert.Equal("end", (string?)halves[0].Elements(W + "r").Last().Element(W + "fldChar")?.Attribute(W + "fldCharType"));
+        Assert.Equal("y", XElement.Parse(session.Raw.GetXml(para)).Element(W + "r")?.Element(W + "t")?.Value);
+        Assert.Equal("D", halves[1].Element(W + "r")?.Element(W + "t")?.Value);
     }
     [Fact]
     public void DEP046_ZeroLengthInsert_AtOffsetZero_OfFieldOnlyParagraph_LandsBeforeTheField()

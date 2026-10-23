@@ -51,6 +51,14 @@ All notable changes to this project will be documented in this file.
   follows another starts where that one ends. A paragraph's own after-spacing still separates it from
   the table, and a floating table keeps its `w:tblpPr` distance from the text above. The measurements
   are in `docs/ooxml_corner_cases.md`.
+
+- With tracked changes off, text inserted through `ReplaceTextAtSpan` at an offset strictly inside a tracked
+  insertion now splits the insertion around a plain run (#1319). Inside one of the insertion's runs the
+  call was refused, and the browser editor's fallback then grew the insertion's run; between two of its
+  runs the new run joined the insertion. Either way the text was credited to the insertion's author and
+  removed when that insertion was rejected. The second half keeps the author and date under a fresh
+  `w:id`, as `SplitParagraph` already does.
+
 - Under tracked changes, deleting or replacing text in the session author's own pending insertion through
   `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`) now removes it from the insertion instead of
   recording a deletion nested inside it (#1316). A Backspace in text still being typed left a struck

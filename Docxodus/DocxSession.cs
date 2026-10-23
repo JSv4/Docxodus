@@ -2854,6 +2854,13 @@ public sealed partial class DocxSession : IDisposable
             if (consumed >= localOffset) movedChildren.Add(child);
             consumed += len;
         }
+        SplitContainerBefore(container, movedChildren, nextRevisionId);
+    }
+
+    /// <summary>Move <paramref name="movedChildren"/> (the container's trailing children) into a
+    /// copy of <paramref name="container"/> placed right after it. Nothing to move, nothing done.</summary>
+    internal static void SplitContainerBefore(XElement container, IReadOnlyList<XElement> movedChildren, Func<int> nextRevisionId)
+    {
         if (movedChildren.Count == 0) return;
 
         var second = new XElement(container.Name);
