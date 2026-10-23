@@ -3839,16 +3839,21 @@ namespace Docxodus
                 }
             }
 
-            var style = new Dictionary<string, string>();
-            var a = new XElement(Xhtml.a,
+            // HTML forbids an <a> inside another: a parser closes the open link at the inner one,
+            // and the rest of the link's content falls outside it (issue #1285). Inside a link the
+            // target is a span; an id on any element is a fragment target. The empty text keeps
+            // either element from serializing self-closed.
+            var target = new XElement(IsInsideLink(element) ? Xhtml.span : Xhtml.a,
                 new XAttribute("id", name),
                 new XText(""));
-            if (!a.Nodes().Any())
-                a.Add(new XText(""));
-            style.Add("text-decoration", "none");
-            a.AddAnnotation(style);
-            return a;
+            target.AddAnnotation(new Dictionary<string, string> { { "text-decoration", "none" } });
+            return target;
         }
+
+        /// <summary>Whether an element renders inside an HTML link: a <c>w:hyperlink</c>, or the
+        /// result of a HYPERLINK field. Content there must not open an <c>&lt;a&gt;</c> of its own.</summary>
+        private static bool IsInsideLink(XElement element) =>
+            element.Ancestors(W.hyperlink).Any() || FieldRetriever.IsFieldResult(element, "HYPERLINK");
 
         private static object? ProcessBookmarkEnd(WmlToHtmlConverterSettings settings, XElement element)
         {
@@ -5723,7 +5728,8 @@ namespace Docxodus
         private static bool IsDiscardableEmptySpan(XElement span)
         {
             if (span.HasElements || span.Value.Length != 0) return false;
-            if (span.Attributes().Any(a =>
+            // An id is a link target (a bookmark inside a link renders as an empty span).
+            if (span.Attributes().Any(a => a.Name.LocalName == "id" ||
                 a.Name.LocalName.StartsWith("data-", StringComparison.Ordinal)))
             {
                 return false;
@@ -5794,7 +5800,49 @@ namespace Docxodus
             if (leader != null)
                 span.Add(new XAttribute("data-docx-tab-leader", leader));
             span.AddAnnotation(style);
+            AddTabLines(element, span);
             return span;
+        }
+
+        /// <summary>
+        /// CSS paints a run's underline and strikethrough across its text only, never across an
+        /// atomic inline box such as a tab advance. So a tab in an underlined or struck run, such
+        /// as the signature line in <c>By: ____</c>, showed no line (issue #1285). Draw the run's
+        /// lines as the top borders of empty blocks inside the tab box instead, moved to where
+        /// the browser draws a text underline and line-through. Relative offsets take no room, so
+        /// the tab's advance and its line's height do not change, and a leader keeps the tab's
+        /// own bottom border. A words-only underline skips the tab, as it skips spaces; a cached
+        /// TOC result drops its link underline here as <see cref="ApplyFieldResultPresentation"/>
+        /// does for the run's text.
+        /// </summary>
+        private static void AddTabLines(XElement tab, XElement tabSpan)
+        {
+            if (tab.Parent is not { } run || run.Name != W.r || run.Element(W.rPr) is not { } rPr)
+                return;
+            var lines = GetRunLines(run, rPr);
+            if (lines.Underline != null && !lines.UnderlinesWordsOnly && !IsTocLinkResult(run))
+                tabSpan.Add(TabLine("0.05em", lines.Underline, lines.HeavyUnderline, lines.UnderlineColor));
+            if (lines.Strike != null)
+                tabSpan.Add(TabLine("-0.3em", lines.Strike, false, null));
+        }
+
+        private static XElement TabLine(string top, string lineStyle, bool heavy, string? color)
+        {
+            var line = new XElement(Xhtml.span, new XText(string.Empty));
+            var width = lineStyle == "double" ? "3px" : heavy ? "2px" : "1px";
+            // CSS borders have no wavy style; a wavy underline draws solid.
+            var style = lineStyle is "double" or "dotted" or "dashed" ? lineStyle : "solid";
+            var css = new Dictionary<string, string>
+            {
+                { "display", "block" },
+                { "position", "relative" },
+                { "top", top },
+                { "border-top", $"{width} {style} currentColor" },
+            };
+            if (color != null)
+                CreateColorProperty("border-top-color", color, css);
+            line.AddAnnotation(css);
+            return line;
         }
 
         private static object ProcessBreak(
@@ -7290,13 +7338,11 @@ namespace Docxodus
                 ? paragraphContent.TakeWhile(e => e != firstTabRun).ToList()
                 : Enumerable.Empty<XElement>().ToList();
 
-            // TODO: Revisit
-            // For the time being, if a hyperlink field precedes the tab, we'll render it as before.
-            var hyperlinkPrecedesTab = elementsPrecedingTab
-                .Elements(W.r)
-                .Elements(W.instrText)
-                .Select(e => e.Value)
-                .Any(value => value != null && value.TrimStart().ToUpper().StartsWith("HYPERLINK"));
+            // Keep a HYPERLINK before or across the tab whole: converting its preceding runs
+            // individually would leave its text and bookmark targets outside the link. Reuse the field annotations
+            // rather than looking for instructions under the already-flattened run list.
+            var hyperlinkPrecedesTab = elementsPrecedingTab.Any(e => FieldRetriever.IsFieldResult(e, "HYPERLINK")) ||
+                firstTabRun != null && FieldRetriever.IsFieldResult(firstTabRun, "HYPERLINK");
             if (hyperlinkPrecedesTab)
             {
                 var paraElement1 = new XElement(elementName,
@@ -7589,7 +7635,7 @@ namespace Docxodus
                     tabElement.Attribute(PtOpenXml.TabAfterWrappedText) == null &&
                     CanFlexTabRun(settings, firstTabRun!)
                     ? CreateFlexibleTabRun(wordDoc, settings, firstTabRun!)
-                    : ProcessTab(tabElement);
+                    : ConvertRun(wordDoc, settings, firstTabRun!);
             }
 
             // Text longer than its line wraps, so it cannot sit in a box pinned to the tab stop:
@@ -8264,7 +8310,7 @@ namespace Docxodus
             XElement run,
             Dictionary<string, string> style)
         {
-            if (!run.Ancestors(W.hyperlink).Any() || !FieldRetriever.IsFieldResult(run, "TOC"))
+            if (!IsTocLinkResult(run))
                 return;
 
             // Removing these properties exposes the underlying TOC paragraph/run formatting; it
@@ -8287,6 +8333,9 @@ namespace Docxodus
             else
                 style["text-decoration"] = string.Join(" ", remaining);
         }
+
+        private static bool IsTocLinkResult(XElement run) =>
+            run.Ancestors(W.hyperlink).Any() && FieldRetriever.IsFieldResult(run, "TOC");
 
         private static string DescribeFormatChange(XElement currentRPr, XElement rPrChange)
         {
@@ -8462,19 +8511,38 @@ namespace Docxodus
         private static Dictionary<string, string>? DefineRunDecorations(
             XElement run, XElement rPr, Dictionary<string, string> style)
         {
-            var underline = rPr.Element(W.u);
-            var underlineValue = (string?)underline?.Attribute(W.val);
-            var hasUnderline = underline != null && underlineValue != "none";
-            var strike = GetBoolProp(rPr, W.strike) || GetBoolProp(rPr, W.dstrike);
-            var strikeStyle = GetBoolProp(rPr, W.dstrike) ? "double" : "solid";
-            if (!hasUnderline)
+            var lines = GetRunLines(run, rPr);
+            if (lines.Underline == null)
             {
-                if (strike)
-                    style["text-decoration"] = "line-through" + (strikeStyle == "double" ? " double" : "");
+                if (lines.Strike != null)
+                    style["text-decoration"] = "line-through" + (lines.Strike == "double" ? " double" : "");
                 return null;
             }
 
-            var underlineStyle = underlineValue switch
+            var shared = lines.Strike == lines.Underline && !lines.HeavyUnderline && lines.UnderlineColor == null;
+            // A shorthand resets its longhands. Insert it first: fabricated class CSS preserves
+            // dictionary order, while inline CSS sorts declarations by name.
+            style["text-decoration"] = "underline" + (shared ? " line-through" : "") +
+                (lines.Underline == "solid" ? "" : " " + lines.Underline);
+            if (lines.UnderlineColor != null)
+                CreateColorProperty("text-decoration-color", lines.UnderlineColor, style);
+            if (lines.HeavyUnderline)
+                style["text-decoration-thickness"] = "0.12em";
+            return lines.Strike != null && !shared
+                ? new Dictionary<string, string> { { "text-decoration", "line-through" + (lines.Strike == "double" ? " double" : "") } }
+                : null;
+        }
+
+        /// <summary>The underline and strikethrough a run draws. Line styles are CSS
+        /// <c>text-decoration-style</c> values; a null style is no line.</summary>
+        private sealed record RunLines(
+            string? Underline, string? UnderlineColor, bool HeavyUnderline, bool UnderlinesWordsOnly, string? Strike);
+
+        private static RunLines GetRunLines(XElement run, XElement rPr)
+        {
+            var underline = rPr.Element(W.u);
+            var underlineValue = (string?)underline?.Attribute(W.val);
+            var underlineStyle = underline == null || underlineValue == "none" ? null : underlineValue switch
             {
                 "double" => "double",
                 "dotted" or "dottedHeavy" => "dotted",
@@ -8483,22 +8551,16 @@ namespace Docxodus
                 "wave" or "wavyHeavy" or "wavyDouble" => "wavy",
                 _ => "solid",
             };
-            var color = ResolveThemeColor(underline, W.color, W.themeColor, W.themeTint, W.themeShade,
-                GetThemeColorScheme(run));
-            var hasColor = color != null && color != "auto";
-            var heavy = underlineValue == "thick" || underlineValue?.EndsWith("Heavy", StringComparison.Ordinal) == true;
-            var shared = strike && underlineStyle == strikeStyle && !heavy && !hasColor;
-            // A shorthand resets its longhands. Insert it first: fabricated class CSS preserves
-            // dictionary order, while inline CSS sorts declarations by name.
-            style["text-decoration"] = "underline" + (shared ? " line-through" : "") +
-                (underlineStyle == "solid" ? "" : " " + underlineStyle);
-            if (hasColor)
-                CreateColorProperty("text-decoration-color", color!, style);
-            if (heavy)
-                style["text-decoration-thickness"] = "0.12em";
-            return strike && !shared
-                ? new Dictionary<string, string> { { "text-decoration", "line-through" + (strikeStyle == "double" ? " double" : "") } }
-                : null;
+            var color = underlineStyle == null
+                ? null
+                : ResolveThemeColor(underline!, W.color, W.themeColor, W.themeTint, W.themeShade,
+                    GetThemeColorScheme(run));
+            return new RunLines(
+                underlineStyle,
+                color is null or "auto" ? null : color,
+                underlineValue == "thick" || underlineValue?.EndsWith("Heavy", StringComparison.Ordinal) == true,
+                underlineValue == "words",
+                GetBoolProp(rPr, W.dstrike) ? "double" : GetBoolProp(rPr, W.strike) ? "solid" : null);
         }
 
         private static decimal? GetFontSize(XElement e)

@@ -160,7 +160,7 @@ w:br/w:cr   ──►  <br> with directional marks
 
 w:sym       ──►  <span>&#NNN;</span> (symbol as entity)
 
-w:bookmarkStart ──► <a id="..."></a>
+w:bookmarkStart ──► <a id="..."></a>  (<span id="..."></span> inside a link: an <a> cannot nest)
 
 w:noBreakHyphen ──► "-" (text)
 ```
@@ -704,3 +704,17 @@ hyperlink still suppresses its underline without removing a strike.
 Heavy variants increase decoration thickness. CSS has no direct double-wave or dot-dash equivalent;
 those variants use wavy or dashed lines respectively. Word's word-only underline retains the existing
 continuous underline rendering. These approximations do not change run text or line metrics.
+
+CSS paints a decoration across text only, never across an atomic inline box, so a tab advance in an
+underlined or struck run (a `By: ____` signature line) would show no line (issue #1285). The tab box
+draws the run's lines itself: each is the top border of an empty block inside the tab, moved with a
+relative offset to where Chromium draws a text underline (`0.05em` below the baseline) or line-through
+(`0.3em` above it). The blocks take no room, so neither the advance nor the line height changes, and a
+leader keeps the tab's own bottom border. Double lines use a double border, a heavy underline a 2px
+border, and a wavy one a solid border. A word-only underline skips tabs, and a cached TOC hyperlink
+drops the underline from its tabs as from its text.
+
+Both fixed and flexible tabs go through the run renderer, so a leading tab keeps its run's font,
+colour and visibility. A complex HYPERLINK before or spanning a tab stays whole; converting its runs
+individually would leave its text and bookmark targets outside the link. The paragraph uses the shared
+field-context annotations to choose that path.

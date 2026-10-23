@@ -2842,8 +2842,12 @@ Two separate causes:
   flex path. A bookmark that opens a rendered annotation range still falls back, as an annotation
   range that is already open does. Underline and strike were rejected, but CSS text decoration
   does not paint an empty tab box on either path, so the rejection cost alignment and bought no
-  decoration. LibreOffice does draw the underline under an underlined tab; Docxodus still does not,
-  before or after this fix.
+  decoration. LibreOffice does draw the underline (and the strike) across an underlined (or struck)
+  tab. Since issue #1285 the tab box draws them too, as borders of empty blocks inside it.
+- A bookmark inside a `w:hyperlink` rendered as an `<a id>` inside the link's `<a href>`. HTML
+  forbids nested links, so the browser's parser closed the link at the bookmark and left the label,
+  title and number outside it, off their stops (issue #1285). Inside a link the bookmark target is
+  now an empty `<span id>`.
 
 - Code: `Docxodus/WmlToHtmlConverter.cs`: `CalculateSpanWidthTransform` (right-tab branch),
   `ConvertAlignedTabRuns`, `CanFlexTabRun`.
