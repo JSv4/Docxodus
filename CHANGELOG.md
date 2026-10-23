@@ -113,6 +113,12 @@ All notable changes to this project will be documented in this file.
   changes nothing, including its other matches. Replace those through `Grep` and `ReplaceMatch`, skipping
   the match inside the move.
 
+- HTML output now draws an underline or strikethrough across a tab in an underlined or struck run,
+  such as the signature line in `By: ____`; it drew no line, because CSS does not decorate the tab's
+  box (#1285). A bookmark inside a hyperlink no longer writes an `<a>` inside the link's `<a>`, which
+  the HTML parser split apart, leaving the entry's text outside the link and off its tab stops; the
+  bookmark target is now an empty `<span id>` there (#1285).
+
 - A table no longer starts 7.5pt below a paragraph that has no space after it, or below another table
   (#1244). The HTML converter gave such a table a top margin of its own "for visual separation", which
   moved the first row and everything after it down in the HTML, the paginated view and the PDF export.
