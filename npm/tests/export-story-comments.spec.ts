@@ -32,7 +32,8 @@ async function exportStories(browser: Browser, commentProfile: Profile, balloons
     ...(balloons ? { commentColumnPlacement: 'balloons' as const } : {}),
     unsupportedContent: 'strict', timeoutMs: 120_000,
   });
-  expect(result.renderReport.warnings).toEqual([]);
+  // Only the host's font environment may warn; nothing about the comments or their stories.
+  expect(result.renderReport.warnings.filter(w => !w.code.startsWith('font_'))).toEqual([]);
   expect(result.pageCount).toBe(2);
   return result;
 }
@@ -71,15 +72,17 @@ test('the inline profile carries every story\'s comment on its highlight', async
   } finally { await page.close(); }
 });
 
-test('margin notes for a header or footer comment print on every page; a note\'s on its own', async ({ browser }, testInfo) => {
+test('margin notes for a header or footer comment print on every page that story prints on', async ({ browser }, testInfo) => {
   test.setTimeout(150_000);
   const result = await exportStories(browser, 'margin');
   await writeFile(testInfo.outputPath('story-comments-margin.pdf'), result.pdf!);
   expect(await columnTexts(browser, result.html!, '.page-comment-margin')).toEqual([
-    ['BODYCOMMENT', 'HEADERCOMMENT', 'NOTECOMMENT', 'FOOTERCOMMENT'],
+    // Top to bottom: the header, the body, the footnote, the footer.
+    ['HEADERCOMMENT', 'BODYCOMMENT', 'NOTECOMMENT', 'FOOTERCOMMENT'],
     ['HEADERCOMMENT', 'ENDCOMMENT', 'FOOTERCOMMENT'],
   ]);
-  const pages = await pdfPages(result.pdf!);
+  // The narrow margin column wraps a long token in the PDF text layer.
+  const pages = (await pdfPages(result.pdf!)).map(page => page.replace(/\s/g, ''));
   for (const comment of ['HEADERCOMMENT', 'FOOTERCOMMENT']) for (const page of pages) expect(page).toContain(comment);
   expect(pages[0]).toContain('NOTECOMMENT');
   expect(pages[1]).toContain('ENDCOMMENT');
@@ -98,10 +101,11 @@ test('balloons for a header or footer comment print on every page', async ({ bro
 
 test('control: a body-only comment prints alone in every profile', async ({ browser }) => {
   test.setTimeout(150_000);
-  for (const profile of ['endnotes', 'margin'] as const) {
-    const result = await exportStories(browser, profile, false, true);
-    expect((await pdfPages(result.pdf!)).join(' ').match(/[A-Z]+COMMENT/g)).toEqual(['BODYCOMMENT']);
-  }
+  const endnotes = await exportStories(browser, 'endnotes', false, true);
+  expect((await pdfPages(endnotes.pdf!)).join(' ').match(/[A-Z]+COMMENT/g)).toEqual(['BODYCOMMENT']);
+  // The margin column is narrow enough to wrap the token in the PDF, so read the delivered HTML.
+  const margin = await exportStories(browser, 'margin', false, true);
+  expect(await columnTexts(browser, margin.html!, '.page-comment-margin')).toEqual([['BODYCOMMENT'], []]);
   const balloons = await exportStories(browser, 'margin', true, true);
   const pages = await pdfPages(balloons.pdf!);
   expect(pages[0].match(/[A-Z]+COMMENT/g)).toEqual(['BODYCOMMENT']);
