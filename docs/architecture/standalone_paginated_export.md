@@ -833,6 +833,18 @@ paginator never budgeted that margin (fixed in `collapsedBlockMarginsPx`). Exact
 the font's height: CSS centres the glyph box on the line, so the last line's descenders hang a few
 pixels past the band (corrected by this pass).
 
+Both the body-band check and the footnote-band check measure an element down to what it lays out
+(`laidOutBottom` in `line-metrics.ts`, issue #1271). That is its border box, except that an inline
+box's own bottom padding and border are left out: CSS paints them below the text without making the
+line taller, so the dotted rule under a formatting revision (`rev-format-change`), a comment
+highlight's underline or a custom annotation's underline and padding could hang a pixel or two past
+a band whose text fits. Counted as clipped, they failed a one-line footnote outright (in a body
+band they would have asked for a needless correction round). Text, blocks, inline-blocks and
+replaced elements (images, SVG) are measured as before, so genuinely clipped content still fails.
+The decoration itself is still cut at the band's edge: on a note's last line, which ends at the
+text's own bottom, the formatting-revision rule disappears entirely from the PDF, and on a body
+page's last line it may be partly cut, depending on the space left below it.
+
 `browser_launch` appears twice in a Node export, and in different places. On the host it is
 Chromium and its isolated context, before anything is converted. In the browser materializer it is
 the isolated render realm — a script-free same-origin frame — which is created only once there is
