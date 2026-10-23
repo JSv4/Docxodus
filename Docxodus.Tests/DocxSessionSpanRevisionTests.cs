@@ -169,8 +169,10 @@ public class DocxSessionSpanRevisionTests
     }
 
     [Fact]
-    public void RemovingAPictureFromAnotherAuthorsInsertion_IsNotTreatedAsOwn()
+    public void Control_RemovingAPictureFromAnotherAuthorsInsertion_IsRefused()
     {
+        // A control for the image ops' own-insertion check, now OwnPendingInsertion: another
+        // author's insertion is refused before that check runs, so this passed before too.
         // Alex inserts a picture under tracking; Pat then tries to remove it with tracking on.
         byte[] bytes;
         using (var alex = new DocxSession(Build(Run("Logo: ")), new DocxSessionSettings
