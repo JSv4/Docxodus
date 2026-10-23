@@ -18,7 +18,7 @@ public class DefaultTabStopIntervalTests
 {
     private static readonly string[] Texts = { "Observatory inventory", "North", "East", "South", "Copper lens" };
 
-    private static byte[] Fixture(int interval, int? customStop = null)
+    private static byte[] Fixture(int interval, int? customStop = null, int? leftIndent = null)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -30,9 +30,15 @@ public class DefaultTabStopIntervalTests
                     new Wp.FontSize { Val = "24" }))));
             main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings(new Wp.DefaultTabStop { Val = (short)interval });
             var paragraph = new Wp.Paragraph();
+            var properties = new Wp.ParagraphProperties();
             if (customStop is { } stop)
-                paragraph.Append(new Wp.ParagraphProperties(new Wp.Tabs(new Wp.TabStop { Val = Wp.TabStopValues.Left, Position = stop })));
-            // Text, tab, text, tab, text, tab, text: the issue's paragraph shape.
+                properties.Append(new Wp.Tabs(new Wp.TabStop { Val = Wp.TabStopValues.Left, Position = stop }));
+            if (leftIndent is { } left)
+                properties.Append(new Wp.Indentation { Left = left.ToString(CultureInfo.InvariantCulture) });
+            if (properties.HasChildren) paragraph.Append(properties);
+            // Text, tab, text, tab, text, tab, text: the issue's paragraph shape. With an indent the
+            // paragraph opens with a tab, so the first tab advances from the indent itself.
+            if (leftIndent != null) paragraph.Append(new Wp.Run(new Wp.TabChar()));
             for (var i = 0; i < 4; i++)
             {
                 if (i > 0) paragraph.Append(new Wp.Run(new Wp.TabChar()));
@@ -43,7 +49,7 @@ public class DefaultTabStopIntervalTests
                 new Wp.SectionProperties(new Wp.PageSize { Width = 12240, Height = 15840 },
                     new Wp.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440, Header = 720, Footer = 720, Gutter = 0 })));
             doc.Save();
-            Assert.Empty(new OpenXmlValidator().Validate(doc));
+            if (interval >= 0) Assert.Empty(new OpenXmlValidator().Validate(doc)); // a negative interval is schema-invalid
         }
         return stream.ToArray();
     }
@@ -120,11 +126,14 @@ public class DefaultTabStopIntervalTests
         Assert.All(advances, a => Assert.InRange(a, 0.001m, 0.009m));
     }
 
-    [Fact]
-    public void ZeroIntervalTabsAdvanceNothingAndNoTextIsLost()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-12)]
+    public void ZeroIntervalTabsAdvanceNothingAndNoTextIsLost(int interval)
     {
-        // A zero interval generates no automatic stops, and Word gives such a tab no width.
-        var html = Convert(Fixture(0));
+        // A zero interval generates no automatic stops, and Word gives such a tab no width. A
+        // negative interval is schema-invalid; it is read as 0, Word's minimum.
+        var html = Convert(Fixture(interval));
 
         AssertTextKeptInOrder(html);
         Assert.Equal(new[] { 0m, 0m, 0m }, TabAdvancesInInches(html));
@@ -141,5 +150,16 @@ public class DefaultTabStopIntervalTests
         var advances = TabAdvancesInInches(html);
         Assert.True(advances[0] > 0m, $"first tab advance {advances[0]}in");
         Assert.Equal(new[] { 0m, 0m }, advances[1..]);
+    }
+
+    [Fact]
+    public void NegativeIndentAdvancesToTheNextStopRightOfIt()
+    {
+        // The pen starts at the -725 indent, left of the margin. The next 12-twip multiple is -720,
+        // 5 twips on; rounding the quotient toward zero instead skipped it for -708, 17 twips on.
+        var html = Convert(Fixture(12, leftIndent: -725));
+
+        AssertTextKeptInOrder(html);
+        Assert.Equal(0.003m, TabAdvancesInInches(html)[0]);
     }
 }

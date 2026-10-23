@@ -9290,7 +9290,8 @@ namespace Docxodus
                     defaultTabStop = WordprocessingMLUtil.StringToTwips(defaultTabStopValue);
             }
             // A zero interval means no automatic stops: Word gives a tab past the last custom stop
-            // no width (issue #1269, docs/ooxml_corner_cases.md). Word reads the value as at least 0.
+            // no width (issue #1269, docs/ooxml_corner_cases.md). A negative value is schema-invalid
+            // (ST_TwipsMeasure) and Word's minimum is 0, so it is read as 0.
             if (defaultTabStop < 0)
                 defaultTabStop = 0;
 
@@ -9881,11 +9882,13 @@ namespace Docxodus
         /// <summary>
         /// The first 100 automatic tab stops after <paramref name="afterTwips"/>: left stops at the
         /// following multiples of the <c>w:defaultTabStop</c> interval. A zero interval has none.
+        /// The first index is the floor of the quotient plus one, so a position left of the margin
+        /// (a negative indent) does not skip the multiple just after it.
         /// </summary>
         private static IEnumerable<XElement> AutomaticTabStops(int afterTwips, int defaultTabStop) =>
             defaultTabStop <= 0
                 ? Enumerable.Empty<XElement>()
-                : Enumerable.Range(afterTwips / defaultTabStop + 1, 100)
+                : Enumerable.Range((int)Math.Floor((double)afterTwips / defaultTabStop) + 1, 100)
                     .Select(r => new XElement(W.tab,
                         new XAttribute(W.val, "left"),
                         new XAttribute(W.pos, r * defaultTabStop)));
