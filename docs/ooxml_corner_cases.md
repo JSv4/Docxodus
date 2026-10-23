@@ -3772,6 +3772,96 @@ heading as the baseline, and reject would keep the heading that the pending chan
 Code: `DocxSession.SplitParagraph`, `TrackSplitOffProperties`, `RemoveMarkOwnedProperties`.
 Tests: `DocxSessionClonedRevisionTests` (RID003, RID004, RID007, RID010, RID011, RID020, RID022).
 
+## Merging paragraphs under tracking: the deleted mark and whose properties survive (issue #1313)
+
+A tracked join (Delete at a paragraph's end, Backspace at the next one's start) is the inverse of
+the tracked Enter above: the mark that ends the first paragraph is marked deleted, and both
+paragraphs stay until review.
+
+```xml
+<w:p>
+  <w:pPr><w:jc w:val="center"/><w:rPr><w:del w:id="7" w:author="Bob" w:date="…"/><w:b/></w:rPr></w:pPr>
+  <w:r><w:t>First.</w:t></w:r>
+  <w:ins w:id="8" w:author="Bob" w:date="…"><w:r><w:t xml:space="preserve"> </w:t></w:r></w:ins>
+</w:p>
+<w:p>
+  <w:pPr><w:jc w:val="center"/>
+    <w:rPr><w:b/><w:rPrChange w:id="9" w:author="Bob" w:date="…"><w:rPr/></w:rPrChange></w:rPr>
+    <w:pPrChange w:id="10" w:author="Bob" w:date="…"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr>
+  <w:r><w:t>Second.</w:t></w:r>
+</w:p>
+```
+
+Accepting the deleted mark joins the first paragraph into the second. The question is again which
+paragraph's properties the joined paragraph keeps:
+
+| Accept a deleted mark between P1 (`jc=center`) and P2 (`jc=right`), no property change recorded | Joined paragraph keeps |
+|---|---|
+| Word | unmeasured |
+| LibreOffice | unmeasured |
+| Docxodus (`RevisionOps.MergeParagraphWithNext`) | P2's `w:pPr` (`right`), the surviving mark's |
+| Untracked `DocxSession.MergeParagraphs` | P1's `w:pPr` (`center`) |
+
+The tracked merge does not depend on the answer. It writes P1's properties onto P2 as the editor's
+own `w:pPrChange`, and P1's mark formatting as the editor's `w:rPrChange` on P2's mark. The only
+row the encoding needs is the one Docxodus measures: accepting everything gives P1's properties,
+which is what an untracked merge gives. A consumer that keeps P1's properties on accept gives the
+same result. Rejecting everything resolves the property changes and restores the mark, so both
+paragraphs come back exactly. What belongs to P2's mark alone (its own revision, its section break)
+is not touched, so a section break that P2 ends stays where it was.
+
+A mark that ends a section is refused rather than deleted. Accepting the deletion would remove the
+section break with the mark, but an untracked merge keeps the break on the joined paragraph.
+
+The copy of P1's properties is one value, so it cannot follow a pending change to them. Say Alice
+centred P1 (`w:pPrChange`, before: `left`) and Bob then merges. Bob's copy is `center`. Reject
+Alice's change and accept Bob's merge, and the joined paragraph comes out `center`, the formatting
+Alice's rejection was meant to remove; rejecting her change first and then merging untracked gives
+`left`. So a tracked merge is refused (`UnresolvedStructuralRevision`) while P1 or its mark has a
+pending property change, whoever made it. A pending change on P2 is refused too: the merge would
+fold its own change into it, so one revision would record two edits, and a change of Alice's the
+merge took back to its baseline would simply be gone. The one exception is the editor's own change
+that the merge takes back to its baseline, the Enter-then-Backspace case, which is resolved.
+
+Code: `DocxSession.MergeParagraphs`, `RefuseTrackedMerge`, `TrackMergedProperties`.
+Tests: `DocxSessionTrackedEditGapTests` (`TrackedMerge_*`, `TrackedSplitThenMerge_*`,
+`TrackedEnterAfterAHeadingThenBackspace_*`).
+
+## Splitting a paragraph inside a field's result (issue #1313)
+
+```xml
+<w:p><w:r><w:t xml:space="preserve">See </w:t></w:r>
+  <w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> REF x </w:instrText></w:r>
+  <w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Clause twelve</w:t></w:r>
+  <w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t xml:space="preserve"> now</w:t></w:r></w:p>
+```
+
+Word lets a field's result span paragraphs: a table of contents is one field across many. But a
+split at an offset inside "Clause twelve" splits the field's displayed result, not the field.
+Before #1313, Docxodus put `begin`, the instruction, `separate` and "Clause" in the first paragraph,
+and " twelve" with the `end` mark in the second. The same thing happened at offset 17, right after
+the result. The `end` mark has no text, so it sits at offset 17 too, and every zero-width child at
+the split offset moved to the second paragraph.
+
+| Split at | Docxodus before | Docxodus now |
+|---|---|---|
+| 4 (before the field) | field whole in the second paragraph | same |
+| 10 (inside the result) | field cut in two | refused, `UnsupportedInlineBoundary` |
+| 17 (after the result) | field cut: `end` alone in the second paragraph | field whole in the first paragraph |
+
+Only an offset strictly between a field's begin and end marks is refused, and only for a field
+whose begin and end are both in the paragraph. A field that already runs across paragraphs is not
+the paragraph's to keep whole, so a split inside it goes ahead. Word may write a mark in the same
+run as text on the far side of an edge (`<w:r><w:fldChar w:fldCharType="end"/><w:t> now</w:t></w:r>`),
+or inside the same hyperlink or tracked insertion as that text. A split at that edge first cuts the
+run and each such container at the mark, as a text split cuts them, so the field stays whole on its
+side. The check splits a copy of the paragraph and compares where each field's marks land, so a
+field inside a tracked insertion or a hyperlink is covered as well; an edge inside a container a
+split keeps whole (a content control) is refused like the inside.
+
+Code: `DocxSession.SplitWouldCutAField`, `ParagraphFields`, `SeparateFieldMark`, `MoveInlineChildrenAfter`.
+Tests: `DocxSessionTrackedEditGapTests` (`Split*Field*`).
+
 ## Hidden paragraph mark: which paragraph's keep properties govern the joined block (issue #1294)
 
 A paragraph whose mark is hidden (`w:pPr/w:rPr/w:vanish`) is joined to the paragraph after it, the

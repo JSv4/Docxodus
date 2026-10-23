@@ -531,7 +531,8 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | `DeleteBlock(fn)` / `DeleteBlock(en)` / `DeleteBlock(cmt)` | — | the definition anchor (and any cross-references it pointed at — those become "gone" but aren't separately addressed) | — | nearest stable ancestor in the body |
 | `InsertParagraph(p, pos, md)` | one anchor per new block | — | — | smallest enclosing common parent |
 | `SplitParagraph(p, offset)` | the **second** half | — | `p` (first half — convention) | enclosing parent |
-| `MergeParagraphs(a, b)` | — | `b` + descendants | `a` | `a` |
+| `MergeParagraphs(a, b)`, untracked | — | `b` + descendants | `a` | `a` |
+| `MergeParagraphs(a, b)`, `RenderInline` | — | — (both stay until the deleted mark is accepted) | `a`, `b` (as re-projected: `b`'s kind can change) | `a` |
 | `ApplyFormat(p, span?, op)` | — | — | `p` | `p` |
 | `SetParagraphStyle(p, style)` | — | — | `p` (kind prefix may flip) | `p` |
 | `SetListLevel(p, delta)` | — | — | `p` | enclosing list (downstream items renumber) |
@@ -584,6 +585,42 @@ Two conventions worth pinning down because they affect agent reasoning:
   fresh `w:id`. Other revision wrappers (`w:moveTo`, `w:del`) stay atomic: an offset inside one is
   refused with `UnsupportedInlineBoundary`.
 - **`MergeParagraphs` lets the first anchor absorb the second.** Symmetric reason: the first anchor is to the left in reading order and is more likely to be the one a caller has cached.
+- **A tracked merge is Word's tracked join.** Under `RenderInline` the first paragraph's mark is
+  the editor's `w:pPr/w:rPr/w:del`, and the separator space, when one is added, is the editor's
+  `w:ins`. Accepting the deleted mark joins the first paragraph into the second, which keeps its own
+  mark and properties. An untracked merge keeps the first paragraph's properties, so the second
+  paragraph takes them, its mark formatting included, as the editor's `w:pPrChange`/`w:rPrChange`.
+  Accepting everything gives what an untracked merge gives, and rejecting everything gives back both
+  paragraphs. The second paragraph's section break stays with its mark. `Modified` reports both
+  anchors as the document now has them: the second paragraph can change kind (`p` → `h`).
+  The merge is refused, writing nothing, when it could not be reviewed on its own:
+  - `TrackedOperationUnsupported` when the first paragraph ends a section: accepting the deletion
+    would lose the section break that an untracked merge keeps.
+  - `UnresolvedStructuralRevision` when another revision already deleted or moved either
+    paragraph's mark (a deleted second mark would join a third paragraph on accept).
+  - `UnresolvedStructuralRevision` when the first paragraph has a pending `w:pPrChange` or its mark
+    a pending `w:rPrChange`, whoever made it. The merge copies the first paragraph's properties
+    once, so rejecting that change while accepting the merge would bring back what was rejected.
+  - `UnresolvedStructuralRevision` when the second paragraph or its mark has a pending property
+    change, unless it is the editor's own and the merge takes it back to its baseline, which
+    resolves it (Enter at the end of a heading, then Backspace). The merge would otherwise fold into
+    it, so one change would record both edits; another author's change would be discarded.
+
+  A first mark that is a pending insertion, the editor's own (Enter then Backspace) or another
+  author's, takes the deletion beside its insertion; every order and outcome of reviewing the two
+  gives what applying the two decisions in turn gives (issue #1313). See
+  `docs/ooxml_corner_cases.md`, "Merging paragraphs under tracking". In the editor, Backspace at the
+  start of a paragraph whose predecessor's mark is already a pending deletion steps over the struck
+  pilcrow and removes the live character before it, as Word does, instead of joining again.
+- **A split keeps a field whole.** An offset strictly between the begin and end marks of a field
+  whose begin and end are both in the paragraph is refused with `UnsupportedInlineBoundary`,
+  tracked or not, because the begin would end up in one paragraph and the end in the other.
+  Splitting at the field's edges (just before its begin, just after its end) is allowed and keeps
+  the field whole: a mark that shares its run, hyperlink or tracked insertion with text on the
+  other side of the offset is first cut free of it, and the `end` mark, which has no text and so
+  sits at the offset, stays with the field. An edge inside a container a split keeps whole (a
+  content control) is refused like the inside. A field that already runs across paragraphs (a table
+  of contents) is not the paragraph's to keep whole, so a split inside it goes ahead (issue #1313).
 
 **Tracked-change mode shifts the semantics for `ReplaceText` and block deletion (`DeleteBlock`, `DeleteRange`, and `DeleteSection`).** When `Settings.TrackedChanges = RenderInline`, supported deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. `ReplaceText` deletes each live run where it sits — inside hyperlinks, fields, inline controls and other authors' insertions (`w:ins > w:del`, so the deletion rejects on its own) — un-inserts the session author's own pending runs, keeps zero-width markers (bookmark/comment ranges, note and comment reference runs) in place, and inserts the replacement after the last superseded run, ahead of any trailing markers. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged. The mode is switchable mid-session — see "Switching tracked-changes mode mid-session" below.
 
@@ -907,7 +944,10 @@ run holds what Word would currently render — the bookmarked text, the target's
 under `\r` (`0` when the target is unnumbered, as Word shows), and/or the `above`/`below`
 position word — so non-recomputing renderers display a faithful snapshot while Word updates
 the field like any hand-authored cross-reference. The bookmark must already exist as one
-coherent same-story pair; otherwise the op fails with `MissingBookmarkTarget`.
+coherent same-story pair; otherwise the op fails with `MissingBookmarkTarget`. Under
+`RenderInline` the same field is a tracked insertion: complex-field runs (begin, instruction,
+separate, cached result, end) inside one `w:ins`, which is how Word records an inserted field and
+the only form a `w:ins` can hold, since `w:fldSimple` is not a run (issue #1313).
 
 `HyperlinkTarget.External(uri)` creates or reuses a hyperlink relationship on the XML part that
 owns the link. A header link is related from its `HeaderPart`, a footnote link from its
@@ -1573,8 +1613,8 @@ resolution replay) still strips it (DS430/DS434 vs DS418).
 
 | Under `RenderInline` | Operations |
 |---|---|
-| Record as native revisions | `ReplaceText` (and `ReplaceMatch`/`ReplaceInner`/`ReplaceTextAtSpan`), `DeleteBlock`, `DeleteRange`, `DeleteSection`, `InsertParagraph`, `SplitParagraph`, `MergeParagraphs`, `MoveBlock`, `InsertHorizontalRule`, `InsertFootnote`, `InsertEndnote`, the formatting ops (`*PrChange`), the table row/column ops, and `ReplaceCellContent` (issue #1311), which records the cell's old content as a deletion and the new as an insertion the way `SetHeaderText` does a story: the cell's last paragraph keeps its mark and takes the new last paragraph's runs and paragraph properties, so reject gives back exactly the old cell and accept the new content. As when typing over a cell in Word, what a deletion does not remove survives an accept: the kept mark and its run formatting, bookmark/comment/permission range markers, and the empty shell of an inline content control. The running-story and section ops record too (issue #1299): `InsertPageNumberField` puts the field's runs in one `w:ins`, as Word records an inserted field; `SetHeaderText`/`SetFooterText` record the new story content as an insertion and any existing content as a deletion (the story's final paragraph mark is kept, so reject gives back exactly the old story and accept exactly the new one); and `SetPageSetup`, `SetPageNumbering`, `ClearPageNumbering` and the first-page flag (`EnsureHeaderFooterVisible`/`SetHeaderFooterKindEnabled` with `First`, or writing a first-page story) record a `w:sectPrChange`. A section that already has a pending `w:sectPrChange` keeps it, so its stored before-image stays the original section; an edit that puts the section back the way it was resolves it. When that pending change is another author's and the edit actually changes the properties, the fold re-credits it to the latest editor (this edit's author and date, a fresh id) while the stored baseline stays the original; a fold into the session author's own pending change keeps its id and takes the edit's date |
-| Refuse with `TrackedOperationUnsupported` | `InsertTable`, `ApplyListFormatRange`, and every image mutation — no reversible native encoding exists, so nothing is written rather than something that cannot be taken back. Also every change to "Different odd and even pages" (`EnsureHeaderFooterVisible`/`SetHeaderFooterKindEnabled` with `Even`, or a `SetHeaderText`/`SetFooterText` even story while the setting is off): `w:evenAndOddHeaders` is a document setting in `settings.xml`, and OOXML has no revision element for settings. A tracked `SetHeaderText`/`SetFooterText` is refused the same way when the existing story does not end in a paragraph (for example a story ending in a block content control), when its last paragraph holds bookmark markers (the condition tracked `ReplaceText` refuses), or when the section has no story of that kind of its own but inherits one from an earlier section — giving it its own adds a header/footer reference, and no revision can record that, so a reject could never bring the inherited story back. A tracked `ReplaceCellContent` is refused when the cell holds a block beside its paragraphs (a nested table or a block-level content control: the untracked edit replaces only the direct paragraphs and keeps that block, which the tracked replacement would delete) or when its last paragraph holds bookmark markers. Each refusal writes nothing |
+| Record as native revisions | `ReplaceText` (and `ReplaceMatch`/`ReplaceInner`/`ReplaceTextAtSpan`), `DeleteBlock`, `DeleteRange`, `DeleteSection`, `InsertParagraph`, `SplitParagraph`, `MergeParagraphs` (a deleted first paragraph mark, issue #1313), `MoveBlock`, `InsertHorizontalRule`, `InsertFootnote`, `InsertEndnote`, `InsertCrossReference` (the REF field's complex-field runs in one `w:ins`, issue #1313), the formatting ops (`*PrChange`), the table row/column ops, and `ReplaceCellContent` (issue #1311), which records the cell's old content as a deletion and the new as an insertion the way `SetHeaderText` does a story: the cell's last paragraph keeps its mark and takes the new last paragraph's runs and paragraph properties, so reject gives back exactly the old cell and accept the new content. As when typing over a cell in Word, what a deletion does not remove survives an accept: the kept mark and its run formatting, bookmark/comment/permission range markers, and the empty shell of an inline content control. The running-story and section ops record too (issue #1299): `InsertPageNumberField` puts the field's runs in one `w:ins`, as Word records an inserted field; `SetHeaderText`/`SetFooterText` record the new story content as an insertion and any existing content as a deletion (the story's final paragraph mark is kept, so reject gives back exactly the old story and accept exactly the new one); and `SetPageSetup`, `SetPageNumbering`, `ClearPageNumbering` and the first-page flag (`EnsureHeaderFooterVisible`/`SetHeaderFooterKindEnabled` with `First`, or writing a first-page story) record a `w:sectPrChange`. A section that already has a pending `w:sectPrChange` keeps it, so its stored before-image stays the original section; an edit that puts the section back the way it was resolves it. When that pending change is another author's and the edit actually changes the properties, the fold re-credits it to the latest editor (this edit's author and date, a fresh id) while the stored baseline stays the original; a fold into the session author's own pending change keeps its id and takes the edit's date |
+| Refuse with `TrackedOperationUnsupported` | `InsertTable`, `ApplyListFormatRange`, a `MergeParagraphs` whose first paragraph ends a section, and every image mutation — no reversible native encoding exists, so nothing is written rather than something that cannot be taken back. Also every change to "Different odd and even pages" (`EnsureHeaderFooterVisible`/`SetHeaderFooterKindEnabled` with `Even`, or a `SetHeaderText`/`SetFooterText` even story while the setting is off): `w:evenAndOddHeaders` is a document setting in `settings.xml`, and OOXML has no revision element for settings. A tracked `SetHeaderText`/`SetFooterText` is refused the same way when the existing story does not end in a paragraph (for example a story ending in a block content control), when its last paragraph holds bookmark markers (the condition tracked `ReplaceText` refuses), or when the section has no story of that kind of its own but inherits one from an earlier section — giving it its own adds a header/footer reference, and no revision can record that, so a reject could never bring the inherited story back. A tracked `ReplaceCellContent` is refused when the cell holds a block beside its paragraphs (a nested table or a block-level content control: the untracked edit replaces only the direct paragraphs and keeps that block, which the tracked replacement would delete) or when its last paragraph holds bookmark markers. Each refusal writes nothing |
 | Apply untracked | Comments and annotations, which are not revisions, by design |
 
 Anything that writes package state under recording belongs in exactly one of those three rows.
