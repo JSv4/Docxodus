@@ -49,6 +49,32 @@ const html = await convertDocxToHtml(docxBytes, {
 | Text Input | `w:ffData` with `w:textInput` | `[TEXT INPUT]` | `unsupported-form` |
 | Dropdown | `w:ffData` with `w:ddList` | `[DROPDOWN]` | `unsupported-form` |
 | Ruby Annotation | `w:ruby` | `{base text}` | `unsupported-ruby` |
+| Inline drawing the converter cannot draw | `w:drawing/wp:inline` | `[SHAPE]`, `[SMARTART]`, `[CHART]`, `[UNSUPPORTED IMAGE]` or `[DRAWING]` | `unsupported-other` |
+
+### Inline drawings
+
+An inline drawing occupies its `wp:extent` whether or not the converter can draw it (issue #1270): the
+empty-paragraph pass counts an inline `w:drawing` as paragraph content, so a drawing that rendered to
+nothing used to leave its paragraph with no line box. When nothing in the drawing can be drawn — preset
+geometry other than `rect`, `roundRect`, `ellipse`, `line` and `straightConnector1`, custom geometry,
+SmartArt, a chart type that is not projected, a picture whose image is missing or linked — the converter
+emits:
+
+- with placeholders **on**, the placeholder above (`data-content-type="Other"`, `data-element-name` the
+  drawing's content element: `wsp`, `relIds`, `chart`, `pic`, …), sized to the extent with
+  `box-sizing: border-box` and marked `data-docx-shape="unrendered"`;
+- with placeholders **off**, a blank `<span data-docx-shape="unrendered" aria-hidden="true">` holding an
+  empty SVG of the extent.
+
+A shape or group that is only partly drawable (a group holding a picture or a triangle beside a
+rectangle, a grouped text box's text) draws what it can and marks its wrapper
+`data-docx-shape="partial"`; with placeholders on, the wrapper also carries `data-content-type="Other"`.
+A picture is still omitted entirely when the caller passes no image handler; an image handler that
+returns null declines that one picture, whose extent is kept as an unrendered box.
+
+The PDF export always converts with placeholders on and inventories every `data-content-type` element,
+so an undrawable drawing is reported as an `unsupported_content_placeholder` warning (and in the render
+report's `unsupportedContent`) and rejects the export under `unsupportedContent: 'strict'`.
 
 ## HTML Output
 

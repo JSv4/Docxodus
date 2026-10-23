@@ -10074,8 +10074,9 @@ namespace Docxodus
             return node;
         }
 
-        /// <summary><paramref name="element"/> and its descendants, leaving out hidden runs and
-        /// floating (<c>wp:anchor</c>) drawings together with their content.</summary>
+        /// <summary><paramref name="element"/> and its descendants, leaving out hidden runs, floating
+        /// (<c>wp:anchor</c>) drawings together with their content, and the branches of an
+        /// <c>mc:AlternateContent</c> the renderer does not select.</summary>
         private static IEnumerable<XElement> InFlowDescendantsAndSelf(XElement element)
         {
             if (element.Name == W.drawing && element.Elements(WP.anchor).Any())
@@ -10086,7 +10087,12 @@ namespace Docxodus
                 GetBoolProp(runProperties, W.vanish) && !GetBoolProp(runProperties, W.specVanish))
                 yield break;
             yield return element;
-            foreach (var child in element.Elements())
+            // Of an mc:AlternateContent, only the branch the renderer selects is content: a drawing
+            // in an unselected Choice renders nothing.
+            var children = element.Name == MC.AlternateContent
+                ? SelectedMarkupBranch(element)?.Elements() ?? Enumerable.Empty<XElement>()
+                : element.Elements();
+            foreach (var child in children)
                 foreach (var descendant in InFlowDescendantsAndSelf(child))
                     yield return descendant;
         }
@@ -11247,14 +11253,18 @@ namespace Docxodus
             // available Choice branches advertises only namespaces they understand. This also
             // gives older draft DrawingML shapes a portable VML representation instead of
             // silently dropping the entire logical object.
-            var selected = alternateContent.Elements(MC.Choice).FirstOrDefault(IsSupportedMarkupChoice)
-                ?? alternateContent.Element(MC.Fallback);
+            var selected = SelectedMarkupBranch(alternateContent);
 
             return selected == null
                 ? null
                 : selected.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false,
                     currentMarginLeft));
         }
+
+        /// <summary>The branch of an <c>mc:AlternateContent</c> this converter renders, if any.</summary>
+        private static XElement? SelectedMarkupBranch(XElement alternateContent) =>
+            alternateContent.Elements(MC.Choice).FirstOrDefault(IsSupportedMarkupChoice)
+                ?? alternateContent.Element(MC.Fallback);
 
         private static bool IsSupportedMarkupChoice(XElement choice)
         {
@@ -11287,7 +11297,7 @@ namespace Docxodus
                         return image;
                 }
                 return ProcessTextBox(wordDoc, element, settings)
-                    ?? ProcessDrawingShape(wordDoc, element, imageHandler != null);
+                    ?? ProcessDrawingShape(wordDoc, element, imageHandler != null, settings);
             }
             if (element.Name == W.pict || element.Name == W._object)
             {

@@ -22,14 +22,16 @@ namespace Docxodus
         /// <c>wps:wsp</c> shape, a <c>wpg:wgp</c> group or a <c>wpc:wpc</c> canvas — as SVG sized
         /// to its <c>wp:extent</c>. Rectangles, rounded rectangles, ellipses and lines are drawn
         /// with their fill and outline; a group maps its children through its child coordinate
-        /// space (<c>a:chOff</c>/<c>a:chExt</c>). Geometry this projection does not draw still
-        /// occupies its extent.
+        /// space (<c>a:chOff</c>/<c>a:chExt</c>).
         /// <para>
-        /// Any other inline drawing nothing else rendered also gets an empty box of its extent. The
+        /// Any inline drawing nothing could draw — other geometry, SmartArt, a chart type that is
+        /// not projected, a picture whose image is missing — keeps its extent as an
+        /// <see cref="UnrenderedDrawing">unrendered box</see> rather than vanishing. The
         /// empty-paragraph pass counts every inline <c>w:drawing</c> as paragraph content, so a
         /// drawing that rendered to nothing left its paragraph with no line box at all (issue
         /// #1270). The one exception is a picture when the caller passed no image handler: that
-        /// caller asked for pictures to be left out.
+        /// caller asked for pictures to be left out. (A handler that returns null for one picture
+        /// declines only that picture, whose space is kept.)
         /// </para>
         /// <para>
         /// Floating (<c>wp:anchor</c>) shapes are not drawn. They are not counted as paragraph
@@ -38,64 +40,130 @@ namespace Docxodus
         /// </para>
         /// </summary>
         private static XElement? ProcessDrawingShape(WordprocessingDocument wordDoc, XElement drawing,
-            bool rendersPictures)
+            bool rendersPictures, WmlToHtmlConverterSettings? settings)
         {
             var container = drawing.Element(WP.inline);
             if (container == null)
                 return null;
 
             var graphicData = container.Element(A.graphic)?.Element(A.graphicData);
-            var payload = graphicData?.Elements()
-                .FirstOrDefault(e => e.Name == WPS.wsp || e.Name == WpgGroup || e.Name == WpcCanvas);
-            if (payload == null && !rendersPictures && graphicData?.Element(Pic._pic) != null)
+            var content = graphicData?.Elements().FirstOrDefault();
+            if (content?.Name == Pic._pic && !rendersPictures)
                 return null;
 
             var extent = container.Element(WP.extent);
             var width = Math.Max(0L, (long?)extent?.Attribute(NoNamespace.cx) ?? 0L);
             var height = Math.Max(0L, (long?)extent?.Attribute(NoNamespace.cy) ?? 0L);
-            var docPr = container.Element(WP.docPr);
-            var altText = (string?)docPr?.Attribute(NoNamespace.descr) ?? (string?)docPr?.Attribute(NoNamespace.name) ?? "";
-
-            // The SVG has no viewBox: a zero extent (a horizontal or vertical line) would make one
-            // degenerate, which disables rendering. Drawing coordinates are EMUs, scaled to the
-            // SVG's CSS pixels (9525 EMUs each) by the root group; overflow keeps outlines whole.
-            // Explicit dimensions, at least a pixel each, are what the PDF export requires of an
-            // inline SVG before it will lay one out.
-            var svg = new XElement(Svg + "svg",
-                new XAttribute("width", Format(Math.Max(width / 9525.0, 1))),
-                new XAttribute("height", Format(Math.Max(height / 9525.0, 1))),
-                new XAttribute("overflow", "visible"),
-                new XAttribute("role", "img"),
-                new XAttribute("aria-label", altText),
-                new XAttribute("style", "display: block;"));
-            if (payload == null)
-                svg.Add(new XAttribute("data-docx-shape", "unrendered"));
+            var context = new ShapeContext(wordDoc);
+            var frame = new ShapeBox(0, 0, width, height);
+            // Coordinates are EMUs, scaled to the SVG's CSS pixels (9525 EMUs each) by this group.
+            var drawingSpace = new XElement(Svg + "g",
+                new XAttribute("transform", "scale(" + (1.0 / 9525).ToString("G9", CultureInfo.InvariantCulture) + ")"));
+            if (content?.Name == WPS.wsp)
+                AddShapeElement(drawingSpace, content, frame, null, context);
+            else if (content?.Name == WpgGroup)
+                AddGroup(drawingSpace, content, content.Element(WpgGroupProperties), frame, null, context);
+            else if (content?.Name == WpcCanvas)
+                AddGroupChildren(drawingSpace, content, ShapeMap.Identity, null, context);
             else
-            {
-                var context = new ShapeContext(wordDoc);
-                var frame = new ShapeBox(0, 0, width, height);
-                var drawingSpace = new XElement(Svg + "g",
-                    new XAttribute("transform", "scale(" + (1.0 / 9525).ToString("G9", CultureInfo.InvariantCulture) + ")"));
-                if (payload.Name == WPS.wsp)
-                    AddShapeElement(drawingSpace, payload, frame, context);
-                else if (payload.Name == WpgGroup)
-                    drawingSpace.Add(GroupElement(payload, payload.Element(WpgGroupProperties), frame, context));
-                else
-                    AddGroupChildren(drawingSpace, payload, context);
-                svg.Add(drawingSpace);
-            }
+                context.Undrawn++;
+            if (context.Drawn == 0 && context.Undrawn > 0)
+                return UnrenderedDrawing(settings, drawing, content, width, height);
+
+            var docPr = container.Element(WP.docPr);
+            var altText = (string?)docPr?.Attribute(NoNamespace.descr) ?? (string?)docPr?.Attribute(NoNamespace.name);
+            var svg = DrawingSvg(width, height, drawingSpace);
+            if (string.IsNullOrEmpty(altText))
+                svg.Add(new XAttribute("aria-hidden", "true"));
+            else
+                svg.Add(new XAttribute("role", "img"), new XAttribute("aria-label", altText));
 
             // An inline-block whose only content is a block-level SVG has no line box, so its
             // baseline is its bottom edge: the drawing sits on the text baseline, as Word places
             // an inline object.
             var wrapper = new XElement(Xhtml.span, svg);
+            if (context.Undrawn > 0)
+            {
+                // Part of the drawing could not be drawn. Say so where a consumer can see it: the
+                // PDF export inventories data-content-type as unsupported content.
+                wrapper.Add(new XAttribute("data-docx-shape", "partial"));
+                if (settings is { RenderUnsupportedContentPlaceholders: true, IncludeUnsupportedContentMetadata: true })
+                    wrapper.Add(new XAttribute("data-content-type", nameof(UnsupportedContentType.Other)),
+                        new XAttribute("data-element-name", content!.Name.LocalName),
+                        new XAttribute("title", "Part of this drawing is not rendered in HTML output"));
+            }
             var style = new Dictionary<string, string> { { "display", "inline-block" } };
             AddEmuDimensions(style, width, height);
             wrapper.AddAnnotation(style);
             return wrapper;
         }
 
+        /// <summary>
+        /// The SVG for a drawing's extent. It has no viewBox: a zero extent (a horizontal or vertical
+        /// line) would make one degenerate, which disables rendering. Its explicit dimensions, at
+        /// least a pixel each, are what the PDF export requires of an inline SVG before it will lay
+        /// one out; overflow keeps outlines whole.
+        /// </summary>
+        private static XElement DrawingSvg(long width, long height, object? content) =>
+            new XElement(Svg + "svg",
+                new XAttribute("width", Format(Math.Max(width / 9525.0, 1))),
+                new XAttribute("height", Format(Math.Max(height / 9525.0, 1))),
+                new XAttribute("overflow", "visible"),
+                new XAttribute("style", "display: block;"),
+                content);
+
+        /// <summary>
+        /// An inline drawing nothing could draw, as a box of its extent. With unsupported-content
+        /// placeholders on (as the PDF export always converts), it is the standard placeholder at
+        /// that size, so the export reports it, and rejects it under its strict policy. Otherwise
+        /// it is a blank box marked <c>data-docx-shape="unrendered"</c> and hidden from assistive
+        /// technology, which has nothing to announce.
+        /// </summary>
+        private static XElement UnrenderedDrawing(WmlToHtmlConverterSettings? settings, XElement drawing,
+            XElement? content, long width, long height)
+        {
+            var style = new Dictionary<string, string> { { "display", "inline-block" } };
+            AddEmuDimensions(style, width, height);
+            var uri = (string?)content?.Parent?.Attribute("uri") ?? "";
+            var label = content?.Name == Pic._pic ? "[UNSUPPORTED IMAGE]"
+                : content?.Name == C.chart ? "[CHART]"
+                : uri.EndsWith("/diagram", StringComparison.Ordinal) ? "[SMARTART]"
+                : content?.Name == WPS.wsp || content?.Name == WpgGroup || content?.Name == WpcCanvas ? "[SHAPE]"
+                : "[DRAWING]";
+            var placeholder = settings == null ? null
+                : CreateUnsupportedContentPlaceholder(settings, content ?? drawing, UnsupportedContentType.Other, label);
+            if (placeholder != null)
+            {
+                placeholder.Add(new XAttribute("data-docx-shape", "unrendered"));
+                style["box-sizing"] = "border-box";
+                style["overflow"] = "hidden";
+                placeholder.AddAnnotation(style);
+                return placeholder;
+            }
+
+            var box = new XElement(Xhtml.span,
+                DrawingSvg(width, height, null),
+                new XAttribute("data-docx-shape", "unrendered"),
+                new XAttribute("aria-hidden", "true"));
+            box.AddAnnotation(style);
+            return box;
+        }
+
         private readonly record struct ShapeBox(double X, double Y, double Width, double Height);
+
+        /// <summary>
+        /// A group's child coordinate space mapped onto the drawing's: scale, then translate. It is
+        /// applied to geometry rather than emitted as an SVG transform, so a group whose child
+        /// space is not the size of its frame does not scale its children's outlines (Word and
+        /// LibreOffice keep a grouped 1pt line at 1pt).
+        /// </summary>
+        private readonly record struct ShapeMap(double ScaleX, double ScaleY, double OffsetX, double OffsetY)
+        {
+            public static ShapeMap Identity => new(1, 1, 0, 0);
+
+            public ShapeBox Apply(ShapeBox box) =>
+                new(box.X * ScaleX + OffsetX, box.Y * ScaleY + OffsetY, box.Width * ScaleX, box.Height * ScaleY);
+        }
 
         /// <summary>The document's theme, read once per drawing and only if a color names it.</summary>
         private sealed class ShapeContext
@@ -107,6 +175,10 @@ namespace Docxodus
 
             public ThemeColorScheme Theme => _theme ??= LoadThemeColorScheme(_wordDoc);
 
+            /// <summary>Shapes drawn, and drawing parts (geometry, pictures, text) left undrawn.</summary>
+            public int Drawn;
+            public int Undrawn;
+
             /// <summary>Width of the theme line style an <c>a:lnRef</c> index names, in EMUs.</summary>
             public long? ThemeLineWidth(int index) =>
                 (long?)_wordDoc.MainDocumentPart?.ThemePart?.GetXDocument().Root?
@@ -115,12 +187,12 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// A group as an SVG group whose transform maps its child coordinate space
-        /// (<c>a:chOff</c>/<c>a:chExt</c>) onto its frame in the parent's coordinates, so each
-        /// child's own <c>a:xfrm</c> lands where the group puts it.
+        /// Adds a group whose frame in drawing coordinates is <paramref name="frame"/>: its children
+        /// are mapped from its child coordinate space (<c>a:chOff</c>/<c>a:chExt</c>) onto that
+        /// frame, and the group's own rotation and flips wrap them.
         /// </summary>
-        private static XElement GroupElement(XElement group, XElement? groupProperties, ShapeBox frame,
-            ShapeContext context)
+        private static void AddGroup(XElement target, XElement group, XElement? groupProperties, ShapeBox frame,
+            XElement? inheritedFill, ShapeContext context)
         {
             var transform = groupProperties?.Element(A.xfrm);
             var childOffset = transform?.Element(A.chOff);
@@ -132,34 +204,48 @@ namespace Docxodus
             // An axis with no child extent (a group of only horizontal lines, say) is not scaled.
             var scaleX = childWidth > 0 ? frame.Width / childWidth : 1;
             var scaleY = childHeight > 0 ? frame.Height / childHeight : 1;
+            var map = new ShapeMap(scaleX, scaleY, frame.X - childX * scaleX, frame.Y - childY * scaleY);
 
-            var children = new XElement(Svg + "g", new XAttribute("transform",
-                $"matrix({Format(scaleX)} 0 0 {Format(scaleY)} {Format(frame.X - childX * scaleX)} {Format(frame.Y - childY * scaleY)})"));
-            AddGroupChildren(children, group, context);
+            // A child with a:grpFill takes the nearest group fill that is not itself a:grpFill.
+            var groupFill = groupProperties?.Elements().FirstOrDefault(IsFillChoice);
+            if (groupFill == null || groupFill.Name == A.grpFill)
+                groupFill = inheritedFill;
 
             var orientation = ShapeOrientation(transform, frame);
-            return orientation == null
-                ? children
-                : new XElement(Svg + "g", new XAttribute("transform", orientation), children);
+            var children = orientation == null ? target : new XElement(Svg + "g", new XAttribute("transform", orientation));
+            AddGroupChildren(children, group, map, groupFill, context);
+            if (children != target)
+                target.Add(children);
         }
 
         /// <summary>Adds the shapes and nested groups of a group or canvas, in z-order.</summary>
-        private static void AddGroupChildren(XElement target, XElement group, ShapeContext context)
+        private static void AddGroupChildren(XElement target, XElement group, ShapeMap map, XElement? groupFill,
+            ShapeContext context)
         {
             foreach (var child in group.Elements())
             {
                 if (child.Name == WPS.wsp)
                 {
                     var frame = ChildFrame(child.Element(WPS.spPr)?.Element(A.xfrm));
-                    if (frame != null)
-                        AddShapeElement(target, child, frame.Value, context);
+                    if (frame == null)
+                        context.Undrawn++;
+                    else
+                        AddShapeElement(target, child, map.Apply(frame.Value), groupFill, context);
                 }
                 else if (child.Name == WpgNestedGroup || child.Name == WpgGroup)
                 {
                     var properties = child.Element(WpgGroupProperties);
                     var frame = ChildFrame(properties?.Element(A.xfrm));
-                    if (frame != null)
-                        target.Add(GroupElement(child, properties, frame.Value, context));
+                    if (frame == null)
+                        context.Undrawn++;
+                    else
+                        AddGroup(target, child, properties, map.Apply(frame.Value), groupFill, context);
+                }
+                else if (child.Name == Pic._pic || child.Name == WPG.wpg + "graphicFrame" ||
+                         child.Name == WPC.wpc + "graphicFrame" || child.Name == W14.w14 + "contentPart")
+                {
+                    // Pictures, charts and ink inside a group are not drawn.
+                    context.Undrawn++;
                 }
             }
         }
@@ -178,10 +264,11 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Draws one shape's preset geometry in <paramref name="frame"/>. Other geometry draws
-        /// nothing: the drawing's extent is still reserved by the enclosing SVG.
+        /// Draws one shape's preset geometry in <paramref name="frame"/>, in drawing coordinates.
+        /// Other geometry, and the text of a text box inside a group, count as undrawn.
         /// </summary>
-        private static void AddShapeElement(XElement target, XElement shape, ShapeBox frame, ShapeContext context)
+        private static void AddShapeElement(XElement target, XElement shape, ShapeBox frame, XElement? groupFill,
+            ShapeContext context)
         {
             var properties = shape.Element(WPS.spPr);
             var shapeStyle = shape.Element(WPS.style);
@@ -202,16 +289,28 @@ namespace Docxodus
                     new XAttribute("y2", Format(frame.Y + frame.Height))),
                 _ => null,
             };
+            if (shape.Descendants(W.txbxContent).Any(text => text.Descendants(W.t).Any()))
+                context.Undrawn++;
             if (element == null)
+            {
+                context.Undrawn++;
                 return;
+            }
 
+            context.Drawn++;
             var isLine = element.Name.LocalName == "line";
-            element.Add(new XAttribute("fill",
-                isLine ? "none" : ShapeFill(properties, shapeStyle, context) ?? "none"));
-            var (stroke, strokeWidth) = ShapeOutline(properties, shapeStyle, context);
-            element.Add(new XAttribute("stroke", stroke ?? "none"));
+            var fill = isLine ? null : ShapeFill(properties, shapeStyle, groupFill, context);
+            element.Add(new XAttribute("fill", fill?.Color ?? "none"));
+            if (fill?.Opacity is { } fillOpacity)
+                element.Add(new XAttribute("fill-opacity", Format(fillOpacity)));
+            var (stroke, strokeWidth) = ShapeOutline(properties, shapeStyle, groupFill, context);
+            element.Add(new XAttribute("stroke", stroke?.Color ?? "none"));
             if (stroke != null)
+            {
                 element.Add(new XAttribute("stroke-width", Format(strokeWidth)));
+                if (stroke.Value.Opacity is { } strokeOpacity)
+                    element.Add(new XAttribute("stroke-opacity", Format(strokeOpacity)));
+            }
             var orientation = ShapeOrientation(properties?.Element(A.xfrm), frame);
             if (orientation != null)
                 element.Add(new XAttribute("transform", orientation));
@@ -262,35 +361,39 @@ namespace Docxodus
         private static bool IsTrueAttribute(XElement? element, string name) =>
             (string?)element?.Attribute(name) is "1" or "true";
 
-        /// <summary>A shape's fill color, or null when it is unfilled.</summary>
-        private static string? ShapeFill(XElement? properties, XElement? shapeStyle, ShapeContext context)
+        /// <summary>A paint: a CSS color and, when the DrawingML color is translucent, its opacity.</summary>
+        private readonly record struct ShapePaint(string Color, double? Opacity);
+
+        /// <summary>A shape's fill, or null when it is unfilled.</summary>
+        private static ShapePaint? ShapeFill(XElement? properties, XElement? shapeStyle, XElement? groupFill,
+            ShapeContext context)
         {
             var fill = properties?.Elements().FirstOrDefault(IsFillChoice);
             if (fill != null)
-                return FillColor(fill, context);
+                return FillPaint(fill, groupFill, context);
 
             // No explicit fill: the shape style's fill reference applies; index 0 means no fill.
             var reference = shapeStyle?.Element(A.fillRef);
-            return ReadIndex(reference) > 0 ? ResolveDrawingColor(reference, context.Theme) : null;
+            return ReadIndex(reference) > 0 ? Paint(reference, context) : null;
         }
 
-        /// <summary>A shape's outline color and width in EMUs; a null color means no outline.</summary>
-        private static (string? Color, double Width) ShapeOutline(XElement? properties, XElement? shapeStyle,
-            ShapeContext context)
+        /// <summary>A shape's outline and its width in EMUs; a null paint means no outline.</summary>
+        private static (ShapePaint? Paint, double Width) ShapeOutline(XElement? properties, XElement? shapeStyle,
+            XElement? groupFill, ShapeContext context)
         {
             var line = properties?.Element(A.ln);
             var reference = shapeStyle?.Element(A.lnRef);
             var referenceIndex = ReadIndex(reference);
             var fill = line?.Elements().FirstOrDefault(IsFillChoice);
-            var color = fill != null
-                ? FillColor(fill, context)
-                : referenceIndex > 0 ? ResolveDrawingColor(reference, context.Theme) : null;
+            var paint = fill != null
+                ? FillPaint(fill, groupFill, context)
+                : referenceIndex > 0 ? Paint(reference, context) : null;
             // An outline with no width of its own takes the referenced theme line style's width;
             // otherwise it is DrawingML's thinnest line, drawn here as one CSS pixel (9525 EMUs).
             var width = (long?)line?.Attribute(NoNamespace.w)
                 ?? (referenceIndex > 0 ? context.ThemeLineWidth(referenceIndex) : null)
                 ?? 9525L;
-            return (color, Math.Max(width, 9525L));
+            return (paint, Math.Max(width, 9525L));
         }
 
         private static bool IsFillChoice(XElement element) =>
@@ -298,18 +401,29 @@ namespace Docxodus
             element.Name == A.pattFill || element.Name == A.blipFill || element.Name == A.grpFill;
 
         /// <summary>
-        /// The color a fill choice paints with. A gradient approximates to its first stop and a
-        /// pattern to its foreground; picture and group fills are not drawn.
+        /// The paint of a fill choice. A gradient approximates to its first stop, a pattern to its
+        /// foreground and a group fill to the enclosing group's; a picture fill is not drawn.
         /// </summary>
-        private static string? FillColor(XElement fill, ShapeContext context)
+        private static ShapePaint? FillPaint(XElement fill, XElement? groupFill, ShapeContext context)
         {
+            if (fill.Name == A.grpFill)
+                return groupFill == null || groupFill.Name == A.grpFill ? null : FillPaint(groupFill, null, context);
             if (fill.Name == A.solidFill)
-                return ResolveDrawingColor(fill, context.Theme);
+                return Paint(fill, context);
             if (fill.Name == A.gradFill)
-                return ResolveDrawingColor(fill.Element(A.gsLst)?.Elements(A.gs).FirstOrDefault(), context.Theme);
+                return Paint(fill.Element(A.gsLst)?.Elements(A.gs).FirstOrDefault(), context);
             if (fill.Name == A.pattFill)
-                return ResolveDrawingColor(fill.Element(A.fgClr), context.Theme);
+                return Paint(fill.Element(A.fgClr), context);
             return null;
+        }
+
+        private static ShapePaint? Paint(XElement? colorParent, ShapeContext context)
+        {
+            var color = ResolveDrawingColor(colorParent, context.Theme);
+            if (color == null)
+                return null;
+            var alpha = ReadDoubleAttribute(colorParent!.Elements().First().Element(A.alpha), "val") / 100000;
+            return new ShapePaint(color, alpha is < 1 ? Math.Max(alpha.Value, 0) : null);
         }
 
         private static int ReadIndex(XElement? reference) =>
@@ -323,14 +437,24 @@ namespace Docxodus
         /// </summary>
         private static string? ResolveDrawingColor(XElement? colorParent, ThemeColorScheme? theme)
         {
-            var color = colorParent?.Elements()
-                .FirstOrDefault(e => e.Name == A.srgbClr || e.Name == A.schemeClr || e.Name == A.sysClr);
+            var color = colorParent?.Elements().FirstOrDefault(e => e.Name == A.srgbClr || e.Name == A.schemeClr ||
+                e.Name == A.sysClr || e.Name == A.scrgbClr || e.Name == A.hslClr);
             if (color == null)
                 return null;
 
             string? rgb = null;
             if (color.Name == A.srgbClr)
                 rgb = (string?)color.Attribute(NoNamespace.val);
+            else if (color.Name == A.scrgbClr)
+            {
+                // Linear RGB in thousandths of a percent.
+                string Channel(string name) => ((int)Math.Round(FromLinear(
+                    (ReadDoubleAttribute(color, name) ?? 0) / 100000))).ToString("X2", CultureInfo.InvariantCulture);
+                rgb = Channel("r") + Channel("g") + Channel("b");
+            }
+            else if (color.Name == A.hslClr)
+                rgb = HslToRgb((ReadDoubleAttribute(color, "hue") ?? 0) / 60000,
+                    (ReadDoubleAttribute(color, "sat") ?? 0) / 100000, (ReadDoubleAttribute(color, "lum") ?? 0) / 100000);
             else if (color.Name == A.sysClr)
                 rgb = (string?)color.Attribute("lastClr")
                     ?? ((string?)color.Attribute(NoNamespace.val) is { } system ? MapSystemColor(system) : null);
@@ -367,6 +491,27 @@ namespace Docxodus
             var lumOff = Modifier(A.lumOff) ?? 0;
             return string.Concat(channels.Select(channel =>
                 ((int)Math.Round(Math.Clamp(channel * lumMod + 255 * lumOff, 0, 255))).ToString("X2", CultureInfo.InvariantCulture)));
+        }
+
+        private static string HslToRgb(double hue, double saturation, double luminance)
+        {
+            saturation = Math.Clamp(saturation, 0, 1);
+            luminance = Math.Clamp(luminance, 0, 1);
+            var chroma = (1 - Math.Abs(2 * luminance - 1)) * saturation;
+            var sector = (hue % 360 + 360) % 360 / 60;
+            var second = chroma * (1 - Math.Abs(sector % 2 - 1));
+            var (r, g, b) = (int)sector switch
+            {
+                0 => (chroma, second, 0.0),
+                1 => (second, chroma, 0.0),
+                2 => (0.0, chroma, second),
+                3 => (0.0, second, chroma),
+                4 => (second, 0.0, chroma),
+                _ => (chroma, 0.0, second),
+            };
+            var lightness = luminance - chroma / 2;
+            return string.Concat(new[] { r, g, b }.Select(channel =>
+                ((int)Math.Round((channel + lightness) * 255)).ToString("X2", CultureInfo.InvariantCulture)));
         }
 
         private static double ToLinear(double channel)

@@ -714,7 +714,7 @@ public class HtmlConversionOpsTests
         var svg = Assert.Single(XElement.Parse(html).Descendants(),
             element => element.Name.LocalName == "svg");
         Assert.Null(svg.Attribute("data-chart-type"));
-        Assert.Equal("unrendered", (string?)svg.Attribute("data-docx-shape"));
+        Assert.Equal("unrendered", (string?)svg.Parent!.Attribute("data-docx-shape"));
         Assert.Empty(svg.Elements());
     }
 

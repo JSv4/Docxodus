@@ -79,13 +79,15 @@ public class HtmlDrawingShapeTests
         return stream.ToArray();
     }
 
-    private static XElement MiddleParagraph(byte[] docx, PaginationMode mode = PaginationMode.None)
+    private static XElement MiddleParagraph(byte[] docx, PaginationMode mode = PaginationMode.None,
+        bool placeholders = false)
     {
         var html = HtmlConversionOps.ConvertToHtml(docx, new HtmlConversionOptions
         {
             FabricateCssClasses = false,
             PaginationMode = (int)mode,
             RenderTrackedChanges = true,
+            RenderUnsupportedContentPlaceholders = placeholders,
         });
         return XElement.Parse(html).Descendants().Where(e => e.Name.LocalName == "p")
             .Single(p => !p.Value.Contains("Optical panel") && !p.Value.Contains("End of inspection"));
@@ -120,17 +122,19 @@ public class HtmlDrawingShapeTests
     [Fact]
     public void GroupChildren_AreMappedThroughTheChildCoordinateSpace()
     {
-        // A child space half the group's size, offset by 1000: the child's frame doubles on render.
+        // A child space half the group's size, offset by 1000: the child's frame doubles on render,
+        // and its 1pt outline stays 1pt, as Word and LibreOffice draw it.
         var child = "<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x=\"1000\" y=\"1000\"/><a:ext cx=\"457200\" cy=\"457200\"/></a:xfrm>" +
-                    $"<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>{Teal}</wps:spPr><wps:bodyPr/></wps:wsp>";
+                    $"<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>{Teal}" +
+                    "<a:ln w=\"12700\"><a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill></a:ln></wps:spPr><wps:bodyPr/></wps:wsp>";
         var svg = OnlySvg(MiddleParagraph(Docx(InlineDrawing(GroupUri, Group(child, "1000", 914400, 457200)))));
 
-        // The group maps child (1000, 1000)–(915400, 458400) onto its frame (0, 0)–(1828800, 914400).
-        var group = Assert.Single(Drawn(svg, "g"), g => g.Elements().Any(e => e.Name.LocalName == "rect"));
-        Assert.Equal("matrix(2 0 0 2 -2000 -2000)", (string?)group.Attribute("transform"));
-        var rect = Assert.Single(Drawn(group, "rect"));
-        Assert.Equal("1000", (string?)rect.Attribute("x"));
-        Assert.Equal("457200", (string?)rect.Attribute("width"));
+        // The group maps child (1000, 1000)–(458200, 458200) onto (0, 0)–(914400, 914400).
+        var rect = Assert.Single(Drawn(svg, "rect"));
+        Assert.Equal(("0", "0"), ((string?)rect.Attribute("x"), (string?)rect.Attribute("y")));
+        Assert.Equal(("914400", "914400"), ((string?)rect.Attribute("width"), (string?)rect.Attribute("height")));
+        Assert.Equal("12700", (string?)rect.Attribute("stroke-width"));
+        Assert.All(Drawn(svg, "g"), g => Assert.StartsWith("scale(", (string?)g.Attribute("transform")));
     }
 
     [Fact]
@@ -220,20 +224,84 @@ public class HtmlDrawingShapeTests
         Assert.Equal("12700", (string?)rect.Attribute("stroke-width"));
     }
 
-    [Fact]
-    public void UndrawnGeometry_StillReservesItsExtent()
+    /// <summary>The box an undrawable drawing leaves: a blank SVG of its extent, marked and hidden.</summary>
+    private static void AssertUnrenderedBox(XElement paragraph)
     {
-        var svg = OnlySvg(MiddleParagraph(Docx(InlineDrawing(ShapeUri, Shape("cloudCallout")))));
-        Assert.Contains("width: 144pt", (string?)svg.Parent!.Attribute("style"));
-        Assert.All(svg.Descendants(), e => Assert.Equal("g", e.Name.LocalName));
+        var svg = OnlySvg(paragraph);
+        Assert.Empty(svg.Elements());
+        var box = svg.Parent!;
+        Assert.Equal("unrendered", (string?)box.Attribute("data-docx-shape"));
+        Assert.Equal("true", (string?)box.Attribute("aria-hidden"));
+        Assert.Contains("width: 144pt", (string?)box.Attribute("style"));
+        Assert.Contains("height: 72pt", (string?)box.Attribute("style"));
     }
 
     [Fact]
-    public void InlineDrawingWithUnrecognizedContent_ReservesAnEmptyBoxOfItsExtent()
+    public void UndrawnGeometry_ReservesItsExtentAsAnUnrenderedBox() =>
+        AssertUnrenderedBox(MiddleParagraph(Docx(InlineDrawing(ShapeUri, Shape("triangle")))));
+
+    [Fact]
+    public void InlineDrawingWithUnrecognizedContent_ReservesItsExtentAsAnUnrenderedBox() =>
+        AssertUnrenderedBox(MiddleParagraph(Docx(InlineDrawing("urn:example:unknown", "<unknown xmlns=\"urn:example:unknown\"/>"))));
+
+    [Theory]
+    [InlineData("triangle", "[SHAPE]")]
+    [InlineData("missing-picture", "[UNSUPPORTED IMAGE]")]
+    public void WithPlaceholdersOn_AnUndrawableDrawingIsTheStandardPlaceholderAtItsExtent(string kind, string label)
     {
-        var svg = OnlySvg(MiddleParagraph(Docx(InlineDrawing("urn:example:unknown", "<unknown xmlns=\"urn:example:unknown\"/>"))));
-        Assert.Equal("unrendered", (string?)svg.Attribute("data-docx-shape"));
-        Assert.Contains("height: 72pt", (string?)svg.Parent!.Attribute("style"));
+        var drawing = kind == "triangle" ? InlineDrawing(ShapeUri, Shape("triangle")) : MissingPicture;
+        var placeholder = Assert.Single(MiddleParagraph(Docx(drawing), placeholders: true).Descendants(),
+            e => (string?)e.Attribute("data-docx-shape") == "unrendered");
+
+        // data-content-type is what the PDF export inventories as unsupported content.
+        Assert.Equal("Other", (string?)placeholder.Attribute("data-content-type"));
+        Assert.Contains("unsupported-placeholder", (string?)placeholder.Attribute("class"));
+        Assert.Equal(label, placeholder.Value);
+        Assert.Contains("width: 144pt", (string?)placeholder.Attribute("style"));
+        Assert.Contains("box-sizing: border-box", (string?)placeholder.Attribute("style"));
+    }
+
+    [Fact]
+    public void GroupWithAnUndrawableChild_DrawsTheRestAndIsMarkedPartial()
+    {
+        var group = Group(Shape() + Shape("triangle"));
+        var plain = OnlySvg(MiddleParagraph(Docx(InlineDrawing(GroupUri, group)))).Parent!;
+        var flagged = OnlySvg(MiddleParagraph(Docx(InlineDrawing(GroupUri, group)), placeholders: true)).Parent!;
+
+        Assert.Single(Drawn(plain, "rect"));
+        Assert.Equal("partial", (string?)plain.Attribute("data-docx-shape"));
+        Assert.Null(plain.Attribute("data-content-type"));
+        Assert.Equal("Other", (string?)flagged.Attribute("data-content-type"));
+    }
+
+    [Fact]
+    public void TranslucentAndGroupFills_AreDrawn()
+    {
+        var translucent = "<a:solidFill><a:srgbClr val=\"19647E\"><a:alpha val=\"40000\"/></a:srgbClr></a:solidFill>";
+        var group = Group(Shape(fill: translucent) + Shape(fill: "<a:grpFill/>"))
+            .Replace("</a:xfrm></wpg:grpSpPr>", "</a:xfrm><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill></wpg:grpSpPr>");
+        var rects = Drawn(OnlySvg(MiddleParagraph(Docx(InlineDrawing(GroupUri, group)))), "rect");
+
+        Assert.Equal(("#19647E", "0.4"), ((string?)rects[0].Attribute("fill"), (string?)rects[0].Attribute("fill-opacity")));
+        Assert.Equal("#FF0000", (string?)rects[1].Attribute("fill"));
+    }
+
+    [Theory]
+    [InlineData("<a:scrgbClr r=\"100000\" g=\"21586\" b=\"0\"/>", "#FF8000")]
+    [InlineData("<a:hslClr hue=\"1800000\" sat=\"100000\" lum=\"50000\"/>", "#FF8000")]
+    public void LinearRgbAndHslColors_Resolve(string color, string expected)
+    {
+        var rect = Assert.Single(Drawn(OnlySvg(MiddleParagraph(Docx(InlineDrawing(ShapeUri,
+            Shape(fill: $"<a:solidFill>{color}</a:solidFill>"))))), "rect"));
+        Assert.Equal(expected, (string?)rect.Attribute("fill"));
+    }
+
+    [Fact]
+    public void DrawingWithNoDescriptionOrName_IsHiddenFromAssistiveTechnology()
+    {
+        var svg = OnlySvg(MiddleParagraph(Docx(InlineDrawing(ShapeUri, Shape()).Replace(" name=\"Teal inspection panel\"", ""))));
+        Assert.Equal("true", (string?)svg.Attribute("aria-hidden"));
+        Assert.Null(svg.Attribute("role"));
     }
 
     /// <summary>An inline picture whose image relationship does not exist.</summary>
@@ -242,11 +310,23 @@ public class HtmlDrawingShapeTests
         "<pic:blipFill><a:blip r:embed=\"rIdMissing\"/></pic:blipFill><pic:spPr/></pic:pic>");
 
     [Fact]
-    public void PictureWhoseImageIsMissing_ReservesAnEmptyBoxOfItsExtent()
+    public void PictureWhoseImageIsMissing_ReservesItsExtentAsAnUnrenderedBox() =>
+        AssertUnrenderedBox(MiddleParagraph(Docx(MissingPicture)));
+
+    [Fact]
+    public void DrawingInAnUnselectedChoice_IsNotParagraphContent()
     {
-        var svg = OnlySvg(MiddleParagraph(Docx(MissingPicture)));
-        Assert.Equal("unrendered", (string?)svg.Attribute("data-docx-shape"));
-        Assert.Contains("width: 144pt", (string?)svg.Parent!.Attribute("style"));
+        // The Choice needs a namespace the converter does not render, so the (empty) VML Fallback
+        // is selected; the Choice's drawing must not count as content, or the paragraph has no line.
+        var alternate = "<w:r><mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" " +
+                        "xmlns:x=\"urn:example:unsupported\"><mc:Choice Requires=\"x\">" +
+                        InlineDrawing(ShapeUri, Shape()).Replace("<w:r>", "").Replace("</w:r>", "") +
+                        "</mc:Choice><mc:Fallback/></mc:AlternateContent></w:r>";
+        var paragraph = MiddleParagraph(Docx(alternate));
+
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Name.LocalName == "svg");
+        Assert.NotEmpty(paragraph.Value);
+        Assert.True(string.IsNullOrWhiteSpace(paragraph.Value));
     }
 
     [Fact]
