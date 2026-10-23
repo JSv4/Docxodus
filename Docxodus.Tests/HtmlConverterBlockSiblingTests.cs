@@ -63,10 +63,10 @@ public class HtmlConverterBlockSiblingTests
     {
         var floating = Table("Floating");
         floating.GetFirstChild<Wp.TableProperties>()!.PrependChild(
-            new Wp.TablePositionProperties { TopFromText = 150, VerticalAnchor = Wp.VerticalAnchorValues.Text });
+            new Wp.TablePositionProperties { TopFromText = 200, VerticalAnchor = Wp.VerticalAnchorValues.Text });
         var html = Convert(new Wp.Paragraph(new Wp.Run(new Wp.Text("unspaced"))), floating);
 
-        Assert.Equal("7.5pt", TopMargin(html, "Floating"));
+        Assert.Equal("10pt", TopMargin(html, "Floating"));
     }
 
     private static Wp.Paragraph SeparatorParagraph(string text) => new(

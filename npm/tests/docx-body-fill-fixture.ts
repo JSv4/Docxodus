@@ -19,7 +19,9 @@ export interface BodyFillOptions {
   lineRule?: 'exact' | 'atLeast';
   /**
    * Put a one-row, one-cell table after the first paragraph. Its `w:tblpPr/@w:topFromText` of
-   * 7.5pt becomes a top margin of the table's own, which collapses through its wrapper `div`.
+   * 7.5pt becomes a top margin of the table's own, which collapses through its wrapper `div`. This
+   * relies on the converter laying a floating table out in flow with that margin; if floating tables
+   * are ever positioned out of flow, give the pagination guard another source of a table margin.
    */
   tableAfterFirstParagraph?: boolean;
   /** Space before the first paragraph, in twips; shifts where the page boundary falls. */

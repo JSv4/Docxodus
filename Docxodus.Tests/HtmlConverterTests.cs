@@ -3221,6 +3221,8 @@ namespace Docxodus.Tests
             }
         }
 
+        private static XElement TableOf(XElement html) => html.Descendants().Single(e => e.Name.LocalName == "table");
+
         [Fact]
         public void HC056_TablePrecededByParagraph_HasNoImplicitTopMargin()
         {
@@ -3263,13 +3265,14 @@ namespace Docxodus.Tests
 
                     var settings = new WmlToHtmlConverterSettings
                     {
-                        PageTitle = "Table Spacing Test"
+                        PageTitle = "Table Spacing Test",
+                        FabricateCssClasses = false,
                     };
 
                     var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
                     var htmlString = html.ToString();
 
-                    Assert.DoesNotContain("margin-top: 7.5pt", htmlString);
+                    Assert.Contains("margin-top: .001pt", (string?)TableOf(html).Attribute("style"));
                     Assert.Contains("Text before table", htmlString);
                     Assert.Contains("Table cell", htmlString);
                 }
@@ -3279,7 +3282,8 @@ namespace Docxodus.Tests
         [Fact]
         public void HC057_TableWithParagraphSpacing_NoExtraMargin()
         {
-            // Test that when the preceding paragraph has after-spacing, no extra margin-top is added
+            // A paragraph's after-spacing (here 10pt from w:docDefaults) is what separates it from the
+            // table after it: the paragraph carries it as its bottom margin and the table adds none.
             using (MemoryStream ms = new MemoryStream())
             {
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -3321,14 +3325,16 @@ namespace Docxodus.Tests
 
                     var settings = new WmlToHtmlConverterSettings
                     {
-                        PageTitle = "Table Spacing Test"
+                        PageTitle = "Table Spacing Test",
+                        FabricateCssClasses = false,
                     };
 
                     var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
                     var htmlString = html.ToString();
 
-                    // Table should NOT have the default 7.5pt margin-top since paragraph has spacing
-                    Assert.DoesNotContain("margin-top: 7.5pt", htmlString);
+                    var paragraph = html.Descendants().First(e => e.Name.LocalName == "p" && e.Value.Contains("Spaced paragraph"));
+                    Assert.Contains("margin-bottom: 10pt", (string?)paragraph.Attribute("style"));
+                    Assert.Contains("margin-top: .001pt", (string?)TableOf(html).Attribute("style"));
                     Assert.Contains("Spaced paragraph", htmlString);
                     Assert.Contains("Table cell", htmlString);
                 }

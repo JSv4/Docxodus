@@ -3561,12 +3561,18 @@ paragraph without after-spacing, or anything other than a paragraph, to "separat
 has no such rule, so the margin is gone. A floating table's `w:tblpPr/@w:topFromText` still becomes its
 top margin.
 
-Two smaller differences remain. When the second of two adjacent tables has a top border, Word does not
-add the border's width between them (its first line is still 18.0pt below the first table's), where
-Docxodus adds 0.75pt. And Word gives the exact zero-height rows of
-`tables-row-height-exact-zero-borderless` and `tables-row-height-exact-zero-only` (docx-fidelity-bench)
-the height of their content: in the second, the paragraph after the table starts 58.5pt below the one
-before it, four 14.6pt lines for that paragraph and three rows. Neither is part of this fix.
+Three differences remain, none part of this fix:
+
+- When the second of two adjacent tables has a top border, Word does not add the border's width between
+  them: its first line is still 18.0pt below the first table's. The HTML converter's output adds 0.75pt.
+- The PDF export does not keep two adjacent tables apart. Its `final` review-profile projection accepts
+  revisions, and accepting merges adjacent tables into one, dropping the second table's own properties
+  (#1341). The measurements above for adjacent tables are of the plain HTML conversion.
+- Word gives the exact zero-height rows of `tables-row-height-exact-zero-borderless` and
+  `tables-row-height-exact-zero-only` (docx-fidelity-bench) the height of their content. In the second,
+  the paragraph after the table starts 58.5pt below the one before it: four 14.6pt lines, one for that
+  paragraph and one for each row. Docxodus keeps those rows at zero height (#1168); #1339 tracks the
+  decision.
 
 - Code: `Docxodus/WmlToHtmlConverter.cs` (`ProcessTable`).
 - Tests: `HtmlConverterBlockSiblingTests`, `HC056_TablePrecededByParagraph_HasNoImplicitTopMargin`,

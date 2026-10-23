@@ -11,7 +11,11 @@ const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 export interface TableBoundaryOptions {
   /** The opening paragraph's `w:spacing/@w:after` in twips; `null` leaves the attribute out. */
   afterTwips: string | null;
-  /** Follow the first table directly with a second one. */
+  /**
+   * Follow the first table directly with a second one. An empty bookmark sits between them: Word
+   * treats the two as adjacent tables all the same, and it keeps the export's accept-revisions pass
+   * from merging them into one table (#1341), so the second table's own position is what is measured.
+   */
   adjacent?: boolean;
   borders?: boolean;
 }
@@ -26,7 +30,10 @@ export function tableBoundaryDocx({ afterTwips, adjacent = false, borders = fals
     + '<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid><w:tr><w:trPr><w:trHeight w:val="360" w:hRule="atLeast"/></w:trPr>'
     + `<w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/></w:tcPr>${paragraph(text)}</w:tc></w:tr></w:tbl>`;
   const before = paragraph('BoundaryBefore', afterTwips === null ? '' : `<w:spacing w:after="${afterTwips}"/>`);
-  const body = before + table('BoundaryCell') + (adjacent ? table('BoundarySecond') : '') + paragraph('BoundaryAfter');
+  const second = adjacent
+    ? '<w:bookmarkStart w:id="0" w:name="SecondTable"/><w:bookmarkEnd w:id="0"/>' + table('BoundarySecond')
+    : '';
+  const body = before + table('BoundaryCell') + second + paragraph('BoundaryAfter');
   const font = 'Liberation Serif';
   return storedZip([
     { name: '[Content_Types].xml', data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
