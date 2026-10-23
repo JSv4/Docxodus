@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { outOfFlowDocx } from './docx-out-of-flow-fixture.js';
+import { storedZip, W_NS, xml } from './docx-zip.js';
 
 /**
  * Issue #1285: tab-rendering gaps in leader lines and signature lines, laid out by Chromium.
@@ -20,11 +20,46 @@ function entry(content: string, stops = '<w:tab w:val="left" w:pos="1296"/><w:ta
   return `<w:p><w:pPr><w:tabs>${stops}</w:tabs><w:ind w:left="1296" w:right="864" w:hanging="648"/></w:pPr>${content}</w:p>`;
 }
 
+/** A Letter page with one-inch margins, in 12pt Liberation Serif, holding `bodyXml`. */
+function leaderDocx(bodyXml: string): Uint8Array {
+  const part = (name: string, type: string) =>
+    `<Override PartName="/word/${name}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${type}+xml"/>`;
+  return storedZip([
+    {
+      name: '[Content_Types].xml',
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
+        + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'
+        + `${part('document', 'document.main')}${part('styles', 'styles')}</Types>`),
+    },
+    {
+      name: '_rels/.rels',
+      data: xml('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+    },
+    {
+      name: 'word/_rels/document.xml.rels',
+      data: xml('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'),
+    },
+    {
+      name: 'word/styles.xml',
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>`
+        + '<w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>'),
+    },
+    {
+      name: 'word/document.xml',
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W_NS}"><w:body>${bodyXml}`
+        + '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>'
+        + '</w:body></w:document>'),
+    },
+  ]);
+}
+
 interface Word { text: string; left: number; right: number; top: number }
 
 /** Convert, parse with the browser's HTML parser, and lay out in a 6.5in column. */
 async function layOut(page: Page, bodyXml: string) {
-  const bytes = Array.from(outOfFlowDocx(bodyXml));
+  const bytes = Array.from(leaderDocx(bodyXml));
   const result = await page.evaluate((values) =>
     (window as any).DocxodusTests.convertToHtml(new Uint8Array(values)), bytes);
   expect(result.error).toBeUndefined();
