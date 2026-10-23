@@ -1059,8 +1059,10 @@ neither flag set (`DS268`).
 
 **Addressing.** `SetHeaderText`/`SetFooterText` take *any body block* in the target
 section — the governing `w:sectPr` is resolved the same way `GetSectionInfo` resolves
-it (a forward mid-document section break, else the body's trailing `sectPr`; if the
-body has none, a trailing `sectPr` is synthesized). This mirrors `GetSectionInfo`
+it: the first section break at or after the block in document order — a `sec` anchor's
+own `w:sectPr`, the break a paragraph carries itself, one on a table-cell paragraph, else
+the next one, ending at the body's trailing `sectPr` (if the body has none, a trailing
+`sectPr` is synthesized). This mirrors `GetSectionInfo`
 returning `null` for non-body anchors: passing a header/footer/footnote anchor is an
 `AnchorWrongKind` error, because a story attaches to a *body* section.
 

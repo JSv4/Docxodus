@@ -138,34 +138,44 @@ internal static class BlockMetadataOps
     }
 
     /// <summary>
-    /// The <c>w:sectPr</c> that governs <paramref name="element"/> (a body block): the next
-    /// forward paragraph's <c>pPr/sectPr</c> (a mid-document section break), else the element's
-    /// own <c>pPr/sectPr</c>, else the body's trailing <c>sectPr</c> (the document-final section).
-    /// Returns <c>null</c> when the body has no section properties at all. Shared with
-    /// <see cref="DocxSession.SetHeaderText"/>/<see cref="DocxSession.SetFooterText"/>.
+    /// The <c>w:sectPr</c> that governs <paramref name="element"/> (anything in the body): the
+    /// first section break at or after it in document order. A <c>sec</c> anchor's own
+    /// <c>w:sectPr</c> governs itself, a paragraph that carries a break belongs to the section
+    /// it ends, a table whose cell paragraph carries one belongs to that one, and content inside
+    /// a paragraph (a text box's) belongs to that paragraph's section. Returns <c>null</c> when
+    /// no break follows — a body with no section properties at all. Shared by every section
+    /// read and edit: <c>GetSectionInfo</c>, <c>SetPageSetup</c>, the page-numbering and
+    /// header/footer ops.
     /// </summary>
     internal static XElement? FindGoverningSectPr(XElement element)
     {
-        // The sectPr that governs a paragraph is either:
-        // (a) the next sectPr-bearing paragraph's pPr/sectPr after this one (mid-doc section break), or
-        // (b) the body's trailing sectPr (the document-final section).
         var body = element.AncestorsAndSelf(W.body).FirstOrDefault();
         if (body is null) return null;
 
-        // Walk forward from the element looking for any p whose pPr has a sectPr.
-        foreach (var sib in element.ElementsAfterSelf())
-        {
-            if (sib.Name != W.p) continue;
-            var sp = sib.Element(W.pPr)?.Element(W.sectPr);
-            if (sp is not null) return sp;
-        }
-        if (element.Name == W.p)
-        {
-            var ownSect = element.Element(W.pPr)?.Element(W.sectPr);
-            if (ownSect is not null) return ownSect;
-        }
-        return body.Element(W.sectPr);
+        // The break the outermost enclosing paragraph or section properties carry (a sec anchor
+        // is its own break), else the first one after it, climbing out of table cells and
+        // content controls on the way.
+        var block = element.AncestorsAndSelf().LastOrDefault(e => e.Name == W.p || e.Name == W.sectPr) ?? element;
+        if (SectionBreakIn(block) is { } carried) return carried;
+        for (var node = block; node != body; node = node.Parent!)
+            foreach (var next in node.ElementsAfterSelf())
+                if (SectionBreakIn(next) is { } after) return after;
+        return null;
     }
+
+    /// <summary>The first section break <paramref name="block"/> carries: a paragraph's own
+    /// <c>w:pPr/w:sectPr</c>, the body's trailing <c>w:sectPr</c> itself, or for a container (a
+    /// table, a content control) the first break on a paragraph inside it.</summary>
+    internal static XElement? SectionBreakIn(XElement block) =>
+        block.Name == W.p ? block.Element(W.pPr)?.Element(W.sectPr)
+        : block.Name == W.sectPr ? (IsSectionBreak(block) ? block : null)
+        : block.Descendants(W.sectPr).FirstOrDefault(IsSectionBreak);
+
+    /// <summary>Whether <paramref name="sectPr"/> ends a section: a paragraph mark's
+    /// (<c>w:pPr/w:sectPr</c>, in the body or a table cell) or the body's trailing one. The copy
+    /// of a section's earlier properties inside <c>w:sectPrChange</c> is not one.</summary>
+    internal static bool IsSectionBreak(XElement sectPr) =>
+        sectPr.Parent?.Name == W.pPr || sectPr.Parent?.Name == W.body;
 
     /// <summary>
     /// Extend a section's own references with the ones it INHERITS. Per ECMA-376 §17.6.17 a

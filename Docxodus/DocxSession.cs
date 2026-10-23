@@ -749,9 +749,7 @@ public sealed partial class DocxSession : IDisposable
     /// <summary>Whether a body block carries the section break that ends its section: a
     /// paragraph's own <c>w:pPr/w:sectPr</c>, or one on a paragraph inside a table's cells.</summary>
     internal static bool ClosesSection(XElement block) =>
-        block.Name == W.p
-            ? block.Element(W.pPr)?.Element(W.sectPr) is not null
-            : block.Name == W.tbl && block.Descendants(W.sectPr).Any(s => s.Parent?.Name == W.pPr);
+        (block.Name == W.p || block.Name == W.tbl) && Internal.BlockMetadataOps.SectionBreakIn(block) is not null;
 
     private static bool IsRemovedInAcceptedRevisionView(XElement block)
     {

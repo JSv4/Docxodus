@@ -77,6 +77,13 @@ All notable changes to this project will be documented in this file.
     paragraph indented -360 twips now reaches the margin rather than 0.5in, and at -725 or -1080 twips
     it reaches -0.5in.
 
+- Section reads and edits now act on the section an anchor names (#1308). A `sec` anchor of an
+  earlier section resolved to the document's final section, so `GetSectionInfo` reported the last
+  section's page and `SetPageSetup`, `SetPageNumbering` and the header/footer operations changed
+  the last section while reporting success. A paragraph that carries a section break resolved to
+  the next section whenever a later paragraph carried another, a table whose cell carries a break
+  resolved past it, and a text-box paragraph resolved to the final section. Every body anchor now
+  belongs to the first section break at or after it.
 - Tracked formatting of a run that already has another author's pending format change is now
   credited to the person who made it (#1295). The session folded the new formatting into the
   existing `w:rPrChange` but left that change's author, date and `w:id` alone, so `ListRevisions()`
