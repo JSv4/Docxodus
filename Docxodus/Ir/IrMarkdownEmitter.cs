@@ -467,7 +467,8 @@ internal static class IrMarkdownEmitter
     }
 
     // ------------------------------------------------------------------
-    // TextPreview (mirrors the oracle's ComputeTextPreview: flat w:t concat, 80-char cap + ellipsis)
+    // TextPreview (mirrors the oracle's ComputeTextPreview: DocxSession.VisibleText, the w:t text
+    // outside tracked deletions and move sources, 80-char cap + ellipsis)
     // ------------------------------------------------------------------
 
     private static string ComputeTextPreview(object node)
