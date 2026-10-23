@@ -208,6 +208,7 @@ internal static class IrCompositeMarkupRenderer
                         commentAuthors.TryAdd(id, authors[r]);
                 IrMarkupRenderer.NormalizeComments(main, IrMarkupRenderer.BodyCommentIds(baseIr),
                     commentAuthors.Keys.ToHashSet(), state, commentAuthors);
+                IrMarkupRenderer.CompleteCommentThreadingEntries(main);
 
                 // The base's and the reviewers' surviving bookmarks can share ids; renumber them unique,
                 // each start kept with its own end (issue #840).

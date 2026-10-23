@@ -72,6 +72,21 @@ All notable changes to this project will be documented in this file.
   now leave out text in a tracked deletion or move source too, nested or directly in the paragraph, so a
   `Grep` span can guard the next edit without a spurious precondition failure.
 
+- `DocxCompare.Compare` and `Consolidate` keep a reply the revision adds under the original's comment it
+  answers (#1312). The redline takes its comment definitions from the original, but the added reply
+  names its parent by the revised document's `w14:paraId` for that comment. When the original's comment
+  had no paraId (a tool that writes none) or a different one (an editor that renumbers them on save),
+  the reply's `w15:paraIdParent` named nothing, or another comment that happened to hold that paraId,
+  and `ListComments` showed the reply as top-level. The reply's parent is now found through the
+  revised comment with that paraId, which the comparison has already matched to the original's comment
+  by author, date and text; the original's comment gets a fresh paraId if it had none, and the reply's
+  link is re-pointed at it. Only replies the revision adds are linked: comments the original already
+  holds keep the original's threading and resolved state, since neither is a tracked change. A reply
+  whose parent the redline does not hold, or whose parent matches two identical comments of the
+  original, now lists as top-level instead of naming a missing or guessed comment. Every comment with
+  a paraId now has its own entry in each of the redline's `commentsExtended` and `commentsIds` parts,
+  and an added comment renamed for a colliding paraId can no longer be given a paraId a later added
+  comment holds, which had moved that comment's reply under the wrong parent.
 - HTML to DOCX now adds a nested element's `text-decoration` lines to those of the elements around it
   instead of replacing them (#1280). The converter treated `text-decoration` as an inherited property,
   so a struck span inside an underlined span produced only `<w:strike/>`, and a DOCX → HTML → DOCX round

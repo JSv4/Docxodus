@@ -627,6 +627,25 @@ The SDK `OpenXmlValidator` (Microsoft365) checks the value range though not uniq
 
 Docxodus: `CommentOps.ParaIdAllocator` scans every paraId-bearing part plus the threading keys and mints one past the largest id below `0x80000000`, falling back to the lowest free value; `NextDurableId` does the same below `0x7FFFFFFF`. `MergeRightCommentDefinitions` re-mints a right-added definition's paraId when the output's comments or threading already use it, re-keying its threading entries with it, and gives its `commentsIds` entry a fresh durable id when the output already uses its own. (Docxodus merges no `commentsExtensible` (`w16cex`) entries, so there is nothing to re-key there.) A last render pass, `ParagraphIds.MakeUnique`, then renames any remaining duplicate story paragraph (comment definitions and threading keys are read first and keep their values; nothing refers to a story paragraph's paraId). `w14:textId` is left alone: it is a version identifier for the paragraph's text, not an identity, so the validator's range check is the only constraint enforced on it here.
 
+#### A reply added in the revision names its parent by the revision's paraId (issue #1312)
+
+The redline's comment definitions are the original's. A reply the revision adds is merged in with its own `commentsExtended` entry, whose `w15:paraIdParent` is the paraId the **revised** package gives the parent comment. Nothing makes that value the original's: a tool that writes no comment paraIds leaves the original's root without one, and an editor that renumbers paraIds on save gives the same comment a different value in each version. Minimal reproducer (original, no `commentsExtended` part):
+
+```xml
+<w:comment w:id="0" w:author="Ann"><w:p><w:r><w:t>Root comment.</w:t></w:r></w:p></w:comment>
+```
+
+The revision adds `<w:comment w:id="1">` with `w14:paraId="00000002"`, gives the root `w14:paraId="00000001"`, and threads `<w15:commentEx w15:paraId="00000002" w15:paraIdParent="00000001"/>`.
+
+| | Redline root paraId | Reply's `paraIdParent` | Reply in `ListComments` |
+|---|---|---|---|
+| Docxodus before | none | `00000001` (names nothing) | top-level |
+| Docxodus after | freshly minted | that minted paraId | under the root |
+
+Word was not measured. Adopting the revised paraId for the root is not a fix: when the original already gives that value to another comment, the reply would thread under that comment, or the original comment would be renamed and lose its own entry and resolved state to the root. `MergeRightCommentDefinitions` (`LinkRepliesToOriginalParents`) instead follows the parent through its comment id, which `CommentOps.AlignIds` has aligned between the inputs by author, date and text, and re-points the reply at the output definition's own paraId, minting one when it has none. A reworded root is a different comment by that identity, so the redline deletes the original's and inserts the revision's, and the reply threads under the inserted one as before.
+
+Threading and resolution are not tracked changes, and the redline's definitions are the original's, so only the link of a reply the revision **adds** is translated. A comment the original already holds keeps the original's state: no entry in the original means open and top-level, and the redline states exactly that, even when the revision resolved it or threaded it under another original comment. This also makes a consolidation independent of reviewer order. When two original comments share author, date and text, the id alignment may pair them crosswise, so a reply to one of them lists top-level rather than under a guess. Finally, every comment with a paraId gets its own entry in each threading part the redline has (`CompleteCommentThreadingEntries`), since either input may lack a part the other brings.
+
 #### v1 limitation: cross-document comment id / paraId collision (independent documents only)
 
 The comment merge (`MergeRightCommentDefinitions`) and collapse assume a comment present in both sides carries the SAME `w:id` — true when the two inputs are two versions of ONE document (Word never reassigns a comment's id, so an edited doc's comment ids are stable). Two **independent** documents that each happened to assign `w:id="0"` to a DIFFERENT comment anchored on the same text, are out of v1 scope: the cross-document case can leave `accept` showing the left comment's text (the right definition is not re-id'd and merged). (A right-added comment whose `w14:paraId` collides with a left one's is handled: it takes a fresh paraId, issue #1170.) The output stays schema-valid and every reference resolves to exactly ONE comment (the `(C)` backstop guarantees that) — it is a content/threading-attribution gap, not a structural corruption, and it does not arise from the diff/review workflow the engine targets (before/after of one document). Re-id'ing right-sourced markers for a genuinely independent-document merge is a follow-on.
