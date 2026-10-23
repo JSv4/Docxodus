@@ -1907,6 +1907,9 @@ public sealed partial class DocxSession : IDisposable
             : e.Name == W.sdt ? e.Element(W.sdtContent) is not { } content || IsZeroWidthMarker(content)
             : ZeroWidthCarrierNames.Contains(e.Name) && e.Elements().All(IsZeroWidthMarker));
 
+    private static bool IsPendingRemoval(XElement e) =>
+        e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd;
+
     private sealed record PreservedMarkerPosition(XElement Element, int Offset, int Order);
 
     /// <summary>
@@ -1917,15 +1920,24 @@ public sealed partial class DocxSession : IDisposable
     /// </summary>
     private static List<PreservedMarkerPosition> CapturePreservedMarkerPositions(XElement paragraph)
     {
+        // Pending removed text (a deletion or move source, with its move range) takes no room in
+        // the paragraph's text either, and is not the text being replaced: dropping it would
+        // silently resolve another reviewer's change, or orphan a move's destination (#1292).
+        // Its old coordinate means nothing in the new text, and keeping it would cut a word in
+        // two, so removed text that led the paragraph stays first and any other follows it.
         var candidates = paragraph.Elements()
-            .Where(IsZeroWidthMarker)
+            .Where(e => IsZeroWidthMarker(e) || IsPendingRemoval(e))
             .Concat(paragraph.Descendants()
                 .Where(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd))
             .Distinct()
             .OrderBy(e => e, Comparer<XElement>.Create(XNode.DocumentOrderComparer.Compare))
             .ToList();
         var result = candidates.Select((element, order) =>
-            new PreservedMarkerPosition(element, MarkerOffset(paragraph, element), order)).ToList();
+        {
+            int offset = MarkerOffset(paragraph, element);
+            return new PreservedMarkerPosition(element,
+                IsPendingRemoval(element) && offset > 0 ? int.MaxValue : offset, order);
+        }).ToList();
         foreach (var marker in candidates) marker.Remove();
         return result;
     }

@@ -737,6 +737,57 @@ public class DocxSessionSpanRevisionTests
         Assert.Equal(version, session.Version);
     }
 
+    // ─── Untracked whole-paragraph replacement keeps pending removed text (issue #1292) ───
+
+    [Fact]
+    public void Untracked_ReplaceTextOfAParagraphWhoseOnlyTextIsDeleted_KeepsTheDeletion()
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", Del("Reviewer", 1, "Gone clause"));
+
+        var edit = session.ReplaceText(p, "New text");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal("del:Reviewer[\"Gone clause\"] \"New text\"", Shape(session, p));
+        Assert.Equal(new[] { "delete:Reviewer:Gone clause" }, Revisions(session));
+        Assert.Equal("New text", Accepted(session));
+        Assert.Equal("Gone clauseNew text", Rejected(session));
+    }
+
+    [Fact]
+    public void Untracked_ReplaceText_PutsAMidParagraphDeletionAfterTheNewTextRatherThanInsideIt()
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", Run("Keep "), Del("Reviewer", 1, "gone "), Run("rest"));
+
+        Assert.True(session.ReplaceText(p, "New words").Success);
+
+        Assert.Equal("\"New words\" del:Reviewer[\"gone \"]", Shape(session, p));
+    }
+
+    [Fact]
+    public void Untracked_ReplaceText_KeepsAMoveSourceWithItsRange()
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat",
+            new XElement(W.moveFromRangeStart, new XAttribute(W.id, 5), new XAttribute(W.name, "move1")),
+            new XElement(W.moveFrom, Stamp("Reviewer", 6),
+                new XElement(W.r, new XElement(W.delText, new XAttribute(XNamespace.Xml + "space", "preserve"), "Moved"))),
+            new XElement(W.moveFromRangeEnd, new XAttribute(W.id, 5)));
+
+        Assert.True(session.ReplaceText(p, "New text").Success);
+
+        Assert.Equal("moveFromRangeStart[] moveFrom:Reviewer[\"Moved\"] moveFromRangeEnd[] \"New text\"", Shape(session, p));
+    }
+
+    [Fact]
+    public void Control_UntrackedReplaceText_StillReplacesLiveTextAndInsertions()
+    {
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", Run("Old "), Ins("Alex", 1, Run("words")));
+
+        Assert.True(session.ReplaceText(p, "New text").Success);
+
+        Assert.Equal("\"New text\"", Shape(session, p));
+        Assert.Empty(Revisions(session));
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     internal static XElement Run(string text, bool bold = false) => new(W.r,

@@ -54,6 +54,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- An untracked `ReplaceText` no longer drops a pending tracked deletion or move source in the paragraph
+  (#1292). Typing into a paragraph whose only text was deleted, in the browser editor's default mode
+  (edits untracked, revisions hidden), rewrote the paragraph and removed the deletion, so rejecting
+  revisions could no longer restore its text and the revision list lost it, with no edit failure
+  reported. The replacement now keeps removed text, and a move source keeps its range markers so the
+  move's destination is not orphaned: removed text that led the paragraph stays first, any other
+  follows the new text.
+
 - Under tracked changes, text inserted through `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`)
   that would land strictly inside another author's tracked insertion now splits their insertion and goes
   between the halves in the session author's own `w:ins`, as Word does (#1318). A zero-length insert inside

@@ -517,3 +517,31 @@ test.describe('DocxEditor — typing beside a deletion stays on the caret side (
     });
   }
 });
+
+test.describe('DocxEditor — default options keep a hidden deletion (#1292)', () => {
+  // With the default options edits are untracked and existing revisions are not shown, so a
+  // paragraph whose only text is deleted renders empty, and the editor rewrites it whole. The
+  // rewrite used to drop the hidden deletion, so a reject could no longer restore its text.
+  test('typing into a paragraph whose only text is a hidden deletion keeps the deletion', async ({ page }) => {
+    await openTracked(page, false);
+    const revisions = () => page.evaluate(() => (window as any).editor.listRevisions()
+      .map((r: any) => `${r.type}:${r.text}`).filter((r: string) => r.includes('Gone too')));
+    expect(await revisions()).toEqual(['delete:Gone too']);
+    const block = await page.evaluate(() => {
+      const w = window as any;
+      // The hidden deletion leaves the paragraph empty; it is the one after "Gone heading"'s.
+      const blocks = Array.from(w.container.querySelectorAll('p[data-anchor]')) as HTMLElement[];
+      const empty = blocks.filter((b) => (b.textContent ?? '').trim() === '');
+      empty[1].setAttribute('data-test-target', '1');
+      return empty.length;
+    });
+    expect(block).toBeGreaterThanOrEqual(2);
+    await page.locator('[data-test-target="1"]').click();
+    await page.keyboard.type('New text');
+    await blur(page);
+    expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+    expect(await revisions()).toEqual(['delete:Gone too']);
+    const accepted = await page.evaluate(() => (window as any).acceptedText());
+    expect(accepted).toContain('New text');
+  });
+});
