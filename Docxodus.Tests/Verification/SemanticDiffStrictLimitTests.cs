@@ -18,7 +18,7 @@ public class SemanticDiffStrictLimitTests
         foreach (var strict in new[] { false, true })
         foreach (var supplement in new[] { false, true })
         foreach (var bytes in new[] { false, true })
-        foreach (var limit in new[] { "xml", "entry", "total" })
+        foreach (var limit in new[] { "xml", "entry", "total", "ratio" })
             yield return new object[] { strict, supplement, bytes, limit };
     }
 
@@ -52,7 +52,7 @@ public class SemanticDiffStrictLimitTests
     {
         var document = Document(strict: true);
         var smaller = DocxDiffStrictConformanceTests.AsStrict(IrTestDocuments.Create("Small"));
-        foreach (var limit in new[] { "xml", "entry", "total" })
+        foreach (var limit in new[] { "xml", "entry", "total", "ratio" })
         {
             var options = new SemanticDiffOptions
             {
@@ -102,6 +102,7 @@ public class SemanticDiffStrictLimitTests
             "xml" => new PackageManifestOptions { MaxXmlPartBytes = largest },
             "entry" => new PackageManifestOptions { MaxEntryUncompressedBytes = largest },
             "total" => new PackageManifestOptions { MaxTotalUncompressedBytes = zip.Entries.Sum(entry => entry.Length) },
+            "ratio" => new PackageManifestOptions { MaxCompressionRatio = zip.Entries.Max(entry => (double)entry.Length / entry.CompressedLength) },
             _ => throw new ArgumentOutOfRangeException(nameof(limit)),
         };
     }
