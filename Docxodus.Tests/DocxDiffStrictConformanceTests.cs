@@ -29,7 +29,7 @@ public class DocxDiffStrictConformanceTests
     /// wordprocessingml namespace flips to the strict URI in every XML part and the
     /// officeDocument-family relationship types flip to their strict (purl.oclc.org) forms.
     /// </summary>
-    private static WmlDocument AsStrict(WmlDocument doc)
+    internal static WmlDocument AsStrict(WmlDocument doc)
     {
         using var ms = new MemoryStream();
         ms.Write(doc.DocumentByteArray, 0, doc.DocumentByteArray.Length);
