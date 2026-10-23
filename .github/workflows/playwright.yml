@@ -8,14 +8,22 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes the run in flight; runs on main finish.
+concurrency:
+  group: playwright-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The browser suite is ~30 CPU-minutes of mostly one-second tests, each booting its own WASM
+# runtime. It used to run as one job on one worker, 40–50 minutes per pull request. Now one job
+# builds the package and every lane job downloads that build: the pool lane runs the ordinary
+# specs on several workers and across shards, the serial lane runs the latency and frame-rate
+# specs alone on one worker (npm/playwright.config.ts decides which is which from
+# DOCXODUS_PLAYWRIGHT_LANE), and the export and delivery checks run beside them. A final job
+# merges the lanes' reports into the one HTML report reviewers had before.
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
-    # The full single-worker WASM matrix plus the pinned-Chromium export suite now exceeds the
-    # former 25-minute ceiling on hosted runners. Keep a bounded cushion so assertion failures
-    # still surface instead of the job being canceled before export artifacts are produced.
-    # The delivery export-host integration test adds one .NET test build on top.
-    timeout-minutes: 55
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -33,6 +41,10 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            npm/package-lock.json
+            npm-export/package-lock.json
 
       - name: Install npm dependencies
         run: cd npm && npm ci
@@ -40,10 +52,72 @@ jobs:
       - name: Build npm package (WASM + TypeScript)
         run: cd npm && npm run build
 
-      - name: Install Node export companion dependencies
+      - name: Install and build the Node export companion
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
-        run: cd npm-export && npm ci --ignore-scripts
+        run: cd npm-export && npm ci --ignore-scripts && npm run build
+
+      # Stages the test pages into dist/site, fetches the arcade IWAD into dist/wasm/vendor,
+      # type-checks the specs and checks bundle sizes and the package boundary: once, here,
+      # so that no lane repeats it.
+      - name: Stage test pages and run the pre-test checks
+        run: cd npm && npm run pretest
+
+      # The lanes must partition the spec files: a spec in both lanes runs twice, one in neither
+      # never runs. Listing the specs loads them, so this needs the export companion built above.
+      - name: Check the Playwright lane split
+        run: cd npm && npm run test:lanes
+
+      - name: Upload the built package for the lanes
+        uses: actions/upload-artifact@v7
+        with:
+          name: docxodus-build
+          path: |
+            npm/dist
+            npm-export/dist
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  pool:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # Six shards: with four, each shard's test step was ~5 minutes on top of a ~1-minute
+      # setup and the ~5-minute build it waits for; more shards shorten only the first of those.
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            npm/package-lock.json
+            npm-export/package-lock.json
+
+      # The export specs import the companion from npm-export/dist and need its dependencies.
+      - name: Install npm dependencies
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+        run: |
+          (cd npm && npm ci)
+          (cd npm-export && npm ci --ignore-scripts)
+
+      - name: Download the built package
+        uses: actions/download-artifact@v7
+        with:
+          name: docxodus-build
+
+      - name: Install Playwright browsers
+        uses: ./.github/actions/playwright-browsers
 
       # The export runtime deliberately keeps Chromium's process sandbox on, so the runner has to
       # permit unprivileged user namespaces. Ubuntu 24.04 restricts them through AppArmor by
@@ -51,12 +125,138 @@ jobs:
       - name: Permit Chromium's unprivileged user-namespace sandbox
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - name: Install Playwright browsers
-        run: cd npm && npx playwright install --with-deps chromium firefox
+      # The lane runner's `--split` deals the spec files round-robin, so the heavy and
+      # alphabetically adjacent export specs spread across the shards; Playwright's own `--shard`
+      # hands each shard a contiguous run of files and left one shard three times another's work.
+      - name: Run the pool lane, shard ${{ matrix.shard }} of ${{ strategy.job-total }}
+        env:
+          DOCXODUS_PLAYWRIGHT_LANE: pool
+          PLAYWRIGHT_BLOB_OUTPUT_FILE: blob-report/pool-${{ matrix.shard }}.zip
+        run: cd npm && node scripts/playwright-lanes.mjs --split=${{ matrix.shard }}/${{ strategy.job-total }} --reporter=blob
 
-      # The export runtime deliberately keeps Chromium's process sandbox on, so the runner has to
-      # permit unprivileged user namespaces. Ubuntu 24.04 restricts them through AppArmor by
-      # default, which fails every launched-browser export with browser_launch_failure.
+      # One directory per lane, so the artifact's layout is the same whether or not the lane
+      # wrote any test output: an upload of several paths is rooted at their common ancestor,
+      # which moves when one of them is missing, and the report job would then not find the
+      # shard's blob report.
+      - name: Collect this shard's report and test output
+        if: always()
+        run: |
+          mkdir -p lane-output
+          [ -d npm/blob-report ] && mv npm/blob-report lane-output/
+          [ -d npm/test-results ] && mv npm/test-results lane-output/
+          true
+
+      - name: Upload this shard's report and test output
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: playwright-lane-pool-${{ matrix.shard }}
+          path: lane-output
+          if-no-files-found: ignore
+          retention-days: 1
+
+  serial:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            npm/package-lock.json
+            npm-export/package-lock.json
+
+      - name: Install npm dependencies
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+        run: |
+          (cd npm && npm ci)
+          (cd npm-export && npm ci --ignore-scripts)
+
+      - name: Download the built package
+        uses: actions/download-artifact@v7
+        with:
+          name: docxodus-build
+
+      # Firefox runs only the cross-block drag canary, which the config keeps in this lane so
+      # that the pool shards never install it.
+      - name: Install Playwright browsers
+        uses: ./.github/actions/playwright-browsers
+        with:
+          browsers: chromium firefox
+
+      - name: Permit Chromium's unprivileged user-namespace sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Run the serial lane
+        env:
+          DOCXODUS_PLAYWRIGHT_LANE: serial
+          PLAYWRIGHT_BLOB_OUTPUT_FILE: blob-report/serial.zip
+        run: cd npm && node scripts/playwright-lanes.mjs --reporter=blob
+
+      - name: Collect this lane's report and test output
+        if: always()
+        run: |
+          mkdir -p lane-output
+          [ -d npm/blob-report ] && mv npm/blob-report lane-output/
+          [ -d npm/test-results-serial ] && mv npm/test-results-serial lane-output/
+          true
+
+      - name: Upload this lane's report and test output
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: playwright-lane-serial
+          path: lane-output
+          if-no-files-found: ignore
+          retention-days: 1
+
+  export:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            npm/package-lock.json
+            npm-export/package-lock.json
+
+      - name: Install npm dependencies
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+        run: |
+          (cd npm && npm ci)
+          (cd npm-export && npm ci --ignore-scripts)
+
+      - name: Download the built package
+        uses: actions/download-artifact@v7
+        with:
+          name: docxodus-build
+
+      # The companion's playwright-core finds the same Chromium build the test package installs.
+      - name: Install Playwright browsers
+        uses: ./.github/actions/playwright-browsers
+
       - name: Permit Chromium's unprivileged user-namespace sandbox
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
@@ -76,11 +276,58 @@ jobs:
           dotnet test Docxodus.Tests/Docxodus.Tests.csproj \
             --filter "FullyQualifiedName~DeliveryExportHostIntegrationTests"
 
-      # Run the long editor matrix after the export evidence exists. The final upload is `always()`,
-      # so an unrelated late regression cannot suppress the HTML/PDF artifacts under review.
-      - name: Run Playwright tests
-        run: cd npm && npm test
+      - name: Upload export evidence
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: export-artifacts
+          path: |
+            npm-export/test-artifacts/
+            delivery-artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
 
+  # Runs after the lanes whether or not they passed, so a failing run still publishes the report
+  # that explains it; skipped only when there was no build to test or the run was cancelled.
+  report:
+    needs: [build, pool, serial]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: npm/package-lock.json
+
+      - name: Install npm dependencies
+        run: cd npm && npm ci
+
+      # Each lane uploaded one directory holding its blob-report and test output, so merged into
+      # npm/ they land where a single run would have written them.
+      - name: Download every lane's report and test output
+        uses: actions/download-artifact@v7
+        with:
+          pattern: playwright-lane-*
+          merge-multiple: true
+          path: npm
+
+      - name: Merge the lanes' reports into one HTML report
+        run: cd npm && npx playwright merge-reports --reporter html ./blob-report
+
+      # The history example spec runs in the pool lane and leaves its browser-written history
+      # files under npm/test-results, which the merged download above reassembles.
       - name: Verify browser history files in fresh Python/native hosts
         env:
           DOCXODUS_HISTORY_BROWSER_ARTIFACT_DIR: ${{ github.workspace }}/npm/test-results
@@ -98,8 +345,7 @@ jobs:
           path: |
             npm/playwright-report/
             npm/test-results/
-            npm-export/test-artifacts/
-            delivery-artifacts/
+            npm/test-results-serial/
             history-artifacts/
           if-no-files-found: ignore
           retention-days: 7

@@ -28,6 +28,15 @@ All notable changes to this project will be documented in this file.
   paragraph, which takes the new text, in `EditResult.Modified` rather than `Created`; `Created`
   lists only the paragraphs added before it. Use that paragraph as the `InsertPageNumberField`
   target. Untracked results are unchanged.
+- The Playwright suite runs as two lanes instead of one worker: the pool, every ordinary spec on
+  several workers at once, and a serial lane of the latency, throughput and frame-rate specs on one
+  worker (`npm test` runs both; `DOCXODUS_PLAYWRIGHT_LANE` runs one). In CI one job builds the package
+  for every lane job, the pool runs as six shards beside the serial, export and delivery jobs, the
+  browsers and their apt packages come from the Actions cache, and the lanes' reports are merged into
+  the one `playwright-report` artifact as before. The .NET suite runs as two halves on two runners,
+  the rendering-fidelity job keeps its pinned baseline build between runs, and a newer push to a pull
+  request cancels its superseded CI and Playwright runs. One pull request's browser run took 40–50
+  minutes before.
 
 ### Fixed
 

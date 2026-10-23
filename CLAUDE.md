@@ -162,13 +162,22 @@ dotnet test --filter "FullyQualifiedName~DbTests"
 cd npm
 npm install && npx playwright install chromium   # first time only
 npm run build                                    # produces dist/ that the harness loads
-npm test                                         # all Playwright specs
+npm test                                         # all Playwright specs: the pool lane, then the serial lane
+npm test -- worker.spec.ts                       # one spec, whichever lane it is in
+npm run test:lanes                               # the lane split still partitions the spec files
 npx playwright test --grep "Document Structure"
 npx tsc --noEmit
 ```
 
 Playwright serves from `npm/dist/wasm/`. **If you edit C#, `.ts`, or the harness HTML,
 re-run `npm run build` first** or you will test stale artifacts.
+
+**Playwright lanes.** `npm test` runs the suite as two lanes: the pool (every ordinary spec, on
+several workers) and the serial lane (one worker) for the specs that assert a latency, throughput
+or frame-rate bound, which another worker's WASM boot would inflate. A new spec of that kind goes in
+`serialLaneSpecs` in `npm/scripts/playwright-lanes.mjs`; `npm run test:lanes` fails when a spec file
+is in both lanes or neither. CI runs each lane as its own job with `DOCXODUS_PLAYWRIGHT_LANE`, the
+pool as six shards.
 
 **Allocation gate.** On pull requests that touch `Docxodus/`, `perf.yml` runs the DocxDiff stress
 and complex-form benchmarks against the base commit's library and the PR's, and fails when a case
