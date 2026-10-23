@@ -197,7 +197,7 @@ public class RightTabLeaderLineTests
     {
         var tabs = TabLines(variant);
         Assert.Equal(2 * Entries.Length, tabs.Length);
-        Assert.All(tabs, lines => Assert.Equal(new[] { (top, border) }, lines));
+        Assert.All(tabs, lines => Assert.Equal(new (string?, string?)[] { (top, border) }, lines));
     }
 
     [Fact]
