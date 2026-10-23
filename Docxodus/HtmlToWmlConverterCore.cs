@@ -2913,6 +2913,21 @@ namespace Docxodus.HtmlToWml
             return rPr;
         }
 
+        private static bool HasKeyword(CssExpression value, string keyword) =>
+            value.Terms.Any(t => string.Equals(t.Value, keyword, StringComparison.OrdinalIgnoreCase));
+
+        // An inline-block (or other atomic inline), a float or an absolutely positioned box draws its own
+        // text-decoration lines, but its ancestors' lines do not reach its text (CSS Text Decoration 3).
+        private static bool StopsTextDecorationPropagation(XElement element)
+        {
+            var display = element.GetProp("display")?.ToString().ToLowerInvariant();
+            var position = element.GetProp("position")?.ToString().ToLowerInvariant();
+            var floatValue = element.GetProp("float")?.ToString().ToLowerInvariant();
+            return display is "inline-block" or "inline-table" or "inline-flex" or "inline-grid" ||
+                position is "absolute" or "fixed" ||
+                floatValue is not (null or "none");
+        }
+
         private static XElement? GetRunProperties(XElement element, HtmlToWmlConverterSettings settings)
         {
             // CSS shorthand/normalization always expands these onto styled elements reaching
@@ -2937,15 +2952,23 @@ namespace Docxodus.HtmlToWml
             TPoint? fontSizeTPoint = GetUsedSizeFromFontSizeProperty(fontSizeProperty);
             // text-decoration lists its lines and an optional style in any order, e.g. "underline double"
             // for w:u double and "line-through double" for w:dstrike (issue #1273). CSS draws an element's
-            // lines across all its descendants' text, so a run carries the lines of every element around
+            // lines across its in-flow descendants' text, so a run carries the lines of every element around
             // it, and a nested value (even "none") cannot replace or remove an ancestor's line. Each line
             // takes its style from the nearest element that draws it (issue #1280).
-            var decorations = element.AncestorsAndSelf()
-                .Select(e => e.GetProp("text-decoration")?.Terms.Select(t => t.Value?.ToLowerInvariant()).ToHashSet())
-                .OfType<HashSet<string?>>()
-                .ToList();
-            var underlineDecoration = decorations.FirstOrDefault(d => d.Contains("underline"));
-            var strikeDecoration = decorations.FirstOrDefault(d => d.Contains("line-through"));
+            CssExpression? underlineDecoration = null;
+            CssExpression? strikeDecoration = null;
+            foreach (var e in element.AncestorsAndSelf())
+            {
+                if (e.GetProp("text-decoration") is { } decoration)
+                {
+                    if (underlineDecoration == null && HasKeyword(decoration, "underline"))
+                        underlineDecoration = decoration;
+                    if (strikeDecoration == null && HasKeyword(decoration, "line-through"))
+                        strikeDecoration = decoration;
+                }
+                if (StopsTextDecorationPropagation(e))
+                    break;
+            }
             string fontStyleString = fontStyleProperty.ToString();
             string fontWeightString = fontWeightProperty.ToString().ToLower();
             string backgroundColorString = backgroundColorProperty.ToString().ToLower();
@@ -3002,7 +3025,7 @@ namespace Docxodus.HtmlToWml
 
             XElement? strike = null;
             if (strikeDecoration != null)
-                strike = new XElement(strikeDecoration.Contains("double") ? W.dstrike : W.strike);
+                strike = new XElement(HasKeyword(strikeDecoration, "double") ? W.dstrike : W.strike);
             else if (sAncestor)
                 strike = new XElement(W.strike);
 
@@ -3025,10 +3048,10 @@ namespace Docxodus.HtmlToWml
             XElement? underline = null;
             if (underlineDecoration != null)
                 underline = new XElement(W.u, new XAttribute(W.val,
-                    underlineDecoration.Contains("double") ? "double" :
-                    underlineDecoration.Contains("dotted") ? "dotted" :
-                    underlineDecoration.Contains("dashed") ? "dash" :
-                    underlineDecoration.Contains("wavy") ? "wave" : "single"));
+                    HasKeyword(underlineDecoration, "double") ? "double" :
+                    HasKeyword(underlineDecoration, "dotted") ? "dotted" :
+                    HasKeyword(underlineDecoration, "dashed") ? "dash" :
+                    HasKeyword(underlineDecoration, "wavy") ? "wave" : "single"));
             else if (uAncestor)
                 underline = new XElement(W.u, new XAttribute(W.val, "single"));
 

@@ -71,6 +71,7 @@ public class HtmlToWmlTextDecorationTests
     [InlineData("line-through double", "underline", "dstrike u=single")]
     [InlineData("underline", "none", "u=single")]
     [InlineData("underline double", "underline dotted", "u=dotted")]
+    [InlineData("underline double", "inherit", "u=double")]
     public void NestedTextDecoration_AddsToTheOuterLines(string outer, string inner, string expected) =>
         Assert.Equal(expected, Describe(Convert(
             $"<p><span style='text-decoration: {outer}'><span style='text-decoration: {inner}'>x</span></span></p>", "x")));
@@ -81,6 +82,27 @@ public class HtmlToWmlTextDecorationTests
     [InlineData("<p><span style='text-decoration: underline'>a</span><span>x</span></p>", "")]
     public void SingleDecoration_ReachesOnlyItsOwnText(string body, string expected) =>
         Assert.Equal(expected, Describe(Convert(body, "x")));
+
+    [Theory]
+    [InlineData("<p style='text-decoration: underline'><span style='text-decoration: line-through'>x</span></p>", "strike u=single")]
+    [InlineData("<ul><li style='text-decoration: underline'><span style='text-decoration: line-through'>x</span></li></ul>", "strike u=single")]
+    [InlineData("<table><tr><td style='text-decoration: underline'><p><span style='text-decoration: line-through'>x</span></p></td></tr></table>", "strike u=single")]
+    public void BlockDecoration_AddsToANestedSpansLines(string body, string expected) =>
+        Assert.Equal(expected, Describe(Convert(body, "x")));
+
+    /// <summary>
+    /// An ancestor's lines do not reach the text of an inline-block, a float or an absolutely
+    /// positioned box, though such a box still draws its own lines.
+    /// </summary>
+    [Theory]
+    [InlineData("display: inline-block; text-decoration: line-through", "strike")]
+    [InlineData("display: inline-block", "")]
+    [InlineData("float: left", "")]
+    [InlineData("position: absolute", "")]
+    [InlineData("position: relative", "u=single")]
+    public void OutOfFlowOrAtomicBox_StopsAncestorLines(string innerStyle, string expected) =>
+        Assert.Equal(expected, Describe(Convert(
+            $"<p><span style='text-decoration: underline'><span style='{innerStyle}'>x</span></span></p>", "x")));
 
     [Theory]
     [InlineData("<span style='text-decoration: line-through'><a href='http://example.com/'>x</a></span>", "strike u=single")]

@@ -47,7 +47,10 @@ All notable changes to this project will be documented in this file.
   (the DOCX-to-HTML converter writes those as an underlined outer span around a struck inner span). As
   in CSS, a run now carries every line drawn by its ancestors, each line takes its style from the
   nearest element that draws it, and `text-decoration: none` on a child no longer removes an
-  ancestor's line. Underline colour is still not mapped back to `w:u w:color`.
+  ancestor's line. Also as in CSS, an ancestor's lines no longer reach the text of an inline-block,
+  a float or an absolutely positioned element, which keeps only its own lines; before, such an
+  element inherited the ancestor's underline or strikethrough. Underline colour is still not mapped
+  back to `w:u w:color`.
 
 - Tracked formatting of a run that already has another author's pending format change is now
   credited to the person who made it (#1295). The session folded the new formatting into the
