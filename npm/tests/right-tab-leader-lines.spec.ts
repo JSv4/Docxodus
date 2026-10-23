@@ -188,6 +188,58 @@ test.describe('tab leader and signature lines (#1285)', () => {
     ]);
   });
 
+  test('a page number held in a PAGEREF field ends on the right stop', async ({ page }) => {
+    const pageRef = (name: string, number: string) =>
+      `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGEREF ${name} \\h </w:instrText></w:r>` +
+      `<w:r><w:fldChar w:fldCharType="separate"/></w:r>${run(number)}<w:r><w:fldChar w:fldCharType="end"/></w:r>`;
+    await layOutBody(page,
+      entry(`${run('2.1.')}${tab()}${run('Quarry Access Roads')}${tab()}${pageRef('_Toc1', '3')}`) +
+      entry(`${run('2.2.')}${tab()}${run('Spillway')}${tab()}${pageRef('_Toc2', '12')}`));
+    const [first, second] = await words(page);
+    for (const [line, number] of [[first, '3'], [second, '12']] as const) {
+      expect(find(line, number).right).toBeCloseTo(COLUMN_PX, 0);
+      expect(new Set(line.map((w) => w.top)).size).toBe(1);
+    }
+  });
+
+  test('a title that wraps keeps its page number on its last line, on the stop', async ({ page }) => {
+    const title = 'Culvert Inspection, Annual Load Ratings and Scour Monitoring for the Northern Spillway Approach';
+    await layOutBody(page, entry(`${run('2.1.')}${tab()}${run(title)}<w:r><w:tab/><w:t>27</w:t></w:r>`));
+    const [line] = await words(page);
+    const tops = [...new Set(line.map((w) => w.top))];
+    // Two lines, as LibreOffice lays it out: the title wraps at the line end (566.4px), its second
+    // line starts at the left indent, and the number ends on the stop beside the last title word.
+    expect(tops).toHaveLength(2);
+    expect(find(line, '2.1.').top).toBe(tops[0]);
+    expect(Math.max(...line.filter((w) => w.top === tops[0]).map((w) => w.right))).toBeLessThanOrEqual(566.4);
+    expect(find(line, 'Northern').left).toBeCloseTo(TITLE_PX, 0);
+    expect(find(line, '27').top).toBe(find(line, 'Approach').top);
+    expect(find(line, '27').right).toBeCloseTo(COLUMN_PX, 0);
+    // The leader runs from the end of the title's last line to the number.
+    const leader = await page.evaluate(() => {
+      const box = document.querySelector('[data-docx-tab="right"]')!.getBoundingClientRect();
+      return { left: box.left - document.body.getBoundingClientRect().left };
+    });
+    expect(leader.left).toBeCloseTo(find(line, 'Approach').right, 0);
+  });
+
+  test('a second tab after a stretch that reaches into the right indent stays on the line', async ({ page }) => {
+    const stops = (next: string) => `<w:tab w:val="left" w:pos="1296"/><w:tab w:val="right" w:leader="dot" w:pos="8800"/>${next}`;
+    const content = (last: string) => `${run('2.1.')}${tab()}${run('Spillway')}<w:r><w:tab/><w:t>12</w:t></w:r><w:r><w:tab/><w:t>${last}</w:t></w:r>`;
+    await layOutBody(page,
+      entry(content('34'), stops('<w:tab w:val="right" w:leader="dot" w:pos="9360"/>')) +
+      entry(content('A'), stops('<w:tab w:val="left" w:pos="8900"/>')));
+    const [rightRight, rightLeft] = await words(page);
+    // LibreOffice: "12" ends on the 8800 stop (586.7px), then "34" ends on 9360 (624px), or "A"
+    // starts on 8900 (593.3px), all on the first line.
+    for (const line of [rightRight, rightLeft]) {
+      expect(new Set(line.map((w) => w.top)).size).toBe(1);
+      expect(find(line, '12').right).toBeCloseTo(8800 / 15, 0);
+    }
+    expect(find(rightRight, '34').right).toBeCloseTo(COLUMN_PX, 0);
+    expect(find(rightLeft, 'A').left).toBeCloseTo(8900 / 15, 0);
+  });
+
   test('a bookmark inside a link keeps the whole entry inside that link and on its stops', async ({ page }) => {
     const linked = (bookmark: string) => entry(`<w:hyperlink w:anchor="_Toc9">${bookmark}${run('2.1.')}${tab()}${run('Spillway')}<w:r><w:tab/><w:t>12</w:t></w:r></w:hyperlink>`);
     await layOutBody(page, linked('<w:bookmarkStart w:id="1" w:name="_Toc1"/><w:bookmarkEnd w:id="1"/>') + linked(''));

@@ -113,6 +113,13 @@ All notable changes to this project will be documented in this file.
   changes nothing, including its other matches. Replace those through `Grep` and `ReplaceMatch`, skipping
   the match inside the move.
 
+- HTML right-tab segments now cover three more leader-line shapes (#1285). A page number held in a
+  complex field, as table-of-contents `PAGEREF` numbers are, ends on its right stop instead of falling
+  short of it or wrapping to the next line. A title that wraps keeps its page number on its last line, on
+  the stop, with the leader from the title's end; the number had dropped to a line of its own. And a tab
+  after a stretch right-aligned on a stop inside the right indent stays on the line, on its own stop,
+  instead of sending the paragraph's tab stretches to the next line.
+
 - HTML output now draws an underline or strikethrough across a tab in an underlined or struck run,
   such as the signature line in `By: ____`; it drew no line, because CSS does not decorate the tab's
   box (#1285). A bookmark inside a hyperlink no longer writes an `<a>` inside the link's `<a>`, which

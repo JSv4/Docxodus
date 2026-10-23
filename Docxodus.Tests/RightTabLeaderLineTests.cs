@@ -53,12 +53,29 @@ public class RightTabLeaderLineTests
             (variant is "bookmark" or "linked-bookmark" ? $"<w:bookmarkStart w:id=\"{i}\" w:name=\"_Toc{i}\"/><w:bookmarkEnd w:id=\"{i}\"/>" : "") +
             $"<w:r><w:t>{e.Label}</w:t></w:r><w:r>{tabRPr}<w:tab/></w:r><w:r><w:t>{e.Title}</w:t></w:r>" +
             (variant == "hyphen" ? "<w:r><w:noBreakHyphen/><w:t>West</w:t></w:r>" : "") +
-            $"<w:r>{tabRPr}<w:tab/><w:t>{e.Number}</w:t></w:r>" +
+            (variant == "pageref"
+                ? $"<w:r><w:tab/></w:r>{Field($"PAGEREF _Toc{i} \\h", $"<w:r><w:t>{e.Number}</w:t></w:r>")}"
+                : $"<w:r>{tabRPr}<w:tab/><w:t>{e.Number}</w:t></w:r>") +
             (variant is "linked-bookmark" or "toc-link-underline" ? fieldLink
                 ? "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>" : "</w:hyperlink>" : "") +
             (variant == "toc-link-underline" && i == Entries.Length - 1 ? "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>" : "") +
             "</w:p>"));
+        return Package(body);
+    }
 
+    /// <summary>A complex field: begin, instruction, separator, <paramref name="result"/>, end.</summary>
+    private static string Field(string instruction, string result) =>
+        "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>" +
+        $"<w:r><w:instrText xml:space=\"preserve\"> {instruction} </w:instrText></w:r>" +
+        $"<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>{result}<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+
+    /// <summary>One entry with the given stops and content, its line ending 864 twips before the
+    /// column edge.</summary>
+    private static string Entry(string stops, string content) =>
+        $"<w:p><w:pPr><w:tabs>{stops}</w:tabs><w:ind w:left=\"1296\" w:right=\"864\" w:hanging=\"648\"/></w:pPr>{content}</w:p>";
+
+    private static byte[] Package(string body)
+    {
         using var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
         {
@@ -120,6 +137,7 @@ public class RightTabLeaderLineTests
     [InlineData("hyphen")]
     [InlineData("underline")]
     [InlineData("strike")]
+    [InlineData("pageref")]
     public void RightTab_IsAFlexSegmentEndingOnTheStop(string variant)
     {
         foreach (var segment in RightTabSegments(Fixture(variant, rightIndent: null)))
@@ -134,6 +152,8 @@ public class RightTabLeaderLineTests
     [InlineData("plain")]
     [InlineData("bookmark")]
     [InlineData("underline")]
+    // A table of contents holds its page numbers in PAGEREF fields (issue #1285).
+    [InlineData("pageref")]
     public void RightTabSegment_OverhangsTheRightIndentToReachTheStop(string variant)
     {
         // The line ends 864 twips (43.2pt) before the stop; the segment keeps its full width and
@@ -170,6 +190,100 @@ public class RightTabLeaderLineTests
         // text estimated to run past a stop gets no extra room, the same as at a stop inside the line.
         foreach (var segment in RightTabSegments(Fixture("plain", rightIndent: 9360 - (textEnd - 30), rightStop: textEnd - 10)))
             Assert.Equal("-1pt", Style(segment, "margin-right"));
+    }
+
+    [Theory]
+    // Controls: a stretch converts its fields on its own, so a field the converter wraps whole
+    // must not be cut at a tab. Such a paragraph keeps the run-aware path.
+    [InlineData("HYPERLINK \\l \"_Ref1\"", false)]
+    [InlineData("PAGE", true)]
+    public void FieldOpenAcrossATab_KeepsTheRunAwarePath(string instruction, bool paginated)
+    {
+        var docx = Package(Entry("<w:tab w:val=\"left\" w:pos=\"1296\"/><w:tab w:val=\"right\" w:pos=\"9360\"/>",
+            Field(instruction, "<w:r><w:t>2.1.</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>Spillway</w:t></w:r><w:r><w:tab/><w:t>12</w:t></w:r>")));
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("field.docx", docx), new WmlToHtmlConverterSettings
+        {
+            FabricateCssClasses = false,
+            RenderPagination = paginated ? PaginationMode.Paginated : PaginationMode.None,
+        });
+        var tab = html.Descendants().Single(e => (string?)e.Attribute("data-docx-tab") == "right");
+        Assert.DoesNotContain("width: 100%", (string?)tab.Attribute("style") ?? "");
+    }
+
+    private const string LeftStop = "<w:tab w:val=\"left\" w:pos=\"1296\"/>";
+
+    private static XElement RightSegment(XElement html, string number) =>
+        html.Descendants().Where(e => Style(e, "display") == "inline-flex").Single(e =>
+            e.Descendants().Any(d => (string?)d.Attribute("data-docx-tab") == "right") && e.Value.EndsWith(number));
+
+    [Fact]
+    public void SecondTabPastTheLineEnd_FollowsTheFirstOnTheLine()
+    {
+        // The line ends at 9360 - 864 = 8496 twips. "12" is right-aligned on a stop at 8800, inside
+        // the right indent; LibreOffice keeps the next stretch, "34" on a right stop at 9360, on the
+        // same line rather than wrapping the paragraph (issue #1285).
+        var html = Html(Package(Entry(LeftStop + "<w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"8800\"/><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9360\"/>",
+            "<w:r><w:t>2.1.</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>Spillway</w:t></w:r><w:r><w:tab/><w:t>12</w:t></w:r><w:r><w:tab/><w:t>34</w:t></w:r>")));
+        var tabs = html.Descendants().Where(e => (string?)e.Attribute("data-docx-tab") == "right").ToArray();
+        Assert.Equal(2, tabs.Length);
+        Assert.All(tabs, tab => Assert.Contains("width: 100%", (string?)tab.Attribute("style") ?? ""));
+
+        // The first segment gives back its 304-twip (15.2pt) overhang. Everything after it sits in
+        // one box that takes no room and starts where that segment ends, and the second segment,
+        // 9360 - 8800 = 560 twips (28pt) wide, then ends on its own stop.
+        var first = RightSegment(html, "12");
+        Assert.Equal("-15.2pt", Style(first, "margin-right"));
+        var tail = (XElement)first.NextNode!;
+        Assert.Equal(("0", "15.2pt", "-15.2pt"), (Style(tail, "width"), Style(tail, "margin-left"), Style(tail, "margin-right")));
+        var second = RightSegment(html, "34");
+        Assert.Equal(tail, second.Parent);
+        Assert.Equal("28pt", Style(second, "width"));
+        Assert.Null(Style(second, "margin-right"));
+    }
+
+    [Fact]
+    public void SecondTabInsideTheLine_NeedsNoTailBox()
+    {
+        // Control: stops at 8000 and 8400 both lie before the line end.
+        var html = Html(Package(Entry(LeftStop + "<w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"8000\"/><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"8400\"/>",
+            "<w:r><w:t>2.1.</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>Spillway</w:t></w:r><w:r><w:tab/><w:t>12</w:t></w:r><w:r><w:tab/><w:t>34</w:t></w:r>")));
+        Assert.Equal(RightSegment(html, "12").Parent, RightSegment(html, "34").Parent);
+        Assert.DoesNotContain(html.Descendants(), e => Style(e, "width") == "0");
+    }
+
+    private const string LongTitle = "Culvert Inspection, Annual Load Ratings and Scour Monitoring for the Northern Spillway Approach";
+
+    [Fact]
+    public void WrappedTitle_WrapsInsideItsSegmentAndKeepsTheNumberOnTheStop()
+    {
+        // The title runs past the line end. It began at the left indent, where its second line begins
+        // too, so it wraps inside a segment that starts there and reaches the stop at 9360: 8064 twips
+        // (403.2pt) wide, the title itself at most 7200 twips (360pt), to the line end (issue #1285).
+        var html = Html(Package(Entry(LeftStop + "<w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9360\"/>",
+            $"<w:r><w:t>2.1.</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>{LongTitle}</w:t></w:r><w:r><w:tab/><w:t>27</w:t></w:r>")));
+        var segment = RightSegment(html, "27");
+        Assert.Equal(("403.2pt", "-43.2pt", "last baseline", "top"),
+            (Style(segment, "width"), Style(segment, "margin-right"), Style(segment, "align-items"), Style(segment, "vertical-align")));
+        var title = segment.Descendants().Single(e => Style(e, "max-width") != null);
+        Assert.Equal("360pt", Style(title, "max-width"));
+        Assert.StartsWith(LongTitle, title.Value);
+        // The tab takes no room after the title's last word, and its leader reaches to the stop.
+        var tab = title.Descendants().Single(e => (string?)e.Attribute("data-docx-tab") == "right");
+        Assert.Equal("403.2pt", Style(tab, "width"));
+        Assert.Equal("0", Style(tab.Parent!, "width"));
+    }
+
+    [Fact]
+    public void WrappedTextNotStartingAtTheIndent_KeepsTheRunAwarePath()
+    {
+        // Control: with no hanging indent, the title begins at the 1296 stop but its second line
+        // begins at the left indent, 0, so it cannot wrap inside a box that starts at the stop.
+        var html = Html(Package(
+            $"<w:p><w:pPr><w:tabs>{LeftStop}<w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9360\"/></w:tabs><w:ind w:right=\"864\"/></w:pPr>" +
+            $"<w:r><w:t>2.1.</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>{LongTitle}</w:t></w:r><w:r><w:tab/><w:t>27</w:t></w:r></w:p>"));
+        var tab = html.Descendants().Single(e => (string?)e.Attribute("data-docx-tab") == "right");
+        Assert.DoesNotContain("width: 100%", (string?)tab.Attribute("style") ?? "");
+        Assert.DoesNotContain(html.Descendants(), e => Style(e, "max-width") != null);
     }
 
     [Theory]

@@ -7531,26 +7531,52 @@ namespace Docxodus
                 return null;
             foreach (var tabRun in tabRuns)
                 if (!CanFlexTabRun(settings, tabRun)) return null;
-            // A bookmark is an invisible marker, unless it opens a rendered annotation range.
+            // A bookmark is an invisible marker, unless it opens a rendered annotation range. A
+            // complex field's begin, instruction, separator and end runs draw nothing, so a page
+            // number held in a PAGEREF field still gets a browser-sized segment (issue #1285); a
+            // form field's begin carries its form data, which renders.
             bool Unsupported(XElement e) => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd
                 ? settings.RenderAnnotations && ((string?)e.Attribute(W.name))?
                     .StartsWith(AnnotationManager.BookmarkPrefix, StringComparison.Ordinal) == true
                 : e.Name != W.r || e.Elements().Any(c =>
-                    c.Name != W.rPr && c.Name != W.t && c.Name != W.tab && c.Name != W.noBreakHyphen);
-            if (tabRuns.Count == 0 || content.Any(Unsupported) ||
-                tabRuns.Any(r => r.Elements().Count(e => e.Name != W.rPr) != 1 ||
-                    r.Element(W.tab)!.Attribute(PtOpenXml.TabAfterWrappedText) != null ||
+                    c.Name != W.rPr && c.Name != W.t && c.Name != W.tab && c.Name != W.noBreakHyphen &&
+                    c.Name != W.instrText && !(c.Name == W.fldChar && !c.HasElements));
+            // Each stretch between tabs converts its fields on its own, so a field open across a tab
+            // is cut in two. That is harmless for a field drawn as its result's runs, but not for one
+            // the converter wraps whole: a HYPERLINK's link or a page-number marker.
+            bool CutsAWrappedField(XElement tabRun)
+            {
+                var stack = tabRun.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>();
+                if (stack is not { Count: > 0 }) return false;
+                var instrText = FieldRetriever.InstrText(tabRun.Ancestors().Last(), stack.Min(info => info.Id))
+                    .TrimStart('{').TrimEnd('}');
+                return FieldRetriever.ParseField(instrText).FieldType == "HYPERLINK" ||
+                    Internal.PageNumberFieldInstr.TryParse(instrText) != null;
+            }
+            // Text that wraps before a tab keeps the run-aware path, unless it is the last tab and a
+            // right one whose wrapped text can wrap inside its segment (see below).
+            bool AfterUnsupportedWrap(XElement r) =>
+                r.Element(W.tab)!.Attribute(PtOpenXml.TabAfterWrappedText) != null &&
+                (r != tabRuns[^1] || r.Element(W.tab)!.Attribute(TabWrappedSegmentWidthAttribute) == null);
+            if (tabRuns.Count == 0 || content.Any(Unsupported) || tabRuns.Any(CutsAWrappedField) ||
+                tabRuns.Any(r => r.Elements().Count(e => e.Name != W.rPr) != 1 || AfterUnsupportedWrap(r) ||
                     ((string?)r.Element(W.tab)!.Attribute(PtOpenXml.TabAlignment) ?? "left") is not ("left" or "right")))
                 return null;
 
             var result = new List<object?>();
+            XElement? tail = null;
+            void Emit(object? item)
+            {
+                if (tail != null) tail.Add(item);
+                else result.Add(item);
+            }
             var start = 0;
             while (start < content.Count)
             {
                 var tabIndex = content.FindIndex(start, e => e.Element(W.tab) != null);
                 if (tabIndex < 0)
                 {
-                    result.Add(ConvertContentThatCanContainFields(wordDoc, settings, content.Skip(start)));
+                    Emit(ConvertContentThatCanContainFields(wordDoc, settings, content.Skip(start)));
                     break;
                 }
                 var preceding = content.Skip(start).Take(tabIndex - start).ToList();
@@ -7558,7 +7584,7 @@ namespace Docxodus
                 var tab = tabRun.Element(W.tab)!;
                 if ((string?)tab.Attribute(PtOpenXml.TabAlignment) != "right")
                 {
-                    result.AddRange(TransformElementsPrecedingTab(wordDoc, settings, preceding, tabRun));
+                    Emit(TransformElementsPrecedingTab(wordDoc, settings, preceding, tabRun));
                     start = tabIndex + 1;
                     continue;
                 }
@@ -7581,24 +7607,83 @@ namespace Docxodus
                     });
                     return span;
                 }
-                var precedingSpan = TextSpan(preceding);
                 var tabSpan = CreateFlexibleTabRun(wordDoc, settings, tabRun)!;
                 var followingSpan = TextSpan(following);
-                var segment = new XElement(Xhtml.span, precedingSpan, tabSpan, followingSpan);
-                var segmentStyle = new Dictionary<string, string>
+                var overhang = (decimal?)tab.Attribute(TabOverhangAttribute);
+                var wrappedWidth = (decimal?)tab.Attribute(TabWrappedSegmentWidthAttribute);
+                var segment = wrappedWidth is { } wrapped
+                    ? WrappedSegment(wordDoc, settings, preceding, tabSpan, followingSpan, wrapped, overhang ?? 0m)
+                    : new XElement(Xhtml.span, TextSpan(preceding), tabSpan, followingSpan);
+                var segmentStyle = segment.Annotation<Dictionary<string, string>>() ?? new Dictionary<string, string>
                 {
                     { "display", "inline-flex" }, { "align-items", "baseline" },
                     { "text-indent", "0" }, { "width", InchesCss(width) }
                 };
                 // Reaching a stop past the line end, the segment hands the overhang back
                 // to the line so it does not break before the segment.
-                if ((decimal?)tab.Attribute(TabOverhangAttribute) is { } overhang)
-                    segmentStyle["margin-right"] = InchesCss(-overhang);
-                segment.AddAnnotation(segmentStyle);
-                result.Add(segment);
+                if (overhang != null && tail == null)
+                    segmentStyle["margin-right"] = InchesCss(-overhang.Value);
+                if (segment.Annotation<Dictionary<string, string>>() == null)
+                    segment.AddAnnotation(segmentStyle);
+                Emit(segment);
                 start = nextTab;
+                // Past the line end the line has no room left, but LibreOffice keeps what follows on
+                // it, the next stop included (issue #1285). So everything after this segment goes in
+                // one box that takes no room, starting where the segment ends: its margins undo the
+                // overhang the segment handed back.
+                if (overhang != null && tail == null && start < content.Count)
+                {
+                    tail = new XElement(Xhtml.span);
+                    tail.AddAnnotation(new Dictionary<string, string>
+                    {
+                        { "display", "inline-block" }, { "width", "0" }, { "white-space", "nowrap" },
+                        { "text-indent", "0" },
+                        { "margin-left", InchesCss(overhang.Value) }, { "margin-right", InchesCss(-overhang.Value) },
+                    });
+                    result.Add(tail);
+                }
             }
             return result;
+        }
+
+        /// <summary>
+        /// A right-aligned segment whose text wraps, such as a long table-of-contents title. Its text
+        /// began at the left indent, where its later lines begin too, so the text can wrap inside a
+        /// box that starts there and ends at the line end. The segment reaches on to the stop, and
+        /// aligns the tab and the following text with the text's last line: the following text ends
+        /// on the stop, and the tab, which takes no room, draws its leader from the end of the
+        /// text's last line, clipped where the following text begins (issue #1285).
+        /// </summary>
+        private static XElement WrappedSegment(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+            List<XElement> preceding, XElement tabRun, XElement followingSpan, decimal width, decimal overhang)
+        {
+            var tabStyle = tabRun.Annotation<Dictionary<string, string>>()!;
+            foreach (var flex in new[] { "flex-grow", "flex-shrink", "flex-basis", "min-width" })
+                tabStyle.Remove(flex);
+            tabStyle["width"] = "0";
+            tabStyle["height"] = "0";
+            tabRun.DescendantsAndSelf().First(e => e.Attribute("data-docx-tab") != null)
+                .Annotation<Dictionary<string, string>>()!["width"] = InchesCss(width);
+
+            var text = new XElement(Xhtml.span, ConvertContentThatCanContainFields(wordDoc, settings, preceding), tabRun);
+            text.AddAnnotation(new Dictionary<string, string>
+            {
+                { "display", "block" }, { "max-width", InchesCss(width - overhang) },
+            });
+            var clip = new XElement(Xhtml.span, text);
+            clip.AddAnnotation(new Dictionary<string, string>
+            {
+                { "flex-grow", "1" }, { "flex-shrink", "1" }, { "flex-basis", "0" }, { "min-width", "0" },
+                { "overflow-x", "clip" },
+            });
+            var segment = new XElement(Xhtml.span, clip, followingSpan);
+            // The segment's first line shares the paragraph's line, so its top meets the line top.
+            segment.AddAnnotation(new Dictionary<string, string>
+            {
+                { "display", "inline-flex" }, { "align-items", "last baseline" }, { "vertical-align", "top" },
+                { "text-indent", "0" }, { "width", InchesCss(width) },
+            });
+            return segment;
         }
 
         private static List<object?> TransformElementsPrecedingTab(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
@@ -9010,6 +9095,7 @@ namespace Docxodus
         private const int DefaultTabStopTwips = 720;
         private static readonly XName TabFollowingWidthAttribute = PtOpenXml.pt + "TabFollowingWidth";
         private static readonly XName TabOverhangAttribute = PtOpenXml.pt + "TabOverhang";
+        private static readonly XName TabWrappedSegmentWidthAttribute = PtOpenXml.pt + "TabWrappedSegmentWidth";
 
         /// <summary>Gets the DocumentSettingsPart's XDocument, or null if the part is absent.
         /// DocumentSettingsPart is optional in OOXML — Word opens packages without
@@ -9479,6 +9565,9 @@ namespace Docxodus
                 }
             }
             var twipCounter = firstInTwips;
+            var rightStopReached = 0;
+            // Where the text since the last tab or break began; null until that text starts.
+            int? stretchStart = firstInTwips;
             var contentToMeasure = element.DescendantsTrimmed(z => z.Name == W.txbxContent || z.Name == W.pPr || z.Name == W.rPr).ToArray();
             var currentElementIdx = 0;
             while (true)
@@ -9488,6 +9577,7 @@ namespace Docxodus
                 if (currentElement.Name == W.br)
                 {
                     twipCounter = leftInTwips;
+                    stretchStart = null;
 
                     currentElement.Add(new XAttribute(PtOpenXml.TabWidth,
                         TabWidthValue(firstInTwips)));
@@ -9504,13 +9594,18 @@ namespace Docxodus
                                       runContainingTabToReplace.Ancestors(W.p).FirstOrDefault()?.Attribute(PtOpenXml.pt + "FontName");
 
                     // Text that ran past the line wrapped: the tab advances from the pen on the last
-                    // line, not from where one unwrapped line would end (issue #891).
-                    if (lineEndTwips is { } lineEnd && twipCounter > lineEnd)
+                    // line, not from where one unwrapped line would end (issue #891). A stretch
+                    // right-aligned on a stop inside the right indent ends past the line end without
+                    // wrapping, so the pen may reach that stop (issue #1285).
+                    var wrappedFromIndent = false;
+                    if (lineEndTwips is { } lineEnd && twipCounter > Math.Max(lineEnd, rightStopReached))
                     {
+                        wrappedFromIndent = (stretchStart ?? twipCounter) == leftInTwips;
                         twipCounter = PenAfterWrapping(contentToMeasure, currentElementIdx,
                             firstInTwips, leftInTwips, lineEnd);
                         currentElement.SetAttributeValue(PtOpenXml.TabAfterWrappedText, true);
                     }
+                    stretchStart = null;
 
                     var testAmount = twipCounter;
 
@@ -9561,11 +9656,17 @@ namespace Docxodus
                             GetLeader(tabAfterText));
                         var stopTwips = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!);
                         twipCounter = Math.Max(stopTwips, twipCounter + widthOfTextAfterTab);
+                        rightStopReached = Math.Max(rightStopReached, stopTwips);
                         // A right stop may lie inside the right indent or past the column edge: the
                         // right-aligned text then ends past the line, on the stop. Text estimated to
                         // run past the stop gets no more room than at a stop inside the line.
                         if (lineEndTwips is { } end && stopTwips > end)
                             currentElement.SetAttributeValue(TabOverhangAttribute, TabWidthValue(stopTwips - end));
+                        // The wrapped text began at the left indent, where its later lines begin too,
+                        // so it can wrap inside one box that reaches from there to the stop.
+                        if (wrappedFromIndent)
+                            currentElement.SetAttributeValue(TabWrappedSegmentWidthAttribute,
+                                TabWidthValue(stopTwips - leftInTwips));
 
                         var lastElement = textElementsToMeasure.LastOrDefault();
                         if (lastElement == null)
@@ -9726,6 +9827,7 @@ namespace Docxodus
 
                 if (currentElement.Name == W.t)
                 {
+                    stretchStart ??= twipCounter;
                     // Measure text width to properly position subsequent tabs
                     // Uses estimation fallback when fonts are unavailable (Azure, WASM)
                     var runContainingTabToReplace = currentElement.Parent!; // a w:t always has a w:r parent
