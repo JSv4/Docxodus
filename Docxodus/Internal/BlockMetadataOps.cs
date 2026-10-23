@@ -176,11 +176,21 @@ internal static class BlockMetadataOps
     /// main-story paragraph mark's (<c>w:p/w:pPr/w:sectPr</c>, in the body, a table cell or a
     /// content control). Not one: a paragraph's inside a text box (its own story), and the earlier
     /// properties a <c>w:sectPrChange</c> or <c>w:pPrChange</c> keeps. Mirrors
-    /// <c>WmlToHtmlConverter.CollectSectionData</c>; see docs/ooxml_corner_cases.md.</summary>
-    internal static bool IsSectionBreak(XElement sectPr) =>
-        sectPr.Parent is { } parent
-        && (parent.Name == W.body
-            || parent.Name == W.pPr && parent.Parent?.Name == W.p && !parent.Ancestors(W.txbxContent).Any());
+    /// <c>WmlToHtmlConverter.CollectSectionData</c>; see docs/ooxml_corner_cases.md. Names are
+    /// matched in the element's own namespace, so a Strict-conformance package reads the same.</summary>
+    internal static bool IsSectionBreak(XElement sectPr)
+    {
+        var w = sectPr.Name.Namespace;
+        return sectPr.Parent is { } parent
+            && (parent.Name == w + "body"
+                || parent.Name == w + "pPr" && parent.Parent?.Name == w + "p" && !parent.Ancestors(w + "txbxContent").Any());
+    }
+
+    /// <summary>The section breaks under <paramref name="root"/> (a body, usually), in document
+    /// order: one per section, the last being the body's trailing <c>w:sectPr</c>. The one place
+    /// that enumerates sections; every walk that counts or indexes them goes through it.</summary>
+    internal static IEnumerable<XElement> SectionBreaks(XElement root) =>
+        root.Descendants().Where(e => e.Name.LocalName == "sectPr" && IsSectionBreak(e));
 
     /// <summary>
     /// Extend a section's own references with the ones it INHERITS. Per ECMA-376 §17.6.17 a
@@ -199,7 +209,7 @@ internal static class BlockMetadataOps
 
         // Every sectPr in document order — inline section breaks (w:pPr/w:sectPr) followed by the
         // body's trailing one, which is exactly the order sections apply in.
-        var all = body.Descendants(W.sectPr).Where(IsSectionBreak).ToList();
+        var all = SectionBreaks(body).ToList();
         int idx = all.IndexOf(governing);
         if (idx <= 0) return (ownHeaders, ownFooters);
 

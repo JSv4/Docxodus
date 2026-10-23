@@ -620,8 +620,9 @@ public static class WmlToMarkdownConverter
         if (n == W.tr) return "tr";
         if (n == W.tc) return "tc";
         if (n == W.gridCol) return "col";
-        // The earlier properties a pending w:sectPrChange keeps are a w:sectPr too, but no section.
-        if (n == W.sectPr) return el.Parent?.Name == W.sectPrChange ? null : "sec";
+        // Only a section break is a section: not the earlier properties a pending w:sectPrChange
+        // keeps, nor a w:sectPr inside a text box.
+        if (n == W.sectPr) return Internal.BlockMetadataOps.IsSectionBreak(el) ? "sec" : null;
         if (n == W.footnote) return "fn";
         if (n == W.endnote) return "en";
         if (n == W.comment) return "cmt";
@@ -1111,7 +1112,7 @@ public static class WmlToMarkdownConverter
     private static void EmitInlineSectionBreak(XElement p, EmitContext ctx)
     {
         var sectPr = p.Element(W.pPr)?.Element(W.sectPr);
-        if (sectPr == null) return;
+        if (sectPr == null || !Internal.BlockMetadataOps.IsSectionBreak(sectPr)) return;
         var unid = (string?)sectPr.Attribute(PtOpenXml.Unid);
         if (unid == null) return;
         if (ctx.Settings.AnchorMode != AnchorRenderMode.None)

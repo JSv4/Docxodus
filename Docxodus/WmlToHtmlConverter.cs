@@ -8795,8 +8795,7 @@ namespace Docxodus
         private static string GetNoteNumberFormat(WordprocessingDocument wordDoc, XName notePrName, string specDefault)
         {
             var body = wordDoc.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
-            var sectionFormat = body?.Descendants(W.sectPr)
-                .Where(Internal.BlockMetadataOps.IsSectionBreak)   // not a pending change's earlier copy
+            var sectionFormat = (body is null ? Enumerable.Empty<XElement>() : Internal.BlockMetadataOps.SectionBreaks(body))
                 .Select(sectPr => (string?)sectPr.Element(notePrName)?.Element(W.numFmt)?.Attribute(W.val))
                 .FirstOrDefault(v => v != null);
             if (sectionFormat != null)
@@ -10219,7 +10218,7 @@ namespace Docxodus
 
             foreach (var d in reverseDescendants)
             {
-                if (d.Name == W.sectPr)
+                if (d.Name == W.sectPr && Internal.BlockMetadataOps.IsSectionBreak(d))
                 {
                     if (d.Attribute(XNamespace.Xmlns + "w") == null)
                         d.Add(new XAttribute(XNamespace.Xmlns + "w", W.w));
@@ -10238,7 +10237,7 @@ namespace Docxodus
         {
             var currentSection = new SectionAnnotation()
             {
-                SectionElement = reverseDescendants.FirstOrDefault(e => e.Name == W.sectPr)
+                SectionElement = reverseDescendants.FirstOrDefault(e => e.Name == W.sectPr && Internal.BlockMetadataOps.IsSectionBreak(e))
             };
             if (currentSection.SectionElement != null &&
                 currentSection.SectionElement.Attribute(XNamespace.Xmlns + "w") == null)

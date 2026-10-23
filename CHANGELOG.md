@@ -89,8 +89,17 @@ All notable changes to this project will be documented in this file.
   `w:sectPrChange` keeps the section's earlier properties as a nested `w:sectPr`, and the anchor
   index listed that copy as one more `sec` anchor, so a document with two sections reported three
   and a caller listing sections saw one that does not exist; a tracked `SetPageSetup` added one
-  each time. The HTML converter's tracked-changes view also read the copy's footnote/endnote
-  number format as the section's own, numbering notes in the format the change replaced.
+  each time. Other surfaces read the copy as a section too:
+  - the package manifest's `sectionCount` (npm `sectionCount`, Python `section_count`) counted it,
+    so a two-section document reported four;
+  - the OpenContracts export took a page size from it, exporting the earlier page size;
+  - the HTML converter laid out the last paragraph of the document with the earlier page geometry
+    whenever the final section had a pending change, so a page-anchored floating picture could flip
+    sides with tracked changes rendered;
+  - its tracked-changes view numbered footnotes and endnotes in the format the change replaced.
+
+  Every walk that counts or indexes sections now goes through one helper, which also leaves out a
+  `w:sectPr` inside a text box, as the converter's section count already did.
 - Section reads and edits now act on the section an anchor names (#1308). A `sec` anchor of an
   earlier section resolved to the document's final section, so `GetSectionInfo` reported the last
   section's page and `SetPageSetup`, `SetPageNumbering` and the header/footer operations changed
