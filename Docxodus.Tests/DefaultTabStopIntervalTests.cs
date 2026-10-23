@@ -92,17 +92,16 @@ public class DefaultTabStopIntervalTests
     }
 
     [Theory]
-    [InlineData(12, 12)]
-    [InlineData(0, 720)]
-    [InlineData(720, 720)]
-    public void EveryTabLandsOnAnAutomaticStopAndNoTextIsLost(int interval, int effectiveInterval)
+    [InlineData(12)]
+    [InlineData(720)]
+    public void EveryTabLandsOnAnAutomaticStopAndNoTextIsLost(int interval)
     {
         var html = Convert(Fixture(interval));
 
         AssertTextKeptInOrder(html);
         var stops = TabStopsInTwips(html);
         Assert.Equal(3, stops.Length);
-        Assert.All(stops, s => Assert.Equal(0, s % effectiveInterval));
+        Assert.All(stops, s => Assert.Equal(0, s % interval));
         Assert.True(stops[0] > 1200, $"the first stop {stops[0]} should lie past the 100th 12-twip stop");
         Assert.True(stops[0] < stops[1] && stops[1] < stops[2], string.Join(", ", stops));
     }
@@ -122,10 +121,25 @@ public class DefaultTabStopIntervalTests
     }
 
     [Fact]
-    public void ZeroIntervalFallsBackToTheHalfInchDefault()
+    public void ZeroIntervalTabsAdvanceNothingAndNoTextIsLost()
     {
-        // A zero multiplier generates no automatic stops; it is read as if the element were
-        // absent, the spec's 720-twip default (LibreOffice likewise falls back to its own default).
-        Assert.Equal(TabStopsInTwips(Convert(Fixture(720))), TabStopsInTwips(Convert(Fixture(0))));
+        // A zero interval generates no automatic stops, and Word gives such a tab no width.
+        var html = Convert(Fixture(0));
+
+        AssertTextKeptInOrder(html);
+        Assert.Equal(new[] { 0m, 0m, 0m }, TabAdvancesInInches(html));
+    }
+
+    [Fact]
+    public void ZeroIntervalStillHonoursACustomStop()
+    {
+        // The first tab reaches the custom stop at 3in; the two after it have no stop to reach.
+        var html = Convert(Fixture(0, customStop: 4320));
+
+        AssertTextKeptInOrder(html);
+        Assert.Equal(4320, TabStopsInTwips(html)[0]);
+        var advances = TabAdvancesInInches(html);
+        Assert.True(advances[0] > 0m, $"first tab advance {advances[0]}in");
+        Assert.Equal(new[] { 0m, 0m }, advances[1..]);
     }
 }
