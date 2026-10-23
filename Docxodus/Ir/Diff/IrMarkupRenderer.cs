@@ -475,6 +475,7 @@ internal static partial class IrMarkupRenderer
                 // w:comment definition dangling. Word's compare output never emits such an orphan; prune them
                 // (and their threading metadata). See PruneOrphanedComments.
                 PruneOrphanedComments(main);
+                CompleteCommentThreadingEntries(main);
 
                 // Bookmark normalization pass: an edit straddling a bookmark range endpoint, or a dense
                 // overlapping content-region layout, can leave the rendered body with a duplicate bookmark id
@@ -3752,7 +3753,7 @@ internal static partial class IrMarkupRenderer
         var outRoot = EnsureCommentsRoot(main);
         var outputComments = main.WordprocessingCommentsPart!;
         var addedDefinitions = new List<XElement>(toAdd.Count);
-        var addedParaIds = new HashSet<string>();
+        var addedParaIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // The paraIds the output's comments are already keyed on — their definitions' and the threading
         // entries'. A right-added definition reusing one (it numbered a different comment in the other
         // package) takes a fresh package-wide id, and its threading entries follow it below, so it never
@@ -3762,7 +3763,6 @@ internal static partial class IrMarkupRenderer
                 .Concat(Internal.CommentOps.ThreadingParaIds(main)),
             StringComparer.OrdinalIgnoreCase);
         var renamedParaIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        Internal.CommentOps.ParaIdAllocator? paraIds = null;
         foreach (var def in toAdd)
         {
             // Keep the live clone: relationship import rewrites its r:embed/r:id attributes in place.
@@ -3771,18 +3771,21 @@ internal static partial class IrMarkupRenderer
             var clone = new XElement(def);
             outRoot.Add(clone);
             addedDefinitions.Add(clone);
-            foreach (var pid in clone.Descendants().Attributes(W14ns + "paraId"))
-            {
-                if (pid.Value.Length == 0)
-                    continue;
-                addedParaIds.Add(pid.Value);
-                if (commentKeys.Add(pid.Value))
-                    continue;
-                var fresh = (paraIds ??= new Internal.CommentOps.ParaIdAllocator(main)).Next();
-                renamedParaIds[pid.Value] = fresh;
-                commentKeys.Add(fresh);
-                pid.Value = fresh;
-            }
+        }
+        // Every clone is in the part before any paraId is minted, so the allocator sees the ones still to come
+        // and cannot hand a renamed clone a later clone's paraId (issue #1312).
+        Internal.CommentOps.ParaIdAllocator? paraIds = null;
+        foreach (var pid in addedDefinitions.SelectMany(clone => clone.Descendants().Attributes(W14ns + "paraId")))
+        {
+            if (pid.Value.Length == 0)
+                continue;
+            addedParaIds.Add(pid.Value);
+            if (commentKeys.Add(pid.Value))
+                continue;
+            var fresh = (paraIds ??= new Internal.CommentOps.ParaIdAllocator(main)).Next();
+            renamedParaIds[pid.Value] = fresh;
+            commentKeys.Add(fresh);
+            pid.Value = fresh;
         }
 
         // Import relationships against their OWNERS: both r:embed media and w:hyperlink r:ids in a
@@ -3796,12 +3799,11 @@ internal static partial class IrMarkupRenderer
                 rightPackagePart, outputPackagePart, clone, skipDanglingRelationships: true,
                 skipHeaderFooterReferences: true);
 
-        var threadParaIds = new HashSet<string>(addedParaIds, StringComparer.OrdinalIgnoreCase);
-        LinkRepliesToOriginalParents(main, rightMain!, outRoot, addedDefinitions, addedParaIds, threadParaIds, renamedParaIds);
+        LinkRepliesToOriginalParents(main, rightMain!, outRoot, addedDefinitions, addedParaIds, renamedParaIds);
         main.WordprocessingCommentsPart!.PutXDocument();
 
         // Carry threading metadata for the merged comments (paraId-keyed), so a right-added reply keeps its link.
-        if (threadParaIds.Count > 0)
+        if (addedParaIds.Count > 0)
         {
             // Guard the commentsExtended merge on the right actually HAVING that part (mirrors the commentsIds
             // guard below). Otherwise the eager `?? AddNewPart<…>()` creates an empty /word/commentsExtended.xml on
@@ -3813,14 +3815,14 @@ internal static partial class IrMarkupRenderer
                     main.WordprocessingCommentsExPart
                         ?? main.AddDeterministicPart<WordprocessingCommentsExPart>("rIdCommentsEx"),
                     rightMain.WordprocessingCommentsExPart,
-                    W15ns + "commentsEx", W15ns + "commentEx", W15ns + "paraId", threadParaIds, renamedParaIds,
+                    W15ns + "commentsEx", W15ns + "commentEx", W15ns + "paraId", addedParaIds, renamedParaIds,
                     $"<w15:commentsEx xmlns:w=\"{W.w.NamespaceName}\" xmlns:w15=\"{W15ns.NamespaceName}\"/>");
             if (rightMain.WordprocessingCommentsIdsPart != null)
                 MergeRightThreadingEntries(
                     main.WordprocessingCommentsIdsPart
                         ?? main.AddDeterministicPart<WordprocessingCommentsIdsPart>("rIdCommentsIds"),
                     rightMain.WordprocessingCommentsIdsPart,
-                    W16cidNs + "commentsIds", W16cidNs + "commentId", W16cidNs + "paraId", threadParaIds, renamedParaIds,
+                    W16cidNs + "commentsIds", W16cidNs + "commentId", W16cidNs + "paraId", addedParaIds, renamedParaIds,
                     $"<w16cid:commentsIds xmlns:w=\"{W.w.NamespaceName}\" xmlns:w16cid=\"{W16cidNs.NamespaceName}\"/>");
         }
     }
@@ -3831,43 +3833,41 @@ internal static partial class IrMarkupRenderer
     /// a different one (an editor that renumbers paraIds on save) — so the reply's link would name nothing, or
     /// another comment (issue #1312). <see cref="Internal.CommentOps.AlignIds"/> has already given matching
     /// comments one <c>w:id</c>, so follow the parent through it: the right comment holding that paraId, then
-    /// the output definition with the same id. Its last paragraph's paraId (minted when absent) becomes the
-    /// parent the reply's threading entry is renamed to, and the parent's own right threading entries are
-    /// carried under that paraId unless the output already has them (so its own parent is followed the same way).
-    /// A parent the output does not hold at all leaves the reply top-level rather than pointing at nothing.
+    /// the output definition with the same id, whose last paragraph's paraId (minted when absent) the reply's
+    /// link is renamed to. Only the link is translated: the parent's own threading state is the original's,
+    /// since threading is not a tracked change and the output's definitions are the original's
+    /// (<see cref="CompleteCommentThreadingEntries"/> gives it an entry). A link the output cannot resolve to
+    /// exactly one comment — the parent is absent, or two output comments share its author, date and text, so
+    /// the id alignment may have paired them crosswise — is dropped, leaving the reply top-level rather than
+    /// under a missing or guessed comment.
     /// </summary>
     private static void LinkRepliesToOriginalParents(MainDocumentPart main, MainDocumentPart rightMain,
         XElement outRoot, List<XElement> addedDefinitions, HashSet<string> addedParaIds,
-        HashSet<string> threadParaIds, Dictionary<string, string> renamedParaIds)
+        Dictionary<string, string> renamedParaIds)
     {
         var rightExRoot = rightMain.WordprocessingCommentsExPart?.GetXDocument().Root;
         var rightCommentsRoot = rightMain.WordprocessingCommentsPart?.GetXDocument().Root;
         if (rightExRoot == null || rightCommentsRoot == null)
             return;
-        // paraIds are hex, so a link may differ in case from the definition it names.
-        var added = new HashSet<string>(addedParaIds, StringComparer.OrdinalIgnoreCase);
-        var rightEntries = rightExRoot.Elements(W15ns + "commentEx")
-            .Where(e => e.Attribute(W15ns + "paraId") != null)
-            .GroupBy(e => (string)e.Attribute(W15ns + "paraId")!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => (string?)g.First().Attribute(W15ns + "paraIdParent"), StringComparer.OrdinalIgnoreCase);
-        // Every parent a merged reply names outside the merged comments, then (because each one's own entry is
-        // carried too) every ancestor above it.
-        var pending = new Queue<string>(rightEntries.Where(e => added.Contains(e.Key))
-            .Select(e => e.Value).OfType<string>());
-        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var parents = rightExRoot.Elements(W15ns + "commentEx")
+            .Where(e => (string?)e.Attribute(W15ns + "paraId") is { } own && addedParaIds.Contains(own))
+            .Select(e => (string?)e.Attribute(W15ns + "paraIdParent"))
+            .OfType<string>()
+            .Where(parent => !addedParaIds.Contains(parent))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         Internal.CommentOps.ParaIdAllocator? paraIds = null;
-        while (pending.TryDequeue(out var parent))
+        foreach (var parent in parents)
         {
-            if (added.Contains(parent) || !visited.Add(parent))
-                continue;
             var rightParentId = (string?)rightCommentsRoot.Elements(W.comment).FirstOrDefault(c =>
                 c.Descendants(W.p).Any(p => string.Equals((string?)p.Attribute(W14ns + "paraId"), parent,
                     StringComparison.OrdinalIgnoreCase)))?.Attribute(W.id);
             var outputParent = rightParentId == null ? null : outRoot.Elements(W.comment).FirstOrDefault(c =>
                 (string?)c.Attribute(W.id) == rightParentId && !addedDefinitions.Contains(c));
-            if (outputParent?.Elements(W.p).LastOrDefault() is not { } lastParagraph)
+            var identity = outputParent == null ? null : Internal.CommentOps.Identity(outputParent);
+            if (outputParent?.Elements(W.p).LastOrDefault() is not { } lastParagraph
+                || outRoot.Elements(W.comment).Count(c => Internal.CommentOps.Identity(c) == identity) > 1)
             {
-                // Nothing in the output to thread under: MergeRightThreadingEntries drops a link renamed to "".
+                // MergeRightThreadingEntries drops a link renamed to "".
                 renamedParaIds[parent] = "";
                 continue;
             }
@@ -3878,11 +3878,8 @@ internal static partial class IrMarkupRenderer
                 PartNamespaces.EnsureIgnorablePrefix(outRoot, "w14", W14ns);
                 lastParagraph.SetAttributeValue(W14ns + "paraId", outputParaId);
             }
-            threadParaIds.Add(parent);
             if (!string.Equals(parent, outputParaId, StringComparison.OrdinalIgnoreCase))
                 renamedParaIds[parent] = outputParaId;
-            if (rightEntries.TryGetValue(parent, out var grandparent) && grandparent != null)
-                pending.Enqueue(grandparent);
         }
     }
 
@@ -4167,6 +4164,39 @@ internal static partial class IrMarkupRenderer
 
         if (changed)
             storyPart.PutXDocument();
+    }
+
+    /// <summary>
+    /// Give every comment definition keyed by a <c>w14:paraId</c> its own entry in each comment threading part the
+    /// output has: a <c>commentsExtended</c> entry stating the implied state of a comment that had none (open,
+    /// top-level), and a <c>commentsIds</c> entry with a fresh durable id. The output mixes comments from two
+    /// packages, either of which may lack a part the other brings, so without this a part could cover only the
+    /// comments one side keyed (issue #1312). A definition with no paraId cannot be keyed and is left alone.
+    /// </summary>
+    internal static void CompleteCommentThreadingEntries(MainDocumentPart main)
+    {
+        var paraIds = main.WordprocessingCommentsPart?.GetXDocument().Root?.Elements(W.comment)
+            .Select(c => (string?)c.Elements(W.p).LastOrDefault()?.Attribute(W14ns + "paraId"))
+            .OfType<string>().Where(v => v.Length > 0).ToList();
+        if (paraIds == null || paraIds.Count == 0)
+            return;
+        void Complete(OpenXmlPart? part, XName entryName, XName keyName, Func<XElement, string, XElement> entry)
+        {
+            if (part?.GetXDocument().Root is not { } root)
+                return;
+            var keyed = root.Elements(entryName).Select(e => (string?)e.Attribute(keyName)).OfType<string>()
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var missing = paraIds.Where(keyed.Add).ToList();
+            foreach (var paraId in missing)
+                root.Add(entry(root, paraId));
+            if (missing.Count > 0)
+                part.PutXDocument();
+        }
+        Complete(main.WordprocessingCommentsExPart, W15ns + "commentEx", W15ns + "paraId",
+            (_, paraId) => new XElement(W15ns + "commentEx", new XAttribute(W15ns + "paraId", paraId), new XAttribute(W15ns + "done", "0")));
+        Complete(main.WordprocessingCommentsIdsPart, W16cidNs + "commentId", W16cidNs + "paraId",
+            (root, paraId) => new XElement(W16cidNs + "commentId", new XAttribute(W16cidNs + "paraId", paraId),
+                new XAttribute(W16cidNs + "durableId", Internal.CommentOps.NextDurableId(root))));
     }
 
     /// <summary>
