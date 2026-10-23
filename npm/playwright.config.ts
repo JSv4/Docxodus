@@ -43,7 +43,7 @@ if (lane !== undefined && lane !== 'pool' && lane !== 'serial') {
   throw new Error(`DOCXODUS_PLAYWRIGHT_LANE must be "pool" or "serial", not "${lane}"`);
 }
 const serialLaneMatch = new RegExp(
-  `[\\\\/](${serialLaneSpecs.map(name => name.replace(/\./g, '\\.')).join('|')})$`);
+  `[\\\\/](${serialLaneSpecs.map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`);
 
 const chromiumUse = {
   ...devices['Desktop Chrome'],
