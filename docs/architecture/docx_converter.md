@@ -715,6 +715,6 @@ border, and a wavy one a solid border. A word-only underline skips tabs, and a c
 drops the underline from its tabs as from its text.
 
 Both fixed and flexible tabs go through the run renderer, so a leading tab keeps its run's font,
-colour and visibility. A complex HYPERLINK result spanning a tab stays whole; splitting it at the tab
-would leave its leading text and bookmark targets outside the link. The paragraph uses the shared
+colour and visibility. A complex HYPERLINK before or spanning a tab stays whole; converting its runs
+individually would leave its text and bookmark targets outside the link. The paragraph uses the shared
 field-context annotations to choose that path.

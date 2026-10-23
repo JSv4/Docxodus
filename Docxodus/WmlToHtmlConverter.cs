@@ -7338,10 +7338,11 @@ namespace Docxodus
                 ? paragraphContent.TakeWhile(e => e != firstTabRun).ToList()
                 : Enumerable.Empty<XElement>().ToList();
 
-            // Keep a HYPERLINK result whole across the tab: splitting it here would leave its
-            // leading text and bookmark targets outside the link. Reuse the field annotations
+            // Keep a HYPERLINK before or across the tab whole: converting its preceding runs
+            // individually would leave its text and bookmark targets outside the link. Reuse the field annotations
             // rather than looking for instructions under the already-flattened run list.
-            var hyperlinkPrecedesTab = firstTabRun != null && FieldRetriever.IsFieldResult(firstTabRun, "HYPERLINK");
+            var hyperlinkPrecedesTab = elementsPrecedingTab.Any(e => FieldRetriever.IsFieldResult(e, "HYPERLINK")) ||
+                firstTabRun != null && FieldRetriever.IsFieldResult(firstTabRun, "HYPERLINK");
             if (hyperlinkPrecedesTab)
             {
                 var paraElement1 = new XElement(elementName,

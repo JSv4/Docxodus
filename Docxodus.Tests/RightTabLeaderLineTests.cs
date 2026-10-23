@@ -85,6 +85,20 @@ public class RightTabLeaderLineTests
         WmlToHtmlConverter.ConvertToHtml(new WmlDocument("leader-lines.docx", docx),
             new WmlToHtmlConverterSettings { FabricateCssClasses = false });
 
+    private static byte[] EditFixture(byte[] source, Action<XDocument> edit)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(source);
+        using (var document = WordprocessingDocument.Open(stream, true))
+        {
+            var part = document.MainDocumentPart!;
+            var xml = part.GetXDocument();
+            edit(xml);
+            part.PutXDocument(xml);
+        }
+        return stream.ToArray();
+    }
+
     private static XElement[] RightTabSegments(byte[] docx)
     {
         var html = Html(docx);
@@ -188,6 +202,28 @@ public class RightTabLeaderLineTests
             html.Descendants().Single(e => (string?)e.Attribute("id") == $"_Toc{i}").Name.LocalName));
     }
 
+    [Fact]
+    public void HyperlinkEndingBeforeATab_KeepsItsLabelAndBookmarkInTheLink()
+    {
+        var source = EditFixture(Fixture("linked-bookmark", rightIndent: 864, fieldLink: true), xml =>
+        {
+            foreach (var paragraph in xml.Descendants(W.p))
+            {
+                var end = paragraph.Elements(W.r).Single(r =>
+                    (string?)r.Element(W.fldChar)?.Attribute(W.fldCharType) == "end");
+                end.Remove();
+                paragraph.Elements(W.r).First(r => r.Element(W.t) != null).AddAfterSelf(end);
+            }
+        });
+        var links = Html(source).Descendants().Where(e => e.Name.LocalName == "a").ToArray();
+        Assert.Equal(Entries.Length, links.Length);
+        foreach (var (link, i) in links.Select((link, i) => (link, i)))
+        {
+            Assert.Equal(Entries[i].Label, link.Value);
+            Assert.Contains(link.Descendants(), e => (string?)e.Attribute("id") == $"_Toc{i}");
+        }
+    }
+
     /// <summary>The border-top lines drawn inside each tab box, by (top offset, border).</summary>
     private static (string? Top, string? Border)[][] TabLines(string variant) =>
         Html(Fixture(variant, rightIndent: null)).Descendants().Where(e => e.Attribute("data-docx-tab") != null)
@@ -234,12 +270,8 @@ public class RightTabLeaderLineTests
     [InlineData(true)]
     public void DecoratedTab_KeepsItsRunFontAndColorWithoutPrecedingText(bool leading)
     {
-        using var stream = new MemoryStream();
-        stream.Write(Fixture("underline", rightIndent: null));
-        using (var document = WordprocessingDocument.Open(stream, true))
+        var source = EditFixture(Fixture("underline", rightIndent: null), xml =>
         {
-            var part = document.MainDocumentPart!;
-            var xml = part.GetXDocument();
             foreach (var paragraph in xml.Descendants(W.p))
             {
                 if (leading) paragraph.Elements(W.r).First().Remove();
@@ -249,9 +281,8 @@ public class RightTabLeaderLineTests
                     new XElement(W.sz, new XAttribute(W.val, "48")),
                     new XElement(W.u, new XAttribute(W.val, "single"))));
             }
-            part.PutXDocument(xml);
-        }
-        var tabs = Html(stream.ToArray()).Descendants().Where(e => (string?)e.Attribute("data-docx-tab") == "left");
+        });
+        var tabs = Html(source).Descendants().Where(e => (string?)e.Attribute("data-docx-tab") == "left");
         Assert.Equal(Entries.Length, tabs.Count());
         foreach (var tab in tabs)
         {

@@ -206,16 +206,17 @@ test.describe('tab leader and signature lines (#1285)', () => {
     }
   });
 
-  test('a complex HYPERLINK spanning a tab keeps its label and bookmark inside the link', async ({ page }) => {
+  for (const closesBeforeTab of [false, true]) test(`a complex HYPERLINK ${closesBeforeTab ? 'before' : 'across'} a tab keeps its label and bookmark inside the link`, async ({ page }) => {
     const begin = '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
       + '<w:r><w:instrText> HYPERLINK "https://example.com/entry" </w:instrText></w:r>'
       + '<w:r><w:fldChar w:fldCharType="separate"/></w:r>';
     const end = '<w:r><w:fldChar w:fldCharType="end"/></w:r>';
     await layOutBody(page, entry(begin + '<w:bookmarkStart w:id="1" w:name="_Toc1"/><w:bookmarkEnd w:id="1"/>'
-      + run('2.1.') + tab() + run('Spillway') + '<w:r><w:tab/><w:t>12</w:t></w:r>' + end));
+      + run('2.1.') + (closesBeforeTab ? end : '') + tab() + run('Spillway')
+      + '<w:r><w:tab/><w:t>12</w:t></w:r>' + (closesBeforeTab ? '' : end)));
     const link = page.locator('a[href="https://example.com/entry"]');
     await expect(link).toHaveCount(1);
-    await expect(link).toHaveText('2.1.Spillway12');
+    await expect(link).toHaveText(closesBeforeTab ? '2.1.' : '2.1.Spillway12');
     await expect(link.locator('span[id="_Toc1"]')).toHaveCount(1);
     await expect(link.locator('a')).toHaveCount(0);
   });
