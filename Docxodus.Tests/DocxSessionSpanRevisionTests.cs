@@ -652,6 +652,91 @@ public class DocxSessionSpanRevisionTests
         Assert.Equal("Y", string.Concat(session.GetFormatting(p)!.Runs.Where(r => r.Effective.Bold is true).Select(r => r.Text)));
     }
 
+    [Theory]
+    [InlineData(TrackedChangeMode.Accept, DeletedTextSide.Before)]
+    [InlineData(TrackedChangeMode.Accept, DeletedTextSide.After)]
+    [InlineData(TrackedChangeMode.RenderInline, DeletedTextSide.Before)]
+    [InlineData(TrackedChangeMode.RenderInline, DeletedTextSide.After)]
+    public void DeletedTextSide_InsideALiveRun_DoesNotJumpToALaterDeletion(
+        TrackedChangeMode tracking, DeletedTextSide side)
+    {
+        var (session, p) = Open(tracking, "Pat", TenantPromptlyRepaint());
+
+        var edit = session.ReplaceTextAtSpan(p, 2, 0, "Y", side);
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal("ThYe tenant shall repaint", Accepted(session));
+        Assert.Contains("delete:A:promptly ", Revisions(session));
+        Assert.Equal(tracking == TrackedChangeMode.Accept
+            ? "ThYe tenant shall promptly repaint" : "The tenant shall promptly repaint", Rejected(session));
+    }
+
+    [Theory]
+    [InlineData(TrackedChangeMode.Accept, DeletedTextSide.Before)]
+    [InlineData(TrackedChangeMode.Accept, DeletedTextSide.After)]
+    [InlineData(TrackedChangeMode.RenderInline, DeletedTextSide.Before)]
+    [InlineData(TrackedChangeMode.RenderInline, DeletedTextSide.After)]
+    public void DeletedTextSide_BesideAMoveSource_KeepsNewTextOutsideItsRange(
+        TrackedChangeMode tracking, DeletedTextSide side)
+    {
+        var (session, p) = Open(tracking, "Pat", Run("Fee "),
+            new XElement(W.moveFromRangeStart, Stamp("Alex", 10), new XAttribute(W.name, "move1")),
+            new XElement(W.moveFrom, Stamp("Alex", 11), new XElement(W.r, new XElement(W.delText, "amount"))),
+            new XElement(W.moveFromRangeEnd, new XAttribute(W.id, 10)), Run("due "),
+            new XElement(W.moveToRangeStart, Stamp("Alex", 12), new XAttribute(W.name, "move1")),
+            new XElement(W.moveTo, Stamp("Alex", 13), Run("amount")),
+            new XElement(W.moveToRangeEnd, new XAttribute(W.id, 12)));
+
+        var edit = session.ReplaceTextAtSpan(p, 4, 0, "XY", side);
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal("Fee XYdue amount", Accepted(session));
+        Assert.Equal(tracking == TrackedChangeMode.RenderInline ? "Fee amountdue "
+            : side == DeletedTextSide.Before ? "Fee XYamountdue " : "Fee amountXYdue ", Rejected(session));
+    }
+
+    [Theory]
+    [InlineData(TrackedChangeMode.Accept, false)]
+    [InlineData(TrackedChangeMode.Accept, true)]
+    [InlineData(TrackedChangeMode.RenderInline, false)]
+    [InlineData(TrackedChangeMode.RenderInline, true)]
+    public void DeletedTextSide_OutsideAMoveSourceParagraph_IsRefusedWithoutMutation(
+        TrackedChangeMode tracking, bool after)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Build(Run("Fee "),
+            new XElement(W.moveFromRangeStart, Stamp("Alex", 10), new XAttribute(W.name, "move1")),
+            new XElement(W.moveFrom, Stamp("Alex", 11), new XElement(W.r, new XElement(W.delText, "amount")))));
+        using (var document = WordprocessingDocument.Open(stream, true))
+        {
+            var xml = document.MainDocumentPart!.GetXDocument();
+            xml.Root!.Element(W.body)!.Add(
+                new XElement(W.p,
+                    new XElement(W.moveFrom, Stamp("Alex", 14), new XElement(W.r, new XElement(W.delText, " more"))),
+                    new XElement(W.moveFromRangeEnd, new XAttribute(W.id, 10)), Run("due")),
+                new XElement(W.p,
+                    new XElement(W.moveToRangeStart, Stamp("Alex", 12), new XAttribute(W.name, "move1")),
+                    new XElement(W.moveTo, Stamp("Alex", 13), Run("amount more")),
+                    new XElement(W.moveToRangeEnd, new XAttribute(W.id, 12))));
+            document.MainDocumentPart.PutXDocument(xml);
+        }
+        using var session = new DocxSession(stream.ToArray(), new DocxSessionSettings
+        {
+            TrackedChanges = tracking, RevisionAuthor = "Pat",
+        });
+        var p = session.FindByText(after ? "Fee" : "due")!.Anchor.Id;
+        var before = session.Raw.GetXml(p);
+        var version = session.Version;
+
+        var edit = session.ReplaceTextAtSpan(p, after ? 4 : 0, 0, "XY",
+            after ? DeletedTextSide.After : DeletedTextSide.Before);
+
+        Assert.False(edit.Success);
+        Assert.Equal(EditErrorCode.UnsupportedInlineBoundary, edit.Error?.Code);
+        Assert.Equal(before, session.Raw.GetXml(p));
+        Assert.Equal(version, session.Version);
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     internal static XElement Run(string text, bool bold = false) => new(W.r,

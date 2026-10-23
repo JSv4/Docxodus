@@ -17,6 +17,8 @@ All notable changes to this project will be documented in this file.
   side from where the text was typed, so typing right after a struck word under tracked changes no
   longer shows the insertion before it. In a paragraph whose only text is a shown deletion, plain typed
   text now goes in beside the deletion on that side instead of through a whole-paragraph rewrite.
+  A side hint changes no interior text offset and keeps new text outside a native move source's range.
+  A range boundary in another paragraph is refused rather than letting accept-all erase the new text.
 
 - Word's All Markup print layout for the paginated view and the PDF export (#1300):
   `commentColumnPlacement: "balloons"` (`--comment-column-placement balloons` in the export CLI) keeps

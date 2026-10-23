@@ -453,13 +453,17 @@ public sealed partial class DocxSession
                 "text cannot be inserted inside a simple field's result; type before or after the field", anchorId);
         if (after is not null && after.Name == W.moveTo) after = PastMoveRangeMarker(after, forward: true);
         if (before is not null && before.Name == W.moveTo) before = PastMoveRangeMarker(before, forward: false);
-        if (deletedTextSide is { } side
-            && BesideDeletedText(element, after, before, side) is { } beside
-            && (!ReferenceEquals(beside.After, after) || !ReferenceEquals(beside.Before, before)))
+        if (!splitRun && deletedTextSide is { } side)
         {
-            // A run reached this way was not stepped to out of a field, so it may be extended.
-            (after, before) = beside;
-            (afterBeforeFieldStep, beforeBeforeFieldStep) = beside;
+            if (BesideDeletedText(element, after, before, side) is not { } beside)
+                return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
+                    "the requested side of a move source is outside this paragraph; resolve the move first", anchorId);
+            if (!ReferenceEquals(beside.After, after) || !ReferenceEquals(beside.Before, before))
+            {
+                // A run reached this way was not stepped to out of a field, so it may be extended.
+                (after, before) = beside;
+                (afterBeforeFieldStep, beforeBeforeFieldStep) = beside;
+            }
         }
 
         // Tracked text typed inside the session author's own pending insertion extends it.
@@ -573,7 +577,7 @@ public sealed partial class DocxSession
     /// or before <paramref name="before"/>, or in a paragraph with no text at all. Range markers
     /// passed over stay beside the live text. Unchanged when no deleted text is there.
     /// </summary>
-    private static (XElement? After, XElement? Before) BesideDeletedText(
+    private static (XElement? After, XElement? Before)? BesideDeletedText(
         XElement paragraph, XElement? after, XElement? before, DeletedTextSide side)
     {
         var zeroWidth = (after is not null ? after.ElementsAfterSelf()
@@ -586,6 +590,20 @@ public sealed partial class DocxSession
         // In document order, whichever direction the siblings were read in.
         var first = before is not null && after is null ? removed[^1] : removed[0];
         var last = before is not null && after is null ? removed[0] : removed[^1];
+        // Accepting a native move deletes everything between its source range markers, even
+        // plain text outside w:moveFrom. Stay outside that range, as for a move destination.
+        if (side == DeletedTextSide.Before && first.Name == W.moveFrom)
+        {
+            var start = PastMoveRangeMarker(first, forward: false);
+            if (ReferenceEquals(start, first)) return null;
+            first = start;
+        }
+        if (side == DeletedTextSide.After && last.Name == W.moveFrom)
+        {
+            var end = PastMoveRangeMarker(last, forward: true);
+            if (ReferenceEquals(end, last)) return null;
+            last = end;
+        }
         // Already adjacent on the requested side: keep the run anchor, which an untracked
         // insertion can extend instead of adding a run beside it.
         if (side == DeletedTextSide.Before && after is not null && ReferenceEquals(after.ElementsAfterSelf().First(), first))
@@ -1102,12 +1120,14 @@ public sealed partial class DocxSession
             "text cannot be inserted inside a tracked move destination (w:moveTo); type before or after the moved text, or resolve the move first",
             anchorId);
 
-    /// <summary>The <c>w:moveToRangeEnd</c> (<paramref name="forward"/>) or
-    /// <c>w:moveToRangeStart</c> just past <paramref name="move"/>, across range markers only, so
+    /// <summary>The source or destination range end (<paramref name="forward"/>) or
+    /// start just past <paramref name="move"/>, across range markers only, so
     /// text placed beside the move lands outside its range; else the move itself.</summary>
     private static XElement PastMoveRangeMarker(XElement move, bool forward)
     {
-        var name = forward ? W.moveToRangeEnd : W.moveToRangeStart;
+        var name = move.Name == W.moveFrom
+            ? (forward ? W.moveFromRangeEnd : W.moveFromRangeStart)
+            : (forward ? W.moveToRangeEnd : W.moveToRangeStart);
         var siblings = forward ? move.ElementsAfterSelf() : move.ElementsBeforeSelf().Reverse();
         foreach (var sibling in siblings)
         {
