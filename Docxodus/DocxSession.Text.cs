@@ -928,7 +928,10 @@ public sealed partial class DocxSession
     /// Tracked-change counterpart to <see cref="ApplyFragmentReplacement"/>. Each selected
     /// run slice becomes a formatting-preserving <c>w:r/w:delText</c> inside one or more
     /// <c>w:del</c> envelopes, while the replacement is a single <c>w:r/w:t</c> inside
-    /// <c>w:ins</c> and inherits the first affected run's <c>w:rPr</c>. Runs are split at
+    /// <c>w:ins</c> and inherits the first affected run's <c>w:rPr</c>. A slice of the session
+    /// author's own pending insertion is the exception: it is removed outright, and a replacement
+    /// starting in one is written into it, as <see cref="DeleteInlineElementInPlace"/> does for
+    /// whole runs. Runs are split at
     /// the selection boundaries so untouched prefixes/suffixes remain ordinary text.
     /// Zero-width siblings (bookmarks, comment ranges, note-reference runs, proofing markers)
     /// are never moved into revision envelopes; when one separates selected runs it simply
@@ -970,6 +973,19 @@ public sealed partial class DocxSession
             var before = concat[..start];
             var removed = concat.Substring(start, len);
             var after = concat[(start + len)..];
+
+            // The session author's own pending insertion is a draft, as in Word: text removed
+            // from it is cut out with no trace, and a replacement that starts in it joins it
+            // (issue #1316). A run it empties goes, with any envelope that leaves empty.
+            if (OwnPendingInsertion(run, author) is { } ownInsertion)
+            {
+                var kept = before + (i == 0 ? replace : string.Empty) + after;
+                if (kept.Length > 0 || HasNonTextRunContent(run))
+                    SetRunText(run, kept.Length > 0 ? kept : null);
+                else
+                    RemoveFromInsertion(run, ownInsertion);
+                continue;
+            }
 
             // Snapshot the original formatting before changing/reusing the live run.
             var deletedRun = CloneRunWithRevisionText(run, W.delText, removed);
