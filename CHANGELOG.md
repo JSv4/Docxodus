@@ -58,7 +58,8 @@ All notable changes to this project will be documented in this file.
   (#1292). Typing into a paragraph whose only text was deleted, in the browser editor's default mode
   (edits untracked, revisions hidden), rewrote the paragraph and removed the deletion, so rejecting
   revisions could no longer restore its text and the revision list lost it, with no edit failure
-  reported. The replacement now keeps removed text, and a move source keeps its range markers so the
+  reported. Nested range markers stay with the removed text, and an outside end follows its start
+  when necessary. The replacement now keeps removed text, and a move source keeps its range markers so the
   move's destination is not orphaned: removed text that led the paragraph stays first, any other
   follows the new text.
 

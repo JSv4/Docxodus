@@ -788,6 +788,50 @@ public class DocxSessionSpanRevisionTests
         Assert.Empty(Revisions(session));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Untracked_ReplaceText_KeepsBookmarksInsideAPreservedDeletion(bool hasLivePrefix)
+    {
+        var deletion = new XElement(W.del, Stamp("Reviewer", 1), Bookmark(W.bookmarkStart),
+            new XElement(W.r, new XElement(W.delText, "Gone clause")), Bookmark(W.bookmarkEnd));
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat",
+            hasLivePrefix ? Run("Keep ") : null!, deletion);
+        var before = new XElement(XElement.Parse(session.Raw.GetXml(p)).Element(W.del)!);
+
+        var edit = session.ReplaceText(p, "New text");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        var paragraph = XElement.Parse(session.Raw.GetXml(p));
+        Assert.True(XNode.DeepEquals(before, paragraph.Element(W.del)), paragraph.ToString());
+        Assert.Empty(paragraph.Elements(W.bookmarkStart));
+        Assert.Empty(paragraph.Elements(W.bookmarkEnd));
+        Assert.Equal("New text", Accepted(session));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Untracked_ReplaceText_KeepsABookmarkSpanningPreservedRemovedAndLiveText(bool startInsideDeletion)
+    {
+        var start = Bookmark(W.bookmarkStart);
+        var end = Bookmark(W.bookmarkEnd);
+        var deletion = new XElement(W.del, Stamp("Reviewer", 1), startInsideDeletion ? start : null,
+            new XElement(W.r, new XElement(W.delText, "Gone clause")), startInsideDeletion ? null : end);
+        var (session, p) = Open(TrackedChangeMode.Accept, "Pat", startInsideDeletion ? null! : start,
+            Run("Keep "), deletion, Run("rest"), startInsideDeletion ? end : null!);
+
+        var edit = session.ReplaceText(p, "New replacement words");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        var paragraph = XElement.Parse(session.Raw.GetXml(p));
+        var savedStart = paragraph.Descendants(W.bookmarkStart).Single();
+        var savedEnd = paragraph.Descendants(W.bookmarkEnd).Single();
+        Assert.True(XNode.DocumentOrderComparer.Compare(savedStart, savedEnd) < 0, paragraph.ToString());
+        Assert.Equal(startInsideDeletion, savedStart.Parent?.Name == W.del);
+        Assert.Equal(!startInsideDeletion, savedEnd.Parent?.Name == W.del);
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     internal static XElement Run(string text, bool bold = false) => new(W.r,

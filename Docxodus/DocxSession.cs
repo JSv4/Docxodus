@@ -1925,18 +1925,33 @@ public sealed partial class DocxSession : IDisposable
         // silently resolve another reviewer's change, or orphan a move's destination (#1292).
         // Its old coordinate means nothing in the new text, and keeping it would cut a word in
         // two, so removed text that led the paragraph stays first and any other follows it.
+        // If a range starts inside removed text that moves to the end, its outside endpoint
+        // must follow it too. Leaving that endpoint at its old text coordinate would invert it.
+        var trailingRangeEnds = paragraph.Elements()
+            .Where(e => IsPendingRemoval(e) && MarkerOffset(paragraph, e) > 0)
+            .SelectMany(e => e.Descendants())
+            .Where(e => (e.Name == W.bookmarkStart || e.Name == W.commentRangeStart || e.Name == W.permStart)
+                && e.Attribute(W.id) is not null)
+            .Select(e => (Name: e.Name == W.bookmarkStart ? W.bookmarkEnd
+                : e.Name == W.commentRangeStart ? W.commentRangeEnd : W.permEnd, Id: (string?)e.Attribute(W.id)))
+            .ToHashSet();
         var candidates = paragraph.Elements()
             .Where(e => IsZeroWidthMarker(e) || IsPendingRemoval(e))
             .Concat(paragraph.Descendants()
                 .Where(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd))
+            // A preserved removal carries its own nested markers; extracting them would move
+            // their range off the removed text and onto the replacement.
+            .Where(e => !e.Ancestors().Any(a => ReferenceEquals(a.Parent, paragraph) && IsPendingRemoval(a)))
             .Distinct()
             .OrderBy(e => e, Comparer<XElement>.Create(XNode.DocumentOrderComparer.Compare))
             .ToList();
         var result = candidates.Select((element, order) =>
         {
             int offset = MarkerOffset(paragraph, element);
+            bool followsRemoval = element.DescendantsAndSelf()
+                .Any(e => trailingRangeEnds.Contains((e.Name, (string?)e.Attribute(W.id))));
             return new PreservedMarkerPosition(element,
-                IsPendingRemoval(element) && offset > 0 ? int.MaxValue : offset, order);
+                (IsPendingRemoval(element) && offset > 0) || followsRemoval ? int.MaxValue : offset, order);
         }).ToList();
         foreach (var marker in candidates) marker.Remove();
         return result;
