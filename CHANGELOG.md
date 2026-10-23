@@ -54,6 +54,16 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- An untracked `ReplaceText` no longer drops a pending tracked deletion or move source in the paragraph
+  (#1292), including one in an otherwise empty hyperlink, content control or simple field.
+  Typing into a paragraph whose only text was deleted, in the browser editor's default mode
+  (edits untracked, revisions hidden), rewrote the paragraph and removed the deletion, so rejecting
+  revisions could no longer restore its text and the revision list lost it, with no edit failure
+  reported. Nested range markers stay with the removed text, and an outside end follows its start
+  when necessary. The replacement now keeps removed text, and a move source keeps its range markers so the
+  move's destination is not orphaned: removed text that led the paragraph stays first, any other
+  follows the new text.
+
 - DrawingML shapes and groups that are not text boxes no longer disappear from the HTML, and PDF
   export of a document holding one no longer fails (#1270). Only pictures, charts and text boxes were
   drawn, so a plain `wps:wsp` rectangle or a `wpg:wgp` group produced no HTML; its paragraph, still
@@ -71,22 +81,13 @@ All notable changes to this project will be documented in this file.
   placeholder at that size. The PDF export therefore reports such a drawing as an
   `unsupported_content_placeholder` warning and **rejects it under `unsupportedContent: 'strict'`**,
   including documents that used to export under strict because the drawing silently vanished beside
-  other text. A picture is still omitted when the caller passes no image handler. The empty-paragraph
+  other text. Partly drawn groups and unsupported shape fills are reported too. A picture is still
+  omitted when the caller passes no image handler. The empty-paragraph
   check now also follows the `mc:AlternateContent` branch the converter renders, so a drawing in an
   unselected `mc:Choice` no longer leaves its paragraph without a line. Floating (`wp:anchor`) shapes
   are still not drawn (#1346). Charts share the shapes' colour resolver, so a series colour's shade or
   tint now applies (on an sRGB colour too, as do luminance modifiers), and `tx1`/`bg1`/`tx2`/`bg2`,
   system, scRGB and HSL colours resolve.
-
-- An untracked `ReplaceText` no longer drops a pending tracked deletion or move source in the paragraph
-  (#1292), including one in an otherwise empty hyperlink, content control or simple field.
-  Typing into a paragraph whose only text was deleted, in the browser editor's default mode
-  (edits untracked, revisions hidden), rewrote the paragraph and removed the deletion, so rejecting
-  revisions could no longer restore its text and the revision list lost it, with no edit failure
-  reported. Nested range markers stay with the removed text, and an outside end follows its start
-  when necessary. The replacement now keeps removed text, and a move source keeps its range markers so the
-  move's destination is not orphaned: removed text that led the paragraph stays first, any other
-  follows the new text.
 
 - Under tracked changes, text inserted through `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`)
   that would land strictly inside another author's tracked insertion now splits their insertion and goes

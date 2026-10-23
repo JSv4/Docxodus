@@ -37,12 +37,15 @@ const diagramPart = (id: string, relationship: string, contentType: string, root
 });
 
 /**
- * Inline drawings the converter cannot draw: a shape with preset geometry it does not draw, SmartArt,
+ * Inline drawings or fills the converter cannot draw: unsupported shape geometry or paint, SmartArt,
  * a chart type it does not project (scatter), and a picture with no image (issue #1270 review). Each
  * keeps its extent, and the PDF export reports it as unsupported content.
  */
 export const UNDRAWABLE_DRAWINGS: Record<string, { uri: string; data: string; parts?: ExtraPart[] }> = {
   triangle: { uri: WPS, data: SHAPE.replace('prst="rect"', 'prst="triangle"') },
+  presetColorFill: { uri: WPS, data: SHAPE.replace('<a:srgbClr val="19647E"/>', '<a:prstClr val="red"/>') },
+  pictureFill: { uri: WPS, data: SHAPE.replace('<a:solidFill><a:srgbClr val="19647E"/></a:solidFill>',
+    '<a:blipFill><a:stretch><a:fillRect/></a:stretch></a:blipFill>') },
   smartArt: {
     uri: DGM,
     data: `<dgm:relIds xmlns:dgm="${DGM}" r:dm="rIdDm" r:lo="rIdLo" r:qs="rIdQs" r:cs="rIdCs"/>`,

@@ -67,7 +67,7 @@ emits:
   empty SVG of the extent.
 
 A shape or group that is only partly drawable (a group holding a picture or a triangle beside a
-rectangle, a grouped text box's text) draws what it can and marks its wrapper
+rectangle, a grouped text box's text, a picture fill or an unsupported fill colour) draws what it can and marks its wrapper
 `data-docx-shape="partial"`; with placeholders on, the wrapper also carries `data-content-type="Other"`.
 A picture is still omitted entirely when the caller passes no image handler; an image handler that
 returns null declines that one picture, whose extent is kept as an unrendered box.

@@ -274,6 +274,23 @@ public class HtmlDrawingShapeTests
         Assert.Equal("Other", (string?)flagged.Attribute("data-content-type"));
     }
 
+    [Theory]
+    [InlineData("<a:solidFill><a:prstClr val=\"red\"/></a:solidFill>", true)]
+    [InlineData("<a:blipFill><a:stretch><a:fillRect/></a:stretch></a:blipFill>", true)]
+    [InlineData(Teal, false)]
+    public void UndrawableShapePaint_IsReportedAsPartial(string fill, bool partial)
+    {
+        var source = Docx(InlineDrawing(ShapeUri, Shape(fill: fill)));
+        using (var stream = new MemoryStream(source))
+        using (var document = WordprocessingDocument.Open(stream, false))
+            Assert.Empty(new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
+                DocumentFormat.OpenXml.FileFormatVersions.Office2019).Validate(document));
+        var wrapper = OnlySvg(MiddleParagraph(source, placeholders: true)).Parent!;
+
+        Assert.Equal(partial ? "partial" : null, (string?)wrapper.Attribute("data-docx-shape"));
+        Assert.Equal(partial ? "Other" : null, (string?)wrapper.Attribute("data-content-type"));
+    }
+
     [Fact]
     public void TranslucentAndGroupFills_AreDrawn()
     {

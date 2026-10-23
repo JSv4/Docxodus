@@ -414,6 +414,8 @@ namespace Docxodus
                 return Paint(fill.Element(A.gsLst)?.Elements(A.gs).FirstOrDefault(), context);
             if (fill.Name == A.pattFill)
                 return Paint(fill.Element(A.fgClr), context);
+            if (fill.Name == A.blipFill)
+                context.Undrawn++;
             return null;
         }
 
@@ -421,7 +423,11 @@ namespace Docxodus
         {
             var color = ResolveDrawingColor(colorParent, context.Theme);
             if (color == null)
+            {
+                if (colorParent?.HasElements == true)
+                    context.Undrawn++;
                 return null;
+            }
             var alpha = ReadDoubleAttribute(colorParent!.Elements().First().Element(A.alpha), "val") / 100000;
             return new ShapePaint(color, alpha is < 1 ? Math.Max(alpha.Value, 0) : null);
         }
