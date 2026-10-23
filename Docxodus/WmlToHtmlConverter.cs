@@ -9565,6 +9565,7 @@ namespace Docxodus
                 }
             }
             var twipCounter = firstInTwips;
+            // The furthest stop a right-aligned stretch on the current line ended on.
             var rightStopReached = 0;
             // Where the text since the last tab or break began; null until that text starts.
             int? stretchStart = firstInTwips;
@@ -9578,6 +9579,7 @@ namespace Docxodus
                 {
                     twipCounter = leftInTwips;
                     stretchStart = null;
+                    rightStopReached = 0;
 
                     currentElement.Add(new XAttribute(PtOpenXml.TabWidth,
                         TabWidthValue(firstInTwips)));
@@ -9604,6 +9606,7 @@ namespace Docxodus
                         twipCounter = PenAfterWrapping(contentToMeasure, currentElementIdx,
                             firstInTwips, leftInTwips, lineEnd);
                         currentElement.SetAttributeValue(PtOpenXml.TabAfterWrappedText, true);
+                        rightStopReached = 0;
                     }
                     stretchStart = null;
 
