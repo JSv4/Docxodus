@@ -9289,6 +9289,11 @@ namespace Docxodus
                 if (defaultTabStopValue != null)
                     defaultTabStop = WordprocessingMLUtil.StringToTwips(defaultTabStopValue);
             }
+            // A zero multiplier generates no automatic stops at all. Read it as if the element were
+            // absent, the spec's half-inch default; LibreOffice likewise keeps its own default
+            // (issue #1269, docs/ooxml_corner_cases.md).
+            if (defaultTabStop <= 0)
+                defaultTabStop = DefaultTabStopTwips;
 
             // The width a paragraph's lines wrap at. Body paragraphs take their own section's
             // text width (resolved at w:body); running stories and notes take the final section's.
@@ -9453,18 +9458,14 @@ namespace Docxodus
 
                     var testAmount = twipCounter;
 
+                    // Automatic stops continue across the line without end: past the ones generated
+                    // up front, the next is the first interval multiple beyond the pen (issue #1269).
                     var tabAfterText = tabs
                         .Elements(W.tab)
-                        .FirstOrDefault(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)!) > testAmount);
-
-                    if (tabAfterText == null)
-                    {
-                        // something has gone wrong, so put 1/2 inch in
-                        if (currentElement.Attribute(PtOpenXml.TabWidth) == null)
-                            currentElement.Add(
-                                new XAttribute(PtOpenXml.TabWidth, TabWidthValue(720m)));
-                        break;
-                    }
+                        .FirstOrDefault(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)!) > testAmount)
+                        ?? new XElement(W.tab,
+                            new XAttribute(W.val, "left"),
+                            new XAttribute(W.pos, (testAmount / defaultTabStop + 1) * defaultTabStop));
 
                     var tabVal = (string?)tabAfterText.Attribute(W.val);
                     if (tabVal == "right" || tabVal == "end")
@@ -9866,8 +9867,6 @@ namespace Docxodus
                 .LastOrDefault();
             if (lastTabElement != null)
             {
-                if (defaultTabStop == 0)
-                    defaultTabStop = DefaultTabStopTwips;
                 var rangeStart = WordprocessingMLUtil.StringToTwips((string)lastTabElement.Attribute(W.pos)!) / defaultTabStop + 1;
                 var tempTabs = new XElement(W.tabs,
                     tabs.Elements().Where(t => (string?)t.Attribute(W.val) != "clear" && (string?)t.Attribute(W.val) != "bar"),

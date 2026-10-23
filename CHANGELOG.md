@@ -65,6 +65,11 @@ All notable changes to this project will be documented in this file.
   element inherited the ancestor's underline or strikethrough. Underline colour is still not mapped
   back to `w:u w:color`.
 
+- HTML conversion (and so PDF export) no longer throws `Sequence contains no matching element` on a
+  paragraph whose tabs fall on automatic stops when `w:defaultTabStop` is tiny or 0 (#1269). Automatic
+  stops now continue past the pen for as long as the line needs them, so every tab is measured and
+  positioned; a zero interval falls back to the 720-twip default, as an absent one does.
+
 - Tracked formatting of a run that already has another author's pending format change is now
   credited to the person who made it (#1295). The session folded the new formatting into the
   existing `w:rPrChange` but left that change's author, date and `w:id` alone, so `ListRevisions()`
