@@ -129,11 +129,17 @@ internal sealed record SemanticChangeDraft(
 /// </summary>
 internal interface ISemanticPackageChangeDetector
 {
-    IReadOnlyList<SemanticChangeDraft> Compare(
+    SemanticPackageComparison Compare(
         byte[] leftBytes,
         byte[] rightBytes,
         SemanticDiffOptions options);
 }
+
+// The bounded package pass supplies the same normalized bytes to the supplement and IR reader.
+internal sealed record SemanticPackageComparison(
+    byte[] LeftBytes,
+    byte[] RightBytes,
+    IReadOnlyList<SemanticChangeDraft> Changes);
 
 internal static class SemanticDiffEngine
 {
@@ -155,10 +161,10 @@ internal static class SemanticDiffEngine
         // This overload owns the raw-byte trust boundary: do not construct WmlDocument (whose
         // constructor opens the OPC package to identify its document type) until inspection has
         // enforced all declared archive and XML limits.
-        var packageChanges = ComparePackages(leftBytes, rightBytes, options);
-        var left = new WmlDocument("left.docx", leftBytes);
-        var right = new WmlDocument("right.docx", rightBytes);
-        return CompareValidated(left, right, options, packageChanges, maximumChanges);
+        var packages = PackageDetector.Compare(leftBytes, rightBytes, options);
+        var left = new WmlDocument("left.docx", packages.LeftBytes);
+        var right = new WmlDocument("right.docx", packages.RightBytes);
+        return CompareValidated(left, right, options, packages.Changes, maximumChanges);
     }
 
     public static SemanticChangeSet Compare(
@@ -170,31 +176,18 @@ internal static class SemanticDiffEngine
         // Inspect the raw package before the Open XML SDK/IR path. This makes the declared package
         // limits an actual boundary for the default public operation instead of a late supplement
         // reached only after an untrusted archive has already been expanded.
-        var packageChanges = ComparePackages(
+        var packages = PackageDetector.Compare(
             originalLeft.DocumentByteArray,
             originalRight.DocumentByteArray,
             options);
+        var left = ReferenceEquals(packages.LeftBytes, originalLeft.DocumentByteArray)
+            ? originalLeft
+            : new WmlDocument(originalLeft.FileName, packages.LeftBytes);
+        var right = ReferenceEquals(packages.RightBytes, originalRight.DocumentByteArray)
+            ? originalRight
+            : new WmlDocument(originalRight.FileName, packages.RightBytes);
         return CompareValidated(
-            originalLeft, originalRight, options, packageChanges, maximumChanges);
-    }
-
-    /// <summary>
-    /// The package-level changes. The bounded inspection first runs on the bytes as given, so its
-    /// limits hold before anything expands them. A STRICT side is then compared as its transitional
-    /// conversion, as the IR side below is (issue #1268): otherwise every URI the conversion rewrites
-    /// reads as a changed relationship or an opaque part.
-    /// </summary>
-    private static IReadOnlyList<SemanticChangeDraft> ComparePackages(
-        byte[] leftBytes,
-        byte[] rightBytes,
-        SemanticDiffOptions options)
-    {
-        var changes = PackageDetector.Compare(leftBytes, rightBytes, options);
-        var left = StrictOoxmlNormalizer.NormalizeForReading(leftBytes);
-        var right = StrictOoxmlNormalizer.NormalizeForReading(rightBytes);
-        return ReferenceEquals(left, leftBytes) && ReferenceEquals(right, rightBytes)
-            ? changes
-            : PackageDetector.Compare(left, right, options);
+            left, right, options, packages.Changes, maximumChanges);
     }
 
     private static SemanticChangeSet CompareValidated(
