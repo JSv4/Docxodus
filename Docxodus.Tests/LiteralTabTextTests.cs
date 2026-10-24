@@ -63,6 +63,7 @@ public class LiteralTabTextTests
         Assert.Contains(tab.Ancestors(), e => ((string?)e.Attribute("style") ?? "").Contains("display: inline-flex"));
         var deletion = Assert.Single(tab.Ancestors(Xhtml.del));
         Assert.Equal("Ferry reviewer", (string?)deletion.Attribute("data-author"));
+        AssertDecorationBridge(tab);
         Assert.Contains("North", deletion.Value);
         Assert.Contains("Harbor", deletion.Value);
     }
@@ -90,6 +91,7 @@ public class LiteralTabTextTests
 
         Assert.Contains(tab.Ancestors(), e => ((string?)e.Attribute("style") ?? "").Contains("display: inline-flex"));
         Assert.Equal("Ferry reviewer", (string?)Assert.Single(tab.Ancestors(Xhtml.ins)).Attribute("data-author"));
+        AssertDecorationBridge(tab);
     }
 
     [Fact]
@@ -118,6 +120,15 @@ public class LiteralTabTextTests
         Assert.Empty(Tabs(html));
         Assert.Contains(html.Descendants(), e => (string?)e.Attribute("data-field") == "PAGE");
         Assert.Equal("PAGE\t", main.GetXDocument().Descendants(W.instrText).Single().Value);
+    }
+
+    private static void AssertDecorationBridge(XElement tab)
+    {
+        var segment = tab.Ancestors(Xhtml.span).First(e =>
+            ((string?)e.Attribute("style") ?? "").Contains("display: inline-flex"));
+        Assert.Contains("text-decoration: inherit", (string?)segment.Attribute("style") ?? "");
+        foreach (var text in new[] { segment.Elements().First(), segment.Elements().Last() })
+            Assert.Contains("text-decoration: inherit", (string?)text.Attribute("style") ?? "");
     }
 
     private static string[] Tabs(XElement html) => html.Descendants()

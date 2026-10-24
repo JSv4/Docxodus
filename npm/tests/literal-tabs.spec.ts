@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { literalTabFixture, type LiteralTabCase } from './docx-literal-tab-fixture.js';
 
-for (const kind of ['body', 'header', 'footer', 'multiple', 'deleted'] as LiteralTabCase[]) {
+for (const kind of ['body', 'header', 'footer', 'multiple', 'deleted', 'inserted'] as LiteralTabCase[]) {
   test('literal tabs use paragraph stops in ' + kind, async ({ page }) => {
     await page.goto('/worker-test-harness.html');
     await page.addScriptTag({ url: '/pagination.bundle.js' });
@@ -31,6 +31,8 @@ for (const kind of ['body', 'header', 'footer', 'multiple', 'deleted'] as Litera
         const rect = range.getBoundingClientRect();
         result.push({ right: rect.right - column.left, width: rect.width,
           tabs: Array.from(box.querySelectorAll<HTMLElement>('[data-docx-tab]')).map(t => ({ alignment: t.dataset.docxTab, leader: t.dataset.docxTabLeader })),
+          decoration: Array.from(box.querySelectorAll<HTMLElement>('del > span, ins > span, del > span > span, ins > span > span'))
+            .filter(e => !e.hasAttribute('data-docx-exact-run')).map(e => getComputedStyle(e).textDecorationLine),
           weight: getComputedStyle(node.parentElement!).fontWeight, text: box.textContent });
       }
       worker.terminate();
@@ -38,6 +40,10 @@ for (const kind of ['body', 'header', 'footer', 'multiple', 'deleted'] as Litera
     }, { actual: Array.from(literalTabFixture(kind)), control: Array.from(literalTabFixture(kind, false)) });
     expect(facts[0].tabs.map(t => t.alignment)).toEqual(kind === 'multiple' ? ['left', 'right'] : ['right']);
     expect(facts[0].right).toBeCloseTo(624, 0);
+    if (kind === 'deleted' || kind === 'inserted') {
+      const line = kind === 'deleted' ? 'line-through' : 'underline';
+      expect(facts[0].decoration).toEqual([line, line, line]);
+    }
     expect(facts[0].weight).toBe('700');
     expect(facts[0]).toEqual(facts[1]);
   });

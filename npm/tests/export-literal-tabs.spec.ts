@@ -20,12 +20,12 @@ async function pdfFacts(bytes: Uint8Array) {
   } finally { await task.destroy(); }
 }
 
-for (const kind of ['body', 'header', 'footer', 'multiple', 'deleted'] as LiteralTabCase[]) {
+for (const kind of ['body', 'header', 'footer', 'multiple', 'deleted', 'inserted'] as LiteralTabCase[]) {
   test('literal tabs export like explicit tabs in ' + kind, async ({ browser }, info) => {
     test.setTimeout(120_000);
     const bytes = literalTabFixture(kind);
     const options = { browser, outputs: ['pdf'] as const, commentProfile: 'hidden' as const, timeoutMs: 120_000,
-      reviewProfile: kind === 'deleted' ? 'markup' as const : 'final' as const };
+      reviewProfile: kind === 'deleted' || kind === 'inserted' ? 'markup' as const : 'final' as const };
     const actual = await renderDocxArtifacts(bytes, options);
     const control = await renderDocxArtifacts(literalTabFixture(kind, false), options);
     const facts = await pdfFacts(actual.pdf!);
@@ -34,6 +34,13 @@ for (const kind of ['body', 'header', 'footer', 'multiple', 'deleted'] as Litera
     expect(marker).toHaveLength(1);
     expect(marker[0].transform[4] + marker[0].width).toBeCloseTo(540, 0);
     expect(facts).toEqual(await pdfFacts(control.pdf!));
+    if (kind === 'deleted' || kind === 'inserted') {
+      const withoutLines = await renderDocxArtifacts(bytes, { ...options,
+        additionalCss: 'del.rev-del, ins.rev-ins { text-decoration: none !important; }' });
+      const plain = await pdfFacts(withoutLines.pdf!);
+      expect(facts.text).toEqual(plain.text);
+      expect(facts.drawing).not.toEqual(plain.drawing);
+    }
     writeFileSync(info.outputPath('literal-tabs.docx'), bytes);
     writeFileSync(info.outputPath('literal-tabs.pdf'), actual.pdf!);
   });

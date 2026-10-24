@@ -1,6 +1,6 @@
 import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
 
-export type LiteralTabCase = 'body' | 'header' | 'footer' | 'multiple' | 'deleted';
+export type LiteralTabCase = 'body' | 'header' | 'footer' | 'multiple' | 'deleted' | 'inserted';
 
 /** Original tab-only, mixed-text and deleted-text inputs, with explicit-tab controls. */
 export function literalTabFixture(kind: LiteralTabCase, literal = true): Uint8Array {
@@ -8,7 +8,7 @@ export function literalTabFixture(kind: LiteralTabCase, literal = true): Uint8Ar
   const tag = kind === 'deleted' ? 'delText' : 't';
   const text = (value: string) => '<w:' + tag + ' xml:space="preserve">' + value + '</w:' + tag + '>';
   let content: string;
-  if (kind === 'multiple' || kind === 'deleted') {
+  if (kind === 'multiple' || kind === 'deleted' || kind === 'inserted') {
     const tabs = kind === 'multiple' ? 2 : 1;
     content = '<w:r>' + format + (literal ? text('North' + '&#9;'.repeat(tabs) + 'HarborMark')
       : text('North') + '<w:tab/>'.repeat(tabs) + text('HarborMark')) + '</w:r>';
@@ -17,6 +17,7 @@ export function literalTabFixture(kind: LiteralTabCase, literal = true): Uint8Ar
       + '</w:r><w:r>' + format + text('HarborMark') + '</w:r>';
   }
   if (kind === 'deleted') content = '<w:del w:id="7" w:author="Ferry reviewer" w:date="2026-01-01T00:00:00Z">' + content + '</w:del>';
+  if (kind === 'inserted') content = '<w:ins w:id="8" w:author="Ferry reviewer" w:date="2026-01-01T00:00:00Z">' + content + '</w:ins>';
   const paragraph = '<w:p><w:pPr><w:tabs>' + (kind === 'multiple' ? '<w:tab w:val="left" w:pos="2400"/>' : '')
     + '<w:tab w:val="right" w:pos="9360" w:leader="dot"/></w:tabs></w:pPr>' + content + '</w:p>';
   const story = kind === 'header' || kind === 'footer' ? kind : null;

@@ -7632,7 +7632,7 @@ namespace Docxodus
                     if (!span.Nodes().Any()) span.Add(new XText(""));
                     span.AddAnnotation(new Dictionary<string, string>
                     {
-                        { "flex-shrink", "0" }, { "white-space", "nowrap" }
+                        { "flex-shrink", "0" }, { "white-space", "nowrap" }, { "text-decoration", "inherit" }
                     });
                     return span;
                 }
@@ -7648,6 +7648,9 @@ namespace Docxodus
                     { "display", "inline-flex" }, { "align-items", "baseline" },
                     { "text-indent", "0" }, { "width", InchesCss(width) }
                 };
+                // Decorations do not cross an atomic inline flex box. Carry the revision
+                // wrapper's underline/strike through the neutral segment and its text items.
+                segmentStyle["text-decoration"] = "inherit";
                 // Reaching a stop past the line end, the segment hands the overhang back
                 // to the line so it does not break before the segment.
                 if (overhang != null && tail == null)
@@ -7668,7 +7671,7 @@ namespace Docxodus
                     tail.AddAnnotation(new Dictionary<string, string>
                     {
                         { "display", "inline-block" }, { "width", "max-content" }, { "white-space", "nowrap" },
-                        { "text-indent", "0" },
+                        { "text-indent", "0" }, { "text-decoration", "inherit" },
                         { "margin-left", InchesCss(overhang.Value) }, { "margin-right", "-100%" },
                     });
                     result.Add(tail);
@@ -7700,12 +7703,13 @@ namespace Docxodus
             text.AddAnnotation(new Dictionary<string, string>
             {
                 { "display", "block" }, { "max-width", InchesCss(width - overhang) },
+                { "text-decoration", "inherit" },
             });
             var clip = new XElement(Xhtml.span, text);
             clip.AddAnnotation(new Dictionary<string, string>
             {
                 { "flex-grow", "1" }, { "flex-shrink", "1" }, { "flex-basis", "0" }, { "min-width", "0" },
-                { "overflow-x", "clip" },
+                { "overflow-x", "clip" }, { "text-decoration", "inherit" },
             });
             var segment = new XElement(Xhtml.span, clip, followingSpan);
             // The segment's first line shares the paragraph's line, so its top meets the line top.
@@ -7767,7 +7771,7 @@ namespace Docxodus
                 precedingSpan.AddAnnotation(new Dictionary<string, string>
                 {
                     { "flex-shrink", "0" },
-                    { "white-space", "nowrap" },
+                    { "white-space", "nowrap" }, { "text-decoration", "inherit" },
                 });
 
                 if (tabSpan is XElement tabSpanElement)
@@ -7787,7 +7791,7 @@ namespace Docxodus
                 var spanStyle = new Dictionary<string, string>
                 {
                     { "align-items", "baseline" },
-                    { "display", "inline-flex" },
+                    { "display", "inline-flex" }, { "text-decoration", "inherit" },
                     { "text-indent", "0" },
                     { "width", InchesCss(totalWidth) }
                 };
