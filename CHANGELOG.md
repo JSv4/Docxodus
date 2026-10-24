@@ -54,6 +54,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Text-span, search-range and match replacement keep tabs and breaks between text nodes in the
+  same run (#1337). Untracked edits change only the selected text nodes; tracked edits keep the
+  intervening non-text content outside deletion envelopes. Accepting and rejecting therefore retain
+  each marker on the correct side of the edited text, including repeated matches in one run.
+
 - Untracked column insertion and deletion keep a pending table grid revision consistent with the
   edited rows (#1342). Saved cell spans, row omissions and cloned cell properties receive the same
   structural edit, so rejecting older formatting preserves the column change. An incompatible
