@@ -4317,4 +4317,8 @@ keeps its attributes, formatting and revision owner; leading, consecutive and tr
 in order. Field instructions retain literal tab whitespace and do not acquire layout tabs.
 Native regressions compare complete visible text and tab markup with explicit-tab controls;
 worker/pagination and export regressions check the physical right edge and PDF text/drawing facts.
+Browser verification also found explicit tabs inside visible deletion wrappers using a full-width
+spacer without accounting for the deleted text. The label wrapped back to the left margin. Revision
+content now reuses the shared browser-aligned tab renderer, measuring visible deleted text and
+skipping hidden deletion/move-source content. Guards keep field boundaries and revision ownership.
 This implements the reported equivalence; no new Word capture is claimed.

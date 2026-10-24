@@ -52,6 +52,46 @@ public class LiteralTabTextTests
         Assert.DoesNotContain('\t', actual.Element(Xhtml.body)!.Value);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Visible_deleted_tabs_keep_browser_alignment_and_revision_ownership(bool literal)
+    {
+        var html = Convert(Fixture("body", "North\tHarbor", literal, deleted: true));
+        var tab = html.Descendants().Single(e => e.Attribute("data-docx-tab") != null);
+
+        Assert.Contains(tab.Ancestors(), e => ((string?)e.Attribute("style") ?? "").Contains("display: inline-flex"));
+        var deletion = Assert.Single(tab.Ancestors(Xhtml.del));
+        Assert.Equal("Ferry reviewer", (string?)deletion.Attribute("data-author"));
+        Assert.Contains("North", deletion.Value);
+        Assert.Contains("Harbor", deletion.Value);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Hidden_deleted_tabs_do_not_consume_the_following_live_tab_stop(bool literal)
+    {
+        var html = Convert(Fixture("body", "North\tHarbor", literal, deleted: true, followingTab: true), hidden: true);
+        var tab = html.Descendants().Single(e => e.Attribute("data-docx-tab") != null);
+
+        Assert.Equal("right", (string?)tab.Attribute("data-docx-tab"));
+        Assert.Contains("Tail", html.Value);
+        Assert.DoesNotContain("North", html.Value);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Inserted_tabs_keep_browser_alignment_and_revision_ownership(bool literal)
+    {
+        var html = Convert(Fixture("body", "North\tHarbor", literal, inserted: true));
+        var tab = html.Descendants().Single(e => e.Attribute("data-docx-tab") != null);
+
+        Assert.Contains(tab.Ancestors(), e => ((string?)e.Attribute("style") ?? "").Contains("display: inline-flex"));
+        Assert.Equal("Ferry reviewer", (string?)Assert.Single(tab.Ancestors(Xhtml.ins)).Attribute("data-author"));
+    }
+
     [Fact]
     public void A_tab_in_field_instructions_does_not_become_a_layout_tab()
     {
@@ -95,7 +135,7 @@ public class LiteralTabTextTests
                 ShowDeletedContent = !hidden,
             });
 
-    private static byte[] Fixture(string story, string text, bool literal, bool deleted = false)
+    private static byte[] Fixture(string story, string text, bool literal, bool deleted = false, bool followingTab = false, bool inserted = false)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -131,9 +171,12 @@ public class LiteralTabTextTests
             }
             if (deleted) paragraph.Append(new Wp.DeletedRun(run)
                 { Id = "7", Author = "Ferry reviewer", Date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc) });
+            else if (inserted) paragraph.Append(new Wp.InsertedRun(run)
+                { Id = "8", Author = "Ferry reviewer", Date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc) });
             else paragraph.Append(run);
             if (separateLabel) paragraph.Append(new Wp.Run(
                 new Wp.RunProperties(new Wp.Bold(), new Wp.Color { Val = "225588" }), new Wp.Text("Harbor")));
+            if (followingTab) paragraph.Append(new Wp.Run(new Wp.TabChar(), new Wp.Text("Tail")));
 
             var section = new Wp.SectionProperties();
             if (story == "header")

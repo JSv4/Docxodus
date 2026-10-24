@@ -1126,7 +1126,7 @@ namespace Docxodus
             FormattingAssembler.AssembleFormatting(wordDoc, formattingAssemblerSettings);
 
             InsertAppropriateNonbreakingSpaces(wordDoc);
-            CalculateSpanWidthForTabs(wordDoc);
+            CalculateSpanWidthForTabs(wordDoc, htmlConverterSettings.RenderTrackedChanges && htmlConverterSettings.ShowDeletedContent);
             ReverseTableBordersForRtlTables(wordDoc);
             AdjustTableBorders(wordDoc);
             AnnotateOwningContentParts(wordDoc);
@@ -3970,9 +3970,13 @@ namespace Docxodus
             static bool NoOpenField(XElement e) =>
                 e.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>() is not { Count: > 0 };
 
-            if (element.Descendants(W.fldChar).Any() && NoOpenField(element)
-                && NoOpenField(element.DescendantsAndSelf().Last()))
-                return ConvertContentThatCanContainFields(wordDoc, settings, element.Elements());
+            if (NoOpenField(element) && NoOpenField(element.DescendantsAndSelf().Last()))
+            {
+                var alignedTabs = ConvertAlignedTabRuns(wordDoc, settings, element.Elements().ToList());
+                if (alignedTabs != null) return alignedTabs;
+                if (element.Descendants(W.fldChar).Any())
+                    return ConvertContentThatCanContainFields(wordDoc, settings, element.Elements());
+            }
 
             return element.Elements()
                 .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
@@ -7563,7 +7567,7 @@ namespace Docxodus
                 ? settings.RenderAnnotations && ((string?)e.Attribute(W.name))?
                     .StartsWith(AnnotationManager.BookmarkPrefix, StringComparison.Ordinal) == true
                 : e.Name != W.r || e.Elements().Any(c =>
-                    c.Name != W.rPr && c.Name != W.t && c.Name != W.tab && c.Name != W.noBreakHyphen &&
+                    c.Name != W.rPr && c.Name != W.t && c.Name != W.delText && c.Name != W.tab && c.Name != W.noBreakHyphen &&
                     c.Name != W.instrText && !(c.Name == W.fldChar && !c.HasElements));
             // Each stretch between tabs converts its fields on its own, so a field open across a tab
             // is cut in two. That is harmless for a field drawn as its result's runs, but not for one
@@ -9447,7 +9451,7 @@ namespace Docxodus
         /// mis-position the page number, it paints it on top of the date (issue #688). Paginated
         /// mode renders those stories, so their tabs have to resolve like the body's.
         /// </summary>
-        private static void CalculateSpanWidthForTabs(WordprocessingDocument wordDoc)
+        private static void CalculateSpanWidthForTabs(WordprocessingDocument wordDoc, bool includeDeletedText)
         {
             // w:defaultTabStop in settings. Settings is optional in OOXML — Word opens
             // packages without word/settings.xml fine. Missing DocumentSettingsPart used
@@ -9482,7 +9486,7 @@ namespace Docxodus
                 int? partLineWidth = part is HeaderPart or FooterPart or FootnotesPart or EndnotesPart
                     ? finalSectionWidth
                     : null;
-                var newRoot = (XElement)CalculateSpanWidthTransform(root, defaultTabStop, partLineWidth);
+                var newRoot = (XElement)CalculateSpanWidthTransform(root, defaultTabStop, partLineWidth, includeDeletedText);
                 root.ReplaceWith(newRoot);
                 part.PutXDocument();
             }
@@ -9490,13 +9494,13 @@ namespace Docxodus
 
         // TODO: Refactor. This method is way too long.
         [SuppressMessage("ReSharper", "FunctionComplexityOverflow")]
-        private static object CalculateSpanWidthTransform(XNode node, int defaultTabStop, int? lineWidthTwips)
+        private static object CalculateSpanWidthTransform(XNode node, int defaultTabStop, int? lineWidthTwips, bool includeDeletedText)
         {
             var element = node as XElement;
             if (element == null) return node;
 
             if (element.Name == W.body)
-                return CalculateSpanWidthForBody(element, defaultTabStop);
+                return CalculateSpanWidthForBody(element, defaultTabStop, includeDeletedText);
             if (element.Name == W.tc)
                 lineWidthTwips = CellTextWidthTwips(element) ?? lineWidthTwips;
             else if (element.Name == W.txbxContent)
@@ -9510,7 +9514,7 @@ namespace Docxodus
                 // TODO: Revisit. Can we just return the node if it is a paragraph that does not have any tab?
                 return new XElement(element.Name,
                     element.Attributes(),
-                    element.Nodes().Select(n => CalculateSpanWidthTransform(n, defaultTabStop, lineWidthTwips)));
+                    element.Nodes().Select(n => CalculateSpanWidthTransform(n, defaultTabStop, lineWidthTwips, includeDeletedText)));
             }
 
             var clonedPara = new XElement(element);
@@ -9598,7 +9602,8 @@ namespace Docxodus
             // Where the text since the last tab or break began; null until that text starts.
             int? stretchStart = firstInTwips;
             XElement? lastTab = null;
-            var contentToMeasure = element.DescendantsTrimmed(z => z.Name == W.txbxContent || z.Name == W.pPr || z.Name == W.rPr).ToArray();
+            var contentToMeasure = element.DescendantsTrimmed(z => z.Name == W.txbxContent || z.Name == W.pPr || z.Name == W.rPr ||
+                (!includeDeletedText && (z.Name == W.del || z.Name == W.moveFrom))).ToArray();
             var currentElementIdx = 0;
             while (true)
             {
@@ -9668,7 +9673,7 @@ namespace Docxodus
                             .ToList();
 
                         var textAfterTab = textElementsToMeasure
-                            .Where(z => z.Name == W.t)
+                            .Where(z => (z.Name == W.t || z.Name == W.delText))
                             .Select(t => (string)t)
                             .StringConcatenate();
 
@@ -9725,7 +9730,7 @@ namespace Docxodus
                             .ToList();
 
                         var textAfterTab = textElementsToMeasure
-                            .Where(z => z.Name == W.t)
+                            .Where(z => (z.Name == W.t || z.Name == W.delText))
                             .Select(t => (string)t)
                             .StringConcatenate();
 
@@ -9810,7 +9815,7 @@ namespace Docxodus
                             .ToList();
 
                         var textAfterTab = textElementsToMeasure
-                            .Where(z => z.Name == W.t)
+                            .Where(z => (z.Name == W.t || z.Name == W.delText))
                             .Select(t => (string)t)
                             .StringConcatenate();
 
@@ -9858,7 +9863,7 @@ namespace Docxodus
                     }
                 }
 
-                if (currentElement.Name == W.t)
+                if (currentElement.Name == W.t || currentElement.Name == W.delText)
                 {
                     stretchStart ??= twipCounter;
                     // Measure text width to properly position subsequent tabs
@@ -9904,7 +9909,7 @@ namespace Docxodus
 
             return new XElement(element.Name,
                 element.Attributes(),
-                element.Nodes().Select(n => CalculateSpanWidthTransform(n, defaultTabStop, lineWidthTwips)));
+                element.Nodes().Select(n => CalculateSpanWidthTransform(n, defaultTabStop, lineWidthTwips, includeDeletedText)));
         }
 
         /// <summary>
@@ -9912,7 +9917,7 @@ namespace Docxodus
         /// to: a paragraph carrying <c>w:sectPr</c> closes a section, and the body's own
         /// <c>w:sectPr</c> governs everything after the last such paragraph.
         /// </summary>
-        private static XElement CalculateSpanWidthForBody(XElement body, int defaultTabStop)
+        private static XElement CalculateSpanWidthForBody(XElement body, int defaultTabStop, bool includeDeletedText)
         {
             var children = body.Nodes().ToList();
             var widths = new int?[children.Count];
@@ -9926,7 +9931,7 @@ namespace Docxodus
                 widths[i] = width;
             }
             return new XElement(body.Name, body.Attributes(),
-                children.Select((n, i) => CalculateSpanWidthTransform(n, defaultTabStop, widths[i])));
+                children.Select((n, i) => CalculateSpanWidthTransform(n, defaultTabStop, widths[i], includeDeletedText)));
         }
 
         private static XElement? FinalSectionProperties(XElement body) =>
@@ -10030,7 +10035,7 @@ namespace Docxodus
                     var advance = (int)Math.Round(((decimal?)element.Attribute(PtOpenXml.TabWidth) ?? 0m) * 1440m);
                     Place(advance, advance);
                 }
-                else if (element.Name == W.t)
+                else if (element.Name == W.t || element.Name == W.delText)
                 {
                     var run = element.Parent!;
                     var paragraph = run.Ancestors(W.p).First();
@@ -10112,7 +10117,7 @@ namespace Docxodus
             var italic = GetBoolProp(rPr, W.i) || GetBoolProp(rPr, W.iCs);
 
             var runText = r.DescendantsTrimmed(W.txbxContent)
-                .Where(e => e.Name == W.t)
+                .Where(e => e.Name == W.t || e.Name == W.delText)
                 .Select(t => (string) t)
                 .StringConcatenate();
 

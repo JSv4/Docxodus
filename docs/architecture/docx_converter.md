@@ -306,6 +306,10 @@ U+0009 characters in `w:t` and `w:delText` with canonical `w:tab` elements acros
 fragments retain their attributes and their run's formatting/revision owner. Field instructions
 (`w:instrText`) remain unchanged: their tab characters are instruction whitespace, not layout tabs.
 The normal stop, leader and browser-flex calculations below then handle both representations.
+Revision wrappers reuse the same aligned-tab renderer as paragraph content when field boundaries
+permit it. Tab measurements include visible deleted text and skip hidden deletion/move-source
+content, so hidden revisions do not advance the live pen. Revision ownership and formatting stay
+on the outer wrapper and its runs.
 
 `CalculateSpanWidthForTabs` measures the current position and following segment, then annotates each
 tab with the advance needed for its OOXML target. Left/right tab sequences use character-class
