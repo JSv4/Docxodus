@@ -77,6 +77,11 @@ export function inlineDrawingDocx(uri: string, data: string, deleted = false, pa
     + '<wp:docPr id="7" name="Teal inspection panel"/>'
     + `<a:graphic><a:graphicData uri="${uri}">${data}</a:graphicData></a:graphic>`
     + '</wp:inline></w:drawing></w:r>';
+  return drawingDocx(drawing, deleted, parts);
+}
+
+export function drawingDocx(drawing: string, deleted = false, parts: ExtraPart[] = [],
+  after = 'End of inspection'): Uint8Array {
   const payload = deleted
     ? `<w:del w:id="31" w:author="Review Example" w:date="2026-09-12T10:00:00Z">${drawing}</w:del>`
     : drawing;
@@ -84,7 +89,7 @@ export function inlineDrawingDocx(uri: string, data: string, deleted = false, pa
 <w:document xmlns:w="${W}" xmlns:r="${R}" xmlns:wp="${WP}" xmlns:a="${A}" xmlns:wps="${WPS}" xmlns:wpg="${WPG}"><w:body>
   <w:p><w:r><w:t xml:space="preserve">Optical panel</w:t></w:r></w:p>
   <w:p>${payload}</w:p>
-  <w:p><w:r><w:t xml:space="preserve">End of inspection</w:t></w:r></w:p>
+  <w:p><w:r><w:t xml:space="preserve">${after}</w:t></w:r></w:p>
   <w:sectPr><w:pgSz w:w="12240" w:h="15840"/>
     <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>
   </w:sectPr>

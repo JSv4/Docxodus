@@ -18,7 +18,7 @@ namespace Docxodus
         private static readonly XName WpcCanvas = WPC.wpc + "wpc";
 
         /// <summary>
-        /// Draws an inline DrawingML drawing that is neither a picture, a chart nor a text box — a
+        /// Draws a DrawingML drawing that is neither a picture, a chart nor a text box — a
         /// <c>wps:wsp</c> shape, a <c>wpg:wgp</c> group or a <c>wpc:wpc</c> canvas — as SVG sized
         /// to its <c>wp:extent</c>. Rectangles, rounded rectangles, ellipses and lines are drawn
         /// with their fill and outline; a group maps its children through its child coordinate
@@ -34,15 +34,14 @@ namespace Docxodus
         /// declines only that picture, whose space is kept.)
         /// </para>
         /// <para>
-        /// Floating (<c>wp:anchor</c>) shapes are not drawn. They are not counted as paragraph
-        /// content, and drawing them faithfully needs their stacking (<c>behindDoc</c>) and text
-        /// wrapping, which this projection does not model.
+        /// Floating (<c>wp:anchor</c>) shapes keep their SVG and anchor geometry for the host,
+        /// while their paragraph mark remains separate from the drawing.
         /// </para>
         /// </summary>
         private static XElement? ProcessDrawingShape(WordprocessingDocument wordDoc, XElement drawing,
             bool rendersPictures, WmlToHtmlConverterSettings? settings)
         {
-            var container = drawing.Element(WP.inline);
+            var container = drawing.Elements().FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
             if (container == null)
                 return null;
 
@@ -68,7 +67,7 @@ namespace Docxodus
             else
                 context.Undrawn++;
             if (context.Drawn == 0 && context.Undrawn > 0)
-                return UnrenderedDrawing(settings, drawing, content, width, height);
+                return PlaceDrawingShape(UnrenderedDrawing(settings, drawing, content, width, height), container, settings);
 
             var docPr = container.Element(WP.docPr);
             var altText = (string?)docPr?.Attribute(NoNamespace.descr) ?? (string?)docPr?.Attribute(NoNamespace.name);
@@ -95,7 +94,33 @@ namespace Docxodus
             var style = new Dictionary<string, string> { { "display", "inline-block" } };
             AddEmuDimensions(style, width, height);
             wrapper.AddAnnotation(style);
+            return PlaceDrawingShape(wrapper, container, settings);
+        }
+
+        private static XElement PlaceDrawingShape(XElement wrapper, XElement container,
+            WmlToHtmlConverterSettings? settings)
+        {
+            if (container.Name == WP.anchor)
+                AddDrawingFrameStyle(wrapper.Annotation<Dictionary<string, string>>()!, wrapper, container,
+                    settings ?? new WmlToHtmlConverterSettings(), autoFit: false);
             return wrapper;
+        }
+
+        private static XElement? ProcessVmlShapeFallback(XElement element, WmlToHtmlConverterSettings settings)
+        {
+            // Image and textbox paths already had the opportunity to render their content.
+            // Do not turn an explicitly omitted picture into an unsupported shape.
+            if (element.Descendants(VML.imagedata).Any()) return null;
+            var shape = element.Descendants().FirstOrDefault(e => e.Name.Namespace == VML.shape.Namespace &&
+                e.Name.LocalName is "rect" or "roundrect" or "oval" or "line" or "polyline" or "arc" or "shape");
+            if (shape == null) return null;
+            var placeholder = CreateUnsupportedContentPlaceholder(settings, shape, UnsupportedContentType.Other, "[SHAPE]")
+                ?? new XElement(Xhtml.span, new XAttribute("aria-hidden", "true"));
+            placeholder.SetAttributeValue("data-docx-shape", "unrendered");
+            var style = new Dictionary<string, string> { { "display", "inline-block" }, { "box-sizing", "border-box" } };
+            AddVmlTextBoxStyle(style, shape);
+            placeholder.AddAnnotation(style);
+            return placeholder;
         }
 
         /// <summary>

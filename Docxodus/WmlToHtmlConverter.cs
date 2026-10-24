@@ -11573,7 +11573,8 @@ namespace Docxodus
                     if (image != null)
                         return image;
                 }
-                return ProcessTextBox(wordDoc, element, settings);
+                return ProcessTextBox(wordDoc, element, settings)
+                    ?? ProcessVmlShapeFallback(element, settings);
             }
             return null;
         }
@@ -11858,6 +11859,45 @@ namespace Docxodus
         private static void AddDrawingTextBoxStyle(Dictionary<string, string> style, XElement wrapper,
             XElement drawing, XElement drawingContainer, WmlToHtmlConverterSettings settings, bool autoFit)
         {
+            AddDrawingFrameStyle(style, wrapper, drawingContainer, settings, autoFit);
+
+            var shapeProperties = drawing.Descendants(WPS.spPr).FirstOrDefault();
+            if (shapeProperties != null)
+            {
+                var fill = (string?)shapeProperties.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
+                if (IsHexColor(fill))
+                    style.AddIfMissing("background-color", "#" + fill);
+
+                var line = shapeProperties.Element(A.ln);
+                var lineColor = (string?)line?.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
+                if (IsHexColor(lineColor))
+                {
+                    // lineColor is only non-null (per IsHexColor's [NotNullWhen(true)]) when
+                    // line itself was non-null, since lineColor is derived via line?.Element(...).
+                    var widthEmu = (long?)line!.Attribute("w") ?? 12700L;
+                    style.AddIfMissing("border", string.Format(NumberFormatInfo.InvariantInfo,
+                        "{0:0.##}pt solid #{1}", widthEmu / 12700.0, lineColor));
+                }
+            }
+
+            var bodyProperties = drawing.Descendants(WPS.bodyPr).FirstOrDefault();
+            if (bodyProperties != null)
+            {
+                // LibreOffice honors DrawingML's automatic shape fitting: a one-line text box
+                // with a large stored extent shrinks to its content height. Leaving the fixed
+                // extent here creates a visibly oversized rectangle in the visual oracle.
+                if (bodyProperties.Element(A.spAutoFit) != null)
+                    style.Remove("height");
+                AddEmuPadding(style, "padding-left", (long?)bodyProperties.Attribute("lIns"));
+                AddEmuPadding(style, "padding-top", (long?)bodyProperties.Attribute("tIns"));
+                AddEmuPadding(style, "padding-right", (long?)bodyProperties.Attribute("rIns"));
+                AddEmuPadding(style, "padding-bottom", (long?)bodyProperties.Attribute("bIns"));
+            }
+        }
+
+        private static void AddDrawingFrameStyle(Dictionary<string, string> style, XElement wrapper,
+            XElement drawingContainer, WmlToHtmlConverterSettings settings, bool autoFit)
+        {
             var extentCx = (long?)drawingContainer.Elements(WP.extent)
                 .Attributes(NoNamespace.cx).FirstOrDefault();
             var extentCy = (long?)drawingContainer.Elements(WP.extent)
@@ -11898,38 +11938,6 @@ namespace Docxodus
                 }
             }
 
-            var shapeProperties = drawing.Descendants(WPS.spPr).FirstOrDefault();
-            if (shapeProperties != null)
-            {
-                var fill = (string?)shapeProperties.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
-                if (IsHexColor(fill))
-                    style.AddIfMissing("background-color", "#" + fill);
-
-                var line = shapeProperties.Element(A.ln);
-                var lineColor = (string?)line?.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
-                if (IsHexColor(lineColor))
-                {
-                    // lineColor is only non-null (per IsHexColor's [NotNullWhen(true)]) when
-                    // line itself was non-null, since lineColor is derived via line?.Element(...).
-                    var widthEmu = (long?)line!.Attribute("w") ?? 12700L;
-                    style.AddIfMissing("border", string.Format(NumberFormatInfo.InvariantInfo,
-                        "{0:0.##}pt solid #{1}", widthEmu / 12700.0, lineColor));
-                }
-            }
-
-            var bodyProperties = drawing.Descendants(WPS.bodyPr).FirstOrDefault();
-            if (bodyProperties != null)
-            {
-                // LibreOffice honors DrawingML's automatic shape fitting: a one-line text box
-                // with a large stored extent shrinks to its content height. Leaving the fixed
-                // extent here creates a visibly oversized rectangle in the visual oracle.
-                if (bodyProperties.Element(A.spAutoFit) != null)
-                    style.Remove("height");
-                AddEmuPadding(style, "padding-left", (long?)bodyProperties.Attribute("lIns"));
-                AddEmuPadding(style, "padding-top", (long?)bodyProperties.Attribute("tIns"));
-                AddEmuPadding(style, "padding-right", (long?)bodyProperties.Attribute("rIns"));
-                AddEmuPadding(style, "padding-bottom", (long?)bodyProperties.Attribute("bIns"));
-            }
         }
 
         /// <summary>
