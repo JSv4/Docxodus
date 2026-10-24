@@ -54,6 +54,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Floating DrawingML shapes and groups retain their SVG, anchor geometry, text clearance and
+  paint order in HTML, paginated views and PDF export (#1346). Top/bottom wrapping reserves space
+  independently of the drawing, and no-wrap objects retain their paragraph-mark line. Background
+  drawings remain behind text and above the paper in standalone export. Unsupported geometry,
+  interior wrapping and undrawn VML shapes are reported through the unsupported-content policy;
+  fallback labels inherit the document font instead of introducing a generic font requirement.
+  Preset hexagons and simple inline VML rectangles draw their actual geometry without adding label text.
+
 - Comments anchored in a header, footer, footnote or endnote now render like body comments (#1310).
   The HTML converter read them but emitted nothing for them, in every comment mode: no highlighted
   range, no marker and no entry, so a paginated export or PDF finished without them and without a

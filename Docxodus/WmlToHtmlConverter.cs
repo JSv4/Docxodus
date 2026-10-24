@@ -1255,6 +1255,7 @@ namespace Docxodus
             if (EmitsSemanticLists(htmlConverterSettings))
                 GroupSemanticLists(xhtml);
 
+            FinalizeShapeAnchors(xhtml, htmlConverterSettings);
             ReifyStylesAndClasses(htmlConverterSettings, xhtml, wordDoc);
 
             // Remove insignificant whitespace between inline elements in paragraphs.
@@ -11573,7 +11574,8 @@ namespace Docxodus
                     if (image != null)
                         return image;
                 }
-                return ProcessTextBox(wordDoc, element, settings);
+                return ProcessTextBox(wordDoc, element, settings)
+                    ?? ProcessVmlShape(element, settings);
             }
             return null;
         }
@@ -11858,6 +11860,48 @@ namespace Docxodus
         private static void AddDrawingTextBoxStyle(Dictionary<string, string> style, XElement wrapper,
             XElement drawing, XElement drawingContainer, WmlToHtmlConverterSettings settings, bool autoFit)
         {
+            AddDrawingFrameStyle(style, wrapper, drawingContainer, settings, autoFit);
+            if (drawingContainer.Name == WP.anchor &&
+                drawing.Descendants().Any(e => e.Name == WpgGroup || e.Name == WpcCanvas))
+                ReportShapeLayoutLoss(wrapper, settings, "Non-text members of this drawing group are not rendered");
+
+            var shapeProperties = drawing.Descendants(WPS.spPr).FirstOrDefault();
+            if (shapeProperties != null)
+            {
+                var fill = (string?)shapeProperties.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
+                if (IsHexColor(fill))
+                    style.AddIfMissing("background-color", "#" + fill);
+
+                var line = shapeProperties.Element(A.ln);
+                var lineColor = (string?)line?.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
+                if (IsHexColor(lineColor))
+                {
+                    // lineColor is only non-null (per IsHexColor's [NotNullWhen(true)]) when
+                    // line itself was non-null, since lineColor is derived via line?.Element(...).
+                    var widthEmu = (long?)line!.Attribute("w") ?? 12700L;
+                    style.AddIfMissing("border", string.Format(NumberFormatInfo.InvariantInfo,
+                        "{0:0.##}pt solid #{1}", widthEmu / 12700.0, lineColor));
+                }
+            }
+
+            var bodyProperties = drawing.Descendants(WPS.bodyPr).FirstOrDefault();
+            if (bodyProperties != null)
+            {
+                // LibreOffice honors DrawingML's automatic shape fitting: a one-line text box
+                // with a large stored extent shrinks to its content height. Leaving the fixed
+                // extent here creates a visibly oversized rectangle in the visual oracle.
+                if (bodyProperties.Element(A.spAutoFit) != null)
+                    style.Remove("height");
+                AddEmuPadding(style, "padding-left", (long?)bodyProperties.Attribute("lIns"));
+                AddEmuPadding(style, "padding-top", (long?)bodyProperties.Attribute("tIns"));
+                AddEmuPadding(style, "padding-right", (long?)bodyProperties.Attribute("rIns"));
+                AddEmuPadding(style, "padding-bottom", (long?)bodyProperties.Attribute("bIns"));
+            }
+        }
+
+        private static void AddDrawingFrameStyle(Dictionary<string, string> style, XElement wrapper,
+            XElement drawingContainer, WmlToHtmlConverterSettings settings, bool autoFit)
+        {
             var extentCx = (long?)drawingContainer.Elements(WP.extent)
                 .Attributes(NoNamespace.cx).FirstOrDefault();
             var extentCy = (long?)drawingContainer.Elements(WP.extent)
@@ -11898,38 +11942,6 @@ namespace Docxodus
                 }
             }
 
-            var shapeProperties = drawing.Descendants(WPS.spPr).FirstOrDefault();
-            if (shapeProperties != null)
-            {
-                var fill = (string?)shapeProperties.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
-                if (IsHexColor(fill))
-                    style.AddIfMissing("background-color", "#" + fill);
-
-                var line = shapeProperties.Element(A.ln);
-                var lineColor = (string?)line?.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
-                if (IsHexColor(lineColor))
-                {
-                    // lineColor is only non-null (per IsHexColor's [NotNullWhen(true)]) when
-                    // line itself was non-null, since lineColor is derived via line?.Element(...).
-                    var widthEmu = (long?)line!.Attribute("w") ?? 12700L;
-                    style.AddIfMissing("border", string.Format(NumberFormatInfo.InvariantInfo,
-                        "{0:0.##}pt solid #{1}", widthEmu / 12700.0, lineColor));
-                }
-            }
-
-            var bodyProperties = drawing.Descendants(WPS.bodyPr).FirstOrDefault();
-            if (bodyProperties != null)
-            {
-                // LibreOffice honors DrawingML's automatic shape fitting: a one-line text box
-                // with a large stored extent shrinks to its content height. Leaving the fixed
-                // extent here creates a visibly oversized rectangle in the visual oracle.
-                if (bodyProperties.Element(A.spAutoFit) != null)
-                    style.Remove("height");
-                AddEmuPadding(style, "padding-left", (long?)bodyProperties.Attribute("lIns"));
-                AddEmuPadding(style, "padding-top", (long?)bodyProperties.Attribute("tIns"));
-                AddEmuPadding(style, "padding-right", (long?)bodyProperties.Attribute("rIns"));
-                AddEmuPadding(style, "padding-bottom", (long?)bodyProperties.Attribute("bIns"));
-            }
         }
 
         /// <summary>
@@ -11943,20 +11955,34 @@ namespace Docxodus
             long? extentCx, long? extentCy, bool autoFit)
         {
             wrapper.Add(new XAttribute("data-docx-drawing-anchor", "true"));
+            wrapper.SetAttributeValue("data-docx-anchor-behind", (bool?)anchor.Attribute("behindDoc") == true ? "true" : "false");
+            wrapper.SetAttributeValue("data-docx-anchor-order", (uint?)anchor.Attribute("relativeHeight") ?? 0);
             AddEmuDataAttribute(wrapper, "data-docx-anchor-extent-width", extentCx);
             AddEmuDataAttribute(wrapper, "data-docx-anchor-extent-height", extentCy);
 
-            AddAnchorAxisMetadata(wrapper, anchor.Element(WP.positionH), "h");
-            AddAnchorAxisMetadata(wrapper, anchor.Element(WP.positionV), "v");
+            if (IsTrueAttribute(anchor, "simplePos"))
+            {
+                wrapper.SetAttributeValue("data-docx-anchor-h-relative", "page");
+                wrapper.SetAttributeValue("data-docx-anchor-v-relative", "page");
+                AddEmuDataAttribute(wrapper, "data-docx-anchor-h-offset", (long?)anchor.Element(WP.simplePos)?.Attribute(NoNamespace.x) ?? 0);
+                AddEmuDataAttribute(wrapper, "data-docx-anchor-v-offset", (long?)anchor.Element(WP.simplePos)?.Attribute(NoNamespace.y) ?? 0);
+            }
+            else
+            {
+                AddAnchorAxisMetadata(wrapper, anchor.Element(WP.positionH), "h");
+                AddAnchorAxisMetadata(wrapper, anchor.Element(WP.positionV), "v");
+            }
 
+            var verticalWrap = anchor.Element(WP.wrapTopAndBottom);
+            var sideWrap = anchor.Elements().FirstOrDefault(e => e.Name == WP.wrapSquare || e.Name == WP.wrapTight || e.Name == WP.wrapThrough);
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-top",
-                (long?)anchor.Attribute(NoNamespace.distT));
+                (long?)verticalWrap?.Attribute(NoNamespace.distT) ?? (long?)anchor.Attribute(NoNamespace.distT));
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-right",
-                (long?)anchor.Attribute(NoNamespace.distR));
+                (long?)sideWrap?.Attribute(NoNamespace.distR) ?? (long?)anchor.Attribute(NoNamespace.distR));
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-bottom",
-                (long?)anchor.Attribute(NoNamespace.distB));
+                (long?)verticalWrap?.Attribute(NoNamespace.distB) ?? (long?)anchor.Attribute(NoNamespace.distB));
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-left",
-                (long?)anchor.Attribute(NoNamespace.distL));
+                (long?)sideWrap?.Attribute(NoNamespace.distL) ?? (long?)anchor.Attribute(NoNamespace.distL));
 
             AddRelativeSizeMetadata(wrapper, anchor.Element(WP14.sizeRelH), WP14.pctWidth,
                 "width");
@@ -12016,6 +12042,21 @@ namespace Docxodus
 
         private static void AddVmlTextBoxStyle(Dictionary<string, string> style, XElement shape)
         {
+            AddVmlDimensions(style, shape);
+
+            var fill = NormalizeVmlCssColor((string?)shape.Attribute("fillcolor"));
+            if (fill != null)
+                style.AddIfMissing("background-color", fill);
+            var stroke = NormalizeVmlCssColor((string?)shape.Attribute("strokecolor"));
+            if (stroke != null)
+                style.AddIfMissing("border", "1pt solid " + stroke);
+
+            if (HasVmlTextBoxAutoFit(shape))
+                style.Remove("height");
+        }
+
+        private static void AddVmlDimensions(Dictionary<string, string> style, XElement shape)
+        {
             var vmlStyle = (string?)shape.Attribute("style");
             if (!string.IsNullOrEmpty(vmlStyle))
             {
@@ -12028,15 +12069,6 @@ namespace Docxodus
                     style.AddIfMissing("height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.##}pt", height));
             }
 
-            var fill = NormalizeVmlCssColor((string?)shape.Attribute("fillcolor"));
-            if (fill != null)
-                style.AddIfMissing("background-color", fill);
-            var stroke = NormalizeVmlCssColor((string?)shape.Attribute("strokecolor"));
-            if (stroke != null)
-                style.AddIfMissing("border", "1pt solid " + stroke);
-
-            if (HasVmlTextBoxAutoFit(shape))
-                style.Remove("height");
         }
 
         private static bool HasAutoFitTextBox(XElement element) =>
@@ -12547,7 +12579,8 @@ namespace Docxodus
                 sizeString.Substring(sizeString.Length - 2) == "pt")
             {
                 float size;
-                if (float.TryParse(sizeString.Substring(0, sizeString.Length - 2), out size))
+                if (float.TryParse(sizeString.Substring(0, sizeString.Length - 2), NumberStyles.Float,
+                    CultureInfo.InvariantCulture, out size))
                     return size;
             }
             return null;

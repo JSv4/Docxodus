@@ -18,7 +18,7 @@ namespace Docxodus
         private static readonly XName WpcCanvas = WPC.wpc + "wpc";
 
         /// <summary>
-        /// Draws an inline DrawingML drawing that is neither a picture, a chart nor a text box — a
+        /// Draws a DrawingML drawing that is neither a picture, a chart nor a text box — a
         /// <c>wps:wsp</c> shape, a <c>wpg:wgp</c> group or a <c>wpc:wpc</c> canvas — as SVG sized
         /// to its <c>wp:extent</c>. Rectangles, rounded rectangles, ellipses and lines are drawn
         /// with their fill and outline; a group maps its children through its child coordinate
@@ -34,15 +34,14 @@ namespace Docxodus
         /// declines only that picture, whose space is kept.)
         /// </para>
         /// <para>
-        /// Floating (<c>wp:anchor</c>) shapes are not drawn. They are not counted as paragraph
-        /// content, and drawing them faithfully needs their stacking (<c>behindDoc</c>) and text
-        /// wrapping, which this projection does not model.
+        /// Floating (<c>wp:anchor</c>) shapes keep their SVG and anchor geometry for the host,
+        /// while their paragraph mark remains separate from the drawing.
         /// </para>
         /// </summary>
         private static XElement? ProcessDrawingShape(WordprocessingDocument wordDoc, XElement drawing,
             bool rendersPictures, WmlToHtmlConverterSettings? settings)
         {
-            var container = drawing.Element(WP.inline);
+            var container = drawing.Elements().FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
             if (container == null)
                 return null;
 
@@ -57,8 +56,7 @@ namespace Docxodus
             var context = new ShapeContext(wordDoc);
             var frame = new ShapeBox(0, 0, width, height);
             // Coordinates are EMUs, scaled to the SVG's CSS pixels (9525 EMUs each) by this group.
-            var drawingSpace = new XElement(Svg + "g",
-                new XAttribute("transform", "scale(" + (1.0 / 9525).ToString("G9", CultureInfo.InvariantCulture) + ")"));
+            var drawingSpace = DrawingSpace();
             if (content?.Name == WPS.wsp)
                 AddShapeElement(drawingSpace, content, frame, null, context);
             else if (content?.Name == WpgGroup)
@@ -68,7 +66,7 @@ namespace Docxodus
             else
                 context.Undrawn++;
             if (context.Drawn == 0 && context.Undrawn > 0)
-                return UnrenderedDrawing(settings, drawing, content, width, height);
+                return PlaceDrawingShape(UnrenderedDrawing(settings, drawing, content, width, height), container, settings);
 
             var docPr = container.Element(WP.docPr);
             var altText = (string?)docPr?.Attribute(NoNamespace.descr) ?? (string?)docPr?.Attribute(NoNamespace.name);
@@ -95,8 +93,261 @@ namespace Docxodus
             var style = new Dictionary<string, string> { { "display", "inline-block" } };
             AddEmuDimensions(style, width, height);
             wrapper.AddAnnotation(style);
+            return PlaceDrawingShape(wrapper, container, settings);
+        }
+
+        private static XElement PlaceDrawingShape(XElement wrapper, XElement container,
+            WmlToHtmlConverterSettings? settings)
+        {
+            if (container.Name != WP.anchor) return wrapper;
+            var options = settings ?? new WmlToHtmlConverterSettings();
+            var style = wrapper.Annotation<Dictionary<string, string>>()!;
+            AddDrawingFrameStyle(style, wrapper, container, options, autoFit: false);
+            wrapper.SetAttributeValue("data-docx-shape-anchor", "true");
+            style["position"] = "absolute";
+            PrepareRelativeShapeSvg(wrapper, options);
+            if (container.Ancestors(W.tc).Any())
+                ReportShapeLayoutLoss(wrapper, options, "Drawing placement within a table cell is approximated");
+
+            var wrap = container.Elements().FirstOrDefault(e => e.Name == WP.wrapTopAndBottom ||
+                e.Name == WP.wrapSquare || e.Name == WP.wrapTight || e.Name == WP.wrapThrough);
+            var kind = wrap?.Name.LocalName ?? "wrapNone";
+            wrapper.SetAttributeValue("data-docx-anchor-wrap", kind);
+            var topDistance = ShapeAnchorNumber(wrapper, "wrap-top");
+            if (wrap != null && topDistance > 0)
+                ReportShapeLayoutLoss(wrapper, options, "Clearance above this drawing's anchor paragraph is not fully represented");
+            var horizontal = container.Element(WP.positionH);
+            var vertical = container.Element(WP.positionV);
+            var paragraphRelative = !IsTrueAttribute(container, "simplePos") && (string?)vertical?.Attribute(NoNamespace.relativeFrom) == "paragraph" &&
+                vertical.Element(WP.posOffset) != null;
+
+            if (wrap != null && wrap.Name != WP.wrapTopAndBottom)
+            {
+                // A column-edge exclusion has an exact CSS float equivalent. An interior
+                // object with text on both sides cannot be represented by a single float.
+                var edge = (string?)horizontal?.Attribute(NoNamespace.relativeFrom) == "column" &&
+                    (horizontal.Element(WP.align)?.Value is "left" or "right" ||
+                        (long?)horizontal.Element(WP.posOffset) == 0);
+                if (edge && paragraphRelative && (long?)vertical!.Element(WP.posOffset) == 0)
+                {
+                    var exclusion = ApplyAnchorTextWrap(wrapper, container)!;
+                    var exclusionStyle = exclusion.Annotation<Dictionary<string, string>>()!;
+                    AddEmuDimensions(exclusionStyle, (long?)container.Element(WP.extent)?.Attribute(NoNamespace.cx),
+                        (long?)container.Element(WP.extent)?.Attribute(NoNamespace.cy));
+                    exclusionStyle["position"] = "relative";
+                    exclusion.SetAttributeValue("data-docx-shape-exclusion", kind);
+                    // The float owns the edge position in continuous HTML. Paginated output
+                    // resolves the original anchor independently before promoting the SVG.
+                    style["left"] = "0pt";
+                    style["top"] = options.RenderPagination == PaginationMode.Paginated ? "0pt"
+                        : (-topDistance).ToString(CultureInfo.InvariantCulture) + "pt";
+                    return exclusion;
+                }
+                ReportShapeLayoutLoss(wrapper, options, "This drawing's interior text wrapping is approximated by top/bottom clearance");
+                wrapper.SetAttributeValue("data-docx-anchor-wrap", "wrapTopAndBottom");
+            }
+            if (wrap != null && !paragraphRelative)
+                ReportShapeLayoutLoss(wrapper, options, "This drawing's page-relative text clearance cannot be resolved in continuous flow");
             return wrapper;
         }
+
+        private static void PrepareRelativeShapeSvg(XElement wrapper, WmlToHtmlConverterSettings settings)
+        {
+            var relativeWidth = ShapeAnchorNumber(wrapper, "width-percent") > 0;
+            var relativeHeight = ShapeAnchorNumber(wrapper, "height-percent") > 0;
+            if (!relativeWidth && !relativeHeight) return;
+            var svg = wrapper.Element(Svg + "svg");
+            var width = ShapeAnchorNumber(wrapper, "extent-width") * 96 / 72;
+            var height = ShapeAnchorNumber(wrapper, "extent-height") * 96 / 72;
+            if (svg != null && width > 0 && height > 0)
+            {
+                svg.SetAttributeValue("viewBox", "0 0 " + width.ToString(CultureInfo.InvariantCulture) + " " + height.ToString(CultureInfo.InvariantCulture));
+                svg.SetAttributeValue("preserveAspectRatio", "none");
+                svg.SetAttributeValue("style", "display: block; width: 100%; height: 100%;");
+                foreach (var element in svg.Descendants().Where(e => e.Attribute("stroke-width") != null))
+                {
+                    var stroke = (double)element.Attribute("stroke-width")!;
+                    // Non-scaling strokes ignore the root EMU transform too; store CSS pixels.
+                    element.SetAttributeValue("stroke-width", Format(stroke / 9525));
+                    element.SetAttributeValue("vector-effect", "non-scaling-stroke");
+                }
+            }
+            else ReportShapeLayoutLoss(wrapper, settings, "This drawing's relative size cannot be applied to its stored geometry");
+            if (settings.RenderPagination != PaginationMode.Paginated ||
+                relativeWidth && (string?)wrapper.Attribute("data-docx-anchor-width-relative") is not ("page" or "margin") ||
+                relativeHeight && (string?)wrapper.Attribute("data-docx-anchor-height-relative") is not ("page" or "margin"))
+                ReportShapeLayoutLoss(wrapper, settings, "This drawing's relative sizing needs a physical page or page-dependent margin context");
+        }
+
+        private static void ReportShapeLayoutLoss(XElement anchor, WmlToHtmlConverterSettings settings, string message)
+        {
+            anchor.SetAttributeValue("data-docx-shape", "partial");
+            if (settings is { RenderUnsupportedContentPlaceholders: true, IncludeUnsupportedContentMetadata: true })
+            {
+                anchor.SetAttributeValue("data-content-type", nameof(UnsupportedContentType.Other));
+                anchor.SetAttributeValue("data-element-name", "anchor");
+                anchor.SetAttributeValue("title", message);
+            }
+        }
+
+        /// <summary>
+        /// A floating drawing does not own a text line. Keep its anchor paragraph's mark, and
+        /// represent text clearance separately from the SVG. Overlapping top/bottom drawings
+        /// reserve their union's bottom, rather than summing their heights in source order.
+        /// </summary>
+        private static void FinalizeShapeAnchors(XElement html, WmlToHtmlConverterSettings settings)
+        {
+            var anchors = html.Descendants().Where(e => (string?)e.Attribute("data-docx-shape-anchor") == "true").ToList();
+            var clearances = new Dictionary<XElement, decimal>();
+            foreach (var anchor in anchors)
+            {
+                var paragraph = anchor.Ancestors().FirstOrDefault(e => ParagraphElementNames.Contains(e.Name));
+                if (paragraph == null) continue;
+                var style = anchor.Annotation<Dictionary<string, string>>()!;
+                var inFloat = anchor.Parent?.Attribute("data-docx-shape-exclusion") != null;
+                if (settings.RenderPagination != PaginationMode.Paginated && !inFloat)
+                {
+                    var paragraphStyle = paragraph.Annotation<Dictionary<string, string>>();
+                    if (paragraphStyle == null)
+                    {
+                        paragraphStyle = new Dictionary<string, string>();
+                        paragraph.AddAnnotation(paragraphStyle);
+                    }
+                    paragraphStyle["position"] = "relative";
+                    var horizontal = (string?)anchor.Attribute("data-docx-anchor-h-relative");
+                    var vertical = (string?)anchor.Attribute("data-docx-anchor-v-relative");
+                    if (horizontal != "column" || vertical != "paragraph")
+                        ReportShapeLayoutLoss(anchor, settings, "This drawing's page or margin position is approximated relative to its paragraph in continuous HTML");
+                    if (horizontal == "column" && new[] { "margin-left", "margin-right" }.Any(property =>
+                        paragraphStyle.TryGetValue(property, out var value) && value is not ("0" or "0pt" or "0in")))
+                        ReportShapeLayoutLoss(anchor, settings, "This drawing's column position is approximated beside an indented paragraph");
+                    style["left"] = ShapeAnchorNumber(anchor, "h-offset").ToString(CultureInfo.InvariantCulture) + "pt";
+                    style["top"] = ShapeAnchorNumber(anchor, "v-offset").ToString(CultureInfo.InvariantCulture) + "pt";
+                    var align = (string?)anchor.Attribute("data-docx-anchor-h-align");
+                    if (align == "center") { style["left"] = "50%"; style["transform"] = "translateX(-50%)"; }
+                    else if (align == "right") { style.Remove("left"); style["right"] = "0pt"; }
+                }
+                if ((string?)anchor.Attribute("data-docx-anchor-wrap") == "wrapTopAndBottom")
+                {
+                    var bottom = ShapeAnchorNumber(anchor, "extent-height") +
+                        ShapeAnchorNumber(anchor, "wrap-bottom") +
+                        ((string?)anchor.Attribute("data-docx-anchor-v-relative") == "paragraph"
+                            ? ShapeAnchorNumber(anchor, "v-offset") : 0);
+                    clearances[paragraph] = Math.Max(clearances.GetValueOrDefault(paragraph), bottom);
+                }
+            }
+            foreach (var pair in clearances)
+            {
+                var spacer = new XElement(Xhtml.span, new XAttribute("data-docx-shape-clearance", "true"),
+                    new XAttribute("aria-hidden", "true"), new XAttribute("data-page-map-exclude", "true"));
+                spacer.AddAnnotation(new Dictionary<string, string> { { "float", "left" }, { "width", "100%" },
+                    { "height", Math.Max(0, pair.Value).ToString(CultureInfo.InvariantCulture) + "pt" } });
+                pair.Key.AddFirst(spacer);
+            }
+            if (settings.RenderPagination != PaginationMode.Paginated && anchors.Count > 0)
+            {
+                var body = html.Descendants(Xhtml.body).FirstOrDefault();
+                if (body != null)
+                {
+                    var bodyStyle = body.Annotation<Dictionary<string, string>>();
+                    if (bodyStyle == null) { bodyStyle = new Dictionary<string, string>(); body.AddAnnotation(bodyStyle); }
+                    bodyStyle["isolation"] = "isolate";
+                }
+                var ordered = anchors.OrderBy(e => ShapeAnchorNumber(e, "order")).ToList();
+                for (var index = 0; index < ordered.Count; index++)
+                    ordered[index].Annotation<Dictionary<string, string>>()!["z-index"] =
+                        ((string?)ordered[index].Attribute("data-docx-anchor-behind") == "true"
+                            ? index - ordered.Count : index + 1).ToString(CultureInfo.InvariantCulture);
+            }
+        }
+
+        private static decimal ShapeAnchorNumber(XElement anchor, string suffix) =>
+            decimal.TryParse((string?)anchor.Attribute("data-docx-anchor-" + suffix), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out var number) ? number : 0;
+
+        private static XElement? ProcessVmlShape(XElement element, WmlToHtmlConverterSettings? settings)
+        {
+            // Image and textbox paths already had the opportunity to render their content.
+            // Do not turn an explicitly omitted picture into an unsupported shape.
+            if (element.Descendants(VML.imagedata).Any()) return null;
+            var shapes = element.Descendants().Where(e => e.Name.Namespace == VML.shape.Namespace &&
+                e.Name.LocalName is "rect" or "roundrect" or "oval" or "line" or "polyline" or "arc" or "shape").ToList();
+            var shape = shapes.FirstOrDefault();
+            if (shape == null) return null;
+            if (shapes.Count == 1 && shape.Parent == element && TryVmlRectangle(shape) is { } rectangle)
+                return rectangle;
+            var placeholder = (settings == null ? null
+                : CreateUnsupportedContentPlaceholder(settings, shape, UnsupportedContentType.Other, "[SHAPE]"))
+                ?? new XElement(Xhtml.span, new XAttribute("aria-hidden", "true"));
+            placeholder.SetAttributeValue("data-docx-shape", "unrendered");
+            var style = new Dictionary<string, string> { { "display", "inline-block" },
+                { "box-sizing", "border-box" }, { "font-family", "inherit" } };
+            // Keeping an undrawn oval or line's extent must not invent a filled rectangle.
+            AddVmlDimensions(style, shape);
+            placeholder.AddAnnotation(style);
+            return placeholder;
+        }
+
+        private static XElement? TryVmlRectangle(XElement shape)
+        {
+            if (shape.Name.LocalName != "rect" || shape.HasElements || shape.Attributes().Any(a =>
+                !a.IsNamespaceDeclaration && a.Name.Namespace != PtOpenXml.pt && !(a.Name.Namespace == XNamespace.None && (a.Name.LocalName is
+                    "style" or "id" or "title" or "alt" or "fillcolor" or "filled" or "strokecolor" or "stroked" or "strokeweight") ||
+                    a.Name.NamespaceName == "urn:schemas-microsoft-com:office:office" && a.Name.LocalName == "spid")))
+                return null;
+            var tokens = ((string?)shape.Attribute("style") ?? "").Split(';')
+                .Select(token => token.Trim()).Where(token => token.Length > 0).ToList();
+            // Positioned/grouped VML and effects need more than an inline rectangle. Preserve
+            // their unsupported fallback rather than silently discarding those instructions.
+            if (tokens.Any(token => !token.StartsWith("width:", StringComparison.Ordinal) &&
+                !token.StartsWith("height:", StringComparison.Ordinal))) return null;
+            var width = WidthInPoints(tokens);
+            var height = HeightInPoints(tokens);
+            if (width is not > 0 || height is not > 0 || !float.IsFinite(width.Value) || !float.IsFinite(height.Value) ||
+                width.Value > long.MaxValue / 12700d || height.Value > long.MaxValue / 12700d)
+                return null;
+            var filled = VmlFlag(shape, "filled");
+            var stroked = VmlFlag(shape, "stroked");
+            var fill = NormalizeVmlCssColor((string?)shape.Attribute("fillcolor") ?? "#ffffff");
+            var stroke = NormalizeVmlCssColor((string?)shape.Attribute("strokecolor") ?? "#000000");
+            var weight = (string?)shape.Attribute("strokeweight");
+            // VML's default is one CSS pixel. A unitless attribute is measured in EMUs.
+            double? strokeWidth = weight == null ? 9525 :
+                double.TryParse(weight, NumberStyles.Float, CultureInfo.InvariantCulture, out var emu) ? emu :
+                weight.EndsWith("px", StringComparison.Ordinal) && double.TryParse(weight[..^2], NumberStyles.Float,
+                    CultureInfo.InvariantCulture, out var pixels) ? pixels * 9525 :
+                WidthInPoints(new[] { "width:" + weight }) is { } points ? points * 12700d : null;
+            if (filled == null || stroked == null || filled == true && fill == null ||
+                stroked == true && (stroke == null || strokeWidth is not >= 0 || !double.IsFinite(strokeWidth.Value)))
+                return null;
+            var widthEmu = (long)Math.Round(width.Value * 12700d);
+            var heightEmu = (long)Math.Round(height.Value * 12700d);
+            var rect = ShapeRectangle(new ShapeBox(0, 0, widthEmu, heightEmu));
+            rect.Add(new XAttribute("fill", filled == true ? fill! : "none"),
+                new XAttribute("stroke", stroked == true ? stroke! : "none"));
+            if (stroked == true) rect.Add(new XAttribute("stroke-width", Format(strokeWidth!.Value)));
+            var space = DrawingSpace();
+            space.Add(rect);
+            var svg = DrawingSvg(widthEmu, heightEmu, space);
+            var alt = (string?)shape.Attribute("alt") ?? (string?)shape.Attribute("title");
+            if (string.IsNullOrEmpty(alt)) svg.SetAttributeValue("aria-hidden", "true");
+            else svg.Add(new XAttribute("role", "img"), new XAttribute("aria-label", alt));
+            var wrapper = new XElement(Xhtml.span, svg);
+            var style = new Dictionary<string, string> { { "display", "inline-block" } };
+            AddEmuDimensions(style, widthEmu, heightEmu);
+            wrapper.AddAnnotation(style);
+            return wrapper;
+        }
+
+        private static bool? VmlFlag(XElement shape, string name) => ((string?)shape.Attribute(name))?.ToLowerInvariant() switch
+        {
+            null or "t" or "true" or "1" or "on" => true,
+            "f" or "false" or "0" or "off" => false,
+            _ => null,
+        };
+
+        private static XElement DrawingSpace() => new XElement(Svg + "g", new XAttribute("transform",
+            "scale(" + (1.0 / 9525).ToString("G9", CultureInfo.InvariantCulture) + ")"));
 
         /// <summary>
         /// The SVG for a drawing's extent. It has no viewBox: a zero extent (a horizontal or vertical
@@ -135,6 +386,9 @@ namespace Docxodus
             if (placeholder != null)
             {
                 placeholder.Add(new XAttribute("data-docx-shape", "unrendered"));
+                // A drawing label is UI, not a new document font. Introducing generic monospace
+                // would make strict-font export fail before its content policy can report the loss.
+                style["font-family"] = "inherit";
                 style["box-sizing"] = "border-box";
                 style["overflow"] = "hidden";
                 placeholder.AddAnnotation(style);
@@ -275,10 +529,9 @@ namespace Docxodus
             var geometry = (string?)properties?.Element(A.prstGeom)?.Attribute(NoNamespace.prst);
             XElement? element = geometry switch
             {
-                "rect" => new XElement(Svg + "rect",
-                    new XAttribute("x", Format(frame.X)), new XAttribute("y", Format(frame.Y)),
-                    new XAttribute("width", Format(frame.Width)), new XAttribute("height", Format(frame.Height))),
+                "rect" => ShapeRectangle(frame),
                 "roundRect" => RoundedRectangle(properties!.Element(A.prstGeom)!, frame),
+                "hexagon" => Hexagon(properties!, frame),
                 "ellipse" => new XElement(Svg + "ellipse",
                     new XAttribute("cx", Format(frame.X + frame.Width / 2)),
                     new XAttribute("cy", Format(frame.Y + frame.Height / 2)),
@@ -321,19 +574,48 @@ namespace Docxodus
         {
             // ECMA-376 presetShapeDefinitions: the corner radius is adj/100000 of the shorter
             // side, adj defaulting to 16667 and clamped to [0, 50000].
-            var adjustment = presetGeometry.Element(A.avLst)?.Elements(A.gd)
-                .Where(guide => (string?)guide.Attribute(NoNamespace.name) == "adj")
-                .Select(guide => (string?)guide.Attribute(NoNamespace.fmla))
-                .Select(formula => formula != null && formula.StartsWith("val ", StringComparison.Ordinal) &&
-                    double.TryParse(formula.Substring(4), NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
-                        ? (double?)value
-                        : null)
-                .FirstOrDefault() ?? 16667;
+            var adjustment = PresetAdjustment(presetGeometry, "adj", 16667) ?? 16667;
             var radius = Math.Min(frame.Width, frame.Height) * Math.Clamp(adjustment, 0, 50000) / 100000;
             return new XElement(Svg + "rect",
                 new XAttribute("x", Format(frame.X)), new XAttribute("y", Format(frame.Y)),
                 new XAttribute("width", Format(frame.Width)), new XAttribute("height", Format(frame.Height)),
                 new XAttribute("rx", Format(radius)), new XAttribute("ry", Format(radius)));
+        }
+
+        private static XElement ShapeRectangle(ShapeBox frame) => new XElement(Svg + "rect",
+            new XAttribute("x", Format(frame.X)), new XAttribute("y", Format(frame.Y)),
+            new XAttribute("width", Format(frame.Width)), new XAttribute("height", Format(frame.Height)));
+
+        private static double? PresetAdjustment(XElement preset, string name, double fallback)
+        {
+            var formula = (string?)preset.Element(A.avLst)?.Elements(A.gd)
+                .FirstOrDefault(guide => (string?)guide.Attribute(NoNamespace.name) == name)?.Attribute(NoNamespace.fmla);
+            if (formula == null) return fallback;
+            return formula.StartsWith("val ", StringComparison.Ordinal) &&
+                double.TryParse(formula[4..], NumberStyles.Float, CultureInfo.InvariantCulture, out var value) && double.IsFinite(value)
+                ? value : null;
+        }
+
+        private static XElement? Hexagon(XElement properties, ShapeBox frame)
+        {
+            var preset = properties.Element(A.prstGeom)!;
+            var adjustment = PresetAdjustment(preset, "adj", 25000);
+            var verticalFactor = PresetAdjustment(preset, "vf", 115470);
+            if (adjustment == null || verticalFactor == null) return null;
+            // ECMA presetShapeDefinitions: x1=ss*pin(0,adj,50000*w/ss)/100000;
+            // y1=vc-sin(hd2*vf/100000,60deg). Map source geometry before group scaling.
+            var sourceWidth = (long?)properties.Element(A.xfrm)?.Element(A.ext)?.Attribute(NoNamespace.cx) ?? frame.Width;
+            var sourceHeight = (long?)properties.Element(A.xfrm)?.Element(A.ext)?.Attribute(NoNamespace.cy) ?? frame.Height;
+            var inset = sourceWidth > 0 ? Math.Clamp(Math.Min(sourceWidth, sourceHeight) * adjustment.Value / 100000,
+                0, sourceWidth / 2) * frame.Width / sourceWidth : 0;
+            var deltaY = frame.Height / 2 * verticalFactor.Value / 100000 * Math.Sin(Math.PI / 3);
+            if (!double.IsFinite(deltaY)) return null;
+            var centerY = frame.Y + frame.Height / 2;
+            var points = new[] { (frame.X, centerY), (frame.X + inset, centerY - deltaY),
+                (frame.X + frame.Width - inset, centerY - deltaY), (frame.X + frame.Width, centerY),
+                (frame.X + frame.Width - inset, centerY + deltaY), (frame.X + inset, centerY + deltaY) };
+            return new XElement(Svg + "polygon", new XAttribute("points",
+                string.Join(" ", points.Select(point => Format(point.Item1) + "," + Format(point.Item2)))));
         }
 
         /// <summary>

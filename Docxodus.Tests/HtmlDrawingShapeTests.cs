@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Validation;
 using Docxodus.Internal;
 using Xunit;
 
@@ -356,14 +357,263 @@ public class HtmlDrawingShapeTests
     }
 
     [Theory]
+    [InlineData(PaginationMode.None, false, false)]
+    [InlineData(PaginationMode.None, false, true)]
+    [InlineData(PaginationMode.None, true, false)]
+    [InlineData(PaginationMode.None, true, true)]
+    [InlineData(PaginationMode.Paginated, false, false)]
+    [InlineData(PaginationMode.Paginated, false, true)]
+    [InlineData(PaginationMode.Paginated, true, false)]
+    [InlineData(PaginationMode.Paginated, true, true)]
+    public void Shape_and_group_keep_ink_and_anchor_geometry(PaginationMode mode, bool grouped, bool floating)
+    {
+        var content = grouped ? Group(Shape()) : Shape();
+        var uri = grouped ? GroupUri : ShapeUri;
+        var input = Docx(floating ? FloatingDrawing(uri, content) : InlineDrawing(uri, content));
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, mode);
+        var svg = OnlySvg(paragraph);
+
+        Assert.Equal("#19647E", (string?)Assert.Single(Drawn(svg, "rect")).Attribute("fill"));
+        Assert.Equal("192", (string?)svg.Attribute("width"));
+        Assert.Equal("96", (string?)svg.Attribute("height"));
+        if (floating)
+        {
+            var anchor = Assert.Single(svg.Ancestors().Where(e => (string?)e.Attribute("data-docx-drawing-anchor") == "true"));
+            Assert.Equal("144", (string?)anchor.Attribute("data-docx-anchor-extent-width"));
+            Assert.Equal("72", (string?)anchor.Attribute("data-docx-anchor-extent-height"));
+            Assert.Equal("page", (string?)anchor.Attribute("data-docx-anchor-h-relative"));
+            Assert.Equal("360", (string?)anchor.Attribute("data-docx-anchor-h-offset"));
+            Assert.Equal("page", (string?)anchor.Attribute("data-docx-anchor-v-relative"));
+            Assert.Equal("360", (string?)anchor.Attribute("data-docx-anchor-v-offset"));
+        }
+        else Assert.DoesNotContain(svg.Ancestors(), e => e.Attribute("data-docx-drawing-anchor") != null);
+    }
+
+    [Theory]
+    [InlineData(PaginationMode.None)]
+    [InlineData(PaginationMode.Paginated)]
+    public void An_unsupported_floating_shape_is_reported(PaginationMode mode)
+    {
+        var input = Docx(FloatingDrawing(ShapeUri, Shape("pentagon")));
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, mode, placeholders: true);
+
+        Assert.Contains(paragraph.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+        Assert.Contains(paragraph.Descendants(), e => (string?)e.Attribute("data-docx-drawing-anchor") == "true");
+    }
+
+    [Theory]
+    [InlineData(PaginationMode.None)]
+    [InlineData(PaginationMode.Paginated)]
+    public void A_plain_Vml_shape_is_drawn_or_reported(PaginationMode mode)
+    {
+        var input = Docx("<w:r><w:pict><v:rect xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+            "style=\"width:144pt;height:72pt\" fillcolor=\"#19647E\"/></w:pict></w:r>");
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, mode, placeholders: true);
+
+        Assert.Contains(paragraph.Descendants(), e => e.Name.LocalName == "svg" || e.Attribute("data-content-type") != null);
+    }
+
+    private static void AssertSchemaValid(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(stream, false);
+        Assert.Empty(new OpenXmlValidator(DocumentFormat.OpenXml.FileFormatVersions.Office2019).Validate(doc)
+            .Select(e => e.Description));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_floating_hexagon_draws_its_six_preset_vertices(bool grouped)
+    {
+        var input = Docx(FloatingDrawing(grouped ? GroupUri : ShapeUri,
+            grouped ? Group(Shape("hexagon")) : Shape("hexagon")));
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
+        var points = PolygonPoints(OnlySvg(paragraph));
+        Assert.Equal(6, points.Length);
+        Assert.Equal(new[] { 0d, 18, 126, 144, 126, 18 }, points.Select(p => p.X).ToArray());
+        var expectedY = new[] { 36d, 0, 0, 36, 72, 72 };
+        for (var i = 0; i < points.Length; i++) Assert.Equal(expectedY[i], points[i].Y, 4);
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-content-type") != null);
+    }
+
+    [Fact]
+    public void A_hexagon_keeps_its_source_adjustment_under_nonuniform_group_scaling()
+    {
+        var input = Docx(InlineDrawing(GroupUri, Group(Shape("hexagon", cx: 914400, cy: 914400),
+            childCx: 914400, childCy: 914400)));
+        AssertSchemaValid(input);
+        // A square child has an 18pt inset; the group doubles its horizontal coordinates only.
+        var points = PolygonPoints(OnlySvg(MiddleParagraph(input)));
+        Assert.Equal(36, points[1].X);
+        Assert.Equal(108, points[2].X);
+    }
+
+    [Fact]
+    public void A_hexagon_honors_its_adjustment_and_vertical_factor()
+    {
+        var shape = Shape("hexagon").Replace("<a:avLst/>",
+            "<a:avLst><a:gd name=\"adj\" fmla=\"val 50000\"/><a:gd name=\"vf\" fmla=\"val 100000\"/></a:avLst>");
+        var input = Docx(InlineDrawing(ShapeUri, shape));
+        AssertSchemaValid(input);
+        var points = PolygonPoints(OnlySvg(MiddleParagraph(input)));
+        Assert.Equal(36, points[1].X);
+        Assert.Equal(36 - 36 * System.Math.Sin(System.Math.PI / 3), points[1].Y, 4);
+    }
+
+    private static (double X, double Y)[] PolygonPoints(XElement svg) =>
+        Assert.Single(Drawn(svg, "polygon")).Attribute("points")!.Value.Split(' ')
+            .Select(pair => pair.Split(','))
+            .Select(point => (double.Parse(point[0], System.Globalization.CultureInfo.InvariantCulture) / 12700,
+                double.Parse(point[1], System.Globalization.CultureInfo.InvariantCulture) / 12700)).ToArray();
+
+    [Fact]
+    public void A_hexagon_with_an_unsupported_adjustment_formula_is_reported()
+    {
+        var shape = Shape("hexagon").Replace("<a:avLst/>",
+            "<a:avLst><a:gd name=\"adj\" fmla=\"*/ w 1 4\"/></a:avLst>");
+        var input = Docx(InlineDrawing(ShapeUri, shape));
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, placeholders: true);
+        Assert.Contains(paragraph.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+    }
+
+    [Theory]
+    [InlineData("", "#ffffff", "#000000", "9525")]
+    [InlineData("fillcolor=\"#19647E\"", "#19647E", "#000000", "9525")]
+    [InlineData("filled=\"f\" stroked=\"f\"", "none", "none", null)]
+    [InlineData("fillcolor=\"red\" strokecolor=\"blue\" strokeweight=\"2pt\"", "red", "blue", "25400")]
+    public void A_plain_Vml_rectangle_draws_its_declared_paint(string attributes, string fill, string stroke, string? width)
+    {
+        var input = Docx("<w:r><w:pict><v:rect xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+            "style=\"width:144pt;height:72pt\" " + attributes + "/></w:pict></w:r>");
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
+        var rect = Assert.Single(Drawn(OnlySvg(paragraph), "rect"));
+        Assert.Equal(fill, (string?)rect.Attribute("fill"));
+        Assert.Equal(stroke, (string?)rect.Attribute("stroke"));
+        Assert.Equal(width, (string?)rect.Attribute("stroke-width"));
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-content-type") != null);
+    }
+
+    [Fact]
+    public void Vml_lengths_keep_the_Css_decimal_point_under_a_comma_decimal_culture()
+    {
+        var previous = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("fr-FR");
+            var input = Docx("<w:r><w:pict><v:rect xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+                "style=\"width:144.5pt;height:72pt\"/></w:pict></w:r>");
+            AssertSchemaValid(input);
+            var rect = Assert.Single(Drawn(OnlySvg(MiddleParagraph(input)), "rect"));
+            Assert.Equal("1835150", (string?)rect.Attribute("width"));
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = previous; }
+    }
+
+    [Fact]
+    public void Positioned_Vml_is_reported_instead_of_becoming_an_inline_rectangle()
+    {
+        var input = Docx("<w:r><w:pict><v:rect xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+            "style=\"position:absolute;left:36pt;top:24pt;width:144pt;height:72pt\"/></w:pict></w:r>");
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, placeholders: true);
+        Assert.Contains(paragraph.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Name.LocalName == "svg");
+    }
+
+    [Fact]
+    public void A_simple_position_uses_its_page_coordinates_instead_of_the_unused_axes()
+    {
+        var input = Docx(FloatingDrawing(ShapeUri, Shape()).Replace("simplePos=\"0\"", "simplePos=\"1\"")
+            .Replace("<wp:simplePos x=\"0\" y=\"0\"/>", "<wp:simplePos x=\"914400\" y=\"1828800\"/>"));
+        AssertSchemaValid(input);
+        var anchor = OnlySvg(MiddleParagraph(input, PaginationMode.Paginated)).Parent!;
+        Assert.Equal("72", (string?)anchor.Attribute("data-docx-anchor-h-offset"));
+        Assert.Equal("144", (string?)anchor.Attribute("data-docx-anchor-v-offset"));
+        Assert.Equal("page", (string?)anchor.Attribute("data-docx-anchor-h-relative"));
+    }
+
+    private static string ParagraphShape(string wrap = "<wp:wrapTopAndBottom/>") =>
+        FloatingDrawing(ShapeUri, Shape())
+            .Replace("<wp:positionH relativeFrom=\"page\">", "<wp:positionH relativeFrom=\"column\">")
+            .Replace("<wp:positionV relativeFrom=\"page\">", "<wp:positionV relativeFrom=\"paragraph\">")
+            .Replace("4572000", "0").Replace("<wp:wrapNone/>", wrap);
+
+    [Theory]
+    [InlineData(0, "72")]
+    [InlineData(24, "96")]
+    public void Overlapping_top_bottom_shapes_reserve_their_union(int secondOffset, string expectedHeight)
+    {
+        var second = ParagraphShape().Replace("id=\"7\"", "id=\"8\"")
+            .Replace("<wp:positionV relativeFrom=\"paragraph\"><wp:posOffset>0</wp:posOffset>",
+                $"<wp:positionV relativeFrom=\"paragraph\"><wp:posOffset>{secondOffset * 12700}</wp:posOffset>");
+        var input = Docx(ParagraphShape() + second);
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
+        var clearance = Assert.Single(paragraph.Descendants().Where(e => e.Attribute("data-docx-shape-clearance") != null));
+        Assert.Contains("height: " + expectedHeight + "pt", (string?)clearance.Attribute("style"));
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-content-type") != null);
+    }
+
+    [Fact]
+    public void Interior_wrapping_is_reported_while_the_shape_keeps_its_anchored_geometry()
+    {
+        var input = Docx(ParagraphShape("<wp:wrapSquare wrapText=\"bothSides\"/>")
+            .Replace("<wp:positionH relativeFrom=\"column\"><wp:posOffset>0</wp:posOffset>",
+                "<wp:positionH relativeFrom=\"column\"><wp:posOffset>1270000</wp:posOffset>"));
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
+        var anchor = OnlySvg(paragraph).Parent!;
+        Assert.Equal("Other", (string?)anchor.Attribute("data-content-type"));
+        Assert.Equal("100", (string?)anchor.Attribute("data-docx-anchor-h-offset"));
+    }
+
+    [Fact]
+    public void A_floating_group_with_a_text_box_reports_its_undrawn_members()
+    {
+        var textBox = Shape().Replace("<wps:bodyPr/>",
+            "<wps:txbx><w:txbxContent><w:p><w:r><w:t>Group caption</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/>");
+        var input = Docx(FloatingDrawing(GroupUri, Group(Shape() + textBox)));
+        AssertSchemaValid(input);
+        var html = HtmlConversionOps.ConvertToHtml(input, new HtmlConversionOptions
+        {
+            PaginationMode = (int)PaginationMode.Paginated,
+            RenderUnsupportedContentPlaceholders = true,
+        });
+        var document = XElement.Parse(html);
+        Assert.Contains("Group caption", document.Value);
+        Assert.Contains(document.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+    }
+
+    [Fact]
+    public void A_Vml_fallback_does_not_invent_ink_from_disabled_fill_or_outline()
+    {
+        var input = Docx("<w:r><w:pict><v:oval xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+            "style=\"width:144pt;height:72pt\" fillcolor=\"#19647E\" strokecolor=\"#FF9900\" filled=\"f\" stroked=\"f\"/></w:pict></w:r>");
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, placeholders: true);
+        var placeholder = Assert.Single(paragraph.Descendants().Where(e => e.Attribute("data-content-type") != null));
+        Assert.Contains("width: 144pt", (string?)placeholder.Attribute("style"));
+        Assert.Contains("height: 72pt", (string?)placeholder.Attribute("style"));
+        Assert.DoesNotContain("#19647E", placeholder.ToString());
+        Assert.DoesNotContain("#FF9900", placeholder.ToString());
+    }
+
+    [Theory]
     [InlineData(PaginationMode.Paginated)]
     [InlineData(PaginationMode.None)]
-    public void FloatingShape_StaysOutOfTheTextFlowAndItsParagraphKeepsAPlaceholderLine(PaginationMode mode)
+    public void FloatingShape_RetainsItsParagraphMarkAlongsideItsGraphic(PaginationMode mode)
     {
         // A floating drawing is not paragraph content (issue #880), so nothing may take its line.
         var paragraph = MiddleParagraph(Docx(FloatingDrawing(ShapeUri, Shape())), mode);
 
-        Assert.DoesNotContain(paragraph.Descendants(), e => e.Name.LocalName == "svg");
+        Assert.Single(paragraph.Descendants().Where(e => e.Name.LocalName == "svg"));
         Assert.NotEmpty(paragraph.Value);
         Assert.True(string.IsNullOrWhiteSpace(paragraph.Value));
     }
