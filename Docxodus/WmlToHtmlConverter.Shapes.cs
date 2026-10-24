@@ -106,7 +106,7 @@ namespace Docxodus
             return wrapper;
         }
 
-        private static XElement? ProcessVmlShapeFallback(XElement element, WmlToHtmlConverterSettings settings)
+        private static XElement? ProcessVmlShapeFallback(XElement element, WmlToHtmlConverterSettings? settings)
         {
             // Image and textbox paths already had the opportunity to render their content.
             // Do not turn an explicitly omitted picture into an unsupported shape.
@@ -114,7 +114,8 @@ namespace Docxodus
             var shape = element.Descendants().FirstOrDefault(e => e.Name.Namespace == VML.shape.Namespace &&
                 e.Name.LocalName is "rect" or "roundrect" or "oval" or "line" or "polyline" or "arc" or "shape");
             if (shape == null) return null;
-            var placeholder = CreateUnsupportedContentPlaceholder(settings, shape, UnsupportedContentType.Other, "[SHAPE]")
+            var placeholder = (settings == null ? null
+                : CreateUnsupportedContentPlaceholder(settings, shape, UnsupportedContentType.Other, "[SHAPE]"))
                 ?? new XElement(Xhtml.span, new XAttribute("aria-hidden", "true"));
             placeholder.SetAttributeValue("data-docx-shape", "unrendered");
             var style = new Dictionary<string, string> { { "display", "inline-block" }, { "box-sizing", "border-box" } };
