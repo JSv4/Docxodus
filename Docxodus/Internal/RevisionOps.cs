@@ -1766,6 +1766,95 @@ internal static class RevisionOps
         }
     }
 
+    /// <summary>A one-column insertion can cross rows that grow an omission or a merged cell
+    /// instead of gaining a physical cell. Join those separated cell marks only when every row
+    /// and the saved grid describe that same column insertion.</summary>
+    private static RevisionGroup? CoalesceInsertedColumnGroups(
+        List<RevisionGroup> groups, IReadOnlyList<RevisionGroup> tableGroups, XElement table, int partIndex)
+    {
+        var grids = groups.Where(group => group.PartIndex == partIndex
+            && group.Units.Count == 1 && group.Units[0].Element.Name == W.tblGridChange
+            && ReferenceEquals(group.Units[0].Table, table)
+            && string.IsNullOrEmpty(group.Author) && group.Date is null && group.DateUtc is null).ToList();
+        if (grids.Count != 1) return null;
+        var gridGroup = grids[0];
+        var gridChange = gridGroup.Units[0].Element;
+        var columns = table.Element(W.tblGrid)?.Elements(W.gridCol).ToList();
+        var oldColumns = gridChange.Element(W.tblGrid)?.Elements(W.gridCol).ToList();
+        if (columns is null || oldColumns is null || columns.Count != oldColumns.Count + 1) return null;
+        static XElement Value(XElement element) => new(element.Name,
+            element.Attributes().Where(attribute => attribute.Name.Namespace != PtOpenXml.pt));
+        static int Property(XElement? properties, XName name, int fallback = 0) =>
+            (int?)properties?.Element(name)?.Attribute(W.val) ?? fallback;
+
+        var plans = new List<List<RevisionGroup>>();
+        foreach (var byStamp in tableGroups.Where(group => group.Family == RevisionFamily.CellInsert)
+            .GroupBy(group => new { group.Author, group.Date, group.DateUtc }))
+        {
+            var cluster = byStamp.ToList();
+            var inserted = cluster.SelectMany(group => group.Units).Where(unit => unit.Kind == UnitKind.CellMark)
+                .Select(unit => unit.MarkedCell).Where(cell => cell is not null).Select(cell => cell!).ToHashSet();
+            var shapes = WordprocessingMLUtil.TableRows(table).SelectMany(TableGridModel.RowGrid)
+                .Where(cell => inserted.Contains(cell.Tc)).ToList();
+            if (shapes.Count != inserted.Count || shapes.Count == 0 || shapes.Any(cell => cell.Span != 1)) continue;
+            int column = shapes[0].Start;
+            if (column < 0 || column >= columns.Count || shapes.Any(cell => cell.Start != column)
+                || !columns.Where((_, index) => index != column).Select(Value)
+                    .Zip(oldColumns.Select(Value), XNode.DeepEquals).All(equal => equal))
+                continue;
+
+            var changes = new HashSet<XElement> { gridChange };
+            bool covered = true;
+            foreach (var row in WordprocessingMLUtil.TableRows(table))
+            {
+                var cells = TableGridModel.RowGrid(row);
+                int before = TableGridModel.GridBefore(row), after = TableGridModel.GridAfter(row);
+                if (cells.Count == 0 || cells[^1].End + after != columns.Count) { covered = false; break; }
+                XName? omission = column < before ? W.gridBefore : column >= cells[^1].End ? W.gridAfter : null;
+                if (omission is not null)
+                {
+                    var properties = row.Element(W.trPr);
+                    var change = properties?.Element(W.trPrChange);
+                    if (change is null || !ChangesOnly(change, omission)
+                        || Property(properties, omission) != Property(change.Element(W.trPr), omission) + 1)
+                    { covered = false; break; }
+                    changes.Add(change);
+                    continue;
+                }
+                var cell = TableGridModel.CellCovering(cells, column)!.Value;
+                if (inserted.Contains(cell.Tc)) continue;
+                var cellProperties = cell.Tc.Element(W.tcPr);
+                var cellChange = cellProperties?.Element(W.tcPrChange);
+                var previous = cellChange?.Element(W.tcPr);
+                if (cellChange is null || cell.Span != Math.Max(1, Property(previous, W.gridSpan, 1)) + 1
+                    || !ChangesOnly(cellChange, W.gridSpan, W.tcW))
+                { covered = false; break; }
+                var width = cellProperties?.Element(W.tcW);
+                var oldWidth = previous?.Element(W.tcW);
+                bool widthMatches = (string?)oldWidth?.Attribute(W.type) == "dxa"
+                    ? (string?)width?.Attribute(W.type) == "dxa"
+                        && (long?)width?.Attribute(W._w) == Math.Max(0L,
+                            ((long?)oldWidth.Attribute(W._w) ?? 0) + ((long?)columns[column].Attribute(W._w) ?? 0))
+                    : width is null ? oldWidth is null : oldWidth is not null && XNode.DeepEquals(Value(width), Value(oldWidth));
+                if (!widthMatches) { covered = false; break; }
+                changes.Add(cellChange);
+            }
+            if (!covered) continue;
+            var propertiesToJoin = groups.Where(group => group.PartIndex == partIndex
+                && group.Units.Count > 0 && group.Units.All(unit => changes.Contains(unit.Element))
+                && (ReferenceEquals(group, gridGroup)
+                    || (group.Author == byStamp.Key.Author && group.Date == byStamp.Key.Date
+                        && group.DateUtc == byStamp.Key.DateUtc))).ToList();
+            if (!changes.SetEquals(propertiesToJoin.SelectMany(group => group.Units).Select(unit => unit.Element))) continue;
+            plans.Add(cluster.Concat(propertiesToJoin).ToList());
+        }
+        // A bare grid has no author or time. Geometry must identify one complete operation,
+        // never whichever of several plausible columns happened to be enumerated first.
+        if (plans.Count != 1) return null;
+        MergeGroups(plans[0], groups);
+        return plans[0][0];
+    }
+
     /// <summary>
     /// Word records one cell-structure action as live cell marks plus associated table,
     /// cell, paragraph-property, and content revisions. Fold that coherent stamp into
@@ -1783,7 +1872,8 @@ internal static class RevisionOps
         foreach (var byTable in cellGroups.GroupBy(g => g.Units[0].Table))
         {
             if (byTable.Key is null) continue;
-            var tableCellGroups = byTable.ToList();
+            var insertedColumn = CoalesceInsertedColumnGroups(groups, byTable.ToList(), byTable.Key, partIndex);
+            var tableCellGroups = byTable.Where(groups.Contains).ToList();
             var markedCells = tableCellGroups.SelectMany(group => group.Units)
                 .Select(unit => unit.MarkedCell)
                 .Where(cell => cell is not null)
@@ -1808,6 +1898,9 @@ internal static class RevisionOps
                 var matches = tableCellGroups.Where(c =>
                     c.Author == candidate.Author && c.Date == candidate.Date
                     && c.DateUtc == candidate.DateUtc
+                    // The proven column already owns every geometry property it needs. Other
+                    // property revisions remain separate even if they share its stamp.
+                    && (!ReferenceEquals(c, insertedColumn) || candidate.Units.All(unit => unit.Kind != UnitKind.PropsChange))
                     && (candidate.Units.All(unit => unit.Element.Name == W.tblGridChange)
                         || candidate.Units.All(unit => unit.Element.Name == W.tblPrChange
                             || unit.Element.Name == W.tblPrExChange)
