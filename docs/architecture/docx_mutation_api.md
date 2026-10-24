@@ -653,6 +653,14 @@ missing property revision can be treated as part of that operation. Mixed shadin
 missing width changes under another author's stamp, separate tables and unrelated no-op grids
 stay separate. Nested tables retain their own grids.
 
+A tracked column insertion also remains one atomic entry when it crosses rows with omitted
+columns or horizontal merges (#1330). The registry requires one complete explanation of the
+new column: matching cell marks, a grid that differs from its saved version by that column,
+and the corresponding saved omission/span/width properties in every affected row. Those
+geometry changes resolve together, including selective accept/reject. Unrelated row or table formatting
+stays separate. A bare grid that fits multiple complete column operations remains ambiguous;
+the registry does not choose one by enumeration order.
+
 An untracked column insertion or deletion also transforms a pending grid revision's saved grid
 (#1342). Rejecting that older revision therefore keeps the untracked column edit. The new column
 is cloned from the corresponding source column in each grid, including its previous width in

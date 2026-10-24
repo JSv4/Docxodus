@@ -59,6 +59,12 @@ All notable changes to this project will be documented in this file.
   intervening non-text content outside deletion envelopes. Accepting and rejecting therefore retain
   each marker on the correct side of the edited text, including repeated matches in one run.
 
+- A tracked column insertion remains one resolvable revision when intermediate rows grow an
+  omitted column or a merged cell instead of gaining a new cell (#1330). The registry verifies
+  the complete inserted-column geometry and matching saved properties before joining separated
+  cell marks, their grid change and the affected row/cell properties. Unrelated formatting and
+  competing column operations remain separate or ambiguous.
+
 - Untracked column insertion and deletion keep a pending table grid revision consistent with the
   edited rows (#1342). Saved cell spans, row omissions and cloned cell properties receive the same
   structural edit, so rejecting older formatting preserves the column change. An incompatible
