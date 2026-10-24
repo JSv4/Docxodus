@@ -1,4 +1,4 @@
-import { test, expect, type Browser } from '@playwright/test';
+import { test, expect, type Browser, type Page } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
@@ -111,3 +111,39 @@ test('control: a body-only comment prints alone in every profile', async ({ brow
   expect(pages[0].match(/[A-Z]+COMMENT/g)).toEqual(['BODYCOMMENT']);
   expect(pages[1]).not.toContain('COMMENT');
 });
+
+/** The paginated view, without the export: each page's comment column, for one placement. */
+async function viewColumns(page: Page, placement: 'margin' | 'outside'): Promise<string[][]> {
+  await page.goto('/test-harness.html');
+  await page.waitForFunction(() => (window as any).DocxodusReady === true);
+  await page.addScriptTag({ url: '/pagination.bundle.js' });
+  return page.evaluate(({ bytes, placement }) => {
+    // Margin comments (2), paginated (1), notes and running stories rendered (the two trues after
+    // the annotation prefix), tracked changes off.
+    const html: string = (window as any).Docxodus.DocumentConverter.ConvertDocxToHtmlComplete(
+      new Uint8Array(bytes), 'Story comments', 'docx-', false, '', 2, 'comment-',
+      1, 1, 'page-', false, 0, 'annot-', true, true, false, true, true, false, null, false, 0);
+    if (html.startsWith('{')) throw new Error(html);
+    const parsed = new DOMParser().parseFromString(html, 'text/html');
+    document.head.insertAdjacentHTML('beforeend', parsed.head.innerHTML);
+    document.body.innerHTML = '<div id="host"></div>';
+    const host = document.querySelector<HTMLElement>('#host')!;
+    (window as any).DocxodusPagination.paginateHtml(parsed.body.innerHTML, host, {
+      showPageNumbers: false, commentColumnPlacement: placement,
+    });
+    const pages = Array.from(host.querySelectorAll<HTMLElement>('.page-box')).map(box => box.dataset.pageNumber);
+    const columns = Array.from(host.querySelectorAll<HTMLElement>('.page-comment-margin'));
+    return pages.map(number => columns.filter(column => column.dataset.pageNumber === number)
+      .flatMap(column => (column.textContent ?? '').match(/[A-Z]+COMMENT/g) ?? []));
+  }, { bytes: Array.from(storyCommentsFixture()), placement });
+}
+
+for (const placement of ['margin', 'outside'] as const) {
+  test(`the paginated view places running-story notes on every page (${placement})`, async ({ page }) => {
+    test.setTimeout(120_000);
+    expect(await viewColumns(page, placement)).toEqual([
+      ['HEADERCOMMENT', 'BODYCOMMENT', 'NOTECOMMENT', 'FOOTERCOMMENT'],
+      ['HEADERCOMMENT', 'ENDCOMMENT', 'FOOTERCOMMENT'],
+    ]);
+  });
+}

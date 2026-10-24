@@ -752,7 +752,7 @@ namespace Docxodus
     /// </summary>
     /// <remarks>
     /// Comments can be anchored in any story — the body, a header or footer, a footnote or an
-    /// endnote — and story markup finds its tracker through its own part's root (issue #1310).
+    /// endnote — and story markup finds its nearest scoped tracker (issue #1310).
     /// <see cref="ForStory"/> gives each story root a tracker that shares the comment set and
     /// every rendered/referenced record with the body's, but keeps its own open ranges: a range
     /// never crosses a story, so one left unclosed in one story must not highlight another.
@@ -799,16 +799,16 @@ namespace Docxodus
         private readonly Dictionary<int, int> _storyRank = new Dictionary<int, int>();
 
         /// <summary>Record the first reference to a comment, from the story whose root is <paramref name="storyRoot"/>.</summary>
-        public void Reference(int id, XElement storyRoot)
+        public void Reference(int id, XElement storyRoot, bool explicitReference = true)
         {
+            if (explicitReference && !ReferencedCommentIds.Contains(id)) ReferencedCommentIds.Add(id);
             if (_storyRank.ContainsKey(id))
                 return;
-            // Word's story order: the main document, headers and footers, footnotes, endnotes.
+            // Stable presentation order: body, headers and footers, footnotes, endnotes.
             _storyRank[id] = storyRoot.Name == W.document ? 0
                 : storyRoot.Name == W.hdr || storyRoot.Name == W.ftr ? 1
                 : storyRoot.Name == W.footnotes ? 2
                 : 3;
-            ReferencedCommentIds.Add(id);
         }
 
         /// <summary>
@@ -818,7 +818,7 @@ namespace Docxodus
         /// every comment by id.
         /// </summary>
         public List<CommentInfo> InPresentationOrder() => (ReferencedCommentIds.Any()
-            ? ReferencedCommentIds
+            ? ReferencedCommentIds.Concat(_storyRank.Keys.Where(RenderedRangeIds.Contains)).Distinct()
                 .Where(Comments.ContainsKey)
                 .OrderBy(id => _storyRank[id])
                 .Select(id => Comments[id])
@@ -1199,6 +1199,9 @@ namespace Docxodus
             {
                 storyRoot.RemoveAnnotations<CommentTracker>();
                 storyRoot.AddAnnotation(commentTracker.ForStory());
+                // Each note is an independent story even though its part holds several notes.
+                foreach (var note in storyRoot.Elements().Where(e => e.Name == W.footnote || e.Name == W.endnote))
+                    note.AddAnnotation(commentTracker.ForStory());
             }
 
             // Load custom annotations if rendering is enabled
@@ -5142,9 +5145,9 @@ namespace Docxodus
 
         private static CommentTracker? GetCommentTracker(XElement element)
         {
-            // Walk up to the document root to find the annotation
-            var root = element.AncestorsAndSelf().LastOrDefault();
-            return root?.Annotation<CommentTracker>();
+            // A note has its own range state inside the shared notes part.
+            return element.AncestorsAndSelf().Select(e => e.Annotation<CommentTracker>())
+                .FirstOrDefault(tracker => tracker != null);
         }
 
         private static FootnoteNumberingTracker? GetFootnoteNumberingTracker(XElement element)
@@ -5332,6 +5335,7 @@ namespace Docxodus
             if (id != null)
             {
                 tracker.OpenRanges.Add(id.Value);
+                tracker.Reference(id.Value, element.AncestorsAndSelf().Last(), explicitReference: false);
             }
 
             // Don't emit anything - we'll wrap content in ConvertRun

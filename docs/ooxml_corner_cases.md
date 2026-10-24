@@ -4001,6 +4001,54 @@ Word does when a page's balloons cannot fit beside it. Docxodus never overlaps t
 tallest a line at a time, lets any that still do not fit run off the page's foot, and reports every
 cut balloon in a `comment_balloon_truncated` export warning.
 
+## Comments in a footer or footnote (issue #1310)
+
+OOXML permits a comment anchor outside the body. Docxodus preserves it under its documented
+export contract, even though Word ignores these non-body anchors. Minimal
+reproducer, a footer holding the range and its reference (the footnote form is the same markup inside
+`w:footnote`):
+
+```xml
+<w:ftr><w:p>
+  <w:commentRangeStart w:id="5"/><w:r><w:t>OakFooterLine Ledger copy.</w:t></w:r>
+  <w:commentRangeEnd w:id="5"/><w:r><w:commentReference w:id="5"/></w:r>
+</w:p></w:ftr>
+```
+
+| | Footer or footnote comment with a reference | The same range with no `w:commentReference` | Body comment with no reference |
+|---|---|---|---|
+| Word | Microsoft documents that these non-body anchor elements are ignored; no new capture | same documented restriction | no new capture |
+| LibreOffice 25.8.7.3 | will not open the package: `soffice --convert-to pdf` reports "source file could not be loaded" | opens; draws no comment | opens; draws no comment |
+| Docxodus before the fix | no highlight, marker or entry, in every comment mode; no export warning | the same | highlight and note |
+| Docxodus now | highlight, marker and entry, as a body comment | highlight and note | unchanged |
+
+**Analysis.** Microsoft's [commentReference implementation note](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/84a35ef3-9c12-4b59-ab4c-4a88f520d06c)
+and [commentRangeStart note](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/64b95366-980f-4c75-9519-b745345ded9a)
+say that OOXML permits these anchors but Word ignores them outside the body. Preserving their
+content here follows Docxodus's export contract; it does not claim Word parity.
+LibreOffice's failure is a load failure, not a rendering choice. It reproduces with the
+reference run on its own (no range) and with a `CommentReference` character style; removing only the
+reference run makes the package load. A comment with no reference has no annotation in LibreOffice,
+so it prints nothing even in the body. Docxodus lost the comment because its comment state was
+attached to the body's part only; a range in another story found none.
+
+**Code.** `WmlToHtmlConverter.ConvertToHtml` annotates a per-story `CommentTracker` onto every story
+root and each individual note; `npm/src/pagination.ts` places a footer comment's margin note.
+The nearest tracker scopes open ranges to one note, so an open range cannot highlight its peer.
+A rendered range without a reference also keeps its entry when another story contains a real
+reference; selecting only reference-mark IDs previously discarded that note.
+
+**Validation.** Open XML SDK 3.5.1 reports `Sem_MissingReferenceElement` for permitted non-body
+comment anchors even when the matching comment exists in the main document's comments part.
+The SDK disallows adding that comments part directly to a header/footer. Tests retain only this
+bounded semantic finding for these four story part types and verify every target id against the
+actual comments part; all other validation errors fail. This does not suppress renderer or export
+warnings. Benchmark metadata retains each SDK finding verbatim. Design:
+`docs/architecture/comment_rendering.md`, "Comments outside the body". Tests:
+`StoryCommentRenderingTests`, `HtmlConversionEditorRenderTests.HER007`,
+`npm/tests/export-story-comments.spec.ts`. The paired fidelity-bench story cases use the range-only
+form, because the LibreOffice reference track cannot open the other.
+
 ## Contributing
 
 When adding new corner cases to this document:

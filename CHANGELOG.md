@@ -60,7 +60,7 @@ All notable changes to this project will be documented in this file.
   warning. Each now gets its highlight, its marker and its entry. The comments section and the margin
   column list comments by story (the body, then headers and footers, footnotes, endnotes), the same in
   continuous and paginated renders. In the paginated view a header or footer comment's margin note
-  prints on every page that header or footer prints on, as its balloon already did. A comment range
+  prints on every page that header or footer prints on, the rule balloons already follow. A comment range
   left open in one story no longer runs on into the next story converted.
 
 - Literal tab characters inside `w:t` and `w:delText` use the same paragraph tab stops and leaders

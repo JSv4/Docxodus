@@ -126,7 +126,8 @@ document has no comment or formatting change, the pages are left as they are. Ot
   line. A paragraph change is anchored at its last line, on the page that holds its mark.
 - Changes and comments in a header or footer get balloons on every page that header or footer
   prints on, because it renders there. The margin placement does the same with its notes
-  (issue #1310).
+  (issue #1310). Non-body comments follow Docxodus's preservation contract; Word ignores these
+  anchors, as documented in `comment_rendering.md`, "Comments outside the body".
 - Geometry, in page points before shrinking:
 
   | Property | Value |

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Validation;
 using Xunit;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
@@ -56,7 +57,7 @@ public class StoryCommentRenderingTests
         var items = html.Descendants(H + "li").Where(li => ((string?)li.Attribute("id"))?.StartsWith("comment-") == true)
             .ToList();
 
-        // Word's story order: the main document, then headers and footers, footnotes, endnotes.
+        // Stable presentation order: the main document, then headers and footers, footnotes, endnotes.
         Assert.Equal(new[] { "comment-0", "comment-1", "comment-2", "comment-3", "comment-4" },
             items.Select(li => (string?)li.Attribute("id")));
         foreach (var (id, _, comment) in Stories)
@@ -121,6 +122,91 @@ public class StoryCommentRenderingTests
                 ((string?)s.Attribute("class"))?.Split(' ').Contains("comment-highlight") == true
                 && s.Value.Contains(text));
             Assert.Equal(id.ToString(), (string?)span.Attribute("data-comment-id"));
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, true)]
+    public void Comment_range_in_one_note_does_not_highlight_the_next_note(bool endnote, bool paginated, bool closed)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(StoryCommentsDocx());
+        using (var doc = WordprocessingDocument.Open(stream, true))
+        {
+            var main = doc.MainDocumentPart!;
+            OpenXmlCompositeElement notes = endnote ? main.EndnotesPart!.Endnotes! : main.FootnotesPart!.Footnotes!;
+            var first = notes.ChildElements.Single(n => n.GetAttribute("id", W.w.NamespaceName).Value == "2");
+            if (!closed) first.Descendants<Wp.CommentRangeEnd>().Single().Remove();
+            var paragraph = new Wp.Paragraph(new Wp.Run(new Wp.Text("PeerNoteText")));
+            if (endnote) notes.Append(new Wp.Endnote(paragraph) { Id = 3 });
+            else notes.Append(new Wp.Footnote(paragraph) { Id = 3 });
+            var body = main.Document!.Body!;
+            body.InsertBefore(new Wp.Paragraph(new Wp.Run(endnote
+                ? (OpenXmlElement)new Wp.EndnoteReference { Id = 3 }
+                : new Wp.FootnoteReference { Id = 3 })), body.GetFirstChild<Wp.SectionProperties>());
+            AssertCommentPackageValidation(doc);
+        }
+        var html = Convert(stream.ToArray(), CommentRenderMode.EndnoteStyle, paginated);
+
+        Assert.Contains("PeerNoteText", html.Value);
+        Assert.DoesNotContain(Highlights(html, endnote ? 4 : 3), span => span.Value.Contains("PeerNoteText"));
+        Assert.Contains(Highlights(html, endnote ? 4 : 3), span => span.Value.Contains(endnote ? "ENDTEXT" : "NOTETEXT"));
+    }
+
+    public static IEnumerable<object[]> RangeOnlyCases()
+    {
+        foreach (var id in new[] { 1, 2, 3, 4 })
+        foreach (var mode in new[] { CommentRenderMode.EndnoteStyle, CommentRenderMode.Margin })
+        foreach (var paginated in new[] { false, true })
+            yield return new object[] { id, mode, paginated };
+    }
+
+    [Theory]
+    [MemberData(nameof(RangeOnlyCases))]
+    public void A_story_range_without_a_reference_keeps_its_entry_when_other_stories_have_references(
+        int id, CommentRenderMode mode, bool paginated)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(StoryCommentsDocx());
+        using (var doc = WordprocessingDocument.Open(stream, true))
+        {
+            var main = doc.MainDocumentPart!;
+            OpenXmlCompositeElement root = id switch
+            {
+                1 => main.HeaderParts.Single().Header!,
+                2 => main.FooterParts.Single().Footer!,
+                3 => main.FootnotesPart!.Footnotes!,
+                _ => main.EndnotesPart!.Endnotes!,
+            };
+            root.Descendants<Wp.CommentReference>().Single(r => r.Id!.Value == id.ToString()).Parent!.Remove();
+            AssertCommentPackageValidation(doc);
+        }
+        var html = Convert(stream.ToArray(), mode, paginated);
+
+        Assert.Contains(Highlights(html, id), span => span.Value.Contains(Stories[id].Text));
+        foreach (var story in Stories) Assert.Contains(story.Comment, html.Value);
+    }
+
+    private static void AssertCommentPackageValidation(WordprocessingDocument doc)
+    {
+        var definitions = doc.MainDocumentPart!.WordprocessingCommentsPart!.Comments!
+            .Elements<Wp.Comment>().Select(c => c.Id!.Value).ToHashSet();
+        // SDK 3.5.1 resolves these references against the current part's direct relationships,
+        // although OOXML permits non-body anchors targeting the document's comments part.
+        // Keep the exact semantic findings bounded; schema errors and genuinely missing IDs fail.
+        foreach (var error in new OpenXmlValidator(FileFormatVersions.Office2019).Validate(doc))
+        {
+            Assert.Equal("Sem_MissingReferenceElement", error.Id);
+            Assert.True(error.Part is HeaderPart or FooterPart or FootnotesPart or EndnotesPart);
+            Assert.True(error.Node is Wp.CommentRangeStart or Wp.CommentRangeEnd or Wp.CommentReference);
+            Assert.Contains(error.Node!.GetAttribute("id", W.w.NamespaceName).Value, definitions);
         }
     }
 
@@ -190,7 +276,8 @@ public class StoryCommentRenderingTests
                     new OpenXmlElement[] { new Wp.Run(new Wp.EndnoteReferenceMark()) }
                         .Concat(Commented(4, "ENDTEXT")))) { Id = 2 });
 
-            main.AddNewPart<WordprocessingCommentsPart>().Comments = new Wp.Comments(
+            var comments = main.AddNewPart<WordprocessingCommentsPart>();
+            comments.Comments = new Wp.Comments(
                 Stories.Where(s => commented(s.Id)).Select(s => new Wp.Comment(
                     new Wp.Paragraph(new Wp.Run(new Wp.Text(s.Comment))))
                     { Id = s.Id.ToString(), Author = "Reviewer", Initials = "R" }));
@@ -207,6 +294,7 @@ public class StoryCommentRenderingTests
                     {
                         Top = 1440, Bottom = 1440, Left = 1440, Right = 1440, Header = 720, Footer = 720, Gutter = 0,
                     })));
+            AssertCommentPackageValidation(doc);
         }
         return stream.ToArray();
     }

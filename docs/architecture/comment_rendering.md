@@ -690,35 +690,41 @@ precisely this pairing: it is the value the highlight's `data-comment-id` carrie
 
 ## Comments outside the body (issue #1310)
 
-A comment can be anchored in any story Word lets you comment in: the body, a header or footer, a
-footnote or an endnote. Story markup finds its tracker through its own part's root, so the
-converter annotates one onto every story root, not just the body's. Before issue #1310 only the
+OOXML permits comment anchors in the body, a header or footer, a
+footnote or an endnote. Story markup uses the nearest scoped tracker, so the converter annotates
+every story root and each individual note, not just the body's root. Before issue #1310 only the
 body had one, and a comment in any other story was read into the comment list but drew nothing —
 no highlight, no marker, no entry — in every mode, with nothing to say it was missing.
 
 - **One comment set, per-story open ranges.** `CommentTracker.ForStory()` shares the comment
   definitions, the referenced list and the rendered-range set with the body's tracker, so the
   comments section and margin column see every story's references. Each story keeps its own
-  `OpenRanges`: a range never crosses a story, so one left unclosed in one story must not
-  highlight the next story converted.
+  `OpenRanges`, including a separate scope for each individual footnote/endnote: an open
+  range in one story must not highlight the next story converted.
 - **Story order.** The comments section and the margin column (and so the balloon numbering) list
   referenced comments by story — the body, then headers and footers, then footnotes, then endnotes
-  — and within a story in the order converted. A continuous render converts the headers before the
+  — retaining real reference order within each group, then including rendered ranges without
+  reference marks. If no story contains a reference mark, the existing fallback lists all comments
+  by id. A continuous render converts the headers before the
   body and a paginated one after it; ordering by story makes both list the same way.
 - **Continuous margin mode** builds its column after every story has converted, so comments in
   footnotes, endnotes and footers are in it.
 - **One entry, repeated presentation.** A header or footer part converts once into the paginated
   registry, so its comment has one comments-section entry and one marker in the source. The
   paginator clones the story onto every page that selects it, highlight included, and a margin
-  note or balloon is placed on each of those pages, as Word's balloons are (see
-  `all_markup_layout.md`). A footnote's note goes on the page holding the footnote; an endnote's on
+  note or balloon is placed on each of those pages, the every-page rule `all_markup_layout.md`
+  states for balloons. A footnote's note goes on the page holding the footnote; an endnote's on
   the page the endnote flows to. The PageMap expects the margin notes of comments in every running
   story a page selects, as it does for body and cited-note comments.
 - **Editor.** The editor's paginated full render and its chrome render go through the same
   converter. Its per-block re-render of a header or footer paragraph clones the paragraph into the
   shell body, which always had a tracker; the two now agree (`HER007`).
 
-Every story kind renders, so the standalone export has no unsupported comment story to warn about.
+These five story kinds render, so the standalone export does not drop their comments or warn that
+these stories are unsupported. This is Docxodus's content-preservation contract. Microsoft's
+[implementation note](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/84a35ef3-9c12-4b59-ab4c-4a88f520d06c)
+states that Word ignores comment references in headers, footers, text boxes, footnotes and endnotes;
+this behavior does not claim Word presentation parity. No new Word capture is available.
 
 One edge stays as it was: a header or footer variant that no page selects (a default header in a
 one-page section with a distinct first page, say) is still converted into the registry, so its
