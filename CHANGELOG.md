@@ -54,6 +54,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Untracked column insertion and deletion keep a pending table grid revision consistent with the
+  edited rows (#1342). Saved cell spans, row omissions and cloned cell properties receive the same
+  structural edit, so rejecting older formatting preserves the column change. An incompatible
+  saved column layout is refused before mutation or undo history is recorded.
+
 - Tracked `SetColumnWidths` writes a schema-valid `w:tblGridChange` with only `w:id` (#1322).
   The revision registry joins it to the matching table and cell width changes, including edits
   that leave some columns unchanged, so one edit still accepts or rejects as one revision.

@@ -6,6 +6,7 @@ using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using Docxodus;
+using Docxodus.Tests.Ir;
 using Xunit;
 
 namespace Docxodus.Tests;
@@ -774,5 +775,313 @@ public class DocxSessionTableEditTests
         Assert.Equal(AllText(left.DocumentByteArray),
             AllText(RevisionProcessor.RejectRevisions(redline).DocumentByteArray));
         AssertSchemaValid(redline.DocumentByteArray);
+    }
+    // ─── Untracked column edits under a pending grid change (issue #1342) ─────────
+
+    /// <summary>A 2x2 table whose grid carries a pending <c>w:tblGridChange</c>: a real one (the
+    /// old widths differ) or Word's no-op one (the old grid is the live grid).</summary>
+    private static byte[] TableWithPendingGridChange(bool real, bool pending = true, bool unaligned = false)
+    {
+        string Cell(string text) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        var oldGrid = real
+            ? "<w:gridCol w:w=\"3000\"/><w:gridCol w:w=\"1000\"/>"
+            : "<w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/>";
+        if (unaligned) oldGrid += "<w:gridCol w:w=\"2000\"/>";
+        return IrTestDocuments.FromBodyXml(
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/>"
+            + (pending ? $"<w:tblGridChange w:id=\"5\"><w:tblGrid>{oldGrid}</w:tblGrid></w:tblGridChange>" : "") + "</w:tblGrid>"
+            + $"<w:tr>{Cell("A1")}{Cell("B1")}</w:tr><w:tr>{Cell("A2")}{Cell("B2")}</w:tr></w:tbl>"
+            + "<w:p><w:r><w:t>after</w:t></w:r></w:p>").DocumentByteArray;
+    }
+
+    private static byte[] PendingGridChangeFixture(string fixture) => fixture switch
+    {
+        "synthetic_real" => TableWithPendingGridChange(real: true),
+        "synthetic_no_op" => TableWithPendingGridChange(real: false),
+        _ => File.ReadAllBytes(Path.GetFullPath(Path.Combine(
+            System.AppContext.BaseDirectory, "../../../../TestFiles", fixture))),
+    };
+
+    /// <summary>Every row's grid span (omitted columns, then each cell's span) next to the
+    /// grid's column count, for the first table.</summary>
+    private static (int GridColumns, int[] RowSpans) GridAndRowSpans(byte[] bytes)
+    {
+        var tbl = DocumentXml(bytes).Descendants(W + "tbl").First();
+        int Omitted(XElement tr, string name) =>
+            (int?)tr.Element(W + "trPr")?.Element(W + name)?.Attribute(W + "val") ?? 0;
+        return (tbl.Element(W + "tblGrid")!.Elements(W + "gridCol").Count(),
+            tbl.Elements(W + "tr")
+                .Select(tr => Omitted(tr, "gridBefore") + Omitted(tr, "gridAfter") + tr.Elements(W + "tc").Sum(Span))
+                .ToArray());
+    }
+
+    /// <summary>An untracked column insertion or deletion is mirrored in the old grid a pending
+    /// <c>w:tblGridChange</c> keeps, so rejecting that change, all at once or revision by
+    /// revision, restores a grid exactly as wide as the rows, and the widths can be set again.</summary>
+    [Theory]
+    [InlineData("FA/RevTracking/021-TableGridChange.docx", "insert")]
+    [InlineData("FA/RevTracking/021-TableGridChange.docx", "delete")]
+    [InlineData("RP/RP029-Table-Row-Props-Change.docx", "insert")]
+    [InlineData("RP/RP029-Table-Row-Props-Change.docx", "delete")]
+    [InlineData("synthetic_real", "insert")]
+    [InlineData("synthetic_real", "delete")]
+    [InlineData("synthetic_no_op", "insert")]
+    [InlineData("synthetic_no_op", "delete")]
+    public void DT265_UntrackedColumnEdit_KeepsAPendingGridChangeAsWideAsTheRows(string fixture, string operation)
+    {
+        var baseline = PendingGridChangeFixture(fixture);
+        byte[] edited;
+        using (var session = new DocxSession(baseline))
+        {
+            var cell = session.Project().AnchorIndex.Values.First(a => a.Anchor.Kind == "tc").Anchor.Id;
+            var result = operation == "insert"
+                ? session.InsertTableColumn(cell, Position.After)
+                : session.DeleteTableColumn(cell);
+            Assert.True(result.Success, result.Error?.Message);
+            edited = session.Save();
+
+            Assert.True(session.Undo());
+            Assert.True(XNode.DeepEquals(DocumentXml(baseline), DocumentXml(session.Save())));
+        }
+        foreach (var version in new[] { DocumentFormat.OpenXml.FileFormatVersions.Office2019,
+                     DocumentFormat.OpenXml.FileFormatVersions.Office2021 })
+            Assert.Subset(PackageValidation.ErrorKeys(baseline, version, PackageValidation.Keys.IdDescriptionXPath),
+                PackageValidation.ErrorKeys(edited, version, PackageValidation.Keys.IdDescriptionXPath));
+
+        foreach (var resolution in new[] { "reject_all", "reject_each", "accept_all" })
+        {
+            using var session = new DocxSession(edited);
+            if (resolution == "reject_each")
+                while (session.ListRevisions().FirstOrDefault() is { } revision)
+                    Assert.True(session.RejectRevision(revision.Id).Success, revision.Id);
+            else
+                Assert.True((resolution == "accept_all"
+                    ? session.AcceptAllRevisions() : session.RejectAllRevisions()).Success);
+
+            var (gridColumns, rowSpans) = GridAndRowSpans(session.Save());
+            Assert.All(rowSpans, span => Assert.Equal(gridColumns, span));
+            var cell = session.Project().AnchorIndex.Values.First(a => a.Anchor.Kind == "tc").Anchor.Id;
+            var widths = session.SetColumnWidths(cell, Enumerable.Repeat(1000, gridColumns).ToArray());
+            Assert.True(widths.Success, $"{resolution}: {widths.Error?.Message}");
+        }
+    }
+
+    /// <summary>The mirrored column is the old grid's copy of the column the new one was cloned
+    /// from, at the same position: rejecting the grid change gives the new column that column's
+    /// old width, as it gives every other column its own.</summary>
+    [Fact]
+    public void DT266_UntrackedColumnInsert_RejectGivesTheNewColumnItsSourcesOldWidth()
+    {
+        using var session = new DocxSession(TableWithPendingGridChange(real: true));
+        var cell = session.Project().AnchorIndex.Values.First(a => a.Anchor.Kind == "tc").Anchor.Id;
+        Assert.True(session.InsertTableColumn(cell, Position.After).Success);
+        Assert.Equal(new[] { 2000, 2000, 2000 }, GridCols(SingleTable(session)));
+
+        Assert.True(session.RejectAllRevisions().Success);
+
+        Assert.Equal(new[] { 3000, 3000, 1000 }, GridCols(SingleTable(session)));
+    }
+
+    private static byte[] PendingColumnGeometry(string shape, bool incompatible = false)
+    {
+        string Cell(string text, string properties = "<w:tcW w:w=\"2000\" w:type=\"dxa\"/>") =>
+            $"<w:tc><w:tcPr>{properties}</w:tcPr><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        const string stamp = "w:id=\"6\" w:author=\"Prior Reviewer\" w:date=\"2026-01-01T00:00:00Z\"";
+        var current = "<w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/>";
+        var prior = "<w:gridCol w:w=\"3000\"/><w:gridCol w:w=\"1000\"/>";
+        string rows;
+        if (shape == "merged")
+        {
+            const string width = "<w:tcW w:w=\"4000\" w:type=\"dxa\"/><w:gridSpan w:val=\"2\"/>";
+            var previousWidth = incompatible ? width.Replace("w:val=\"2\"", "w:val=\"1\"") : width;
+            var properties = width + "<w:shd w:val=\"clear\" w:fill=\"00AA00\"/>"
+                + $"<w:tcPrChange {stamp}><w:tcPr>{previousWidth}<w:shd w:val=\"clear\" w:fill=\"AA0000\"/></w:tcPr></w:tcPrChange>";
+            var previousRow = incompatible ? "<w:trPr><w:trPrChange w:id=\"7\" w:author=\"Prior Reviewer\" w:date=\"2026-01-01T00:00:00Z\"><w:trPr><w:gridAfter w:val=\"1\"/></w:trPr></w:trPrChange></w:trPr>" : "";
+            rows = $"<w:tr>{previousRow}{Cell("Merged", properties)}</w:tr><w:tr>{Cell("A")}{Cell("B")}</w:tr>";
+        }
+        else
+        {
+            current += "<w:gridCol w:w=\"2000\"/>";
+            prior += "<w:gridCol w:w=\"2000\"/>";
+            var rowProperties = "<w:gridBefore w:val=\"1\"/><w:trHeight w:val=\"480\"/>"
+                + $"<w:trPrChange {stamp}><w:trPr><w:gridBefore w:val=\"{(incompatible ? 0 : 1)}\"/>"
+                + (incompatible ? "<w:gridAfter w:val=\"1\"/>" : "")
+                + "<w:trHeight w:val=\"240\"/></w:trPr></w:trPrChange>";
+            rows = $"<w:tr><w:trPr>{rowProperties}</w:trPr>{Cell("A")}{Cell("B")}</w:tr>"
+                + $"<w:tr>{Cell("C")}{Cell("D")}{Cell("E")}</w:tr>";
+        }
+        return IrTestDocuments.FromBodyXml("<w:tbl><w:tblPr/><w:tblGrid>" + current
+            + "<w:tblGridChange w:id=\"5\"><w:tblGrid>" + prior + "</w:tblGrid></w:tblGridChange></w:tblGrid>"
+            + rows + "</w:tbl><w:p><w:r><w:t>After</w:t></w:r></w:p>").DocumentByteArray;
+    }
+
+    [Theory]
+    [InlineData("merged", "insert")]
+    [InlineData("merged", "delete")]
+    [InlineData("omitted", "insert")]
+    [InlineData("omitted", "delete")]
+    public void UntrackedColumnEdit_KeepsPendingCellAndRowGeometryConsistent(string shape, string operation)
+    {
+        var baseline = PendingColumnGeometry(shape);
+        AssertSchemaValid(baseline);
+        byte[] edited;
+        using (var session = new DocxSession(baseline))
+        {
+            var cells = session.Project().AnchorIndex.Values.Where(a => a.Anchor.Kind == "tc").ToArray();
+            var anchor = cells[shape == "merged" ? 1 : 2].Anchor.Id;
+            Assert.True((operation == "insert" ? session.InsertTableColumn(anchor,
+                shape == "merged" ? Position.After : Position.Before) : session.DeleteTableColumn(anchor)).Success);
+            edited = session.Save();
+            AssertSchemaValid(edited);
+        }
+        foreach (var bulk in new[] { false, true })
+        {
+            using var session = new DocxSession(edited);
+            if (bulk)
+                Assert.True(session.RejectAllRevisions().Success);
+            else
+                while (session.ListRevisions().FirstOrDefault() is { } revision)
+                    Assert.True(session.RejectRevision(revision.Id).Success);
+            var (columns, spans) = GridAndRowSpans(session.Save());
+            Assert.All(spans, span => Assert.Equal(columns, span));
+            var firstRow = SingleTable(session).Elements(W + "tr").First();
+            if (shape == "merged")
+            {
+                var properties = firstRow.Element(W + "tc")!.Element(W + "tcPr")!;
+                Assert.Equal(operation == "insert" ? 7000 : 1000, (int?)properties.Element(W + "tcW")!.Attribute(W + "w"));
+                Assert.Equal("AA0000", (string?)properties.Element(W + "shd")!.Attribute(W + "fill"));
+            }
+            else
+                Assert.Equal(240, (int?)firstRow.Element(W + "trPr")!.Element(W + "trHeight")!.Attribute(W + "val"));
+            AssertSchemaValid(session.Save());
+        }
+    }
+
+    [Theory]
+    [InlineData("merged", "insert")]
+    [InlineData("merged", "delete")]
+    [InlineData("omitted", "insert")]
+    [InlineData("omitted", "delete")]
+    public void UntrackedColumnEdit_RefusesAnIncompatiblePendingLayoutBeforeHistory(string shape, string operation)
+    {
+        var baseline = PendingColumnGeometry(shape, incompatible: true);
+        AssertSchemaValid(baseline);
+        using var session = new DocxSession(baseline);
+        var cells = session.Project().AnchorIndex.Values.Where(a => a.Anchor.Kind == "tc").ToArray();
+        var anchor = cells[shape == "merged" ? 1 : 2].Anchor.Id;
+        var before = DocumentXml(session.Save());
+        var version = session.Version;
+        var result = operation == "insert" ? session.InsertTableColumn(anchor,
+            shape == "merged" ? Position.After : Position.Before) : session.DeleteTableColumn(anchor);
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.UnresolvedStructuralRevision, result.Error!.Code);
+        Assert.Equal(version, session.Version);
+        Assert.True(XNode.DeepEquals(before, DocumentXml(session.Save())));
+        Assert.False(session.Undo());
+    }
+
+    [Theory]
+    [InlineData("insert")]
+    [InlineData("delete")]
+    public void UntrackedColumnEdit_WithoutPendingPropertiesStaysRevisionFree(string operation)
+    {
+        var baseline = TableWithPendingGridChange(real: false, pending: false);
+        using var session = new DocxSession(baseline);
+        var anchor = session.Project().AnchorIndex.Values.First(a => a.Anchor.Kind == "tc").Anchor.Id;
+        Assert.True((operation == "insert" ? session.InsertTableColumn(anchor, Position.After) : session.DeleteTableColumn(anchor)).Success);
+        Assert.Empty(session.ListRevisions());
+        var edited = DocumentXml(session.Save());
+        Assert.True(session.Undo());
+        Assert.True(XNode.DeepEquals(DocumentXml(baseline), DocumentXml(session.Save())));
+        Assert.True(session.Redo());
+        Assert.True(XNode.DeepEquals(edited, DocumentXml(session.Save())));
+        AssertSchemaValid(session.Save());
+    }
+
+    [Theory]
+    [InlineData(Position.Before, 3000)]
+    [InlineData(Position.After, 1000)]
+    public void UntrackedNewColumn_CopiesAUnitCellBaselineFromAMergedReference(Position position, int oldWidth)
+    {
+        using var session = new DocxSession(PendingColumnGeometry("merged"));
+        var anchor = session.Project().AnchorIndex.Values.First(a => a.Anchor.Kind == "tc").Anchor.Id;
+        Assert.True(session.InsertTableColumn(anchor, position).Success);
+        var row = SingleTable(session).Elements(W + "tr").First();
+        var inserted = position == Position.Before ? row.Elements(W + "tc").First() : row.Elements(W + "tc").Last();
+        var previous = inserted.Element(W + "tcPr")!.Element(W + "tcPrChange")!.Element(W + "tcPr")!;
+        Assert.Null(previous.Element(W + "gridSpan"));
+        Assert.Equal(oldWidth, (int?)previous.Element(W + "tcW")!.Attribute(W + "w"));
+        Assert.True(session.RejectAllRevisions().Success);
+        var (columns, spans) = GridAndRowSpans(session.Save());
+        Assert.Equal(3, columns);
+        Assert.All(spans, span => Assert.Equal(columns, span));
+        AssertSchemaValid(session.Save());
+    }
+
+    [Theory]
+    [InlineData(Position.Before)]
+    [InlineData(Position.After)]
+    public void UntrackedColumnInsert_UsesTheLastColumnsPreviousWidth(Position position)
+    {
+        using var session = new DocxSession(TableWithPendingGridChange(real: true));
+        var anchor = session.Project().AnchorIndex.Values.Where(a => a.Anchor.Kind == "tc").Skip(1).First().Anchor.Id;
+        Assert.True(session.InsertTableColumn(anchor, position).Success);
+        Assert.True(session.RejectAllRevisions().Success);
+        Assert.Equal(new[] { 3000, 1000, 1000 }, GridCols(SingleTable(session)));
+        AssertSchemaValid(session.Save());
+    }
+
+    [Fact]
+    public void UntrackedColumnDelete_RemovesTheSameLastColumnFromThePreviousGrid()
+    {
+        using var session = new DocxSession(TableWithPendingGridChange(real: true));
+        var anchor = session.Project().AnchorIndex.Values.Where(a => a.Anchor.Kind == "tc").Skip(1).First().Anchor.Id;
+        Assert.True(session.DeleteTableColumn(anchor).Success);
+        Assert.True(session.RejectAllRevisions().Success);
+        Assert.Equal(new[] { 3000 }, GridCols(SingleTable(session)));
+        AssertSchemaValid(session.Save());
+    }
+
+    [Theory]
+    [InlineData("insert")]
+    [InlineData("delete")]
+    public void UntrackedColumnEdit_RequiresAnAlignedPreviousGrid(string operation)
+    {
+        var baseline = TableWithPendingGridChange(real: true, unaligned: true);
+        AssertSchemaValid(baseline);
+        using var session = new DocxSession(baseline);
+        var anchor = session.Project().AnchorIndex.Values.First(a => a.Anchor.Kind == "tc").Anchor.Id;
+        var before = DocumentXml(session.Save());
+        var result = operation == "insert" ? session.InsertTableColumn(anchor, Position.After) : session.DeleteTableColumn(anchor);
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.UnresolvedStructuralRevision, result.Error!.Code);
+        Assert.True(XNode.DeepEquals(before, DocumentXml(session.Save())));
+        Assert.False(session.Undo());
+        Assert.True(session.AcceptAllRevisions().Success);
+        anchor = session.Project().AnchorIndex.Values.First(a => a.Anchor.Kind == "tc").Anchor.Id;
+        Assert.True((operation == "insert" ? session.InsertTableColumn(anchor, Position.After) : session.DeleteTableColumn(anchor)).Success);
+        AssertSchemaValid(session.Save());
+    }
+
+    [Fact]
+    public void UntrackedColumnDelete_RefusesAUnitCellWhosePreviousLayoutSpannedTwoColumns()
+    {
+        const string stamp = "w:author=\"Prior Reviewer\" w:date=\"2026-01-01T00:00:00Z\"";
+        var baseline = IrTestDocuments.FromBodyXml(
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/>"
+            + "<w:tblGridChange w:id=\"5\"><w:tblGrid><w:gridCol w:w=\"3000\"/><w:gridCol w:w=\"1000\"/><w:gridCol w:w=\"2000\"/></w:tblGrid></w:tblGridChange></w:tblGrid>"
+            + $"<w:tr><w:trPr><w:gridBefore w:val=\"1\"/><w:trPrChange w:id=\"7\" {stamp}><w:trPr><w:gridBefore w:val=\"0\"/></w:trPr></w:trPrChange></w:trPr>"
+            + $"<w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/><w:tcPrChange w:id=\"6\" {stamp}><w:tcPr><w:tcW w:w=\"4000\" w:type=\"dxa\"/><w:gridSpan w:val=\"2\"/></w:tcPr></w:tcPrChange></w:tcPr><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc>"
+            + "<w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>").DocumentByteArray;
+        AssertSchemaValid(baseline);
+        using var session = new DocxSession(baseline);
+        var anchor = session.Project().AnchorIndex.Values.First(a => a.Anchor.Kind == "tc").Anchor.Id;
+        var before = DocumentXml(session.Save());
+        var result = session.DeleteTableColumn(anchor);
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.UnresolvedStructuralRevision, result.Error!.Code);
+        Assert.True(XNode.DeepEquals(before, DocumentXml(session.Save())));
+        Assert.False(session.Undo());
     }
 }
