@@ -2221,6 +2221,8 @@ left unconsumed).
 
 The replacement text inherits the formatting of the FIRST run the match spanned. Middle and trailing runs keep their `w:rPr` but lose the slice of text the match consumed — so a bold phrase that got partially overwritten still has bold formatting for any surviving text. This is the practical sweet spot: it solves the template-fill case where you want `[___]` → `Bluth Co.` to take on the surrounding text's formatting, and it's predictable for cross-formatting matches.
 
+A run can contain several `w:t` nodes with a tab, break or reference between them. These operations edit only the selected text nodes and retain every intervening non-text child in order (#1337). For `ab<w:tab/>cd`, replacing `b` with `X` gives `aX<w:tab/>cd`. A tracked edit preserves the same accepted order and restores `ab<w:tab/>cd` on rejection. A selection spanning the marker keeps it outside the deletion envelopes, with the replacement at the first selected text node.
+
 If you need different per-fragment behavior (e.g., the replacement should be bold even when the first fragment was plain), use `Grep` + bespoke `Raw.GetXml` mutation today, or wait for a future inline-markdown-aware overload.
 
 ### Tracked-change behavior

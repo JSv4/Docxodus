@@ -1040,9 +1040,6 @@ public sealed partial class DocxSession
             var len = fragment.SpanInElement.Length;
             if (start < 0 || start + len > concat.Length) continue;
 
-            var before = concat.Substring(0, start);
-            var after = concat.Substring(start + len);
-
             // Untracked text joins no tracked insertion (issue #1319): a replacement that would
             // land in one's run goes in its own run, outside the insertion, at the same place.
             if (i == 0 && replace.Length > 0
@@ -1051,16 +1048,7 @@ public sealed partial class DocxSession
                 PlaceReplacementOutsideInsertion(blockElement, run, start, len, replace);
                 continue;
             }
-            var newText = i == 0 ? before + replace + after : before + after;
-
-            // Collapse all w:t descendants in this run into a single w:t with the new text.
-            // Loses any inline <w:tab/>/<w:br/> inside the run's text section — they're rare
-            // for placeholder slots and supporting them here would balloon the impl. Run's
-            // rPr/proofErr siblings are untouched, which is the formatting-preservation contract.
-            foreach (var t in run.Elements(W.t).ToList()) t.Remove();
-            run.Add(new XElement(W.t,
-                new XAttribute(XNamespace.Xml + "space", "preserve"),
-                newText));
+            ReplaceRunTextRange(run, start, len, i == 0 ? replace : string.Empty);
         }
     }
 
@@ -1258,17 +1246,13 @@ public sealed partial class DocxSession
                 throw new InvalidOperationException(
                     $"tracked replacement slice {start}+{len} is outside run text length {concat.Length}");
 
-            var before = concat[..start];
-            var removed = concat.Substring(start, len);
-            var after = concat[(start + len)..];
-
             // The session author's own pending insertion is a draft, as in Word: text removed
             // from it is cut out with no trace, and a replacement that starts in it joins it
             // (issue #1316). A run it empties goes, with any envelope that leaves empty.
             if (OwnPendingInsertion(run, author) is { } ownInsertion)
             {
                 var inserted = i == 0 ? replace : string.Empty;
-                if (before.Length + inserted.Length + after.Length == 0 && !HasNonTextRunContent(run))
+                if (concat.Length - len + inserted.Length == 0 && !HasNonTextRunContent(run))
                     RemoveFromInsertion(run, ownInsertion);
                 else
                     ReplaceRunTextRange(run, start, len, inserted);
@@ -1276,42 +1260,47 @@ public sealed partial class DocxSession
             }
 
             // Snapshot the original formatting before changing/reusing the live run.
-            var deletedRun = CloneRunWithRevisionText(run, W.delText, removed);
             if (i == 0 && replace.Length > 0)
                 insertedRun = CloneRunWithRevisionText(run, W.t, replace);
 
-            var replacementNodes = new List<XElement>(4);
-            if (before.Length > 0)
+            var replacementNodes = new List<XElement>();
+            var untouched = new List<XElement>();
+            void FlushUntouched()
             {
-                SetRunText(run, before);
-                replacementNodes.Add(run);
+                if (untouched.Count == 0) return;
+                replacementNodes.Add(CloneRunWithContent(run, untouched));
+                untouched.Clear();
             }
-            else if (after.Length == 0 && HasNonTextRunContent(run))
+            int consumed = 0;
+            foreach (var child in run.Elements().Where(e => e.Name != W.rPr))
             {
-                // A text-bearing marker run is unusual but legal (notably note/comment
-                // references). Keep its zero-width payload exactly once when all w:t text
-                // was selected instead of dropping it with the old text.
-                SetRunText(run, null);
-                replacementNodes.Add(run);
-            }
-
-            replacementNodes.Add(deletedRun);
-
-            if (after.Length > 0)
-            {
-                if (before.Length == 0)
+                if (child.Name != W.t)
                 {
-                    SetRunText(run, after);
-                    replacementNodes.Add(run);
+                    untouched.Add(new XElement(child));
+                    continue;
                 }
-                else
+                var value = child.Value;
+                int cutFrom = Math.Clamp(start - consumed, 0, value.Length);
+                int cutTo = Math.Clamp(start + len - consumed, 0, value.Length);
+                consumed += value.Length;
+                if (cutFrom == cutTo)
                 {
-                    replacementNodes.Add(CloneRunWithRevisionText(run, W.t, after));
+                    untouched.Add(new XElement(child));
+                    continue;
                 }
+                XElement Text(string text) => new(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), text);
+                if (cutFrom > 0) untouched.Add(Text(value[..cutFrom]));
+                FlushUntouched();
+                var deletedSlice = CloneRunWithRevisionText(run, W.delText, value[cutFrom..cutTo]);
+                replacementNodes.Add(deletedSlice);
+                deletedRuns.Add(deletedSlice);
+                if (cutTo < value.Length) untouched.Add(Text(value[cutTo..]));
             }
-
+            FlushUntouched();
+            // Range replacement visits matches right to left. Its earlier matches still name
+            // this original run, whose untouched prefix now occupies the first piece.
+            replacementNodes[0].SetAttributeValue(PtOpenXml.Unid, run.Attribute(PtOpenXml.Unid)?.Value);
             run.ReplaceWith(replacementNodes);
-            deletedRuns.Add(deletedRun);
         }
 
         // Coalesce adjacent deleted slices under the same inline parent. This is the
@@ -1340,14 +1329,10 @@ public sealed partial class DocxSession
 
         if (insertedRun is null || deletionEnvelopes.Count == 0) return;
 
-        // Keep a replacement wholly inside its original hyperlink/SDT/smartTag/fldSimple.
-        // When every deletion envelope has that same parent, put the insertion after the
-        // final deletion (the canonical Word replacement order). A cross-container match
-        // inserts beside the first slice so it retains the first run's inline semantics.
+        // A marker between deletion slices stays outside their envelopes. Put replacement
+        // text at the first selected slice, before any such marker, just as the untracked path does.
         var firstEnvelope = deletionEnvelopes[0];
-        var insertionAnchor = deletionEnvelopes.All(e => ReferenceEquals(e.Parent, firstEnvelope.Parent))
-            ? deletionEnvelopes[^1]
-            : firstEnvelope;
+        var insertionAnchor = firstEnvelope;
         var insertionEnvelope = CreateRevisionEnvelope(W.ins, author, date);
         insertionEnvelope.Add(insertedRun);
         // Not inside another author's insertion: Word cuts theirs around the new one (#1318).
@@ -1472,47 +1457,21 @@ public sealed partial class DocxSession
     /// <summary>Create a text-only run that retains the source run's formatting/rsid
     /// attributes but gets its own internal Unid and revision ids. <paramref name="textName"/> is
     /// <c>w:t</c> for ordinary/inserted text and <c>w:delText</c> for deletions.</summary>
-    private XElement CloneRunWithRevisionText(XElement source, XName textName, string text)
+    private XElement CloneRunWithRevisionText(XElement source, XName textName, string text) =>
+        CloneRunWithContent(source, new[] { new XElement(textName,
+            new XAttribute(XNamespace.Xml + "space", "preserve"), text) });
+
+    private XElement CloneRunWithContent(XElement source, IEnumerable<XElement> content)
     {
         var clone = new XElement(W.r,
             source.Attributes()
                 .Where(a => a.Name != PtOpenXml.Unid)
                 .Select(a => new XAttribute(a)),
             source.Element(W.rPr) is { } rPr ? new XElement(rPr) : null,
-            new XElement(textName,
-                new XAttribute(XNamespace.Xml + "space", "preserve"),
-                text));
+            content);
         UnidHelper.AssignToSelfAndDescendants(clone);
         Internal.RevisionOps.RenumberCopiedRevisions(clone, NextRevisionId);
         return clone;
-    }
-
-    /// <summary>Replace a run's direct w:t sequence with one text node while retaining
-    /// rPr and every non-text child in place. Null removes text without adding an empty
-    /// node (used to preserve a zero-width marker run).</summary>
-    private static void SetRunText(XElement run, string? text)
-    {
-        var textNodes = run.Elements(W.t).ToList();
-        if (textNodes.Count > 0)
-        {
-            if (text is null)
-            {
-                foreach (var t in textNodes) t.Remove();
-                return;
-            }
-
-            var replacement = new XElement(W.t,
-                new XAttribute(XNamespace.Xml + "space", "preserve"),
-                text);
-            textNodes[0].ReplaceWith(replacement);
-            foreach (var t in textNodes.Skip(1)) t.Remove();
-            return;
-        }
-
-        if (text is not null)
-            run.Add(new XElement(W.t,
-                new XAttribute(XNamespace.Xml + "space", "preserve"),
-                text));
     }
 
     /// <summary>Replace <paramref name="length"/> characters at <paramref name="start"/> of
