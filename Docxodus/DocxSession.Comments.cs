@@ -661,6 +661,7 @@ public sealed partial class DocxSession
         var element = target.Resolve(_doc!);
         if (element is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        if (RefuseNonBlockSibling(element, target.Anchor, "InsertTable") is { } notBlock) return notBlock;
 
         var opts = options ?? new TableInsertOptions();
         var contents = opts.CellContents;

@@ -236,6 +236,31 @@ public sealed partial class DocxSession
         return targets;
     }
 
+    /// <summary>The elements whose children are blocks (paragraphs, tables, block content
+    /// controls) wherever they appear. A content control's content or a custom XML element holds
+    /// blocks only when the control itself sits among blocks.</summary>
+    private static readonly HashSet<XName> BlockContainerNames = new()
+    {
+        W.body, W.tc, W.txbxContent, W.hdr, W.ftr, W.footnote, W.endnote, W.comment, W.docPartBody,
+    };
+
+    private static bool HoldsBlocks(XElement? container) => container is not null
+        && (BlockContainerNames.Contains(container.Name)
+            || (container.Name == W.sdtContent && HoldsBlocks(container.Parent?.Parent))
+            || (container.Name == W.customXml && HoldsBlocks(container.Parent)));
+
+    /// <summary>Refuse an anchor that a new paragraph or table cannot be placed beside. Only a
+    /// paragraph, a table or a block content control qualifies: a sibling of a cell, row, grid
+    /// column, section break, note, comment or a run-, row- or cell-level content control would
+    /// be schema-invalid (a <c>w:p</c> directly inside a <c>w:tr</c>, say).</summary>
+    private static EditResult? RefuseNonBlockSibling(XElement element, Anchor anchor, string operation) =>
+        (element.Name == W.p || element.Name == W.tbl || element.Name == W.sdt) && HoldsBlocks(element.Parent)
+            ? null
+            : EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"{operation} places a block beside a paragraph, table or block content control; got kind={anchor.Kind}. "
+                + "To add content inside a table cell, anchor on one of its paragraphs or use ReplaceCellContent",
+                anchor.Id);
+
     private static bool IsEditorBodyBlock(XElement block, XElement parent)
     {
         if (block.Name != W.p && block.Name != W.tbl) return false;
@@ -651,6 +676,7 @@ public sealed partial class DocxSession
         var element = target.Resolve(_doc!);
         if (element is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        if (RefuseNonBlockSibling(element, target.Anchor, "InsertParagraph") is { } notBlock) return notBlock;
 
         _history.RecordPreOp(TakeSnapshot());
         try

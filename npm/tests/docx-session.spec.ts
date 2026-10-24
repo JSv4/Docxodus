@@ -86,6 +86,41 @@ test.describe('DocxSession (WASM bridge)', () => {
     expect(result.errorCode).toBe('table_insert_not_supported');
   });
 
+  test('block insertion refuses cell anchors before recording history', async ({ page }) => {
+    const results = await page.evaluate((bytes: number[]) => {
+      const open = (input: Uint8Array) => (window as any).Docxodus.openTypedSession(input) as DocxSession;
+      const seed = open(new Uint8Array(bytes));
+      let source: Uint8Array;
+      try {
+        const anchor = Object.entries(seed.project().anchorIndex).find(([, a]) => a.kind === 'p')![0];
+        if (!seed.insertTable(anchor, 'after', 1, 1).success) throw new Error('Table setup failed');
+        source = seed.save();
+      } finally { seed.close(); }
+      return ['paragraph', 'rule', 'table'].flatMap(operation => [false, true].map(control => {
+        const session = open(source);
+        try {
+          const before = session.project();
+          const kind = control ? 'p' : 'tc';
+          const anchor = Object.entries(before.anchorIndex).find(([, a]) => a.kind === kind)![0];
+          const result = operation === 'paragraph' ? session.insertParagraph(anchor, 'after', 'Inserted block')
+            : operation === 'rule' ? session.insertHorizontalRule(anchor, 'after')
+              : session.insertTable(anchor, 'after', 1, 1);
+          const unchanged = session.project().markdown === before.markdown;
+          const undo = session.undo();
+          return { operation, control, success: result.success, error: result.error?.code, unchanged, undo };
+        } finally { session.close(); }
+      }));
+    }, Array.from(generateFootnoteDocx(0, 1)));
+    for (const result of results) {
+      expect(result.success, result.operation).toBe(result.control);
+      expect(result.undo, result.operation).toBe(result.control);
+      if (!result.control) {
+        expect(result.error).toBe('anchor_wrong_kind');
+        expect(result.unchanged).toBe(true);
+      }
+    }
+  });
+
   test('list patches after save include renumbered followers and keep text edits scoped', async ({ page }) => {
     // Reuse the generator for four plain body paragraphs, without any notes.
     const results = await page.evaluate((bytes: number[]) => [false, true].map(textOnly => {

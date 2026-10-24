@@ -451,6 +451,7 @@ public sealed partial class DocxSession
         var element = target.Resolve(_doc!);
         if (element is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        if (RefuseNonBlockSibling(element, target.Anchor, "InsertHorizontalRule") is { } notBlock) return notBlock;
 
         _history.RecordPreOp(TakeSnapshot());
         try
