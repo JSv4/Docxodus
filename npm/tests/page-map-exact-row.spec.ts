@@ -119,7 +119,8 @@ test('a paragraph a nested exact row lies below its outer exact row has no fragm
   expect(result.mapped).not.toContain('p:body:inner');
 });
 
-/** A borderless table whose rows are `rows`; `zeroExact` rows carry the converter's zero-height clip. */
+// Synthetic zero-area clips still occur when borders/padding consume a positive exact row.
+// They differ from OOXML exact-zero rows, which the converter lays out at content height (#1339).
 function zeroTable(id: string, rows: Array<'zeroExact' | 'empty'>): string {
   const row = (kind: string, index: number) => `<tr data-source-anchor-id="tr:body:${id}${index}">`
     + `<td data-source-anchor-id="tc:body:${id}${index}" style="padding:0">`
@@ -132,7 +133,7 @@ function zeroTable(id: string, rows: Array<'zeroExact' | 'empty'>): string {
     + `${rows.map(row).join('')}</table>`;
 }
 
-test('a table made only of zero-height exact rows has no fragment either', async ({ page }) => {
+test('a table made only of zero-area exact-row clips has no fragment either', async ({ page }) => {
   const result = await paginateSynthetic(page, section(
     `${zeroTable('z', ['zeroExact'])}<p data-source-anchor-id="p:body:after" style="margin:0">after</p>`));
 

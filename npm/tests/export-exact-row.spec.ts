@@ -6,7 +6,7 @@ import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 import { generateExactRowDocx } from './docx-exact-row-fixture.js';
 import { decodePng } from './visual-parity/png.js';
 
-/** Exact-height table rows (`w:hRule="exact"`) in the PDF export: Word draws only what fits the row. */
+/** Positive exact row heights clip; exact zero uses the content height, as Word does. */
 
 test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}) } });
@@ -62,10 +62,10 @@ test('a row that hides a whole paragraph exports, clipped like any other overflo
 });
 
 for (const tableBorders of [true, false]) {
-  test(`a zero-height exact row ${tableBorders ? 'with' : 'without'} borders exports, showing none of its text (issue #1168)`, async ({ browser }, testInfo) => {
+  test(`a zero-height exact row ${tableBorders ? 'with' : 'without'} borders exports at its content height (issue #1339)`, async ({ browser }, testInfo) => {
     test.setTimeout(120_000);
-    // Every paragraph of the row is hidden whole, and its clip box has no height at all. Without
-    // borders the row and its cells have no height either.
+    // Native Word treats exact zero as auto. Both paragraphs stay visible and the row
+    // contributes their full height, with or without table borders.
     const bytes = generateExactRowDocx({ clippedParagraphs: 2, firstRowTwips: 0, tableBorders });
     const actual = await renderDocxArtifacts(bytes, { browser, ...options });
     writeFileSync(testInfo.outputPath('zero-height.docx'), bytes);
@@ -73,12 +73,14 @@ for (const tableBorders of [true, false]) {
 
     expect(actual.pageCount).toBe(1);
     const text = (await pageTexts(actual.pdf!)).join(' ');
-    for (const word of ['Value02', 'Row02', 'Closing']) expect(text).toContain(word);
-    expect(text).not.toContain('Alder');
+    for (const word of ['Alder', 'Birch', 'Value01', 'Value02', 'Row02', 'Closing']) expect(text).toContain(word);
+    const rows = actual.pageMap.fragments.filter(fragment => fragment.anchorId.startsWith('tr:'));
+    expect(rows).toHaveLength(3);
+    expect(rows[0].geometry.height).toBeGreaterThan(20);
   });
 }
 
-test('a table made only of a borderless zero-height exact row exports (issue #1168)', async ({ browser }) => {
+test('a table made only of a borderless exact-zero row keeps its content (issue #1339)', async ({ browser }) => {
   test.setTimeout(120_000);
   const actual = await renderDocxArtifacts(
     generateExactRowDocx({ bodyRows: 1, firstRowTwips: 0, tableBorders: false }), { browser, ...options });
@@ -86,7 +88,8 @@ test('a table made only of a borderless zero-height exact row exports (issue #11
   expect(actual.pageCount).toBe(1);
   const text = (await pageTexts(actual.pdf!)).join(' ');
   expect(text).toContain('Closing');
-  expect(text).not.toContain('Alder');
+  expect(text).toContain('Alder');
+  expect(actual.pageMap.fragments.some(fragment => fragment.anchorId.startsWith('tbl:'))).toBe(true);
 });
 
 for (const rule of ['exact', 'atLeast'] as const) {

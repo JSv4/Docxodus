@@ -1,10 +1,14 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Validation;
 using Xunit;
+using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Docxodus.Tests;
 
@@ -15,9 +19,9 @@ public class TableRowHeightRuleTests
     private const string W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
     // Literal original ledger; no external document or template is read.
-    private static byte[] AuthoredDocument(string? rule, string extraCell = "", string vAlign = "", string size = "6")
+    private static byte[] AuthoredDocument(string? rule, string extraCell = "", string vAlign = "", string size = "6", string twips = "720")
     {
-        var height = rule == null ? "<w:trHeight w:val=\"720\"/>" : $"<w:trHeight w:val=\"720\" w:hRule=\"{rule}\"/>";
+        var height = rule == null ? $"<w:trHeight w:val=\"{twips}\"/>" : $"<w:trHeight w:val=\"{twips}\" w:hRule=\"{rule}\"/>";
         var borders = "<w:tblBorders>" + string.Concat(new[] { "top", "left", "bottom", "right", "insideH", "insideV" }
             .Select(side => $"<w:{side} w:val=\"single\" w:sz=\"{size}\" w:color=\"444444\"/>")) + "</w:tblBorders>";
         var cell = $"<w:tc><w:tcPr><w:tcW w:w=\"3600\" w:type=\"dxa\"/>{vAlign}</w:tcPr><w:p><w:r><w:t>Birch exact record.</w:t></w:r></w:p>{extraCell}</w:tc>";
@@ -29,14 +33,18 @@ public class TableRowHeightRuleTests
         using (var document = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
         {
             var main = document.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
             using var xml = new MemoryStream(Encoding.UTF8.GetBytes(content));
             main.FeedData(xml);
+            Assert.Empty(new OpenXmlValidator(DocumentFormat.OpenXml.FileFormatVersions.Office2019).Validate(document)
+                .Select(e => e.Description));
         }
         return stream.ToArray();
     }
 
-    private static XElement Render(string? rule, string extraCell = "", string vAlign = "", string size = "6") =>
-        WmlToHtmlConverter.ConvertToHtml(new WmlDocument("Birch.docx", AuthoredDocument(rule, extraCell, vAlign, size)),
+    private static XElement Render(string? rule, string extraCell = "", string vAlign = "", string size = "6", string twips = "720") =>
+        WmlToHtmlConverter.ConvertToHtml(new WmlDocument("Birch.docx", AuthoredDocument(rule, extraCell, vAlign, size, twips)),
             new WmlToHtmlConverterSettings { FabricateCssClasses = false });
 
     private static Dictionary<string, string> Style(XElement? element) =>
@@ -78,6 +86,49 @@ public class TableRowHeightRuleTests
     {
         var clip = Clip(Render("exact", vAlign: "<w:vAlign w:val=\"bottom\"/>"));
         Assert.Equal("safe flex-end", Style(clip)["justify-content"]);
+    }
+
+    // Issue #1339: Word lays out an exact row of height 0 at its content height, as if it were auto.
+    [Theory]
+    [InlineData("exact")]
+    [InlineData("atLeast")]
+    public void ZeroHeightAddsNoConstraint(string rule)
+    {
+        var html = Render(rule, "<w:p><w:r><w:t>Second Birch line.</w:t></w:r></w:p>", twips: "0");
+        Assert.False(Style(Row(html)).ContainsKey("height"));
+        Assert.Null(Clip(html));
+    }
+
+    [Fact]
+    public void OneTwipExactHeightStillClips()
+    {
+        // A positive exact height remains a constraint, even at one twip.
+        var html = Render("exact", twips: "1");
+        Assert.Equal("0.05pt", Style(Row(html))["height"]);
+        Assert.Equal("0pt", Style(Clip(html))["height"]);
+    }
+
+    [Theory]
+    [InlineData("tables-row-height-exact-zero-content-times-new-roman", 0)]
+    [InlineData("tables-row-height-exact-tiny-control-times-new-roman", 6)]
+    public void CapturedWordInputs_KeepZeroRowsLiveAndPositiveRowsClipped(string name, int clips)
+    {
+        var path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
+            "../../../../TestFiles/ZeroExactRows", name + ".docx"));
+        var bytes = File.ReadAllBytes(path);
+        using var observations = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(Path.GetDirectoryName(path)!, "word-observations.json")));
+        var observed = observations.RootElement.GetProperty("cases").EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == name);
+        Assert.Equal(observed.GetProperty("inputSha256").GetString(),
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+        PackageValidation.AssertValid(bytes, DocumentFormat.OpenXml.FileFormatVersions.Microsoft365);
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument(name + ".docx", bytes),
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false });
+        Assert.Equal(clips, html.Descendants().Count(e => e.Attribute("data-docx-exact-row-cell") != null));
+        if (clips == 0)
+            foreach (var word in new[] { "AlphaMid1L", "BravoMid1L", "CharlieMid1L", "CharlieMid2L", "CharlieMid3L", "KiloMid1L" })
+                Assert.Contains(word, html.Value);
     }
 
     [Fact]
