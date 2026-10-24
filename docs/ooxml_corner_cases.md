@@ -4396,7 +4396,7 @@ Office Online was unavailable; these observations do not establish Word parity.
 | `behindDoc="1"`, no wrapping, with body text | Not captured | Ink behind text | Ink behind text and above paper |
 | Teal `relativeHeight="4294967295"` followed by orange `relativeHeight="2147483648"` | Not captured | Orange above teal | Teal above orange |
 | Filled rectangle with a triangular tight/through wrap polygon | Not captured | Uses rectangular clearance | Uses the supplied contour |
-| Unsupported floating hexagon / plain VML rectangle | Not captured | Draws the geometry | Preserves space and reports an unsupported placeholder |
+| Floating hexagon / simple inline VML rectangle | Not captured | Draws the geometry | Draws the geometry |
 
 The SDK exposes `relativeHeight` as an unsigned 32-bit value
 ([Microsoft API reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.wordprocessing.anchor.relativeheight?view=openxml-3.0.1)).
@@ -4404,3 +4404,12 @@ Docxodus maps numeric order to dense CSS ranks rather than clamping it to CSS's 
 range. The high-value ordering and contour differences above need a Word capture
 before either renderer can be treated as a Word reference for those variants. The
 benchmark records them rather than changing the source values to match LibreOffice.
+
+Hexagon geometry follows the ECMA preset equations (`adj=25000`, `vf=115470` by default),
+including the shorter source side and subsequent group transform. The definitions were checked
+against [LibreOffice's published copy at 5044a9a](https://github.com/LibreOffice/core/blob/5044a9a5719bba9402184438e5d66586de01d20f/oox/source/drawingml/customshapes/presetShapeDefinitions.xml).
+Simple VML rectangles follow the declared fill/stroke flags and colours. Their default outline is
+one pixel ([Microsoft VML reference](https://learn.microsoft.com/en-us/windows/win32/vml/msdn-online-vml-strokeweight-attribute));
+unitless stroke weights are EMUs. Drawing these primitives avoids injecting a placeholder label
+into the PDF text inventory. Other geometry, unsupported formulas and positioned VML retain the
+ordinary unsupported-content policy.

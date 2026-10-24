@@ -60,6 +60,7 @@ All notable changes to this project will be documented in this file.
   drawings remain behind text and above the paper in standalone export. Unsupported geometry,
   interior wrapping and undrawn VML shapes are reported through the unsupported-content policy;
   fallback labels inherit the document font instead of introducing a generic font requirement.
+  Preset hexagons and simple inline VML rectangles draw their actual geometry without adding label text.
 
 - Comments anchored in a header, footer, footnote or endnote now render like body comments (#1310).
   The HTML converter read them but emitted nothing for them, in every comment mode: no highlighted

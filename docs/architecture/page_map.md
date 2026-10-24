@@ -71,6 +71,9 @@ flow while the SVG moves to its page position. The page uses `isolation: isolate
 drawings remain above its paper when standalone export removes `contain` and `will-change`.
 PageMap geometry alone cannot prove that a drawing is painted above an opaque background; the
 floating-shape export regressions also inspect PDF paint order (#1346).
+When a paragraph splits beside a float, its candidate head is measured with the preceding page
+content. Measuring it alone would admit more text than its narrowed first lines can hold. The tail
+is measured without the previous page's float, so every glyph remains within its own body band.
 
 Read-only `paginateHtml()` defaults to a scrollable comment panel outside each page. The source
 comment subtree and its outside presentation, like the `"balloons"` placement's markup area, balloons

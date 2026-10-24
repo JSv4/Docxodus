@@ -23,9 +23,8 @@ for(const grouped of [false,true]) for(const wrap of ['none','topAndBottom'] as 
 }
 
 for(const [name,source] of [
-  ['floating hexagon',()=>floatingShapeDocx({geometry:'hexagon'})],
+  ['unsupported floating pentagon',()=>floatingShapeDocx({geometry:'pentagon'})],
   ['interior wrapping',()=>floatingShapeDocx({wrap:'square',x:100})],
-  ['plain VML rectangle',()=>vmlShapeDocx()],
   ['VML without an extent',()=>vmlShapeDocx(false)],
 ] as const) test(`${name} reaches the unsupported-content policy`,async({browser})=>{
   test.setTimeout(120_000);
@@ -40,6 +39,26 @@ for(const [name,source] of [
   ]);
   await expect(renderDocxArtifacts(input,{...options,unsupportedContent:'strict'}))
     .rejects.toMatchObject({code:'resource_policy_failure'});
+});
+
+for(const [name,source,element] of [
+  ['hexagon',()=>floatingShapeDocx({geometry:'hexagon'}),'polygon'],
+  ['plain VML rectangle',()=>vmlShapeDocx(),'rect'],
+] as const) test(`${name} exports its native geometry without a placeholder label`,async({browser})=>{
+  const result=await renderDocxArtifacts(source(),{browser,outputs:['html','pdf'],
+    reviewProfile:'final',commentProfile:'hidden',timeoutMs:120_000});
+  expect(result.pageCount).toBe(1);
+  expect(result.html).toContain(`<${element}`);
+  expect(result.renderReport.unsupportedContent).toEqual([]);
+  const task=getDocument({data:new Uint8Array(result.pdf!),verbosity:0});
+  try {
+    const page=await(await task.promise).getPage(1);
+    const text=await page.getTextContent();
+    const words=text.items.filter(item=>'str' in item).map(item=>item.str).join('');
+    expect(words).not.toContain('[SHAPE]');
+    const ops=await page.getOperatorList();
+    expect(ops.fnArray.some((op,i)=>op===OPS.setFillRGBColor && ops.argsArray[i][0]==='#19647e')).toBe(true);
+  } finally {await task.destroy();}
 });
 
 for(const behind of [false,true]) test(`PDF paints a ${behind?'background':'foreground'} shape above the paper and on the correct side of text`,async({browser})=>{
@@ -64,4 +83,45 @@ for(const behind of [false,true]) test(`PDF paints a ${behind?'background':'fore
     if(behind) expect(teal).toBeLessThan(text);
     else expect(teal).toBeGreaterThan(text);
   } finally {await task.destroy();}
+});
+
+test('relative size changes the PDF rectangle without scaling its physical outline',async({browser})=>{
+  const result=await renderDocxArtifacts(floatingShapeDocx({wrap:'none',relativeWidth:50000,relativeHeight:12500,outline:true}),{
+    browser,outputs:['pdf'],reviewProfile:'final',commentProfile:'hidden',timeoutMs:120_000,
+  });
+  const task=getDocument({data:new Uint8Array(result.pdf!),verbosity:0});
+  try {
+    const ops=await(await(await task.promise).getPage(1)).getOperatorList();
+    let sx=1,sy=1;const stack:[number,number][]=[];const widths:number[]=[];
+    ops.fnArray.forEach((op,i)=>{
+      const a=ops.argsArray[i];
+      if(op===OPS.save) stack.push([sx,sy]);
+      else if(op===OPS.restore) [sx,sy]=stack.pop()!;
+      else if(op===OPS.transform) {sx*=Math.hypot(a[0],a[1]);sy*=Math.hypot(a[2],a[3]);}
+      else if(op===OPS.setLineWidth) widths.push(a[0]*Math.sqrt(sx*sy));
+    });
+    expect(widths).toHaveLength(1);
+    expect(widths[0]).toBeCloseTo(1.5,2);
+  } finally {await task.destroy();}
+});
+
+for(const story of ['header','footer'] as const) test(`${story} drawings retain their page position and source mapping`,async({browser})=>{
+  const top=story==='header'?36:660;
+  const result=await renderDocxArtifacts(floatingShapeDocx({story,wrap:'none',behind:true,vertical:'page',y:top}),{
+    browser,outputs:['html','pdf'],reviewProfile:'final',commentProfile:'hidden',timeoutMs:120_000,
+  });
+  expect(result.pageCount).toBe(1);
+  expect(result.renderReport.unsupportedContent).toEqual([]);
+  expect(result.pageMap.fragments.some(f=>f.story!=='body')).toBe(true);
+  const page=await browser.newPage();
+  try {
+    await page.setContent(result.html!);await page.evaluate(()=>document.fonts.ready);
+    const f=await page.evaluate(()=>{
+      const anchor=document.querySelector<HTMLElement>('.page-box [data-docx-shape-anchor]')!;
+      const paper=anchor.closest<HTMLElement>('.page-box')!.getBoundingClientRect();
+      const ink=anchor.querySelector('svg')!.getBoundingClientRect();
+      return {top:(ink.top-paper.top)*.75,height:ink.height*.75,parent:anchor.parentElement?.className};
+    });
+    expect(f.top).toBeCloseTo(top,0);expect(f.height).toBeCloseTo(72,0);expect(f.parent).toBe('page-box');
+  } finally {await page.close();}
 });

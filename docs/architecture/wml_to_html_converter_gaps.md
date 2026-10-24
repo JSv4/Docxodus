@@ -336,14 +336,19 @@ Content inside DrawingML shapes (`a:txBody`, `wps:txbx`) may not be fully extrac
 
 Inline shapes that are not text boxes (`wps:wsp`, `wpg:wgp` groups, `wpc:wpc` canvases) render as
 SVG sized to their `wp:extent` (`WmlToHtmlConverter.Shapes.cs`, issue #1270). Preset `rect`,
-`roundRect`, `ellipse`, `line` and `straightConnector1` geometry is drawn with its fill and outline,
+`roundRect`, `hexagon`, `ellipse`, `line` and `straightConnector1` geometry is drawn with its fill and outline,
 from `wps:spPr` or the `wps:style` theme references, honouring `rot`/`flipH`/`flipV`. Colours may be
 sRGB, theme, system, scRGB or HSL, with luminance, shade, tint and alpha modifiers; a gradient is drawn
 as its first stop, a pattern as its foreground, and `a:grpFill` as the enclosing group's fill. A
 group's child coordinate space is mapped onto its frame in the geometry itself, not by an SVG
 transform, so outlines keep their width as Word and LibreOffice draw them; a rotated shape inside a
 non-uniformly scaled group is rotated in the scaled space (an approximation). Coordinates are EMUs
-under one root scale, with no viewBox, so a zero-height line extent still draws.
+under one root scale, with no viewBox for ordinary stored extents, so a zero-height line still draws.
+Positive relative dimensions use a responsive SVG viewport; outlines retain physical width rather
+than stretching with that viewport. Relative shape sizes are applied before block measurement so
+their text clearance participates in pagination. Hexagons evaluate the preset's `adj` and `vf`
+values in the source coordinate space before group scaling; unsupported adjustment formulas are
+reported instead of silently replacing them with defaults.
 
 Not drawn: other preset and custom geometry, preset colours (`a:prstClr`), picture fills, line
 arrowheads (`a:headEnd`/`a:tailEnd`), dash patterns, effects and the extra space `wp:effectExtent`
@@ -367,9 +372,10 @@ drawings keep only their anchor paragraph's normal line. Column-edge square, tig
 wrapping reuse the picture float/contour path. Continuous HTML positions these shapes relative to
 their paragraphs. Page/margin bases that continuous HTML cannot resolve, and interior wrapping that
 a single float cannot represent, are marked `Other` when unsupported-content metadata is enabled.
-A floating group handled by the text-box path reports its unrendered members too. Plain VML shapes
-without text or images keep their declared dimensions as unsupported placeholders instead of
-vanishing; their labels inherit the document font.
+A floating group handled by the text-box path reports its unrendered members too. Simple inline VML
+rectangles draw their fill, outline and declared dimensions; the default outline is one CSS pixel.
+Positioned VML, richer VML content and other unsupported primitives keep their dimensions and are
+reported rather than silently flattened. Fallback labels inherit the document font.
 
 ---
 

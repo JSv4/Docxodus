@@ -14,6 +14,12 @@ export interface FloatingShapeOptions {
   y?: number;
   distance?: number;
   bottomDistance?: number;
+  topDistance?: number;
+  relativeWidth?: number;
+  relativeHeight?: number;
+  heading?: boolean;
+  outline?: boolean;
+  story?: 'header' | 'footer';
   before?: string[];
   after?: string;
   layers?: { order: number; fill: string; behind?: boolean }[];
@@ -41,6 +47,7 @@ export function floatingShapeDocx(options: FloatingShapeOptions = {}): Uint8Arra
   const source = (id:number, order:number, fill:string, behind:boolean) => {
     const shape='<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/></a:xfrm>'
       + `<a:prstGeom prst="${options.geometry??'rect'}"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="${fill}"/></a:solidFill>`
+      + (options.outline?'<a:ln w="19050"><a:solidFill><a:srgbClr val="FF9900"/></a:solidFill></a:ln>':'')
       + '</wps:spPr><wps:bodyPr/></wps:wsp>';
     const content = options.grouped ? '<wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/>'
       + '<a:ext cx="1828800" cy="914400"/><a:chOff x="0" y="0"/><a:chExt cx="1828800" cy="914400"/></a:xfrm></wpg:grpSpPr>'
@@ -50,15 +57,25 @@ export function floatingShapeDocx(options: FloatingShapeOptions = {}): Uint8Arra
       + '<wp:lineTo x="0" y="21600"/><wp:lineTo x="0" y="0"/></wp:wrapPolygon>';
     const wrap=kind==='none'?'<wp:wrapNone/>':kind==='topAndBottom'?'<wp:wrapTopAndBottom/>':kind==='square'
       ? '<wp:wrapSquare wrapText="bothSides"/>' : `<wp:wrap${kind==='tight'?'Tight':'Through'} wrapText="bothSides">${polygon}</wp:wrap${kind==='tight'?'Tight':'Through'}>`;
-    return `<w:r><w:drawing xmlns:wp="${WP}" xmlns:a="${A}" xmlns:wps="${WPS}" xmlns:wpg="${WPG}">`
-      + `<wp:anchor distT="0" distR="${emu(options.distance??0)}" distB="${emu(options.bottomDistance??0)}" distL="0" simplePos="0" relativeHeight="${order}" behindDoc="${behind?'1':'0'}" locked="0" layoutInCell="1" allowOverlap="1">`
+    const relative=(options.relativeWidth===undefined?'':`<wp14:sizeRelH relativeFrom="margin"><wp14:pctWidth>${options.relativeWidth}</wp14:pctWidth></wp14:sizeRelH>`)
+      +(options.relativeHeight===undefined?'':`<wp14:sizeRelV relativeFrom="margin"><wp14:pctHeight>${options.relativeHeight}</wp14:pctHeight></wp14:sizeRelV>`);
+    return `<w:r><w:drawing xmlns:wp="${WP}" xmlns:a="${A}" xmlns:wps="${WPS}" xmlns:wpg="${WPG}"`
+      +(relative?' xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"':'')+'>'
+      + `<wp:anchor distT="${emu(options.topDistance??0)}" distR="${emu(options.distance??0)}" distB="${emu(options.bottomDistance??0)}" distL="0" simplePos="0" relativeHeight="${order}" behindDoc="${behind?'1':'0'}" locked="0" layoutInCell="1" allowOverlap="1">`
       + '<wp:simplePos x="0" y="0"/>'
       + `<wp:positionH relativeFrom="${options.horizontal??'column'}"><wp:posOffset>${emu(options.x??0)}</wp:posOffset></wp:positionH>`
       + `<wp:positionV relativeFrom="${options.vertical??'paragraph'}"><wp:posOffset>${emu(options.y??0)}</wp:posOffset></wp:positionV>`
       + `<wp:extent cx="1828800" cy="914400"/>${wrap}<wp:docPr id="${id}" name="Harbor panel ${id}"/>`
-      + `<a:graphic><a:graphicData uri="${options.grouped?WPG:WPS}">${content}</a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
+      + `<a:graphic><a:graphicData uri="${options.grouped?WPG:WPS}">${content}</a:graphicData></a:graphic>${relative}</wp:anchor></w:drawing></w:r>`;
   };
   const layers=options.layers??[{order:options.order??10,fill:'19647E',behind:options.behind??false}];
   const drawings=layers.map((l,i)=>source(7+i,l.order,l.fill,l.behind??false)).join('');
-  return drawingDocx(drawings+(options.mixed?'<w:r><w:t>AnchorWord</w:t></w:r>':''),false,parts,options.after,options.before);
+  const headingStyle='<w:style w:type="paragraph" w:styleId="DrawingHeading"><w:name w:val="Drawing heading"/><w:pPr><w:outlineLvl w:val="0"/></w:pPr></w:style>';
+  const fixtureParts=options.heading?parts.map(p=>p.name==='styles.xml'?{...p,body:p.body.replace('</w:styles>',headingStyle+'</w:styles>')}:p):[...parts];
+  if(options.story) fixtureParts.push({id:'rDrawingStory',type:R+'/'+options.story,name:options.story+'1.xml',
+    contentType:`application/vnd.openxmlformats-officedocument.wordprocessingml.${options.story}+xml`,
+    body:`<w:${options.story==='header'?'hdr':'ftr'} xmlns:w="${W}"><w:p>${drawings}</w:p></w:${options.story==='header'?'hdr':'ftr'}>`});
+  return drawingDocx((options.heading?'<w:pPr><w:pStyle w:val="DrawingHeading"/></w:pPr>':'')
+    +(options.story?'<w:r><w:t>StoryBody</w:t></w:r>':drawings)+(options.mixed?'<w:r><w:t>AnchorWord</w:t></w:r>':''),
+    false,fixtureParts,options.after,options.before,options.story?`<w:${options.story}Reference w:type="default" r:id="rDrawingStory"/>`:'');
 }

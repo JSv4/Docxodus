@@ -11575,7 +11575,7 @@ namespace Docxodus
                         return image;
                 }
                 return ProcessTextBox(wordDoc, element, settings)
-                    ?? ProcessVmlShapeFallback(element, settings);
+                    ?? ProcessVmlShape(element, settings);
             }
             return null;
         }
@@ -11960,17 +11960,29 @@ namespace Docxodus
             AddEmuDataAttribute(wrapper, "data-docx-anchor-extent-width", extentCx);
             AddEmuDataAttribute(wrapper, "data-docx-anchor-extent-height", extentCy);
 
-            AddAnchorAxisMetadata(wrapper, anchor.Element(WP.positionH), "h");
-            AddAnchorAxisMetadata(wrapper, anchor.Element(WP.positionV), "v");
+            if (IsTrueAttribute(anchor, "simplePos"))
+            {
+                wrapper.SetAttributeValue("data-docx-anchor-h-relative", "page");
+                wrapper.SetAttributeValue("data-docx-anchor-v-relative", "page");
+                AddEmuDataAttribute(wrapper, "data-docx-anchor-h-offset", (long?)anchor.Element(WP.simplePos)?.Attribute(NoNamespace.x) ?? 0);
+                AddEmuDataAttribute(wrapper, "data-docx-anchor-v-offset", (long?)anchor.Element(WP.simplePos)?.Attribute(NoNamespace.y) ?? 0);
+            }
+            else
+            {
+                AddAnchorAxisMetadata(wrapper, anchor.Element(WP.positionH), "h");
+                AddAnchorAxisMetadata(wrapper, anchor.Element(WP.positionV), "v");
+            }
 
+            var verticalWrap = anchor.Element(WP.wrapTopAndBottom);
+            var sideWrap = anchor.Elements().FirstOrDefault(e => e.Name == WP.wrapSquare || e.Name == WP.wrapTight || e.Name == WP.wrapThrough);
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-top",
-                (long?)anchor.Attribute(NoNamespace.distT));
+                (long?)verticalWrap?.Attribute(NoNamespace.distT) ?? (long?)anchor.Attribute(NoNamespace.distT));
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-right",
-                (long?)anchor.Attribute(NoNamespace.distR));
+                (long?)sideWrap?.Attribute(NoNamespace.distR) ?? (long?)anchor.Attribute(NoNamespace.distR));
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-bottom",
-                (long?)anchor.Attribute(NoNamespace.distB));
+                (long?)verticalWrap?.Attribute(NoNamespace.distB) ?? (long?)anchor.Attribute(NoNamespace.distB));
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-left",
-                (long?)anchor.Attribute(NoNamespace.distL));
+                (long?)sideWrap?.Attribute(NoNamespace.distL) ?? (long?)anchor.Attribute(NoNamespace.distL));
 
             AddRelativeSizeMetadata(wrapper, anchor.Element(WP14.sizeRelH), WP14.pctWidth,
                 "width");
@@ -12567,7 +12579,8 @@ namespace Docxodus
                 sizeString.Substring(sizeString.Length - 2) == "pt")
             {
                 float size;
-                if (float.TryParse(sizeString.Substring(0, sizeString.Length - 2), out size))
+                if (float.TryParse(sizeString.Substring(0, sizeString.Length - 2), NumberStyles.Float,
+                    CultureInfo.InvariantCulture, out size))
                     return size;
             }
             return null;

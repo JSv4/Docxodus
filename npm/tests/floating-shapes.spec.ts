@@ -23,8 +23,9 @@ async function layout(page: Page, options: FloatingShapeOptions, paginated = tru
       const firstShape = host.querySelector<HTMLElement>(paginated
         ? '.page-box [data-docx-shape-anchor]' : '[data-docx-shape-anchor]')!;
       const root = firstShape.closest<HTMLElement>('.page-box') ?? host;
-      const paragraphs = Array.from(root.querySelectorAll<HTMLElement>('p'));
-      const anchorParagraph = firstShape.closest<HTMLElement>('p') ?? root.querySelector<HTMLElement>(
+      const paragraphNames='p,h1,h2,h3,h4,h5,h6';
+      const paragraphs = Array.from(root.querySelectorAll<HTMLElement>(paragraphNames));
+      const anchorParagraph = firstShape.closest<HTMLElement>(paragraphNames) ?? root.querySelector<HTMLElement>(
         `[data-source-anchor-id="${CSS.escape(firstShape.dataset.docxAnchorHost!)}"]`)!;
       const afterParagraph = paragraphs[paragraphs.indexOf(anchorParagraph)+1];
       const origin = root.getBoundingClientRect();
@@ -47,10 +48,22 @@ async function layout(page: Page, options: FloatingShapeOptions, paginated = tru
         y:(anchorText.top+anchorText.height/2)/.75+origin.top};
       const textPaint = document.elementsFromPoint(textPoint.x,textPoint.y).map(e=>
         e.closest('[data-docx-drawing-anchor]') ? 'shape' : e.textContent==='AnchorWord' ? 'text' : null).filter(Boolean);
+      const content=Array.from(host.querySelectorAll<HTMLElement>('.page-content'));
+      const overflowingText:{text:string;bottom:number;top:number}[]=[];
+      for(const area of content){const bounds=area.getBoundingClientRect();const walker=document.createTreeWalker(area,NodeFilter.SHOW_TEXT);
+        for(let node=walker.nextNode();node;node=walker.nextNode())if(node.textContent?.trim()){
+          const range=document.createRange();range.selectNodeContents(node);
+          for(const r of Array.from(range.getClientRects()))if(r.bottom>bounds.bottom+1||r.top<bounds.top-1)
+            overflowingText.push({text:node.textContent.slice(0,30),bottom:(r.bottom-bounds.bottom)*.75,top:(bounds.top-r.top)*.75});
+        }
+      }
       return {pages:host.querySelectorAll('.page-box').length,page:Number(root.dataset.pageNumber??1), shapes:svg.map((s,i)=>({
         ...rect(s.getBoundingClientRect()),fill:s.querySelector('rect')?.getAttribute('fill'),
+        inkWidth:s.querySelector<SVGGraphicsElement>('rect,polygon,ellipse,line')!.getBoundingClientRect().width*.75,
+        inkHeight:s.querySelector<SVGGraphicsElement>('rect,polygon,ellipse,line')!.getBoundingClientRect().height*.75,
         z:getComputedStyle(shapes[i]).zIndex,
       })),anchor:rect(anchorParagraph.getBoundingClientRect()),anchorText,after:textRect(afterParagraph),
+        anchorTag:anchorParagraph.tagName,allText:content.map(e=>e.textContent).join(''),overflowingText,
         lineHeight:parseFloat(getComputedStyle(anchorParagraph).lineHeight)*.75,
         painted:Array.from(new Set(atCenter)),textPaint:Array.from(new Set(textPaint)),
         unsupported:root.querySelectorAll('[data-content-type]').length};
@@ -129,4 +142,49 @@ test('top/bottom clearance and its host move together at a page boundary',async(
   expect(f.page).toBe(2);
   expect(f.after.top).toBeGreaterThanOrEqual(f.shapes[0].bottom-.5);
   expect(f.shapes[0].top).toBeCloseTo(72,0);
+});
+
+for(const paginated of [false,true]) test(`heading hosts reserve top/bottom clearance (${paginated?'pages':'flow'})`,async({page})=>{
+  const f=await layout(page,{heading:true,wrap:'topAndBottom'},paginated);
+  expect(f.anchorTag).toBe('H1');
+  expect(f.after.top).toBeGreaterThanOrEqual(f.shapes[0].bottom-.5);
+});
+
+for(const paginated of [false,true]) test(`top distance keeps the anchor position and reports unresolved prior clearance (${paginated?'pages':'flow'})`,async({page})=>{
+  const f=await layout(page,{wrap:'square',topDistance:24},paginated);
+  expect(f.shapes[0].top-f.anchor.top).toBeCloseTo(0,0);
+  expect(f.unsupported).toBe(1);
+});
+
+test('positive relative dimensions resize the actual SVG ink',async({page})=>{
+  const f=await layout(page,{wrap:'none',relativeWidth:50000,relativeHeight:12500});
+  expect(f.shapes[0].inkWidth).toBeCloseTo(234,0);
+  expect(f.shapes[0].inkHeight).toBeCloseTo(81,0);
+  expect(f.unsupported).toBe(0);
+});
+
+test('relative height participates in top/bottom pagination clearance',async({page})=>{
+  const f=await layout(page,{wrap:'topAndBottom',relativeHeight:50000});
+  expect(f.shapes[0].inkHeight).toBeCloseTo(324,0);
+  expect(f.after.top).toBeGreaterThanOrEqual(f.shapes[0].bottom-.5);
+});
+
+test('zero relative dimensions preserve the stored ink and clearance',async({page})=>{
+  const f=await layout(page,{wrap:'topAndBottom',relativeWidth:0,relativeHeight:0});
+  expect(f.shapes[0].inkWidth).toBeCloseTo(144,0);expect(f.shapes[0].inkHeight).toBeCloseTo(72,0);
+  expect(f.after.top).toBeGreaterThanOrEqual(f.shapes[0].bottom-.5);
+});
+
+test('cross-page square wrapping keeps every word visible',async({page})=>{
+  const after='AfterStart '+Array.from({length:1300},(_,i)=>`maple${i}`).join(' ')+' AfterEnd';
+  const f=await layout(page,{wrap:'square',after});
+  expect(f.pages).toBeGreaterThan(1);
+  expect(f.allText.replace(/\s/g,'')).toContain(after.replace(/\s/g,''));
+  expect(f.overflowingText).toEqual([]);
+});
+
+test('cross-page no-wrap control keeps every word visible',async({page})=>{
+  const after='AfterStart '+Array.from({length:1300},(_,i)=>`maple${i}`).join(' ')+' AfterEnd';
+  const f=await layout(page,{wrap:'none',after});
+  expect(f.overflowingText).toEqual([]);
 });

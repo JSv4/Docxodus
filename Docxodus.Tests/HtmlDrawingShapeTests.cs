@@ -395,7 +395,7 @@ public class HtmlDrawingShapeTests
     [InlineData(PaginationMode.Paginated)]
     public void An_unsupported_floating_shape_is_reported(PaginationMode mode)
     {
-        var input = Docx(FloatingDrawing(ShapeUri, Shape("hexagon")));
+        var input = Docx(FloatingDrawing(ShapeUri, Shape("pentagon")));
         AssertSchemaValid(input);
         var paragraph = MiddleParagraph(input, mode, placeholders: true);
 
@@ -422,6 +422,121 @@ public class HtmlDrawingShapeTests
         using var doc = WordprocessingDocument.Open(stream, false);
         Assert.Empty(new OpenXmlValidator(DocumentFormat.OpenXml.FileFormatVersions.Office2019).Validate(doc)
             .Select(e => e.Description));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_floating_hexagon_draws_its_six_preset_vertices(bool grouped)
+    {
+        var input = Docx(FloatingDrawing(grouped ? GroupUri : ShapeUri,
+            grouped ? Group(Shape("hexagon")) : Shape("hexagon")));
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
+        var points = PolygonPoints(OnlySvg(paragraph));
+        Assert.Equal(6, points.Length);
+        Assert.Equal(new[] { 0d, 18, 126, 144, 126, 18 }, points.Select(p => p.X).ToArray());
+        var expectedY = new[] { 36d, 0, 0, 36, 72, 72 };
+        for (var i = 0; i < points.Length; i++) Assert.Equal(expectedY[i], points[i].Y, 4);
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-content-type") != null);
+    }
+
+    [Fact]
+    public void A_hexagon_keeps_its_source_adjustment_under_nonuniform_group_scaling()
+    {
+        var input = Docx(InlineDrawing(GroupUri, Group(Shape("hexagon", cx: 914400, cy: 914400),
+            childCx: 914400, childCy: 914400)));
+        AssertSchemaValid(input);
+        // A square child has an 18pt inset; the group doubles its horizontal coordinates only.
+        var points = PolygonPoints(OnlySvg(MiddleParagraph(input)));
+        Assert.Equal(36, points[1].X);
+        Assert.Equal(108, points[2].X);
+    }
+
+    [Fact]
+    public void A_hexagon_honors_its_adjustment_and_vertical_factor()
+    {
+        var shape = Shape("hexagon").Replace("<a:avLst/>",
+            "<a:avLst><a:gd name=\"adj\" fmla=\"val 50000\"/><a:gd name=\"vf\" fmla=\"val 100000\"/></a:avLst>");
+        var input = Docx(InlineDrawing(ShapeUri, shape));
+        AssertSchemaValid(input);
+        var points = PolygonPoints(OnlySvg(MiddleParagraph(input)));
+        Assert.Equal(36, points[1].X);
+        Assert.Equal(36 - 36 * System.Math.Sin(System.Math.PI / 3), points[1].Y, 4);
+    }
+
+    private static (double X, double Y)[] PolygonPoints(XElement svg) =>
+        Assert.Single(Drawn(svg, "polygon")).Attribute("points")!.Value.Split(' ')
+            .Select(pair => pair.Split(','))
+            .Select(point => (double.Parse(point[0], System.Globalization.CultureInfo.InvariantCulture) / 12700,
+                double.Parse(point[1], System.Globalization.CultureInfo.InvariantCulture) / 12700)).ToArray();
+
+    [Fact]
+    public void A_hexagon_with_an_unsupported_adjustment_formula_is_reported()
+    {
+        var shape = Shape("hexagon").Replace("<a:avLst/>",
+            "<a:avLst><a:gd name=\"adj\" fmla=\"*/ w 1 4\"/></a:avLst>");
+        var input = Docx(InlineDrawing(ShapeUri, shape));
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, placeholders: true);
+        Assert.Contains(paragraph.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+    }
+
+    [Theory]
+    [InlineData("", "#ffffff", "#000000", "9525")]
+    [InlineData("fillcolor=\"#19647E\"", "#19647E", "#000000", "9525")]
+    [InlineData("filled=\"f\" stroked=\"f\"", "none", "none", null)]
+    [InlineData("fillcolor=\"red\" strokecolor=\"blue\" strokeweight=\"2pt\"", "red", "blue", "25400")]
+    public void A_plain_Vml_rectangle_draws_its_declared_paint(string attributes, string fill, string stroke, string? width)
+    {
+        var input = Docx("<w:r><w:pict><v:rect xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+            "style=\"width:144pt;height:72pt\" " + attributes + "/></w:pict></w:r>");
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, placeholders: true);
+        var rect = Assert.Single(Drawn(OnlySvg(paragraph), "rect"));
+        Assert.Equal(fill, (string?)rect.Attribute("fill"));
+        Assert.Equal(stroke, (string?)rect.Attribute("stroke"));
+        Assert.Equal(width, (string?)rect.Attribute("stroke-width"));
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-content-type") != null);
+    }
+
+    [Fact]
+    public void Vml_lengths_keep_the_Css_decimal_point_under_a_comma_decimal_culture()
+    {
+        var previous = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("fr-FR");
+            var input = Docx("<w:r><w:pict><v:rect xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+                "style=\"width:144.5pt;height:72pt\"/></w:pict></w:r>");
+            AssertSchemaValid(input);
+            var rect = Assert.Single(Drawn(OnlySvg(MiddleParagraph(input)), "rect"));
+            Assert.Equal("1835150", (string?)rect.Attribute("width"));
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = previous; }
+    }
+
+    [Fact]
+    public void Positioned_Vml_is_reported_instead_of_becoming_an_inline_rectangle()
+    {
+        var input = Docx("<w:r><w:pict><v:rect xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+            "style=\"position:absolute;left:36pt;top:24pt;width:144pt;height:72pt\"/></w:pict></w:r>");
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, placeholders: true);
+        Assert.Contains(paragraph.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Name.LocalName == "svg");
+    }
+
+    [Fact]
+    public void A_simple_position_uses_its_page_coordinates_instead_of_the_unused_axes()
+    {
+        var input = Docx(FloatingDrawing(ShapeUri, Shape()).Replace("simplePos=\"0\"", "simplePos=\"1\"")
+            .Replace("<wp:simplePos x=\"0\" y=\"0\"/>", "<wp:simplePos x=\"914400\" y=\"1828800\"/>"));
+        AssertSchemaValid(input);
+        var anchor = OnlySvg(MiddleParagraph(input, PaginationMode.Paginated)).Parent!;
+        Assert.Equal("72", (string?)anchor.Attribute("data-docx-anchor-h-offset"));
+        Assert.Equal("144", (string?)anchor.Attribute("data-docx-anchor-v-offset"));
+        Assert.Equal("page", (string?)anchor.Attribute("data-docx-anchor-h-relative"));
     }
 
     private static string ParagraphShape(string wrap = "<wp:wrapTopAndBottom/>") =>
