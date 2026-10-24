@@ -652,6 +652,15 @@ missing property revision can be treated as part of that operation. Mixed shadin
 missing width changes under another author's stamp, separate tables and unrelated no-op grids
 stay separate. Nested tables retain their own grids.
 
+An untracked column insertion or deletion also transforms a pending grid revision's saved grid
+(#1342). Rejecting that older revision therefore keeps the untracked column edit. The new column
+is cloned from the corresponding source column in each grid, including its previous width in
+the saved grid. Saved cell spans, `dxa` widths and row omissions receive the same structural
+adjustment; a new unit cell's copied property baseline also describes a unit cell. Other saved
+formatting and its author/date/id remain intact. If a pending grid has a different column count,
+or a saved span/omission describes another layout, the call returns
+`UnresolvedStructuralRevision` before mutation or history. Resolve that prior layout change first.
+
 **`ReplaceText` quietly strips a leading auto-number prefix from the payload.** When the target paragraph carries `w:numPr` (numbered heading or list item), the projector emits the resolved number inline (`## Fourth The total number…`) so a human can read what Word renders. An agent that echoes the visible heading back as its `ReplaceText` payload would otherwise see `Fourth Fourth: …` in the saved DOCX — the auto-number is still applied by Word, *and* the new run text now also starts with the prefix. The session resolves the number via the shared `Internal.ListNumberResolver` and strips a matching prefix (plus one optional separator: space, tab, or NBSP) from the payload before parsing. Idempotent — if the agent skipped the prefix, nothing is stripped. Documented in `DS091`/`DS091b`.
 
 ## When to use what
