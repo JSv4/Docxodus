@@ -2,7 +2,7 @@ import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
 
 /**
  * Exact-height table rows (`w:trHeight w:hRule="exact"`), authored as literal XML: Word draws only what
- * fits the row and clips the rest, whatever it is.
+ * fits a positive row height and clips the rest; an exact zero uses the content height.
  */
 export interface ExactRowOptions {
   /** Body rows below the header. Enough of them run the table onto later pages. */
@@ -27,7 +27,7 @@ export interface ExactRowOptions {
   box?: boolean;
   /** The first body row's exact height in twips; 300 holds one 11pt line. */
   firstRowTwips?: number;
-  /** Table borders (`w:tblBorders`); without them a zero-height row has no height at all. */
+  /** Table borders (`w:tblBorders`), independent of the row height constraint. */
   tableBorders?: boolean;
   /** A comment (id 7) on the header row's first paragraph. */
   headerComment?: boolean;
@@ -76,10 +76,11 @@ export function generateExactRowDocx(options: ExactRowOptions = {}): Uint8Array 
     ? `<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>`
     : '';
   const parts: Record<string, string> = {
-    '[Content_Types].xml': `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>${comments}</Types>`,
+    '[Content_Types].xml': `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>${comments}</Types>`,
     '_rels/.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="document" Type="${R_NS}/officeDocument" Target="word/document.xml"/></Relationships>`,
-    'word/_rels/document.xml.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="styles" Type="${R_NS}/styles" Target="styles.xml"/>${headerComment ? `<Relationship Id="comments" Type="${R_NS}/comments" Target="comments.xml"/>` : ''}</Relationships>`,
+    'word/_rels/document.xml.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="styles" Type="${R_NS}/styles" Target="styles.xml"/><Relationship Id="settings" Type="${R_NS}/settings" Target="settings.xml"/>${headerComment ? `<Relationship Id="comments" Type="${R_NS}/comments" Target="comments.xml"/>` : ''}</Relationships>`,
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif" w:cs="Liberation Serif"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>`,
+    'word/settings.xml': `<w:settings xmlns:w="${W_NS}"/>`,
     'word/document.xml': `<w:document xmlns:w="${W_NS}"><w:body>${body}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>`,
   };
   if (headerComment) {

@@ -3693,12 +3693,42 @@ Three differences remain, none part of this fix:
 - Word gives the exact zero-height rows of `tables-row-height-exact-zero-borderless` and
   `tables-row-height-exact-zero-only` (docx-fidelity-bench) the height of their content. In the second,
   the paragraph after the table starts 58.5pt below the one before it: four 14.6pt lines, one for that
-  paragraph and one for each row. Docxodus keeps those rows at zero height (#1168); #1339 tracks the
-  decision.
+  paragraph and one for each row. The #1339 fix treats an exact zero as unconstrained, matching the
+  native Word captures; positive exact heights retain #1168's clipping. See the detailed entry below.
 
 - Code: `Docxodus/WmlToHtmlConverter.cs` (`ProcessTable`).
 - Tests: `HtmlConverterBlockSiblingTests`, `HC056_TablePrecededByParagraph_HasNoImplicitTopMargin`,
   `npm/tests/export-table-boundary.spec.ts`; bench cases `tables-boundary-*` (core-v51).
+
+## Exact table rows: zero uses the content height (issue #1339)
+
+`<w:trHeight w:val="0" w:hRule="exact"/>` is schema-valid, but Word for the web renders it at its
+content height. It does not hide the row. Native PDFs captured on 2026-10-24 show this in borderless
+and bordered rows, including a three-line cell. An exact row with its value omitted is likewise
+unconstrained. Positive exact rows still clip: the separate Times New Roman control includes
+one-twip empty rows and an 8pt row whose content exceeds its height. Those controls are not evidence
+that an ordinary exact-zero row should disappear.
+
+The [MS-OI29500 trHeight note](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/5919e0bd-e6ce-477e-8d66-0e5282f5c506)
+(Part 1 §17.4.80, note c) distinguishes the standard, which permits exact zero, from Word's authoring
+restriction against that combination. It does not prescribe Word's reader fallback. The content-height
+fallback here follows the observed native Word PDFs. Note d also describes Word's bottom-padding
+addition to a positive exact height; this fix does not change that separate geometry rule.
+
+`ProcessTableRow` parses the height once and emits a height constraint and exact-row clip only for a
+positive value. Zero therefore reaches pagination and export as ordinary cell content, with no clip
+that would remove its PageMap fragments or PDF text. A positive height consumed entirely by borders
+or padding can still produce a zero-area clip; synthetic PageMap tests retain that distinction.
+
+`TestFiles/ZeroExactRows/word-observations.json` pins the two Times New Roman source packages,
+native PDF hashes, fonts, pages and observed words. Source bytes are unchanged and validate against
+Open XML SDK 3.5.1 Microsoft365. The earlier two Liberation Serif fixtures were also captured; Word
+substituted Times New Roman, so those PDFs are diagnostic evidence rather than eligible font-matched
+references. The source-identical Word downloads did not normalize the zero height. Word exposed no
+exact build number. The PDF and UI evidence remain in the durable per-issue fixture pack.
+
+Tests: `TableRowHeightRuleTests`, `TableRowHeightUnitTests`, `npm/tests/export-exact-row.spec.ts`
+and `npm/tests/page-map-exact-row.spec.ts`.
 
 ## Footnotes: how much of a page the note area takes (issue #1178)
 

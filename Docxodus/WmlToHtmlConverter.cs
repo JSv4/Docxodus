@@ -6897,7 +6897,9 @@ namespace Docxodus
             // w:hRule decides whether w:trHeight does too (issue #1122): an exact height is the
             // row's whole pitch and clips content that needs more, while a minimum height bounds
             // the content and the borders are added to it. Twip precision: issue #1121.
-            if (trHeight != null && heightRule != "auto")
+            // Word treats an exact zero as unconstrained, as the native Word captures for
+            // issue #1339 show. Only positive heights create a fixed/minimum row constraint.
+            if (trHeight is > 0m && heightRule != "auto")
             {
                 var heightInPoints = trHeight.Value / 20m;
                 // A collapsed row takes the widest top half and the widest bottom half of its cells.

@@ -62,6 +62,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Table rows with an exact height of zero now use their content height, matching Word (#1339).
+  Their text remains visible in HTML, pagination and PDF export. Positive exact heights still clip,
+  including a one-twip row; missing heights and automatic row heights remain unconstrained.
+
 - Accepting or rejecting a native move preserves untracked text, bookmarks, empty fields and
   content controls inside its range (#1340). Sessions resolve multiple disjoint source or
   destination ranges with one move name as one revision, including ranges spanning paragraphs;

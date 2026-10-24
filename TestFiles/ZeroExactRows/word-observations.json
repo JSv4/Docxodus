@@ -1,0 +1,97 @@
+{
+  "issue": 1339,
+  "product": "Microsoft Word for the web",
+  "reportedBuild": null,
+  "rights": {
+    "author": "John Scrudato IV",
+    "license": "MIT",
+    "origin": "Original repository/issue fixture or original literal OOXML; no external document content or embedded fonts"
+  },
+  "method": "Native Word PDF export, source-identical download and UI proof retained in issue-1339-evidence.zip",
+  "cases": [
+    {
+      "id": "tables-row-height-exact-zero-content-times-new-roman",
+      "inputSha256": "9096f52f52caa2c454112db95ba49ffb2364610b49eab59978b924068c54b0d5",
+      "wordPdfSha256": "354cde3a68e2512e7b9139f4e703413b435107eb9ff280389e42630ad6a58eb4",
+      "wordPdfPages": 1,
+      "wordPdfFonts": [
+        "BCDEEE+TimesNewRomanPSMT"
+      ],
+      "capturedAtUtc": "2026-10-24T20:46:37.435Z",
+      "visibleWords": [
+        "AlphaBefore",
+        "AlphaTop1L",
+        "AlphaTop1R",
+        "AlphaMid1L",
+        "AlphaMid1R",
+        "AlphaBot1L",
+        "AlphaBot1R",
+        "AlphaAfter",
+        "BravoBefore",
+        "BravoTop1L",
+        "BravoTop1R",
+        "BravoMid1L",
+        "BravoMid1R",
+        "BravoBot1L",
+        "BravoBot1R",
+        "BravoAfter",
+        "CharlieBefore",
+        "CharlieTop1L",
+        "CharlieTop1R",
+        "CharlieMid1L",
+        "CharlieMid2L",
+        "CharlieMid3L",
+        "CharlieMid1R",
+        "CharlieMid2R",
+        "CharlieMid3R",
+        "CharlieBot1L",
+        "CharlieBot1R",
+        "CharlieAfter",
+        "KiloBefore",
+        "KiloTop1L",
+        "KiloTop1R",
+        "KiloMid1L",
+        "KiloMid1R",
+        "KiloBot1L",
+        "KiloBot1R",
+        "KiloAfter"
+      ],
+      "clipCellCount": 0
+    },
+    {
+      "id": "tables-row-height-exact-tiny-control-times-new-roman",
+      "inputSha256": "816ab93a2b643ef6ef96fcf6813ccfbb5e6e9fa54b985d3b3e819cf7204ef856",
+      "wordPdfSha256": "14e5ccac247ae546975bb9fe50766e0809af75f9910a8f75d113ba0def622529",
+      "wordPdfPages": 1,
+      "wordPdfFonts": [
+        "BCDEEE+TimesNewRomanPSMT"
+      ],
+      "capturedAtUtc": "2026-10-24T20:48:50.461Z",
+      "visibleWords": [
+        "EchoBefore",
+        "EchoTop1L",
+        "EchoTop1R",
+        "EchoBot1L",
+        "EchoBot1R",
+        "EchoAfter",
+        "FoxtrotBefore",
+        "FoxtrotTop1L",
+        "FoxtrotTop1R",
+        "FoxtrotBot1L",
+        "FoxtrotBot1R",
+        "FoxtrotAfter",
+        "LimaBefore",
+        "LimaTop1L",
+        "LimaTop1R",
+        "Li",
+        "Mid1L",
+        "Li",
+        "Mid1R",
+        "LimaBot1L",
+        "LimaBot1R",
+        "LimaAfter"
+      ],
+      "clipCellCount": 6
+    }
+  ]
+}
