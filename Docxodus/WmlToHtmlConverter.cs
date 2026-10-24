@@ -750,8 +750,30 @@ namespace Docxodus
     /// <summary>
     /// Tracks comment state during HTML transformation.
     /// </summary>
+    /// <remarks>
+    /// Comments can be anchored in any story — the body, a header or footer, a footnote or an
+    /// endnote — and story markup finds its nearest scoped tracker (issue #1310).
+    /// <see cref="ForStory"/> gives each story root a tracker that shares the comment set and
+    /// every rendered/referenced record with the body's, but keeps its own open ranges: a range
+    /// never crosses a story, so one left unclosed in one story must not highlight another.
+    /// </remarks>
     internal class CommentTracker
     {
+        public CommentTracker()
+        {
+        }
+
+        private CommentTracker(CommentTracker shared)
+        {
+            Comments = shared.Comments;
+            ReferencedCommentIds = shared.ReferencedCommentIds;
+            RenderedRangeIds = shared.RenderedRangeIds;
+            _storyRank = shared._storyRank;
+        }
+
+        /// <summary>A tracker for another story's root: the same comments and records, its own open ranges.</summary>
+        public CommentTracker ForStory() => new CommentTracker(this);
+
         /// <summary>
         /// All comments loaded from the document, keyed by ID.
         /// </summary>
@@ -763,7 +785,7 @@ namespace Docxodus
         public HashSet<int> OpenRanges { get; } = new HashSet<int>();
 
         /// <summary>
-        /// IDs of comments that have been referenced in the document (for rendering order).
+        /// IDs of comments that have been referenced in the document, in the order converted.
         /// </summary>
         public List<int> ReferencedCommentIds { get; } = new List<int>();
 
@@ -773,6 +795,34 @@ namespace Docxodus
         /// open; its reference marker becomes the visible presentation anchor instead.
         /// </summary>
         public HashSet<int> RenderedRangeIds { get; } = new HashSet<int>();
+
+        private readonly Dictionary<int, int> _storyRank = new Dictionary<int, int>();
+
+        /// <summary>Record the first reference to a comment, from the story whose root is <paramref name="storyRoot"/>.</summary>
+        public void Reference(int id, XElement storyRoot, bool explicitReference = true)
+        {
+            if (explicitReference && !ReferencedCommentIds.Contains(id)) ReferencedCommentIds.Add(id);
+            if (_storyRank.ContainsKey(id))
+                return;
+            // Stable presentation order: body, headers and footers, footnotes, endnotes.
+            _storyRank[id] = storyRoot.Name == W.document ? 0
+                : storyRoot.Name == W.hdr || storyRoot.Name == W.ftr ? 1
+                : storyRoot.Name == W.footnotes ? 2
+                : 3;
+        }
+
+        /// <summary>
+        /// The comments a comments section or margin column lists: the referenced ones by story,
+        /// then in the order converted — so a continuous render, which converts the headers
+        /// before the body, lists them as a paginated one does — or, when nothing was referenced,
+        /// every comment by id.
+        /// </summary>
+        public List<CommentInfo> InPresentationOrder() => (ReferencedCommentIds.Any()
+            ? ReferencedCommentIds.Concat(_storyRank.Keys.Where(RenderedRangeIds.Contains)).Distinct()
+                .Where(Comments.ContainsKey)
+                .OrderBy(id => _storyRank[id])
+                .Select(id => Comments[id])
+            : Comments.Values.OrderBy(c => c.Id)).ToList();
     }
 
     /// <summary>
@@ -1140,8 +1190,19 @@ namespace Docxodus
             {
                 LoadComments(wordDoc, htmlConverterSettings, commentTracker);
             }
-            // Store tracker as annotation on the root element for access during transform
+            // Store tracker as annotation on the root element for access during transform — and on
+            // every other story's root, whose markup resolves it through its own part (issue #1310).
+            // The comments part is not a story that holds comment ranges.
             rootElement.AddAnnotation(commentTracker);
+            var commentsRoot = wordDoc.MainDocumentPart!.WordprocessingCommentsPart?.GetXDocument().Root;
+            foreach (var storyRoot in EnumerateStoryRoots(wordDoc).Where(root => root != commentsRoot))
+            {
+                storyRoot.RemoveAnnotations<CommentTracker>();
+                storyRoot.AddAnnotation(commentTracker.ForStory());
+                // Each note is an independent story even though its part holds several notes.
+                foreach (var note in storyRoot.Elements().Where(e => e.Name == W.footnote || e.Name == W.endnote))
+                    note.AddAnnotation(commentTracker.ForStory());
+            }
 
             // Load custom annotations if rendering is enabled
             var annotationTracker = new AnnotationTracker();
@@ -3329,20 +3390,20 @@ namespace Docxodus
                 // Get main document content
                 var mainContent = CreateSectionDivs(wordDoc, settings, element);
 
-                // For margin mode, wrap content in a flex container with margin column
+                // For margin mode, wrap content in a flex container with margin column. The column
+                // itself is added once every story has converted, so that comments anchored in
+                // footnotes, endnotes and footers are in it too (issue #1310).
+                XElement? marginContainer = null;
                 if (settings.RenderComments
                     && settings.CommentRenderMode == CommentRenderMode.Margin
                     && settings.RenderPagination != PaginationMode.Paginated)
                 {
                     var prefix = settings.CommentCssClassPrefix ?? "comment-";
-                    var tracker = GetCommentTracker(element);
-
-                    var marginContainer = new XElement(Xhtml.div,
+                    marginContainer = new XElement(Xhtml.div,
                         new XAttribute("class", prefix + "margin-container"),
                         new XElement(Xhtml.div,
                             new XAttribute("class", prefix + "margin-content"),
-                            mainContent),
-                        RenderMarginCommentsColumn(wordDoc, settings, tracker, prefix));
+                            mainContent));
 
                     bodyContent.Add(marginContainer);
                 }
@@ -3390,6 +3451,9 @@ namespace Docxodus
                     if (footersSection != null)
                         bodyContent.Add(footersSection);
                 }
+
+                marginContainer?.Add(RenderMarginCommentsColumn(wordDoc, settings, GetCommentTracker(element),
+                    settings.CommentCssClassPrefix ?? "comment-"));
 
                 // Add comments section if enabled (EndnoteStyle mode)
                 if (settings.RenderComments
@@ -5081,9 +5145,9 @@ namespace Docxodus
 
         private static CommentTracker? GetCommentTracker(XElement element)
         {
-            // Walk up to the document root to find the annotation
-            var root = element.AncestorsAndSelf().LastOrDefault();
-            return root?.Annotation<CommentTracker>();
+            // A note has its own range state inside the shared notes part.
+            return element.AncestorsAndSelf().Select(e => e.Annotation<CommentTracker>())
+                .FirstOrDefault(tracker => tracker != null);
         }
 
         private static FootnoteNumberingTracker? GetFootnoteNumberingTracker(XElement element)
@@ -5271,6 +5335,7 @@ namespace Docxodus
             if (id != null)
             {
                 tracker.OpenRanges.Add(id.Value);
+                tracker.Reference(id.Value, element.AncestorsAndSelf().Last(), explicitReference: false);
             }
 
             // Don't emit anything - we'll wrap content in ConvertRun
@@ -5309,10 +5374,7 @@ namespace Docxodus
                 return null;
 
             // Track that this comment was referenced (for rendering order)
-            if (!tracker.ReferencedCommentIds.Contains(id.Value))
-            {
-                tracker.ReferencedCommentIds.Add(id.Value);
-            }
+            tracker.Reference(id.Value, element.AncestorsAndSelf().Last());
 
             var prefix = settings.CommentCssClassPrefix ?? "comment-";
             tracker.Comments.TryGetValue(id.Value, out var comment);
@@ -5401,12 +5463,7 @@ namespace Docxodus
 
             var prefix = settings.CommentCssClassPrefix ?? "comment-";
 
-            // Use referenced order if available, otherwise use comment ID order
-            var orderedComments = (tracker.ReferencedCommentIds.Any()
-                ? tracker.ReferencedCommentIds
-                    .Where(id => tracker.Comments.ContainsKey(id))
-                    .Select(id => tracker.Comments[id])
-                : tracker.Comments.Values.OrderBy(c => c.Id)).ToList();
+            var orderedComments = tracker.InPresentationOrder();
 
             // Replies nest inside their parent's item (issue #540). A reply whose parent is not
             // in the set renders top-level rather than disappearing, and the rendered set guards
@@ -5575,12 +5632,7 @@ namespace Docxodus
             if (tracker == null || !tracker.Comments.Any())
                 return marginColumn;
 
-            // Use referenced order if available, otherwise use comment ID order
-            var orderedComments = (tracker.ReferencedCommentIds.Any()
-                ? tracker.ReferencedCommentIds
-                    .Where(id => tracker.Comments.ContainsKey(id))
-                    .Select(id => tracker.Comments[id])
-                : tracker.Comments.Values.OrderBy(c => c.Id)).ToList();
+            var orderedComments = tracker.InPresentationOrder();
 
             // Replies nest inside their parent's note so the thread positions as one unit
             // (issue #540); the guards mirror RenderCommentsSection.
