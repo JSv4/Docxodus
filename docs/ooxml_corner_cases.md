@@ -3678,9 +3678,11 @@ Three differences remain, none part of this fix:
 
 - When the second of two adjacent tables has a top border, Word does not add the border's width between
   them: its first line is still 18.0pt below the first table's. The HTML converter's output adds 0.75pt.
-- The PDF export does not keep two adjacent tables apart. Its `final` review-profile projection accepts
-  revisions, and accepting merges adjacent tables into one, dropping the second table's own properties
-  (#1341). The measurements above for adjacent tables are of the plain HTML conversion.
+- The PDF export previously merged already adjacent tables during its `final` review-profile
+  projection, dropping the second table's own properties (#1341). Revision acceptance now records
+  source boundaries and joins compatible tables only when resolution creates their adjacency. Final
+  and original exports therefore retain each table's own properties. The Word measurements above
+  remain the original plain-HTML comparison; the fix adds native and production-export regressions.
 - Word gives the exact zero-height rows of `tables-row-height-exact-zero-borderless` and
   `tables-row-height-exact-zero-only` (docx-fidelity-bench) the height of their content. In the second,
   the paragraph after the table starts 58.5pt below the one before it: four 14.6pt lines, one for that

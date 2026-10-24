@@ -493,23 +493,27 @@ namespace Docxodus
             {
                 if (element.Element(W.tbl) != null)
                 {
-                    var grouped = element
-                        .Elements()
-                        .GroupAdjacent(e =>
-                        {
-                            if (e.Name != W.tbl)
-                                return "";
-                            var bidiVisual = e.Elements(W.tblPr).Elements(W.bidiVisual).FirstOrDefault();
-                            var bidiVisString = bidiVisual == null ? "" : "|bidiVisual";
-                            var key = "tbl" + bidiVisString;
-                            return key;
-                        });
+                    // A table joins the table before it only when resolving revisions made them adjacent
+                    // and they agree on bidiVisual. Tables already adjacent in the input stay apart, each
+                    // with its own properties, as Word keeps them (issue #1341).
+                    var grouped = new List<List<XElement>>();
+                    XElement? previous = null;
+                    foreach (var e in element.Elements())
+                    {
+                        if (previous != null && previous.Name == W.tbl && e.Name == W.tbl &&
+                            (string?)e.Attribute(PT.FollowsTable) != (string?)previous.Attribute(PT.TableBoundaryId) &&
+                            HasBidiVisualSetting(previous) == HasBidiVisualSetting(e))
+                            grouped[^1].Add(e);
+                        else
+                            grouped.Add(new List<XElement> { e });
+                        previous = e;
+                    }
 
                     var newContent = grouped
                         .Select(g =>
                         {
-                            if (g.Key == "" || g.Count() == 1)
-                                return (object)g;
+                            if (g.Count == 1)
+                                return (object)g[0];
                             var rolled = g
                                 .Select(tbl =>
                                 {
@@ -626,153 +630,8 @@ namespace Docxodus
             return node;
         }
 
-        // The accepted document normalizer intentionally joins adjacent tables with the same
-        // bidiVisual setting.  That is normally a useful cleanup, but the IR reader compares the
-        // accepted view of two inputs independently: one input can contain revisions elsewhere and
-        // therefore be normalized while an otherwise-identical clean input keeps its original table
-        // boundaries.  Keep a small, source-aware record of only the table runs that were already
-        // adjacent AND carried no revision markup, so the IR-only accept path can put those original
-        // boundaries back after the normalizer has done its work.  Runs made adjacent by accepting a
-        // deletion are deliberately not captured and remain coalesced.
-        private sealed class PreexistingCleanTableRun
-        {
-            public PreexistingCleanTableRun(IEnumerable<XElement> sourceTables)
-            {
-                Tables = sourceTables
-                    .Select(t => (XElement)RemoveRsidTransform(new XElement(t))!)
-                    .ToList();
-                Rows = Tables.SelectMany(t => t.Elements(W.tr))
-                    .Select(TableRunRowMatchShape)
-                    .ToList();
-                FirstTableProperties = Tables[0].Element(W.tblPr) is XElement props
-                    ? new XElement(props)
-                    : null;
-                HasBidiVisual = HasBidiVisualSetting(Tables[0]);
-            }
-
-            public List<XElement> Tables { get; }
-            public List<XElement> Rows { get; }
-            public XElement? FirstTableProperties { get; }
-            public bool HasBidiVisual { get; }
-        }
-
-        private static List<PreexistingCleanTableRun> CapturePreexistingCleanTableRuns(XElement root)
-        {
-            var runs = new List<PreexistingCleanTableRun>();
-
-            foreach (var parent in root.DescendantsAndSelf())
-            {
-                // A table inside a revision wrapper is not an untouched input table, even if the
-                // wrapper itself sits outside the table element.  Do not resurrect those boundaries.
-                if (parent.AncestorsAndSelf().Any(e => IsProcessorRevisionMarkup(e.Name)))
-                    continue;
-
-                var currentRun = new List<XElement>();
-                bool? currentBidiVisual = null;
-
-                void Flush()
-                {
-                    if (currentRun.Count >= 2)
-                        runs.Add(new PreexistingCleanTableRun(currentRun));
-                    currentRun.Clear();
-                    currentBidiVisual = null;
-                }
-
-                foreach (var child in parent.Elements())
-                {
-                    if (child.Name != W.tbl || ContainsProcessorRevisionMarkup(child))
-                    {
-                        Flush();
-                        continue;
-                    }
-
-                    var bidiVisual = HasBidiVisualSetting(child);
-                    if (currentRun.Count > 0 && currentBidiVisual != bidiVisual)
-                        Flush();
-
-                    currentRun.Add(child);
-                    currentBidiVisual = bidiVisual;
-                }
-
-                Flush();
-            }
-
-            return runs;
-        }
-
-        private static void RestorePreexistingCleanTableRuns(
-            XElement acceptedRoot,
-            IReadOnlyList<PreexistingCleanTableRun> runs)
-        {
-            foreach (var run in runs)
-            {
-                // Re-split only an unambiguous exact match.  A table can legitimately have the same
-                // row text as another table elsewhere in a part; refusing an ambiguous match is much
-                // safer than moving a clean table run to the wrong location.
-                var matches = acceptedRoot.Descendants(W.tbl)
-                    .Where(table => MatchesMergedCleanTableRun(table, run))
-                    .ToList();
-                if (matches.Count != 1)
-                    continue;
-
-                matches[0].ReplaceWith(run.Tables.Select(t => (object)new XElement(t)).ToArray());
-            }
-        }
-
-        private static bool MatchesMergedCleanTableRun(XElement table, PreexistingCleanTableRun run)
-        {
-            if (HasBidiVisualSetting(table) != run.HasBidiVisual)
-                return false;
-
-            var tableProperties = table.Element(W.tblPr);
-            if (run.FirstTableProperties == null)
-            {
-                if (tableProperties != null)
-                    return false;
-            }
-            else if (tableProperties == null || !XNode.DeepEquals(tableProperties, run.FirstTableProperties))
-            {
-                return false;
-            }
-
-            var rows = table.Elements(W.tr).ToList();
-            if (rows.Count != run.Rows.Count)
-                return false;
-            for (var i = 0; i < rows.Count; i++)
-                if (!XNode.DeepEquals(TableRunRowMatchShape(rows[i]), run.Rows[i]))
-                    return false;
-            return true;
-        }
-
-        // MergeAdjacentTablesTransform recalculates tcW/gridSpan to fit the rolled-up table grid.
-        // Those layout values identify the merge rather than the source row, so ignore them for the
-        // source-to-accepted match while retaining every other row property and every cell payload.
-        private static XElement TableRunRowMatchShape(XElement row) =>
-            (XElement)TableRunMatchNodeShape(row)!;
-
-        private static object? TableRunMatchNodeShape(XNode node)
-        {
-            if (node is not XElement element)
-                return node;
-            if (element.Name == W.tcW || element.Name == W.gridSpan)
-                return null;
-            return new XElement(element.Name,
-                element.Attributes().Where(a => a.Name != PT.UniqueId && a.Name != PT.RunIds),
-                element.Nodes().Select(TableRunMatchNodeShape).Where(n => n != null));
-        }
-
         private static bool HasBidiVisualSetting(XElement table) =>
             table.Elements(W.tblPr).Elements(W.bidiVisual).Any();
-
-        private static bool ContainsProcessorRevisionMarkup(XElement element) =>
-            element.DescendantsAndSelf().Any(e => IsProcessorRevisionMarkup(e.Name));
-
-        private static bool IsProcessorRevisionMarkup(XName name) =>
-            TrackedRevisionsElements.Contains(name) ||
-            name == W.customXmlMoveFromRangeStart ||
-            name == W.customXmlMoveFromRangeEnd ||
-            name == W.customXmlMoveToRangeStart ||
-            name == W.customXmlMoveToRangeEnd;
 
         /// <summary>
         /// Whether a <c>w:ins</c>/<c>w:del</c> under <paramref name="parent"/> (its nearest ancestor other than a
@@ -1444,38 +1303,19 @@ namespace Docxodus
             return node;
         }
 
-        public static WmlDocument AcceptRevisions(WmlDocument document) =>
-            AcceptRevisionsCore(document, preservePreexistingCleanTableRuns: false);
-
-        /// <summary>
-        /// Accepts revisions for the IR reader while retaining adjacent, revision-free tables that
-        /// existed as separate tables in the input.  The ordinary revision processor deliberately
-        /// coalesces every adjacent compatible table after accepting revisions; that is useful for a
-        /// final accepted document, but it makes the accepted view of a dirty document structurally
-        /// unlike an otherwise-identical clean document.  The IR diff must not turn that incidental
-        /// normalisation into a delete-plus-insert table diff.
-        /// </summary>
-        internal static WmlDocument AcceptRevisionsForIrReader(WmlDocument document) =>
-            AcceptRevisionsCore(document, preservePreexistingCleanTableRuns: true);
-
-        private static WmlDocument AcceptRevisionsCore(
-            WmlDocument document,
-            bool preservePreexistingCleanTableRuns)
+        public static WmlDocument AcceptRevisions(WmlDocument document)
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(document))
             {
                 using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
                 {
-                    AcceptRevisions(doc, preservePreexistingCleanTableRuns);
+                    AcceptRevisions(doc);
                 }
                 return streamDoc.GetModifiedWmlDocument();
             }
         }
 
-        public static void AcceptRevisions(WordprocessingDocument doc) =>
-            AcceptRevisions(doc, preservePreexistingCleanTableRuns: false);
-
-        private static void AcceptRevisions(WordprocessingDocument doc, bool preservePreexistingCleanTableRuns)
+        public static void AcceptRevisions(WordprocessingDocument doc)
         {
             // Word's note-lifecycle rule, accept side (issue #631): a definition this accept both
             // orphaned and stripped of its blocks is a note the redline wholly deleted, and it goes
@@ -1483,15 +1323,15 @@ namespace Docxodus
             // is documented once, on the rule's owner: Internal.NoteReferenceOps
             // .PruneNotesEmptiedByResolution.
             var citedBefore = Internal.NoteReferenceOps.ReferencedNoteIds(doc.MainDocumentPart);
-            AcceptRevisionsForPart(doc.MainDocumentPart!, preservePreexistingCleanTableRuns);
+            AcceptRevisionsForPart(doc.MainDocumentPart!);
             foreach (var part in doc.MainDocumentPart!.HeaderParts)
-                AcceptRevisionsForPart(part, preservePreexistingCleanTableRuns);
+                AcceptRevisionsForPart(part);
             foreach (var part in doc.MainDocumentPart.FooterParts)
-                AcceptRevisionsForPart(part, preservePreexistingCleanTableRuns);
+                AcceptRevisionsForPart(part);
             if (doc.MainDocumentPart.EndnotesPart != null)
-                AcceptRevisionsForPart(doc.MainDocumentPart.EndnotesPart, preservePreexistingCleanTableRuns);
+                AcceptRevisionsForPart(doc.MainDocumentPart.EndnotesPart);
             if (doc.MainDocumentPart.FootnotesPart != null)
-                AcceptRevisionsForPart(doc.MainDocumentPart.FootnotesPart, preservePreexistingCleanTableRuns);
+                AcceptRevisionsForPart(doc.MainDocumentPart.FootnotesPart);
             if (doc.MainDocumentPart.StyleDefinitionsPart != null)
                 AcceptRevisionsForStylesDefinitionPart(doc.MainDocumentPart.StyleDefinitionsPart);
 
@@ -1520,9 +1360,11 @@ namespace Docxodus
             return node;
         }
 
+        // The optional argument remains for source compatibility; all accept paths now preserve
+        // table boundaries that existed before revision resolution.
         public static void AcceptRevisionsForPart(OpenXmlPart part, bool preservePreexistingCleanTableRuns = false)
         {
-            var accepted = AcceptRevisionsForRoot(part.GetXDocument().Root!, preservePreexistingCleanTableRuns);
+            var accepted = AcceptRevisionsForRoot(part.GetXDocument().Root!);
             part.PutXDocument(new XDocument(accepted));
         }
 
@@ -1540,17 +1382,15 @@ namespace Docxodus
                 return false;
             var root = new XElement(W.document, new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
                 new XElement(W.body, new XElement(table)));
-            return !AcceptRevisionsForRoot(root, preservePreexistingCleanTableRuns: false)
+            return !AcceptRevisionsForRoot(root)
                 .Elements(W.body).Elements(W.tbl).Any();
         }
 
-        private static XElement AcceptRevisionsForRoot(XElement documentElement, bool preservePreexistingCleanTableRuns)
+        private static XElement AcceptRevisionsForRoot(XElement documentElement)
         {
-            var cleanTableRuns = preservePreexistingCleanTableRuns
-                ? CapturePreexistingCleanTableRuns(documentElement)
-                : null;
             documentElement = (XElement)RemoveRsidTransform(documentElement)!;
             MarkTablesWithRows(documentElement);
+            MarkTablesThatFollowATable(documentElement);
             documentElement = (XElement)FixUpDeletedOrInsertedFieldCodesTransform(documentElement)!;
             var containsMoveFromMoveTo = documentElement.Descendants(W.moveFrom).Any();
             documentElement = (XElement)AcceptMoveFromMoveToTransform(documentElement)!;
@@ -1565,10 +1405,8 @@ namespace Docxodus
             documentElement = (XElement)AcceptDeletedCellsTransform(documentElement)!;
             RemoveTablesThatLostEveryRow(documentElement);
             documentElement = (XElement)MergeAdjacentTablesTransform(documentElement)!;
-            if (cleanTableRuns is { Count: > 0 })
-                RestorePreexistingCleanTableRuns(documentElement, cleanTableRuns);
             documentElement = (XElement)AddEmptyParagraphToAnyEmptyCells(documentElement)!;
-            documentElement.Descendants().Attributes().Where(a => a.Name == PT.UniqueId || a.Name == PT.RunIds || a.Name == PT.HadRows).Remove();
+            documentElement.Descendants().Attributes().Where(a => a.Name == PT.UniqueId || a.Name == PT.RunIds || a.Name == PT.HadRows || a.Name == PT.FollowsTable || a.Name == PT.TableBoundaryId).Remove();
             documentElement.Descendants(W.numPr).Where(np => !np.HasElements).Remove();
             RemoveEmptyParagraphMarkShells(documentElement);
             return documentElement;
@@ -1582,6 +1420,27 @@ namespace Docxodus
             foreach (var table in documentElement.Descendants(W.tbl))
                 if (WordprocessingMLUtil.TableRows(table).Any())
                     table.SetAttributeValue(PT.HadRows, "1");
+        }
+
+        /// <summary>Mark every table whose nearest preceding block in the input is another table, so
+        /// <see cref="MergeAdjacentTablesTransform"/> joins only tables that resolving revisions brought
+        /// together. Leaves the accept discards (bookmark, comment-range and permission markers) do not
+        /// separate tables; anything that holds a paragraph or a table does. Record the predecessor's
+        /// identity, since deleting a whole intervening table creates a new boundary too. The transforms
+        /// copy attributes, so these identities survive them.</summary>
+        private static void MarkTablesThatFollowATable(XElement documentElement)
+        {
+            var tables = documentElement.Descendants(W.tbl).ToList();
+            for (var i = 0; i < tables.Count; i++)
+                tables[i].SetAttributeValue(PT.TableBoundaryId, i);
+            foreach (var table in tables)
+            {
+                var before = table.ElementsBeforeSelf().Reverse().FirstOrDefault(e =>
+                    e.Name == W.p || e.Name == W.tbl || e.Name == W.sectPr ||
+                    e.Descendants().Any(d => d.Name == W.p || d.Name == W.tbl));
+                if (before?.Name == W.tbl)
+                    table.SetAttributeValue(PT.FollowsTable, before.Attribute(PT.TableBoundaryId)!.Value);
+            }
         }
 
         /// <summary>
@@ -2338,6 +2197,8 @@ namespace Docxodus
             public static XName UniqueId = pt + "UniqueId";
             public static XName RunIds = pt + "RunIds";
             public static XName HadRows = pt + "HadRows";
+            public static XName FollowsTable = pt + "FollowsTable";
+            public static XName TableBoundaryId = pt + "TableBoundaryId";
         }
 
         private static void AnnotateRunElementsWithId(XElement element)

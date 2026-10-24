@@ -54,6 +54,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Accepting or rejecting revisions preserves tables that were already adjacent in the input (#1341).
+  Final and original PDF exports retain each table's own borders, width and cell margins. Tables
+  brought together by removing a tracked separator still join; the comparison reader uses the same
+  boundary-preserving path instead of reconstructing table boundaries afterward.
+
+
 - Text-span, search-range and match replacement keep tabs and breaks between text nodes in the
   same run (#1337). Untracked edits change only the selected text nodes; tracked edits keep the
   intervening non-text content outside deletion envelopes. Accepting and rejecting therefore retain
