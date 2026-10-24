@@ -1393,8 +1393,8 @@ namespace Docxodus
             MarkTablesThatFollowATable(documentElement);
             documentElement = (XElement)FixUpDeletedOrInsertedFieldCodesTransform(documentElement)!;
             var containsMoveFromMoveTo = documentElement.Descendants(W.moveFrom).Any();
-            documentElement = (XElement)AcceptMoveFromMoveToTransform(documentElement)!;
             documentElement = AcceptMoveFromRanges(documentElement);
+            documentElement = (XElement)AcceptMoveFromMoveToTransform(documentElement)!;
             // AcceptParagraphEndTagsInMoveFromTransform needs rewritten similar to AcceptDeletedAndMoveFromParagraphMarks
             documentElement = (XElement)AcceptParagraphEndTagsInMoveFromTransform(documentElement)!;
             documentElement = AcceptDeletedAndMovedFromContentControls(documentElement);
@@ -1751,10 +1751,57 @@ namespace Docxodus
             var moveFromElementsToDelete = startElementTagsInMoveFromRange
                 .Intersect(endElementTagsInMoveFromRange)
                 .ToArray();
+            if (moveFromElementsToDelete.Length > 0)
+            {
+                var keep = ContentOutsideTheMove(document);
+                moveFromElementsToDelete = moveFromElementsToDelete.Where(e => !keep.Contains(e)).ToArray();
+            }
             if (moveFromElementsToDelete.Count() > 0)
                 return (XElement)AcceptMoveFromRangesTransform(
                     document, moveFromElementsToDelete)!;
             return document;
+        }
+
+        /// <summary>
+        /// A named range links moved content; it does not make every child part of the move.
+        /// Inspect wrappers before removing them, so ordinary empty controls can be distinguished
+        /// from controls the move empties. Preserve surviving content and its required properties.
+        /// Later passes still resolve deletion and paragraph-mark revisions normally.
+        /// </summary>
+        private static HashSet<XElement> ContentOutsideTheMove(XElement document)
+        {
+            static bool IsPropertyChild(XElement element) =>
+                element.Name.LocalName.EndsWith("Pr", StringComparison.Ordinal) || element.Name == W.tblGrid;
+
+            // A moved-away comment's reference belongs to its removed run wrapper. Its range
+            // markers alone must not keep that copy anchored after the move resolves.
+            var liveCommentIds = document.Descendants(W.commentReference)
+                .Where(reference => !reference.Ancestors().Any(ancestor =>
+                    ancestor.Name == W.del || ancestor.Name == W.moveFrom))
+                .Select(reference => (string?)reference.Attribute(W.id))
+                .ToHashSet(StringComparer.Ordinal);
+
+            bool IsLiveContent(XElement element) =>
+                element.Name == W.r || element.Name == M.r || element.Name == W.altChunk ||
+                ((element.Name == W.sdt || element.Name == W.fldSimple || element.Name == W.customXml)
+                    && !element.Descendants().Any(child => child.Name == W.moveFrom || child.Name == W.del)) ||
+                element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd ||
+                element.Name == W.permStart || element.Name == W.permEnd ||
+                ((element.Name == W.commentRangeStart || element.Name == W.commentRangeEnd)
+                    && liveCommentIds.Contains((string?)element.Attribute(W.id)));
+
+            var liveContent = document.Descendants()
+                .Where(element => IsLiveContent(element) && !element.Ancestors().Any(ancestor =>
+                    ancestor.Name == W.del || ancestor.Name == W.moveFrom))
+                .ToList();
+            var holders = new HashSet<XElement>(liveContent.SelectMany(element => element.AncestorsAndSelf()));
+            var keep = new HashSet<XElement>(holders);
+            foreach (var content in liveContent)
+                keep.UnionWith(content.Descendants());
+            foreach (var holder in holders)
+                foreach (var property in holder.Elements().Where(IsPropertyChild))
+                    keep.UnionWith(property.DescendantsAndSelf());
+            return keep;
         }
 
         private enum MoveFromCollectionType

@@ -62,6 +62,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Accepting or rejecting a native move preserves untracked text, bookmarks, empty fields and
+  content controls inside its range (#1340). Sessions resolve multiple disjoint source or
+  destination ranges with one move name as one revision, including ranges spanning paragraphs;
+  reused IDs, overlapping ranges and inconsistent ownership remain refused.
+
 - Floating DrawingML shapes and groups retain their SVG, anchor geometry, text clearance and
   paint order in HTML, paginated views and PDF export (#1346). Top/bottom wrapping reserves space
   independently of the drawing, and no-wrap objects retain their paragraph-mark line. Background

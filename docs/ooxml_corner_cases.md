@@ -4280,7 +4280,7 @@ whether `w:name` changes.
 
 ### Plain text inside a move-destination range (issue #1340)
 
-A run that sits between `w:moveToRangeStart` and `w:moveToRangeEnd` but outside any `w:moveTo` is read two ways in Docxodus:
+A run between `w:moveToRangeStart` and `w:moveToRangeEnd`, outside any `w:moveTo`, is ordinary content. Word for the web preserves it when rejecting the move:
 
 ```xml
 <w:moveToRangeStart w:id="3" w:name="move1" w:author="Alex" w:date="2026-05-01T09:00:00Z"/>
@@ -4291,12 +4291,40 @@ A run that sits between `w:moveToRangeStart` and `w:moveToRangeEnd` but outside 
 
 | Reader | Reject all |
 |---|---|
-| Word | unverified |
-| LibreOffice | unverified |
-| `RevisionProcessor.RejectRevisions` | drops `XY` (the whole range is the moved content) |
-| `DocxSession.RejectAllRevisions` | keeps `XY` (only `w:moveTo` content is moved) |
+| Word for the web, captured 2026-10-24 | keeps `XY`; removes only the moved destination text |
+| LibreOffice | not adjudicated for these exact source inputs |
+| `RevisionProcessor.RejectRevisions` before #1340 | drops `XY` |
+| `RevisionProcessor.RejectRevisions` after #1340 | keeps `XY` |
+| `DocxSession.RejectAllRevisions` | keeps `XY` |
 
-Splitting the range in two around the text (two ranges with the same `w:name`) satisfies both resolvers' text, but the session's registry flags it as `ambiguous_move_topology` and refuses to resolve it. So the session avoids writing either shape within one paragraph: `ReplaceTextAtSpan` refuses text strictly inside a `w:moveTo`, as `SplitParagraph` does, and text typed at a move's edge goes past the range marker when that marker is in the same paragraph (`DocxSession.Text.cs`, `InsertTextAtBoundary` and `PastMoveRangeMarker`). A moved range that spans paragraphs is not covered yet: text typed at the end of the first moved paragraph, or the start of a later one, still lands inside the range (see #1340). Documents that already hold the first shape still resolve differently; see #1340.
+Word also accepts and rejects two disjoint destination ranges with the same `w:name`, including a
+range spanning paragraphs. The session now lists them as one supported move and resolves all its
+ranges together. Each range still needs its own paired `w:id`, coherent author/date ownership and
+ordered, disjoint source and destination content. Reused IDs, overlapping same-named ranges and
+crossed ranges remain refused. A named range links explicitly marked moved content; its position
+alone does not make ordinary content part of the move (ECMA-376 §17.13.5.24 and §17.13.5.28).
+
+The processor inspects live content before removing moved wrappers. Range cleanup preserves
+untracked runs and non-run content, including bookmarks, fields and originally empty content controls,
+with their containers and properties. Controls emptied by the move and comment ranges whose moved
+reference disappears do not preserve a second copy. Later passes still resolve deleted paragraph marks
+and deleted content controls. This applies to
+accepting source ranges and rejecting destination ranges.
+
+`MoveRangeWordOracleTests` pins six original literal-OOXML source documents in
+`TestFiles/RP/MoveRangeMembership/`: an unsplit control, plain text after and between moved wrappers,
+a split destination, plain text outside the range, and a cross-paragraph split. Their manifest records
+source hashes and native Word accept/reject DOCX, document XML and PDF hashes. All source packages
+validate with Open XML SDK 3.5.1 (`Microsoft365`). The 36 endpoint checks exercise the stateless
+processor, session bulk resolution and selective resolution against Word's actual paragraph lists;
+all resulting packages must validate and contain no move markers. Native Word output is retained
+unchanged in the evidence pack; some Word downloads contain unrelated settings-order findings, so
+those outputs are evidence rather than validator-clean fixture inputs. Word exposed no build number.
+
+Editing strictly inside a `w:moveTo` remains refused by `ReplaceTextAtSpan` and `SplitParagraph`:
+coordinating changes to both moved sides is a separate editing operation. Text inserted at a same-
+paragraph move edge still goes past its range marker. Existing ordinary content inside a range,
+including text at an edge in another paragraph, now survives resolution by both APIs.
 
 ---
 
