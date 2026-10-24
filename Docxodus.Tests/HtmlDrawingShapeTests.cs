@@ -424,6 +424,72 @@ public class HtmlDrawingShapeTests
             .Select(e => e.Description));
     }
 
+    private static string ParagraphShape(string wrap = "<wp:wrapTopAndBottom/>") =>
+        FloatingDrawing(ShapeUri, Shape())
+            .Replace("<wp:positionH relativeFrom=\"page\">", "<wp:positionH relativeFrom=\"column\">")
+            .Replace("<wp:positionV relativeFrom=\"page\">", "<wp:positionV relativeFrom=\"paragraph\">")
+            .Replace("4572000", "0").Replace("<wp:wrapNone/>", wrap);
+
+    [Theory]
+    [InlineData(0, "72")]
+    [InlineData(24, "96")]
+    public void Overlapping_top_bottom_shapes_reserve_their_union(int secondOffset, string expectedHeight)
+    {
+        var second = ParagraphShape().Replace("id=\"7\"", "id=\"8\"")
+            .Replace("<wp:positionV relativeFrom=\"paragraph\"><wp:posOffset>0</wp:posOffset>",
+                $"<wp:positionV relativeFrom=\"paragraph\"><wp:posOffset>{secondOffset * 12700}</wp:posOffset>");
+        var input = Docx(ParagraphShape() + second);
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
+        var clearance = Assert.Single(paragraph.Descendants().Where(e => e.Attribute("data-docx-shape-clearance") != null));
+        Assert.Contains("height: " + expectedHeight + "pt", (string?)clearance.Attribute("style"));
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-content-type") != null);
+    }
+
+    [Fact]
+    public void Interior_wrapping_is_reported_while_the_shape_keeps_its_anchored_geometry()
+    {
+        var input = Docx(ParagraphShape("<wp:wrapSquare wrapText=\"bothSides\"/>")
+            .Replace("<wp:positionH relativeFrom=\"column\"><wp:posOffset>0</wp:posOffset>",
+                "<wp:positionH relativeFrom=\"column\"><wp:posOffset>1270000</wp:posOffset>"));
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
+        var anchor = OnlySvg(paragraph).Parent!;
+        Assert.Equal("Other", (string?)anchor.Attribute("data-content-type"));
+        Assert.Equal("100", (string?)anchor.Attribute("data-docx-anchor-h-offset"));
+    }
+
+    [Fact]
+    public void A_floating_group_with_a_text_box_reports_its_undrawn_members()
+    {
+        var textBox = Shape().Replace("<wps:bodyPr/>",
+            "<wps:txbx><w:txbxContent><w:p><w:r><w:t>Group caption</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/>");
+        var input = Docx(FloatingDrawing(GroupUri, Group(Shape() + textBox)));
+        AssertSchemaValid(input);
+        var html = HtmlConversionOps.ConvertToHtml(input, new HtmlConversionOptions
+        {
+            PaginationMode = (int)PaginationMode.Paginated,
+            RenderUnsupportedContentPlaceholders = true,
+        });
+        var document = XElement.Parse(html);
+        Assert.Contains("Group caption", document.Value);
+        Assert.Contains(document.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+    }
+
+    [Fact]
+    public void A_Vml_fallback_does_not_invent_ink_from_disabled_fill_or_outline()
+    {
+        var input = Docx("<w:r><w:pict><v:oval xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+            "style=\"width:144pt;height:72pt\" fillcolor=\"#19647E\" strokecolor=\"#FF9900\" filled=\"f\" stroked=\"f\"/></w:pict></w:r>");
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, placeholders: true);
+        var placeholder = Assert.Single(paragraph.Descendants().Where(e => e.Attribute("data-content-type") != null));
+        Assert.Contains("width: 144pt", (string?)placeholder.Attribute("style"));
+        Assert.Contains("height: 72pt", (string?)placeholder.Attribute("style"));
+        Assert.DoesNotContain("#19647E", placeholder.ToString());
+        Assert.DoesNotContain("#FF9900", placeholder.ToString());
+    }
+
     [Theory]
     [InlineData(PaginationMode.Paginated)]
     [InlineData(PaginationMode.None)]

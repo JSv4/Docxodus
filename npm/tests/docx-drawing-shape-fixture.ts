@@ -81,13 +81,13 @@ export function inlineDrawingDocx(uri: string, data: string, deleted = false, pa
 }
 
 export function drawingDocx(drawing: string, deleted = false, parts: ExtraPart[] = [],
-  after = 'End of inspection'): Uint8Array {
+  after = 'End of inspection', before = ['Optical panel']): Uint8Array {
   const payload = deleted
     ? `<w:del w:id="31" w:author="Review Example" w:date="2026-09-12T10:00:00Z">${drawing}</w:del>`
     : drawing;
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="${W}" xmlns:r="${R}" xmlns:wp="${WP}" xmlns:a="${A}" xmlns:wps="${WPS}" xmlns:wpg="${WPG}"><w:body>
-  <w:p><w:r><w:t xml:space="preserve">Optical panel</w:t></w:r></w:p>
+  ${before.map(text => `<w:p><w:r><w:t xml:space="preserve">${text}</w:t></w:r></w:p>`).join('\n  ')}
   <w:p>${payload}</w:p>
   <w:p><w:r><w:t xml:space="preserve">${after}</w:t></w:r></w:p>
   <w:sectPr><w:pgSz w:w="12240" w:h="15840"/>

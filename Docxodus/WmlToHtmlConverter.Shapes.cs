@@ -100,11 +100,133 @@ namespace Docxodus
         private static XElement PlaceDrawingShape(XElement wrapper, XElement container,
             WmlToHtmlConverterSettings? settings)
         {
-            if (container.Name == WP.anchor)
-                AddDrawingFrameStyle(wrapper.Annotation<Dictionary<string, string>>()!, wrapper, container,
-                    settings ?? new WmlToHtmlConverterSettings(), autoFit: false);
+            if (container.Name != WP.anchor) return wrapper;
+            var options = settings ?? new WmlToHtmlConverterSettings();
+            var style = wrapper.Annotation<Dictionary<string, string>>()!;
+            AddDrawingFrameStyle(style, wrapper, container, options, autoFit: false);
+            wrapper.SetAttributeValue("data-docx-shape-anchor", "true");
+            style["position"] = "absolute";
+
+            var wrap = container.Elements().FirstOrDefault(e => e.Name == WP.wrapTopAndBottom ||
+                e.Name == WP.wrapSquare || e.Name == WP.wrapTight || e.Name == WP.wrapThrough);
+            var kind = wrap?.Name.LocalName ?? "wrapNone";
+            wrapper.SetAttributeValue("data-docx-anchor-wrap", kind);
+            var horizontal = container.Element(WP.positionH);
+            var vertical = container.Element(WP.positionV);
+            var paragraphRelative = (string?)vertical?.Attribute(NoNamespace.relativeFrom) == "paragraph" &&
+                vertical.Element(WP.posOffset) != null;
+
+            if (wrap != null && wrap.Name != WP.wrapTopAndBottom)
+            {
+                // A column-edge exclusion has an exact CSS float equivalent. An interior
+                // object with text on both sides cannot be represented by a single float.
+                var edge = (string?)horizontal?.Attribute(NoNamespace.relativeFrom) == "column" &&
+                    (horizontal.Element(WP.align)?.Value is "left" or "right" ||
+                        (long?)horizontal.Element(WP.posOffset) == 0);
+                if (edge && paragraphRelative && (long?)vertical!.Element(WP.posOffset) == 0)
+                {
+                    var exclusion = ApplyAnchorTextWrap(wrapper, container)!;
+                    var exclusionStyle = exclusion.Annotation<Dictionary<string, string>>()!;
+                    AddEmuDimensions(exclusionStyle, (long?)container.Element(WP.extent)?.Attribute(NoNamespace.cx),
+                        (long?)container.Element(WP.extent)?.Attribute(NoNamespace.cy));
+                    exclusionStyle["position"] = "relative";
+                    exclusion.SetAttributeValue("data-docx-shape-exclusion", kind);
+                    // The float owns the edge position in continuous HTML. Paginated output
+                    // resolves the original anchor independently before promoting the SVG.
+                    style["left"] = "0pt";
+                    style["top"] = "0pt";
+                    return exclusion;
+                }
+                ReportShapeLayoutLoss(wrapper, options, "This drawing's interior text wrapping is approximated by top/bottom clearance");
+                wrapper.SetAttributeValue("data-docx-anchor-wrap", "wrapTopAndBottom");
+            }
+            if (wrap != null && !paragraphRelative)
+                ReportShapeLayoutLoss(wrapper, options, "This drawing's page-relative text clearance cannot be resolved in continuous flow");
             return wrapper;
         }
+
+        private static void ReportShapeLayoutLoss(XElement anchor, WmlToHtmlConverterSettings settings, string message)
+        {
+            anchor.SetAttributeValue("data-docx-shape", "partial");
+            if (settings is { RenderUnsupportedContentPlaceholders: true, IncludeUnsupportedContentMetadata: true })
+            {
+                anchor.SetAttributeValue("data-content-type", nameof(UnsupportedContentType.Other));
+                anchor.SetAttributeValue("data-element-name", "anchor");
+                anchor.SetAttributeValue("title", message);
+            }
+        }
+
+        /// <summary>
+        /// A floating drawing does not own a text line. Keep its anchor paragraph's mark, and
+        /// represent text clearance separately from the SVG. Overlapping top/bottom drawings
+        /// reserve their union's bottom, rather than summing their heights in source order.
+        /// </summary>
+        private static void FinalizeShapeAnchors(XElement html, WmlToHtmlConverterSettings settings)
+        {
+            var anchors = html.Descendants().Where(e => (string?)e.Attribute("data-docx-shape-anchor") == "true").ToList();
+            var clearances = new Dictionary<XElement, decimal>();
+            foreach (var anchor in anchors)
+            {
+                var paragraph = anchor.Ancestors(Xhtml.p).FirstOrDefault();
+                if (paragraph == null) continue;
+                var style = anchor.Annotation<Dictionary<string, string>>()!;
+                var inFloat = anchor.Parent?.Attribute("data-docx-shape-exclusion") != null;
+                if (settings.RenderPagination != PaginationMode.Paginated && !inFloat)
+                {
+                    var paragraphStyle = paragraph.Annotation<Dictionary<string, string>>();
+                    if (paragraphStyle == null)
+                    {
+                        paragraphStyle = new Dictionary<string, string>();
+                        paragraph.AddAnnotation(paragraphStyle);
+                    }
+                    paragraphStyle["position"] = "relative";
+                    var horizontal = (string?)anchor.Attribute("data-docx-anchor-h-relative");
+                    var vertical = (string?)anchor.Attribute("data-docx-anchor-v-relative");
+                    if (horizontal != "column" || vertical != "paragraph")
+                        ReportShapeLayoutLoss(anchor, settings, "This drawing's page or margin position is approximated relative to its paragraph in continuous HTML");
+                    style["left"] = ShapeAnchorNumber(anchor, "h-offset").ToString(CultureInfo.InvariantCulture) + "pt";
+                    style["top"] = ShapeAnchorNumber(anchor, "v-offset").ToString(CultureInfo.InvariantCulture) + "pt";
+                    var align = (string?)anchor.Attribute("data-docx-anchor-h-align");
+                    if (align == "center") { style["left"] = "50%"; style["transform"] = "translateX(-50%)"; }
+                    else if (align == "right") { style.Remove("left"); style["right"] = "0pt"; }
+                }
+                if ((string?)anchor.Attribute("data-docx-anchor-wrap") == "wrapTopAndBottom")
+                {
+                    var bottom = ShapeAnchorNumber(anchor, "extent-height") +
+                        ShapeAnchorNumber(anchor, "wrap-bottom") +
+                        ((string?)anchor.Attribute("data-docx-anchor-v-relative") == "paragraph"
+                            ? ShapeAnchorNumber(anchor, "v-offset") : 0);
+                    clearances[paragraph] = Math.Max(clearances.GetValueOrDefault(paragraph), bottom);
+                }
+            }
+            foreach (var pair in clearances)
+            {
+                var spacer = new XElement(Xhtml.span, new XAttribute("data-docx-shape-clearance", "true"),
+                    new XAttribute("aria-hidden", "true"), new XAttribute("data-page-map-exclude", "true"));
+                spacer.AddAnnotation(new Dictionary<string, string> { { "float", "left" }, { "width", "100%" },
+                    { "height", Math.Max(0, pair.Value).ToString(CultureInfo.InvariantCulture) + "pt" } });
+                pair.Key.AddFirst(spacer);
+            }
+            if (settings.RenderPagination != PaginationMode.Paginated && anchors.Count > 0)
+            {
+                var body = html.Descendants(Xhtml.body).FirstOrDefault();
+                if (body != null)
+                {
+                    var bodyStyle = body.Annotation<Dictionary<string, string>>();
+                    if (bodyStyle == null) { bodyStyle = new Dictionary<string, string>(); body.AddAnnotation(bodyStyle); }
+                    bodyStyle["isolation"] = "isolate";
+                }
+                var ordered = anchors.OrderBy(e => ShapeAnchorNumber(e, "order")).ToList();
+                for (var index = 0; index < ordered.Count; index++)
+                    ordered[index].Annotation<Dictionary<string, string>>()!["z-index"] =
+                        ((string?)ordered[index].Attribute("data-docx-anchor-behind") == "true"
+                            ? index - ordered.Count : index + 1).ToString(CultureInfo.InvariantCulture);
+            }
+        }
+
+        private static decimal ShapeAnchorNumber(XElement anchor, string suffix) =>
+            decimal.TryParse((string?)anchor.Attribute("data-docx-anchor-" + suffix), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out var number) ? number : 0;
 
         private static XElement? ProcessVmlShapeFallback(XElement element, WmlToHtmlConverterSettings? settings)
         {
@@ -119,7 +241,8 @@ namespace Docxodus
                 ?? new XElement(Xhtml.span, new XAttribute("aria-hidden", "true"));
             placeholder.SetAttributeValue("data-docx-shape", "unrendered");
             var style = new Dictionary<string, string> { { "display", "inline-block" }, { "box-sizing", "border-box" } };
-            AddVmlTextBoxStyle(style, shape);
+            // Keeping an undrawn oval or line's extent must not invent a filled rectangle.
+            AddVmlDimensions(style, shape);
             placeholder.AddAnnotation(style);
             return placeholder;
         }

@@ -1255,6 +1255,7 @@ namespace Docxodus
             if (EmitsSemanticLists(htmlConverterSettings))
                 GroupSemanticLists(xhtml);
 
+            FinalizeShapeAnchors(xhtml, htmlConverterSettings);
             ReifyStylesAndClasses(htmlConverterSettings, xhtml, wordDoc);
 
             // Remove insignificant whitespace between inline elements in paragraphs.
@@ -11860,6 +11861,9 @@ namespace Docxodus
             XElement drawing, XElement drawingContainer, WmlToHtmlConverterSettings settings, bool autoFit)
         {
             AddDrawingFrameStyle(style, wrapper, drawingContainer, settings, autoFit);
+            if (drawingContainer.Name == WP.anchor &&
+                drawing.Descendants().Any(e => e.Name == WpgGroup || e.Name == WpcCanvas))
+                ReportShapeLayoutLoss(wrapper, settings, "Non-text members of this drawing group are not rendered");
 
             var shapeProperties = drawing.Descendants(WPS.spPr).FirstOrDefault();
             if (shapeProperties != null)
@@ -11951,6 +11955,8 @@ namespace Docxodus
             long? extentCx, long? extentCy, bool autoFit)
         {
             wrapper.Add(new XAttribute("data-docx-drawing-anchor", "true"));
+            wrapper.SetAttributeValue("data-docx-anchor-behind", (bool?)anchor.Attribute("behindDoc") == true ? "true" : "false");
+            wrapper.SetAttributeValue("data-docx-anchor-order", (uint?)anchor.Attribute("relativeHeight") ?? 0);
             AddEmuDataAttribute(wrapper, "data-docx-anchor-extent-width", extentCx);
             AddEmuDataAttribute(wrapper, "data-docx-anchor-extent-height", extentCy);
 
@@ -12024,6 +12030,21 @@ namespace Docxodus
 
         private static void AddVmlTextBoxStyle(Dictionary<string, string> style, XElement shape)
         {
+            AddVmlDimensions(style, shape);
+
+            var fill = NormalizeVmlCssColor((string?)shape.Attribute("fillcolor"));
+            if (fill != null)
+                style.AddIfMissing("background-color", fill);
+            var stroke = NormalizeVmlCssColor((string?)shape.Attribute("strokecolor"));
+            if (stroke != null)
+                style.AddIfMissing("border", "1pt solid " + stroke);
+
+            if (HasVmlTextBoxAutoFit(shape))
+                style.Remove("height");
+        }
+
+        private static void AddVmlDimensions(Dictionary<string, string> style, XElement shape)
+        {
             var vmlStyle = (string?)shape.Attribute("style");
             if (!string.IsNullOrEmpty(vmlStyle))
             {
@@ -12036,15 +12057,6 @@ namespace Docxodus
                     style.AddIfMissing("height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.##}pt", height));
             }
 
-            var fill = NormalizeVmlCssColor((string?)shape.Attribute("fillcolor"));
-            if (fill != null)
-                style.AddIfMissing("background-color", fill);
-            var stroke = NormalizeVmlCssColor((string?)shape.Attribute("strokecolor"));
-            if (stroke != null)
-                style.AddIfMissing("border", "1pt solid " + stroke);
-
-            if (HasVmlTextBoxAutoFit(shape))
-                style.Remove("height");
         }
 
         private static bool HasAutoFitTextBox(XElement element) =>

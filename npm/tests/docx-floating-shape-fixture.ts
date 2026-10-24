@@ -13,6 +13,8 @@ export interface FloatingShapeOptions {
   x?: number;
   y?: number;
   distance?: number;
+  bottomDistance?: number;
+  before?: string[];
   after?: string;
   layers?: { order: number; fill: string; behind?: boolean }[];
 }
@@ -38,7 +40,7 @@ export function floatingShapeDocx(options: FloatingShapeOptions = {}): Uint8Arra
     const wrap=kind==='none'?'<wp:wrapNone/>':kind==='topAndBottom'?'<wp:wrapTopAndBottom/>':kind==='square'
       ? '<wp:wrapSquare wrapText="bothSides"/>' : `<wp:wrap${kind==='tight'?'Tight':'Through'} wrapText="bothSides">${polygon}</wp:wrap${kind==='tight'?'Tight':'Through'}>`;
     return `<w:r><w:drawing xmlns:wp="${WP}" xmlns:a="${A}" xmlns:wps="${WPS}" xmlns:wpg="${WPG}">`
-      + `<wp:anchor distT="0" distR="${emu(options.distance??0)}" distB="0" distL="0" simplePos="0" relativeHeight="${order}" behindDoc="${behind?'1':'0'}" locked="0" layoutInCell="1" allowOverlap="1">`
+      + `<wp:anchor distT="0" distR="${emu(options.distance??0)}" distB="${emu(options.bottomDistance??0)}" distL="0" simplePos="0" relativeHeight="${order}" behindDoc="${behind?'1':'0'}" locked="0" layoutInCell="1" allowOverlap="1">`
       + '<wp:simplePos x="0" y="0"/>'
       + `<wp:positionH relativeFrom="${options.horizontal??'column'}"><wp:posOffset>${emu(options.x??0)}</wp:posOffset></wp:positionH>`
       + `<wp:positionV relativeFrom="${options.vertical??'paragraph'}"><wp:posOffset>${emu(options.y??0)}</wp:posOffset></wp:positionV>`
@@ -51,5 +53,5 @@ export function floatingShapeDocx(options: FloatingShapeOptions = {}): Uint8Arra
     {id:'rStyles',type:R+'/styles',name:'styles.xml',contentType:'application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml',
       body:`<w:styles xmlns:w="${W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="atLeast"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>`},
     {id:'rSettings',type:R+'/settings',name:'settings.xml',contentType:'application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml',body:`<w:settings xmlns:w="${W}"/>`},
-  ],options.after);
+  ],options.after,options.before);
 }

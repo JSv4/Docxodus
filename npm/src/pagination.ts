@@ -5218,6 +5218,16 @@ export class PaginationEngine {
       anchor.style.top = `${top}pt`;
       anchor.style.margin = '0';
     }
+
+    // relativeHeight is an unsigned 32-bit value; using it directly as a CSS z-index would
+    // clamp distinct values above 2^31. Dense ranks also keep every behindDoc object below
+    // the text, independently of its relativeHeight and XML order.
+    const paintOrder = [...anchors].sort((a, b) =>
+      (this.anchorNumber(a, 'order') ?? 0) - (this.anchorNumber(b, 'order') ?? 0));
+    paintOrder.forEach((anchor, index) => {
+      anchor.style.zIndex = String(anchor.dataset.docxAnchorBehind === 'true'
+        ? index - paintOrder.length : index + 1);
+    });
   }
 
   private anchorNumber(anchor: HTMLElement, suffix: string): number | undefined {
@@ -5584,9 +5594,10 @@ export class PaginationEngine {
 
     // Floating objects need the final page and anchor-paragraph boxes. Resolve them only after
     // append, when getBoundingClientRect() is meaningful, and lift them out of content clipping.
-    const textFrames = this.positionTextFrames(pageBox, dims, pageNumber);
-    this.positionDrawingAnchors(pageBox, contentArea, dims, pageNumber);
-    for (const frame of textFrames) this.positionDrawingAnchors(pageBox, frame, dims, pageNumber);
+    this.positionTextFrames(pageBox, dims, pageNumber);
+    // One page-wide pass includes running stories and compares all drawings in the same
+    // stacking order, including those nested in a promoted paragraph frame.
+    this.positionDrawingAnchors(pageBox, pageBox, dims, pageNumber);
 
     // Body and notes must occupy DISJOINT bands. The note block is absolutely positioned against
     // the page bottom and grows upward, while the content area spans the whole text height — so
