@@ -240,7 +240,8 @@ namespace Docxodus
                 : CreateUnsupportedContentPlaceholder(settings, shape, UnsupportedContentType.Other, "[SHAPE]"))
                 ?? new XElement(Xhtml.span, new XAttribute("aria-hidden", "true"));
             placeholder.SetAttributeValue("data-docx-shape", "unrendered");
-            var style = new Dictionary<string, string> { { "display", "inline-block" }, { "box-sizing", "border-box" } };
+            var style = new Dictionary<string, string> { { "display", "inline-block" },
+                { "box-sizing", "border-box" }, { "font-family", "inherit" } };
             // Keeping an undrawn oval or line's extent must not invent a filled rectangle.
             AddVmlDimensions(style, shape);
             placeholder.AddAnnotation(style);
@@ -284,6 +285,9 @@ namespace Docxodus
             if (placeholder != null)
             {
                 placeholder.Add(new XAttribute("data-docx-shape", "unrendered"));
+                // A drawing label is UI, not a new document font. Introducing generic monospace
+                // would make strict-font export fail before its content policy can report the loss.
+                style["font-family"] = "inherit";
                 style["box-sizing"] = "border-box";
                 style["overflow"] = "hidden";
                 placeholder.AddAnnotation(style);

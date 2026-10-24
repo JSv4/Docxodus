@@ -61,10 +61,16 @@ A source's fragment is where it renders, measured by `measureRenderedSource` in
 and the standalone export's offline re-verification all share. Normally that is the element's own
 box, clipped by the page and by every overflow-clipping ancestor. A paragraph whose only content is
 a floating text box or shape is different: the paginator promotes the drawing out of the text column
-into the page box (recording its host in `data-docx-anchor-host`), leaving the paragraph with a
-zero-height line. Such a paragraph measures as the union of what it renders — its own descendants
+into the page box (recording its host in `data-docx-anchor-host`), retaining the paragraph-mark line
+independently of the drawing's extent. Such a paragraph measures as the union of what it renders — its own descendants
 and the drawings promoted out of it, each clipped along its own ancestor chain — so it is not
 reported as missing (issue #849).
+
+Floating shape clearance is separate from the promoted ink: top/bottom exclusions stay in the text
+flow while the SVG moves to its page position. The page uses `isolation: isolate` so background
+drawings remain above its paper when standalone export removes `contain` and `will-change`.
+PageMap geometry alone cannot prove that a drawing is painted above an opaque background; the
+floating-shape export regressions also inspect PDF paint order (#1346).
 
 Read-only `paginateHtml()` defaults to a scrollable comment panel outside each page. The source
 comment subtree and its outside presentation, like the `"balloons"` placement's markup area, balloons

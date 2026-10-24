@@ -4370,3 +4370,37 @@ spacer without accounting for the deleted text. The label wrapped back to the le
 content now reuses the shared browser-aligned tab renderer, measuring visible deleted text and
 skipping hidden deletion/move-source content. Guards keep field boundaries and revision ownership.
 This implements the reported equivalence; no new Word capture is claimed.
+
+## Floating shape clearance and stacking (#1346)
+
+A 144 × 72pt `wps:wsp` rectangle, or the same rectangle inside `wpg:wgp`, can be
+placed between two paragraphs with `wp:anchor`, column-relative horizontal offset 0,
+paragraph-relative vertical offset 0, and `wp:wrapTopAndBottom`. The drawing is outside
+its paragraph's text line. Dropping its SVG also drops its wrapping exclusion; treating
+it as an inline SVG makes `wrapNone` consume height. The complete valid packages are
+constructed by [the floating-shape fixture](../npm/tests/docx-floating-shape-fixture.ts).
+
+The converter now separates SVG ink from text clearance. Top/bottom drawings reserve
+the union of their bottom edges in the anchor paragraph. The paginator places the ink
+and assigns drawing layers on the physical page. An explicit page stacking context is
+necessary in standalone export: its cleanup removes `contain` and `will-change`, and
+without another context a negative `z-index` drawing paints below the opaque paper.
+The export regressions inspect PDF drawing/text operators as well as HTML geometry.
+
+The local comparison used LibreOffice 25.8.7.3 and source-bound Chromium PDF exports.
+Office Online was unavailable; these observations do not establish Word parity.
+
+| Input | Word | LibreOffice | Docxodus |
+| --- | --- | --- | --- |
+| Paragraph-relative rectangle/group, top/bottom wrapping | Not captured | Keeps ink and clearance | Keeps ink and clearance |
+| `behindDoc="1"`, no wrapping, with body text | Not captured | Ink behind text | Ink behind text and above paper |
+| Teal `relativeHeight="4294967295"` followed by orange `relativeHeight="2147483648"` | Not captured | Orange above teal | Teal above orange |
+| Filled rectangle with a triangular tight/through wrap polygon | Not captured | Uses rectangular clearance | Uses the supplied contour |
+| Unsupported floating hexagon / plain VML rectangle | Not captured | Draws the geometry | Preserves space and reports an unsupported placeholder |
+
+The SDK exposes `relativeHeight` as an unsigned 32-bit value
+([Microsoft API reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.wordprocessing.anchor.relativeheight?view=openxml-3.0.1)).
+Docxodus maps numeric order to dense CSS ranks rather than clamping it to CSS's signed
+range. The high-value ordering and contour differences above need a Word capture
+before either renderer can be treated as a Word reference for those variants. The
+benchmark records them rather than changing the source values to match LibreOffice.

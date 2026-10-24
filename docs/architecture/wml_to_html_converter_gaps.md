@@ -355,9 +355,21 @@ A group that contains a text box is still rendered by the text-box path, unchang
 group becomes one box at the group's extent, styled with the first shape's fill and outline and holding
 only the text box's text; the group's other shapes are not drawn.
 
-Floating (`wp:anchor`) shapes are still not drawn (#1346): faithful output needs their stacking order
-(`behindDoc`) and text wrapping, and a decorative background rectangle drawn over the text would be
-worse than none.
+Floating (`wp:anchor`) shapes and groups reuse the SVG renderer (#1346). The paginator resolves their
+stored anchor geometry and promotes them into the page. `behindDoc` separates background drawings
+from foreground drawings; `relativeHeight` orders each set independently of XML order. Dense CSS
+ranks preserve distinct unsigned values without overflowing CSS's signed `z-index`. Each page keeps
+an explicit stacking context when standalone export removes its performance-related containment.
+
+Drawing ink and text clearance are separate. Paragraph-relative top/bottom wrapping reserves the
+furthest bottom of overlapping drawings, including their vertical offset and bottom distance; no-wrap
+drawings keep only their anchor paragraph's normal line. Column-edge square, tight and through
+wrapping reuse the picture float/contour path. Continuous HTML positions these shapes relative to
+their paragraphs. Page/margin bases that continuous HTML cannot resolve, and interior wrapping that
+a single float cannot represent, are marked `Other` when unsupported-content metadata is enabled.
+A floating group handled by the text-box path reports its unrendered members too. Plain VML shapes
+without text or images keep their declared dimensions as unsupported placeholders instead of
+vanishing; their labels inherit the document font.
 
 ---
 
