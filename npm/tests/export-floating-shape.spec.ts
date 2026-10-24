@@ -92,13 +92,15 @@ test('relative size changes the PDF rectangle without scaling its physical outli
   const task=getDocument({data:new Uint8Array(result.pdf!),verbosity:0});
   try {
     const ops=await(await(await task.promise).getPage(1)).getOperatorList();
-    let sx=1,sy=1;const stack:[number,number][]=[];const widths:number[]=[];
+    let sx=1,sy=1,lineWidth=1;const stack:[number,number,number][]=[];const widths:number[]=[];
     ops.fnArray.forEach((op,i)=>{
       const a=ops.argsArray[i];
-      if(op===OPS.save) stack.push([sx,sy]);
-      else if(op===OPS.restore) [sx,sy]=stack.pop()!;
+      if(op===OPS.save) stack.push([sx,sy,lineWidth]);
+      else if(op===OPS.restore) [sx,sy,lineWidth]=stack.pop()!;
       else if(op===OPS.transform) {sx*=Math.hypot(a[0],a[1]);sy*=Math.hypot(a[2],a[3]);}
-      else if(op===OPS.setLineWidth) widths.push(a[0]*Math.sqrt(sx*sy));
+      else if(op===OPS.setLineWidth) lineWidth=a[0];
+      else if(op===OPS.setGState) {for(const [key,value] of a[0]) if(key==='LW') lineWidth=value;}
+      else if(op===OPS.constructPath && a[0]===OPS.stroke) widths.push(lineWidth*Math.sqrt(sx*sy));
     });
     expect(widths).toHaveLength(1);
     expect(widths[0]).toBeCloseTo(1.5,2);

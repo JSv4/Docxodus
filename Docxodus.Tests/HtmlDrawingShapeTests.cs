@@ -492,7 +492,7 @@ public class HtmlDrawingShapeTests
         var input = Docx("<w:r><w:pict><v:rect xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
             "style=\"width:144pt;height:72pt\" " + attributes + "/></w:pict></w:r>");
         AssertSchemaValid(input);
-        var paragraph = MiddleParagraph(input, placeholders: true);
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
         var rect = Assert.Single(Drawn(OnlySvg(paragraph), "rect"));
         Assert.Equal(fill, (string?)rect.Attribute("fill"));
         Assert.Equal(stroke, (string?)rect.Attribute("stroke"));

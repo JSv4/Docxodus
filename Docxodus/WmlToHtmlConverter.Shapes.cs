@@ -291,7 +291,7 @@ namespace Docxodus
         private static XElement? TryVmlRectangle(XElement shape)
         {
             if (shape.Name.LocalName != "rect" || shape.HasElements || shape.Attributes().Any(a =>
-                !a.IsNamespaceDeclaration && !(a.Name.Namespace == XNamespace.None && (a.Name.LocalName is
+                !a.IsNamespaceDeclaration && a.Name.Namespace != PtOpenXml.pt && !(a.Name.Namespace == XNamespace.None && (a.Name.LocalName is
                     "style" or "id" or "title" or "alt" or "fillcolor" or "filled" or "strokecolor" or "stroked" or "strokeweight") ||
                     a.Name.NamespaceName == "urn:schemas-microsoft-com:office:office" && a.Name.LocalName == "spid")))
                 return null;
