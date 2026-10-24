@@ -273,6 +273,7 @@ public sealed partial class DocxSession
         try
         {
             var part = Internal.CommentOps.EnsureCommentsPart(main);
+            RecordRevisionIdentity(author);
             Internal.StyleFactory.EnsureCommentStyles(_doc!);
             var id = Internal.CommentOps.NextCommentId(main);
             var idStr = id.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -396,6 +397,7 @@ public sealed partial class DocxSession
         _history.RecordPreOp(TakeSnapshot());
         try
         {
+            RecordRevisionIdentity(author);
             Internal.StyleFactory.EnsureCommentStyles(_doc!);
             var id = Internal.CommentOps.NextCommentId(main);
             var idStr = id.ToString(System.Globalization.CultureInfo.InvariantCulture);

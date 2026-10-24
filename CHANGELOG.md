@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Sessions can identify revision owners by account through `RevisionIdentities` and
+  `SetRevisionIdentities` (#1317). Word's `people.xml` reviewer mappings distinguish namesakes
+  and recognize the same AD account under another display name, by principal name or object id.
+  `GetRevisionAuthorNameStatus` reports whether a name is free, owned or taken before editing.
+  New claims are saved with the first tracked revision or comment and follow document Undo/Redo.
+  The setting, configuration operation and query are available in WASM, npm, Python and MCP;
+  callers without identities retain the existing display-name comparison.
+
 - `ReplaceTextAtSpan` and `ReplaceTextAtSpanWithFormat` take an optional side for a zero-length insertion
   next to tracked deleted text (#1290): `DeletedTextSide.Before`/`After` through new .NET overloads,
   `deletedTextSide: "before" | "after"` on the stdio host, MCP (`docxodus_edit

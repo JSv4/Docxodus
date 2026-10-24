@@ -33,6 +33,7 @@ __all__ = [
     "DocxDiffRevisionGranularity",
     "DocxDiffFormatComparison",
     "TrackedChangeMode",
+    "RevisionAuthorNameStatus",
     "AnchorRenderMode",
     "TableRenderMode",
     "EmptyParagraphMode",
@@ -576,6 +577,14 @@ class DocxDiffFormatComparison(IntEnum):
 
     MODELED_ONLY = 0
     FULL = 1
+
+
+class RevisionAuthorNameStatus(str, Enum):
+    """Availability of a display name under the session's account identities."""
+
+    FREE = "free"
+    OWN = "own"
+    TAKEN = "taken"
 
 
 class TrackedChangeMode(str, Enum):

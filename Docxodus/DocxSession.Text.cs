@@ -1398,7 +1398,7 @@ public sealed partial class DocxSession
             return;
         }
         EnsureTrackRevisionsEnabled();
-        if (!string.Equals((string?)pending.Attribute(W.author), stamp.Author, StringComparison.Ordinal))
+        if (!IsOwnRevisionAuthor((string?)pending.Attribute(W.author), stamp.Author))
         {
             pending.SetAttributeValue(W.id, NextRevisionId());
             pending.SetAttributeValue(W.author, stamp.Author);
@@ -1428,6 +1428,7 @@ public sealed partial class DocxSession
     {
         var main = _doc!.MainDocumentPart
             ?? throw new InvalidOperationException("document has no main document part");
+        RecordRevisionIdentity(_revisionAuthor ?? "docxodus");
         var settingsPart = main.DocumentSettingsPart ?? main.AddNewPart<DocumentSettingsPart>();
         var xDoc = settingsPart.GetXDocument();
         var root = xDoc.Root;

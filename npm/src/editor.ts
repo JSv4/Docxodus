@@ -37,6 +37,7 @@ import {
   autoScrollWindowForElements,
 } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
 import { TrackedChangeMode } from "./types.js";
+import { requireRevisionIdentitySupport } from "./session.js";
 import type {
   CommentListEntry,
   EditErrorCode,
@@ -49,6 +50,8 @@ import type {
   NumberFormat,
   PageSetupOp,
   RevisionListEntry,
+  RevisionIdentity,
+  RevisionAuthorNameInfo,
   SectionInfo,
   StyleInfo,
   TableBorderSpec,
@@ -189,6 +192,8 @@ export interface DocxEditorExports {
     /** Review-mode controls (optional). */
     SetTrackedChanges?: (handle: number, mode: number) => void;
     SetRevisionAuthor?: (handle: number, author: string) => void;
+    SetRevisionIdentities?: (handle: number, identitiesJson: string) => void;
+    GetRevisionAuthorNameStatus?: (handle: number, author: string) => string;
     ListRevisions?: (handle: number) => string;
     AcceptRevision?: (handle: number, revisionId: string) => string;
     RejectRevision?: (handle: number, revisionId: string) => string;
@@ -297,6 +302,8 @@ export interface DocxEditorOptions {
   showRevisions?: boolean;
   /** Author stamped on native Word revisions. Default "docxodus". */
   revisionAuthor?: string;
+  /** Account identifiers for ownership; absent, null or empty retains display-name ownership. */
+  revisionIdentities?: readonly RevisionIdentity[] | null;
   /**
    * Render comments Word-style: the commented range highlighted inline and each thread as a
    * bubble in a gutter beside the page. Default true. With it off the document renders without
@@ -1724,6 +1731,7 @@ export class DocxEditor {
       trackedChanges: options.trackedChanges ?? TrackedChangeMode.Accept,
       showRevisions: options.showRevisions,
       revisionAuthor: options.revisionAuthor ?? "docxodus",
+      revisionIdentities: options.revisionIdentities?.map(identity => ({...identity})) ?? null,
       comments: options.comments ?? true,
       commentAuthor: options.commentAuthor ?? options.revisionAuthor ?? "Reviewer",
       onEdit: options.onEdit,
@@ -1746,10 +1754,12 @@ export class DocxEditor {
     // save/re-render hop, and it asks for that per call via SaveWithAnchorIds.
     // emitMarkdownPatch off: the editor re-renders from HTML, never from markdown patches,
     // so paying a whole-document re-projection per op would be dead weight.
+    requireRevisionIdentitySupport(exports.DocxSessionBridge, opts.revisionIdentities);
     const handle = exports.DocxSessionBridge.OpenSession(bytes, JSON.stringify({
       emitMarkdownPatch: false,
       trackedChanges: trackedChangeWireName(opts.trackedChanges),
       revisionAuthor: opts.revisionAuthor,
+      revisionIdentities: opts.revisionIdentities,
     }));
     return new DocxEditor(container, exports, handle, opts);
   }
@@ -4757,6 +4767,23 @@ export class DocxEditor {
     this.assertOpen();
     this.options.revisionAuthor = author;
     this.exports.DocxSessionBridge.SetRevisionAuthor?.(this.handle, author);
+  }
+
+  /** Configure account ownership without changing the document or its history. */
+  setRevisionIdentities(identities: readonly RevisionIdentity[] | null): void {
+    this.assertOpen();
+    const copied = identities?.map(identity => ({...identity})) ?? null;
+    const bridge = this.exports.DocxSessionBridge;
+    requireRevisionIdentitySupport(bridge, copied);
+    bridge.SetRevisionIdentities?.(this.handle, JSON.stringify(copied));
+    this.options.revisionIdentities = copied;
+  }
+
+  getRevisionAuthorNameStatus(author?: string | null): RevisionAuthorNameInfo {
+    this.assertOpen();
+    const query = this.exports.DocxSessionBridge.GetRevisionAuthorNameStatus;
+    if (typeof query !== 'function') throw new Error('Revision author name queries require a renderer that supports them.');
+    return JSON.parse(query(this.handle, author ?? '')) as RevisionAuthorNameInfo;
   }
 
   /** Every tracked revision in the document, from the session's registry. */

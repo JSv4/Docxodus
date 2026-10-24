@@ -1867,6 +1867,57 @@ Semantics:
   stdio host + docx-scalpel (`set_tracked_changes`/`set_revision_author`), MCP
   (`docxodus_track_changes` action `set_mode`).
 
+## Revision ownership by account (#1317)
+
+Display names alone do not distinguish two reviewers named Pat. A host that knows its user's
+account can set `DocxSessionSettings.RevisionIdentities`, a list of `RevisionIdentity(providerId,
+userId)` values in Word's `people.xml` shape. `SetRevisionIdentities` configures or replaces that
+list mid-session. Null or an empty list restores the existing exact display-name comparison.
+The session copies the list; later changes to a caller-owned collection have no effect.
+
+With identities configured, the session reads the reviewer mapping for a pending revision's
+`w:author`. A matching account owns it even when the recorded display name differs from
+`RevisionAuthor`. Provider identifiers and opaque user identifiers match exactly. For `AD`,
+`S::principal-name::object-id` additionally matches a nonempty principal name or object id
+case-insensitively. Any configured identity can match; new reviewer entries use the first one.
+
+A name already used without a matching account is taken. The used-name baseline includes
+revisions and comments in every XML part and the reviewer list, captured when identities are set.
+Changing `RevisionAuthor` later does not turn an existing unattributed reviewer into the host's
+account. A free current author name can own subsequent edits; its first tracked revision or
+comment creates its `people.xml` entry. Explicit comments attributed to a different author do not
+claim that author's identity. Existing foreign mappings are never overwritten.
+
+`GetRevisionAuthorNameStatus(author?)` returns `Free`, `Own` or `Taken`; omitting the argument
+checks the current revision author. The host can select a distinguishing name before editing.
+Editing with a taken name still records revisions, but cannot remove that namesake's prior
+insertions outright or edit their inserted pictures in place.
+
+```csharp
+session.SetRevisionIdentities(new[]
+{
+    new RevisionIdentity("AD", "S::pat@ourfirm.example::22222222-2222-2222-2222-222222222222"),
+});
+if (session.GetRevisionAuthorNameStatus() == RevisionAuthorNameStatus.Taken)
+    session.SetRevisionAuthor("Pat (our firm)");
+```
+
+Account configuration takes no document version or undo step. The reviewer entry written by an
+edit is document state: Save/reopen, Undo/Redo, failed-edit rollback and package transactions
+retain or remove it with that edit. Transactions also restore account configuration on rollback.
+Preview shadows copy the original used-name baseline; retained previews become stale if the
+live account configuration changes after prediction.
+
+The shared facade owns parsing and queries on every transport. npm exposes `revisionIdentities`,
+`setRevisionIdentities` and `getRevisionAuthorNameStatus`; Python exposes `revision_identities`,
+`set_revision_identities` and `get_revision_author_name_status`. Wire query results contain
+`{author, status}`, where status is `free`, `own` or `taken`. MCP accepts `revisionIdentities` on
+`docxodus_open`, with `docxodus_track_changes` actions `set_identities` and `author_name_status`.
+These configuration/query actions stay outside mutation batches, like `set_mode`.
+The browser editor and ribbon forward `revisionIdentities` when opening their sessions; the
+editor also exposes the configuration operation and name query. Supplying identities to an older
+WASM bridge without account support is refused before opening, rather than silently using names.
+
 ## Tracked-revision registry and resolution (issues #318, #455)
 
 Tracked-change resolution used to be all-or-nothing (`RevisionProcessor` over the whole

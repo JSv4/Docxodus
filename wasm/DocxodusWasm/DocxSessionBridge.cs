@@ -1488,6 +1488,14 @@ public static partial class DocxSessionBridge
         DocxSessionOps.SetRevisionAuthor(h, string.IsNullOrEmpty(author) ? null : author);
 
     [JSExport]
+    public static void SetRevisionIdentities(int h, string identitiesJson) =>
+        DocxSessionOps.SetRevisionIdentities(h, identitiesJson);
+
+    [JSExport]
+    public static string GetRevisionAuthorNameStatus(int h, string author) =>
+        DocxSessionOps.GetRevisionAuthorNameStatus(h, string.IsNullOrEmpty(author) ? null : author);
+
+    [JSExport]
     public static byte[] Save(int h) => DocxSessionOps.Save(h);
 
     /// <summary>Save KEEPING the projector's Unid bookkeeping — for the editor's remount, which

@@ -19,6 +19,7 @@ internal sealed record RetainedPreview(
     string PackageHash,
     TrackedChangeMode TrackedChanges,
     string? RevisionAuthor,
+    DocxSession.RevisionIdentityContext? RevisionIdentities,
     MutationBatchResult? Result)
 {
     internal long ApproximateBytes => Snapshot.ApproximateBytes;

@@ -61,6 +61,7 @@ from .enums import (
     TableRowHeightRule,
     TableVerticalMergeRole,
     TrackedChangeMode,
+    RevisionAuthorNameStatus,
     VerificationFindingSeverity,
     WhitespaceMode,
 )
@@ -119,6 +120,8 @@ __all__ = [
     "TemplatePlaceholder",
     "MarkdownProjection",
     "DocxSessionSettings",
+    "RevisionIdentity",
+    "RevisionAuthorNameInfo",
     "PackageAnnotationCounts",
     "PackageContentTypeDeclaration",
     "PackageManifest",
@@ -4953,6 +4956,29 @@ class WmlToMarkdownConverterSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class RevisionIdentity:
+    """A people.xml account; AD user ids use S::principal-name::object-id."""
+
+    provider_id: str
+    user_id: str
+
+    def to_wire(self) -> dict[str, str]:
+        return {"providerId": self.provider_id, "userId": self.user_id}
+
+
+@dataclass(frozen=True, slots=True)
+class RevisionAuthorNameInfo:
+    """Availability of the current or proposed reviewer display name."""
+
+    author: str
+    status: RevisionAuthorNameStatus
+
+    @classmethod
+    def _from_wire(cls, data: dict[str, Any]) -> RevisionAuthorNameInfo:
+        return cls(author=data["author"], status=RevisionAuthorNameStatus(data["status"]))
+
+
+@dataclass(frozen=True, slots=True)
 class DocxSessionSettings:
     """Constructor settings passed to ``open_session(bytes, settings=...)``."""
 
@@ -4967,6 +4993,7 @@ class DocxSessionSettings:
     validate_raw_ops: bool = False
     tracked_changes: TrackedChangeMode = TrackedChangeMode.ACCEPT
     revision_author: str | None = None
+    revision_identities: Sequence[RevisionIdentity] | None = None
     persist_anchor_ids: bool = False
     smart_quotes: bool = False
     #: Capture the initial projection for ``get_diff`` and retain exact opening
@@ -4993,6 +5020,8 @@ class DocxSessionSettings:
         }
         if self.revision_author is not None:
             out["revisionAuthor"] = self.revision_author
+        if self.revision_identities is not None:
+            out["revisionIdentities"] = [identity.to_wire() for identity in self.revision_identities]
         if self.projection_settings is not None:
             out["projectionSettings"] = self.projection_settings.to_wire()
         return out
