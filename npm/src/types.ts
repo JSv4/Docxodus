@@ -4546,6 +4546,8 @@ export type WorkerRequestType =
   | "getVersion"
   | "prepare"
   | "sessionOpen"
+  | "sessionSetRevisionIdentities"
+  | "sessionGetRevisionAuthorNameStatus"
   | "sessionGetPackageManifest"
   | "sessionGetSemanticChanges"
   | "sessionVerifyDeliverable"
@@ -4753,6 +4755,20 @@ export interface WorkerSessionOpenRequest extends WorkerRequestBase {
   settingsJson?: string;
 }
 
+/** Configure accounts without mutating the worker session's document or undo history. */
+export interface WorkerSessionSetRevisionIdentitiesRequest extends WorkerRequestBase {
+  type: "sessionSetRevisionIdentities";
+  handle: number;
+  identities: readonly RevisionIdentity[] | null;
+}
+
+/** Check the current or proposed reviewer name against a worker session's accounts. */
+export interface WorkerSessionGetRevisionAuthorNameStatusRequest extends WorkerRequestBase {
+  type: "sessionGetRevisionAuthorNameStatus";
+  handle: number;
+  author?: string | null;
+}
+
 /** Generate a manifest from the current logical checkpoint of a worker session. */
 export interface WorkerSessionGetPackageManifestRequest extends WorkerRequestBase {
   type: "sessionGetPackageManifest";
@@ -4849,6 +4865,8 @@ export type WorkerRequest =
   | WorkerGetVersionRequest
   | WorkerPrepareRequest
   | WorkerSessionOpenRequest
+  | WorkerSessionSetRevisionIdentitiesRequest
+  | WorkerSessionGetRevisionAuthorNameStatusRequest
   | WorkerSessionGetPackageManifestRequest
   | WorkerSessionGetSemanticChangesRequest
   | WorkerSessionVerifyDeliverableRequest
@@ -5033,6 +5051,15 @@ export interface WorkerSessionOpenResponse extends WorkerResponseBase {
   handle?: number;
 }
 
+export interface WorkerSessionSetRevisionIdentitiesResponse extends WorkerResponseBase {
+  type: "sessionSetRevisionIdentities";
+}
+
+export interface WorkerSessionGetRevisionAuthorNameStatusResponse extends WorkerResponseBase {
+  type: "sessionGetRevisionAuthorNameStatus";
+  authorNameInfo?: RevisionAuthorNameInfo;
+}
+
 /** Response containing the current worker-session package manifest. */
 export interface WorkerSessionGetPackageManifestResponse extends WorkerResponseBase {
   type: "sessionGetPackageManifest";
@@ -5095,6 +5122,8 @@ export type WorkerResponse =
   | WorkerGetVersionResponse
   | WorkerPrepareResponse
   | WorkerSessionOpenResponse
+  | WorkerSessionSetRevisionIdentitiesResponse
+  | WorkerSessionGetRevisionAuthorNameStatusResponse
   | WorkerSessionGetPackageManifestResponse
   | WorkerSessionGetSemanticChangesResponse
   | WorkerSessionVerifyDeliverableResponse

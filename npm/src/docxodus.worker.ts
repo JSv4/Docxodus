@@ -34,6 +34,10 @@ import type {
   WorkerGetCommentsRequest,
   WorkerGetDocumentMetadataRequest,
   WorkerSessionOpenRequest,
+  WorkerSessionSetRevisionIdentitiesRequest,
+  WorkerSessionGetRevisionAuthorNameStatusRequest,
+  DocxSessionSettings,
+  RevisionAuthorNameInfo,
   WorkerSessionGetPackageManifestRequest,
   WorkerSessionGetSemanticChangesRequest,
   WorkerSessionVerifyDeliverableRequest,
@@ -58,6 +62,7 @@ import type {
   SemanticChangeSet,
 } from "./types.js";
 import { AnnotationLabelMode } from "./types.js";
+import { requireRevisionIdentitySupport } from "./session.js";
 import { needsCompleteConversion } from "./conversion-options.js";
 import {
   readExternalAnnotationSet,
@@ -640,12 +645,39 @@ function handleSessionOpen(
 ): { handle?: number; error?: string } {
   const exports = ensureInitialized();
   try {
+    const settings = request.settingsJson ? JSON.parse(request.settingsJson) as DocxSessionSettings | null : null;
+    requireRevisionIdentitySupport(exports.DocxSessionBridge, settings?.revisionIdentities);
     const handle = exports.DocxSessionBridge.OpenSession(
       request.documentBytes,
       request.settingsJson ?? ""
     );
     sessionHandles.add(handle);
     return { handle };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+function handleSessionSetRevisionIdentities(
+  request: WorkerSessionSetRevisionIdentitiesRequest,
+): { error?: string } {
+  try {
+    const bridge = ensureInitialized().DocxSessionBridge;
+    requireRevisionIdentitySupport(bridge, request.identities);
+    if (typeof bridge.SetRevisionIdentities === "function")
+      bridge.SetRevisionIdentities(request.handle, JSON.stringify(request.identities));
+    return {};
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+function handleSessionGetRevisionAuthorNameStatus(
+  request: WorkerSessionGetRevisionAuthorNameStatusRequest,
+): { authorNameInfo?: RevisionAuthorNameInfo; error?: string } {
+  try {
+    const json = ensureInitialized().DocxSessionBridge.GetRevisionAuthorNameStatus(request.handle, request.author ?? "");
+    return { authorNameInfo: JSON.parse(json) as RevisionAuthorNameInfo };
   } catch (error) {
     return { error: String(error) };
   }
@@ -1136,6 +1168,29 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
           type: "sessionOpen",
           success: !result.error,
           handle: result.handle,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "sessionSetRevisionIdentities": {
+        const result = handleSessionSetRevisionIdentities(request as WorkerSessionSetRevisionIdentitiesRequest);
+        response = {
+          id: request.id,
+          type: "sessionSetRevisionIdentities",
+          success: !result.error,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "sessionGetRevisionAuthorNameStatus": {
+        const result = handleSessionGetRevisionAuthorNameStatus(request as WorkerSessionGetRevisionAuthorNameStatusRequest);
+        response = {
+          id: request.id,
+          type: "sessionGetRevisionAuthorNameStatus",
+          success: !result.error,
+          authorNameInfo: result.authorNameInfo,
           error: result.error,
         };
         break;
