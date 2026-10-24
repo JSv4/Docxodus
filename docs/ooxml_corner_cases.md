@@ -3683,6 +3683,13 @@ Three differences remain, none part of this fix:
   source boundaries and joins compatible tables only when resolution creates their adjacency. Final
   and original exports therefore retain each table's own properties. The Word measurements above
   remain the original plain-HTML comparison; the fix adds native and production-export regressions.
+  An original #1341 benchmark fixture adds a reference-engine caveat: LibreOffice 25.8.7.3 loads
+  adjacent 4,800/6,000-twip tables with left cell margins 0/720 as one two-row table using the second
+  table's width and margin. A paragraph-separated control stays as two tables. The saved DOCX and
+  rendered PDF both confirm the difference. The new LibreOffice reference therefore is not proof of
+  Word's table-boundary semantics; benchmark eligibility and full pixel measurements are retained.
+  Native and export regressions assert each source table's properties independently. No new Word
+  capture is claimed for this fixture.
 - Word gives the exact zero-height rows of `tables-row-height-exact-zero-borderless` and
   `tables-row-height-exact-zero-only` (docx-fidelity-bench) the height of their content. In the second,
   the paragraph after the table starts 58.5pt below the one before it: four 14.6pt lines, one for that
