@@ -54,6 +54,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Literal tab characters inside `w:t` and `w:delText` use the same paragraph tab stops and leaders
+  as explicit `w:tab` elements (#1353). This keeps docx-js tab-only runs and right-aligned running
+  headers/footers on their declared stops, while preserving text, run formatting and revision marks.
+
+
 - Accepting or rejecting revisions preserves tables that were already adjacent in the input (#1341).
   Final and original PDF exports retain each table's own borders, width and cell margins. Tables
   brought together by removing a tracked separator still join; the comparison reader uses the same

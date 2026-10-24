@@ -1020,6 +1020,28 @@ namespace Docxodus
             };
         }
 
+        // Producers such as docx-js put literal tabs inside text nodes. Expand them before
+        // simplification and formatting so they use the same stop/leader calculations as w:tab.
+        private static void ExpandLiteralTextTabs(WordprocessingDocument wordDoc)
+        {
+            foreach (var part in wordDoc.ContentParts())
+            {
+                var texts = part.GetXDocument().Descendants()
+                    .Where(e => (e.Name == W.t || e.Name == W.delText) && e.Value.Contains('\t'))
+                    .ToList();
+                if (texts.Count == 0) continue;
+                foreach (var text in texts)
+                {
+                    text.ReplaceWith(text.Value.Split('\t').SelectMany((segment, index) => new object?[]
+                    {
+                        index == 0 ? null : new XElement(W.tab),
+                        segment.Length == 0 ? null : new XElement(text.Name, text.Attributes(), segment),
+                    }));
+                }
+                part.PutXDocument();
+            }
+        }
+
         public static XElement ConvertToHtml(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings htmlConverterSettings)
         {
             // Some older Word producers store a DrawingML textbox's body in a related XML part
@@ -1036,6 +1058,8 @@ namespace Docxodus
             // Unid, so identity is looked up by part and Unid rather than re-derived.
             if (htmlConverterSettings.StampCanonicalSourceAnchors)
                 htmlConverterSettings.SourceAnchorIdentityProvider = CanonicalSourceIdentity(wordDoc);
+
+            ExpandLiteralTextTabs(wordDoc);
 
             // Only accept revisions if NOT rendering tracked changes AND document has tracked changes
             // This optimization saves ~9% of conversion time for documents without revisions
