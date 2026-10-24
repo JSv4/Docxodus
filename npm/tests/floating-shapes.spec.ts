@@ -19,7 +19,9 @@ async function layout(page: Page, options: FloatingShapeOptions, paginated = tru
       if (paginated) (window as any).DocxodusPagination.paginateHtml(html,host,{showPageNumbers:false});
       else host.innerHTML = parsed.body.innerHTML;
       await document.fonts.ready;
-      const firstShape = host.querySelector<HTMLElement>('[data-docx-shape-anchor]')!;
+      // paginateHtml retains a hidden staging copy. Inspect only physical page content.
+      const firstShape = host.querySelector<HTMLElement>(paginated
+        ? '.page-box [data-docx-shape-anchor]' : '[data-docx-shape-anchor]')!;
       const root = firstShape.closest<HTMLElement>('.page-box') ?? host;
       const paragraphs = Array.from(root.querySelectorAll<HTMLElement>('p'));
       const anchorParagraph = firstShape.closest<HTMLElement>('p') ?? root.querySelector<HTMLElement>(

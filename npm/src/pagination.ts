@@ -5367,6 +5367,9 @@ export class PaginationEngine {
     pageBox.style.height = `${dims.pageHeight}pt`;
     pageBox.style.overflow = "hidden";
     pageBox.style.position = "relative";
+    // Standalone export removes contain/will-change. Keep negative drawing layers above
+    // this page's paper background after those performance hints are stripped.
+    pageBox.style.isolation = "isolate";
     // Use CSS zoom for better text rendering when supported, fall back to transform
     // Zoom affects layout (no negative margin hack needed) and renders text more crisply
     // Note: zoom is non-standard but supported in all major browsers

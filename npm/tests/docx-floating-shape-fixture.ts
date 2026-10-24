@@ -25,6 +25,17 @@ const WPG='http://schemas.microsoft.com/office/word/2010/wordprocessingGroup';
 const R='http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const WP='http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
 const emu=(pt:number)=>Math.round(pt*12700);
+const parts = [
+  {id:'rStyles',type:R+'/styles',name:'styles.xml',contentType:'application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml',
+    body:`<w:styles xmlns:w="${W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="atLeast"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>`},
+  {id:'rSettings',type:R+'/settings',name:'settings.xml',contentType:'application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml',body:`<w:settings xmlns:w="${W}"/>`},
+];
+
+export function vmlShapeDocx(withExtent = true): Uint8Array {
+  return drawingDocx('<w:r><w:pict><v:rect xmlns:v="urn:schemas-microsoft-com:vml" '
+    + (withExtent ? 'style="width:144pt;height:72pt" ' : '')
+    + 'fillcolor="#19647E"/></w:pict></w:r>',false,parts);
+}
 
 export function floatingShapeDocx(options: FloatingShapeOptions = {}): Uint8Array {
   const source = (id:number, order:number, fill:string, behind:boolean) => {
@@ -49,9 +60,5 @@ export function floatingShapeDocx(options: FloatingShapeOptions = {}): Uint8Arra
   };
   const layers=options.layers??[{order:options.order??10,fill:'19647E',behind:options.behind??false}];
   const drawings=layers.map((l,i)=>source(7+i,l.order,l.fill,l.behind??false)).join('');
-  return drawingDocx(drawings+(options.mixed?'<w:r><w:t>AnchorWord</w:t></w:r>':''),false,[
-    {id:'rStyles',type:R+'/styles',name:'styles.xml',contentType:'application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml',
-      body:`<w:styles xmlns:w="${W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="atLeast"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>`},
-    {id:'rSettings',type:R+'/settings',name:'settings.xml',contentType:'application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml',body:`<w:settings xmlns:w="${W}"/>`},
-  ],options.after,options.before);
+  return drawingDocx(drawings+(options.mixed?'<w:r><w:t>AnchorWord</w:t></w:r>':''),false,parts,options.after,options.before);
 }
