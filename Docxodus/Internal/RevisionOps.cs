@@ -369,37 +369,34 @@ internal static class RevisionOps
 
             if (group.Family == RevisionFamily.Move)
             {
-                var fromStarts = group.RangeMarkers.Where(marker =>
-                    marker.Name == W.moveFromRangeStart).ToArray();
-                var fromEnds = group.RangeMarkers.Where(marker =>
-                    marker.Name == W.moveFromRangeEnd).ToArray();
-                var toStarts = group.RangeMarkers.Where(marker =>
-                    marker.Name == W.moveToRangeStart).ToArray();
-                var toEnds = group.RangeMarkers.Where(marker =>
-                    marker.Name == W.moveToRangeEnd).ToArray();
-                bool duplicate = fromStarts.Length > 1 || fromEnds.Length > 1
-                    || toStarts.Length > 1 || toEnds.Length > 1;
-                bool complete = fromStarts.Length == 1 && fromEnds.Length == 1
-                    && toStarts.Length == 1 && toEnds.Length == 1
+                // One move may own several ranges per side: the name, not a single container,
+                // links move source content to move destination content (ECMA-376 §17.13.5.24,
+                // §17.13.5.28), and RevisionProcessor resolves such a split move (issue #1340).
+                var (fromRanges, fromAmbiguous) = PairMoveRanges(
+                    group.RangeMarkers, W.moveFromRangeStart, W.moveFromRangeEnd);
+                var (toRanges, toAmbiguous) = PairMoveRanges(
+                    group.RangeMarkers, W.moveToRangeStart, W.moveToRangeEnd);
+                bool duplicate = fromAmbiguous || toAmbiguous;
+                bool complete = fromRanges.Count > 0 && toRanges.Count > 0
                     && group.Units.Any(unit => unit.Element.Name == W.moveFrom)
                     && group.Units.Any(unit => unit.Element.Name == W.moveTo);
                 bool pairedIds = complete
-                    && string.Equals((string?)fromStarts[0].Attribute(W.id),
-                        (string?)fromEnds[0].Attribute(W.id), StringComparison.Ordinal)
-                    && string.Equals((string?)toStarts[0].Attribute(W.id),
-                        (string?)toEnds[0].Attribute(W.id), StringComparison.Ordinal);
-                bool distinctRangeIds = complete && !string.Equals(
-                    (string?)fromStarts[0].Attribute(W.id),
-                    (string?)toStarts[0].Attribute(W.id), StringComparison.Ordinal);
+                    && fromRanges.Concat(toRanges).All(range => range.End is not null);
+                bool distinctRangeIds = complete && !fromRanges
+                    .Select(range => (string?)range.Start.Attribute(W.id))
+                    .Intersect(toRanges.Select(range => (string?)range.Start.Attribute(W.id)),
+                        StringComparer.Ordinal)
+                    .Any();
                 var metadataElements = group.Units.Select(unit => unit.Element)
-                    .Concat(fromStarts).Concat(toStarts).ToArray();
+                    .Concat(fromRanges.Select(range => range.Start))
+                    .Concat(toRanges.Select(range => range.Start)).ToArray();
                 bool coherentMetadata = metadataElements.All(element =>
                     string.Equals(AuthorOf(element), group.Author, StringComparison.Ordinal)
                     && string.Equals((string?)element.Attribute(W.date), group.Date,
                         StringComparison.Ordinal)
                     && string.Equals(DateUtcOf(element), group.DateUtc,
                         StringComparison.Ordinal));
-                if (!complete || !pairedIds || !distinctRangeIds || !coherentMetadata)
+                if (duplicate || !complete || !pairedIds || !distinctRangeIds || !coherentMetadata)
                 {
                     group.ResolutionStatus = duplicate || !distinctRangeIds || !coherentMetadata
                         ? RevisionResolutionStatus.Ambiguous
@@ -410,7 +407,7 @@ internal static class RevisionOps
                         : !coherentMetadata ? "incoherent_move_metadata"
                         : "malformed_move_topology",
                         duplicate
-                            ? "A native move name identifies duplicate source or destination range markers."
+                            ? "A native move name identifies source or destination ranges that reuse a w:id or overlap."
                             : !distinctRangeIds
                                 ? "A native move reuses one w:id for distinct source and destination ranges."
                             : !coherentMetadata
@@ -419,19 +416,14 @@ internal static class RevisionOps
                     continue;
                 }
 
-
-                bool fromOrdered = RangeContainsAll(
-                    fromStarts[0], fromEnds[0], group.Units
-                        .Where(unit => unit.Kind == UnitKind.Content
-                            && unit.Element.Name == W.moveFrom)
-                        .Select(unit => unit.Element));
-                bool toOrdered = RangeContainsAll(
-                    toStarts[0], toEnds[0], group.Units
-                        .Where(unit => unit.Kind == UnitKind.Content
-                            && unit.Element.Name == W.moveTo)
-                        .Select(unit => unit.Element));
-                bool disjoint = IsBefore(fromEnds[0], toStarts[0])
-                    || IsBefore(toEnds[0], fromStarts[0]);
+                bool fromOrdered = EachInSomeRange(fromRanges, group.Units
+                    .Where(unit => unit.Kind == UnitKind.Content && unit.Element.Name == W.moveFrom)
+                    .Select(unit => unit.Element));
+                bool toOrdered = EachInSomeRange(toRanges, group.Units
+                    .Where(unit => unit.Kind == UnitKind.Content && unit.Element.Name == W.moveTo)
+                    .Select(unit => unit.Element));
+                bool disjoint = fromRanges.All(from => toRanges.All(to =>
+                    IsBefore(from.End!, to.Start) || IsBefore(to.End!, from.Start)));
                 if (!fromOrdered || !toOrdered || !disjoint)
                 {
                     group.ResolutionStatus = RevisionResolutionStatus.Malformed;
@@ -641,10 +633,34 @@ internal static class RevisionOps
         value.EndsWith("Z", StringComparison.Ordinal)
         && IsValidRevisionDate(value);
 
-    private static bool RangeContainsAll(
-        XElement start, XElement end, IEnumerable<XElement> contents) =>
-        IsBefore(start, end) && contents.All(element =>
-            IsBefore(start, element) && IsBefore(element, end));
+    /// <summary>
+    /// Pair each move range start of one side with its same-<c>w:id</c> end, in document order.
+    /// The side is ambiguous when two of its ranges reuse a <c>w:id</c> or overlap: the spec settles
+    /// text surrounded by several containers by "the last valid container", which a selective
+    /// resolver cannot apply safely. A start with no end keeps a null <c>End</c>.
+    /// </summary>
+    private static (List<(XElement Start, XElement? End)> Ranges, bool Ambiguous) PairMoveRanges(
+        IEnumerable<XElement> markers, XName startName, XName endName)
+    {
+        var sideMarkers = markers.Where(marker => marker.Name == startName || marker.Name == endName)
+            .OrderBy(marker => marker, XNode.DocumentOrderComparer).ToArray();
+        var ranges = sideMarkers.Where(marker => marker.Name == startName)
+            .Select(start => (Start: start, End: sideMarkers.FirstOrDefault(end =>
+                end.Name == endName && IsBefore(start, end)
+                && string.Equals((string?)end.Attribute(W.id), (string?)start.Attribute(W.id),
+                    StringComparison.Ordinal))))
+            .ToList();
+        bool reusedId = ranges.GroupBy(range => (string?)range.Start.Attribute(W.id),
+            StringComparer.Ordinal).Any(byId => byId.Count() > 1);
+        bool overlapping = ranges.Zip(ranges.Skip(1)).Any(pair =>
+            pair.First.End is { } end && !IsBefore(end, pair.Second.Start));
+        return (ranges, reusedId || overlapping);
+    }
+
+    private static bool EachInSomeRange(
+        IReadOnlyList<(XElement Start, XElement? End)> ranges, IEnumerable<XElement> contents) =>
+        contents.All(element => ranges.Any(range =>
+            IsBefore(range.Start, element) && IsBefore(element, range.End!)));
 
     private static bool IsBefore(XElement left, XElement right) =>
         ReferenceEquals(left.Document, right.Document)

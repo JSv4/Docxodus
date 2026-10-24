@@ -1,0 +1,213 @@
+{
+  "schema": 1,
+  "issue": "https://github.com/JSv4/Docxodus/issues/1340",
+  "rights": {
+    "author": "John Scrudato IV",
+    "license": "MIT",
+    "origin": "Original repository/issue fixture or original literal OOXML; no external document content or embedded fonts"
+  },
+  "sourceEvidenceArchive": {
+    "path": "archives/issue-1340-evidence.zip",
+    "sha256": "3337c0a06cef55f2a9270c76b22796d5f165f55fea8ad2f2da8a45644a961f0a",
+    "bytes": 1359436,
+    "packagedAtUtc": "2026-10-24T22:25:11.460673+00:00",
+    "baselineCases": 6,
+    "status": "baseline captured; issue-specific adjudication and pending requested actions remain explicit in manifest"
+  },
+  "cases": [
+    {
+      "id": "unsplit-control",
+      "inputSha256": "c399e3a68acd94f1948718abf9c9241e948999df7c52eaeb12f147ba11aba6d4",
+      "word": {
+        "accept-all": {
+          "paragraphs": [
+            "Old:  end",
+            "Fee amount due"
+          ],
+          "docxSha256": "02009a41531c67fa9848d833860fcf48538daf77c5c3cf994477907eb978ed13",
+          "documentXmlSha256": "36a71ec89cbf48c400fbd1ca25c48e36ce1437e90541c4828783b519e66ff514",
+          "pdfSha256": "138abde41b79269428b61637546507636dad1d6599f1d711e17085f7ae4aa6e2",
+          "capturedAtUtc": "2026-10-24T22:08:40.314Z",
+          "product": "Microsoft Word for the web",
+          "reportedBuild": null,
+          "method": "Native Word for the web Review > Tracking > accept-all > Download a copy; native PDF exported separately"
+        },
+        "reject-all": {
+          "paragraphs": [
+            "Old: amount end",
+            "Fee  due"
+          ],
+          "docxSha256": "75b60d9782c5bb5bae09cb1a22e7e5aa1c4029004da615e7272ad87b2f060063",
+          "documentXmlSha256": "9109b3c590155863033b4770b8f12b60e23a4f11d1d164ec0385a78b8f3d77ee",
+          "pdfSha256": "fd8b53609897d94c8efb2777fdab00e840b196191d9f379bbab7f34d0d111ef4",
+          "capturedAtUtc": "2026-10-24T22:09:16.002Z",
+          "product": "Microsoft Word for the web",
+          "reportedBuild": null,
+          "method": "Native Word for the web Review > Tracking > reject-all > Download a copy; native PDF exported separately"
+        }
+      }
+    },
+    {
+      "id": "plain-tail-inside",
+      "inputSha256": "1fe05c430b1750fd20a97223f0c2816e5acb368eb84784a351f0f0b40fbba168",
+      "word": {
+        "accept-all": {
+          "paragraphs": [
+            "Old:  end",
+            "Fee amountXY due"
+          ],
+          "docxSha256": "743550b5468426b60234a0190ff39269c67e914b8c291d8306d0d66feb63f7a9",
+          "documentXmlSha256": "b60a38726e186070422b15ea40662711816c8c50595e14180edf9705f15147c6",
+          "pdfSha256": "9b00d7000e5d041bcd4b776a807a02fd5158d4fafc561f10cbef2adcc9b11692",
+          "capturedAtUtc": "2026-10-24T22:09:50.096Z",
+          "product": "Microsoft Word for the web",
+          "reportedBuild": null,
+          "method": "Native Word for the web Review > Tracking > accept-all > Download a copy; native PDF exported separately"
+        },
+        "reject-all": {
+          "paragraphs": [
+            "Old: amount end",
+            "Fee XY due"
+          ],
+          "docxSha256": "045c8c4286bb1f73ef414e201417d43ccdd553c41000051a9fb81deeadc87202",
+          "documentXmlSha256": "e02bd6acce42fab412cb56897dcc484822a22789cf7a334e4fe499968a781d6c",
+          "pdfSha256": "f01a8f641d0d4c2d17331093b32823eec12338684eed55ed84099a96f3d26312",
+          "capturedAtUtc": "2026-10-24T22:10:23.604Z",
+          "product": "Microsoft Word for the web",
+          "reportedBuild": null,
+          "method": "Native Word for the web Review > Tracking > reject-all > Download a copy; native PDF exported separately"
+        }
+      }
+    },
+    {
+      "id": "plain-between-move-elements",
+      "inputSha256": "dc50fd46abd9bd03d1698ec69eb9c62ea69d18f981aa0922c627a0cdc9d5c155",
+      "word": {
+        "accept-all": {
+          "paragraphs": [
+            "Old:  end",
+            "Fee amoXYunt due"
+          ],
+          "docxSha256": "fa7fdd99385714b838e42b431c5ddf13d3bd68a679f37adf1ff2750f66516f0c",
+          "documentXmlSha256": "46c4cb2c308b652d6150314cced187e26bfef380568c3df36715f133de00cba6",
+          "pdfSha256": "120a1b4dd3d20181ff299359ff3c339120d515fe4a443aed9517bd8818a7edd0",
+          "capturedAtUtc": "2026-10-24T22:11:03.779Z",
+          "product": "Microsoft Word for the web",
+          "reportedBuild": null,
+          "method": "Native Word for the web Review > Tracking > accept-all > Download a copy; native PDF exported separately"
+        },
+        "reject-all": {
+          "paragraphs": [
+            "Old: amount end",
+            "Fee XY due"
+          ],
+          "docxSha256": "91a7eb3b6c75eb2107e41fae8c84abb63e2fd48964d88d306b2efd3b57c2085f",
+          "documentXmlSha256": "fcd073f402c0a9e73c3007a746e76af0e47a5d949e5c2dda9138f24805d05e81",
+          "pdfSha256": "c1d5ffd12473201c0d589ab8e5d922084ce80e404e88035152f8f31e1f3b8ac9",
+          "capturedAtUtc": "2026-10-24T22:11:35.077Z",
+          "product": "Microsoft Word for the web",
+          "reportedBuild": null,
+          "method": "Native Word for the web Review > Tracking > reject-all > Download a copy; native PDF exported separately"
+        }
+      }
+    },
+    {
+      "id": "split-destination",
+      "inputSha256": "b730d00c0196bc5da785e0020bf2dd52b08660a952d7942c95b8c17862acaa78",
+      "word": {
+        "accept-all": {
+          "paragraphs": [
+            "Old:  end",
+            "Fee amoXYunt due"
+          ],
+          "docxSha256": "57259ccef39373d6b9686163eee4182fb5a1766b2769edd469a329eb5ef3e249",
+          "documentXmlSha256": "78275095c8d1e74d3606e16c314bf977f8ba2dd56e479e98aecfaf99e76c1380",
+          "pdfSha256": "0acef5b38c946ac5798f0e4fbfe20d44cb839f15702f564432003635a1a21573",
+          "capturedAtUtc": "2026-10-24T22:12:15.633Z",
+          "product": "Microsoft Word for the web",
+          "reportedBuild": null,
+          "method": "Native Word for the web Review > Tracking > accept-all > Download a copy; native PDF exported separately"
+        },
+        "reject-all": {
+          "paragraphs": [
+            "Old: amount end",
+            "Fee XY due"
+          ],
+          "docxSha256": "f1e3677eaece25c4493f4cba6815d5c07347df1b527d72433206715fb0635fc7",
+          "documentXmlSha256": "caea59ad3b6add359d70a99d3b0bca3d76f4efb31ea5d6f8b4914f6e1d1894fc",
+          "pdfSha256": "b74b2190a64d534baf74d0686364ef36dd93ffe11890da0ab7b4ac88509e0e08",
+          "capturedAtUtc": "2026-10-24T22:12:51.090Z",
+          "product": "Microsoft Word for the web",
+          "reportedBuild": null,
+          "method": "Native Word for the web Review > Tracking > reject-all > Download a copy; native PDF exported separately"
+        }
+      }
+    },
+    {
+      "id": "plain-outside-control",
+      "inputSha256": "b88ad48e7e30b88ac1af7732ebbacf00e6fcfc7587706bad127f543bf3f3dd02",
+      "word": {
+        "accept-all": {
+          "paragraphs": [
+            "Old:  end",
+            "Fee amountXY due"
+          ],
+          "docxSha256": "cabe996370675bcb5c13076e6aca490af44b1013ee4ef90dcde6e87dd160e0c2",
+          "documentXmlSha256": "dd6f805162cdaf851d8f7e1a97b28cba55b355c6d8d9cdb2212c9ccbea08eb60",
+          "pdfSha256": "1a037b4983b44a6259e7b0d7a1a11cdbc4a77eef68e00c63d6aa3a1f93cf04d5",
+          "capturedAtUtc": "2026-10-24T22:14:23.125Z",
+          "product": "Microsoft Word for the web",
+          "reportedBuild": null,
+          "method": "Native Word for the web Review > Tracking > accept-all > Download a copy; native PDF exported separately"
+        },
+        "reject-all": {
+          "paragraphs": [
+            "Old: amount end",
+            "Fee XY due"
+          ],
+          "docxSha256": "65ccc5b66b627c9e2122d28e7ec1488dd338401a24c1b9acae378facafd652cc",
+          "documentXmlSha256": "0e4d803cb4e696e7de855cf99a4a2a5a53900fc30e75be458b02f5c9b9dc3faa",
+          "pdfSha256": "2ca972a30f53d84e670b6fffb823a4022bc28e958a71a77f9bd518fda5c99807",
+          "capturedAtUtc": "2026-10-24T22:15:13.768Z",
+          "product": "Microsoft Word for the web",
+          "reportedBuild": null,
+          "method": "Native Word for the web Review > Tracking > reject-all > Download a copy; native PDF exported separately"
+        }
+      }
+    },
+    {
+      "id": "cross-paragraph-split",
+      "inputSha256": "2ef9abf76ca4a56cb12aa11df037c22288d648ed4a83d038408d81ec72eae353",
+      "word": {
+        "accept-all": {
+          "paragraphs": [
+            "Old:  end",
+            "Fee ",
+            "amoXYunt due"
+          ],
+          "docxSha256": "eb60681354d7e91844f3c95cca88dfc7598a449ba18688676d3ada0c5596e654",
+          "documentXmlSha256": "2b3e1d6bf049bf7d4e77902a139729bfe3dc7dfa4443159fd5cc8e772c2db74f",
+          "pdfSha256": "dc5dc00cc0cbf45f0a2be6ada39e57fc52fac35419f9c43c521f356de76cd19b",
+          "capturedAtUtc": "2026-10-24T22:15:54.398Z",
+          "product": "Microsoft Word for the web",
+          "reportedBuild": null,
+          "method": "Native Word for the web Review > Tracking > accept-all > Download a copy; native PDF exported separately"
+        },
+        "reject-all": {
+          "paragraphs": [
+            "Old: amount end",
+            "Fee ",
+            "XY due"
+          ],
+          "docxSha256": "5714a47c7db6e7d45a9fbd620942a6e22bcb45ceb1a686cd825645ea4c2e906b",
+          "documentXmlSha256": "3d78d79548ec358c7b5c57d3d4eaca2e2f43cd8673c0bea24fa521467979326f",
+          "pdfSha256": "36652c8eba35ee3458c461e539f81faf895ff2f172f87c84001299e600701f05",
+          "capturedAtUtc": "2026-10-24T22:16:39.890Z",
+          "product": "Microsoft Word for the web",
+          "reportedBuild": null,
+          "method": "Native Word for the web Review > Tracking > reject-all > Download a copy; native PDF exported separately"
+        }
+      }
+    }
+  ]
+}
