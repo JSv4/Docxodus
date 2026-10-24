@@ -2177,6 +2177,19 @@ public sealed record AnnotationUpdate
     public IReadOnlyDictionary<string, string?>? MetadataPatch { get; init; }
 }
 
+/// <summary>An account recorded by Word's people.xml reviewer list.</summary>
+/// <param name="ProviderId">The presence provider, such as AD or Windows Live.</param>
+/// <param name="UserId">The provider's account identifier; AD uses S::principal-name::object-id.</param>
+public sealed record RevisionIdentity(string ProviderId, string UserId);
+
+/// <summary>Whether a reviewer name is available to the session's configured account identities.</summary>
+public enum RevisionAuthorNameStatus
+{
+    Free,
+    Own,
+    Taken,
+}
+
 public sealed class DocxSessionSettings
 {
     /// <summary>
@@ -2207,6 +2220,11 @@ public sealed class DocxSessionSettings
     public bool ValidateRawOps { get; init; } = false;
     public TrackedChangeMode TrackedChanges { get; init; } = TrackedChangeMode.Accept;
     public string? RevisionAuthor { get; init; }
+    /// <summary>
+    /// Accounts used to recognize the session author's pending revisions. Null or empty keeps
+    /// the historical display-name comparison. The session takes a defensive copy on opening.
+    /// </summary>
+    public IReadOnlyList<RevisionIdentity>? RevisionIdentities { get; init; }
     public WmlToMarkdownConverterSettings ProjectionSettings { get; init; } = new();
 
     /// <summary>

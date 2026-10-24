@@ -1481,6 +1481,17 @@ internal static class DocxSessionOps
     public static void SetRevisionAuthor(int handle, string? author) =>
         SessionRegistry.Get(handle).SetRevisionAuthor(author);
 
+    public static void SetRevisionIdentities(int handle, string? identitiesJson) =>
+        SessionRegistry.Get(handle).SetRevisionIdentities(DocxSessionJson.ParseRevisionIdentities(identitiesJson));
+
+    public static string GetRevisionAuthorNameStatus(int handle, string? author = null)
+    {
+        var session = SessionRegistry.Get(handle);
+        var name = author ?? session.RevisionAuthor ?? "docxodus";
+        return "{\"author\":" + DocxSessionJson.JsonString(name) + ",\"status\":"
+            + DocxSessionJson.JsonString(session.GetRevisionAuthorNameStatus(name).ToString().ToLowerInvariant()) + "}";
+    }
+
     public static string GetTrackedChanges(int handle)
     {
         var s = SessionRegistry.Get(handle);

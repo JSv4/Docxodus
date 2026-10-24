@@ -431,6 +431,8 @@ internal static partial class Dispatcher
 
         "set_tracked_changes" => SetTrackedChanges(args),
         "set_revision_author" => SetRevisionAuthor(args),
+        "set_revision_identities" => SetRevisionIdentities(args),
+        "get_revision_author_name_status" => DocxSessionOps.GetRevisionAuthorNameStatus(Handle(args), OptStr(args, "author")),
 
         _ => throw new UnknownOpException(op),
     };
@@ -570,6 +572,13 @@ internal static partial class Dispatcher
         // revisionAuthor, as on MCP (issue #1023); author is this host's deprecated spelling.
         DocxSessionOps.SetRevisionAuthor(Handle(args),
             DocxSessionJson.AliasedString(args, "revisionAuthor", "author"));
+        return "null";
+    }
+
+    private static string SetRevisionIdentities(JsonElement args)
+    {
+        DocxSessionOps.SetRevisionIdentities(Handle(args), args.TryGetProperty("revisionIdentities", out var identities)
+            ? identities.GetRawText() : null);
         return "null";
     }
 

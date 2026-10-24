@@ -892,7 +892,7 @@ public sealed partial class DocxSession
             if (ancestor.Name == W.del || ancestor.Name == W.moveFrom) return "image is inside a tracked deletion";
             if (ancestor.Name == W.moveTo) return "image is inside a tracked move";
             if (ancestor.Name == W.ins && _trackedChanges == TrackedChangeMode.RenderInline
-                && !string.Equals((string?)ancestor.Attribute(W.author), _revisionAuthor ?? "docxodus", StringComparison.Ordinal))
+                && !IsOwnRevisionAuthor((string?)ancestor.Attribute(W.author), _revisionAuthor ?? "docxodus"))
                 return "image is inside another author's tracked insertion";
             if (ancestor.Name == W.fldSimple) return "image is the result of a simple field";
             if (ancestor.Name == MC.AlternateContent)

@@ -23,6 +23,8 @@ import type {
   DocxodusWasmExports,
   DocxSessionProjection,
   DocxSessionSettings,
+  RevisionIdentity,
+  RevisionAuthorNameInfo,
   EditError,
   EditResult,
   EditSummary,
@@ -2329,6 +2331,18 @@ export class DocxSession {
     this.wasm.SetRevisionAuthor(this.handle, author ?? "");
   }
 
+  /** Configure accounts and remember names already in use; null or empty restores name-only ownership. */
+  setRevisionIdentities(identities: readonly RevisionIdentity[] | null): void {
+    requireRevisionIdentitySupport(this.wasm, identities);
+    if (typeof this.wasm.SetRevisionIdentities === 'function')
+      this.wasm.SetRevisionIdentities(this.handle, JSON.stringify(identities));
+  }
+
+  /** Check the current or proposed display name before recording an edit under it. */
+  getRevisionAuthorNameStatus(author?: string | null): RevisionAuthorNameInfo {
+    return JSON.parse(this.wasm.GetRevisionAuthorNameStatus(this.handle, author ?? "")) as RevisionAuthorNameInfo;
+  }
+
   undo(): boolean {
     return this.wasm.Undo(this.handle);
   }
@@ -2371,9 +2385,18 @@ export function openDocxSession(
   settings?: DocxSessionSettings,
 ): DocxSession {
   const bridge = wasmExports.DocxSessionBridge;
+  requireRevisionIdentitySupport(bridge, settings?.revisionIdentities);
   const handle = bridge.OpenSession(bytes, settings ? JSON.stringify(settings) : "");
   return new DocxSession(handle, bridge);
 }
 
-export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, CrossReferenceOptions, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, FormattingInspection, GrepOptions, InlineSpan, MarkdownPatch, MarkdownPatchBlock, MutationBatchChangeSet, MutationBatchFailure, MutationBatchMode, MutationBatchPreviewOptions, MutationBatchPreviewStep, MutationBatchResult, MutationBatchStep, MutationBatchStepResult, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, ParagraphFormatting, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFormattingInfo, RunFragment, StyleInfo, TableStyleFormatting, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
+/** @internal Account opt-in must not silently degrade when a host supplies an older WASM bridge. */
+export function requireRevisionIdentitySupport(
+  bridge: {SetRevisionIdentities?: unknown}, identities?: readonly RevisionIdentity[] | null,
+): void {
+  if (identities?.length && typeof bridge.SetRevisionIdentities !== 'function')
+    throw new Error('Account-based revision ownership requires a renderer that supports it.');
+}
+
+export type { RevisionIdentity, RevisionAuthorNameStatus, RevisionAuthorNameInfo, AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, CrossReferenceOptions, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, FormattingInspection, GrepOptions, InlineSpan, MarkdownPatch, MarkdownPatchBlock, MutationBatchChangeSet, MutationBatchFailure, MutationBatchMode, MutationBatchPreviewOptions, MutationBatchPreviewStep, MutationBatchResult, MutationBatchStep, MutationBatchStepResult, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, ParagraphFormatting, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFormattingInfo, RunFragment, StyleInfo, TableStyleFormatting, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
 export { ContextBoundary, PlaceholderKinds } from "./types.js";

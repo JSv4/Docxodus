@@ -46,6 +46,8 @@ import type {
   WorkerGetVersionResponse,
   WorkerPrepareResponse,
   WorkerSessionOpenResponse,
+  WorkerSessionSetRevisionIdentitiesResponse,
+  WorkerSessionGetRevisionAuthorNameStatusResponse,
   WorkerSessionGetPackageManifestResponse,
   WorkerSessionGetSemanticChangesResponse,
   WorkerSessionVerifyDeliverableResponse,
@@ -59,6 +61,8 @@ import type {
   VersionInfo,
   DocumentMetadata,
   DocxSessionSettings,
+  RevisionIdentity,
+  RevisionAuthorNameInfo,
   DocumentAnnotation,
   AnnotationUpdate,
   CharSpan,
@@ -169,6 +173,12 @@ function deriveWasmBasePath(): string {
  * {@link close} when finished to free the in-worker handle.
  */
 export interface WorkerDocxSession {
+  /** Configure accounts; null or empty restores legacy name-only ownership. */
+  setRevisionIdentities(identities: readonly RevisionIdentity[] | null): Promise<void>;
+
+  /** Check the current or proposed reviewer name before recording changes under it. */
+  getRevisionAuthorNameStatus(author?: string | null): Promise<RevisionAuthorNameInfo>;
+
   /** Generate a deterministic manifest of the session's current logical checkpoint. */
   getPackageManifest(): Promise<PackageManifest>;
 
@@ -978,6 +988,25 @@ export async function createWorkerDocxodus(
         const handle = requireField(openResponse, "handle");
 
         return {
+          async setRevisionIdentities(identities: readonly RevisionIdentity[] | null): Promise<void> {
+            await send<WorkerSessionSetRevisionIdentitiesResponse>({
+              id: generateId(),
+              type: "sessionSetRevisionIdentities",
+              handle,
+              identities,
+            });
+          },
+
+          async getRevisionAuthorNameStatus(author?: string | null): Promise<RevisionAuthorNameInfo> {
+            const res = await send<WorkerSessionGetRevisionAuthorNameStatusResponse>({
+              id: generateId(),
+              type: "sessionGetRevisionAuthorNameStatus",
+              handle,
+              author,
+            });
+            return requireField(res, "authorNameInfo");
+          },
+
           async getPackageManifest(): Promise<PackageManifest> {
             const res = await send<WorkerSessionGetPackageManifestResponse>({
               id: generateId(),

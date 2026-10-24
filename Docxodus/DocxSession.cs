@@ -118,7 +118,8 @@ public sealed partial class DocxSession : IDisposable
         long BaseVersion,
         byte[] BaseBytes,
         TrackedChangeMode TrackedChanges,
-        string? RevisionAuthor);
+        string? RevisionAuthor,
+        RevisionIdentityContext? RevisionIdentities);
 
     private sealed record TransactionState(
         long Id,
@@ -129,6 +130,7 @@ public sealed partial class DocxSession : IDisposable
         long MutationEpoch,
         TrackedChangeMode TrackedChanges,
         string? RevisionAuthor,
+        RevisionIdentityContext? RevisionIdentities,
         Exception? LastInternalError,
         Exception? LastRollbackError);
 
@@ -160,6 +162,7 @@ public sealed partial class DocxSession : IDisposable
         _stream.Write(packageBytes, 0, packageBytes.Length);
         _stream.Position = 0;
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
+        SetRevisionIdentities(_settings.RevisionIdentities);
         // Stamp list numbering's inputs before anything counts a list, so the first edit can tell
         // whether the counts it finds are still current (see ResetProjectionCache).
         ResetProjectionCache();
@@ -968,6 +971,7 @@ public sealed partial class DocxSession : IDisposable
         if (main.WordprocessingCommentsPart is not null) yield return main.WordprocessingCommentsPart;
         if (main.WordprocessingCommentsExPart is not null) yield return main.WordprocessingCommentsExPart;
         if (main.WordprocessingCommentsIdsPart is not null) yield return main.WordprocessingCommentsIdsPart;
+        if (main.WordprocessingPeoplePart is not null) yield return main.WordprocessingPeoplePart;
         if (main.DocumentSettingsPart is not null) yield return main.DocumentSettingsPart;
         if (main.StyleDefinitionsPart is not null) yield return main.StyleDefinitionsPart;
         // Custom XML parts hold annotation metadata; include them so callers that
@@ -1002,6 +1006,7 @@ public sealed partial class DocxSession : IDisposable
         // driven by DocumentSnapshot.PartRelationships below.
         if (main.WordprocessingCommentsExPart is not null) yield return main.WordprocessingCommentsExPart;
         if (main.WordprocessingCommentsIdsPart is not null) yield return main.WordprocessingCommentsIdsPart;
+        if (main.WordprocessingPeoplePart is not null) yield return main.WordprocessingPeoplePart;
 
         // Settings and styles are not walked by the PROJECTOR, but they are WRITTEN by ops, which is
         // what decides snapshot membership. InsertFootnote/InsertEndnote declare w:footnotePr /

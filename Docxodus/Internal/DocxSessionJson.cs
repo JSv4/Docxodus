@@ -644,6 +644,8 @@ internal static class DocxSessionJson
             ValidateRawOps = validateRawOps,
             TrackedChanges = tracked,
             RevisionAuthor = revisionAuthor,
+            RevisionIdentities = root.TryGetProperty("revisionIdentities", out var identities)
+                ? ParseRevisionIdentities(identities) : null,
             PersistAnchorIds = persistAnchorIds,
             SmartQuotes = smartQuotes,
             EmitMarkdownPatch = emitMarkdownPatch,
@@ -651,6 +653,30 @@ internal static class DocxSessionJson
             CaptureDeliveryEvidence = captureDeliveryEvidence,
             ProjectionSettings = projectionSettings,
         };
+    }
+
+    public static IReadOnlyList<RevisionIdentity>? ParseRevisionIdentities(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        using var document = JsonDocument.Parse(json);
+        return ParseRevisionIdentities(document.RootElement);
+    }
+
+    private static IReadOnlyList<RevisionIdentity>? ParseRevisionIdentities(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Null) return null;
+        if (value.ValueKind != JsonValueKind.Array)
+            throw new System.ArgumentException("revisionIdentities must be an array or null");
+        var result = new List<RevisionIdentity>();
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object
+                || !item.TryGetProperty("providerId", out var provider) || provider.ValueKind != JsonValueKind.String
+                || !item.TryGetProperty("userId", out var user) || user.ValueKind != JsonValueKind.String)
+                throw new System.ArgumentException("each revision identity needs string providerId and userId values");
+            result.Add(new RevisionIdentity(provider.GetString()!, user.GetString()!));
+        }
+        return result;
     }
 
     /// <summary>

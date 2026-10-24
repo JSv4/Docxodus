@@ -584,14 +584,14 @@ public sealed partial class DocxSession
         text.Ancestors().TakeWhile(a => !ReferenceEquals(a, runLevel))
             .Any(a => RevisionWrapperNames.Contains(a.Name));
 
-    private static bool IsOwnInsertion(XElement? insertion, string author) =>
+    private bool IsOwnInsertion(XElement? insertion, string author) =>
         insertion is not null
-        && string.Equals((string?)insertion.Attribute(W.author), author, StringComparison.Ordinal);
+        && IsOwnRevisionAuthor((string?)insertion.Attribute(W.author), author);
 
     /// <summary>The <c>w:ins</c> that most closely encloses <paramref name="element"/> when it is
     /// <paramref name="author"/>'s own; null when the nearest insertion-like ancestor is another
     /// author's or a move destination (which is never un-inserted), or there is none.</summary>
-    private static XElement? OwnPendingInsertion(XElement element, string author) =>
+    private XElement? OwnPendingInsertion(XElement element, string author) =>
         element.Ancestors().FirstOrDefault(e => e.Name == W.ins || e.Name == W.moveTo) is { } insertion
         && insertion.Name == W.ins && IsOwnInsertion(insertion, author)
             ? insertion
@@ -600,7 +600,7 @@ public sealed partial class DocxSession
     /// <summary>Whether a tracked deletion of <paramref name="root"/> removes content outright
     /// rather than marking it: a run (other than a marker-only one) inside the session author's
     /// own pending insertion, which <see cref="DeleteInlineElementInPlace"/> un-inserts.</summary>
-    private static bool HasOwnInsertedContent(XElement root, string author) =>
+    private bool HasOwnInsertedContent(XElement root, string author) =>
         root.Descendants(W.r).Any(run => !IsMarkerOnlyRun(run)
             && !run.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom)
             && OwnPendingInsertion(run, author) is not null);
@@ -610,7 +610,7 @@ public sealed partial class DocxSession
     /// the author's insertion (directly, or through a hyperlink, field or smart tag holding only
     /// the author's insertions), with no range marker whose partner may lie elsewhere. Such a
     /// paragraph is un-inserted outright by a tracked deletion, as Word does.</summary>
-    private static bool IsWhollyOwnInsertion(XElement paragraph, string author) =>
+    private bool IsWhollyOwnInsertion(XElement paragraph, string author) =>
         IsOwnInsertion(paragraph.Element(W.pPr)?.Element(W.rPr)?.Element(W.ins), author)
         && paragraph.Elements().Where(child => child.Name != W.pPr).All(child => IsOwnInsertedContent(child, author))
         && !paragraph.Descendants().Any(d => d.Name == W.bookmarkStart || d.Name == W.bookmarkEnd
@@ -619,7 +619,7 @@ public sealed partial class DocxSession
             || d.Name == W.moveFromRangeStart || d.Name == W.moveFromRangeEnd
             || d.Name == W.moveToRangeStart || d.Name == W.moveToRangeEnd);
 
-    private static bool IsOwnInsertedContent(XElement element, string author) =>
+    private bool IsOwnInsertedContent(XElement element, string author) =>
         element.Name == W.proofErr
         || (element.Name == W.ins && IsOwnInsertion(element, author))
         || ((element.Name == W.hyperlink || element.Name == W.fldSimple || element.Name == W.smartTag)
@@ -973,7 +973,7 @@ public sealed partial class DocxSession
         var author = _revisionAuthor ?? "docxodus";
         var markRevisions = Internal.RevisionOps.RevWrapperNames;
         bool Resolves(XElement change, XName propertyName, XElement? target, params XName[] excluded) =>
-            string.Equals((string?)change.Attribute(W.author), author, StringComparison.Ordinal)
+            IsOwnRevisionAuthor((string?)change.Attribute(W.author), author)
             && XNode.DeepEquals(
                 PropertySnapshot(change.Element(propertyName), propertyName, change.Name, excluded),
                 PropertySnapshot(target, propertyName, change.Name, excluded));
