@@ -4302,3 +4302,23 @@ only. Strict also narrows some value spaces, and those values pass through uncha
 written as `"50%"`. Docxodus already reads the `w:ind` and percent-suffixed spellings (see the sections
 on each), but `WmlToHtmlConverter.CreateStyleFromJc` maps only `left`, `right`, `center` and `both`,
 so a Strict `start`/`end` paragraph alignment is not rendered.
+
+
+## Literal tabs inside text nodes (#1353)
+
+The issue's Word example treats `<w:t xml:space="preserve">&#9;</w:t>` like `<w:tab/>`:
+its position is the paragraph's next declared stop. A common docx-js shape has an empty run,
+a tab-only text run, then a header label. The converter previously emitted the literal character
+as browser whitespace, so a right-aligned label stayed near the left margin.
+
+The converter now expands literal tabs in live and deleted text before the normal formatting
+and tab-width pipeline. Body text, headers and footers use the same path. Each text fragment
+keeps its attributes, formatting and revision owner; leading, consecutive and trailing tabs stay
+in order. Field instructions retain literal tab whitespace and do not acquire layout tabs.
+Native regressions compare complete visible text and tab markup with explicit-tab controls;
+worker/pagination and export regressions check the physical right edge and PDF text/drawing facts.
+Browser verification also found explicit tabs inside visible deletion wrappers using a full-width
+spacer without accounting for the deleted text. The label wrapped back to the left margin. Revision
+content now reuses the shared browser-aligned tab renderer, measuring visible deleted text and
+skipping hidden deletion/move-source content. Guards keep field boundaries and revision ownership.
+This implements the reported equivalence; no new Word capture is claimed.
