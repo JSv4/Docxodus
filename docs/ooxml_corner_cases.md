@@ -4304,9 +4304,11 @@ ordered, disjoint source and destination content. Reused IDs, overlapping same-n
 crossed ranges remain refused. A named range links explicitly marked moved content; its position
 alone does not make ordinary content part of the move (ECMA-376 §17.13.5.24 and §17.13.5.28).
 
-The processor removes moved wrappers before range cleanup. Cleanup preserves surviving runs and
-non-run content, including bookmarks, fields and content controls, their containers and properties.
-Later passes still resolve deleted paragraph marks and deleted content controls. This applies to
+The processor inspects live content before removing moved wrappers. Range cleanup preserves
+untracked runs and non-run content, including bookmarks, fields and originally empty content controls,
+with their containers and properties. Controls emptied by the move and comment ranges whose moved
+reference disappears do not preserve a second copy. Later passes still resolve deleted paragraph marks
+and deleted content controls. This applies to
 accepting source ranges and rejecting destination ranges.
 
 `MoveRangeWordOracleTests` pins six original literal-OOXML source documents in

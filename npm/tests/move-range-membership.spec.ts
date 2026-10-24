@@ -9,7 +9,7 @@ const cases = JSON.parse(readFileSync(new URL('word-endpoints.json', root), 'utf
 }[];
 
 for (const sample of cases) for (const worker of [false, true]) {
-  test(`${sample.id} matches Word (${worker ? 'worker' : 'main thread'})`, async ({page}) => {
+  test(`${sample.id}: ${worker ? 'worker lists one supported move' : 'main thread matches Word'}`, async ({page}) => {
     await page.goto(worker ? '/worker-test-harness.html' : '/test-harness.html');
     if (!worker) await page.waitForFunction(() => (window as any).DocxodusReady === true);
     const bytes = Array.from(readFileSync(fileURLToPath(new URL(sample.id + '.docx', root))));
@@ -17,6 +17,15 @@ for (const sample of cases) for (const worker of [false, true]) {
       if (worker) await (window as any).createDocxodusWorker();
       const api = worker ? (window as any).DocxodusWorker : (window as any).Docxodus;
       const results: {accept: boolean; route: string; bytes: number[]}[] = [];
+      if (worker) {
+        try {
+          const revisions = await api.getRevisions(new Uint8Array(bytes));
+          if (revisions.length !== 1 || revisions[0].type !== 'move'
+              || revisions[0].resolutionStatus !== 'supported') throw new Error(JSON.stringify(revisions));
+          if (typeof (window as any).Docxodus !== 'undefined') throw new Error('Unexpected main-thread runtime');
+          return results;
+        } finally {api.terminate();}
+      }
       try {
         for (const accept of [false, true]) {
           if (!worker) {
@@ -25,8 +34,7 @@ for (const sample of cases) for (const worker of [false, true]) {
             results.push({accept, route: 'stateless', bytes: Array.from(output)});
           }
           for (const selective of [false, true]) {
-            const session = worker ? await api.openDocxSession(new Uint8Array(bytes))
-              : (window as any).DocxodusSession.openDocxSession(new Uint8Array(bytes), api);
+            const session = (window as any).DocxodusSession.openDocxSession(new Uint8Array(bytes), api);
             try {
               const revisions = await session.listRevisions();
               if (revisions.length !== 1 || revisions[0].type !== 'move'
@@ -43,6 +51,7 @@ for (const sample of cases) for (const worker of [false, true]) {
       } finally {if (worker) api.terminate();}
       return results;
     }, {bytes, worker});
+    expect(results).toHaveLength(worker ? 0 : 6);
     for (const result of results) {
       const xml = readZipEntry(Buffer.from(result.bytes), 'word/document.xml');
       const paragraphs = await page.evaluate(xml => {

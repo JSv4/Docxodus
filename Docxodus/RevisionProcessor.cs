@@ -1393,8 +1393,8 @@ namespace Docxodus
             MarkTablesThatFollowATable(documentElement);
             documentElement = (XElement)FixUpDeletedOrInsertedFieldCodesTransform(documentElement)!;
             var containsMoveFromMoveTo = documentElement.Descendants(W.moveFrom).Any();
-            documentElement = (XElement)AcceptMoveFromMoveToTransform(documentElement)!;
             documentElement = AcceptMoveFromRanges(documentElement);
+            documentElement = (XElement)AcceptMoveFromMoveToTransform(documentElement)!;
             // AcceptParagraphEndTagsInMoveFromTransform needs rewritten similar to AcceptDeletedAndMoveFromParagraphMarks
             documentElement = (XElement)AcceptParagraphEndTagsInMoveFromTransform(documentElement)!;
             documentElement = AcceptDeletedAndMovedFromContentControls(documentElement);
@@ -1764,8 +1764,8 @@ namespace Docxodus
 
         /// <summary>
         /// A named range links moved content; it does not make every child part of the move.
-        /// The moved wrappers are already gone here. Preserve surviving runs, fields, controls
-        /// and point/range metadata, together with their containers and required properties.
+        /// Inspect wrappers before removing them, so ordinary empty controls can be distinguished
+        /// from controls the move empties. Preserve surviving content and its required properties.
         /// Later passes still resolve deletion and paragraph-mark revisions normally.
         /// </summary>
         private static HashSet<XElement> ContentOutsideTheMove(XElement document)
@@ -1773,23 +1773,26 @@ namespace Docxodus
             static bool IsPropertyChild(XElement element) =>
                 element.Name.LocalName.EndsWith("Pr", StringComparison.Ordinal) || element.Name == W.tblGrid;
 
-            // A moved-away comment's reference disappeared with its run wrapper. Its range
+            // A moved-away comment's reference belongs to its removed run wrapper. Its range
             // markers alone must not keep that copy anchored after the move resolves.
             var liveCommentIds = document.Descendants(W.commentReference)
-                .Where(reference => !reference.Ancestors(W.del).Any())
+                .Where(reference => !reference.Ancestors().Any(ancestor =>
+                    ancestor.Name == W.del || ancestor.Name == W.moveFrom))
                 .Select(reference => (string?)reference.Attribute(W.id))
                 .ToHashSet(StringComparer.Ordinal);
 
             bool IsLiveContent(XElement element) =>
-                element.Name == W.r || element.Name == M.r || element.Name == W.sdt ||
-                element.Name == W.fldSimple || element.Name == W.altChunk || element.Name == W.customXml ||
+                element.Name == W.r || element.Name == M.r || element.Name == W.altChunk ||
+                ((element.Name == W.sdt || element.Name == W.fldSimple || element.Name == W.customXml)
+                    && !element.Descendants().Any(child => child.Name == W.moveFrom || child.Name == W.del)) ||
                 element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd ||
                 element.Name == W.permStart || element.Name == W.permEnd ||
                 ((element.Name == W.commentRangeStart || element.Name == W.commentRangeEnd)
                     && liveCommentIds.Contains((string?)element.Attribute(W.id)));
 
             var liveContent = document.Descendants()
-                .Where(element => IsLiveContent(element) && !element.Ancestors(W.del).Any())
+                .Where(element => IsLiveContent(element) && !element.Ancestors().Any(ancestor =>
+                    ancestor.Name == W.del || ancestor.Name == W.moveFrom))
                 .ToList();
             var holders = new HashSet<XElement>(liveContent.SelectMany(element => element.AncestorsAndSelf()));
             var keep = new HashSet<XElement>(holders);
