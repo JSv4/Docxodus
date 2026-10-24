@@ -122,8 +122,8 @@ public class IrRevisionSkipTests
     {
         // The insertion makes this document take the accept path.  The two following tables were
         // already adjacent and carry no revisions, so their original two-table topology is part of
-        // the accepted VIEW.  RevisionProcessor's final-document normalizer normally merges them,
-        // which made a clean counterpart look like a table delete+insert to the IR diff.
+        // the accepted view. Both public acceptance and the IR reader must retain those boundaries,
+        // or a clean counterpart looks like a table delete+insert to the diff.
         const string dirtyLead =
             "<w:p><w:ins w:id=\"1\" w:author=\"A\" w:date=\"2020-01-01T00:00:00Z\">" +
             "<w:r><w:t>accepted lead</w:t></w:r></w:ins></w:p>";
@@ -133,6 +133,24 @@ public class IrRevisionSkipTests
             new IrReaderOptions { RevisionView = RevisionView.Accept });
 
         Assert.Equal(2, accepted.Body.Blocks.OfType<IrTable>().Count());
+    }
+
+    [Fact]
+    public void AcceptRead_does_not_split_an_unrelated_table_that_matches_an_adjacent_pair()
+    {
+        const string dirtyLead =
+            "<w:p><w:ins w:id=\"1\" w:author=\"A\" w:date=\"2020-01-01T00:00:00Z\">" +
+            "<w:r><w:t>accepted lead</w:t></w:r></w:ins></w:p>";
+        XElement ParseTable(string text) => XElement.Parse(Table(text).Replace("<w:tbl>",
+            "<w:tbl xmlns:w=\"" + W.NamespaceName + "\">"));
+        var twoRows = ParseTable("first");
+        twoRows.Add(ParseTable("second").Elements(W + "tr"));
+        var doc = IrTestDocuments.FromBodyXml(dirtyLead + Table("first") + Table("second") +
+            "<w:p/>" + twoRows);
+
+        var accepted = IrReader.Read(doc, new IrReaderOptions { RevisionView = RevisionView.Accept });
+
+        Assert.Equal(new[] { 1, 1, 2 }, accepted.Body.Blocks.OfType<IrTable>().Select(t => t.Rows.Count));
     }
 
     [Fact]

@@ -563,8 +563,7 @@ internal static class IrReader
             case RevisionView.Reject:
                 // A revision-free input's accepted/rejected VIEW is the input itself.  Skip the full
                 // RevisionProcessor package round-trip in that common case: besides being expensive,
-                // its document normalizers (notably adjacent-table coalescing) deliberately change
-                // clean structure even though there is no revision to accept/reject.  The scan set
+                // its document normalizers can change non-revision markup too. The scan set
                 // covers every revision element the processor reacts to, across every story the reader
                 // consumes, so any document that actually needs a revision transform still takes that
                 // path.  See the masking analysis on ProcessorActsOnNameSet for why w:instrText/w:t are
@@ -572,7 +571,7 @@ internal static class IrReader
                 if (!HasRevisionMarkup(wdoc, ProcessorActsOnNameSet))
                     return null;
                 return view == RevisionView.Accept
-                    ? RevisionProcessor.AcceptRevisionsForIrReader(working)
+                    ? RevisionProcessor.AcceptRevisions(working)
                     : RevisionProcessor.RejectRevisions(working);
 
             default:
