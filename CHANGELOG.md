@@ -59,6 +59,13 @@ All notable changes to this project will be documented in this file.
   structural edit, so rejecting older formatting preserves the column change. An incompatible
   saved column layout is refused before mutation or undo history is recorded.
 
+- Block insertion now refuses table-cell, row, grid-column and inline content-control anchors with
+  `AnchorWrongKind` before mutation or undo history (#1331). `InsertParagraph`, `InsertHorizontalRule`
+  and `InsertTable` share a check that their anchor has block siblings; previously they could report
+  success after inserting a paragraph or table directly into a row or another invalid container.
+  Paragraphs, tables, block-level content controls and paragraphs in block wrappers remain supported. To insert inside
+  a cell, anchor on one of its paragraphs or use `ReplaceCellContent`.
+
 - Tracked `SetColumnWidths` writes a schema-valid `w:tblGridChange` with only `w:id` (#1322).
   The revision registry joins it to the matching table and cell width changes, including edits
   that leave some columns unchanged, so one edit still accepts or rejects as one revision.

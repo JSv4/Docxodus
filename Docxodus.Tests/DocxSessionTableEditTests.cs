@@ -1084,4 +1084,108 @@ public class DocxSessionTableEditTests
         Assert.True(XNode.DeepEquals(before, DocumentXml(session.Save())));
         Assert.False(session.Undo());
     }
+
+    // ─── Block insertion beside a table part (issue #1331) ─────────
+
+    /// <summary>A one-cell table, a block content control and a paragraph holding an inline
+    /// content control: every anchor kind a block insertion might be handed.</summary>
+    private static byte[] BlockAnchorDocument() =>
+        IrTestDocuments.FromBodyXml(
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid>"
+            + "<w:tr><w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc></w:tr>"
+            + "</w:tbl>"
+            + "<w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>block control</w:t></w:r></w:p></w:sdtContent></w:sdt>"
+            + "<w:customXml w:element=\"record\"><w:p><w:r><w:t>custom block control</w:t></w:r></w:p></w:customXml>"
+            + "<w:p><w:r><w:t>before </w:t></w:r><w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>inline control</w:t></w:r></w:sdtContent></w:sdt></w:p>"
+            + "<w:p><w:r><w:t>after</w:t></w:r></w:p>").DocumentByteArray;
+
+    /// <summary>The anchor of the element <paramref name="kind"/> names in
+    /// <see cref="BlockAnchorDocument"/>.</summary>
+    private static string BlockAnchor(DocxSession session, string kind)
+    {
+        var anchors = session.Project().AnchorIndex.Values;
+        return kind switch
+        {
+            "cell_paragraph" => anchors.First(a => a.Anchor.Kind == "p" && a.TextPreview.StartsWith("A1")).Anchor.Id,
+            "body_paragraph" => anchors.First(a => a.Anchor.Kind == "p" && a.TextPreview.StartsWith("after")).Anchor.Id,
+            "block_sdt" => anchors.First(a => a.Anchor.Kind == "sdt" && a.TextPreview.StartsWith("block")).Anchor.Id,
+            "custom_paragraph" => anchors.First(a => a.Anchor.Kind == "p" && a.TextPreview.StartsWith("custom")).Anchor.Id,
+            "inline_sdt" => anchors.First(a => a.Anchor.Kind == "sdt" && a.TextPreview.StartsWith("inline")).Anchor.Id,
+            _ => anchors.First(a => a.Anchor.Kind == kind).Anchor.Id,
+        };
+    }
+
+    private static EditResult InsertBlock(DocxSession session, string operation, string anchor, Position position) =>
+        operation switch
+        {
+            "paragraph" => session.InsertParagraph(anchor, position, "new text"),
+            "rule" => session.InsertHorizontalRule(anchor, position),
+            "table" => session.InsertTable(anchor, position, 1, 1),
+            _ => throw new System.ArgumentOutOfRangeException(nameof(operation)),
+        };
+
+    /// <summary>A cell, row, grid column or inline content control has no block siblings, so a
+    /// paragraph, rule or table placed beside one would be schema-invalid (a <c>w:p</c> directly
+    /// inside a <c>w:tr</c>). The insertion is refused before anything is written or recorded.</summary>
+    [Theory]
+    [InlineData("paragraph", "tc", false)]
+    [InlineData("paragraph", "tc", true)]
+    [InlineData("paragraph", "tr", false)]
+    [InlineData("paragraph", "col", false)]
+    [InlineData("paragraph", "inline_sdt", false)]
+    [InlineData("rule", "tc", false)]
+    [InlineData("rule", "tc", true)]
+    [InlineData("rule", "tr", false)]
+    [InlineData("table", "tc", false)]
+    [InlineData("table", "col", false)]
+    public void DT260_BlockInsertion_BesideANonBlock_IsRefused(string operation, string kind, bool tracked)
+    {
+        var baseline = BlockAnchorDocument();
+        foreach (var position in new[] { Position.Before, Position.After })
+        {
+            using var session = new DocxSession(baseline, new DocxSessionSettings
+            {
+                TrackedChanges = tracked ? TrackedChangeMode.RenderInline : TrackedChangeMode.Accept,
+                RevisionAuthor = "Bob",
+            });
+            long version = session.Version;
+
+            var result = InsertBlock(session, operation, BlockAnchor(session, kind), position);
+
+            Assert.False(result.Success);
+            Assert.Equal(EditErrorCode.AnchorWrongKind, result.Error!.Code);
+            Assert.Equal(version, session.Version);
+            Assert.False(session.Undo());
+            Assert.True(XNode.DeepEquals(DocumentXml(baseline), DocumentXml(session.Save())));
+        }
+    }
+
+    /// <summary>Control: a paragraph (in the body or in a cell), a table and a block content
+    /// control all take a block beside them, and the result validates.</summary>
+    [Theory]
+    [InlineData("paragraph", "body_paragraph")]
+    [InlineData("paragraph", "cell_paragraph")]
+    [InlineData("paragraph", "tbl")]
+    [InlineData("paragraph", "block_sdt")]
+    [InlineData("paragraph", "custom_paragraph")]
+    [InlineData("rule", "custom_paragraph")]
+    [InlineData("table", "custom_paragraph")]
+    [InlineData("rule", "cell_paragraph")]
+    [InlineData("rule", "tbl")]
+    [InlineData("table", "body_paragraph")]
+    [InlineData("table", "block_sdt")]
+    public void DT261_BlockInsertion_BesideABlock_StillSucceeds(string operation, string kind)
+    {
+        foreach (var position in new[] { Position.Before, Position.After })
+        {
+            using var session = new DocxSession(BlockAnchorDocument());
+
+            var result = InsertBlock(session, operation, BlockAnchor(session, kind), position);
+
+            Assert.True(result.Success, result.Error?.Message);
+            var saved = session.Save();
+            PackageValidation.AssertValid(saved, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
+            PackageValidation.AssertValid(saved, DocumentFormat.OpenXml.FileFormatVersions.Office2021);
+        }
+    }
 }
