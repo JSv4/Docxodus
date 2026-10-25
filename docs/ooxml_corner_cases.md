@@ -17,6 +17,7 @@ This document tracks edge cases and quirks in Open XML document processing where
 4. [Paragraph Layout](#paragraph-layout)
    - [`w:lineRule="auto"` is a multiple of the FONT's line box, not of font-size](#wlineruleauto-is-a-multiple-of-the-fonts-line-box-not-of-font-size)
    - [An accumulated line-spacing error can resemble a top-margin deviation](#an-accumulated-line-spacing-error-can-resemble-a-top-margin-deviation)
+   - [Precision loss before auto-spacing (#1124)](#precision-loss-before-auto-spacing-1124)
    - [Cached TOC field results suppress hyperlink presentation](#cached-toc-field-results-suppress-hyperlink-presentation)
    - [`w:ind` has two spellings for each edge: `w:start`/`w:left` and `w:end`/`w:right`](#wind-has-two-spellings-for-each-edge-wstartwleft-and-wendwright)
 5. [Theme Colors](#theme-colors)
@@ -2446,6 +2447,40 @@ the mark draws no glyph. The fixture case is a regression guard: with the strut 
 second baseline lands 15.96 pt below the first instead of Word's 12.25 pt.
 
 Tests: the #949 case in `npm/tests/export-line-baselines.spec.ts`.
+
+### Precision loss before auto-spacing (#1124)
+
+The related #1124 controls in `TestFiles/BaselineFlow/word-observations.json` expose a smaller
+precision loss in plain-paragraph export. For example, `w:spacing w:line="276"
+w:lineRule="auto"` means a 1.15 multiple. Rounding the resolved natural height to twips and
+flooring the product shortens every line. Native Word long-paragraph controls at 10, 13 and
+16 points demonstrate the accumulated error independently of the paragraph's page origin.
+
+| Measurement on the 13pt Arial control | Baseline pitch / accumulated difference |
+| --- | --- |
+| Native Word for the web PDF | 17.2014pt average within the captured page segment |
+| Docxodus before the precision correction | 17.15pt pitch; up to 0.72pt relative baseline error |
+| LibreOffice | Not measured for this specific control |
+
+`npm/src/word-text.ts` now retains the resolved font height through the spacing multiple.
+The shared probe in `npm/src/line-metrics.ts` also measures at 10000px: a 1000px Liberation
+Serif probe reports a 1.149 height ratio, whereas 10000px reports 1.1499, close to the font's
+2355/2048 ratio. The native assertions in `npm/tests/word-baselines.spec.ts` cover both this
+probe loss and premature line rounding. These are relative-pitch observations, not a claim
+that every Word PDF glyph or raster matches.
+
+Matching line inventories also leave a distinct horizontal error when the painter copies
+the browser's hinted word starts. Native 11pt and 12pt glyph-gap controls retain each raw PDF
+coordinate; independent font-table expectations check natural word advances and alignment
+without assuming that Word's PDF placement quantization is a universal grid. The zero-fit
+path now preserves inline flow geometry while painting the same unrounded font advances
+used for newly fitted lines. Unsupported break controls retain their existing DOM path.
+
+The original agreement exposes a provider conflict: with the exact Liberation Serif glyph
+outlines and advances embedded in the Word capture, retaining the auto-spacing precision
+improves the local Word raster diagnostic while reducing its agreement with the preserved
+LibreOffice reference. Both raw references and the historical score remain unchanged. This
+observation does not exempt the case from the existing CI regression gate.
 
 ### An accumulated line-spacing error can resemble a top-margin deviation
 

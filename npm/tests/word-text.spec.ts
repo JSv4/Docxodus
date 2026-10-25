@@ -1,8 +1,10 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 const wordText = readFileSync(new URL('../dist/word-text.js', import.meta.url), 'utf8').replace(/^export /gm, '');
 const lineMetrics = readFileSync(new URL('../dist/line-metrics.js', import.meta.url), 'utf8').replace(/^export /gm, '');
+const nativeAdvances = JSON.parse(readFileSync(new URL('../../TestFiles/WordAdvanceFlow/word-observations.json', import.meta.url), 'utf8'));
 const geometry = `data-section-index="0" data-page-width="444" data-page-height="700"
   data-content-width="300" data-content-height="556" data-margin-top="72"
   data-margin-bottom="72" data-margin-left="72" data-margin-right="72"`;
@@ -293,8 +295,37 @@ test('modern Word can compress a final justified line that exceeds its natural w
   expect(actual.end).toBeCloseTo(actual.width, 2);
 });
 
+test('a matching modern final line retains its bounded space compression', async ({ page }) => {
+  const text = Array(28).fill('pa').join(' ');
+  await page.setContent(`${styles}<main data-docx-compatibility-mode="15"><p style="width:468pt;text-align:justify">
+    <span class="run" style="white-space:pre-wrap;position:static;font-kerning:none">${text}</span></p></main>`);
+  await page.addScriptTag({ content: lineMetrics });
+  await page.addScriptTag({ content: wordText });
+  const actual = await page.evaluate(() => {
+    const api = window as any, root = document.querySelector('main')!, p = root.querySelector<HTMLElement>('p')!, run = p.firstElementChild!;
+    api.applyUnroundedNormalLineHeights(root);
+    const size = Number.parseFloat(getComputedStyle(run).fontSize);
+    const range = document.createRange(); range.selectNodeContents(run);
+    const measured = range.getBoundingClientRect().width;
+    const word = 1933 * size / 2048, natural = (1933 * 28 + 512 * 27) * size / 2048;
+    // Place the band between the browser's hinted width and the independently
+    // derived font width: both choose one line, but vector spaces must contract.
+    p.style.width = `${(measured + natural) / 2}px`;
+    api.prepareWordText(root);
+    const fitted = run.getAttribute('data-docx-word-fit');
+    api.paintWordText(root);
+    const last = p.querySelector('svg > text')!.lastElementChild!;
+    return { measured, natural, fitted, lines:p.querySelectorAll('svg > text').length,
+      end:Number(last.getAttribute('x')) / 4 + word, width:p.getBoundingClientRect().width };
+  });
+  expect(actual.natural - actual.measured).toBeGreaterThan(.01);
+  expect(actual.fitted).toBe('0');
+  expect(actual.lines).toBe(1);
+  expect(actual.end).toBeCloseTo(actual.width, 3);
+});
+
 for (const mode of ['', 'data-docx-compatibility-mode="14"', 'data-docx-compatibility-mode="15"']) {
-  test(`unchanged line choices preserve their measured word starts (${mode || 'omitted mode'})`, async ({ page }) => {
+  test(`unchanged line choices preserve inline flow geometry (${mode || 'omitted mode'})`, async ({ page }) => {
     await page.setContent(`${styles}<style>.run{white-space:pre-wrap;position:static;font-kerning:none}</style><main ${mode}>
       <p style="width:468pt;font-size:16pt;font-weight:bold"><span class="run">Service agreement layout</span></p>
       <p style="width:468pt;text-align:justify"><span class="run">The parties will inspect the sample, record the agreed date, and send the written schedule to the project office. Each report includes the measured quantity and the name of the person responsible for the next review.</span></p>
@@ -304,18 +335,59 @@ for (const mode of ['', 'data-docx-compatibility-mode="14"', 'data-docx-compatib
     const actual = await page.evaluate(() => {
       const api = window as any, root = document.querySelector('main')!;
       api.applyUnroundedNormalLineHeights(root);
-      const before = Array.from(root.querySelectorAll('p')).map(p => {
-        const node = p.firstElementChild!.firstChild!, box = p.getBoundingClientRect();
-        return Array.from(node.textContent!.matchAll(/\S+/g), m => {
-          const r = document.createRange(); r.setStart(node, m.index!); r.setEnd(node, m.index! + m[0].length);
-          return r.getBoundingClientRect().left - box.left;
-        });
-      });
-      api.prepareWordText(root); api.paintWordText(root);
-      const after = Array.from(root.querySelectorAll('p')).map(p =>
-        Array.from(p.querySelectorAll('tspan')).map(w => Number(w.getAttribute('x')) / 4));
-      return { before, after };
+      const boxes = () => Array.from(root.querySelectorAll('p')).map(p => p.getBoundingClientRect().toJSON());
+      const text = root.textContent, before = boxes();
+      api.prepareWordText(root);
+      const prepared = boxes();
+      const fitted = Array.from(root.querySelectorAll('.run')).map(r => r.getAttribute('data-docx-word-fit'));
+      api.paintWordText(root);
+      return { before, prepared, after:boxes(), text, paintedText:root.textContent, fitted };
     });
+    expect(actual.fitted).toEqual(['0', '0']);
+    expect(actual.prepared).toEqual(actual.before);
     expect(actual.after).toEqual(actual.before);
+    expect(actual.paintedText).toBe(actual.text);
+  });
+}
+
+for (const mode of [undefined, 14, 15]) for (const size of [11, 12])
+for (const alignment of ['left', 'justify', 'center', 'right']) {
+  test(`matching lines use independent font word advances (${mode ?? 'omitted'}, ${size}pt, ${alignment})`, async ({ page }) => {
+    const captured = nativeAdvances.cases.find((c: any) => c.fontSizePt === size);
+    const source = readFileSync(new URL(`../../TestFiles/WordAdvanceFlow/${captured.sourceFile}`, import.meta.url));
+    expect(createHash('sha256').update(source).digest('hex')).toBe(captured.sourceSha256);
+    const text = captured.paragraphs.find((p: any) => p.variant === 'natural-word-gaps').text;
+    await page.setContent(`${styles}<main ${mode ? `data-docx-compatibility-mode="${mode}"` : ''}>
+      <p style="width:468pt;font-size:${size}pt;text-align:${alignment}"><span class="run" style="white-space:pre-wrap;position:static;font-kerning:none">${text}</span></p></main>`);
+    await page.addScriptTag({ content: lineMetrics });
+    await page.addScriptTag({ content: wordText });
+    const actual = await page.evaluate(() => {
+      const api = window as any, root = document.querySelector('main')!, p = root.querySelector('p')!, run = p.firstElementChild!;
+      api.applyUnroundedNormalLineHeights(root); api.prepareWordText(root);
+      const box = p.getBoundingClientRect().toJSON();
+      const fitted = run.getAttribute('data-docx-word-fit');
+      const resolvedSizePt = Number.parseFloat(getComputedStyle(run).fontSize) * .75;
+      api.paintWordText(root);
+      return { fitted, box, after:p.getBoundingClientRect().toJSON(), text:p.textContent,
+        resolvedSizePt,
+        lines:p.querySelectorAll('svg > text').length,
+        x:Array.from(p.querySelectorAll('tspan')).map(w => Number(w.getAttribute('x')) * .75 / 4) };
+    });
+    // Independent font-table expectation: Liberation Serif's unkerned p/a/space
+    // advances are1024/909/512 units at2048 UPEM. The native Word glyph-gap
+    // fixtures cover these same words at both sizes; PDF quantization remains
+    // recorded separately rather than being fitted with an arbitrary offset.
+    // CSS serializes11pt as14.6667px; retain that declared resolved size when
+    // scaling the independent table values rather than tolerating its drift.
+    expect(actual.resolvedSizePt).toBeCloseTo(size, 4);
+    const pitch = (1024 + 909 + 512) * actual.resolvedSizePt / 2048;
+    const naturalWidth = pitch * 28 - 512 * actual.resolvedSizePt / 2048;
+    const start = alignment === 'right' ? 468 - naturalWidth : alignment === 'center' ? (468 - naturalWidth) / 2 : 0;
+    expect(actual.fitted).toBe('0');
+    expect(actual.after).toEqual(actual.box);
+    expect(actual.text).toBe(text);
+    expect(actual.lines).toBe(1);
+    expect(actual.x).toHaveLength(28);
+    for (let i = 0; i < actual.x.length; i++) expect(actual.x[i]).toBeCloseTo(start + i * pitch, 4);
   });
 }

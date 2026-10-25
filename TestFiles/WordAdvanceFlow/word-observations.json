@@ -1,0 +1,1370 @@
+{
+  "schema": 1,
+  "issue": 1124,
+  "provider": "Microsoft Word for the web",
+  "captureDate": "2026-10-25",
+  "reportedBuild": null,
+  "qualification": "Raw native PDF word coordinates are observations, not a universal placement grid. Regression expectations independently use unkerned Liberation Serif hmtx p/a/space advances1024/909/512 at2048 UPEM. Same native words have matching Times New Roman advances; raster identity is not asserted.",
+  "cases": [
+    {
+      "id": "glyph-advances-mode-15-size-12",
+      "sourceFile": "glyph-advances-mode-15-size-12.docx",
+      "sourceSha256": "3f6acf30c13ee8c0516cd81786da9f45c10c795b88bc0197c68fdee85a6a4cc3",
+      "nativePdfSha256": "81c0c9eb07d05c16047738e61cef66882f0ab85cb1020aad6778fa150fcdf479",
+      "fontSizePt": 12,
+      "compatibilityMode": 15,
+      "paragraphs": [
+        {
+          "index": 9,
+          "variant": "natural-word-gaps",
+          "alignment": "left",
+          "widthPt": 468,
+          "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+          "nativeLines": [
+            {
+              "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+              "words": [
+                {
+                  "text": "pa",
+                  "xPt": 72.0250015258789
+                },
+                {
+                  "text": "pa",
+                  "xPt": 86.26900482177734
+                },
+                {
+                  "text": "pa",
+                  "xPt": 100.51300811767578
+                },
+                {
+                  "text": "pa",
+                  "xPt": 114.75701141357422
+                },
+                {
+                  "text": "pa",
+                  "xPt": 129.00100708007812
+                },
+                {
+                  "text": "pa",
+                  "xPt": 143.48501586914062
+                },
+                {
+                  "text": "pa",
+                  "xPt": 157.72901916503906
+                },
+                {
+                  "text": "pa",
+                  "xPt": 171.9730224609375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 186.21702575683594
+                },
+                {
+                  "text": "pa",
+                  "xPt": 200.70103454589844
+                },
+                {
+                  "text": "pa",
+                  "xPt": 214.94503784179688
+                },
+                {
+                  "text": "pa",
+                  "xPt": 229.1890411376953
+                },
+                {
+                  "text": "pa",
+                  "xPt": 243.6730499267578
+                },
+                {
+                  "text": "pa",
+                  "xPt": 257.91705322265625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 272.1610412597656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 286.64501953125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 300.8890075683594
+                },
+                {
+                  "text": "pa",
+                  "xPt": 315.13299560546875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 329.61700439453125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 343.8609924316406
+                },
+                {
+                  "text": "pa",
+                  "xPt": 358.10498046875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 372.3489685058594
+                },
+                {
+                  "text": "pa",
+                  "xPt": 386.59295654296875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 401.0769348144531
+                },
+                {
+                  "text": "pa",
+                  "xPt": 415.3209228515625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 429.5649108886719
+                },
+                {
+                  "text": "pa",
+                  "xPt": 443.80889892578125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 458.2928771972656
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "index": 10,
+          "variant": "unexpanded-final-line",
+          "alignment": "both",
+          "widthPt": 468,
+          "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+          "nativeLines": [
+            {
+              "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+              "words": [
+                {
+                  "text": "pa",
+                  "xPt": 72.0250015258789
+                },
+                {
+                  "text": "pa",
+                  "xPt": 86.26900482177734
+                },
+                {
+                  "text": "pa",
+                  "xPt": 100.51300811767578
+                },
+                {
+                  "text": "pa",
+                  "xPt": 114.75701141357422
+                },
+                {
+                  "text": "pa",
+                  "xPt": 129.00100708007812
+                },
+                {
+                  "text": "pa",
+                  "xPt": 143.48501586914062
+                },
+                {
+                  "text": "pa",
+                  "xPt": 157.72901916503906
+                },
+                {
+                  "text": "pa",
+                  "xPt": 171.9730224609375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 186.21702575683594
+                },
+                {
+                  "text": "pa",
+                  "xPt": 200.70103454589844
+                },
+                {
+                  "text": "pa",
+                  "xPt": 214.94503784179688
+                },
+                {
+                  "text": "pa",
+                  "xPt": 229.1890411376953
+                },
+                {
+                  "text": "pa",
+                  "xPt": 243.6730499267578
+                },
+                {
+                  "text": "pa",
+                  "xPt": 257.91705322265625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 272.1610412597656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 286.64501953125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 300.8890075683594
+                },
+                {
+                  "text": "pa",
+                  "xPt": 315.13299560546875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 329.61700439453125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 343.8609924316406
+                },
+                {
+                  "text": "pa",
+                  "xPt": 358.10498046875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 372.3489685058594
+                },
+                {
+                  "text": "pa",
+                  "xPt": 386.59295654296875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 401.0769348144531
+                },
+                {
+                  "text": "pa",
+                  "xPt": 415.3209228515625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 429.5649108886719
+                },
+                {
+                  "text": "pa",
+                  "xPt": 443.80889892578125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 458.2928771972656
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "index": 11,
+          "variant": "single-space-wrap",
+          "alignment": "both",
+          "widthPt": 468,
+          "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+          "nativeLines": [
+            {
+              "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+              "words": [
+                {
+                  "text": "pa",
+                  "xPt": 72.0250015258789
+                },
+                {
+                  "text": "pa",
+                  "xPt": 86.26900482177734
+                },
+                {
+                  "text": "pa",
+                  "xPt": 100.51300811767578
+                },
+                {
+                  "text": "pa",
+                  "xPt": 114.75701141357422
+                },
+                {
+                  "text": "pa",
+                  "xPt": 129.00100708007812
+                },
+                {
+                  "text": "pa",
+                  "xPt": 143.24501037597656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 157.489013671875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 171.73301696777344
+                },
+                {
+                  "text": "pa",
+                  "xPt": 185.97702026367188
+                },
+                {
+                  "text": "pa",
+                  "xPt": 200.2210235595703
+                },
+                {
+                  "text": "pa",
+                  "xPt": 214.46502685546875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 228.7090301513672
+                },
+                {
+                  "text": "pa",
+                  "xPt": 242.95303344726562
+                },
+                {
+                  "text": "pa",
+                  "xPt": 257.197021484375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 271.4410095214844
+                },
+                {
+                  "text": "pa",
+                  "xPt": 285.68499755859375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 300.1689758300781
+                },
+                {
+                  "text": "pa",
+                  "xPt": 314.4129638671875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 328.89697265625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 343.1409606933594
+                },
+                {
+                  "text": "pa",
+                  "xPt": 357.38494873046875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 371.6289367675781
+                },
+                {
+                  "text": "pa",
+                  "xPt": 385.8729248046875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 400.1169128417969
+                },
+                {
+                  "text": "pa",
+                  "xPt": 414.36090087890625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 428.6048889160156
+                },
+                {
+                  "text": "pa",
+                  "xPt": 442.848876953125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 457.0928649902344
+                },
+                {
+                  "text": "pa",
+                  "xPt": 471.33685302734375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 485.5808410644531
+                },
+                {
+                  "text": "pa",
+                  "xPt": 499.8248291015625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 514.06884765625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 528.3128662109375
+                }
+              ]
+            },
+            {
+              "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+              "words": [
+                {
+                  "text": "pa",
+                  "xPt": 72.0250015258789
+                },
+                {
+                  "text": "pa",
+                  "xPt": 86.26900482177734
+                },
+                {
+                  "text": "pa",
+                  "xPt": 100.51300811767578
+                },
+                {
+                  "text": "pa",
+                  "xPt": 114.75701141357422
+                },
+                {
+                  "text": "pa",
+                  "xPt": 129.00100708007812
+                },
+                {
+                  "text": "pa",
+                  "xPt": 143.48501586914062
+                },
+                {
+                  "text": "pa",
+                  "xPt": 157.72901916503906
+                },
+                {
+                  "text": "pa",
+                  "xPt": 171.9730224609375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 186.21702575683594
+                },
+                {
+                  "text": "pa",
+                  "xPt": 200.70103454589844
+                },
+                {
+                  "text": "pa",
+                  "xPt": 214.94503784179688
+                },
+                {
+                  "text": "pa",
+                  "xPt": 229.1890411376953
+                },
+                {
+                  "text": "pa",
+                  "xPt": 243.6730499267578
+                },
+                {
+                  "text": "pa",
+                  "xPt": 257.91705322265625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 272.1610412597656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 286.64501953125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 300.8890075683594
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "index": 12,
+          "variant": "double-space-wrap",
+          "alignment": "both",
+          "widthPt": 468,
+          "text": "pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa",
+          "nativeLines": [
+            {
+              "text": "pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa",
+              "words": [
+                {
+                  "text": "pa",
+                  "xPt": 72.0250015258789
+                },
+                {
+                  "text": "pa",
+                  "xPt": 89.26900482177734
+                },
+                {
+                  "text": "pa",
+                  "xPt": 106.99300384521484
+                },
+                {
+                  "text": "pa",
+                  "xPt": 124.47700500488281
+                },
+                {
+                  "text": "pa",
+                  "xPt": 141.9610137939453
+                },
+                {
+                  "text": "pa",
+                  "xPt": 159.4450225830078
+                },
+                {
+                  "text": "pa",
+                  "xPt": 177.16903686523438
+                },
+                {
+                  "text": "pa",
+                  "xPt": 194.65304565429688
+                },
+                {
+                  "text": "pa",
+                  "xPt": 212.13705444335938
+                },
+                {
+                  "text": "pa",
+                  "xPt": 229.62106323242188
+                },
+                {
+                  "text": "pa",
+                  "xPt": 247.34507751464844
+                },
+                {
+                  "text": "pa",
+                  "xPt": 264.82904052734375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 282.31304931640625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 299.79705810546875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 317.5210266113281
+                },
+                {
+                  "text": "pa",
+                  "xPt": 335.0050048828125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 352.7289733886719
+                },
+                {
+                  "text": "pa",
+                  "xPt": 370.21295166015625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 387.69696044921875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 405.18096923828125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 422.9049377441406
+                },
+                {
+                  "text": "pa",
+                  "xPt": 440.388916015625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 457.8729248046875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 475.35693359375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 493.0809020996094
+                },
+                {
+                  "text": "pa",
+                  "xPt": 510.56488037109375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 528.0488891601562
+                }
+              ]
+            },
+            {
+              "text": "pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa",
+              "words": [
+                {
+                  "text": "pa",
+                  "xPt": 72.0250015258789
+                },
+                {
+                  "text": "pa",
+                  "xPt": 89.26900482177734
+                },
+                {
+                  "text": "pa",
+                  "xPt": 106.51300811767578
+                },
+                {
+                  "text": "pa",
+                  "xPt": 123.75701141357422
+                },
+                {
+                  "text": "pa",
+                  "xPt": 141.0010223388672
+                },
+                {
+                  "text": "pa",
+                  "xPt": 158.4850311279297
+                },
+                {
+                  "text": "pa",
+                  "xPt": 175.72903442382812
+                },
+                {
+                  "text": "pa",
+                  "xPt": 192.97303771972656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 210.217041015625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 227.7010498046875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 244.94505310058594
+                },
+                {
+                  "text": "pa",
+                  "xPt": 262.18902587890625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 279.6730041503906
+                },
+                {
+                  "text": "pa",
+                  "xPt": 296.9169921875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 314.1609802246094
+                },
+                {
+                  "text": "pa",
+                  "xPt": 331.8849792480469
+                },
+                {
+                  "text": "pa",
+                  "xPt": 349.12896728515625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 366.3729553222656
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "glyph-advances-mode-15-size-11",
+      "sourceFile": "glyph-advances-mode-15-size-11.docx",
+      "sourceSha256": "1d798cfaf66752321cf267e6296d994e4e8ee1b49f4dfd3ed408220f0935fd4b",
+      "nativePdfSha256": "bf9ffadeea43b0d4384e5e52fe98128f4b8ca6066ff74386e0207e83731a2b24",
+      "fontSizePt": 11,
+      "compatibilityMode": 15,
+      "paragraphs": [
+        {
+          "index": 9,
+          "variant": "natural-word-gaps",
+          "alignment": "left",
+          "widthPt": 468,
+          "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+          "nativeLines": [
+            {
+              "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+              "words": [
+                {
+                  "text": "pa",
+                  "xPt": 72.0250015258789
+                },
+                {
+                  "text": "pa",
+                  "xPt": 85.26900482177734
+                },
+                {
+                  "text": "pa",
+                  "xPt": 98.51300811767578
+                },
+                {
+                  "text": "pa",
+                  "xPt": 111.75701141357422
+                },
+                {
+                  "text": "pa",
+                  "xPt": 124.74801635742188
+                },
+                {
+                  "text": "pa",
+                  "xPt": 137.9920196533203
+                },
+                {
+                  "text": "pa",
+                  "xPt": 150.98301696777344
+                },
+                {
+                  "text": "pa",
+                  "xPt": 164.22702026367188
+                },
+                {
+                  "text": "pa",
+                  "xPt": 177.218017578125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 190.46202087402344
+                },
+                {
+                  "text": "pa",
+                  "xPt": 203.45301818847656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 216.697021484375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 229.68801879882812
+                },
+                {
+                  "text": "pa",
+                  "xPt": 242.93202209472656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 255.9230194091797
+                },
+                {
+                  "text": "pa",
+                  "xPt": 269.1670227050781
+                },
+                {
+                  "text": "pa",
+                  "xPt": 282.15802001953125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 295.4020080566406
+                },
+                {
+                  "text": "pa",
+                  "xPt": 308.64599609375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 321.6369934082031
+                },
+                {
+                  "text": "pa",
+                  "xPt": 334.62799072265625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 347.8719787597656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 361.115966796875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 374.1069641113281
+                },
+                {
+                  "text": "pa",
+                  "xPt": 387.3509521484375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 400.3419494628906
+                },
+                {
+                  "text": "pa",
+                  "xPt": 413.5859375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 426.5769348144531
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "index": 10,
+          "variant": "unexpanded-final-line",
+          "alignment": "both",
+          "widthPt": 468,
+          "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+          "nativeLines": [
+            {
+              "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+              "words": [
+                {
+                  "text": "pa",
+                  "xPt": 72.0250015258789
+                },
+                {
+                  "text": "pa",
+                  "xPt": 85.26900482177734
+                },
+                {
+                  "text": "pa",
+                  "xPt": 98.51300811767578
+                },
+                {
+                  "text": "pa",
+                  "xPt": 111.75701141357422
+                },
+                {
+                  "text": "pa",
+                  "xPt": 124.74801635742188
+                },
+                {
+                  "text": "pa",
+                  "xPt": 137.9920196533203
+                },
+                {
+                  "text": "pa",
+                  "xPt": 150.98301696777344
+                },
+                {
+                  "text": "pa",
+                  "xPt": 164.22702026367188
+                },
+                {
+                  "text": "pa",
+                  "xPt": 177.218017578125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 190.46202087402344
+                },
+                {
+                  "text": "pa",
+                  "xPt": 203.45301818847656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 216.697021484375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 229.68801879882812
+                },
+                {
+                  "text": "pa",
+                  "xPt": 242.93202209472656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 255.9230194091797
+                },
+                {
+                  "text": "pa",
+                  "xPt": 269.1670227050781
+                },
+                {
+                  "text": "pa",
+                  "xPt": 282.15802001953125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 295.4020080566406
+                },
+                {
+                  "text": "pa",
+                  "xPt": 308.64599609375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 321.6369934082031
+                },
+                {
+                  "text": "pa",
+                  "xPt": 334.62799072265625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 347.8719787597656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 361.115966796875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 374.1069641113281
+                },
+                {
+                  "text": "pa",
+                  "xPt": 387.3509521484375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 400.3419494628906
+                },
+                {
+                  "text": "pa",
+                  "xPt": 413.5859375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 426.5769348144531
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "index": 11,
+          "variant": "single-space-wrap",
+          "alignment": "both",
+          "widthPt": 468,
+          "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+          "nativeLines": [
+            {
+              "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+              "words": [
+                {
+                  "text": "pa",
+                  "xPt": 72.0250015258789
+                },
+                {
+                  "text": "pa",
+                  "xPt": 85.26900482177734
+                },
+                {
+                  "text": "pa",
+                  "xPt": 98.51300811767578
+                },
+                {
+                  "text": "pa",
+                  "xPt": 111.50401306152344
+                },
+                {
+                  "text": "pa",
+                  "xPt": 124.4950180053711
+                },
+                {
+                  "text": "pa",
+                  "xPt": 137.4970245361328
+                },
+                {
+                  "text": "pa",
+                  "xPt": 150.74102783203125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 163.73202514648438
+                },
+                {
+                  "text": "pa",
+                  "xPt": 176.73402404785156
+                },
+                {
+                  "text": "pa",
+                  "xPt": 189.97802734375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 202.96902465820312
+                },
+                {
+                  "text": "pa",
+                  "xPt": 215.9710235595703
+                },
+                {
+                  "text": "pa",
+                  "xPt": 229.21502685546875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 242.20602416992188
+                },
+                {
+                  "text": "pa",
+                  "xPt": 255.197021484375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 268.19903564453125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 281.4430236816406
+                },
+                {
+                  "text": "pa",
+                  "xPt": 294.43402099609375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 307.43603515625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 320.6800231933594
+                },
+                {
+                  "text": "pa",
+                  "xPt": 333.6710205078125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 346.9150085449219
+                },
+                {
+                  "text": "pa",
+                  "xPt": 359.906005859375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 372.8970031738281
+                },
+                {
+                  "text": "pa",
+                  "xPt": 385.8990173339844
+                },
+                {
+                  "text": "pa",
+                  "xPt": 399.14300537109375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 412.1340026855469
+                },
+                {
+                  "text": "pa",
+                  "xPt": 425.1360168457031
+                },
+                {
+                  "text": "pa",
+                  "xPt": 438.3800048828125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 451.3710021972656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 464.3730163574219
+                },
+                {
+                  "text": "pa",
+                  "xPt": 477.61700439453125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 490.6080017089844
+                },
+                {
+                  "text": "pa",
+                  "xPt": 503.5989990234375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 516.6009521484375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 529.8449096679688
+                }
+              ]
+            },
+            {
+              "text": "pa pa pa pa pa pa pa pa pa pa pa pa pa pa",
+              "words": [
+                {
+                  "text": "pa",
+                  "xPt": 72.0250015258789
+                },
+                {
+                  "text": "pa",
+                  "xPt": 85.26900482177734
+                },
+                {
+                  "text": "pa",
+                  "xPt": 98.51300811767578
+                },
+                {
+                  "text": "pa",
+                  "xPt": 111.75701141357422
+                },
+                {
+                  "text": "pa",
+                  "xPt": 124.74801635742188
+                },
+                {
+                  "text": "pa",
+                  "xPt": 137.9920196533203
+                },
+                {
+                  "text": "pa",
+                  "xPt": 150.98301696777344
+                },
+                {
+                  "text": "pa",
+                  "xPt": 164.22702026367188
+                },
+                {
+                  "text": "pa",
+                  "xPt": 177.218017578125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 190.46202087402344
+                },
+                {
+                  "text": "pa",
+                  "xPt": 203.45301818847656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 216.697021484375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 229.68801879882812
+                },
+                {
+                  "text": "pa",
+                  "xPt": 242.93202209472656
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "index": 12,
+          "variant": "double-space-wrap",
+          "alignment": "both",
+          "widthPt": 468,
+          "text": "pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa",
+          "nativeLines": [
+            {
+              "text": "pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa",
+              "words": [
+                {
+                  "text": "pa",
+                  "xPt": 72.0250015258789
+                },
+                {
+                  "text": "pa",
+                  "xPt": 88.01900482177734
+                },
+                {
+                  "text": "pa",
+                  "xPt": 103.77100372314453
+                },
+                {
+                  "text": "pa",
+                  "xPt": 119.51200866699219
+                },
+                {
+                  "text": "pa",
+                  "xPt": 135.2530059814453
+                },
+                {
+                  "text": "pa",
+                  "xPt": 151.24700927734375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 166.98800659179688
+                },
+                {
+                  "text": "pa",
+                  "xPt": 182.72900390625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 198.47000122070312
+                },
+                {
+                  "text": "pa",
+                  "xPt": 214.21099853515625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 229.96299743652344
+                },
+                {
+                  "text": "pa",
+                  "xPt": 245.70399475097656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 261.4449768066406
+                },
+                {
+                  "text": "pa",
+                  "xPt": 277.43896484375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 293.1799621582031
+                },
+                {
+                  "text": "pa",
+                  "xPt": 308.92095947265625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 324.4089660644531
+                },
+                {
+                  "text": "pa",
+                  "xPt": 340.4029541015625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 356.15496826171875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 371.8959655761719
+                },
+                {
+                  "text": "pa",
+                  "xPt": 387.636962890625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 403.6309509277344
+                },
+                {
+                  "text": "pa",
+                  "xPt": 419.3719482421875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 435.1129455566406
+                },
+                {
+                  "text": "pa",
+                  "xPt": 450.85394287109375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 466.5949401855469
+                },
+                {
+                  "text": "pa",
+                  "xPt": 482.3469543457031
+                },
+                {
+                  "text": "pa",
+                  "xPt": 498.08795166015625
+                },
+                {
+                  "text": "pa",
+                  "xPt": 513.8289794921875
+                },
+                {
+                  "text": "pa",
+                  "xPt": 529.8229370117188
+                }
+              ]
+            },
+            {
+              "text": "pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa  pa",
+              "words": [
+                {
+                  "text": "pa",
+                  "xPt": 72.0250015258789
+                },
+                {
+                  "text": "pa",
+                  "xPt": 88.01900482177734
+                },
+                {
+                  "text": "pa",
+                  "xPt": 104.01300811767578
+                },
+                {
+                  "text": "pa",
+                  "xPt": 120.00701141357422
+                },
+                {
+                  "text": "pa",
+                  "xPt": 135.74801635742188
+                },
+                {
+                  "text": "pa",
+                  "xPt": 151.7420196533203
+                },
+                {
+                  "text": "pa",
+                  "xPt": 167.48301696777344
+                },
+                {
+                  "text": "pa",
+                  "xPt": 183.47702026367188
+                },
+                {
+                  "text": "pa",
+                  "xPt": 199.218017578125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 215.21202087402344
+                },
+                {
+                  "text": "pa",
+                  "xPt": 230.95301818847656
+                },
+                {
+                  "text": "pa",
+                  "xPt": 246.947021484375
+                },
+                {
+                  "text": "pa",
+                  "xPt": 262.68798828125
+                },
+                {
+                  "text": "pa",
+                  "xPt": 278.6819763183594
+                },
+                {
+                  "text": "pa",
+                  "xPt": 294.4229736328125
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

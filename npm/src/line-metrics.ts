@@ -10,8 +10,8 @@
  * natural height measured where rounding is negligible.
  */
 
-/** Font size the natural line height is probed at: rounding to a pixel there is < 0.0005 em. */
-const PROBE_FONT_SIZE_PX = 1000;
+/** Large-font probe reduces per-component pixel rounding before scaling back to the run's size. */
+const PROBE_FONT_SIZE_PX = 10000;
 
 /** Probe text for an element whose own text the primary font covers (Latin, through U+024F). */
 const LATIN_PROBE = "Hg";

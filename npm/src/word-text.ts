@@ -253,8 +253,8 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
     start = best + 1;
   }
   // A measured flow needs no replacement when its complete line choices agree.
-  // Preserve those glyph positions and inline block geometry in either mode;
-  // the font-advance fitter owns lines whose chosen contents differ.
+  // Preserve inline block geometry in either mode. The painter still derives
+  // word positions from font advances; matching breaks do not certify DOM X.
   if (run.childNodes.length === 1 && run.firstChild?.nodeType === 3) {
     const measured: string[] = [];
     let offset = 0, top = NaN;
@@ -279,6 +279,7 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
         run.style.top = '0';
       }
       run.setAttribute(FITTED_RUN, '0');
+      if (modernJustification) run.style.setProperty('--docx-word-space-compression', `${-space / 4}px`);
       return false;
     }
   }
@@ -325,7 +326,7 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
 /** Space-aware positioning for an ordinary, unfragmented left-to-right line box. */
 function positionWords(paragraph: HTMLElement, run: HTMLElement,
   rows: Map<number, Array<{ text: string; x: number }>>, checkpoint?: () => void): void {
-  if (!(Number(run.getAttribute(FITTED_RUN)) > 0)) return;
+  if (!run.hasAttribute(FITTED_RUN)) return;
   // NBSP, soft hyphens and other break controls need their own model. Retain
   // the DOM positions for them, including the source's nonbreaking semantics.
   if (/[^\u0020-\u007e\u00c0-\u024f]/u.test(run.textContent!)) return;
@@ -391,19 +392,18 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
     // normal-line pass (line-metrics.ts) has already resolved it to a length.
     const height = Number.parseFloat(runStyle.lineHeight);
     if (!(multiple > 0) || !(height > 0) || !['none', 'normal'].includes(kerning)) continue;
-    // Word's auto spacing advances on the document's twip grid. Resolve the
-    // native single-line height to twips before applying its spacing multiple.
-    const nativeTwips = Math.round(height / multiple * 15);
-    const twips = Math.floor(nativeTwips * multiple);
-    if (!(twips > 0)) continue;
+    // Keep the resolved font height's precision through the spacing multiple.
+    // Rounding the natural height to twips and flooring the product shortens
+    // every line; native Word controls show the loss accumulating down a page.
+    const nativeHeight = height / multiple;
     run.style.fontKerning = kerning;
     const mode = Number(root.closest('[data-docx-compatibility-mode]')?.getAttribute('data-docx-compatibility-mode') ??
       root.ownerDocument.body.getAttribute('data-docx-compatibility-mode') ?? 14);
     let column = false;
     for (let ancestor = paragraph.parentElement; ancestor && ancestor !== root; ancestor = ancestor.parentElement)
       if (Number(view.getComputedStyle(ancestor).columnCount) > 1) column = true;
-    run.style.lineHeight = `${twips / 15}px`;
-    run.style.setProperty('--docx-word-native-height', `${nativeTwips / 15}px`);
+    run.style.lineHeight = `${height}px`;
+    run.style.setProperty('--docx-word-native-height', `${nativeHeight}px`);
     if (!column && !root.querySelector('img'))
       fitWordLines(paragraph, run, mode >= 15 && style.textAlign === 'justify', checkpoint);
     // An empty drawing run participates in the first inline box. Give it the
@@ -466,7 +466,7 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
   }
 
   const pending: Array<{ paragraph: HTMLElement; run: HTMLElement; svg: SVGSVGElement; height: number }> = [];
-  // Chromium lays a twip-grid line (19.333px for 14.5pt) out in 1/64-pixel units (19.328125px), so
+  // Chromium lays fractional line heights out in 1/64-pixel units, so
   // each prepared line ends slightly early and later paragraphs drift up. Paint each paragraph at
   // its ideal place: its layout top plus what the prepared lines above it on the page lost.
   const drift = new Map<Element, number>();

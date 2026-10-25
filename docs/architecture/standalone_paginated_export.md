@@ -1391,10 +1391,17 @@ mixed-prose transition at a 0.05pt boundary and cover both font sizes, repeated 
 indents and final lines. See `TestFiles/JustificationFlow/word-observations.json` for the immutable
 input/output hashes and native line inventories.
 
+Auto-spacing retains the resolved font height's precision through the spacing multiple. The
+shared font-height probe uses the same large-font scale as the vector painter, avoiding the
+per-component rounding that a smaller probe retains. `TestFiles/BaselineFlow/word-observations.json`
+records native Word baseline distances across fonts, sizes and spacing multiples; the browser
+regression checks those distances within each uninterrupted page segment.
+
 When the selected line contents already agree with the measured inline flow, that flow retains
-its existing glyph positions and block geometry in either compatibility mode. The precision fitter
-replaces those boxes only when its line choices differ. This keeps an already correct layout stable
-while handling independently captured boundary failures.
+its block geometry in either compatibility mode. The precision fitter replaces those boxes only
+when its line choices differ. Vector paint derives word positions from unrounded font advances
+in both paths: matching line breaks do not establish that the browser's hinted word advances match
+the font. Natural final lines, alignment and repeated ordinary spaces retain their own rules.
 
 Private line boxes preserve the original text and permit page splits only between complete lines;
 they introduce no synthetic source characters. Vector paint then positions words with those font

@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "referenceTrack": "word-online",
+  "layoutProfile": "default",
+  "benchmarkCommit": "af8a42a4f559e8f1021924ee499f7dcd9a4e90d1",
+  "libreOfficeOracleCommit": "4455081baa3fc4481a71f62d3c7a0e340475ace7",
+  "libreOfficeBaselineCommit": "2283bb60c838643d0916e79ca72fc1f9fc7507b7",
+  "capturePack": {
+    "url": "https://github.com/JSv4/docx-fidelity-bench/releases/download/word-text-precision-v1/word-text-precision-v1.zip",
+    "sha256": "d8d9b16397efb989900c65483bb202fd1fd3961570e83898059b27fc7f8b4486",
+    "bytes": 3924733
+  },
+  "minimumWordScore": 95,
+  "reviewEvidence": "https://github.com/JSv4/docx-fidelity-bench/pull/107",
+  "cases": [
+    {
+      "originalCase": "paragraph-contract",
+      "originalInputSha256": "6b2926adc3bec2bb319d74097a834bace936d207f833791710ab3ce55b955c6b",
+      "wordCase": "paragraph-contract-liberation-plain-ttf",
+      "wordInputSha256": "fd09eb72fc1dbef240461f08260667a4a1b5b087fefcac09e83da19741892f49"
+    },
+    {
+      "originalCase": "columns-continuous",
+      "originalInputSha256": "bdda6db961a6f93797c47f8a0f2efccf7754cd8fa32a06fb689e076577a17861",
+      "wordCase": "historical12-columns-continuous-liberation-plain-ttf",
+      "wordInputSha256": "9894b2ce11f40d3dd2794239d8381226d856f6cc2305700839b3b6e49fdae20a"
+    },
+    {
+      "originalCase": "columns-balanced",
+      "originalInputSha256": "e5d9d9f1f2441d74160babb319263b0d0a01cec3e4b01b652d138df4fec54e53",
+      "wordCase": "historical12-columns-balanced-liberation-plain-ttf",
+      "wordInputSha256": "e2db6c63b81183bf2d480eec6e4da5ccaf8210cf8bef4d96e58f78021fa2cdc1"
+    },
+    {
+      "originalCase": "columns-break",
+      "originalInputSha256": "cc3ec2acb6578135406ab52e64dd981ef6d50d36c75321676fb32389456bb02b",
+      "wordCase": "historical12-columns-break-liberation-plain-ttf",
+      "wordInputSha256": "997a60bfd687c47d0551f5f7888bf182e6acd54150dec219c0b7a3b20ba32dff"
+    },
+    {
+      "originalCase": "paragraph-keep",
+      "originalInputSha256": "b6ef72c1e025d6e6deb70dd6f34068844f057cf45aefff004782c2f4a12d74e5",
+      "wordCase": "historical12-paragraph-keep-liberation-plain-ttf",
+      "wordInputSha256": "1b6bfb8c13c8685a27e0cd77ae9c564157ea5ff01b3c334e93df7682cf5a2060"
+    },
+    {
+      "originalCase": "paragraph-heading",
+      "originalInputSha256": "b48a0d18f7726e9d2e27264efc8951ae58682011196c5791b18a19c9222057a2",
+      "wordCase": "historical12-paragraph-heading-liberation-plain-ttf",
+      "wordInputSha256": "50d0f063f6b2ad81f46c8ca32673b368cd5ccab87af156fcc9ae9ad26ac9cf27"
+    },
+    {
+      "originalCase": "images-square",
+      "originalInputSha256": "5f78dba417ba93dcbc1c129d260ec5ade197f087cfea981564daa6a90cb54a1e",
+      "wordCase": "historical12-images-square-liberation-plain-ttf",
+      "wordInputSha256": "c762593cb714c6c9a1429354f966c86f521b923ceed6f6cd124c050b9aa91e1c"
+    },
+    {
+      "originalCase": "images-tight",
+      "originalInputSha256": "1e8e18ad646236237fa9a6f6a7cc6d8faa024cf970a7b4388b0c98cc7a91b7b5",
+      "wordCase": "historical12-images-tight-liberation-plain-ttf",
+      "wordInputSha256": "a898f99af25f45722c58337aed12c55e605df702141d53e233b640e379b52790"
+    }
+  ]
+}
