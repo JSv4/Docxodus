@@ -2322,6 +2322,8 @@ function sanitizeConvertedDocument(
     target.head.appendChild(target.importNode(style, true));
   }
   target.body.replaceChildren(...Array.from(parsed.body.childNodes, (node) => target.importNode(node, true)));
+  const compatibility = parsed.body.getAttribute("data-docx-compatibility-mode");
+  if (compatibility !== null) target.body.setAttribute("data-docx-compatibility-mode", compatibility);
 }
 
 function inventoryConvertedContent(
@@ -3709,9 +3711,14 @@ export async function convertDocxToPaginatedHtml(
         // attempts start from pristine HTML, so both apply it identically.
         // Word prints no comment reference marks in balloons, so their rules apply before measuring too.
         scopeMarkupBalloons(renderDocument, [staging, container], options.commentColumnPlacement === "balloons");
-        applyUnroundedNormalLineHeights(renderDocument.body);
-        prepareWordText(renderDocument.body, () => checkpointWordText(state));
-        prepareParagraphBorders(renderDocument.body);
+        const restoreTextMeasurement = revealMeasurementStaging(renderDocument);
+        try {
+          applyUnroundedNormalLineHeights(renderDocument.body);
+          prepareWordText(renderDocument.body, () => checkpointWordText(state));
+          prepareParagraphBorders(renderDocument.body);
+        } finally {
+          restoreTextMeasurement();
+        }
         const engine = new PaginationEngine(staging, container, {
           scale: 1,
           cssPrefix: "page-",

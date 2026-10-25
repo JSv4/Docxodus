@@ -76,6 +76,18 @@ namespace Docxodus.Tests
             Assert.Equal("70.85pt", Css(paragraph, "margin-right"));
         }
 
+        [Theory]
+        [InlineData("right", false)]
+        [InlineData("end", false)]
+        [InlineData("right", true)]
+        [InlineData("end", true)]
+        public void Negative_trailing_indent_preserves_the_authored_line_width(string spelling, bool rightToLeft)
+        {
+            var properties = (rightToLeft ? "<w:bidi/>" : "") + $"<w:ind w:{spelling}=\"-25\"/>";
+            var paragraph = Block(ToHtml(Para(properties, "Wider")), "p", "Wider");
+            Assert.Equal("-1.25pt", Css(paragraph, rightToLeft ? "margin-left" : "margin-right"));
+        }
+
         [Fact]
         public void First_line_indent_keeps_twip_precision()
         {

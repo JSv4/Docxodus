@@ -52,6 +52,7 @@ for (const [name, content] of [
   ['picture', '<img width="20" height="20">'],
   ['inline picture', '<p><span><img width="20" height="20"></span><span class="run">Inline picture text</span></p>'],
   ['positioned picture', '<p><span><span style="float:left;position:relative"><img width="20" height="20"></span></span><span class="run">Positioned picture text</span></p>'],
+  ['horizontally shifted text', '<p><span class="run" style="white-space:pre-wrap;position:relative;left:3pt">Shifted text</span></p>'],
   ['table', '<table><tr><td>Cell</td></tr></table>'],
   ['note', '<a class="footnote-ref">1</a>'],
   ['columns with rich text', '<section data-cols="2"><p><span class="run"><b>Rich column</b></span></p></section>'],
@@ -190,3 +191,131 @@ test('a fragmented column container keeps all of its HTML text and geometry', as
   expect(result.after).toEqual(result.before);
   expect(result.pending).toBe(0);
 });
+
+for (const mode of [14, 15]) {
+  test(`mode ${mode} fits words with its measured space limit and paints natural final-line spaces`, async ({ page }) => {
+    await page.setContent(`<style>
+      p { font: 12px monospace; line-height:normal; margin:0; text-align:justify; --docx-auto-line-spacing:1 }
+      .run { white-space:pre-wrap; line-height:normal; --docx-font-kerning:none }
+      </style><main data-docx-compatibility-mode="${mode}"><p><span class="run">WWWW WWWW WWWW WWWW WWWW</span></p></main>`);
+    await page.addScriptTag({ content: lineMetrics });
+    await page.addScriptTag({ content: wordText });
+    const actual = await page.evaluate(() => {
+      const api = window as any, p = document.querySelector('p')!;
+      const canvas = document.createElement('canvas').getContext('2d')!;
+      canvas.font = '12px monospace';
+      const word = canvas.measureText('WWWW').width, space = canvas.measureText(' ').width;
+      p.style.width = `${3 * word + 2 * space * .8}px`;
+      api.applyUnroundedNormalLineHeights(document.querySelector('main'));
+      api.prepareWordText(document.querySelector('main'));
+      const run = p.firstElementChild!;
+      const rows = new Map<number, string[]>();
+      const walker = document.createTreeWalker(run, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) for (const match of node.textContent!.matchAll(/\S+/g)) {
+        const range = document.createRange(); range.setStart(node, match.index!); range.setEnd(node, match.index! + match[0].length);
+        const y = range.getBoundingClientRect().top;
+        const words = rows.get(y) ?? []; words.push(match[0]); rows.set(y, words);
+      }
+      const height = p.getBoundingClientRect().height;
+      api.paintWordText(document.querySelector('main'));
+      const lines = Array.from(p.querySelectorAll('svg > text'));
+      const last = Array.from(lines.at(-1)!.querySelectorAll('tspan')).map(w => Number(w.getAttribute('x')) / 4);
+      return { wordsPerLine: Array.from(rows.values()).map(words => words.length),
+        lastGap: last.length > 1 ? last[1] - last[0] : null, naturalGap: word + space,
+        heightBefore: height, heightAfter: p.getBoundingClientRect().height };
+    });
+    expect(actual.wordsPerLine).toEqual(mode === 15 ? [3, 2] : [2, 2, 1]);
+    if (mode === 15) expect(actual.lastGap).toBeCloseTo(actual.naturalGap, 2);
+    expect(actual.heightAfter).toBe(actual.heightBefore);
+  });
+}
+
+test('a word split across visual lines keeps its complete HTML fallback', async ({ page }) => {
+  await page.setContent(`<style>p{font:12px monospace;line-height:normal;width:50px;margin:0;overflow-wrap:anywhere;--docx-auto-line-spacing:1}
+    .run{white-space:pre-wrap;line-height:normal}</style><main><p><span class="run">${'LongWord'.repeat(10)}</span></p></main>`);
+  await page.addScriptTag({ content: lineMetrics });
+  await page.addScriptTag({ content: wordText });
+  const actual = await page.evaluate(() => {
+    const api = window as any, root = document.querySelector('main')!, p = root.querySelector('p')!;
+    api.applyUnroundedNormalLineHeights(root); api.prepareWordText(root);
+    const before = p.innerHTML, box = p.getBoundingClientRect().toJSON();
+    return { painted: api.paintWordText(root), before, after: p.innerHTML, box, afterBox: p.getBoundingClientRect().toJSON() };
+  });
+  expect(actual.painted).toBe(0);
+  expect(actual.after).toBe(actual.before);
+  expect(actual.afterBox).toEqual(actual.box);
+});
+
+for (const sectionTag of ['section', 'div']) {
+test(`a ${sectionTag} page continuation keeps justification through the last line of each non-final fragment`, async ({ page }) => {
+  await page.setContent(`${styles}<style>span.run{white-space:pre-wrap;position:static}</style><div id="staging"><${sectionTag} ${geometry.replace('700', '260').replace('556', '116')}>
+    <p data-source-anchor-id="p:body:plain" style="text-align:justify"><span class="run">${words}</span></p>
+    </${sectionTag}></div><div id="container"></div>`);
+  await page.addScriptTag({ content: lineMetrics });
+  await page.addScriptTag({ content: wordText });
+  await page.addScriptTag({ path: new URL('../dist/pagination.bundle.js', import.meta.url).pathname });
+  const actual = await page.evaluate(() => {
+    const api = window as any, root = document.getElementById('staging')!, container = document.getElementById('container')!;
+    api.applyUnroundedNormalLineHeights(root); api.prepareWordText(root);
+    const engine = new api.DocxodusPagination.PaginationEngine(root, container, { showPageNumbers:false, fragmentParagraphs:true });
+    const result = engine.paginate(), before = engine.materializePageMap(0, 'fragment-test');
+    const fragments = Array.from(container.querySelectorAll('p'));
+    const alignments = fragments.map(p => getComputedStyle(p).textAlignLast);
+    const painted = api.paintWordText(container);
+    return { pages:result.totalPages, painted, alignments, before, after:engine.materializePageMap(0, 'fragment-test'),
+      text: fragments.map(p => p.textContent).join('') };
+  });
+  expect(actual.pages).toBeGreaterThan(1);
+  expect(actual.painted).toBe(actual.pages);
+  expect(actual.text).toBe(words);
+  expect(actual.after).toEqual(actual.before);
+  expect(actual.alignments.slice(0, -1)).toEqual(Array(actual.pages - 1).fill('justify'));
+  expect(actual.alignments.at(-1)).toBe('auto');
+});
+}
+
+
+test('modern Word can compress a final justified line that exceeds its natural width', async ({ page }) => {
+  await page.setContent(`<style>p{font:12px monospace;line-height:normal;margin:0;text-align:justify;--docx-auto-line-spacing:1}
+    .run{white-space:pre-wrap;line-height:normal}</style><main data-docx-compatibility-mode="15"><p><span class="run">WWWW WWWW WWWW</span></p></main>`);
+  await page.addScriptTag({ content: lineMetrics });
+  await page.addScriptTag({ content: wordText });
+  const actual = await page.evaluate(() => {
+    const api = window as any, root = document.querySelector('main')!, p = root.querySelector('p')!;
+    const context = document.createElement('canvas').getContext('2d')!; context.font = '12px monospace';
+    const word = context.measureText('WWWW').width, space = context.measureText(' ').width;
+    p.style.width = `${word * 3 + space * 2 * .8}px`;
+    api.applyUnroundedNormalLineHeights(root); api.prepareWordText(root); api.paintWordText(root);
+    const lines = p.querySelectorAll('svg > text'), last = lines[0].lastElementChild!;
+    return { lines:lines.length, end:Number(last.getAttribute('x')) / 4 + word, width:p.getBoundingClientRect().width };
+  });
+  expect(actual.lines).toBe(1);
+  expect(actual.end).toBeCloseTo(actual.width, 2);
+});
+
+for (const mode of ['', 'data-docx-compatibility-mode="14"', 'data-docx-compatibility-mode="15"']) {
+  test(`unchanged line choices preserve their measured word starts (${mode || 'omitted mode'})`, async ({ page }) => {
+    await page.setContent(`${styles}<style>.run{white-space:pre-wrap;position:static;font-kerning:none}</style><main ${mode}>
+      <p style="width:468pt;font-size:16pt;font-weight:bold"><span class="run">Service agreement layout</span></p>
+      <p style="width:468pt;text-align:justify"><span class="run">The parties will inspect the sample, record the agreed date, and send the written schedule to the project office. Each report includes the measured quantity and the name of the person responsible for the next review.</span></p>
+      </main>`);
+    await page.addScriptTag({ content: lineMetrics });
+    await page.addScriptTag({ content: wordText });
+    const actual = await page.evaluate(() => {
+      const api = window as any, root = document.querySelector('main')!;
+      api.applyUnroundedNormalLineHeights(root);
+      const before = Array.from(root.querySelectorAll('p')).map(p => {
+        const node = p.firstElementChild!.firstChild!, box = p.getBoundingClientRect();
+        return Array.from(node.textContent!.matchAll(/\S+/g), m => {
+          const r = document.createRange(); r.setStart(node, m.index!); r.setEnd(node, m.index! + m[0].length);
+          return r.getBoundingClientRect().left - box.left;
+        });
+      });
+      api.prepareWordText(root); api.paintWordText(root);
+      const after = Array.from(root.querySelectorAll('p')).map(p =>
+        Array.from(p.querySelectorAll('tspan')).map(w => Number(w.getAttribute('x')) / 4));
+      return { before, after };
+    });
+    expect(actual.after).toEqual(actual.before);
+  });
+}

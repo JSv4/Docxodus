@@ -2448,7 +2448,7 @@ export class PaginationEngine {
   ): ParagraphFragmentEndpoint[] {
     const textNodes: Text[] = [];
     const textStarts = new Map<Text, number>();
-    const lastTextByField = new Map<HTMLElement, Text>();
+    const lastTextByAtomic = new Map<HTMLElement, Text>();
     const breaks: Array<{ element: HTMLElement; textOffset: number }> = [];
     const walker = this.document.createTreeWalker(paragraph,
       this.view.NodeFilter.SHOW_TEXT | this.view.NodeFilter.SHOW_ELEMENT);
@@ -2470,11 +2470,11 @@ export class PaginationEngine {
       textNodes.push(textNode);
       flattenedChunks.push(textNode.data);
       flattenedLength += textNode.data.length;
-      let field = textNode.parentElement?.closest<HTMLElement>("[data-field]") ?? null;
+      let field = textNode.parentElement?.closest<HTMLElement>("[data-field], [data-docx-word-line=true]") ?? null;
       while (field?.parentElement?.closest<HTMLElement>("[data-field]")) {
         field = field.parentElement.closest<HTMLElement>("[data-field]");
       }
-      if (field && paragraph.contains(field)) lastTextByField.set(field, textNode);
+      if (field && paragraph.contains(field)) lastTextByAtomic.set(field, textNode);
     }
     const flattenedText = flattenedChunks.join("");
     if (!this.hasVisibleText(flattenedText)) return [];
@@ -2525,7 +2525,7 @@ export class PaginationEngine {
       // receives one boundary outside its wrapper below; a list marker stays
       // with the first real text fragment and is never emitted by itself.
       const atomic = node.parentElement?.closest<HTMLElement>(
-        "[data-field], [data-list-marker], a[data-comment-id]",
+        "[data-field], [data-list-marker], a[data-comment-id], [data-docx-word-line=true]",
       );
       if (atomic && paragraph.contains(atomic)) continue;
 
@@ -2558,13 +2558,13 @@ export class PaginationEngine {
       }
     }
 
-    // A field is splittable only immediately after its complete outer wrapper.
+    // Fields and fitted Word lines split only after their complete outer wrapper.
     // Starting the tail at the parent's child boundary prevents Range from
     // cloning an empty `[data-field]` shell that substitution could repopulate.
-    for (const field of Array.from(paragraph.querySelectorAll<HTMLElement>("[data-field]"))) {
+    for (const field of Array.from(paragraph.querySelectorAll<HTMLElement>("[data-field], [data-docx-word-line=true]"))) {
       this.checkpoint();
       if (field.parentElement?.closest("[data-field]")) continue;
-      const last = lastTextByField.get(field);
+      const last = lastTextByAtomic.get(field);
       const parent = field.parentNode;
       if (!last || !parent) continue;
       const childIndex = Array.prototype.indexOf.call(parent.childNodes, field);
@@ -2819,11 +2819,14 @@ export class PaginationEngine {
     for (const descendant of Array.from(paragraph.querySelectorAll<HTMLElement>("*"))) {
       if (leading.some((box) => box.contains(descendant))) continue;
       const style = this.view.getComputedStyle(descendant);
+      const wordLine = descendant.dataset.docxWordLine === "true"
+        && Number(descendant.parentElement!.dataset.docxWordFit) > 0
+        && descendant.children.length === 0;
       if (
-        style.display !== "inline" ||
+        (style.display !== "inline" && !(wordLine && style.display === "block")) ||
         style.position !== "static" ||
         style.float !== "none" ||
-        (style.whiteSpace !== "normal" && style.whiteSpace !== "pre-wrap")
+        (style.whiteSpace !== "normal" && style.whiteSpace !== "pre-wrap" && !(wordLine && style.whiteSpace === "pre"))
       ) {
         return false;
       }
@@ -2920,6 +2923,45 @@ export class PaginationEngine {
       // The original bottom spacing belongs after the complete paragraph, not
       // between synthetic page fragments.
       fragment.style.setProperty("margin-bottom", "0", "important");
+      // Word can place the final natural line box against the page edge;
+      // inter-line leading belongs before a following line, not after this head.
+      const run = fragment.querySelector<HTMLElement>('[data-docx-word-fit]');
+      const last = run?.lastElementChild as HTMLElement | null;
+      const natural = Number(run?.dataset.docxWordFit);
+      if (last && natural > 0 && natural < parseFloat(run!.style.lineHeight))
+        last.style.lineHeight = `${natural}px`;
+      else if (run?.dataset.docxWordFit === "0") {
+        // An unchanged inline flow has no private line boxes. Measure its
+        // complete prefix in the laid-out source, then trim only this head.
+        const plain = run;
+        const text = paragraph.firstElementChild?.firstChild;
+        const height = parseFloat(plain.style.getPropertyValue("--docx-word-native-height"));
+        const pitch = parseFloat(plain.style.lineHeight);
+        if (!plain.children.length && text?.nodeType === 3 && range.endContainer === text && height > 0 && pitch > height) {
+          let end = range.endOffset;
+          const content = text.textContent!;
+          while (end > 0 && /\s/.test(content[end - 1])) {
+            if ((end & 255) === 0) this.checkpoint();
+            end--;
+          }
+          if (end > 0) {
+            const glyph = range.cloneRange();
+            glyph.setStart(text, 0); glyph.setEnd(text, 1);
+            const firstBox = glyph.getBoundingClientRect();
+            glyph.setStart(text, end - 1); glyph.setEnd(text, end);
+            const lastBox = glyph.getBoundingClientRect();
+            if (firstBox.height > 0 && lastBox.height > 0 && lastBox.top >= firstBox.top) {
+              const lines = Math.round((lastBox.top - firstBox.top) / pitch);
+              fragment.style.setProperty("--docx-word-text-height", `${lines * pitch + height}px`);
+              fragment.style.height = "var(--docx-word-text-height)";
+            }
+          }
+        }
+      }
+      // A page break is not the end of the source paragraph: its last line
+      // still takes the paragraph's justification rather than last-line alignment.
+      if (this.view.getComputedStyle(paragraph).textAlign === "justify")
+        fragment.style.setProperty("text-align-last", "justify", "important");
     }
 
     return fragment;
