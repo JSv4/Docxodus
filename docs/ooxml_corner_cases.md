@@ -4594,7 +4594,7 @@ that the resulting column has exactly zero width. Tests: `ZeroWidthColumnTests` 
 ## Blocks taller than a page: exact rows, header rows, nested tables and border groups (#1202)
 
 Native Word for the web exports of the exact inputs are recorded in
-`TestFiles/OversizedPageBlocks/word-observations.json`. All twenty inputs have zero Open XML SDK
+`TestFiles/OversizedPageBlocks/word-observations.json`. All twenty-three inputs have zero Open XML SDK
 Microsoft365 findings. The browser regression checks compare the complete word multiset on every
 page, including clipped words and duplicate occurrences, rather than only looking for selected markers.
 
@@ -4625,3 +4625,13 @@ safety checks.
 
 These observations establish page placement and visible text for the registered cases. They are
 not a full Word raster score; native PDF bytes and font identities are retained with the captures.
+
+A body ending in a table still has Word's required final paragraph, even if the package has no
+serialized paragraph after the table. Its normal paragraph style determines whether it fits or
+creates a blank final page. Native controls at 110pt and 130pt row heights, plus a 24pt default
+line-height variant, distinguish this from a one-twip structural spacer. The converter inserts
+this paragraph before formatting assembly as a view-only block with no source identity; explicit
+final paragraphs remain unchanged. Tests retain every physical Word page, including blank ones,
+and compare PDF crop boxes and exact per-page word inventories. Microsoft's
+[blank-page guidance](https://support.microsoft.com/en-us/word/delete-a-page-in-word) describes
+the required end paragraph and its ability to cause a blank last page.

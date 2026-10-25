@@ -15,7 +15,16 @@
           "HazelLine00",
           "HazelLine01"
         ]
-      }
+      },
+      "wordPdfPageCount": 1,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "bordered-paragraph-400",
@@ -61,7 +70,34 @@
         "4": [
           "HazelLine27"
         ]
-      }
+      },
+      "wordPdfPageCount": 4,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "exact-row-36",
@@ -74,7 +110,16 @@
         "1": [
           "Cedar"
         ]
-      }
+      },
+      "wordPdfPageCount": 1,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "exact-row-400",
@@ -86,8 +131,24 @@
       "pageWords": {
         "1": [
           "Cedar"
+        ],
+        "2": []
+      },
+      "wordPdfPageCount": 2,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
         ]
-      }
+      ]
     },
     {
       "id": "header-row-36",
@@ -101,7 +162,16 @@
           "Maple",
           "Willow"
         ]
-      }
+      },
+      "wordPdfPageCount": 1,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "header-row-400",
@@ -116,8 +186,30 @@
         ],
         "2": [
           "Willow"
+        ],
+        "3": []
+      },
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
         ]
-      }
+      ]
     },
     {
       "id": "nested-table-36",
@@ -131,7 +223,16 @@
           "Inner",
           "Tail"
         ]
-      }
+      },
+      "wordPdfPageCount": 1,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "nested-table-400",
@@ -147,7 +248,22 @@
         "2": [
           "Tail"
         ]
-      }
+      },
+      "wordPdfPageCount": 2,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "tables-row-exact-taller-than-page-times-new-roman",
@@ -173,7 +289,28 @@
         "3": [
           "CedarAfter"
         ]
-      }
+      },
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "tables-row-exact-taller-than-page-control-times-new-roman",
@@ -195,7 +332,16 @@
           "CedarAfter",
           "Cedar08"
         ]
-      }
+      },
+      "wordPdfPageCount": 1,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "tables-header-row-taller-than-page-times-new-roman",
@@ -225,7 +371,34 @@
         "4": [
           "MapleAfter"
         ]
-      }
+      },
+      "wordPdfPageCount": 4,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "tables-nested-row-taller-than-page-times-new-roman",
@@ -253,7 +426,28 @@
           "OuterTail",
           "OuterAfter"
         ]
-      }
+      },
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "paragraphs-border-taller-than-page-times-new-roman-schema-order-corrected",
@@ -301,7 +495,34 @@
           "Hazel28",
           "HazelAfter"
         ]
-      }
+      },
+      "wordPdfPageCount": 4,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "paragraphs-border-group-taller-than-page-times-new-roman-schema-order-corrected",
@@ -349,7 +570,34 @@
           "Larch28",
           "LarchAfter"
         ]
-      }
+      },
+      "wordPdfPageCount": 4,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "exact-row-twelve-lines",
@@ -375,7 +623,28 @@
           "CedarAfter"
         ]
       },
-      "nativeReviewActuallyViewed": true
+      "nativeReviewActuallyViewed": true,
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "exact-row-twelve-lines-footer",
@@ -404,7 +673,28 @@
           "FooterProbe"
         ]
       },
-      "nativeReviewActuallyViewed": true
+      "nativeReviewActuallyViewed": true,
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "header-after-repeat",
@@ -432,7 +722,34 @@
           "MapleAfter"
         ]
       },
-      "nativeReviewActuallyViewed": true
+      "nativeReviewActuallyViewed": true,
+      "wordPdfPageCount": 4,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "header-two-hundred-points",
@@ -460,7 +777,34 @@
           "MapleAfter"
         ]
       },
-      "nativeReviewActuallyViewed": true
+      "nativeReviewActuallyViewed": true,
+      "wordPdfPageCount": 4,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "tall-first-row-without-header",
@@ -486,7 +830,28 @@
           "MapleAfter"
         ]
       },
-      "nativeReviewActuallyViewed": true
+      "nativeReviewActuallyViewed": true,
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
     },
     {
       "id": "exact-row-soft-wrapped-text",
@@ -511,6 +876,101 @@
         "3": [
           "CedarAfter"
         ]
+      },
+      "nativeReviewActuallyViewed": true,
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "table-end-row-110",
+      "inputSha256": "94ea83cb3dae483163f295e7cd0791eeae2d86a657e572d5e69e98ba13eaa352",
+      "wordPdfSha256": "bbdca2cc7a84e3653aa8f56af94dc3ed077d466daec562dc3d1b64dda7c8bf63",
+      "wordPdfPageCount": 1,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ],
+      "pageWords": {
+        "1": [
+          "Cedar"
+        ]
+      },
+      "nativeReviewActuallyViewed": true
+    },
+    {
+      "id": "table-end-row-130",
+      "inputSha256": "b601ed791e0f9b432a6182073b0ea7d9d844b8ee773d78cce9aa100e579d8963",
+      "wordPdfSha256": "e41e7bb41bb0bcccf6193e251822ffb825f38c4dde5b15fcc470f55bd57e8576",
+      "wordPdfPageCount": 2,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ],
+      "pageWords": {
+        "1": [
+          "Cedar"
+        ],
+        "2": []
+      },
+      "nativeReviewActuallyViewed": true
+    },
+    {
+      "id": "table-end-default-line-24",
+      "inputSha256": "b1d9170e896c216833a08e5ec5ec5d32eb5bb0192f83ac49a7d46f694e639614",
+      "wordPdfSha256": "1cc7045273b5eec14480d47eb2592a6b6918db197b79d8be6a6fac357b555fb4",
+      "wordPdfPageCount": 2,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ],
+      "pageWords": {
+        "1": [
+          "Cedar"
+        ],
+        "2": []
       },
       "nativeReviewActuallyViewed": true
     }

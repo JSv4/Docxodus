@@ -10,22 +10,25 @@ import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 // the oversized header and the first-page paragraph before the nested table.
 const fixtures = fileURLToPath(new URL('../../TestFiles/OversizedPageBlocks/', import.meta.url));
 const observations = JSON.parse(readFileSync(join(fixtures, 'word-observations.json'), 'utf8')) as {
-  cases: Array<{ id: string; inputSha256: string; pageWords: Record<string, string[]> }>;
+  cases: Array<{ id: string; inputSha256: string; wordPdfPageCount: number; wordPdfPageBoxes: number[][]; pageWords: Record<string, string[]> }>;
 };
 
 test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}) } });
 
-async function pageTexts(bytes: Uint8Array): Promise<string[]> {
+async function pageTexts(bytes: Uint8Array): Promise<{ texts: string[]; boxes: number[][] }> {
   const task = getDocument({ data: new Uint8Array(bytes), verbosity: 0 });
   try {
     const doc = await task.promise;
     const texts: string[] = [];
+    const boxes: number[][] = [];
     for (let page = 1; page <= doc.numPages; page++) {
-      const content = await (await doc.getPage(page)).getTextContent();
+      const pdfPage = await doc.getPage(page);
+      boxes.push([...(pdfPage.view as number[])]);
+      const content = await pdfPage.getTextContent();
       texts.push(content.items.map(item => 'str' in item ? item.str : '').join(' '));
     }
-    return texts;
+    return { texts, boxes };
   } finally { await task.destroy(); }
 }
 
@@ -37,8 +40,11 @@ for (const observed of observations.cases) {
     const actual = await renderDocxArtifacts(bytes, {
       browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'hidden', timeoutMs: 100_000,
     });
-    const texts = await pageTexts(actual.pdf!);
-    expect(actual.pageCount).toBe(Object.keys(observed.pageWords).length);
+    const { texts, boxes } = await pageTexts(actual.pdf!);
+    expect(Object.keys(observed.pageWords)).toEqual(Array.from({ length: observed.wordPdfPageCount }, (_, i) => String(i + 1)));
+    expect(actual.pageCount).toBe(observed.wordPdfPageCount);
+    for (let p = 0; p < boxes.length; p++) for (let edge = 0; edge < 4; edge++)
+      expect(boxes[p][edge], `Word page ${p + 1} crop box`).toBeCloseTo(observed.wordPdfPageBoxes[p][edge], 1);
     for (const [page, words] of Object.entries(observed.pageWords)) {
       const counts = (items: string[]) => items.reduce<Record<string, number>>((result, word) => {
         result[word] = (result[word] ?? 0) + 1;
