@@ -223,7 +223,8 @@ public class ParagraphBorderSpacingRenderingTests
     {
         var cell = Convert(AuthoredDocument(Card("Plain", "4"))).Descendants()
             .First(e => e.Name.LocalName == "td");
-        Assert.Equal("5.4pt", Style(cell)["padding-left"]);
+        // The cell border's w:space is not the cell's margin, and nothing here states one (issue #1219).
+        Assert.Equal("0pt", Style(cell)["padding-left"]);
         Assert.False(Style(cell).ContainsKey("margin-left"));
     }
 }
