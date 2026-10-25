@@ -1,0 +1,417 @@
+{
+  "issue": 1201,
+  "method": "Unmodified native Word for the web PDF exports through authenticated Playwright; source and output hashes are pinned.",
+  "finding": "With explicit zero margins, borderless zero-width fixed cells keep about 1pt content width per cell. A span over two zero columns remains 1pt; two separate cells give 2pt.",
+  "caveats": [
+    "Three small-card inputs requested Liberation Serif but Word used Times New Roman; font-substituted references are diagnostic only.",
+    "Default padding and border offsets are retained as measurements; their general layout rules remain separate issues.",
+    "Native Word-saved DOCX files can contain SDK findings; only source input packages are asserted SDK-zero."
+  ],
+  "cases": [
+    {
+      "id": "zero-exact",
+      "inputSha256": "0d871ac9eec82b68fd4183511d4184ce35c0b0a860c83aad9f85124ff65e34a0",
+      "wordPdfSha256": "78d90634e8ed28f670538643db57b7dae64e0b6a0a006c4bbd154b0eee0a89ff",
+      "wordDocxSha256": "0d871ac9eec82b68fd4183511d4184ce35c0b0a860c83aad9f85124ff65e34a0",
+      "capturedAtUtc": "2026-10-24T20:48:50.462Z",
+      "provider": "Microsoft Word for the web",
+      "reportedBuild": null,
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageCount": 1,
+      "rawWordMarkers": [
+        {
+          "text": "Birch",
+          "page": 1,
+          "rect": [
+            11.0,
+            12.196725,
+            35.49755,
+            24.4014
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zero-atleast",
+      "inputSha256": "fc3f6d147502f8c2c7ae33e95cd3a02352631478ad1c8c5bbc50e471eaf0158b",
+      "wordPdfSha256": "11526a2aa660131f4af710b05ad5e8f27efe76f155731534946b2a2d4b1a0990",
+      "wordDocxSha256": "fc3f6d147502f8c2c7ae33e95cd3a02352631478ad1c8c5bbc50e471eaf0158b",
+      "capturedAtUtc": "2026-10-24T20:49:02.094Z",
+      "provider": "Microsoft Word for the web",
+      "reportedBuild": null,
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageCount": 1,
+      "rawWordMarkers": [
+        {
+          "text": "Birch",
+          "page": 1,
+          "rect": [
+            11.0,
+            12.196725,
+            35.49755,
+            24.4014
+          ]
+        }
+      ]
+    },
+    {
+      "id": "width-control",
+      "inputSha256": "4ce00b7687daa55994dfb5e6fa65db40bf9365669b59366477805014bd2e2341",
+      "wordPdfSha256": "13da463f40f78ed4eee745c0748f3aa3515d26ab2a90b29117dbf9e2290a3a7e",
+      "wordDocxSha256": "4ce00b7687daa55994dfb5e6fa65db40bf9365669b59366477805014bd2e2341",
+      "capturedAtUtc": "2026-10-24T20:49:13.314Z",
+      "provider": "Microsoft Word for the web",
+      "reportedBuild": null,
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageCount": 1,
+      "rawWordMarkers": [
+        {
+          "text": "Birch",
+          "page": 1,
+          "rect": [
+            34.025,
+            12.196725,
+            58.52255,
+            24.4014
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tables-zero-width-column-times-new-roman",
+      "inputSha256": "7acfe8ad04f6bd7e27659ead85751684eb2777583f792a41c817665f046e1bc1",
+      "wordPdfSha256": "698af075be381ca1d0c62bfdb6d920cdf84fc7835c5118a131895756f4f5ba04",
+      "wordDocxSha256": "8811733da83f00318484c1f160e95e0640509dd755ceeddc4f9c06a22eac4c2e",
+      "capturedAtUtc": "2026-10-24T20:49:24.992Z",
+      "provider": "Microsoft Word for the web",
+      "reportedBuild": null,
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageCount": 1,
+      "rawWordMarkers": [
+        {
+          "text": "AlderBefore",
+          "page": 1,
+          "rect": [
+            72.025,
+            74.979,
+            127.102,
+            87.156
+          ]
+        },
+        {
+          "text": "AlderWide",
+          "page": 1,
+          "rect": [
+            73.025,
+            90.979,
+            121.876,
+            103.156
+          ]
+        },
+        {
+          "text": "BirchWide",
+          "page": 1,
+          "rect": [
+            73.025,
+            140.999,
+            121.392,
+            153.176
+          ]
+        },
+        {
+          "text": "DogwoodWide",
+          "page": 1,
+          "rect": [
+            75.025,
+            192.029,
+            142.378,
+            204.206
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tables-zero-width-column-control-times-new-roman",
+      "inputSha256": "2e30565cff03c8c0eb3132be6dbc149ea71970ca7744f36eb462b47c35366183",
+      "wordPdfSha256": "405f48abaabafbf6729bf921a7e4162424b238a9cabb701a2af42f2380494669",
+      "wordDocxSha256": "e69d8609d616e0cbd5fe6fbe3d81ff774b54e868b4d96619abdb85e6195bb528",
+      "capturedAtUtc": "2026-10-24T20:49:36.886Z",
+      "provider": "Microsoft Word for the web",
+      "reportedBuild": null,
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageCount": 1,
+      "rawWordMarkers": [
+        {
+          "text": "AlderBefore",
+          "page": 1,
+          "rect": [
+            72.025,
+            74.979,
+            127.102,
+            87.156
+          ]
+        },
+        {
+          "text": "AlderWide",
+          "page": 1,
+          "rect": [
+            96.05,
+            90.979,
+            144.901,
+            103.156
+          ]
+        },
+        {
+          "text": "BirchWide",
+          "page": 1,
+          "rect": [
+            96.05,
+            140.999,
+            144.417,
+            153.176
+          ]
+        },
+        {
+          "text": "DogwoodWide",
+          "page": 1,
+          "rect": [
+            97.05,
+            192.029,
+            164.403,
+            204.206
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zero-default-margins",
+      "inputSha256": "67950c5bae11be43846921bbb937cff9b868ad8a6ce0716616ce18e2a319b09a",
+      "wordPdfSha256": "d7a69c3e26bb3f64f5eee2c9fb5e6a06329271d5bfaebe862b51fa2e38622cea",
+      "wordDocxSha256": "1591d849e3b9fe2bce8076358b6b2763a65dee11e159c5a924053865368c1bd7",
+      "capturedAtUtc": "2026-10-25T00:03:18.840Z",
+      "provider": "Microsoft Word for the web",
+      "reportedBuild": null,
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageCount": 1,
+      "rawWordMarkers": [
+        {
+          "text": "AlderBefore",
+          "page": 1,
+          "rect": [
+            72.025,
+            74.979,
+            127.102,
+            87.156
+          ]
+        },
+        {
+          "text": "AlderWide",
+          "page": 1,
+          "rect": [
+            74.525,
+            90.979,
+            123.376,
+            103.156
+          ]
+        },
+        {
+          "text": "BirchWide",
+          "page": 1,
+          "rect": [
+            74.525,
+            140.999,
+            122.892,
+            153.176
+          ]
+        },
+        {
+          "text": "DogwoodWide",
+          "page": 1,
+          "rect": [
+            75.025,
+            192.029,
+            142.378,
+            204.206
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zero-explicit-margins",
+      "inputSha256": "21d0cbebcea77f4cef3fdce6842b0fc371baca500ed931cb9d05197a3ee8b947",
+      "wordPdfSha256": "e97466574df916895b84a1e119280f345ee362f53fb4df5dcd5e1fa40ef91e96",
+      "wordDocxSha256": "41c11eae7ec729470a23d1760f6e7e6851e593f1bdd62a1792f624c3956f68f4",
+      "capturedAtUtc": "2026-10-25T00:03:46.054Z",
+      "provider": "Microsoft Word for the web",
+      "reportedBuild": null,
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageCount": 1,
+      "rawWordMarkers": [
+        {
+          "text": "AlderBefore",
+          "page": 1,
+          "rect": [
+            72.025,
+            74.979,
+            127.102,
+            87.156
+          ]
+        },
+        {
+          "text": "AlderWide",
+          "page": 1,
+          "rect": [
+            109.05,
+            90.979,
+            157.901,
+            103.156
+          ]
+        },
+        {
+          "text": "BirchWide",
+          "page": 1,
+          "rect": [
+            109.05,
+            140.999,
+            157.417,
+            153.176
+          ]
+        },
+        {
+          "text": "DogwoodWide",
+          "page": 1,
+          "rect": [
+            109.55,
+            192.029,
+            176.903,
+            204.206
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zero-spanned-columns",
+      "inputSha256": "ea30cf41144e90fc772bef88c4c791b95c9ab5a8ee51b5fa29b9c17a562bf1a0",
+      "wordPdfSha256": "836c23255d6b320a6180c31d1a7739d04e2f5637079ad51483851d6320636675",
+      "wordDocxSha256": "ea30cf41144e90fc772bef88c4c791b95c9ab5a8ee51b5fa29b9c17a562bf1a0",
+      "capturedAtUtc": "2026-10-25T00:04:02.659Z",
+      "provider": "Microsoft Word for the web",
+      "reportedBuild": null,
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageCount": 1,
+      "rawWordMarkers": [
+        {
+          "text": "AlderBefore",
+          "page": 1,
+          "rect": [
+            72.025,
+            74.979,
+            127.102,
+            87.156
+          ]
+        },
+        {
+          "text": "AlderWide",
+          "page": 1,
+          "rect": [
+            73.025,
+            90.979,
+            121.876,
+            103.156
+          ]
+        },
+        {
+          "text": "BirchWide",
+          "page": 1,
+          "rect": [
+            73.025,
+            140.999,
+            121.392,
+            153.176
+          ]
+        },
+        {
+          "text": "DogwoodWide",
+          "page": 1,
+          "rect": [
+            75.025,
+            192.029,
+            142.378,
+            204.206
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zero-separate-columns",
+      "inputSha256": "31dcf2e3e18063ec011cb246bc426b6b1478e80873288a60663b28f897646def",
+      "wordPdfSha256": "e8becca33c46082f1b7a4691d1db862786d2a106cab6df432103ae487afa6c14",
+      "wordDocxSha256": "672e30c43b3a12176e0eb357e5242b56215352909f20c6a620e5914ffa108959",
+      "capturedAtUtc": "2026-10-25T00:08:47.605Z",
+      "provider": "Microsoft Word for the web",
+      "reportedBuild": null,
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageCount": 1,
+      "rawWordMarkers": [
+        {
+          "text": "AlderBefore",
+          "page": 1,
+          "rect": [
+            72.025,
+            74.979,
+            127.102,
+            87.156
+          ]
+        },
+        {
+          "text": "AlderWide",
+          "page": 1,
+          "rect": [
+            74.025,
+            90.979,
+            122.876,
+            103.156
+          ]
+        },
+        {
+          "text": "BirchWide",
+          "page": 1,
+          "rect": [
+            74.025,
+            140.999,
+            122.392,
+            153.176
+          ]
+        },
+        {
+          "text": "DogwoodWide",
+          "page": 1,
+          "rect": [
+            77.025,
+            192.029,
+            144.378,
+            204.206
+          ]
+        }
+      ]
+    }
+  ]
+}
