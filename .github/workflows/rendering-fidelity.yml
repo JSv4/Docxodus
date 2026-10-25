@@ -23,6 +23,8 @@ jobs:
       BASELINE_COMMIT: 2283bb60c838643d0916e79ca72fc1f9fc7507b7
       CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
       ORACLE_REF: 4455081baa3fc4481a71f62d3c7a0e340475ace7
+      WORD_ORACLE_REF: af8a42a4f559e8f1021924ee499f7dcd9a4e90d1
+      WORD_BASELINE_COMMIT: ${{ github.event.pull_request.base.sha || github.sha }}
       NODE_VERSION: '22.23.3'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -32,6 +34,12 @@ jobs:
           repository: JSv4/docx-fidelity-bench
           ref: ${{ env.ORACLE_REF }}
           path: oracle
+      - name: Checkout pinned Word reference harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: JSv4/docx-fidelity-bench
+          ref: ${{ env.WORD_ORACLE_REF }}
+          path: word-oracle
       - name: Checkout baseline renderer
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -42,6 +50,11 @@ jobs:
         with:
           ref: ${{ env.CANDIDATE_COMMIT }}
           path: candidate-source
+      - name: Checkout current main for Word regression comparison
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.WORD_BASELINE_COMMIT }}
+          path: main-source
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
           dotnet-version: '10.0.x'
@@ -78,6 +91,43 @@ jobs:
           python3 -m unittest discover -s tests
           node --test tests/test-adapter.mjs
           python3 -m bench validate
+      - name: Validate Word harness and provider gate
+        working-directory: word-oracle
+        run: |
+          cmp bench/build.py ../oracle/bench/build.py
+          cmp bench/metrics.py ../oracle/bench/metrics.py
+          python3 -m bench.audit
+          python3 -m unittest discover -s ../tools/rendering-fidelity -p test_provider_regressions.py -v
+      - name: Retrieve immutable reviewed Word reference pack
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          from zipfile import ZipFile
+          policy = json.loads(Path('tools/rendering-fidelity/word-reference-policy.json').read_text())
+          assert policy['benchmarkCommit'] == os.environ['WORD_ORACLE_REF']
+          assert policy['libreOfficeOracleCommit'] == os.environ['ORACLE_REF']
+          assert policy['libreOfficeBaselineCommit'] == os.environ['BASELINE_COMMIT']
+          pack = policy['capturePack']
+          target = Path(os.environ['RUNNER_TEMP']) / 'word-text-precision-v1.zip'
+          subprocess.run(['curl', '--fail', '--location', '--retry', '3', '--proto', '=https', '--tlsv1.2',
+                          pack['url'], '-o', str(target)], check=True)
+          assert target.stat().st_size == pack['bytes']
+          assert hashlib.sha256(target.read_bytes()).hexdigest() == pack['sha256']
+          with ZipFile(target) as archive:
+              assert archive.testzip() is None
+              assert all(n == 'CAPTURE-PACK-MANIFEST.json' or
+                         (n.startswith('references/word-text-precision-v1/') and '..' not in Path(n).parts)
+                         for n in archive.namelist())
+              archive.extractall('word-oracle')
+          PY
+      - name: Register exact Word captures in this measurement environment
+        working-directory: word-oracle
+        run: |
+          python3 -m bench reference import --manifest references/word-text-precision-v1/registry.json \
+            --metadata references/word-text-precision-v1/metadata.json \
+            --pdf-dir references/word-text-precision-v1/native \
+            --out references/word-text-precision-v1/registered
       # The baseline is a pinned commit built by a pinned oracle recipe on a pinned Node, so its
       # build is the same every run and is kept between runs: everything `bench build-docxodus`
       # writes, including its source-bound build record. A cache entry is only ever written by
@@ -94,11 +144,25 @@ jobs:
             baseline-source/npm-export/node_modules
             baseline-source/.docx-bench-build.json
           key: fidelity-baseline-${{ runner.os }}-${{ env.BASELINE_COMMIT }}-oracle-${{ env.ORACLE_REF }}-node-${{ env.NODE_VERSION }}
+      - name: Restore current main renderer build
+        id: main-build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            main-source/npm/dist
+            main-source/npm/node_modules
+            main-source/npm-export/dist
+            main-source/npm-export/node_modules
+            main-source/.docx-bench-build.json
+          key: fidelity-main-${{ runner.os }}-${{ env.WORD_BASELINE_COMMIT }}-oracle-${{ env.ORACLE_REF }}-node-${{ env.NODE_VERSION }}
       - name: Build both exact renderer commits
         working-directory: oracle
         run: |
           if [ "${{ steps.baseline-build.outputs.cache-hit }}" != 'true' ]; then
             python3 -m bench build-docxodus --source ../baseline-source --commit "$BASELINE_COMMIT"
+          fi
+          if [ "${{ steps.main-build.outputs.cache-hit }}" != 'true' ]; then
+            python3 -m bench build-docxodus --source ../main-source --commit "$WORD_BASELINE_COMMIT"
           fi
           python3 -m bench build-docxodus --source ../candidate-source --commit "$CANDIDATE_COMMIT"
       - name: Provision Chromium sandbox host
@@ -120,16 +184,47 @@ jobs:
           export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/candidate-source"
           export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
           python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter docxodus --candidate "$CANDIDATE_COMMIT" --out runs/candidate --gate report
+          export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/main-source"
+          export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
+          python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter docxodus --candidate "$WORD_BASELINE_COMMIT" --out runs/main --gate report
+      - name: Measure main and candidate against the same Word references
+        working-directory: word-oracle
+        run: |
+          export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/main-source"
+          export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
+          python3 -m bench run --manifest references/word-text-precision-v1/registry.json \
+            --reference references/word-text-precision-v1/registered/bundle.json --adapter docxodus \
+            --candidate "$WORD_BASELINE_COMMIT" --out runs/word-main --gate report
+          export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/candidate-source"
+          export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
+          python3 -m bench run --manifest references/word-text-precision-v1/registry.json \
+            --reference references/word-text-precision-v1/registered/bundle.json --adapter docxodus \
+            --candidate "$CANDIDATE_COMMIT" --out runs/word-candidate --gate report
+          python3 -m bench compare runs/word-main/result.json runs/word-candidate/result.json --tolerance 0 > runs/word-comparison.txt || test "$?" = 1
+          cat runs/word-comparison.txt
       - name: Record all oracle comparison findings
         working-directory: oracle
         run: |
           python3 -m bench compare runs/baseline/result.json runs/candidate/result.json --tolerance 0 > runs/comparison.txt || test "$?" = 1
           cat runs/comparison.txt
-      - name: Require all mandatory passes and preserve every passing baseline measurement
+      - name: Require separate provider regressions and exact input equivalence
         env:
-          PYTHONPATH: ${{ github.workspace }}/oracle
-        run: python3 tools/rendering-fidelity/check-regressions.py oracle/runs/baseline/result.json oracle/runs/candidate/result.json
-      - name: Preserve complete evidence and immutable shared reference
+          PYTHONPATH: ${{ github.workspace }}/word-oracle
+        run: |
+          python3 tools/rendering-fidelity/check-provider-regressions.py \
+            --libreoffice-baseline oracle/runs/baseline/result.json \
+            --libreoffice-candidate oracle/runs/candidate/result.json \
+            --libreoffice-main oracle/runs/main/result.json \
+            --word-baseline word-oracle/runs/word-main/result.json \
+            --word-candidate word-oracle/runs/word-candidate/result.json \
+            --word-registry word-oracle/references/word-text-precision-v1/registry.json \
+            --word-reference word-oracle/references/word-text-precision-v1/registered/bundle.json \
+            --libreoffice-registry oracle/fixtures/manifest.json \
+            --policy tools/rendering-fidelity/word-reference-policy.json \
+            --capture-pack "$RUNNER_TEMP/word-text-precision-v1.zip" \
+            --main-commit "$WORD_BASELINE_COMMIT" --candidate-commit "$CANDIDATE_COMMIT" \
+            --out word-oracle/runs/provider-comparison.json
+      - name: Preserve separate provider reports and references
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
@@ -137,5 +232,7 @@ jobs:
           path: |
             oracle/runs/
             oracle/references/
+            word-oracle/runs/
+            word-oracle/references/
           retention-days: 30
           if-no-files-found: error
