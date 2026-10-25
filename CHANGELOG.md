@@ -62,6 +62,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Table columns omitted by every row (`w:gridBefore`) no longer give the first visible cell
+  the omitted column's narrow width, splitting its text during HTML and PDF export (#1219).
+
 - Table cell text now starts where Word starts it (#1219). The HTML converter gave every cell a 5.4pt
   left and right margin when nothing stated one; Word gives none, so in a table with no cell margins and
   no table style the text sat about 5pt right of Word's in the HTML, the paginated view and the PDF

@@ -6418,7 +6418,8 @@ namespace Docxodus
                 // sits half a border right of Word's, as it does in mode 15, because CSS pads from the
                 // border's inner edge where Word measures the margin from its centre. A floating table
                 // is placed by w:tblpPr instead.
-                var firstCell = element.Elements(W.tr).Elements(W.tc).FirstOrDefault();
+                var firstCell = element.Descendants(W.tc)
+                    .FirstOrDefault(cell => cell.Ancestors(W.tbl).First() == element);
                 var leadingSide = bidiVisual ? W.right : W.left;
                 var border = firstCell?.Elements(W.tcPr).Elements(W.tcBorders).Elements(leadingSide).FirstOrDefault();
                 var borderType = (string?)border?.Attribute(W.val);
@@ -6582,8 +6583,19 @@ namespace Docxodus
             if (cols.Count == 0 || cols.Any(w => w == null || w <= 0m))
                 return null;
 
+            // HTML rows contain only the actual cells. A grid prefix omitted by every row
+            // must therefore be omitted here too, or CSS assigns its width to the first cell.
+            // Nested rows belong to their own grid; rows inside content controls still count.
+            var leadingColumns = tableElement.Descendants(W.tr)
+                .Where(row => row.Ancestors(W.tbl).First() == tableElement)
+                .Select(row => Math.Max(0, (int?)row.Elements(W.trPr).Elements(W.gridBefore)
+                    .Attributes(W.val).FirstOrDefault() ?? 0))
+                .DefaultIfEmpty(0).Min();
+            if (leadingColumns >= cols.Count)
+                return null;
+
             return new XElement(Xhtml.colgroup,
-                cols.Select(w => new XElement(Xhtml.col,
+                cols.Skip(leadingColumns).Select(w => new XElement(Xhtml.col,
                     new XAttribute("style", string.Format(
                         NumberFormatInfo.InvariantInfo, "width: {0}pt;", w!.Value / 20m)))));
         }

@@ -54,18 +54,32 @@ for (const [name, options, wordOffset] of cases) {
 
 const wordFixtureRoot = new URL('../../TestFiles/TableHorizontalPlacement/', import.meta.url);
 const wordCases = JSON.parse(readFileSync(new URL('word-observations.json', wordFixtureRoot), 'utf8')) as {
-  cases: Array<{ id: string; inputSha256: string; wordMarkers: Record<string, number[]> }>;
+  cases: Array<{ id: string; inputSha256: string; wordMarkers: Record<string, number[]>; wordTokens?: Record<string, number> }>;
 };
 for (const observed of wordCases.cases) {
-  test(`${observed.id}: nested table margins match the captured Word origins`, async ({ browser }) => {
+  test(`${observed.id}: table text matches the captured Word origins`, async ({ browser }) => {
     test.setTimeout(120_000);
     const bytes = new Uint8Array(readFileSync(fileURLToPath(new URL(observed.id + '.docx', wordFixtureRoot))));
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(observed.inputSha256);
     const actual = await renderDocxArtifacts(bytes, { browser, outputs: ['pdf'], reviewProfile: 'final',
       commentProfile: 'hidden', timeoutMs: 120_000 });
     expect(actual.pageCount).toBe(1);
-    const starts = await lineStarts(actual.pdf!);
-    for (const marker of ['OuterLeft', 'InnerLeft'])
-      expect(starts[marker]).toBeCloseTo(observed.wordMarkers[marker][0], 0);
+    const task = getDocument({ data: new Uint8Array(actual.pdf!), verbosity: 0 });
+    try {
+      const page = await (await task.promise).getPage(1);
+      const items = (await page.getTextContent()).items.filter(item => 'str' in item);
+      const starts = Object.fromEntries(items.filter(item => item.str.trim())
+        .map(item => [item.str.trim().split(/\s+/)[0], item.transform[4]]));
+      for (const [marker, rect] of Object.entries(observed.wordMarkers)) {
+        if (!observed.wordTokens && !['OuterLeft', 'InnerLeft'].includes(marker)) continue;
+        expect(starts[marker], marker).toBeCloseTo(rect[0], 0);
+      }
+      if (observed.wordTokens) {
+        const tokens: Record<string, number> = {};
+        for (const item of items) for (const token of item.str.trim().split(/\s+/).filter(Boolean))
+          tokens[token] = (tokens[token] ?? 0) + 1;
+        expect(tokens).toEqual(observed.wordTokens);
+      }
+    } finally { await task.destroy(); }
   });
 }

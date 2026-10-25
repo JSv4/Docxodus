@@ -188,6 +188,50 @@ public class TableHorizontalPlacementTests
         Assert.Equal("-5.9pt", Table(html)["margin-left"]);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Columns_omitted_by_every_own_row_do_not_narrow_the_first_rendered_cell(bool wrapped)
+    {
+        var inner = Table();
+        var table = Table().Replace("<w:gridCol w:w=\"5000\"/>",
+                "<w:gridCol w:w=\"1000\"/><w:gridCol w:w=\"4000\"/>")
+            .Replace("<w:tr>", "<w:tr><w:trPr><w:gridBefore w:val=\"1\"/></w:trPr>")
+            .Replace("<w:tcW w:w=\"5000\"", "<w:tcW w:w=\"4000\"")
+            .Replace("</w:tc>", inner + "<w:p/></w:tc>");
+        if (wrapped)
+        {
+            var ns = XNamespace.Get(W);
+            var xml = XElement.Parse("<root xmlns:w=\"" + W + "\">" + table + "</root>");
+            var row = xml.Element(ns + "tbl")!.Element(ns + "tr")!;
+            row.ReplaceWith(new XElement(ns + "sdt", new XElement(ns + "sdtContent", new XElement(row))));
+            table = string.Concat(xml.Elements());
+        }
+        var html = Convert(table, mode: "14", styles: DefaultTableStyle);
+        var outer = html.Descendants().First(e => e.Name.LocalName == "table");
+        Assert.Equal("-5.9pt", Style(outer)["margin-left"]);
+        var columns = outer.Elements().Single(e => e.Name.LocalName == "colgroup").Elements().ToList();
+        Assert.Single(columns);
+        Assert.Equal("200pt", Style(columns[0])["width"]);
+    }
+
+    [Fact]
+    public void A_column_used_by_another_own_row_stays_in_the_grid()
+    {
+        var table = Table().Replace("<w:gridCol w:w=\"5000\"/>",
+                "<w:gridCol w:w=\"1000\"/><w:gridCol w:w=\"4000\"/>")
+            .Replace("<w:tr>", "<w:tr><w:trPr><w:gridBefore w:val=\"1\"/></w:trPr>");
+        var ns = XNamespace.Get(W);
+        var xml = XElement.Parse("<root xmlns:w=\"" + W + "\">" + table + "</root>");
+        var row = new XElement(xml.Element(ns + "tbl")!.Element(ns + "tr")!);
+        row.Element(ns + "trPr")!.Remove();
+        row.Element(ns + "tc")!.Element(ns + "tcPr")!.Add(new XElement(ns + "gridSpan", new XAttribute(ns + "val", 2)));
+        xml.Element(ns + "tbl")!.Add(row);
+        var html = Convert(string.Concat(xml.Elements()), mode: "14");
+        Assert.Equal(new[] { "50pt", "200pt" }, html.Descendants()
+            .Where(e => e.Name.LocalName == "col").Select(e => Style(e)["width"]));
+    }
+
     [Fact]
     public void Floating_table_is_not_pulled_out()
     {

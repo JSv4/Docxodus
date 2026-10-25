@@ -2841,7 +2841,22 @@ text about 0.25pt right of Word's in every mode; with a 3pt border, about 1.5pt.
 - Code: `Docxodus/WmlToHtmlConverter.cs` (`ResolveTableIndentInputs`, `CellMarginTwips`,
   `ProcessTable`).
 - Tests: `TableHorizontalPlacementTests`, `npm/tests/export-table-indent.spec.ts`; bench cases
-  `tables-cell-margin-*` and `tables-indent-mode-*` (core-v51).
+  `tables-cell-margin-*`, `tables-indent-mode-*` and `tables-legacy-*` (core-v65).
+
+The October 25 review re-exported the exact six legacy benchmark inputs through Word and retained
+complete token inventories alongside their horizontal marker origins. A `gridBefore` control exposed
+an additional width error: the HTML column group included a leading column omitted by every row,
+so CSS applied that column's width to the first actual cell and split `BravoCell` and `gridBefore.`.
+The column group now skips only a grid prefix omitted by all of the table's own rows. Nested rows
+use their own grid, rows wrapped in content controls still count, and a column used by another row
+is retained. The first-cell indent lookup also follows cells inside content controls.
+
+The original nested CI input has two SDK property-order findings and requests Liberation Serif,
+which Word substitutes. Its untouched native capture remains an ineligible diagnostic. Two SDK-valid
+controls, one preserving its requested font and one declaring Times New Roman, confirm the same
+left-cell origins (73.025pt outer, 73.775pt inner). The old renderer adds 5.4pt at each level.
+Whole-table automatic column allocation and the existing vertical offsets are separately retained
+in the benchmark evidence; matching these horizontal margins does not establish a full Word score.
 
 ## `w:rtl` and `w:bidiVisual` are on/off values, and Google Docs writes them switched off
 
