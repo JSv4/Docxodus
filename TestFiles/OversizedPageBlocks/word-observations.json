@@ -487,6 +487,32 @@
         ]
       },
       "nativeReviewActuallyViewed": true
+    },
+    {
+      "id": "exact-row-soft-wrapped-text",
+      "inputSha256": "a536d1a7e789c111ceec2634d73c519fbe5e898265958252302bade311bb9b7d",
+      "wordPdfSha256": "9fb4c7078518f7d302ebe2748925b36fcb3b3303038ee490596ea7371e82929c",
+      "pageWords": {
+        "1": [
+          "CedarBefore"
+        ],
+        "2": [
+          "Cedar01",
+          "Cedar02",
+          "Cedar03",
+          "Cedar04",
+          "Cedar05",
+          "Cedar06",
+          "Cedar07",
+          "Cedar08",
+          "Cedar09",
+          "Cedar10"
+        ],
+        "3": [
+          "CedarAfter"
+        ]
+      },
+      "nativeReviewActuallyViewed": true
     }
   ]
 }

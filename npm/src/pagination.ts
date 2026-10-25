@@ -569,7 +569,7 @@ export const OVERSIZED_BLOCK_ATTRIBUTE = "data-pagination-oversized";
 /** An oversized exact row responsible for this element's intentional vertical overflow. */
 export function findOversizedExactRow(element: Element): HTMLTableRowElement | null {
   const block = element.closest(`[${OVERSIZED_BLOCK_ATTRIBUTE}]`);
-  const body = block?.closest(".page-content");
+  const body = block?.parentElement;
   if (!block || !body) return null;
   const height = body.getBoundingClientRect().height;
   // Column boxes are siblings of rows, but their height includes every row in their table.
@@ -612,7 +612,7 @@ function clippedAwayByExactRow(element: HTMLElement, rect: DOMRect): boolean {
     return false;
   }
   // An exact row taller than its page is clipped where the page ends (issue #1202).
-  const body = element.closest<HTMLElement>(".page-content");
+  const body = element.closest(`[${OVERSIZED_BLOCK_ATTRIBUTE}]`)?.parentElement;
   if (body && findOversizedExactRow(element)) {
     const boundary = body.style.overflowY === "visible" && body.parentElement
       ? body.parentElement.getBoundingClientRect().bottom : body.getBoundingClientRect().bottom;
@@ -2255,9 +2255,26 @@ export class PaginationEngine {
     // The header run must end at a safe boundary and leave body rows to carry.
     const headerCount = repeatHeaderRows ? this.leadingHeaderRowCount(rows, rowGroupEnds) : 0;
     const headerRows = rows.slice(0, headerCount);
-    const withoutRepeats = (): MeasuredBlock[] | null => headerCount > 0
-      ? this.trySplitSimpleOversizedTable(block, dims, sectionIndex, false)
-      : null;
+    const withoutRepeats = (): MeasuredBlock[] | null => {
+      if (headerCount === 0) return null;
+      const fragments = this.trySplitSimpleOversizedTable(block, dims, sectionIndex, false);
+      if (fragments && headerRows.some(row => row.querySelector(EXACT_ROW_CELL) !== null && !rowFits(row))) {
+        // Word starts the text after a table with an indivisible oversized exact header on
+        // a fresh page. finishPage ignores this marker when the last row already turned it.
+        fragments.push({
+          ...block,
+          element: this.document.createElement("div"),
+          heightPt: 0,
+          marginTopPt: 0,
+          marginBottomPt: 0,
+          keepWithNext: false,
+          keepLines: false,
+          pageBreakBefore: false,
+          isPageBreak: true,
+        });
+      }
+      return fragments;
+    };
 
     const groups: HTMLTableRowElement[][] = [];
     // Groups that are a page on their own however they are cut: one exact-height row, or the part
@@ -5137,7 +5154,7 @@ export class PaginationEngine {
           true,
           pageInSection(block.sectionIndex),
         );
-        // The body band clips it; where that clip is an exact-height row's own, Word's too.
+        // A known exact row clips at the paper edge; other fallback overflow stays guarded.
         oversized.setAttribute(OVERSIZED_BLOCK_ATTRIBUTE, "true");
         currentContent.push(oversized);
         // An unsupported body block already occupies/clips its whole body band.

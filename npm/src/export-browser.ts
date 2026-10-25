@@ -10,7 +10,7 @@ import limitsContractJson from "./export-resource-limits-v1.json";
 import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
 import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExactLineInk, laidOutBottom } from "./line-metrics.js";
 import { prepareWordText, paintWordText } from "./word-text.js";
-import { EXACT_ROW_CELL, preserveClippedExactRowText } from "./exact-row-text.js";
+import { preserveClippedExactRowText } from "./exact-row-text.js";
 import { prepareParagraphBorders, paintParagraphBorders } from "./paragraph-borders.js";
 import { measureRenderedSource, findOversizedExactRow, PaginationEngine, type PageMap } from "./pagination.js";
 import { scopeMarkupBalloons } from "./markup-balloons.js";

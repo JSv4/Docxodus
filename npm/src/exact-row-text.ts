@@ -91,9 +91,13 @@ function textNodes(clip: HTMLElement): Text[] {
  * least the part above the baseline (a glyph drawn wholly below its baseline, such as an underscore, is
  * not looked for). Horizontally, a glyph is lost when its whole advance lies outside.
  */
-function hidesText(clip: HTMLElement, view: Window & typeof globalThis): boolean {
+function hidesText(clip: HTMLElement, view: Window & typeof globalThis, page: DOMRect): boolean {
   const document = clip.ownerDocument;
-  const box = clip.getBoundingClientRect();
+  const own = clip.getBoundingClientRect();
+  // An oversized row can hold every line while the paper clips one. The same whole-glyph
+  // preservation is needed at that outer edge, including the last partly visible line.
+  const box = { left: own.left, right: own.right,
+    top: Math.max(own.top, page.top), bottom: Math.min(own.bottom, page.bottom) };
   const context = document.createElement('canvas').getContext('2d');
   const range = document.createRange();
   for (const node of textNodes(clip)) {
@@ -124,6 +128,42 @@ function hidesText(clip: HTMLElement, view: Window & typeof globalThis): boolean
     }
   }
   return false;
+}
+
+/** Keep fully off-paper text out of subsequent PDF pages without changing any line box. */
+function hideTextOutsidePage(clip: HTMLElement, view: Window & typeof globalThis, page: DOMRect): void {
+  const range = clip.ownerDocument.createRange();
+  const outside = (rect: DOMRect) => rect.bottom <= page.top || rect.top >= page.bottom;
+  for (const node of textNodes(clip)) {
+    if (view.getComputedStyle(node.parentElement!).visibility === 'hidden') continue;
+    range.selectNodeContents(node);
+    const boxes = Array.from(range.getClientRects()).filter(r => r.width > 0 && r.height > 0);
+    if (boxes.length === 0 || boxes.every(r => !outside(r))) continue;
+    const hidden: Array<[number, number]> = [];
+    if (boxes.every(outside)) hidden.push([0, node.length]);
+    else {
+      let start = -1;
+      for (let index = 0; index <= node.length; index++) {
+        let hide = false;
+        if (index < node.length) {
+          range.setStart(node, index);
+          range.setEnd(node, index + 1);
+          const glyphs = Array.from(range.getClientRects()).filter(r => r.width > 0 && r.height > 0);
+          hide = glyphs.length > 0 && glyphs.every(outside);
+        }
+        if (hide && start < 0) start = index;
+        if (!hide && start >= 0) { hidden.push([start, index]); start = -1; }
+      }
+    }
+    for (const [start, end] of hidden.reverse()) {
+      if (end < node.length) node.splitText(end);
+      const text = start > 0 ? node.splitText(start) : node;
+      const span = clip.ownerDocument.createElement('span');
+      span.style.visibility = 'hidden';
+      text.parentNode!.insertBefore(span, text);
+      span.appendChild(text);
+    }
+  }
 }
 
 /**
@@ -162,8 +202,12 @@ export function preserveClippedExactRowText(root: HTMLElement): number {
   for (const clip of Array.from(root.querySelectorAll<HTMLElement>(EXACT_ROW_CELL))) {
     const page = clip.closest<HTMLElement>('.page-box');
     const parent = clip.parentElement;
-    if (!page || !parent || !hidesText(clip, view) || holdsOutOfFlowPositioned(clip, view)) continue;
+    if (!page || !parent || holdsOutOfFlowPositioned(clip, view)) continue;
     const pageRect = page.getBoundingClientRect();
+    if (!hidesText(clip, view, pageRect)) continue;
+    // Expanded clip bounds must preserve a partly visible word, not print wholly hidden
+    // lines into a later physical PDF page. Visibility preserves layout and source anchors.
+    hideTextOutsidePage(clip, view, pageRect);
     const box = clip.getBoundingClientRect();
     // A row no taller than its borders and padding shows none of its text (LibreOffice draws none
     // either), and an SVG root of no height cannot be printed (issue #1168).

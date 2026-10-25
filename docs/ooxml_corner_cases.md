@@ -4590,3 +4590,38 @@ The byte-exact native Word inputs, hashes, fonts, and capture geometry are recor
 its grid-span lookup and horizontal clipping; the native captures correct its assumption
 that the resulting column has exactly zero width. Tests: `ZeroWidthColumnTests` and
 `npm/tests/zero-width-column.spec.ts`.
+
+## Blocks taller than a page: exact rows, header rows, nested tables and border groups (#1202)
+
+Native Word for the web exports of the exact inputs are recorded in
+`TestFiles/OversizedPageBlocks/word-observations.json`. All twenty inputs have zero Open XML SDK
+Microsoft365 findings. The browser regression checks compare the complete word multiset on every
+page, including clipped words and duplicate occurrences, rather than only looking for selected markers.
+
+Word places an oversized exact row alone on a new page and clips it at the paper edge. In the
+300pt by 160pt twelve-line probes, Cedar01 through Cedar10 remain on page 2; Cedar11 and Cedar12 are
+absent, and CedarAfter starts page 3. A footer overlaps the last visible row line. The same inventory
+is observed when all twelve words are a single soft-wrapped text node. The standalone PDF writer
+needs the existing whole-text clip expansion at this outer boundary too, or Skia drops the last
+partly visible word. Text wholly outside the paper is made invisible without changing line boxes
+or source anchors, so expanded clip bounds do not emit it on a later physical PDF page.
+
+The paginator identifies the particular oversized exact row responsible for a box's overflow,
+including its table-column boxes. Visible source anchors remain required. PageMap omits a wholly
+clipped source only after checking its positive rectangle against the actual clipping edge. The
+body's horizontal overflow remains visible; the page box clips at the paper. A real footnote band
+keeps its protected body boundary.
+
+A table's first fitting fragment participates in normal placement. This keeps OuterHead on page 1
+in the nested-table case instead of moving the whole table. Word's oversized exact header cases,
+including independent 200pt and 400pt controls, place the two body rows on page 3 and the following
+paragraph on page 4. A conditional page break after those tables preserves that observation. A
+400pt first row without the header flag keeps the following paragraph on page 3.
+
+Bordered paragraphs and their shared-border groups split between their paragraph blocks. The
+painted top/bottom sides are omitted at an internal continuation boundary, retaining the existing
+physical border-width painter. Row spans and footnote-bearing table shapes retain their established
+safety checks.
+
+These observations establish page placement and visible text for the registered cases. They are
+not a full Word raster score; native PDF bytes and font identities are retained with the captures.
