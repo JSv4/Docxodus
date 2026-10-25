@@ -5150,9 +5150,12 @@ export class PaginationEngine {
                   deferralCannotHelp,
                   payload,
                 );
-                // Read-only layout keeps an indivisible oversized part beside its citation.
-                // Editor mode defers it to its own page, where the continuation path forces progress.
-                if (this.fragmentParagraphs && fits.length === 0 && !deferralCannotHelp
+                // Editor mode defers an explicitly kept first paragraph to its own page.
+                // Other indivisible content retains its existing progress fallback here.
+                const firstPart = footnote.querySelector<HTMLElement>(":scope > .footnote-content")?.firstElementChild;
+                const deferKeptEditorNote = !this.fragmentParagraphs
+                  && firstPart instanceof this.view.HTMLElement && firstPart.dataset.keepLines === "true";
+                if (!deferKeptEditorNote && fits.length === 0 && !deferralCannotHelp
                   && this.splitFootnoteToFit(footnote, nextPageMaxFootnoteArea,
                     blockDimensions.contentWidth).fits.length === 0) {
                   ({ fits, overflow } = this.splitFootnoteToFit(

@@ -13,7 +13,7 @@ const budgetsKiB = {
   'embed.iife.js': 135,
   'editor.bundle.js': 112,
   // Merged main a10772a8 measures 29.8 KiB gzip. Word-matched note-table cell/paragraph
-  // fragmentation (#1217) adds 573 bytes (1.9%); deliberately raise only this budget to 31 KiB.
+  // fragmentation (#1217) adds about 0.7 KiB (2%); deliberately raise only this budget to 31 KiB.
   'pagination.bundle.js': 31,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
