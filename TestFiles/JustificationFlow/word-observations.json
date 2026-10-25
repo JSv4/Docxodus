@@ -1,0 +1,4230 @@
+{
+  "schema": 1,
+  "product": "Signed-in Microsoft Word for the web",
+  "reportedBuild": null,
+  "sourceMethod": "Unedited SDK-zero inputs exported via Word UI before the renderer implementation; original PDF and returned DOCX retained in per-issue cache.",
+  "qualification": "Native Times New Roman7.06 and local2.82 have matching captured Latin hmtx advances; outlines/hinting/rasterization are not asserted identical.",
+  "cases": [
+    {
+      "id": "justify-gap-choice-heldout-mode-15-size-11",
+      "file": "justify-gap-choice-heldout-mode-15-size-11.docx",
+      "inputSha256": "475a908aea8bac33b6005124fa59869756bdfb127149a9cb81ea44deb6e738ba",
+      "wordPdfSha256": "5ed1d2abd205d7c510249890ff5dea75b7ed60a867f35fea8b109020f78a14b2",
+      "wordDocxSha256": "3c6eed91c2d63a88657563b64ba2db58f7f4f9eb5ad52e70bed4632f0a6830df",
+      "fontSizePt": 11,
+      "paragraphs": [
+        {
+          "variant": "new-prose-1-spaces-cut-10-indent-0",
+          "alignment": "both",
+          "widthPt": 340.05,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 340.5503627232143,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 1,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates"
+            ],
+            [
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next"
+            ],
+            [
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates"
+            ],
+            [
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next"
+            ],
+            [
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-10-indent-0",
+          "alignment": "both",
+          "widthPt": 340.45,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 340.5503627232143,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 2,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates"
+            ],
+            [
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next"
+            ],
+            [
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates"
+            ],
+            [
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next"
+            ],
+            [
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-10-indent-0",
+          "alignment": "both",
+          "widthPt": 340.65,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 340.5503627232143,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 3,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates"
+            ],
+            [
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next"
+            ],
+            [
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates"
+            ],
+            [
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next"
+            ],
+            [
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-10-indent-0",
+          "alignment": "both",
+          "widthPt": 341.05,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 340.5503627232143,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 4,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and"
+            ],
+            [
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee"
+            ],
+            [
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and"
+            ],
+            [
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee"
+            ],
+            [
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-9-indent-0",
+          "alignment": "both",
+          "widthPt": 334.5,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 335.02111328125,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 5,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting"
+            ],
+            [
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks"
+            ],
+            [
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account"
+            ],
+            [
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting"
+            ],
+            [
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks"
+            ],
+            [
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account"
+            ],
+            [
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-9-indent-0",
+          "alignment": "both",
+          "widthPt": 334.9,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 335.02111328125,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 6,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting"
+            ],
+            [
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks"
+            ],
+            [
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account"
+            ],
+            [
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting"
+            ],
+            [
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks"
+            ],
+            [
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account"
+            ],
+            [
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-9-indent-0",
+          "alignment": "both",
+          "widthPt": 335.1,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 335.02111328125,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 7,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the"
+            ],
+            [
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for"
+            ],
+            [
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the"
+            ],
+            [
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for"
+            ],
+            [
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-9-indent-0",
+          "alignment": "both",
+          "widthPt": 335.5,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 335.02111328125,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 8,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the"
+            ],
+            [
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for"
+            ],
+            [
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the"
+            ],
+            [
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for"
+            ],
+            [
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-8-indent-18",
+          "alignment": "both",
+          "widthPt": 302.95,
+          "firstLineIndentPt": 18,
+          "unroundedHypothesisCrossPt": 303.45166015625,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 9,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-8-indent-18",
+          "alignment": "both",
+          "widthPt": 303.35,
+          "firstLineIndentPt": 18,
+          "unroundedHypothesisCrossPt": 303.45166015625,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 10,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-8-indent-18",
+          "alignment": "both",
+          "widthPt": 303.55,
+          "firstLineIndentPt": 18,
+          "unroundedHypothesisCrossPt": 303.45166015625,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 11,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-8-indent-18",
+          "alignment": "both",
+          "widthPt": 303.95,
+          "firstLineIndentPt": 18,
+          "unroundedHypothesisCrossPt": 303.45166015625,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 12,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-11-indent-12",
+          "alignment": "both",
+          "widthPt": 404.3,
+          "firstLineIndentPt": 12,
+          "unroundedHypothesisCrossPt": 404.81407510080646,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 13,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain"
+            ],
+            [
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities"
+            ],
+            [
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain"
+            ],
+            [
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities"
+            ],
+            [
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-11-indent-12",
+          "alignment": "both",
+          "widthPt": 404.7,
+          "firstLineIndentPt": 12,
+          "unroundedHypothesisCrossPt": 404.81407510080646,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 14,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain"
+            ],
+            [
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities"
+            ],
+            [
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain"
+            ],
+            [
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities"
+            ],
+            [
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-11-indent-12",
+          "alignment": "both",
+          "widthPt": 404.9,
+          "firstLineIndentPt": 12,
+          "unroundedHypothesisCrossPt": 404.81407510080646,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 15,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain",
+              "the"
+            ],
+            [
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while"
+            ],
+            [
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain",
+              "the"
+            ],
+            [
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while"
+            ],
+            [
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-11-indent-12",
+          "alignment": "both",
+          "widthPt": 405.3,
+          "firstLineIndentPt": 12,
+          "unroundedHypothesisCrossPt": 404.81407510080646,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 16,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain",
+              "the"
+            ],
+            [
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while"
+            ],
+            [
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain",
+              "the"
+            ],
+            [
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while"
+            ],
+            [
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "final-uniform-minimum",
+          "alignment": "both",
+          "widthPt": 390.2,
+          "firstLineIndentPt": 0,
+          "text": "WWWW WWWW WWWW WWWW WWWW WWWW WWWW WWWW WWWW",
+          "index": 17,
+          "nativeLines": [
+            [
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW"
+            ],
+            [
+              "WWWW"
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW"
+            ],
+            [
+              "WWWW"
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "final-uniform-minimum",
+          "alignment": "both",
+          "widthPt": 390.3,
+          "firstLineIndentPt": 0,
+          "text": "WWWW WWWW WWWW WWWW WWWW WWWW WWWW WWWW WWWW",
+          "index": 18,
+          "nativeLines": [
+            [
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW"
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW"
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2
+          ]
+        }
+      ],
+      "nativePageCount": 2
+    },
+    {
+      "id": "justify-gap-choice-heldout-mode-15-size-12",
+      "file": "justify-gap-choice-heldout-mode-15-size-12.docx",
+      "inputSha256": "dd8541877c7a82813745588f4864050953a426fb97bf58ebc6d7f4bcd54b845f",
+      "wordPdfSha256": "6cd8cc5446fb32827d6994ad5063e23ae9c7fb339c12e87b47ef935622c04399",
+      "wordDocxSha256": "2b41876d4e1b6e287986e094ca3927310a1bc6fec6fa580bc5a1741fa21028a1",
+      "fontSizePt": 12,
+      "paragraphs": [
+        {
+          "variant": "prior-prose-fine-boundary",
+          "alignment": "both",
+          "widthPt": 468.8,
+          "firstLineIndentPt": 0,
+          "text": "schedule  to  the  project  office.  Each  report  includes  the  measured  quantity  and  the  name  of  the  person  responsible  for  the  next  review.",
+          "index": 1,
+          "nativeLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name"
+            ],
+            [
+              "of",
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name"
+            ],
+            [
+              "of",
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "prior-prose-fine-boundary",
+          "alignment": "both",
+          "widthPt": 469,
+          "firstLineIndentPt": 0,
+          "text": "schedule  to  the  project  office.  Each  report  includes  the  measured  quantity  and  the  name  of  the  person  responsible  for  the  next  review.",
+          "index": 2,
+          "nativeLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name"
+            ],
+            [
+              "of",
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name"
+            ],
+            [
+              "of",
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "prior-prose-fine-boundary",
+          "alignment": "both",
+          "widthPt": 469.1,
+          "firstLineIndentPt": 0,
+          "text": "schedule  to  the  project  office.  Each  report  includes  the  measured  quantity  and  the  name  of  the  person  responsible  for  the  next  review.",
+          "index": 3,
+          "nativeLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name"
+            ],
+            [
+              "of",
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name"
+            ],
+            [
+              "of",
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "prior-prose-fine-boundary",
+          "alignment": "both",
+          "widthPt": 469.2,
+          "firstLineIndentPt": 0,
+          "text": "schedule  to  the  project  office.  Each  report  includes  the  measured  quantity  and  the  name  of  the  person  responsible  for  the  next  review.",
+          "index": 4,
+          "nativeLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name"
+            ],
+            [
+              "of",
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name"
+            ],
+            [
+              "of",
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "prior-prose-fine-boundary",
+          "alignment": "both",
+          "widthPt": 469.25,
+          "firstLineIndentPt": 0,
+          "text": "schedule  to  the  project  office.  Each  report  includes  the  measured  quantity  and  the  name  of  the  person  responsible  for  the  next  review.",
+          "index": 5,
+          "nativeLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name",
+              "of"
+            ],
+            [
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name",
+              "of"
+            ],
+            [
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "prior-prose-fine-boundary",
+          "alignment": "both",
+          "widthPt": 469.3,
+          "firstLineIndentPt": 0,
+          "text": "schedule  to  the  project  office.  Each  report  includes  the  measured  quantity  and  the  name  of  the  person  responsible  for  the  next  review.",
+          "index": 6,
+          "nativeLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name",
+              "of"
+            ],
+            [
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name",
+              "of"
+            ],
+            [
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "prior-prose-fine-boundary",
+          "alignment": "both",
+          "widthPt": 469.4,
+          "firstLineIndentPt": 0,
+          "text": "schedule  to  the  project  office.  Each  report  includes  the  measured  quantity  and  the  name  of  the  person  responsible  for  the  next  review.",
+          "index": 7,
+          "nativeLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name",
+              "of"
+            ],
+            [
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name",
+              "of"
+            ],
+            [
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "prior-prose-fine-boundary",
+          "alignment": "both",
+          "widthPt": 469.5,
+          "firstLineIndentPt": 0,
+          "text": "schedule  to  the  project  office.  Each  report  includes  the  measured  quantity  and  the  name  of  the  person  responsible  for  the  next  review.",
+          "index": 8,
+          "nativeLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name",
+              "of"
+            ],
+            [
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name",
+              "of"
+            ],
+            [
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "prior-prose-fine-boundary",
+          "alignment": "both",
+          "widthPt": 469.6,
+          "firstLineIndentPt": 0,
+          "text": "schedule  to  the  project  office.  Each  report  includes  the  measured  quantity  and  the  name  of  the  person  responsible  for  the  next  review.",
+          "index": 9,
+          "nativeLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name",
+              "of"
+            ],
+            [
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "schedule",
+              "to",
+              "the",
+              "project",
+              "office.",
+              "Each",
+              "report",
+              "includes",
+              "the",
+              "measured",
+              "quantity",
+              "and",
+              "the",
+              "name",
+              "of"
+            ],
+            [
+              "the",
+              "person",
+              "responsible",
+              "for",
+              "the",
+              "next",
+              "review."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-10-indent-0",
+          "alignment": "both",
+          "widthPt": 371,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 371.50948660714283,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 10,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates"
+            ],
+            [
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next"
+            ],
+            [
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates"
+            ],
+            [
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next"
+            ],
+            [
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-10-indent-0",
+          "alignment": "both",
+          "widthPt": 371.4,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 371.50948660714283,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 11,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates"
+            ],
+            [
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next"
+            ],
+            [
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates"
+            ],
+            [
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next"
+            ],
+            [
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-10-indent-0",
+          "alignment": "both",
+          "widthPt": 371.6,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 371.50948660714283,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 12,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates"
+            ],
+            [
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next"
+            ],
+            [
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates"
+            ],
+            [
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next"
+            ],
+            [
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-10-indent-0",
+          "alignment": "both",
+          "widthPt": 372,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 371.50948660714283,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 13,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and"
+            ],
+            [
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee"
+            ],
+            [
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and"
+            ],
+            [
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee"
+            ],
+            [
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-9-indent-0",
+          "alignment": "both",
+          "widthPt": 365,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 365.477578125,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 14,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting"
+            ],
+            [
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks"
+            ],
+            [
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account"
+            ],
+            [
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting"
+            ],
+            [
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks"
+            ],
+            [
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account"
+            ],
+            [
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            1,
+            1,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-9-indent-0",
+          "alignment": "both",
+          "widthPt": 365.4,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 365.477578125,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 15,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting"
+            ],
+            [
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks"
+            ],
+            [
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account"
+            ],
+            [
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting"
+            ],
+            [
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks"
+            ],
+            [
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account"
+            ],
+            [
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-9-indent-0",
+          "alignment": "both",
+          "widthPt": 365.6,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 365.477578125,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 16,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the"
+            ],
+            [
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for"
+            ],
+            [
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the"
+            ],
+            [
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for"
+            ],
+            [
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-9-indent-0",
+          "alignment": "both",
+          "widthPt": 366,
+          "firstLineIndentPt": 0,
+          "unroundedHypothesisCrossPt": 365.477578125,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 17,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the"
+            ],
+            [
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for"
+            ],
+            [
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and"
+            ],
+            [
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the"
+            ],
+            [
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for"
+            ],
+            [
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-8-indent-18",
+          "alignment": "both",
+          "widthPt": 328.9,
+          "firstLineIndentPt": 18,
+          "unroundedHypothesisCrossPt": 329.40181107954544,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 18,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-8-indent-18",
+          "alignment": "both",
+          "widthPt": 329.3,
+          "firstLineIndentPt": 18,
+          "unroundedHypothesisCrossPt": 329.40181107954544,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 19,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-8-indent-18",
+          "alignment": "both",
+          "widthPt": 329.5,
+          "firstLineIndentPt": 18,
+          "unroundedHypothesisCrossPt": 329.40181107954544,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 20,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-1-spaces-cut-8-indent-18",
+          "alignment": "both",
+          "widthPt": 329.9,
+          "firstLineIndentPt": 18,
+          "unroundedHypothesisCrossPt": 329.40181107954544,
+          "text": "Maple01 Auditors examine each record before the morning meeting and explain the findings to all participants. A second reviewer checks the dates and quantities while the secretary prepares a clear account for the next committee meeting.",
+          "index": 21,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning"
+            ],
+            [
+              "meeting",
+              "and",
+              "explain",
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second"
+            ],
+            [
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while",
+              "the",
+              "secretary",
+              "prepares"
+            ],
+            [
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-11-indent-12",
+          "alignment": "both",
+          "widthPt": 440,
+          "firstLineIndentPt": 12,
+          "unroundedHypothesisCrossPt": 440.52444556451616,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 22,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain"
+            ],
+            [
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities"
+            ],
+            [
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain"
+            ],
+            [
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities"
+            ],
+            [
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-11-indent-12",
+          "alignment": "both",
+          "widthPt": 440.4,
+          "firstLineIndentPt": 12,
+          "unroundedHypothesisCrossPt": 440.52444556451616,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 23,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain"
+            ],
+            [
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities"
+            ],
+            [
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain"
+            ],
+            [
+              "the",
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities"
+            ],
+            [
+              "while",
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-11-indent-12",
+          "alignment": "both",
+          "widthPt": 440.6,
+          "firstLineIndentPt": 12,
+          "unroundedHypothesisCrossPt": 440.52444556451616,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 24,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain",
+              "the"
+            ],
+            [
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while"
+            ],
+            [
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain",
+              "the"
+            ],
+            [
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while"
+            ],
+            [
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            2,
+            3,
+            3
+          ]
+        },
+        {
+          "variant": "new-prose-2-spaces-cut-11-indent-12",
+          "alignment": "both",
+          "widthPt": 441,
+          "firstLineIndentPt": 12,
+          "unroundedHypothesisCrossPt": 440.52444556451616,
+          "text": "Maple01  Auditors  examine  each  record  before  the  morning  meeting  and  explain  the  findings  to  all  participants.  A  second  reviewer  checks  the  dates  and  quantities  while  the  secretary  prepares  a  clear  account  for  the  next  committee  meeting.",
+          "index": 25,
+          "nativeLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain",
+              "the"
+            ],
+            [
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while"
+            ],
+            [
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "Maple01",
+              "Auditors",
+              "examine",
+              "each",
+              "record",
+              "before",
+              "the",
+              "morning",
+              "meeting",
+              "and",
+              "explain",
+              "the"
+            ],
+            [
+              "findings",
+              "to",
+              "all",
+              "participants.",
+              "A",
+              "second",
+              "reviewer",
+              "checks",
+              "the",
+              "dates",
+              "and",
+              "quantities",
+              "while"
+            ],
+            [
+              "the",
+              "secretary",
+              "prepares",
+              "a",
+              "clear",
+              "account",
+              "for",
+              "the",
+              "next",
+              "committee",
+              "meeting."
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            3,
+            3,
+            3
+          ]
+        },
+        {
+          "variant": "final-uniform-minimum",
+          "alignment": "both",
+          "widthPt": 425.7,
+          "firstLineIndentPt": 0,
+          "text": "WWWW WWWW WWWW WWWW WWWW WWWW WWWW WWWW WWWW",
+          "index": 26,
+          "nativeLines": [
+            [
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW"
+            ],
+            [
+              "WWWW"
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW"
+            ],
+            [
+              "WWWW"
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            3,
+            3
+          ]
+        },
+        {
+          "variant": "final-uniform-minimum",
+          "alignment": "both",
+          "widthPt": 425.8,
+          "firstLineIndentPt": 0,
+          "text": "WWWW WWWW WWWW WWWW WWWW WWWW WWWW WWWW WWWW",
+          "index": 27,
+          "nativeLines": [
+            [
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW"
+            ]
+          ],
+          "fontFitLines": [
+            [
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW",
+              "WWWW"
+            ]
+          ],
+          "sameLines": true,
+          "nativeLinePages": [
+            3
+          ]
+        }
+      ],
+      "nativePageCount": 3
+    }
+  ]
+}

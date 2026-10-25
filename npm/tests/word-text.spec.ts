@@ -207,9 +207,10 @@ for (const mode of [14, 15]) {
       p.style.width = `${3 * word + 2 * space * .8}px`;
       api.applyUnroundedNormalLineHeights(document.querySelector('main'));
       api.prepareWordText(document.querySelector('main'));
-      const run = p.firstElementChild!, node = run.firstChild!;
+      const run = p.firstElementChild!;
       const rows = new Map<number, string[]>();
-      for (const match of node.textContent!.matchAll(/\S+/g)) {
+      const walker = document.createTreeWalker(run, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) for (const match of node.textContent!.matchAll(/\S+/g)) {
         const range = document.createRange(); range.setStart(node, match.index!); range.setEnd(node, match.index! + match[0].length);
         const y = range.getBoundingClientRect().top;
         const words = rows.get(y) ?? []; words.push(match[0]); rows.set(y, words);
@@ -244,10 +245,11 @@ test('a word split across visual lines keeps its complete HTML fallback', async 
   expect(actual.afterBox).toEqual(actual.box);
 });
 
-test('a page continuation keeps justification through the last line of each non-final fragment', async ({ page }) => {
-  await page.setContent(`${styles}<style>span.run{white-space:pre-wrap;position:static}</style><div id="staging"><section ${geometry.replace('700', '260').replace('556', '116')}>
+for (const sectionTag of ['section', 'div']) {
+test(`a ${sectionTag} page continuation keeps justification through the last line of each non-final fragment`, async ({ page }) => {
+  await page.setContent(`${styles}<style>span.run{white-space:pre-wrap;position:static}</style><div id="staging"><${sectionTag} ${geometry.replace('700', '260').replace('556', '116')}>
     <p data-source-anchor-id="p:body:plain" style="text-align:justify"><span class="run">${words}</span></p>
-    </section></div><div id="container"></div>`);
+    </${sectionTag}></div><div id="container"></div>`);
   await page.addScriptTag({ content: lineMetrics });
   await page.addScriptTag({ content: wordText });
   await page.addScriptTag({ path: new URL('../dist/pagination.bundle.js', import.meta.url).pathname });
@@ -269,6 +271,7 @@ test('a page continuation keeps justification through the last line of each non-
   expect(actual.alignments.slice(0, -1)).toEqual(Array(actual.pages - 1).fill('justify'));
   expect(actual.alignments.at(-1)).toBe('auto');
 });
+}
 
 
 test('modern Word can compress a final justified line that exceeds its natural width', async ({ page }) => {

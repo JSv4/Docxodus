@@ -9,6 +9,8 @@
  */
 
 const PREPARED = 'data-docx-word-text-prepared';
+const FITTED_RUN = 'data-docx-word-fit';
+const FITTED_LINE = 'data-docx-word-line';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PARAGRAPHS = 'p, h1, h2, h3, h4, h5, h6';
 
@@ -79,12 +81,18 @@ function plainRun(paragraph: HTMLElement, rightToLeft = false): HTMLElement | nu
         emptyStyle.getPropertyValue(property) !== runStyle.getPropertyValue(property))) return null;
     }
   }
-  if (!(run instanceof view.HTMLElement) || run.localName !== 'span' || run.children.length ||
-      run.childNodes.length !== 1 || run.firstChild?.nodeType !== 3) return null;
+  if (!(run instanceof view.HTMLElement) || run.localName !== 'span') return null;
+  const fitted = Number(run.getAttribute(FITTED_RUN)) > 0;
+  if (fitted) {
+    if (!run.childNodes.length || Array.from(run.childNodes).some(node =>
+      !(node instanceof view.HTMLElement) || node.localName !== 'span' ||
+      node.getAttribute(FITTED_LINE) !== 'true' || node.children.length ||
+      node.childNodes.length > 1 || (node.firstChild && node.firstChild.nodeType !== 3))) return null;
+  } else if (run.children.length || run.childNodes.length !== 1 || run.firstChild?.nodeType !== 3) return null;
   const text = run.textContent ?? '';
   // Other scripts need their own fallback-font metrics, shaping and bidi model.
   if (!text.trim() || /^\s/.test(text) || (!rightToLeft && !/^[\u0020-\u024f]*$/u.test(text))) return null;
-  if (Array.from(run.attributes).some(a => !['class', 'style', 'lang', 'dir'].includes(a.name))) return null;
+  if (Array.from(run.attributes).some(a => !['class', 'style', 'lang', 'dir', ...(fitted ? [FITTED_RUN] : [])].includes(a.name))) return null;
   const style = view.getComputedStyle(run);
   const parent = view.getComputedStyle(paragraph);
   if (['Top', 'Right', 'Bottom', 'Left'].some(side =>
@@ -194,6 +202,93 @@ function wordMeasure(run: HTMLElement): ((text: string) => number) | null {
   return text => context.measureText(text).width * scale;
 }
 
+/** Resolve plain line contents before pagination, using unrounded font advances. */
+function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustification: boolean,
+  checkpoint?: () => void): boolean {
+  const view = run.ownerDocument.defaultView!;
+  const style = view.getComputedStyle(paragraph);
+  const runStyle = view.getComputedStyle(run);
+  const text = run.textContent!;
+  // Hyphens/slashes and nonordinary spaces have additional break opportunities.
+  // Pictures and columns retain their separately measured flow.
+  if (runStyle.whiteSpace !== 'pre-wrap' || /[^\u0020-\u007e\u00c0-\u024f]|[-/]/u.test(text) ||
+      !/^-?[\d.]+px$/.test(style.textIndent) || style.wordBreak !== 'normal' ||
+      (!['normal', '0px'].includes(runStyle.wordSpacing) &&
+       !run.style.getPropertyValue('--docx-word-space-compression'))) return false;
+  const measure = wordMeasure(run);
+  const width = paragraph.getBoundingClientRect().width;
+  const indent = Number.parseFloat(style.textIndent) || 0;
+  if (!measure || !(width > 0) || !(width - indent > 0)) return false;
+  const space = measure(' ');
+  const words = Array.from(text.matchAll(/\S+ */gu), (match, index) => {
+    if ((index & 63) === 0) checkpoint?.();
+    const word = match[0].trimEnd();
+    return { text: match[0], width: measure(word), spaces: match[0].length - word.length };
+  });
+  if (!words.length || words.some(w => w.width > width) || words[0].width > width - indent) return false;
+  const rows: Array<{ text: string; spaces: number; available: number }> = [];
+  let start = 0;
+  while (start < words.length) {
+    checkpoint?.();
+    const available = width - (rows.length ? 0 : indent);
+    let natural = 0, spaces = 0, best = start, bestCost = Infinity;
+    for (let end = start; end < words.length; end++) {
+      if ((end & 63) === 0) checkpoint?.();
+      if (end > start) { spaces += words[end - 1].spaces; natural += words[end - 1].spaces * space; }
+      natural += words[end].width;
+      const minimum = natural - (modernJustification ? spaces * space / 4 : 0);
+      if (minimum > available) break;
+      // Native Word prefers less gap strain, with condensation twice as costly
+      // as expansion. A final line that fits naturally needs no justification.
+      // The 75% floor bounds which condensed alternatives are legal.
+      const cost = !modernJustification ? -end : end === words.length - 1 && natural <= available ? -1 :
+        spaces ? Math.abs(available - natural) / (spaces * space) * (natural > available ? 2 : 1) : Infinity;
+      if (cost <= bestCost) { best = end; bestCost = cost; }
+    }
+    rows.push({ text: words.slice(start, best + 1).map(w => w.text).join(''),
+      spaces: words.slice(start, best).reduce((n, w) => n + w.spaces, 0), available });
+    start = best + 1;
+  }
+  const previousStyle = run.getAttribute('style');
+  const fragment = run.ownerDocument.createDocumentFragment();
+  const lines = rows.map((row, index) => {
+    checkpoint?.();
+    const line = run.ownerDocument.createElement('span');
+    line.setAttribute(FITTED_LINE, 'true');
+    line.style.cssText = 'display:block;white-space:pre;word-spacing:0px;text-indent:0';
+    if (!index && indent) line.style.marginLeft = `${indent}px`;
+    line.textContent = row.text;
+    fragment.append(line);
+    return line;
+  });
+  run.style.position = 'static';
+  run.style.top = '0';
+  run.style.wordSpacing = '0px';
+  run.replaceChildren(fragment);
+  for (let index = 0; index < lines.length; index++) {
+    checkpoint?.();
+    const range = run.ownerDocument.createRange();
+    range.setStart(lines[index].firstChild!, 0);
+    range.setEnd(lines[index].firstChild!, rows[index].text.trimEnd().length);
+    const excess = range.getBoundingClientRect().width - rows[index].available;
+    if (excess <= 0) continue;
+    if (!rows[index].spaces) {
+      run.replaceChildren(run.ownerDocument.createTextNode(text));
+      run.removeAttribute(FITTED_RUN);
+      if (previousStyle === null) run.removeAttribute('style'); else run.setAttribute('style', previousStyle);
+      return false;
+    }
+    // The DOM supplies line boxes for pagination. Compensate its font rounding
+    // only within this chosen line; vector paint uses the font's true advances.
+    lines[index].style.wordSpacing = `${-excess / rows[index].spaces}px`;
+  }
+  // Carry the measured natural height with the owned line boxes, including
+  // Range clones, so pagination need not resolve their font metrics again.
+  run.setAttribute(FITTED_RUN, String(Number.parseFloat(run.style.getPropertyValue('--docx-word-native-height'))));
+  if (modernJustification) run.style.setProperty('--docx-word-space-compression', `${-space / 4}px`);
+  return true;
+}
+
 /** Space-aware positioning for an ordinary, unfragmented left-to-right line box. */
 function positionWords(paragraph: HTMLElement, run: HTMLElement,
   rows: Map<number, Array<{ text: string; x: number }>>, checkpoint?: () => void): void {
@@ -243,6 +338,12 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
   if (!plainDocument(root)) return 0;
   const view = root.ownerDocument.defaultView;
   if (!view) return 0;
+  // Pagination measures each section at this declared width. Line fitting must
+  // use that same band before the engine starts collecting its block heights.
+  for (const section of Array.from(root.querySelectorAll<HTMLElement>('[data-section-index][data-content-width]'))) {
+    const width = Number(section.dataset.contentWidth);
+    if (Number.isFinite(width) && width > 0) section.style.width = `${width}pt`;
+  }
   let prepared = 0;
   for (const paragraph of Array.from(root.querySelectorAll<HTMLElement>(PARAGRAPHS))) {
     checkpoint?.();
@@ -264,25 +365,13 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
     run.style.fontKerning = kerning;
     const mode = Number(root.closest('[data-docx-compatibility-mode]')?.getAttribute('data-docx-compatibility-mode') ??
       root.ownerDocument.body.getAttribute('data-docx-compatibility-mode') ?? 14);
-    const ordinarySpaces = !/[^\u0020-\u007e\u00c0-\u024f]/u.test(run.textContent!);
     let column = false;
     for (let ancestor = paragraph.parentElement; ancestor && ancestor !== root; ancestor = ancestor.parentElement)
       if (Number(view.getComputedStyle(ancestor).columnCount) > 1) column = true;
-    // Modern Word can fit a justified line with spaces down to 3/4 of their
-    // natural advance. Native Word probes at 11pt and 12pt pin the same limit.
-    // This affects line fitting before pagination; SVG paint restores natural
-    // final-line advances and distributes only non-final justified line gaps.
-    if (mode >= 15 && style.textAlign === 'justify' && ordinarySpaces && !column && !root.querySelector('img') &&
-        (['normal', '0px'].includes(runStyle.wordSpacing) || run.style.getPropertyValue('--docx-word-space-compression'))) {
-      const measure = wordMeasure(run);
-      if (measure) {
-        const compression = -measure(' ') / 4;
-        run.style.setProperty('--docx-word-space-compression', `${compression}px`);
-        run.style.wordSpacing = 'var(--docx-word-space-compression)';
-      }
-    }
     run.style.lineHeight = `${twips / 15}px`;
     run.style.setProperty('--docx-word-native-height', `${nativeTwips / 15}px`);
+    if (!column && !root.querySelector('img'))
+      fitWordLines(paragraph, run, mode >= 15 && style.textAlign === 'justify', checkpoint);
     // An empty drawing run participates in the first inline box. Give it the
     // same resolved height so its inherited auto multiplier is not applied twice.
     for (const picture of Array.from(paragraph.children).filter(child => pictureSibling(child, view))) {
@@ -364,15 +453,15 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     if (!metric || !(fontSize > 0) || !(pitch > 0) || !(box.width > 0) || !(box.height > 0)) continue;
     const columnBand = column || hasPictures ? paragraph.closest<HTMLElement>('.page-content') : null;
     const band = columnBand?.getBoundingClientRect() ?? box;
-    const text = run.textContent!;
     let rows = new Map<number, Array<{ text: string; x: number }>>();
     let wordCount = 0;
     let splitWord = false;
-    for (const match of text.matchAll(/\S+\s*/gu)) {
+    const walker = document.createTreeWalker(run, view.NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) for (const match of node.textContent!.matchAll(/\S+\s*/gu)) {
       if ((wordCount++ & 63) === 0) checkpoint?.();
       const range = document.createRange();
-      range.setStart(run.firstChild!, match.index!);
-      range.setEnd(run.firstChild!, match.index! + match[0].trimEnd().length);
+      range.setStart(node, match.index!);
+      range.setEnd(node, match.index! + match[0].trimEnd().length);
       if (range.getClientRects().length !== 1) { splitWord = true; break; }
       const rect = range.getBoundingClientRect();
       const row = Math.round(rect.top * 4);

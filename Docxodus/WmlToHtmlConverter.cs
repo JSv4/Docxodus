@@ -8034,8 +8034,10 @@ namespace Docxodus
             if (right != null)
             {
                 var rightInPoints = (decimal) right/20m;
+                // A signed trailing indent can extend the line into the margin.
+                // Clamping it changes which words fit at a justification boundary.
                 style.AddIfMissing(isBidi ? "margin-left" : "margin-right",
-                    rightInPoints > 0m ? PointsCss(rightInPoints) : "0");
+                    PointsCss(rightInPoints));
             }
 
             var firstLine = WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.firstLine));

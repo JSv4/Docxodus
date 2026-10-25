@@ -3711,9 +3711,14 @@ export async function convertDocxToPaginatedHtml(
         // attempts start from pristine HTML, so both apply it identically.
         // Word prints no comment reference marks in balloons, so their rules apply before measuring too.
         scopeMarkupBalloons(renderDocument, [staging, container], options.commentColumnPlacement === "balloons");
-        applyUnroundedNormalLineHeights(renderDocument.body);
-        prepareWordText(renderDocument.body, () => checkpointWordText(state));
-        prepareParagraphBorders(renderDocument.body);
+        const restoreTextMeasurement = revealMeasurementStaging(renderDocument);
+        try {
+          applyUnroundedNormalLineHeights(renderDocument.body);
+          prepareWordText(renderDocument.body, () => checkpointWordText(state));
+          prepareParagraphBorders(renderDocument.body);
+        } finally {
+          restoreTextMeasurement();
+        }
         const engine = new PaginationEngine(staging, container, {
           scale: 1,
           cssPrefix: "page-",

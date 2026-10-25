@@ -1383,6 +1383,22 @@ boundaries, preserving inline structure, identities, ordering, and PageMap fragm
 indivisible note content retains the typed clipped-content failure rather than shipping a complete
 result with missing text.
 
+For eligible uniform Latin paragraphs, `word-text.ts` fits lines from unrounded font advances
+in the declared section band before pagination measures block heights. Legacy compatibility modes
+use natural spaces. Modern justified lines choose the least gap strain, with condensation twice
+as costly as expansion and a 75% minimum ordinary-space advance. Independent Word captures pin the
+mixed-prose transition at a 0.05pt boundary and cover both font sizes, repeated spaces, first-line
+indents and final lines. See `TestFiles/JustificationFlow/word-observations.json` for the immutable
+input/output hashes and native line inventories.
+
+Private line boxes preserve the original text and permit page splits only between complete lines;
+they introduce no synthetic source characters. Vector paint then positions words with those font
+advances, justifies non-final fragments, and retains natural spacing on a fitting final line.
+Pictures, columns, nonbreaking controls and rich runs retain their existing layout paths. These
+bounded observations do not claim identical native font outlines, hinting or arbitrary Word raster
+parity; the original paired PDFs and historical fidelity scores remain evidence rather than being
+rewritten around the new renderer.
+
 Package preflight, raw source identity, revision/comment/media inventory, safety findings, and ZIP
 resource ceilings reuse #493's `PackageManifestGenerator` contract through its WASM surface. The
 export path does not add a second partial ZIP inspector. The export stack remains rebased on the

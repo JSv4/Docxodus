@@ -73,6 +73,12 @@ All notable changes to this project will be documented in this file.
   their width, while actual nonbreaking spaces stay distinct. Repeated spaces and run boundaries no
   longer gain synthetic nonbreaking spaces that change justification and soft wrapping.
 
+- Plain paragraph exports fit lines with measured font advances before pagination (#1124).
+  Modern justified paragraphs balance expanded and condensed spaces within the native minimum,
+  and vector paint restores natural final-line spacing. Fitted lines retain source text and
+  paragraph identities through page continuation. Signed trailing indents retain the authored
+  line width, including lines that extend into the page margin.
+
 - Rows, tables and bordered paragraph groups taller than a page can export with Word's page
   placement (#1202). Splittable cell blocks and border groups continue across pages; oversized exact
   rows clip at the paper edge while retaining the complete last visible word in the PDF text layer.
