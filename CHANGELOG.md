@@ -62,6 +62,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Split oversized footnote-table rows through their cell content, including nested tables and
+  wrapped paragraphs. Continuations preserve complete text, repeated headers and source geometry;
+  explicit no-split rows remain intact (#1217).
+
 - Rows, tables and bordered paragraph groups taller than a page can export with Word's page
   placement (#1202). Splittable cell blocks and border groups continue across pages; oversized exact
   rows clip at the paper edge while retaining the complete last visible word in the PDF text layer.

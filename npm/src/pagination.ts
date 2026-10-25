@@ -2118,7 +2118,7 @@ export class PaginationEngine {
   /**
    * Builds a clone of a simple table wrapper containing a contiguous run of rows.
    * The caller supplies complete vertical-merge groups: no rowspan crosses a
-   * fragment boundary. Nested tables remain indivisible.
+   * fragment boundary.
    * Horizontal merges (colspan) are confined to their own row. `repeatedRows` (the table's
    * header rows, on a continuation) are copied in first, marked as repeats.
    */
@@ -2931,7 +2931,7 @@ export class PaginationEngine {
    * duplicated HTML/editor identity only on the leading fragment. Targets that
    * occur wholly after the split are absent from `head` and remain on `tail`.
    */
-  private reconcileParagraphFragmentIdentities(
+  private reconcileFragmentIdentities(
     head: HTMLElement,
     tail: HTMLElement,
   ): void {
@@ -3055,7 +3055,7 @@ export class PaginationEngine {
     if (!this.hasVisibleFragmentText(tailContents)) return { kind: "indivisible" };
 
     const tail = this.createParagraphFragment(paragraph, tailRange, false, true);
-    this.reconcileParagraphFragmentIdentities(best.head, tail);
+    this.reconcileFragmentIdentities(best.head, tail);
 
     return {
       kind: "split",
@@ -3679,9 +3679,10 @@ export class PaginationEngine {
     element: HTMLElement,
     fits: (head: HTMLElement) => boolean,
     forceFirst: boolean,
+    allowNested = false,
   ): { head: HTMLElement; tail: HTMLElement } | null {
     const table = this.blockTable(element);
-    if (!table || table.tBodies.length !== 1 || table.querySelector("table")
+    if (!table || table.tBodies.length !== 1 || (!allowNested && table.querySelector("table"))
       || Array.from(table.children).some(child => child !== table.tBodies[0] && child.localName !== "colgroup")) {
       return null;
     }
@@ -3713,6 +3714,95 @@ export class PaginationEngine {
     if (best < 0 && !forceFirst) return null;
     const cut = ends[Math.max(best, 0)];
     return { head: fragment(0, cut, true), tail: fragment(cut, rows.length, false) };
+  }
+
+  /** Split a note's table between rows, or inside the first row when no complete row fits. */
+  private splitNoteTable(
+    element: HTMLElement,
+    fits: (head: HTMLElement) => boolean,
+    forceFirst: boolean,
+  ): { head: HTMLElement; tail: HTMLElement } | null {
+    const wholeRows = this.splitTableAtRows(element, fits, false, true);
+    if (wholeRows) return wholeRows;
+    const fallback = () => forceFirst ? this.splitTableAtRows(element, fits, true, true) : null;
+    const table = this.blockTable(element);
+    if (!table || table.tBodies.length !== 1
+      || Array.from(table.children).some(child => child !== table.tBodies[0] && child.localName !== "colgroup")) {
+      return null;
+    }
+    const body = table.tBodies[0];
+    const rows = Array.from(body.rows);
+    const ends = this.tableRowGroupEnds(rows);
+    const headers = rows.slice(0, this.leadingHeaderRowCount(rows, ends));
+    const row = rows[headers.length];
+    // Keep vertical merges, declared row heights and non-top cell alignment intact. These need
+    // their own layout rules; ordinary rows can partition each cell in the same measured band.
+    if (!row || !ends.includes(headers.length + 1) || row.dataset.docxCantSplit === "true"
+      || row.dataset.docxHeaderRow === "true"
+      || row.dataset.docxRowHeightRule || row.style.height || row.style.minHeight
+      || Array.from(row.cells).some(cell => cell.rowSpan !== 1
+        || this.view.getComputedStyle(cell).verticalAlign !== "top")) return fallback();
+
+    const emptyRow = row.cloneNode(false) as HTMLTableRowElement;
+    for (const cell of Array.from(row.cells)) emptyRow.appendChild(cell.cloneNode(false));
+    const wrapper = element === table ? null : element;
+    const head = this.createSimpleTableFragment(wrapper, table, body, [...headers, emptyRow], true);
+    const tail = this.createSimpleTableFragment(wrapper, table, body,
+      [emptyRow, ...rows.slice(headers.length + 1)], false, headers);
+    const headCells = this.blockTable(head)!.tBodies[0].rows[headers.length].cells;
+    const tailCells = this.blockTable(tail)!.tBodies[0].rows[headers.length].cells;
+    let hasOverflow = rows.length > headers.length + 1;
+    let hasContent = false;
+    for (let column = 0; column < row.cells.length; column++) {
+      this.checkpoint();
+      const children = Array.from(row.cells[column].children) as HTMLElement[];
+      const current = headCells[column];
+      const remaining = tailCells[column];
+      for (let index = 0; index < children.length; index++) {
+        this.checkpoint();
+        const child = children[index];
+        // A keep-with-next chain is one candidate. It may move to the next band, but a prefix
+        // must not leave a heading alone at the end of this cell fragment.
+        let end = index + 1;
+        while (end < children.length && children[end - 1].dataset.keepWithNext === "true") {
+          this.checkpoint();
+          end++;
+        }
+        const group = children.slice(index, end).map(node => node.cloneNode(true) as HTMLElement);
+        for (const node of group) current.appendChild(node);
+        if (fits(head)) {
+          hasContent ||= group.some(node => this.hasVisibleText(node.textContent ?? ""));
+          index = end - 1;
+          continue;
+        }
+        group.forEach(node => node.remove());
+        const fitsChild = (piece: HTMLElement) => {
+          current.appendChild(piece);
+          try { return fits(head); } finally { piece.remove(); }
+        };
+        let split: { head: HTMLElement; tail: HTMLElement } | null = null;
+        if (end === index + 1) {
+          if (this.canRangeFragmentParagraph(child)) {
+            const paragraph = this.splitParagraphAtLargestFit(child, fitsChild);
+            if (paragraph.kind === "split") split = paragraph;
+          } else {
+            split = this.splitNoteTable(child, fitsChild, false);
+          }
+        }
+        if (split) {
+          current.appendChild(split.head);
+          remaining.appendChild(split.tail);
+          hasContent = true;
+          index++;
+        }
+        for (const rest of children.slice(index)) remaining.appendChild(rest.cloneNode(true));
+        hasOverflow = true;
+        break;
+      }
+    }
+    if (!hasContent || !hasOverflow || !fits(head)) return fallback();
+    this.reconcileFragmentIdentities(head, tail);
+    return { head, tail };
   }
 
   /** Partition a carried note, advancing even when its first indivisible element is oversized. */
@@ -3774,17 +3864,19 @@ export class PaginationEngine {
 
         const canSplitCandidate = candidate.tagName === "P"
           && this.canRangeFragmentParagraph(candidate);
-        candidate.remove();
+        // Keep the source attached between probes so nested paragraphs retain their actual
+        // table-cell styles when the shared fragmenter checks whether a range split is safe.
+        const fitsCandidate = (head: HTMLElement) => {
+          candidate.replaceWith(head);
+          try {
+            return pxToPt(measureContainer.getBoundingClientRect().height) <= availableHeightPt;
+          } finally {
+            head.replaceWith(candidate);
+          }
+        };
         let split: ParagraphSplitAttempt | null = null;
         if (canSplitCandidate) {
-          split = this.splitParagraphAtLargestFit(candidate, (head) => {
-            content.appendChild(head);
-            try {
-              return pxToPt(measureContainer.getBoundingClientRect().height) <= availableHeightPt;
-            } finally {
-              head.remove();
-            }
-          }, {
+          split = this.splitParagraphAtLargestFit(candidate, fitsCandidate, {
             // Both fallbacks below cut where ordinary line breaking would not,
             // so they are only ever right for an element that owns the whole
             // band: if this page already carries earlier content, a paragraph
@@ -3795,14 +3887,9 @@ export class PaginationEngine {
             forceFirstOnNoFit: fitting.length === 0,
           });
         }
-        const tableSplit = split?.kind === "split" ? null : this.splitTableAtRows(element, (head) => {
-          content.appendChild(head);
-          try {
-            return pxToPt(measureContainer.getBoundingClientRect().height) <= availableHeightPt;
-          } finally {
-            head.remove();
-          }
-        }, fitting.length === 0);
+        const tableSplit = split?.kind === "split" ? null
+          : this.splitNoteTable(candidate, fitsCandidate, fitting.length === 0);
+        candidate.remove();
         if (split?.kind === "split") {
           if (sourcePosition) {
             split.head.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, sourcePosition);
@@ -4015,16 +4102,16 @@ export class PaginationEngine {
 
         measuredCandidate.remove();
 
+        const fitsCandidate = (head: HTMLElement) => {
+          measuredContent.appendChild(head);
+          try {
+            return pxToPt(measureContainer.getBoundingClientRect().height) <= availableHeightPt;
+          } finally {
+            head.remove();
+          }
+        };
         const split = this.canRangeFragmentParagraph(child, true)
-          ? this.splitParagraphAtLargestFit(child, (head) => {
-            measuredContent.appendChild(head);
-            try {
-              return pxToPt(measureContainer.getBoundingClientRect().height)
-                <= availableHeightPt;
-            } finally {
-              head.remove();
-            }
-          }, {
+          ? this.splitParagraphAtLargestFit(child, fitsCandidate, {
             // Both fallbacks cut where ordinary line breaking would not, so they
             // are only ever right for an element that owns the whole band: with
             // earlier siblings already packed here, a paragraph that will not
@@ -4033,14 +4120,8 @@ export class PaginationEngine {
             forceFirstOnNoFit: fits.length === 0 && forceProgress,
           })
           : null;
-        const tableSplit = split ? null : this.splitTableAtRows(child, (head) => {
-          measuredContent.appendChild(head);
-          try {
-            return pxToPt(measureContainer.getBoundingClientRect().height) <= availableHeightPt;
-          } finally {
-            head.remove();
-          }
-        }, fits.length === 0 && forceProgress);
+        const tableSplit = split ? null
+          : this.splitNoteTable(child, fitsCandidate, fits.length === 0 && forceProgress);
         if (tableSplit) {
           fits.push(tableSplit.head);
           tableSplit.tail.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, i === 0 ? "first" : "later");
