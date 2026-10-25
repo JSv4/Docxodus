@@ -249,6 +249,26 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
       spaces: words.slice(start, best).reduce((n, w) => n + w.spaces, 0), available });
     start = best + 1;
   }
+  // Natural-space flow needs no replacement when its measured breaks already
+  // agree. Keep those existing glyph positions and inline block geometry;
+  // font-advance fitting is needed only at a differing break or modern gap choice.
+  if (!modernJustification && run.childNodes.length === 1 && run.firstChild?.nodeType === 3) {
+    const measured: string[] = [];
+    let offset = 0, top = NaN;
+    for (const word of words) {
+      checkpoint?.();
+      const range = run.ownerDocument.createRange();
+      range.setStart(run.firstChild, offset);
+      range.setEnd(run.firstChild, offset + word.text.trimEnd().length);
+      if (range.getClientRects().length !== 1) break;
+      const next = range.getBoundingClientRect().top;
+      if (next !== top) { measured.push(''); top = next; }
+      measured[measured.length - 1] += word.text;
+      offset += word.text.length;
+    }
+    if (offset === text.length && rows.length === measured.length &&
+        rows.every((row, index) => row.text === measured[index])) return false;
+  }
   const previousStyle = run.getAttribute('style');
   const fragment = run.ownerDocument.createDocumentFragment();
   const lines = rows.map((row, index) => {
@@ -292,6 +312,7 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
 /** Space-aware positioning for an ordinary, unfragmented left-to-right line box. */
 function positionWords(paragraph: HTMLElement, run: HTMLElement,
   rows: Map<number, Array<{ text: string; x: number }>>, checkpoint?: () => void): void {
+  if (!(Number(run.getAttribute(FITTED_RUN)) > 0)) return;
   // NBSP, soft hyphens and other break controls need their own model. Retain
   // the DOM positions for them, including the source's nonbreaking semantics.
   if (/[^\u0020-\u007e\u00c0-\u024f]/u.test(run.textContent!)) return;

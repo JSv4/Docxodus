@@ -1391,6 +1391,11 @@ mixed-prose transition at a 0.05pt boundary and cover both font sizes, repeated 
 indents and final lines. See `TestFiles/JustificationFlow/word-observations.json` for the immutable
 input/output hashes and native line inventories.
 
+When natural-space line choices already agree with the measured inline flow, that flow retains
+its existing glyph positions and block geometry. The precision fitter replaces those boxes only
+when it selects different breaks or applies the modern justification rule. This keeps an already
+correct legacy layout stable while handling independently captured boundary failures.
+
 Private line boxes preserve the original text and permit page splits only between complete lines;
 they introduce no synthetic source characters. Vector paint then positions words with those font
 advances, justifies non-final fragments, and retains natural spacing on a fitting final line.

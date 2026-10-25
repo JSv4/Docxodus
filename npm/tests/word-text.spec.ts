@@ -291,3 +291,30 @@ test('modern Word can compress a final justified line that exceeds its natural w
   expect(actual.lines).toBe(1);
   expect(actual.end).toBeCloseTo(actual.width, 2);
 });
+
+for (const mode of ['', 'data-docx-compatibility-mode="14"']) {
+  test(`unchanged legacy line choices preserve their measured word starts (${mode || 'omitted mode'})`, async ({ page }) => {
+    await page.setContent(`${styles}<style>.run{white-space:pre-wrap;position:static;font-kerning:none}</style><main ${mode}>
+      <p style="width:468pt;font-size:16pt;font-weight:bold"><span class="run">Service agreement layout</span></p>
+      <p style="width:468pt;text-align:justify"><span class="run">The parties will inspect the sample, record the agreed date, and send the written schedule to the project office. Each report includes the measured quantity and the name of the person responsible for the next review.</span></p>
+      </main>`);
+    await page.addScriptTag({ content: lineMetrics });
+    await page.addScriptTag({ content: wordText });
+    const actual = await page.evaluate(() => {
+      const api = window as any, root = document.querySelector('main')!;
+      api.applyUnroundedNormalLineHeights(root);
+      const before = Array.from(root.querySelectorAll('p')).map(p => {
+        const node = p.firstElementChild!.firstChild!, box = p.getBoundingClientRect();
+        return Array.from(node.textContent!.matchAll(/\S+/g), m => {
+          const r = document.createRange(); r.setStart(node, m.index!); r.setEnd(node, m.index! + m[0].length);
+          return r.getBoundingClientRect().left - box.left;
+        });
+      });
+      api.prepareWordText(root); api.paintWordText(root);
+      const after = Array.from(root.querySelectorAll('p')).map(p =>
+        Array.from(p.querySelectorAll('tspan')).map(w => Number(w.getAttribute('x')) / 4));
+      return { before, after };
+    });
+    expect(actual.after).toEqual(actual.before);
+  });
+}
