@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
@@ -10,7 +11,7 @@ namespace Docxodus.Tests;
 
 public class WmlToHtmlWhitespaceTests
 {
-    private static byte[] Fixture(string text, bool splitRun = false)
+    private static byte[] Fixture(string text, bool splitRun = false, int? mode = null)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -28,7 +29,11 @@ public class WmlToHtmlWhitespaceTests
                     new Wp.RunFonts { Ascii = "Times New Roman", HighAnsi = "Times New Roman" },
                     new Wp.FontSize { Val = "22" }))),
                 new Wp.Style { Type = Wp.StyleValues.Paragraph, Default = true, StyleId = "Normal" });
-            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            main.AddNewPart<DocumentSettingsPart>().Settings = mode is { } number
+                ? new Wp.Settings(new Wp.Compatibility(new Wp.CompatibilitySetting
+                    { Name = Wp.CompatSettingNameValues.CompatibilityMode, Uri = "http://schemas.microsoft.com/office/word",
+                        Val = number.ToString(CultureInfo.InvariantCulture) }))
+                : new Wp.Settings();
             doc.Save();
             PackageValidation.AssertValid(doc, FileFormatVersions.Microsoft365);
         }
@@ -49,6 +54,18 @@ public class WmlToHtmlWhitespaceTests
         var parsed = XElement.Parse(html.ToString(SaveOptions.DisableFormatting));
         Assert.Equal(text, Assert.Single(parsed.Descendants(Xhtml.p)).Value);
         Assert.Contains("white-space: pre-wrap", string.Concat(parsed.Descendants(Xhtml.style).Select(s => s.Value)));
+    }
+
+    [Theory]
+    [InlineData(null, 14)]
+    [InlineData(14, 14)]
+    [InlineData(15, 15)]
+    public void Text_layout_keeps_the_documents_effective_compatibility_mode(int? source, int expected)
+    {
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("mode.docx", Fixture("Alder Oak", mode: source)),
+            new WmlToHtmlConverterSettings());
+        Assert.Equal(expected.ToString(CultureInfo.InvariantCulture),
+            (string?)html.Element(Xhtml.body)?.Attribute("data-docx-compatibility-mode"));
     }
 
     [Fact]

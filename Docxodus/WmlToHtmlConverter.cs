@@ -3478,7 +3478,8 @@ namespace Docxodus
                     }
                 }
 
-                return new XElement(Xhtml.body, bodyContent);
+                return new XElement(Xhtml.body,
+                    new XAttribute("data-docx-compatibility-mode", ReadCompatibilityMode(wordDoc)), bodyContent);
             }
 
             // Transform the w:p element to the XHTML h:h1-h6 or h:p element (if the previous paragraph does not
@@ -7450,6 +7451,16 @@ namespace Docxodus
         private static readonly XName LegacyTableIndentAttribute =
             XName.Get("legacy-table-indent", "urn:docxodus:rendering");
 
+        private static int ReadCompatibilityMode(WordprocessingDocument wordDoc)
+        {
+            var value = (string?)wordDoc.MainDocumentPart?.DocumentSettingsPart?.GetXDocument().Root?
+                .Elements(W.compat).Elements(W.compatSetting)
+                .FirstOrDefault(s => (string?)s.Attribute(W.name) == "compatibilityMode")?
+                .Attribute(W.val);
+            return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var mode) && mode > 0
+                ? mode : 14;
+        }
+
         /// <summary>
         /// States on each table the two inputs to Word's horizontal table placement that the converter
         /// cannot read from the table alone (issue #1219; measured in <c>docs/ooxml_corner_cases.md</c>).
@@ -7481,11 +7492,7 @@ namespace Docxodus
             var defaultTblPr = defaultStyleId == null
                 ? null
                 : FormattingAssembler.ResolveTableStyle(wordDoc, defaultStyleId).Element(W.tblPr);
-            var mode = (string?)wordDoc.MainDocumentPart.DocumentSettingsPart?.GetXDocument().Root?
-                .Elements(W.compat).Elements(W.compatSetting)
-                .FirstOrDefault(s => (string?)s.Attribute(W.name) == "compatibilityMode")?
-                .Attribute(W.val);
-            var legacy = !int.TryParse(mode, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) || number < 15;
+            var legacy = ReadCompatibilityMode(wordDoc) < 15;
             var namedTblPr = new Dictionary<string, XElement?>(StringComparer.Ordinal);
 
             var parts = wordDoc.ContentParts().Append(wordDoc.MainDocumentPart.WordprocessingCommentsPart).OfType<OpenXmlPart>();

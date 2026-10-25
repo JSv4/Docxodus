@@ -2322,6 +2322,8 @@ function sanitizeConvertedDocument(
     target.head.appendChild(target.importNode(style, true));
   }
   target.body.replaceChildren(...Array.from(parsed.body.childNodes, (node) => target.importNode(node, true)));
+  const compatibility = parsed.body.getAttribute("data-docx-compatibility-mode");
+  if (compatibility !== null) target.body.setAttribute("data-docx-compatibility-mode", compatibility);
 }
 
 function inventoryConvertedContent(

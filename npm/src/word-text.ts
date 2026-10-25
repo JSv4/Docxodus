@@ -3,7 +3,7 @@
  *
  * HTML print snaps each inline baseline to a whole CSS pixel, even with an
  * explicit fractional line height. An SVG retains the
- * measured line breaks and word positions while painting the baselines at the
+ * measured line breaks, uses font advances for plain word positions, and paints baselines at the
  * font's unrounded ascent. Source paragraph identities and block geometry stay
  * on the original elements. Complex flow still uses the existing HTML renderer.
  */
@@ -182,6 +182,62 @@ function contourRows(image: HTMLImageElement, paragraph: HTMLElement, run: HTMLE
   return next === words.length && rows.size === lineCount ? rows : null;
 }
 
+/** Measure advances at a large em to avoid CSS-pixel font hinting in line positions. */
+function wordMeasure(run: HTMLElement): ((text: string) => number) | null {
+  const style = run.ownerDocument.defaultView!.getComputedStyle(run);
+  const context = run.ownerDocument.createElement('canvas').getContext('2d');
+  if (!context) return null;
+  context.font = `${style.fontStyle} ${style.fontWeight} 10000px ${style.fontFamily}`;
+  context.fontKerning = style.fontKerning as CanvasFontKerning;
+  if (!context.font.includes('10000px')) return null;
+  const scale = Number.parseFloat(style.fontSize) / 10000;
+  return text => context.measureText(text).width * scale;
+}
+
+/** Space-aware positioning for an ordinary, unfragmented left-to-right line box. */
+function positionWords(paragraph: HTMLElement, run: HTMLElement,
+  rows: Map<number, Array<{ text: string; x: number }>>, checkpoint?: () => void): void {
+  // NBSP, soft hyphens and other break controls need their own model. Retain
+  // the DOM positions for them, including the source's nonbreaking semantics.
+  if (/[^\u0020-\u007e\u00c0-\u024f]/u.test(run.textContent!)) return;
+  const view = run.ownerDocument.defaultView!;
+  const style = view.getComputedStyle(run);
+  if (style.whiteSpace !== 'pre-wrap') return;
+  if (!['normal', '0px'].includes(style.wordSpacing) &&
+      !run.style.getPropertyValue('--docx-word-space-compression')) return;
+  const measure = wordMeasure(run);
+  if (!measure) return;
+  const parent = view.getComputedStyle(paragraph);
+  const width = paragraph.getBoundingClientRect().width;
+  if (!/^-?[\d.]+px$/.test(parent.textIndent)) return;
+  const indent = Number.parseFloat(parent.textIndent) || 0;
+  const lines = Array.from(rows.values());
+  lines.forEach((words, index) => {
+    checkpoint?.();
+    const start = index === 0 ? indent : 0;
+    const available = width - start;
+    const last = index === lines.length - 1;
+    let align = parent.textAlign;
+    if (last) align = parent.textAlignLast === 'auto' ? (align === 'justify' ? 'start' : align) : parent.textAlignLast;
+    const advances = words.map((word, i) => {
+      if ((i & 63) === 0) checkpoint?.();
+      return measure(word.text);
+    });
+    const natural = advances.reduce((a, b) => a + b, 0) -
+      (advances.at(-1)! - measure(words.at(-1)!.text.trimEnd()));
+    const spaces = words.slice(0, -1).reduce((count, word) => count + (word.text.match(/ +$/)?.[0].length ?? 0), 0);
+    const compressed = run.style.getPropertyValue('--docx-word-space-compression') && natural > available;
+    const adjustment = spaces && (align === 'justify' || compressed) ? (available - natural) / spaces : 0;
+    const remaining = available - natural - adjustment * spaces;
+    let x = start + (['right', 'end'].includes(align) ? remaining :
+      align === 'center' ? remaining / 2 : 0);
+    words.forEach((word, i) => {
+      word.x = x;
+      x += advances[i] + adjustment * (word.text.match(/ +$/)?.[0].length ?? 0);
+    });
+  });
+}
+
 /** Run after fonts and natural line heights resolve, before pagination measures them. */
 export function prepareWordText(root: HTMLElement, checkpoint?: () => void): number {
   if (!plainDocument(root)) return 0;
@@ -206,6 +262,25 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
     const twips = Math.floor(nativeTwips * multiple);
     if (!(twips > 0)) continue;
     run.style.fontKerning = kerning;
+    const mode = Number(root.closest('[data-docx-compatibility-mode]')?.getAttribute('data-docx-compatibility-mode') ??
+      root.ownerDocument.body.getAttribute('data-docx-compatibility-mode') ?? 14);
+    const ordinarySpaces = !/[^\u0020-\u007e\u00c0-\u024f]/u.test(run.textContent!);
+    let column = false;
+    for (let ancestor = paragraph.parentElement; ancestor && ancestor !== root; ancestor = ancestor.parentElement)
+      if (Number(view.getComputedStyle(ancestor).columnCount) > 1) column = true;
+    // Modern Word can fit a justified line with spaces down to 3/4 of their
+    // natural advance. Native Word probes at 11pt and 12pt pin the same limit.
+    // This affects line fitting before pagination; SVG paint restores natural
+    // final-line advances and distributes only non-final justified line gaps.
+    if (mode >= 15 && style.textAlign === 'justify' && ordinarySpaces && !column && !root.querySelector('img') &&
+        (['normal', '0px'].includes(runStyle.wordSpacing) || run.style.getPropertyValue('--docx-word-space-compression'))) {
+      const measure = wordMeasure(run);
+      if (measure) {
+        const compression = -measure(' ') / 4;
+        run.style.setProperty('--docx-word-space-compression', `${compression}px`);
+        run.style.wordSpacing = 'var(--docx-word-space-compression)';
+      }
+    }
     run.style.lineHeight = `${twips / 15}px`;
     run.style.setProperty('--docx-word-native-height', `${nativeTwips / 15}px`);
     // An empty drawing run participates in the first inline box. Give it the
@@ -292,18 +367,21 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     const text = run.textContent!;
     let rows = new Map<number, Array<{ text: string; x: number }>>();
     let wordCount = 0;
+    let splitWord = false;
     for (const match of text.matchAll(/\S+\s*/gu)) {
       if ((wordCount++ & 63) === 0) checkpoint?.();
       const range = document.createRange();
       range.setStart(run.firstChild!, match.index!);
       range.setEnd(run.firstChild!, match.index! + match[0].trimEnd().length);
+      if (range.getClientRects().length !== 1) { splitWord = true; break; }
       const rect = range.getBoundingClientRect();
       const row = Math.round(rect.top * 4);
       const words = rows.get(row) ?? [];
       words.push({ text: match[0], x: rect.left - box.left });
       rows.set(row, words);
     }
-    if (!rows.size) continue;
+    if (!rows.size || splitWord) continue;
+    if (!hasPictures && !column) positionWords(paragraph, run, rows, checkpoint);
     if (pictures.length === 1) rows = contourRows(pictures[0], paragraph, run, rows.size, checkpoint) ?? rows;
     const pageBox = paragraph.closest('.page-box');
     const lost = column || !pageBox ? 0 : drift.get(pageBox) ?? 0;

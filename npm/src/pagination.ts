@@ -2920,6 +2920,10 @@ export class PaginationEngine {
       // The original bottom spacing belongs after the complete paragraph, not
       // between synthetic page fragments.
       fragment.style.setProperty("margin-bottom", "0", "important");
+      // A page break is not the end of the source paragraph: its last line
+      // still takes the paragraph's justification rather than last-line alignment.
+      if (this.view.getComputedStyle(paragraph).textAlign === "justify")
+        fragment.style.setProperty("text-align-last", "justify", "important");
     }
 
     return fragment;
