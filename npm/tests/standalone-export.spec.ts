@@ -14,6 +14,7 @@ import {
 import { generateUndecodableImageDocx } from './docx-undecodable-image-fixture.js';
 import { outOfFlowDocx, textBoxRun } from './docx-out-of-flow-fixture.js';
 import { bodyFillDocx } from './docx-body-fill-fixture.js';
+import { generateVerticalMergeDocx } from './docx-vertical-merge-fixture.js';
 import { wordToleratedPackageDocx } from './docx-tolerant-package-fixture.js';
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
@@ -1117,13 +1118,29 @@ test.describe('standalone paginated HTML', () => {
     expect(hidden.html).not.toContain('No, it was superseded.');
   });
 
-  test('fails closed with a report when an indivisible body block would clip', async ({ page }, testInfo) => {
-    // A table row of exact height 750pt cannot split and is taller than the 648pt body band, so no
-    // page and no corrective layout pass can hold it. (This test used HC006-Test-01.docx until
-    // issue #848: that document only clipped because the paginator under-budgeted its tables.)
+  test('exports an oversized exact row at the paper edge', async ({ page }) => {
     const source = bodyFillDocx({
       paragraphs: 3, fontHalfPoints: 20, lineTwips: 240, exactRowTableTwips: 15000,
     });
+    const result = await convert(page, source, false, { commentProfile: 'hidden' });
+    expect(result.renderReport.status).toBe('complete');
+    expect(result.pageCount).toBe(3);
+    const paragraphs = await page.evaluate((html) => {
+      const parsed = new DOMParser().parseFromString(html, 'text/html');
+      return Array.from(parsed.querySelectorAll('.page-box'), box =>
+        Array.from(box.querySelectorAll('.page-content p')).map(p => p.textContent?.trim()));
+    }, result.html);
+    expect(paragraphs).toEqual([
+      ['Line 1 of the body, typography and spacing.'],
+      ['Tall row'],
+      ['Line 2 of the body, typography and spacing.', 'Line 3 of the body, typography and spacing.'],
+    ]);
+  });
+
+  test('fails closed with a report when an indivisible vertical-merge group would clip', async ({ page }, testInfo) => {
+    // Word-style clipping of one oversized exact row is supported (#1202). An unsplittable
+    // group of minimum-height merged rows still exceeds the body band and must fail closed.
+    const source = generateVerticalMergeDocx({ mergeSpan: 18 });
     const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone.convertFailure(
       bytes,
       { reviewProfile: 'final', commentProfile: 'hidden' },
