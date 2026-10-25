@@ -3886,6 +3886,11 @@ CSS classes are generated. Rows with those constraints, vertical merges or non-t
 retain the indivisible fallback; a header alone is not split as ordinary data. These cases need
 separate layout rules. No clipping check or export verification rule is relaxed.
 
+With paragraph fragmentation disabled in the editor, an oversized kept note paragraph is deferred
+to a note-only page (#1217). The continuation path places that indivisible block once and advances,
+preserving later body text and note order. The read-only split/clip fallback stays separate; this
+editor placement rule does not claim that Word clips an oversized kept paragraph.
+
 ## Footnotes: a continued note stays last, and notes keep their order (issue #1179)
 
 Five shapes, Letter page, 12pt body, single-line note paragraphs except in D and E, whose note 1 is

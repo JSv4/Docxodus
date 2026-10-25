@@ -5150,10 +5150,9 @@ export class PaginationEngine {
                   deferralCannotHelp,
                   payload,
                 );
-                // Deferring helps only a note whose first part a fresh page's band can hold: an
-                // indivisible part taller than any band keeps the clipped fallback here, beside its
-                // citation, rather than moving to a page of its own.
-                if (fits.length === 0 && !deferralCannotHelp
+                // Read-only layout keeps an indivisible oversized part beside its citation.
+                // Editor mode defers it to its own page, where the continuation path forces progress.
+                if (this.fragmentParagraphs && fits.length === 0 && !deferralCannotHelp
                   && this.splitFootnoteToFit(footnote, nextPageMaxFootnoteArea,
                     blockDimensions.contentWidth).fits.length === 0) {
                   ({ fits, overflow } = this.splitFootnoteToFit(

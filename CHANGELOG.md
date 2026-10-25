@@ -65,6 +65,9 @@ All notable changes to this project will be documented in this file.
 - Split oversized footnote-table rows through their cell content, including nested tables and
   wrapped paragraphs. Continuations preserve complete text, repeated headers and source geometry;
   explicit no-split rows remain intact (#1217).
+- In paginated editor mode, an oversized kept footnote paragraph moves to its own note-only page
+  rather than clipping beside its mid-page citation. Read-only export retains its separate
+  splitting policy (#1217).
 
 - Preserve ordinary spaces as breakable text in HTML conversion (#1124). Intrinsic run CSS retains
   their width, while actual nonbreaking spaces stay distinct. Repeated spaces and run boundaries no
