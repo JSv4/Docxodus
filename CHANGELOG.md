@@ -62,6 +62,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Zero-width fixed table cells now keep the one-point content width observed in Word, with
+  horizontal clipping. Exact-height rows can paginate and export to PDF without missing-fragment
+  errors, and the narrow cell's visible sliver retains its PageMap anchors (#1201).
+
 - Table rows with an exact height of zero now use their content height, matching Word (#1339).
   Their text remains visible in HTML, pagination and PDF export. Positive exact heights still clip,
   including a one-twip row; missing heights and automatic row heights remain unconstrained.

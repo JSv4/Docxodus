@@ -4471,3 +4471,26 @@ one pixel ([Microsoft VML reference](https://learn.microsoft.com/en-us/windows/w
 unitless stroke weights are EMUs. Drawing these primitives avoids injecting a placeholder label
 into the PDF text inventory. Other geometry, unsupported formulas and positioned VML retain the
 ordinary unsupported-content policy.
+
+
+## Tables: zero-width fixed cells keep a measurable sliver (issue #1201)
+
+A fixed-layout table with `gridCol w:w="0"`, `tcW w:w="0" w:type="dxa"`, and zero
+cell margins does not have an entirely invisible first cell in Word for the web. Native PDF
+captures put the following cell about **1pt** after the body edge. With two zero grid columns
+spanned by one cell, the borderless offset is still 1pt; two separate zero-width cells give
+2pt. Explicit 12pt side padding remains additional to that content width. Default margins and
+borders have further geometry differences; these observations do not resolve their general rules.
+
+The converter gives this combination 1pt of content width and clips horizontal overflow.
+It checks all grid columns the cell spans, its zero absolute preferred width, and fixed layout.
+A missing grid width, a positive preferred width, and explicit autofit do not trigger the rule.
+The shared cell-width calculation uses the same content width for tab placement. PageMap
+registration retains measurable cell and paragraph fragments, including empty paragraphs;
+there is no exception that forgives missing zero-width anchors.
+
+The byte-exact native Word inputs, hashes, fonts, and capture geometry are recorded in
+`TestFiles/ZeroWidthColumns/word-observations.json`. The original author fix is reused for
+its grid-span lookup and horizontal clipping; the native captures correct its assumption
+that the resulting column has exactly zero width. Tests: `ZeroWidthColumnTests` and
+`npm/tests/zero-width-column.spec.ts`.

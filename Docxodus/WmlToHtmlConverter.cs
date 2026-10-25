@@ -6663,7 +6663,13 @@ namespace Docxodus
                     var width = ParseTblWidthValue(tcPr.Elements(W.tcW).Attributes(W._w).FirstOrDefault(), out var isExplicitPercent);
                     if (width != null && !isExplicitPercent)
                     {
-                        style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", width.Value/20m));
+                        // Word gives an explicitly zero-width fixed cell one point of content
+                        // width, including when it spans several zero-width grid columns (#1201).
+                        // Keep that measurable sliver; omitting its PageMap anchors loses content.
+                        var zeroWidthCell = width.Value == 0 && IsZeroWidthFixedCell(element);
+                        style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", zeroWidthCell ? 1m : width.Value/20m));
+                        if (zeroWidthCell)
+                            style.AddIfMissing("overflow-x", "clip");
                     }
                 }
                 if ((string?) tcPr.Elements(W.tcW).Attributes(W.type).FirstOrDefault() == "pct")
@@ -10016,12 +10022,9 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// The width a table cell's paragraphs wrap at, in twips: the grid columns the cell spans
-        /// (or its <c>w:tcW</c> when the grid does not cover it), less its left and right margins
-        /// from <c>w:tcMar</c>, else the table's <c>w:tblCellMar</c>, else Word's default 108.
-        /// Null when neither the grid nor an absolute <c>w:tcW</c> gives a width.
+        /// The <c>w:gridCol</c>s a table cell spans; null when the table's grid does not cover the cell.
         /// </summary>
-        private static int? CellTextWidthTwips(XElement tc)
+        private static List<XElement>? SpannedGridColumns(XElement tc)
         {
             var tr = tc.Ancestors(W.tr).FirstOrDefault();
             var tbl = tc.Ancestors(W.tbl).FirstOrDefault();
@@ -10031,20 +10034,47 @@ namespace Docxodus
             static int Span(XElement cell) =>
                 (int?)cell.Elements(W.tcPr).Elements(W.gridSpan).Attributes(W.val).FirstOrDefault() ?? 1;
 
-            var gridColumns = tbl.Elements(W.tblGrid).Elements(W.gridCol)
-                .Select(c => (int)(WordprocessingMLUtil.AttributeToTwips(c.Attribute(W._w)) ?? 0))
-                .ToList();
+            var gridColumns = tbl.Elements(W.tblGrid).Elements(W.gridCol).ToList();
             var column = ((int?)tr.Elements(W.trPr).Elements(W.gridBefore).Attributes(W.val).FirstOrDefault() ?? 0)
                          + tr.Descendants(W.tc)
                              .Where(c => c.Ancestors(W.tr).First() == tr)
                              .TakeWhile(c => c != tc)
                              .Sum(Span);
             var span = Span(tc);
+            return column >= 0 && span > 0 && column <= gridColumns.Count - span
+                ? gridColumns.Skip(column).Take(span).ToList() : null;
+        }
+
+        private static bool IsZeroWidthFixedCell(XElement tc)
+        {
+            var width = tc.Elements(W.tcPr).Elements(W.tcW).FirstOrDefault();
+            return (string?)width?.Attribute(W.type) == "dxa"
+                && WordprocessingMLUtil.AttributeToTwips(width?.Attribute(W._w)) == 0
+                && tc.Ancestors(W.tbl).FirstOrDefault() is { } table && IsFixedLayoutTable(table)
+                && SpannedGridColumns(tc) is { Count: > 0 } columns
+                && columns.All(c => WordprocessingMLUtil.AttributeToTwips(c.Attribute(W._w)) == 0);
+        }
+
+        /// <summary>
+        /// The width a table cell's paragraphs wrap at, in twips: the grid columns the cell spans
+        /// (or its <c>w:tcW</c> when the grid does not cover it), less its left and right margins
+        /// from <c>w:tcMar</c>, else the table's <c>w:tblCellMar</c>, else Word's default 108.
+        /// Null when neither the grid nor an absolute <c>w:tcW</c> gives a width.
+        /// </summary>
+        private static int? CellTextWidthTwips(XElement tc)
+        {
+            var tbl = tc.Ancestors(W.tbl).FirstOrDefault();
+            if (tbl == null)
+                return null;
+            if (IsZeroWidthFixedCell(tc))
+                return 20; // The one-point content width excludes the cell's padding.
 
             int width;
             var tcW = tc.Elements(W.tcPr).Elements(W.tcW).FirstOrDefault();
-            if (column + span <= gridColumns.Count && gridColumns.Skip(column).Take(span).All(w => w > 0))
-                width = gridColumns.Skip(column).Take(span).Sum();
+            var spanned = SpannedGridColumns(tc)?
+                .Select(c => (int)(WordprocessingMLUtil.AttributeToTwips(c.Attribute(W._w)) ?? 0)).ToList();
+            if (spanned != null && spanned.All(w => w > 0))
+                width = spanned.Sum();
             else if (tcW != null && ((string?)tcW.Attribute(W.type) ?? "dxa") == "dxa"
                      && WordprocessingMLUtil.AttributeToTwips(tcW.Attribute(W._w)) is { } absolute)
                 width = (int)absolute;
