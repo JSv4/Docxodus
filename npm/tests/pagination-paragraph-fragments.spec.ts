@@ -158,6 +158,7 @@ test.describe('Pagination paragraph fragments', () => {
   test('keeps paragraphs with pagination-sensitive or complex descendants intact', async ({ page }) => {
     await page.setContent(viewerHtml(`
       <p data-case="keep-lines" data-keep-lines="true">${words}</p>
+      <p data-case="unresolved-note" data-keep-lines="true">${words}<sup data-footnote-id="missing">9</sup></p>
       <p data-case="keep-next" data-keep-with-next="true">${words}</p>
       <p data-case="clearing-break">alpha<br style="clear:left">bravo<br>charlie<br>delta<br>echo<br>foxtrot</p>
       <p data-case="page-break">alpha<br style="break-before:page">bravo<br>charlie<br>delta<br>echo<br>foxtrot</p>
@@ -177,6 +178,7 @@ test.describe('Pagination paragraph fragments', () => {
         container.querySelectorAll(`p[data-case="${caseName}"]`).length;
       return {
         keepLines: count('keep-lines'),
+        unresolvedNote: count('unresolved-note'),
         keepNext: count('keep-next'),
         lineBreak: count('line-break'),
         clearingBreak: count('clearing-break'),
@@ -186,6 +188,7 @@ test.describe('Pagination paragraph fragments', () => {
 
     expect(result).toEqual({
       keepLines: 1,
+      unresolvedNote: 1,
       keepNext: 1,
       lineBreak: 1,
       clearingBreak: 1,

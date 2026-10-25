@@ -5129,7 +5129,8 @@ export class PaginationEngine {
           effectiveMarginTop,
           headNotesStart,
           currentContent,
-          block.keepLines && isFirstOnPage && block.heightPt > freshBlockPageBodyHeight,
+          block.keepLines && isFirstOnPage && block.heightPt > freshBlockPageBodyHeight
+            && allBlockFootnoteIds.some(id => this.footnoteRegistry.has(id)),
         );
         if (paragraphFragments) {
           blocks.splice(i, 1, ...paragraphFragments);
