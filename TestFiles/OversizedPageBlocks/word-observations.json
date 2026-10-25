@@ -1,0 +1,978 @@
+{
+  "issue": 1202,
+  "method": "Native Word for the web PDF exports. Source and output bytes unchanged.",
+  "caveat": "The eight older small cards have Word font substitution. Their page inventories are diagnostic; six named Times New Roman inputs retain their requested family. Two corrected border inputs are explicitly named; invalid originals remain preserved separately.",
+  "cases": [
+    {
+      "id": "bordered-paragraph-36",
+      "inputSha256": "11398daaa744386c2f2bc3ddb04d6b71ed7aa8db93ae9fd5c2193a373aed88d0",
+      "wordPdfSha256": "9c0e45b2e0b9533c7261eb2e12d0abe3b7260b8f271a620331e4d036e5d5ff65",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "HazelLine00",
+          "HazelLine01"
+        ]
+      },
+      "wordPdfPageCount": 1,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "bordered-paragraph-400",
+      "inputSha256": "8221085acb00c663144d73e478816c58a6cf3bf3c4156f94d9d3e86096c31acd",
+      "wordPdfSha256": "70773227e76a11cf14a722dc72fd900aa0959d11f96c8f1d0b1f69797239fe27",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "HazelLine00",
+          "HazelLine01",
+          "HazelLine02",
+          "HazelLine03",
+          "HazelLine04",
+          "HazelLine05",
+          "HazelLine06",
+          "HazelLine07",
+          "HazelLine08"
+        ],
+        "2": [
+          "HazelLine09",
+          "HazelLine10",
+          "HazelLine11",
+          "HazelLine12",
+          "HazelLine13",
+          "HazelLine14",
+          "HazelLine15",
+          "HazelLine16",
+          "HazelLine17"
+        ],
+        "3": [
+          "HazelLine18",
+          "HazelLine19",
+          "HazelLine20",
+          "HazelLine21",
+          "HazelLine22",
+          "HazelLine23",
+          "HazelLine24",
+          "HazelLine25",
+          "HazelLine26"
+        ],
+        "4": [
+          "HazelLine27"
+        ]
+      },
+      "wordPdfPageCount": 4,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "exact-row-36",
+      "inputSha256": "532cb483d839727796a7c8bd003e062ecd32e903d7d81f062eae6bfbf5eb12f4",
+      "wordPdfSha256": "a6b2bdf71930ecfe5627c447c6f1fd9b24f51e2c62a61ebb982838a88c049a76",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "Cedar"
+        ]
+      },
+      "wordPdfPageCount": 1,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "exact-row-400",
+      "inputSha256": "98b4dada1fc8184255d18014b0fefa8b2a180b84a3ba66e9ed9dd2bc4641d18d",
+      "wordPdfSha256": "4db67936bcf099782128794609e794528f515c38c2445ffd6e9c34e2defe8b21",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "Cedar"
+        ],
+        "2": []
+      },
+      "wordPdfPageCount": 2,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "header-row-36",
+      "inputSha256": "1ec0f5c8b06392056042f5698f01eeacd8daf2b7a8c6076a6658aa5359125be2",
+      "wordPdfSha256": "55e7024b4243578b70b1c001eaaf234dbb7cb34a4da672174dd8b877987e1977",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "Maple",
+          "Willow"
+        ]
+      },
+      "wordPdfPageCount": 1,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "header-row-400",
+      "inputSha256": "77bfd0973076596405452457d701204037212e8e4baa28aea0a7ac1adb48596e",
+      "wordPdfSha256": "22f2e66ed42d1fea9b0c447562efe36f931e03b0513fd42525761c8a0a5af850",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "Maple"
+        ],
+        "2": [
+          "Willow"
+        ],
+        "3": []
+      },
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "nested-table-36",
+      "inputSha256": "a969e50dc755620d891f4147b35b54774a096e26bc06ffce387a64bfdc604f71",
+      "wordPdfSha256": "510d438293bb14ab02a271476e34b273143ceb92ecb852ec2717382e0367a288",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "Inner",
+          "Tail"
+        ]
+      },
+      "wordPdfPageCount": 1,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "nested-table-400",
+      "inputSha256": "2dbb3e91ddb7605d814441239ea5df85b9d70fb2c204e43025c8acea6553db3b",
+      "wordPdfSha256": "7757af1e2b5021cfcd4e7ccba0ea4157b0d6002fd876d404ecd694c9cbe6fe3d",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "Inner"
+        ],
+        "2": [
+          "Tail"
+        ]
+      },
+      "wordPdfPageCount": 2,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "tables-row-exact-taller-than-page-times-new-roman",
+      "inputSha256": "478923612746c838277b6b5382cf3732915bf0f84beffcb2600609656c4b84ad",
+      "wordPdfSha256": "22cd310766cedcb3952d799adcc5424077ea967b2e20069fdfd4e1d94842d9da",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "CedarBefore"
+        ],
+        "2": [
+          "Cedar01",
+          "Cedar02",
+          "Cedar03",
+          "Cedar04",
+          "Cedar05",
+          "Cedar06",
+          "Cedar07",
+          "Cedar08"
+        ],
+        "3": [
+          "CedarAfter"
+        ]
+      },
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "tables-row-exact-taller-than-page-control-times-new-roman",
+      "inputSha256": "7dff5484725e28cc742826842d87c89fc8faf51465af3ce77b4dc477789b2178",
+      "wordPdfSha256": "436fc7610058c67f9f12357965fb63f5db5072eebf0653737d4f147b024a4834",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "CedarBefore",
+          "Cedar01",
+          "Cedar02",
+          "Cedar03",
+          "Cedar04",
+          "Cedar05",
+          "Cedar06",
+          "Cedar07",
+          "CedarAfter",
+          "Cedar08"
+        ]
+      },
+      "wordPdfPageCount": 1,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "tables-header-row-taller-than-page-times-new-roman",
+      "inputSha256": "7125e313f2bba06f6bab636a777fe22d4ed872c67bb41b1c207128263d01d900",
+      "wordPdfSha256": "22890ef023a50acec65bdbdd3d4802ef254981ae448af383e45b6416a277d8cc",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "MapleBefore"
+        ],
+        "2": [
+          "Maple01",
+          "Maple02",
+          "Maple03",
+          "Maple04",
+          "Maple05",
+          "Maple06",
+          "Maple07",
+          "Maple08"
+        ],
+        "3": [
+          "Willow01",
+          "Willow02"
+        ],
+        "4": [
+          "MapleAfter"
+        ]
+      },
+      "wordPdfPageCount": 4,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "tables-nested-row-taller-than-page-times-new-roman",
+      "inputSha256": "2d54c2f35cf6ec2232cc3df8868d9dde1a43fa65803092206b452e492b8e1d02",
+      "wordPdfSha256": "19f396c1808aaac7a940115565c75e4ce20526f55592f0cbacb6367feb97bb48",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "OuterBefore",
+          "OuterHead"
+        ],
+        "2": [
+          "Inner01",
+          "Inner02",
+          "Inner03",
+          "Inner04",
+          "Inner05",
+          "Inner06",
+          "Inner07",
+          "Inner08"
+        ],
+        "3": [
+          "OuterTail",
+          "OuterAfter"
+        ]
+      },
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "paragraphs-border-taller-than-page-times-new-roman-schema-order-corrected",
+      "inputSha256": "c52ab3a3b61a25a2d264fdeb298bc4b4e5f8d49e5bcc5834afa28417073c7dcd",
+      "wordPdfSha256": "310dde5c52e83fe31aab920c83df823e1ab3de0de0fe86f301c183b248af464c",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "HazelBefore",
+          "Hazel01",
+          "Hazel02",
+          "Hazel03",
+          "Hazel04",
+          "Hazel05",
+          "Hazel06",
+          "Hazel07",
+          "Hazel08"
+        ],
+        "2": [
+          "Hazel09",
+          "Hazel10",
+          "Hazel11",
+          "Hazel12",
+          "Hazel13",
+          "Hazel14",
+          "Hazel15",
+          "Hazel16",
+          "Hazel17"
+        ],
+        "3": [
+          "Hazel18",
+          "Hazel19",
+          "Hazel20",
+          "Hazel21",
+          "Hazel22",
+          "Hazel23",
+          "Hazel24",
+          "Hazel25",
+          "Hazel26"
+        ],
+        "4": [
+          "Hazel27",
+          "Hazel28",
+          "HazelAfter"
+        ]
+      },
+      "wordPdfPageCount": 4,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "paragraphs-border-group-taller-than-page-times-new-roman-schema-order-corrected",
+      "inputSha256": "f5abf8c84d63fa2a69621ebb5eb721adbccd5d20ff0d63fbb2ea102fdbfafc7b",
+      "wordPdfSha256": "7df26940829fcd98af30321f650c16a5764dc3dc18bbbefe4e318738d1c243ab",
+      "fonts": [
+        "TimesNewRomanPSMT"
+      ],
+      "pageWords": {
+        "1": [
+          "LarchBefore",
+          "Larch01",
+          "Larch02",
+          "Larch03",
+          "Larch04",
+          "Larch05",
+          "Larch06",
+          "Larch07",
+          "Larch08"
+        ],
+        "2": [
+          "Larch09",
+          "Larch10",
+          "Larch11",
+          "Larch12",
+          "Larch13",
+          "Larch14",
+          "Larch15",
+          "Larch16",
+          "Larch17"
+        ],
+        "3": [
+          "Larch18",
+          "Larch19",
+          "Larch20",
+          "Larch21",
+          "Larch22",
+          "Larch23",
+          "Larch24",
+          "Larch25",
+          "Larch26"
+        ],
+        "4": [
+          "Larch27",
+          "Larch28",
+          "LarchAfter"
+        ]
+      },
+      "wordPdfPageCount": 4,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "exact-row-twelve-lines",
+      "inputSha256": "0313a6cc8cd45bc92f1ad86333774a0fa708abb452bda14b78a6b9ecff20434b",
+      "wordPdfSha256": "19ee93197b4a6a50349ea0186d71e45560dac110ac5f8e08449e658d69641979",
+      "pageWords": {
+        "1": [
+          "CedarBefore"
+        ],
+        "2": [
+          "Cedar01",
+          "Cedar02",
+          "Cedar03",
+          "Cedar04",
+          "Cedar05",
+          "Cedar06",
+          "Cedar07",
+          "Cedar08",
+          "Cedar09",
+          "Cedar10"
+        ],
+        "3": [
+          "CedarAfter"
+        ]
+      },
+      "nativeReviewActuallyViewed": true,
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "exact-row-twelve-lines-footer",
+      "inputSha256": "1566c6152ab68199a0d814e7a3c91249deba3e49df05fb815e44a7da74447c07",
+      "wordPdfSha256": "d37488b065681ad85778a9ae67ec84d085b4d860f0f48b92d276600c8be1f736",
+      "pageWords": {
+        "1": [
+          "CedarBefore",
+          "FooterProbe"
+        ],
+        "2": [
+          "Cedar01",
+          "Cedar02",
+          "Cedar03",
+          "Cedar04",
+          "Cedar05",
+          "Cedar06",
+          "Cedar07",
+          "Cedar08",
+          "Cedar09",
+          "FooterProbe",
+          "Cedar10"
+        ],
+        "3": [
+          "CedarAfter",
+          "FooterProbe"
+        ]
+      },
+      "nativeReviewActuallyViewed": true,
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "header-after-repeat",
+      "inputSha256": "7125e313f2bba06f6bab636a777fe22d4ed872c67bb41b1c207128263d01d900",
+      "wordPdfSha256": "c3e2756e61b718128ec2d0a36b3dcc814377585e3adb02af2154732594737e90",
+      "pageWords": {
+        "1": [
+          "MapleBefore"
+        ],
+        "2": [
+          "Maple01",
+          "Maple02",
+          "Maple03",
+          "Maple04",
+          "Maple05",
+          "Maple06",
+          "Maple07",
+          "Maple08"
+        ],
+        "3": [
+          "Willow01",
+          "Willow02"
+        ],
+        "4": [
+          "MapleAfter"
+        ]
+      },
+      "nativeReviewActuallyViewed": true,
+      "wordPdfPageCount": 4,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "header-two-hundred-points",
+      "inputSha256": "ccf26ae7663b96bf38a045e0331d229eb4117dd4b045edd321177c65471eb9d7",
+      "wordPdfSha256": "f4adf483147ee59f141750d4d3544946e0637d1f703f8688189fbefa5a40c16c",
+      "pageWords": {
+        "1": [
+          "MapleBefore"
+        ],
+        "2": [
+          "Maple01",
+          "Maple02",
+          "Maple03",
+          "Maple04",
+          "Maple05",
+          "Maple06",
+          "Maple07",
+          "Maple08"
+        ],
+        "3": [
+          "Willow01",
+          "Willow02"
+        ],
+        "4": [
+          "MapleAfter"
+        ]
+      },
+      "nativeReviewActuallyViewed": true,
+      "wordPdfPageCount": 4,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "tall-first-row-without-header",
+      "inputSha256": "56a71a56f162424caf1540b03eb0cd6cb951c4788b871850c5fc5236642cd4f7",
+      "wordPdfSha256": "58298d8f3a47052b1c5d9ac9b541ce6b01365eae23a7dcd0aef126ec191daef1",
+      "pageWords": {
+        "1": [
+          "MapleBefore"
+        ],
+        "2": [
+          "Maple01",
+          "Maple02",
+          "Maple03",
+          "Maple04",
+          "Maple05",
+          "Maple06",
+          "Maple07",
+          "Maple08"
+        ],
+        "3": [
+          "Willow01",
+          "Willow02",
+          "MapleAfter"
+        ]
+      },
+      "nativeReviewActuallyViewed": true,
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "exact-row-soft-wrapped-text",
+      "inputSha256": "a536d1a7e789c111ceec2634d73c519fbe5e898265958252302bade311bb9b7d",
+      "wordPdfSha256": "9fb4c7078518f7d302ebe2748925b36fcb3b3303038ee490596ea7371e82929c",
+      "pageWords": {
+        "1": [
+          "CedarBefore"
+        ],
+        "2": [
+          "Cedar01",
+          "Cedar02",
+          "Cedar03",
+          "Cedar04",
+          "Cedar05",
+          "Cedar06",
+          "Cedar07",
+          "Cedar08",
+          "Cedar09",
+          "Cedar10"
+        ],
+        "3": [
+          "CedarAfter"
+        ]
+      },
+      "nativeReviewActuallyViewed": true,
+      "wordPdfPageCount": 3,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ]
+    },
+    {
+      "id": "table-end-row-110",
+      "inputSha256": "94ea83cb3dae483163f295e7cd0791eeae2d86a657e572d5e69e98ba13eaa352",
+      "wordPdfSha256": "bbdca2cc7a84e3653aa8f56af94dc3ed077d466daec562dc3d1b64dda7c8bf63",
+      "wordPdfPageCount": 1,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ],
+      "pageWords": {
+        "1": [
+          "Cedar"
+        ]
+      },
+      "nativeReviewActuallyViewed": true
+    },
+    {
+      "id": "table-end-row-130",
+      "inputSha256": "b601ed791e0f9b432a6182073b0ea7d9d844b8ee773d78cce9aa100e579d8963",
+      "wordPdfSha256": "e41e7bb41bb0bcccf6193e251822ffb825f38c4dde5b15fcc470f55bd57e8576",
+      "wordPdfPageCount": 2,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ],
+      "pageWords": {
+        "1": [
+          "Cedar"
+        ],
+        "2": []
+      },
+      "nativeReviewActuallyViewed": true
+    },
+    {
+      "id": "table-end-default-line-24",
+      "inputSha256": "b1d9170e896c216833a08e5ec5ec5d32eb5bb0192f83ac49a7d46f694e639614",
+      "wordPdfSha256": "1cc7045273b5eec14480d47eb2592a6b6918db197b79d8be6a6fac357b555fb4",
+      "wordPdfPageCount": 2,
+      "wordPdfPageBoxes": [
+        [
+          0,
+          0,
+          300,
+          160
+        ],
+        [
+          0,
+          0,
+          300,
+          160
+        ]
+      ],
+      "pageWords": {
+        "1": [
+          "Cedar"
+        ],
+        "2": []
+      },
+      "nativeReviewActuallyViewed": true
+    }
+  ]
+}

@@ -63,9 +63,20 @@ test('a bare fractional height fails with a property-specific conversion diagnos
       message: expect.stringContaining('w:trHeight/@w:val') });
 });
 
-test('unit and whole-twip oversized rows still fail the clipping guard', async ({ browser }) => {
+test('unit and whole-twip oversized exact rows clip at the paper edge and retain the final blank page', async ({ browser }, testInfo) => {
   test.setTimeout(120_000);
-  for (const value of ['750pt', '15000']) await expect(renderDocxArtifacts(
-    generateRowHeightUnitDocx(value, 1, 'exact'), { browser, ...options }))
-    .rejects.toMatchObject({ code: 'pagination_failure', phase: 'running_story_placement' });
+  const control = await renderDocxArtifacts(generateRowHeightUnitDocx('15000', 1, 'exact'), { browser, ...options });
+  const expected = await facts(control.pdf!);
+  expect(expected.map(page => page.view)).toEqual([[0, 0, 612, 792], [0, 0, 612, 792]]);
+  expect(expected[0].items.map(item => item.text).join(' ').trim().split(/\s+/)).toEqual([
+    'Alder01', 'Original', 'height', 'record.', 'Value01', 'Complete', 'second', 'cell.',
+  ]);
+  expect(expected[1].items.map(item => item.text).join('').trim()).toBe('');
+  // Unit strings are a converter compatibility input; the whole-twip control is schema valid.
+  const bytes = generateRowHeightUnitDocx('750pt', 1, 'exact');
+  const actual = await renderDocxArtifacts(bytes, { browser, ...options });
+  expect(await facts(actual.pdf!)).toEqual(expected);
+  writeFileSync(testInfo.outputPath('oversized-unit.docx'), bytes);
+  writeFileSync(testInfo.outputPath('oversized-unit.pdf'), actual.pdf!);
+  writeFileSync(testInfo.outputPath('oversized-twips.pdf'), control.pdf!);
 });

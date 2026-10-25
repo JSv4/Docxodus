@@ -20,7 +20,8 @@
 import { exactRowClipSpan } from "./exact-row-text.js";
 
 const EXACT = "data-docx-exact-border";
-const PAINT = "data-docx-border-paint";
+/** Set by `prepareParagraphBorders` on a border box whose recorded sides it paints after pagination. */
+export const PAINT = "data-docx-border-paint";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SIDES = ["top", "right", "bottom", "left"] as const;
 type Side = (typeof SIDES)[number];
@@ -66,6 +67,17 @@ export function prepareParagraphBorders(root: HTMLElement): number {
     prepared++;
   }
   return prepared;
+}
+
+/**
+ * Leave one horizontal side of a prepared border box unpainted: the part of a bordered paragraph
+ * group that a page break opens (issue #1202).
+ */
+export function omitPaintedBorderSide(element: HTMLElement, side: "top" | "bottom"): void {
+  const recorded = element.getAttribute(PAINT);
+  if (!recorded) return;
+  const sides = (JSON.parse(recorded) as PaintedSide[]).filter(painted => painted.side !== side);
+  element.setAttribute(PAINT, JSON.stringify(sides));
 }
 
 /** Paint prepared borders on the final page tree. Layout and the PageMap do not change here. */

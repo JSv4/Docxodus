@@ -12,7 +12,7 @@ import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExact
 import { prepareWordText, paintWordText } from "./word-text.js";
 import { preserveClippedExactRowText } from "./exact-row-text.js";
 import { prepareParagraphBorders, paintParagraphBorders } from "./paragraph-borders.js";
-import { measureRenderedSource, PaginationEngine, type PageMap } from "./pagination.js";
+import { measureRenderedSource, findOversizedExactRow, PaginationEngine, type PageMap } from "./pagination.js";
 import { scopeMarkupBalloons } from "./markup-balloons.js";
 export { renderedSourceMeasurerExpression } from "./pagination.js";
 import {
@@ -2841,7 +2841,8 @@ function findClippedContent(document: Document): ClippedBodyPage[] {
           element,
           bottom: laidOutBottom(element, content),
         }))
-        .filter(({ element, bottom }) => bottom > boundary + 1 && !isPreservedExactLineInk(element, content))
+        .filter(({ element, bottom }) => bottom > boundary + 1 && !isPreservedExactLineInk(element, content)
+          && !findOversizedExactRow(element))
         .sort((left, right) => right.bottom - left.bottom);
       // Collapsed trailing margins contribute to scrollHeight even though no
       // descendant pixels are clipped (a common final blank Word paragraph).

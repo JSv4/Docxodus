@@ -62,6 +62,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Rows, tables and bordered paragraph groups taller than a page can export with Word's page
+  placement (#1202). Splittable cell blocks and border groups continue across pages; oversized exact
+  rows clip at the paper edge while retaining the complete last visible word in the PDF text layer.
+  Oversized headers preserve Word's page break after their table, and a fitting nested-table prefix
+  can stay on the preceding page. Hidden lines stay out of later PDF pages, with source-anchor
+  completeness and protected footnote bands retained. Table-ending documents retain Word's required
+  final paragraph and any resulting blank page, without adding an editable source block.
+
 - Table columns omitted by every row (`w:gridBefore`) no longer give the first visible cell
   the omitted column's narrow width, splitting its text during HTML and PDF export (#1219).
 

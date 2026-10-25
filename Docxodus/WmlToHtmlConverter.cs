@@ -1142,6 +1142,7 @@ namespace Docxodus
             };
             MarkupSimplifier.SimplifyMarkup(wordDoc, simplifyMarkupSettings);
 
+            AddImpliedBodyFinalParagraph(wordDoc);
             MarkStructuralTableEndParagraphs(wordDoc);
             ResolveTableIndentInputs(wordDoc);
             // Balloon wording compares direct properties, which assembly replaces (issue #1300).
@@ -7401,6 +7402,7 @@ namespace Docxodus
             bool suppressLeadingWhiteSpace = false)
         {
             var style = DefineParagraphStyle(paragraph, elementName, suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
+            var implied = (string?)paragraph.Attribute(ImpliedTableEndParagraphAttribute) == "true";
             if ((string?)paragraph.Attribute(StructuralTableEndParagraphAttribute) == "true")
             {
                 // A nested table's required, unformatted cell-end paragraph is a structural
@@ -7414,11 +7416,11 @@ namespace Docxodus
                 style["margin-bottom"] = "0";
             }
             var rtl = isBidi ? new XAttribute("dir", "rtl") : new XAttribute("dir", "ltr");
-            var firstMark = isBidi ? new XEntity("#x200f") : null;
-            var anchorAttr = settings.StampAnchors && (string?)paragraph.Attribute(PtOpenXml.Unid) != null
+            var firstMark = isBidi && !implied ? new XEntity("#x200f") : null;
+            var anchorAttr = !implied && settings.StampAnchors && (string?)paragraph.Attribute(PtOpenXml.Unid) != null
                 ? new XAttribute("data-anchor", (string)paragraph.Attribute(PtOpenXml.Unid)!)
                 : null;
-            var sourceAnchorAttr = SourceAnchorIdentityAttribute(settings, paragraph);
+            var sourceAnchorAttr = implied ? null : SourceAnchorIdentityAttribute(settings, paragraph);
 
             // Analyze initial runs to see whether we have a tab, in which case we will render
             // a span with a defined width and ignore the tab rather than rendering the text
@@ -7468,6 +7470,8 @@ namespace Docxodus
             var paraElement = new XElement(elementName,
                 rtl,
                 firstMark,
+                implied ? new[] { new XAttribute("data-docx-implied-table-end", "true"),
+                    new XAttribute("contenteditable", "false"), new XAttribute("aria-hidden", "true") } : null,
                 anchorAttr,
                 sourceAnchorAttr,
                 alignedTabContent ?? new List<object?> { txElementsPrecedingTab,
@@ -7483,6 +7487,24 @@ namespace Docxodus
         private const string ExactLineSpacingCssProperty = "--docx-exact-line-height";
         private static readonly XName StructuralTableEndParagraphAttribute =
             XName.Get("table-end-paragraph", "urn:docxodus:rendering");
+        private static readonly XName ImpliedTableEndParagraphAttribute =
+            XName.Get("implied-table-end-paragraph", "urn:docxodus:rendering");
+
+        private static void AddImpliedBodyFinalParagraph(WordprocessingDocument wordDoc)
+        {
+            var body = wordDoc.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
+            if (body?.Elements().LastOrDefault(e => e.Name != W.sectPr)?.Name != W.tbl)
+                return;
+
+            // Word lays out its required end paragraph even when a table is the body's last
+            // serialized block. Let normal formatting resolve its line height before pagination.
+            // This view-only paragraph must never claim an editable source identity (#1202).
+            var paragraph = new XElement(W.p, new XAttribute(ImpliedTableEndParagraphAttribute, "true"));
+            if (body.Element(W.sectPr) is { } section)
+                section.AddBeforeSelf(paragraph);
+            else
+                body.Add(paragraph);
+        }
 
         /// <summary>
         /// Where Word puts a table's first cell text before compatibility mode 15, when the table is
