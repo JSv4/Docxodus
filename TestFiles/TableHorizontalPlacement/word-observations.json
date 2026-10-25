@@ -1,0 +1,397 @@
+{
+  "issue": 1219,
+  "pr": 1338,
+  "method": "Native Word for the web PDF export through authenticated Playwright; original PDFs and hashes retained.",
+  "scope": "Captured horizontal marker origins and complete source text for legacy controls; the nested controls only adjudicate left-cell margins. Whole-table auto column allocation and pre-existing vertical differences remain separately reported.",
+  "sourcePolicy": "The original CI input has two SDK property-order findings; these controls only reorder those properties, with a separate font-only Times New Roman variant. The untouched original Word capture has identical marker coordinates.",
+  "cases": [
+    {
+      "id": "nested-benchmark-schema-order-corrected",
+      "inputSha256": "b217d592fe7b34a8a7c4c1debd168317661cf73f242fab97afbc0aa769cb6687",
+      "wordPdfSha256": "92323569bcec58e2a548611f1c33fb6818c9c5b2f4c805e48c6ea851a4b7383b",
+      "capturedAtUtc": "2026-10-25T01:12:00.835Z",
+      "reportedBuild": null,
+      "observedFonts": [
+        "TimesNewRomanPS-BoldMT",
+        "TimesNewRomanPSMT"
+      ],
+      "fontSubstituted": true,
+      "wordMarkers": {
+        "OuterLeft": [
+          73.025,
+          106.499,
+          116.541,
+          118.676
+        ],
+        "InnerLeft": [
+          73.775,
+          127.749,
+          115.542,
+          139.926
+        ],
+        "AfterTable": [
+          72.025,
+          149.749,
+          120.37,
+          161.926
+        ],
+        "OuterRight": [
+          450.95,
+          106.499,
+          500.483,
+          118.676
+        ],
+        "InnerRight": [
+          171.83,
+          127.749,
+          219.372,
+          139.926
+        ]
+      }
+    },
+    {
+      "id": "nested-benchmark-times-new-roman-schema-order-corrected",
+      "inputSha256": "2c4880356e5cc3b2ed874d2d308ec34435ccee6423830875bb6213a56b89c828",
+      "wordPdfSha256": "f97449f09ca84c223766ec8804ecd6f04777557b04889a8d5821f3fb537be053",
+      "capturedAtUtc": "2026-10-25T01:12:16.244Z",
+      "reportedBuild": null,
+      "observedFonts": [
+        "TimesNewRomanPS-BoldMT",
+        "TimesNewRomanPSMT"
+      ],
+      "fontSubstituted": false,
+      "wordMarkers": {
+        "OuterLeft": [
+          73.025,
+          106.499,
+          116.541,
+          118.676
+        ],
+        "InnerLeft": [
+          73.775,
+          127.749,
+          115.542,
+          139.926
+        ],
+        "AfterTable": [
+          72.025,
+          149.749,
+          120.37,
+          161.926
+        ],
+        "OuterRight": [
+          450.95,
+          106.499,
+          500.483,
+          118.676
+        ],
+        "InnerRight": [
+          171.83,
+          127.749,
+          219.372,
+          139.926
+        ]
+      }
+    },
+    {
+      "id": "tables-legacy-centred-default-style-times-new-roman",
+      "inputSha256": "4d980bdf3d6ac2da0f3ab5447b7c06fcb90c787fd3d6a2c164ce1f60523ccc00",
+      "wordPdfSha256": "3a06181e89ab6702de6413645af99f7f5d6b128cf539a5966f6dad87552e3f3e",
+      "wordMarkers": {
+        "AlphaBefore": [
+          72.025,
+          74.979,
+          128.873,
+          87.156
+        ],
+        "AlphaCell": [
+          72.025,
+          91.979,
+          117.312,
+          104.156
+        ],
+        "BravoBefore": [
+          72.025,
+          110.999,
+          128.873,
+          123.176
+        ],
+        "BravoCell": [
+          186.58,
+          127.999,
+          231.867,
+          140.176
+        ],
+        "ProbeAfter": [
+          72.025,
+          146.999,
+          120.898,
+          159.176
+        ]
+      },
+      "wordTokens": {
+        "AlphaBefore": 1,
+        "AlphaCell": 1,
+        "BravoBefore": 1,
+        "BravoCell": 1,
+        "ProbeAfter": 1,
+        "centred": 2,
+        "control": 2,
+        "document.": 1,
+        "end": 1,
+        "of": 1,
+        "paragraph.": 1,
+        "table.": 3
+      }
+    },
+    {
+      "id": "tables-legacy-grid-before-default-style-times-new-roman",
+      "inputSha256": "b4765609ed60b8c0add96148abaaf419583e33416e7f3acc00b233408326ae48",
+      "wordPdfSha256": "457fe10ca907d7d5057a6a73fb5836ecb5c223ae11439000d6c55ea0ad208c2b",
+      "wordMarkers": {
+        "AlphaBefore": [
+          72.025,
+          74.979,
+          128.873,
+          87.156
+        ],
+        "AlphaCell": [
+          72.025,
+          91.979,
+          117.312,
+          104.156
+        ],
+        "BravoBefore": [
+          72.025,
+          110.999,
+          128.873,
+          123.176
+        ],
+        "BravoCell": [
+          72.025,
+          127.999,
+          117.312,
+          140.176
+        ],
+        "ProbeAfter": [
+          72.025,
+          146.999,
+          120.898,
+          159.176
+        ]
+      },
+      "wordTokens": {
+        "AlphaBefore": 1,
+        "AlphaCell": 1,
+        "BravoBefore": 1,
+        "BravoCell": 1,
+        "ProbeAfter": 1,
+        "after": 1,
+        "column": 1,
+        "control": 2,
+        "document.": 1,
+        "end": 1,
+        "first": 1,
+        "gridBefore.": 1,
+        "in.": 1,
+        "of": 1,
+        "one": 1,
+        "paragraph.": 1,
+        "row": 1,
+        "starts": 1,
+        "table.": 1
+      }
+    },
+    {
+      "id": "tables-legacy-named-style-no-margins-mode-14-times-new-roman",
+      "inputSha256": "6afc0121fd3fc652f54d7370ef49c9ef1c0af3b79725df6c307028021e080954",
+      "wordPdfSha256": "f9b09a73a2f138813d0a38fac70523760c87514ad1ab6f23f4329460a16900e0",
+      "wordMarkers": {
+        "AlphaBefore": [
+          72.025,
+          74.979,
+          128.873,
+          87.156
+        ],
+        "AlphaCell": [
+          72.525,
+          91.979,
+          117.812,
+          104.156
+        ],
+        "ProbeAfter": [
+          72.025,
+          110.999,
+          120.898,
+          123.176
+        ]
+      },
+      "wordTokens": {
+        "AlphaBefore": 1,
+        "AlphaCell": 1,
+        "ProbeAfter": 1,
+        "cell": 1,
+        "document.": 1,
+        "end": 1,
+        "margins.": 1,
+        "named": 2,
+        "of": 1,
+        "style": 1,
+        "style.": 1,
+        "without": 1
+      }
+    },
+    {
+      "id": "tables-legacy-named-style-no-margins-mode-15-times-new-roman",
+      "inputSha256": "b981fbb075d0d83d7c6254bbefdac21138167d35423af744149a2eb85c46d230",
+      "wordPdfSha256": "b4d96c31b56fbe84480381fab55c19f76da61b2b41330b7fc07e9a712792448b",
+      "wordMarkers": {
+        "AlphaBefore": [
+          72.025,
+          74.979,
+          128.873,
+          87.156
+        ],
+        "AlphaCell": [
+          73.025,
+          91.979,
+          118.312,
+          104.156
+        ],
+        "ProbeAfter": [
+          72.025,
+          110.999,
+          120.898,
+          123.176
+        ]
+      },
+      "wordTokens": {
+        "AlphaBefore": 1,
+        "AlphaCell": 1,
+        "ProbeAfter": 1,
+        "cell": 1,
+        "document.": 1,
+        "end": 1,
+        "margins.": 1,
+        "named": 2,
+        "of": 1,
+        "style": 1,
+        "style.": 1,
+        "without": 1
+      }
+    },
+    {
+      "id": "tables-legacy-nested-default-style-times-new-roman",
+      "inputSha256": "18fe06ca08a0e78669966590016130dbbdb6ecff4966e98cda9b1e28a536d216",
+      "wordPdfSha256": "c651c567024a6a925db15a404910953bcbf5c2fce963640b852092e7f1995baa",
+      "wordMarkers": {
+        "AlphaBefore": [
+          72.025,
+          74.979,
+          128.873,
+          87.156
+        ],
+        "AlphaCell": [
+          72.025,
+          91.979,
+          117.312,
+          104.156
+        ],
+        "BravoBefore": [
+          72.025,
+          110.999,
+          128.873,
+          123.176
+        ],
+        "BravoCell": [
+          72.025,
+          127.999,
+          117.312,
+          140.176
+        ],
+        "CharlieCell": [
+          78.025,
+          144.999,
+          128.812,
+          157.176
+        ],
+        "ProbeAfter": [
+          72.025,
+          164.999,
+          120.898,
+          177.176
+        ]
+      },
+      "wordTokens": {
+        "AlphaBefore": 1,
+        "AlphaCell": 1,
+        "BravoBefore": 1,
+        "BravoCell": 1,
+        "CharlieCell": 1,
+        "ProbeAfter": 1,
+        "cell.": 1,
+        "control": 2,
+        "document.": 1,
+        "end": 1,
+        "nested": 1,
+        "of": 1,
+        "outer": 2,
+        "paragraph.": 1,
+        "table.": 3
+      }
+    },
+    {
+      "id": "tables-legacy-pct-100-default-style-times-new-roman",
+      "inputSha256": "1bee4b16163120eea879853c8b2f8e60634068df1a0b74534daa34ae23db6ef6",
+      "wordPdfSha256": "d7621805f17c3bd053c3e085872d0d795bf528ba65ecc232bb53c9155dd11dec",
+      "wordMarkers": {
+        "AlphaBefore": [
+          72.025,
+          74.979,
+          128.873,
+          87.156
+        ],
+        "AlphaCell": [
+          72.025,
+          91.979,
+          117.312,
+          104.156
+        ],
+        "BravoBefore": [
+          72.025,
+          110.999,
+          128.873,
+          123.176
+        ],
+        "BravoCell": [
+          72.025,
+          127.999,
+          117.312,
+          140.176
+        ],
+        "ProbeAfter": [
+          72.025,
+          146.999,
+          120.898,
+          159.176
+        ]
+      },
+      "wordTokens": {
+        "AlphaBefore": 1,
+        "AlphaCell": 1,
+        "BravoBefore": 1,
+        "BravoCell": 1,
+        "ProbeAfter": 1,
+        "control": 2,
+        "document.": 1,
+        "end": 1,
+        "full": 1,
+        "full-width": 1,
+        "of": 1,
+        "paragraph.": 1,
+        "table.": 2,
+        "width.": 1
+      }
+    }
+  ]
+}

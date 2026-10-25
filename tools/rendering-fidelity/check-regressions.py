@@ -1,7 +1,8 @@
 """Apply the unchanged oracle's findings to already-passing baseline cases.
 
-Newly delivered pages of a formerly failed conversion change measured coverage;
-retain that oracle finding, while permitting the mandatory failure to be fixed.
+Newly delivered pages or Word-adjudicated layout corrections can change similarity
+to LibreOffice while fixing a baseline mandatory failure; retain the raw findings
+and permit that failure to be fixed. Every already-passing baseline case stays protected.
 No tolerance or score adjustment is applied.
 """
 import sys
