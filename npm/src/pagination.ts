@@ -18,6 +18,7 @@ import {
 } from "./page-geometry.js";
 import type { PageBands, PageDimensions } from "./page-geometry.js";
 import { EXACT_ROW_CELL } from "./exact-row-text.js";
+import { omitPaintedBorderSide, PAINT as PAINTED_BORDER } from "./paragraph-borders.js";
 import {
   layoutMarkupBalloons,
   readMarkupBalloonComments,
@@ -559,6 +560,29 @@ export const DRAWING_HOST_ATTRIBUTE = "data-docx-anchor-host";
 export const HOSTS_PROMOTED_DRAWING_ATTRIBUTE = "data-docx-hosts-promoted-drawing";
 
 /**
+ * Marks a block taller than its page that the paginator placed alone on a page. Word starts an
+ * oversized exact row on a new page and clips at the paper edge; a footnote band retains its own
+ * protected boundary (issue #1202).
+ */
+export const OVERSIZED_BLOCK_ATTRIBUTE = "data-pagination-oversized";
+
+/** An oversized exact row responsible for this element's intentional vertical overflow. */
+export function findOversizedExactRow(element: Element): HTMLTableRowElement | null {
+  const block = element.closest(`[${OVERSIZED_BLOCK_ATTRIBUTE}]`);
+  const body = block?.closest(".page-content");
+  if (!block || !body) return null;
+  const height = body.getBoundingClientRect().height;
+  // Column boxes are siblings of rows, but their height includes every row in their table.
+  const columnTable = element.matches("colgroup, col") ? element.closest("table") : null;
+  for (const clip of Array.from(block.querySelectorAll(EXACT_ROW_CELL))) {
+    const row = clip.closest<HTMLTableRowElement>("tr");
+    if (row && clip.getBoundingClientRect().height > height + 1
+      && (row.contains(element) || element.contains(row) || columnTable?.contains(row))) return row;
+  }
+  return null;
+}
+
+/**
  * Whether the document itself clips `element` away whole: its layout box (`rect`) lies entirely
  * outside the exact-height row cell it sits in, as Word hides whatever an exact row cannot hold
  * (issue #1168). Such content renders nowhere, so it has no fragment and is not missing either.
@@ -586,6 +610,13 @@ function clippedAwayByExactRow(element: HTMLElement, rect: DOMRect): boolean {
       return rows.length > 0 && rows.every(zeroHeightRow);
     }
     return false;
+  }
+  // An exact row taller than its page is clipped where the page ends (issue #1202).
+  const body = element.closest<HTMLElement>(".page-content");
+  if (body && findOversizedExactRow(element)) {
+    const boundary = body.style.overflowY === "visible" && body.parentElement
+      ? body.parentElement.getBoundingClientRect().bottom : body.getBoundingClientRect().bottom;
+    if (rect.top >= boundary) return true;
   }
   // Every enclosing exact row clips: a nested table's row can itself lie below its outer row.
   for (let clip = element.parentElement?.closest<HTMLElement>(EXACT_ROW_CELL); clip;
@@ -2203,9 +2234,8 @@ export class PaginationEngine {
       !body ||
       table.tHead ||
       table.tFoot ||
-      body.rows.length < 2 ||
       Array.from(table.children).some(child => child !== body && child.tagName !== "COLGROUP") ||
-      table.querySelector("table, [data-footnote-id]") ||
+      table.querySelector("[data-footnote-id]") ||
       wrapper.querySelector("[data-footnote-id]")
     ) {
       return null;
@@ -2230,6 +2260,12 @@ export class PaginationEngine {
       : null;
 
     const groups: HTMLTableRowElement[][] = [];
+    // Groups that are a page on their own however they are cut: one exact-height row, or the part
+    // of a row that holds one block taller than a page. They are placed alone on a page and clipped.
+    const oversizedGroups = new Set<HTMLTableRowElement[]>();
+    const rowFits = (row: HTMLTableRowElement) => this.measureElement(
+      this.createSimpleTableFragment(wrapper, table, body, [row], true), dims, block.sectionIndex,
+    ).heightPt <= maximumFragmentHeight;
     let start = 0;
     let boundaryIndex = 0;
     while (start < rows.length) {
@@ -2254,11 +2290,25 @@ export class PaginationEngine {
         boundaryIndex++;
       }
 
-      // Even one complete row/merge group cannot fit. Preserve the established
-      // overflow fallback rather than clipping a row or cutting a merged cell. Header rows
-      // left alone at the foot of the first page do not count as its content.
-      if (end === start || (start === 0 && end <= headerCount)) {
+      // Header rows left alone at the foot of the first page do not count as its content, and a
+      // header run that is not followed on the page by a complete row group is not repeated.
+      if (headerCount > 0 && (end === start || (start === 0 && end <= headerCount))) {
         return withoutRepeats();
+      }
+      if (end === start) {
+        // Even one complete row group cannot fit a page. Word breaks a row taller than a page
+        // between the blocks its cells hold (issue #1202); a merged group keeps the established
+        // overflow fallback rather than cutting a merged cell.
+        const row = rows[start];
+        if (rowGroupEnds[boundaryIndex] !== start + 1) return null;
+        for (const piece of this.splitRowAtBlocks(row, rowFits)) {
+          const group = [piece.row];
+          groups.push(group);
+          if (piece.oversized) oversizedGroups.add(group);
+        }
+        start++;
+        boundaryIndex++;
+        continue;
       }
 
       groups.push(rows.slice(start, end));
@@ -2294,6 +2344,7 @@ export class PaginationEngine {
 
       const measured = this.measureElement(fragment, dims, block.sectionIndex);
       if (
+        !oversizedGroups.has(groups[index]) &&
         measured.heightPt + measured.marginTopPt + measured.marginBottomPt >
         minimumContentHeight
       ) {
@@ -2310,6 +2361,60 @@ export class PaginationEngine {
     }
 
     return fragments;
+  }
+
+  /**
+   * Cuts a row taller than a page into rows that each fit one (`fits`), as Word breaks such a row
+   * (issue #1202): every cell keeps, in order, the blocks it holds, and a cell whose blocks are all
+   * placed is left empty. A block taller than a page is a piece of its own, marked `oversized`. An
+   * exact-height row is not cut: Word starts it on a new page and clips it there. Neither is a row
+   * whose cells hold anything but blocks.
+   */
+  private splitRowAtBlocks(
+    row: HTMLTableRowElement,
+    fits: (row: HTMLTableRowElement) => boolean,
+  ): Array<{ row: HTMLTableRowElement; oversized: boolean }> {
+    const cells = Array.from(row.cells);
+    const whole = [{ row, oversized: true }];
+    if (cells.some(cell => cell.querySelector(`:scope > ${EXACT_ROW_CELL}`))) return whole;
+    const pending = cells.map(cell => Array.from(cell.childNodes));
+    if (pending.some(nodes => nodes.some(node => node.nodeType !== this.view.Node.ELEMENT_NODE
+      && (node.nodeType !== this.view.Node.TEXT_NODE || (node.textContent ?? "").trim() !== "")))) return whole;
+    const blocks = pending.map(nodes => nodes.filter(node => node.nodeType === this.view.Node.ELEMENT_NODE) as HTMLElement[]);
+
+    const build = (parts: HTMLElement[][], first: boolean) => {
+      const piece = row.cloneNode(false) as HTMLTableRowElement;
+      cells.forEach((cell, index) => {
+        const clone = cell.cloneNode(false) as HTMLElement;
+        for (const element of parts[index]) clone.appendChild(element.cloneNode(true));
+        if (!first) {
+          clone.removeAttribute("id");
+          clone.removeAttribute("data-anchor");
+        }
+        piece.appendChild(clone);
+      });
+      if (!first) {
+        piece.removeAttribute("id");
+        piece.removeAttribute("data-anchor");
+      }
+      return piece;
+    };
+    const pieces: Array<{ row: HTMLTableRowElement; oversized: boolean }> = [];
+    while (blocks.some(list => list.length > 0)) {
+      this.checkpoint();
+      // A row is as tall as its tallest cell, so each cell takes the most of its blocks that fit.
+      let take = blocks.map((list, index) => {
+        let count = 0;
+        while (count < list.length
+          && fits(build(blocks.map((other, j) => j === index ? list.slice(0, count + 1) : []), true))) count++;
+        return count;
+      });
+      const oversized = take.every(count => count === 0);
+      if (oversized) take = blocks.map(list => Math.min(1, list.length));
+      pieces.push({ row: build(blocks.map((list, index) => list.slice(0, take[index])), pieces.length === 0), oversized });
+      blocks.forEach((list, index) => list.splice(0, take[index]));
+    }
+    return pieces.length > 0 ? pieces : whole;
   }
 
   /**
@@ -2943,6 +3048,94 @@ export class PaginationEngine {
   }
 
   /**
+   * The converter's box around a run of paragraphs that share one border (`w:pBdr`): a `div` whose
+   * element children are all Word paragraphs and that draws a border. `element` must be laid out.
+   */
+  private isBorderGroup(element: HTMLElement): boolean {
+    if (element.localName !== "div" || element.children.length === 0
+      || !Array.from(element.children).every(child => this.isWordParagraphElement(child as HTMLElement))) return false;
+    // The PDF export replaces declared-width borders with padding and paints them after pagination.
+    const style = this.view.getComputedStyle(element);
+    // A frame or other out-of-flow box is not a run of body paragraphs.
+    if (style.position === "absolute" || style.position === "fixed" || style.float !== "none"
+      || element.hasAttribute("data-docx-frame-container")) return false;
+    if (element.hasAttribute(PAINTED_BORDER)) return true;
+    return [style.borderTopStyle, style.borderBottomStyle, style.borderLeftStyle, style.borderRightStyle]
+      .some(value => value !== "none" && value !== "hidden");
+  }
+
+  /**
+   * Splits a bordered paragraph group where Word breaks it across pages (issue #1202): after the last
+   * paragraph that fits, or inside the paragraph that does not, as an ordinary paragraph splits. Word
+   * leaves the border open at the break: the first part has no bottom border and the rest no top
+   * border, so each part keeps its side borders. A group that cites notes, or keeps its lines or its
+   * next paragraph, keeps the whole-block fallback.
+   */
+  private tryFragmentBorderGroup(
+    block: MeasuredBlock,
+    dims: PageDimensions,
+    availableHeightPt: number,
+    effectiveMarginTopPt: number,
+  ): MeasuredBlock[] | null {
+    if (!this.fragmentParagraphs || block.keepWithNext || block.keepLines || block.pageBreakBefore
+      || block.isPageBreak || block.element.querySelector("[data-footnote-id]")) return null;
+
+    // Continuations are detached clones: lay the group out in the staging context first.
+    const host = !block.element.isConnected ? this.document.createElement("div") : null;
+    const group = host ? block.element.cloneNode(true) as HTMLElement : block.element;
+    if (host) {
+      host.style.cssText = `position:absolute;visibility:hidden;left:-9999px;width:${dims.contentWidth}pt`;
+      host.appendChild(group);
+      this.stagingElement.appendChild(host);
+    }
+    try {
+      if (!this.isBorderGroup(group)) return null;
+      const paragraphs = Array.from(group.children) as HTMLElement[];
+      const part = (content: HTMLElement[], open: "bottom" | "top") => {
+        const wrapper = group.cloneNode(false) as HTMLElement;
+        wrapper.style.setProperty(`border-${open}`, "none", "important");
+        wrapper.style.setProperty(`padding-${open}`, "0", "important");
+        wrapper.style.setProperty(`margin-${open}`, "0", "important");
+        omitPaintedBorderSide(wrapper, open);
+        for (const paragraph of content) wrapper.appendChild(paragraph);
+        return wrapper;
+      };
+      const fits = (content: HTMLElement[]) => effectiveMarginTopPt
+        + this.measureElement(part(content, "bottom"), dims, block.sectionIndex).heightPt <= availableHeightPt;
+      const clones = (from: number, to: number) => paragraphs.slice(from, to).map(p => p.cloneNode(true) as HTMLElement);
+
+      // Whole paragraphs that fit, never ending after one that keeps with its next.
+      let whole = 0;
+      while (whole + 1 < paragraphs.length && fits(clones(0, whole + 1))) whole++;
+      while (whole > 0 && paragraphs[whole - 1].dataset.keepWithNext === "true") whole--;
+
+      let head: HTMLElement[] = clones(0, whole);
+      let tail: HTMLElement[] = clones(whole, paragraphs.length);
+      const next = paragraphs[whole];
+      if (next.dataset.keepWithNext !== "true" && this.canRangeFragmentParagraph(next, false, true)) {
+        const split = this.splitParagraphAtLargestFit(next, (part) => fits([...clones(0, whole), part]));
+        if (split.kind === "split") {
+          head = [...head, split.head];
+          tail = [split.tail, ...clones(whole + 1, paragraphs.length)];
+        }
+      }
+      if (head.length === 0) return null;
+      // Word does not repeat a paragraph's space before at the top of the page the rest moves to.
+      tail[0].style.setProperty("margin-top", "0", "important");
+      return [part(head, "bottom"), part(tail, "top")].map(element => ({
+        ...this.measureElement(element, dims, block.sectionIndex),
+        element,
+        keepWithNext: false,
+        keepLines: false,
+        pageBreakBefore: false,
+        isPageBreak: false,
+      }));
+    } finally {
+      host?.remove();
+    }
+  }
+
+  /**
    * Splits a simple paragraph at the largest DOM Range endpoint that fits the
    * currently available body space. The caller then processes the tail normally,
    * allowing it to fragment again on later pages when necessary.
@@ -2956,6 +3149,9 @@ export class PaginationEngine {
     preceding: readonly HTMLElement[] = [],
   ): MeasuredBlock[] | null {
     if (availableHeightPt <= effectiveMarginTopPt) return null;
+    if (block.element.localName === "div") {
+      return this.tryFragmentBorderGroup(block, dims, availableHeightPt, effectiveMarginTopPt);
+    }
 
     // Continuations are detached Range clones. Validate their computed layout
     // in the same staging context used for measurement before splitting again.
@@ -4921,9 +5117,7 @@ export class PaginationEngine {
           block.sectionIndex,
         );
         if (tableFragments) {
-          if (currentContent.length > 0 || currentContinuation) {
-            finishPage(block.sectionIndex);
-          }
+          // Let normal fitting place the first fragment beside preceding content when it fits.
           blocks.splice(i, 1, ...tableFragments);
           i--;
           continue;
@@ -4938,11 +5132,14 @@ export class PaginationEngine {
           continue;
         }
         markSectionPlaced(block.sectionIndex);
-        currentContent.push(this.cloneBlockForPage(
+        const oversized = this.cloneBlockForPage(
           block,
           true,
           pageInSection(block.sectionIndex),
-        ));
+        );
+        // The body band clips it; where that clip is an exact-height row's own, Word's too.
+        oversized.setAttribute(OVERSIZED_BLOCK_ATTRIBUTE, "true");
+        currentContent.push(oversized);
         // An unsupported body block already occupies/clips its whole body band.
         // Preserve its notes losslessly on following note-only pages rather
         // than drawing them underneath that clipped fallback.
@@ -5665,6 +5862,12 @@ export class PaginationEngine {
         contentArea.style.height = `${Math.max(0, contentAreaHeight - notesHeightPt)}pt`;
       }
     }
+
+    // Word lets an oversized exact row paint through the bottom margin and even behind a
+    // footer. The page box still clips at the paper edge; notes keep their disjoint body band.
+    if ((!notesEl || notesEl.getBoundingClientRect().height === 0)
+      && Array.from(contentArea.querySelectorAll(`[${OVERSIZED_BLOCK_ATTRIBUTE}]`))
+        .some(block => findOversizedExactRow(block))) contentArea.style.overflowY = "visible";
 
     // Paint offsets must follow range fragmentation: positioned runs are deliberately excluded
     // from that structural algorithm, even though these offsets leave every line box unchanged.
