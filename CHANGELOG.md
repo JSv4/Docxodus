@@ -66,6 +66,10 @@ All notable changes to this project will be documented in this file.
   wrapped paragraphs. Continuations preserve complete text, repeated headers and source geometry;
   explicit no-split rows remain intact (#1217).
 
+- Preserve ordinary spaces as breakable text in HTML conversion (#1124). Intrinsic run CSS retains
+  their width, while actual nonbreaking spaces stay distinct. Repeated spaces and run boundaries no
+  longer gain synthetic nonbreaking spaces that change justification and soft wrapping.
+
 - Rows, tables and bordered paragraph groups taller than a page can export with Word's page
   placement (#1202). Splittable cell blocks and border groups continue across pages; oversized exact
   rows clip at the paper edge while retaining the complete last visible word in the PDF text layer.
