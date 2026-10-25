@@ -2256,7 +2256,8 @@ Exact and at-least heights had a converter-side quantization of the same kind: t
 with one decimal, so `w:line="253"` (12.65 pt) rendered as 12.7 pt. They now keep twentieths of a
 point (`{0:0.0#}pt`). The paginated export now runs `applyUnroundedNormalLineHeights`
 (`npm/src/line-metrics.ts`) before pagination. It gives every element whose computed line height is
-`normal` an explicit height for its own font, measured at 1000 px, where pixel rounding is negligible.
+`normal` an explicit height for its own font, measured at 10000 px to reduce rounding of its
+ascent, descent and line gap.
 The converter's output is unchanged. Since issue #1151 the paginator itself runs the same pass on its
 staging tree, so the paginated view and the paginated editor lay single-spaced lines out at the same
 unrounded pitch as the export; after the export's earlier pass no line height is `normal`, so the
@@ -3941,8 +3942,17 @@ keep beside a fresh citation. Both paths retain the safe-inline fragmentation ch
 identities, and widow control: the default or explicit on preserves two trailing lines; explicit off
 permits one. A kept paragraph reaching an empty continuation band is split there rather than clipped
 as a whole. The converter carries compatibility mode on staging as well as the body, because
-embedding complete HTML in a viewer discards the body tag. This fixes the separately observed
-read-only kept-note clipping failure; it does not establish the missing original carried-note
+embedding complete HTML in a viewer discards the body tag.
+
+The natural-height probe also needs enough precision: Times New Roman measured at 1000px
+produces a ratio of 1.149, versus its 2355/2048 metric ratio of 1.149902. At 10000px the probe gives
+1.1499. The earlier underestimate accumulates through a long note and can admit one extra line.
+Four native 120-line controls, with the citation first or mid-page and modes 14/15, assert every
+body/note label's page. Mode 14 starts 53 lines beside a fresh citation, then carries 55 per full
+note band. Mode 15 defers the note, then carries 55 per full band. Fresh note-only fragments use
+the same measured physical band as carried continuations; the fixed whole-note guard is not also
+subtracted from an already measured fragment's space. Text visibility and export clipping checks
+remain required. This fixes the separately observed read-only kept-note clipping failure; it does not establish the missing original carried-note
 "no measurable fragment" reproducer from #1217.
 
 For a keep-with-next heading followed by a kept citing paragraph (#1217), the read-only path

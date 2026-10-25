@@ -1,6 +1,8 @@
 import { test, expect, Page } from '@playwright/test';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { generateFootnoteDocx, generateNormalKeptNoteDocx } from './docx-footnote-fixture.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -313,5 +315,29 @@ for (const compatibilityMode of [14, undefined]) {
     expect(layout.body.reduce((sum, count) => sum + count, 0)).toBe(30);
     expect(layout.notes.join(' ').match(/footnote-1-1-\d+/g)).toEqual(
       Array.from({ length: 1200 }, (_, i) => `footnote-1-1-${i + 1}`));
+  });
+}
+
+// These exact native inputs expose a cumulative natural-line-height error that
+// the 15pt exact-spacing controls cannot: mode 14 put lines 54 and 109 one page early.
+const longNoteWordCases: { id: string; inputSha256: string; pages: number; markerPages: Record<string, number> }[] = JSON.parse(
+  readFileSync(new URL('../../TestFiles/KeptNoteFlow/word-observations.json', import.meta.url), 'utf8')).cases;
+for (const c of longNoteWordCases) {
+  test(`Word long kept note native pages: ${c.id}`, async ({ page }) => {
+    const input = readFileSync(new URL(`../../TestFiles/KeptNoteFlow/${c.id}.docx`, import.meta.url));
+    expect(createHash('sha256').update(input).digest('hex')).toBe(c.inputSha256);
+    const layout = await paginate(page, new Uint8Array(input), true, true);
+    expect(layout.body.length).toBe(c.pages);
+    expect(layout.bodyVisible.every(Boolean)).toBe(true);
+    expect(layout.notesVisible.every(Boolean)).toBe(true);
+    const actual = await page.locator('#pagination-container .page-box').evaluateAll(boxes => {
+      const pages: Record<string, number[]> = {};
+      boxes.forEach((box, index) => {
+        for (const match of box.textContent!.matchAll(/Spruce(?:Body\d{2}|LongNote\d{3})/g))
+          (pages[match[0]] ??= []).push(index + 1);
+      });
+      return pages;
+    });
+    expect(actual).toEqual(Object.fromEntries(Object.entries(c.markerPages).map(([marker, page]) => [marker, [page]])));
   });
 }

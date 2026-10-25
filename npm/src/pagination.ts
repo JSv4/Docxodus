@@ -4714,10 +4714,13 @@ export class PaginationEngine {
             // boundaries used during body flow; if it is indivisible, preserve the established
             // visible clipped fallback while still advancing the queue.
             const source = this.footnoteRegistry.get(footnoteId);
+            // Fragment probes measure the exact painted payload, as carried
+            // continuations do. The whole-note guard above must not also shrink
+            // this physical band and discard a line that actually fits.
             const split = source
               ? this.splitFootnoteToFit(
                 source,
-                maxFootnoteHeight - FOOTNOTE_MEASUREMENT_GUARD_PT,
+                maxFootnoteHeight,
                 ownedDimensions.contentWidth,
                 true,
               )
