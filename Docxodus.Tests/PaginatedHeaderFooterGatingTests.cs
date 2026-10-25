@@ -39,7 +39,8 @@ public class PaginatedHeaderFooterGatingTests
         bool? footnoteLayoutLikeWord8 = null,
         bool includeGatedReferences = true,
         bool emitDisabledTitlePage = false,
-        bool emitDisabledEvenAndOddHeaders = false)
+        bool emitDisabledEvenAndOddHeaders = false,
+        int? compatibilityMode = null)
     {
         using var ms = new MemoryStream();
         using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
@@ -52,9 +53,20 @@ public class PaginatedHeaderFooterGatingTests
             var settings = new Settings();
             if (evenAndOddHeaders || emitDisabledEvenAndOddHeaders)
                 settings.Append(new EvenAndOddHeaders { Val = evenAndOddHeaders });
-            if (footnoteLayoutLikeWord8.HasValue)
-                settings.Append(new Compatibility(new FootnoteLayoutLikeWord8
-                    { Val = footnoteLayoutLikeWord8.Value }));
+            if (footnoteLayoutLikeWord8.HasValue || compatibilityMode.HasValue)
+            {
+                var compatibility = new Compatibility();
+                if (footnoteLayoutLikeWord8.HasValue)
+                    compatibility.Append(new FootnoteLayoutLikeWord8 { Val = footnoteLayoutLikeWord8.Value });
+                if (compatibilityMode.HasValue)
+                    compatibility.Append(new CompatibilitySetting
+                    {
+                        Name = CompatSettingNameValues.CompatibilityMode,
+                        Uri = "http://schemas.microsoft.com/office/word",
+                        Val = compatibilityMode.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    });
+                settings.Append(compatibility);
+            }
             main.AddNewPart<DocumentSettingsPart>().Settings = settings;
 
             body.Append(new Paragraph(new Run(new Text("Body paragraph."))));
@@ -263,6 +275,21 @@ public class PaginatedHeaderFooterGatingTests
         Assert.DoesNotContain("data-footnote-layout-like-word8", without);
         Assert.DoesNotContain("data-footnote-layout-like-word8", explicitlyDisabled);
         Assert.Contains("data-footnote-layout-like-word8=\"true\"", with);
+    }
+
+    [Theory]
+    [InlineData(null, "14")]
+    [InlineData(14, "14")]
+    [InlineData(15, "15")]
+    public void PHF005b_CompatibilityModeSurvivesEmbeddingPaginatedHtml(int? mode, string expected)
+    {
+        var root = XElement.Parse(PaginatedHtml(BuildDoc(
+            titlePg: false, evenAndOddHeaders: false, compatibilityMode: mode)));
+        Assert.Equal(expected, (string?)root.Element(Xhtml.body)?.Attribute("data-docx-compatibility-mode"));
+        // Embedding the complete HTML in a div drops its body tag. Staging must
+        // carry the same mode so the public paginateHtml path retains the policy.
+        var staging = Assert.Single(root.Descendants().Where(e => (string?)e.Attribute("id") == "pagination-staging"));
+        Assert.Equal(expected, (string?)staging.Attribute("data-docx-compatibility-mode"));
     }
 
     [Fact]

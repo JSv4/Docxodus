@@ -3926,6 +3926,25 @@ to a note-only page (#1217). The continuation path places that indivisible block
 preserving later body text and note order. The read-only split/clip fallback stays separate; this
 editor placement rule does not claim that Word clips an oversized kept paragraph.
 
+With paragraph fragmentation enabled, oversized kept note paragraphs split without clipping once
+their keep can no longer be satisfied. Their first placement depends on compatibility mode. Matched
+Word for the web exports captured on 2026-10-25 change only the settings part and its package
+declarations; the body, note, styles and page geometry stay unchanged:
+
+| Source | Compatibility 15 | Compatibility 14 or omitted |
+|---|---|---|
+| Two body lines; the first cites one kept 21-line note; 400 x 320pt page, 10pt margins, 15pt exact lines | Both body lines on p1; note alone on p2/p3, split 19/2 lines | Citation and 18 note lines on p1; following body and last three note lines on p2 |
+| Thirty body paragraphs; the first cites a kept 1,200-word note; Letter page, 1in margins | All body on p1; note alone on p2-p5 | Citation and note start on p1; note continues alone on p2/p3; body resumes beside the note's end on p4, finishing on p5 |
+
+The paginator therefore preserves the whole-note deferral in mode 15. Older modes relax an oversized
+keep beside a fresh citation. Both paths retain the safe-inline fragmentation checks, source
+identities, and widow control: the default or explicit on preserves two trailing lines; explicit off
+permits one. A kept paragraph reaching an empty continuation band is split there rather than clipped
+as a whole. The converter carries compatibility mode on staging as well as the body, because
+embedding complete HTML in a viewer discards the body tag. This fixes the separately observed
+read-only kept-note clipping failure; it does not establish the missing original carried-note
+"no measurable fragment" reproducer from #1217.
+
 For a keep-with-next heading followed by a kept citing paragraph (#1217), the read-only path
 tries the chain on a fresh page once. If its note still cannot start beside it, the heading may
 remain while the paragraph moves; on a fresh page, that paragraph may relax keep-lines and split

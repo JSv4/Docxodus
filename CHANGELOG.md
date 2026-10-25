@@ -75,6 +75,9 @@ All notable changes to this project will be documented in this file.
   and spacing multiples. Matching browser line breaks preserve flow geometry while vector
   paint uses unrounded font advances for word positions and alignment (#1124).
 
+- Read-only pagination splits oversized kept footnote paragraphs without clipping their text.
+  Word compatibility mode 15 defers the whole note before splitting; older modes can begin it
+  beside its citation. Source identities and widow control survive continuation (#1217).
 - Paginated kept citing paragraphs retry their heading chain once, then relax keeps with Word's
   widow/orphan rule when needed. Dense note chains may defer a whole later note, and body text
   resumes where a newly split note ends. Default separator rules reserve their font's natural

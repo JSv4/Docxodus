@@ -3952,8 +3952,13 @@ export class PaginationEngine {
           continue;
         }
 
+        // A kept paragraph that reaches an otherwise empty continuation band has
+        // exhausted its fresh-page retry. Word relaxes the keep here, preserving
+        // the source metadata and the usual safe-inline fragmentation guard.
+        const relaxKeepLines = this.fragmentParagraphs && fitting.length === 0
+          && candidate.dataset.keepLines === "true";
         const canSplitCandidate = candidate.tagName === "P"
-          && this.canRangeFragmentParagraph(candidate);
+          && this.canRangeFragmentParagraph(candidate, false, false, relaxKeepLines);
         // Keep the source attached between probes so nested paragraphs retain their actual
         // table-cell styles when the shared fragmenter checks whether a range split is safe.
         const fitsCandidate = (head: HTMLElement) => {
@@ -3975,6 +3980,7 @@ export class PaginationEngine {
             // A continuation page owns the full note band. If even one legal
             // grapheme is taller than it, clip only that unit and keep draining.
             forceFirstOnNoFit: fitting.length === 0,
+            preserveWidowLines: relaxKeepLines && candidate.dataset.widowControl !== "false",
           });
         }
         const tableSplit = split?.kind === "split" ? null
@@ -4102,7 +4108,7 @@ export class PaginationEngine {
     contentWidth: number,
     forceProgress = false,
     existingPayload?: FootnotePackingContext,
-  ): { fits: HTMLElement[]; overflow: HTMLElement[] } {
+  ): { fits: HTMLElement[]; overflow: HTMLElement[]; keptParagraph?: boolean } {
     // Registry entries are detached clones, so getComputedStyle() cannot validate
     // their real paragraph layout. Attach an exact clone in the rendered note
     // context for the duration of the conservative range-fragmentation check.
@@ -4177,6 +4183,7 @@ export class PaginationEngine {
       const children = Array.from(footnoteContent.children) as HTMLElement[];
       const fits: HTMLElement[] = [];
       let overflow: HTMLElement[] = [];
+      let keptParagraph = false;
 
       for (let i = 0; i < children.length; i++) {
         this.checkpoint();
@@ -4200,7 +4207,15 @@ export class PaginationEngine {
             head.remove();
           }
         };
-        const split = this.canRangeFragmentParagraph(child, true)
+        keptParagraph = this.fragmentParagraphs && fits.length === 0
+          && child.dataset.keepLines === "true"
+          && this.canRangeFragmentParagraph(child, true, false, true);
+        // Word mode 15 retries the whole kept note on its own page. Older modes
+        // relax an oversized keep beside the citation; the caller probes a fresh
+        // band before requesting forced progress. Complex inline content keeps
+        // its existing conservative fallback in both modes.
+        const relaxKeepLines = keptParagraph && forceProgress;
+        const split = this.canRangeFragmentParagraph(child, true, false, relaxKeepLines)
           ? this.splitParagraphAtLargestFit(child, fitsCandidate, {
             // Both fallbacks cut where ordinary line breaking would not, so they
             // are only ever right for an element that owns the whole band: with
@@ -4208,6 +4223,7 @@ export class PaginationEngine {
             // start belongs intact in the next note band.
             emergencyGraphemeBreaks: fits.length === 0 && forceProgress,
             forceFirstOnNoFit: fits.length === 0 && forceProgress,
+            preserveWidowLines: relaxKeepLines && child.dataset.widowControl !== "false",
           })
           : null;
         const tableSplit = split ? null
@@ -4245,7 +4261,7 @@ export class PaginationEngine {
         break;
       }
 
-      return { fits, overflow };
+      return { fits, overflow, keptParagraph };
     } finally {
       measureContainer.remove();
       layoutContext.remove();
@@ -4893,6 +4909,8 @@ export class PaginationEngine {
         nextBlockPageInSection,
         displayedPageNumber(block.sectionIndex, nextBlockPageInSection, pageNumber + 1),
       ).bodyHeight;
+      const freshBlockHeight = block.heightPt
+        + this.effectiveBlockMarginTop(block, 0, true, nextBlockPageInSection);
 
       // Handle explicit page breaks
       if (block.isPageBreak) {
@@ -5163,14 +5181,7 @@ export class PaginationEngine {
           currentFootnoteHeight = combinedFootnoteHeight;
         }
         currentPageHasFootnoteReference ||= allBlockFootnoteIds.length > 0;
-      } else if (
-        block.heightPt + this.effectiveBlockMarginTop(
-          block,
-          0,
-          true,
-          pageInSection(block.sectionIndex, pageNumber + 1),
-        ) <= freshBlockPageBodyHeight
-      ) {
+      } else if (freshBlockHeight <= freshBlockPageBodyHeight) {
         // Block doesn't fit with current allocation - try expanding footnote area
         const blockSpaceWithoutFootnotes = effectiveMarginTop + block.heightPt;
 
@@ -5201,8 +5212,7 @@ export class PaginationEngine {
               continue;
             }
             const canMoveWhole = this.isWordParagraphElement(block.element) || (table
-              && this.notesCanStartOnPage(newFootnoteIds, freshBlockPageBodyHeight - block.heightPt
-                - this.effectiveBlockMarginTop(block, 0, true, pageInSection(block.sectionIndex, pageNumber + 1)),
+              && this.notesCanStartOnPage(newFootnoteIds, freshBlockPageBodyHeight - freshBlockHeight,
               blockDimensions.contentWidth, { footnoteIds: [], continuation: null, partialFootnotes: [] }, false));
             // A preceding keep-with-next block belongs with the citation; the chain path owns it.
             if (currentContent.length > 0 && canMoveWhole
@@ -5273,7 +5283,7 @@ export class PaginationEngine {
                   continuation: currentContinuation,
                   partialFootnotes: currentPartialFootnotes,
                 };
-                let { fits, overflow } = this.splitFootnoteToFit(
+                let { fits, overflow, keptParagraph } = this.splitFootnoteToFit(
                   footnote,
                   availableForFootnotes,
                   blockDimensions.contentWidth,
@@ -5285,9 +5295,12 @@ export class PaginationEngine {
                 const firstPart = footnote.querySelector<HTMLElement>(":scope > .footnote-content")?.firstElementChild;
                 const deferKeptEditorNote = !this.fragmentParagraphs
                   && firstPart instanceof this.view.HTMLElement && firstPart.dataset.keepLines === "true";
-                if (!deferKeptEditorNote && fits.length === 0 && !deferralCannotHelp
-                  && this.splitFootnoteToFit(footnote, nextPageMaxFootnoteArea,
-                    blockDimensions.contentWidth).fits.length === 0) {
+                if (!deferKeptEditorNote
+                  && !(keptParagraph && Number(this.stagingElement.dataset.docxCompatibilityMode) >= 15)
+                  && fits.length === 0 && !deferralCannotHelp
+                  && this.splitFootnoteToFit(footnote, keptParagraph
+                    ? nextPageMaxFootnoteArea - freshBlockHeight
+                    : nextPageMaxFootnoteArea, blockDimensions.contentWidth).fits.length === 0) {
                   ({ fits, overflow } = this.splitFootnoteToFit(
                     footnote, availableForFootnotes, blockDimensions.contentWidth, true, payload));
                 }

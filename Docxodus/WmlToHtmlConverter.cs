@@ -7300,6 +7300,7 @@ namespace Docxodus
                     new XElement(Xhtml.div,
                         new XAttribute("id", "pagination-staging"),
                         new XAttribute("class", prefix + "staging"),
+                        new XAttribute("data-docx-compatibility-mode", ReadCompatibilityMode(wordDoc)),
                         useWord8FootnoteLayout
                             ? new XAttribute("data-footnote-layout-like-word8", "true")
                             : null,
