@@ -9,6 +9,7 @@
  */
 
 const PREPARED = 'data-docx-word-text-prepared';
+// A positive value carries fitted-line natural height; zero certifies unchanged line choices.
 const FITTED_RUN = 'data-docx-word-fit';
 const FITTED_LINE = 'data-docx-word-line';
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -92,7 +93,8 @@ function plainRun(paragraph: HTMLElement, rightToLeft = false): HTMLElement | nu
   const text = run.textContent ?? '';
   // Other scripts need their own fallback-font metrics, shaping and bidi model.
   if (!text.trim() || /^\s/.test(text) || (!rightToLeft && !/^[\u0020-\u024f]*$/u.test(text))) return null;
-  if (Array.from(run.attributes).some(a => !['class', 'style', 'lang', 'dir', ...(fitted ? [FITTED_RUN] : [])].includes(a.name))) return null;
+  if (Array.from(run.attributes).some(a => !['class', 'style', 'lang', 'dir',
+    ...(fitted || run.getAttribute(FITTED_RUN) === '0' ? [FITTED_RUN] : [])].includes(a.name))) return null;
   const style = view.getComputedStyle(run);
   const parent = view.getComputedStyle(paragraph);
   if (['Top', 'Right', 'Bottom', 'Left'].some(side =>
@@ -100,6 +102,7 @@ function plainRun(paragraph: HTMLElement, rightToLeft = false): HTMLElement | nu
     parent.getPropertyValue(`border-${side.toLowerCase()}-width`) !== '0px')) return null;
   if (parent.direction !== (rightToLeft ? 'rtl' : 'ltr') || parent.writingMode !== 'horizontal-tb' ||
       style.display !== 'inline' || !['static', 'relative'].includes(style.position) ||
+      (style.position === 'relative' && (style.left !== '0px' || style.right !== '0px')) ||
       style.textTransform !== 'none' || style.fontVariantCaps !== 'normal' ||
       style.textDecorationLine !== 'none' || !['normal', '0px'].includes(style.letterSpacing) ||
       !['normal', '100%'].includes(style.fontStretch) ||
@@ -249,10 +252,10 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
       spaces: words.slice(start, best).reduce((n, w) => n + w.spaces, 0), available });
     start = best + 1;
   }
-  // Natural-space flow needs no replacement when its measured breaks already
-  // agree. Keep those existing glyph positions and inline block geometry;
-  // font-advance fitting is needed only at a differing break or modern gap choice.
-  if (!modernJustification && run.childNodes.length === 1 && run.firstChild?.nodeType === 3) {
+  // A measured flow needs no replacement when its complete line choices agree.
+  // Preserve those glyph positions and inline block geometry in either mode;
+  // the font-advance fitter owns lines whose chosen contents differ.
+  if (run.childNodes.length === 1 && run.firstChild?.nodeType === 3) {
     const measured: string[] = [];
     let offset = 0, top = NaN;
     for (const word of words) {
@@ -267,7 +270,17 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
       offset += word.text.length;
     }
     if (offset === text.length && rows.length === measured.length &&
-        rows.every((row, index) => row.text === measured[index])) return false;
+        rows.every((row, index) => row.text === measured[index])) {
+      // The painter owns vertical baselines. Removing a baseline-only relative
+      // offset leaves inline flow and word X positions intact, while allowing
+      // the existing safe-fragment guard to handle this otherwise plain run.
+      if (runStyle.position === 'relative' && runStyle.left === '0px' && runStyle.right === '0px') {
+        run.style.position = 'static';
+        run.style.top = '0';
+      }
+      run.setAttribute(FITTED_RUN, '0');
+      return false;
+    }
   }
   const previousStyle = run.getAttribute('style');
   const fragment = run.ownerDocument.createDocumentFragment();

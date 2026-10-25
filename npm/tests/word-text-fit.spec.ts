@@ -42,10 +42,12 @@ for (const source of observations.cases) {
   });
 }
 
+for (const position of ['static', 'relative']) {
 for (const source of observations.cases) {
-  test(`${source.id} retains native page membership through paragraph continuation`, async ({ page }) => {
+  test(`${source.id} retains native page membership through paragraph continuation (${position})`, async ({ page }) => {
     await page.setContent(`<style>p{font:${source.fontSizePt}pt 'Liberation Serif',serif;line-height:normal;
-      margin:0 0 6pt;--docx-auto-line-spacing:1.15} .run{white-space:pre-wrap;position:static;
+      margin:0 0 6pt;--docx-auto-line-spacing:1.15} .run{white-space:pre-wrap;position:${position};
+      top:min(0px,calc(1lh * (1/1.15 - 1)/2));
       line-height:calc(1lh * 1.15);--docx-font-kerning:none}</style><div id="staging" data-docx-compatibility-mode="15"><div data-section-index="0"
       data-page-width="612" data-page-height="792" data-content-width="468" data-content-height="648"
       data-margin-top="72" data-margin-bottom="72" data-margin-left="72" data-margin-right="72">
@@ -79,4 +81,5 @@ for (const source of observations.cases) {
     expect(actual.before).toEqual(actual.after);
     expect(actual.lines).toEqual(source.paragraphs.map((p: any) => p.nativeLines.map((words: string[], i: number) => ({page:p.nativeLinePages[i], words}))));
   });
+}
 }

@@ -52,6 +52,7 @@ for (const [name, content] of [
   ['picture', '<img width="20" height="20">'],
   ['inline picture', '<p><span><img width="20" height="20"></span><span class="run">Inline picture text</span></p>'],
   ['positioned picture', '<p><span><span style="float:left;position:relative"><img width="20" height="20"></span></span><span class="run">Positioned picture text</span></p>'],
+  ['horizontally shifted text', '<p><span class="run" style="white-space:pre-wrap;position:relative;left:3pt">Shifted text</span></p>'],
   ['table', '<table><tr><td>Cell</td></tr></table>'],
   ['note', '<a class="footnote-ref">1</a>'],
   ['columns with rich text', '<section data-cols="2"><p><span class="run"><b>Rich column</b></span></p></section>'],
@@ -292,8 +293,8 @@ test('modern Word can compress a final justified line that exceeds its natural w
   expect(actual.end).toBeCloseTo(actual.width, 2);
 });
 
-for (const mode of ['', 'data-docx-compatibility-mode="14"']) {
-  test(`unchanged legacy line choices preserve their measured word starts (${mode || 'omitted mode'})`, async ({ page }) => {
+for (const mode of ['', 'data-docx-compatibility-mode="14"', 'data-docx-compatibility-mode="15"']) {
+  test(`unchanged line choices preserve their measured word starts (${mode || 'omitted mode'})`, async ({ page }) => {
     await page.setContent(`${styles}<style>.run{white-space:pre-wrap;position:static;font-kerning:none}</style><main ${mode}>
       <p style="width:468pt;font-size:16pt;font-weight:bold"><span class="run">Service agreement layout</span></p>
       <p style="width:468pt;text-align:justify"><span class="run">The parties will inspect the sample, record the agreed date, and send the written schedule to the project office. Each report includes the measured quantity and the name of the person responsible for the next review.</span></p>

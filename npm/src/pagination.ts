@@ -2930,6 +2930,34 @@ export class PaginationEngine {
       const natural = Number(run?.dataset.docxWordFit);
       if (last && natural > 0 && natural < parseFloat(run!.style.lineHeight))
         last.style.lineHeight = `${natural}px`;
+      else if (run?.dataset.docxWordFit === "0") {
+        // An unchanged inline flow has no private line boxes. Measure its
+        // complete prefix in the laid-out source, then trim only this head.
+        const plain = run;
+        const text = paragraph.firstElementChild?.firstChild;
+        const height = parseFloat(plain.style.getPropertyValue("--docx-word-native-height"));
+        const pitch = parseFloat(plain.style.lineHeight);
+        if (!plain.children.length && text?.nodeType === 3 && range.endContainer === text && height > 0 && pitch > height) {
+          let end = range.endOffset;
+          const content = text.textContent!;
+          while (end > 0 && /\s/.test(content[end - 1])) {
+            if ((end & 255) === 0) this.checkpoint();
+            end--;
+          }
+          if (end > 0) {
+            const glyph = range.cloneRange();
+            glyph.setStart(text, 0); glyph.setEnd(text, 1);
+            const firstBox = glyph.getBoundingClientRect();
+            glyph.setStart(text, end - 1); glyph.setEnd(text, end);
+            const lastBox = glyph.getBoundingClientRect();
+            if (firstBox.height > 0 && lastBox.height > 0 && lastBox.top >= firstBox.top) {
+              const lines = Math.round((lastBox.top - firstBox.top) / pitch);
+              fragment.style.setProperty("--docx-word-text-height", `${lines * pitch + height}px`);
+              fragment.style.height = "var(--docx-word-text-height)";
+            }
+          }
+        }
+      }
       // A page break is not the end of the source paragraph: its last line
       // still takes the paragraph's justification rather than last-line alignment.
       if (this.view.getComputedStyle(paragraph).textAlign === "justify")
