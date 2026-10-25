@@ -3166,7 +3166,7 @@ namespace Docxodus
         /// both follow it in the style element and therefore win a specificity tie.
         /// </summary>
         /// <remarks>
-        /// Two of Word's layout invariants have no CSS default that matches them:
+        /// Word's layout invariants have no matching CSS defaults:
         ///
         /// 1. <b>A word wider than its column is broken, not overflowed.</b> Word and LibreOffice
         ///    break an over-long word at the column edge. CSS's initial <c>overflow-wrap: normal</c>
@@ -3198,6 +3198,9 @@ namespace Docxodus
         ///    intermediate ancestor such as the editor chrome's root does NOT protect the
         ///    document inside it), so it is emitted on every element of the document rather
         ///    than only on <c>body</c>.
+        /// 5. <b>Ordinary spaces retain their width and their breakability.</b> Nonbreaking-space
+        ///    substitution changes justification and soft wrapping. Preserve source characters and
+        ///    use <c>white-space: pre-wrap</c> on runs, including for direct converter callers.
         /// </remarks>
         private static string GenerateDocumentLayoutCss()
         {
@@ -3205,6 +3208,9 @@ namespace Docxodus
             sb.AppendLine("/* Document layout CSS — Word's layout invariants, which CSS defaults do not match. */");
             sb.AppendLine("body {");
             sb.AppendLine("    overflow-wrap: break-word;");
+            sb.AppendLine("}");
+            sb.AppendLine("span {");
+            sb.AppendLine("    white-space: pre-wrap;");
             sb.AppendLine("}");
             sb.AppendLine("body, body * {");
             sb.AppendLine("    -webkit-text-size-adjust: 100%;");
@@ -3541,10 +3547,10 @@ namespace Docxodus
             // Transform every w:t element to a text node.
             if (element.Name == W.t)
             {
-                // Convert significant whitespace to &nbsp; entities to match LibreOffice behavior.
-                // This allows HTML to be formatted (with newlines/indentation) without affecting
-                // the rendered output, since whitespace between elements will collapse normally.
-                return ConvertTextWithNbsp(element.Value);
+                // Keep ordinary spaces breakable and explicit NBSPs nonbreaking. The document's
+                // intrinsic pre-wrap rule preserves their widths without changing justification
+                // opportunities or soft-wrap boundaries (#1124).
+                return new XText(element.Value);
             }
 
             // The legacy page-number block is visible, non-editable decimal
@@ -3788,80 +3794,6 @@ namespace Docxodus
 
             // Ignore element.
             return null;
-        }
-
-        /// <summary>
-        /// Converts text content to use non-breaking space characters for significant whitespace.
-        /// This matches LibreOffice's approach and allows HTML to be formatted without
-        /// affecting the rendered output.
-        /// </summary>
-        private static object ConvertTextWithNbsp(string text)
-        {
-            if (string.IsNullOrEmpty(text))
-                return new XText("");
-
-            var result = new List<object>();
-            int i = 0;
-            int len = text.Length;
-
-            while (i < len)
-            {
-                // Find the start of the next space sequence
-                int spaceStart = i;
-                while (spaceStart < len && text[spaceStart] != ' ')
-                    spaceStart++;
-
-                // Add any non-space text before this point
-                if (spaceStart > i)
-                {
-                    result.Add(new XText(text.Substring(i, spaceStart - i)));
-                }
-
-                if (spaceStart >= len)
-                    break;
-
-                // Count consecutive spaces
-                int spaceEnd = spaceStart;
-                while (spaceEnd < len && text[spaceEnd] == ' ')
-                    spaceEnd++;
-
-                int spaceCount = spaceEnd - spaceStart;
-
-                // Convert spaces: use &nbsp; for preservation
-                // For multiple spaces, alternate nbsp and regular space to allow some flexibility
-                // For single spaces at start/end of text, use nbsp to prevent collapse
-                bool atStart = spaceStart == 0;
-                bool atEnd = spaceEnd == len;
-
-                if (spaceCount == 1 && !atStart && !atEnd)
-                {
-                    // Single space in the middle - keep as regular space
-                    result.Add(new XText(" "));
-                }
-                else
-                {
-                    // Multiple spaces, or space at boundary - use non-breaking space
-                    // Use Unicode character \u00A0 instead of &nbsp; entity for XML compatibility
-                    for (int j = 0; j < spaceCount; j++)
-                    {
-                        // Alternate between nbsp and regular space for runs of spaces
-                        // This preserves the spacing while allowing some flexibility
-                        if (j % 2 == 0 || spaceCount == 1)
-                            result.Add(new XText("\u00A0"));
-                        else
-                            result.Add(new XText(" "));
-                    }
-                }
-
-                i = spaceEnd;
-            }
-
-            // If only one item, return it directly; otherwise return the list
-            if (result.Count == 0)
-                return new XText("");
-            if (result.Count == 1)
-                return result[0];
-            return result;
         }
 
         private static object ProcessHyperlinkToBookmark(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element)
@@ -10427,12 +10359,9 @@ namespace Docxodus
         // We only need to make sure that visually empty w:p elements are translated into non-empty
         // h:p elements, because an h:p with no rendered inline content produces no line box.
         //
-        // Ordinary run whitespace is NOT substituted here: consumers emit "span { white-space:
-        // pre-wrap; }" (see HtmlConversionOps), under which a real space keeps its own width, and
-        // substituting NBSP would change the layout behavior of consecutive spaces. The synthesized
-        // placeholder below is the single exception, and even there the literal is cosmetic —
-        // ConvertTextWithNbsp already maps a lone boundary space to U+00A0 downstream, so writing
-        // the placeholder as NBSP states the intent rather than changing the emitted bytes.
+        // Ordinary run whitespace stays unchanged: the intrinsic pre-wrap rule preserves its width
+        // and its original breaking semantics. An otherwise empty paragraph still needs the literal
+        // NBSP placeholder below so HTML produces a line box.
         private static object InsertAppropriateNonbreakingSpacesTransform(XNode node)
         {
             XElement? element = node as XElement;
