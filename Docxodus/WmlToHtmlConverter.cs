@@ -6408,7 +6408,10 @@ namespace Docxodus
                 ? WordprocessingMLUtil.AttributeToTwips(tblInd!.Attribute(W._w)) / 20m
                 : null;
             var leadingEdge = indent;
-            if (tblpPr == null && (string?)element.Attribute(LegacyTableIndentAttribute) is { } legacyIndent)
+            // Formatting assembly has now resolved alignment inherited from a table style.
+            var jc = (string?)element.Elements(W.tblPr).Elements(W.jc).Attributes(W.val).FirstOrDefault() ?? "left";
+            if (tblpPr == null && jc is "left" or "start"
+                && (string?)element.Attribute(LegacyTableIndentAttribute) is { } legacyIndent)
             {
                 // Before compatibility mode 15 Word centres the leading border on the indent, and when
                 // the table states an indent or has a style it also pulls the table out by the first
@@ -6510,7 +6513,6 @@ namespace Docxodus
                     }
                 }
             }
-            var jc = (string?)element.Elements(W.tblPr).Elements(W.jc).Attributes(W.val).FirstOrDefault() ?? "left";
             XAttribute? dir = null;
             XAttribute? jcToUse = null;
             if (bidiVisual)

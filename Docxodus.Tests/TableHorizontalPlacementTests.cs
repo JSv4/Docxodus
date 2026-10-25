@@ -157,6 +157,17 @@ public class TableHorizontalPlacementTests
         Assert.Equal("0", Table(html)["margin-left"]);
     }
 
+    [Theory]
+    [InlineData("center")]
+    [InlineData("right")]
+    public void Style_inherited_alignment_is_resolved_before_applying_a_legacy_pull(string alignment)
+    {
+        var styles = "<w:style w:type=\"table\" w:styleId=\"Grid\"><w:name w:val=\"Grid\"/><w:tblPr>"
+            + "<w:tblInd w:w=\"0\" w:type=\"dxa\"/><w:jc w:val=\"" + alignment + "\"/>" + Margins108 + "</w:tblPr></w:style>";
+        var html = Convert(Table(props: "<w:tblStyle w:val=\"Grid\"/>"), mode: "14", styles: styles);
+        Assert.Equal("0", Table(html)["margin-left"]);
+    }
+
     [Fact]
     public void Before_mode_15_a_nested_table_is_not_pulled_out()
     {

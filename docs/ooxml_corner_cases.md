@@ -2849,7 +2849,9 @@ an additional width error: the HTML column group included a leading column omitt
 so CSS applied that column's width to the first actual cell and split `BravoCell` and `gridBefore.`.
 The column group now skips only a grid prefix omitted by all of the table's own rows. Nested rows
 use their own grid, rows wrapped in content controls still count, and a column used by another row
-is retained. The first-cell indent lookup also follows cells inside content controls.
+is retained. The first-cell indent lookup also follows cells inside content controls. The correction checks
+resolved alignment after formatting assembly, so a centred or right-aligned table inherits the
+same placement whether alignment is stated directly or through its table style.
 
 The original nested CI input has two SDK property-order findings and requests Liberation Serif,
 which Word substitutes. Its untouched native capture remains an ineligible diagnostic. Two SDK-valid
