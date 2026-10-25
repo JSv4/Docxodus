@@ -174,4 +174,27 @@ test('a note table repeats its header row on the page it continues on', async ({
   expect(pages[1].firstRow).toMatch(/Note table heading\.$/);
   expect(pages.flatMap((p) => p.rows)).toEqual(range(1, 80));
 });
-
+test('a note cell with unsupported bare text keeps its complete source content', async ({ page }) => {
+  const rows = Array.from({ length: 30 }, (_, i) => `<p>RawLine${i + 1}</p>`).join('');
+  await page.setContent(`<style>body{font:12pt/15pt serif}p{margin:0}td{vertical-align:top;padding:0}</style>
+    <div id="staging"><div id="pagination-footnote-registry"><div class="footnote-item" data-footnote-id="1">
+      <span class="footnote-number">1</span><div class="footnote-content"><table><tbody><tr><td>RawPrefix${rows}</td></tr></tbody></table></div>
+      </div></div><section data-section-index="0" data-page-width="400" data-page-height="320"
+      data-content-width="380" data-content-height="300" data-margin-top="10" data-margin-bottom="10"
+      data-margin-left="10" data-margin-right="10"><p>Cite<sup data-footnote-id="1">1</sup></p><p>BodyTail</p></section></div><div id="container"></div>`);
+  await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
+  const actual = await page.evaluate(() => {
+    const api = (window as any).DocxodusPagination;
+    const result = new api.PaginationEngine(document.getElementById('staging'), document.getElementById('container'),
+      { showPageNumbers: false, fragmentParagraphs: true }).paginate();
+    return {
+      pages: result.totalPages,
+      notes: Array.from(document.querySelectorAll('#container .page-footnotes'), n => n.textContent).join(' '),
+      body: document.querySelector('#container')!.textContent,
+    };
+  });
+  expect(actual.notes.match(/RawPrefix/g) ?? []).toHaveLength(1);
+  expect(actual.notes.match(/RawLine\d+/g)).toEqual(Array.from({ length: 30 }, (_, i) => `RawLine${i + 1}`));
+  expect(actual.body).toContain('BodyTail');
+  expect(actual.pages).toBeLessThan(5);
+});

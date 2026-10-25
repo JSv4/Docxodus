@@ -3743,6 +3743,14 @@ export class PaginationEngine {
       || Array.from(row.cells).some(cell => cell.rowSpan !== 1
         || this.view.getComputedStyle(cell).verticalAlign !== "top")) return fallback();
 
+    // DOCX cells contain blocks. Direct HTML callers can also supply bare text; the block
+    // partition below cannot represent it, so retain the whole row rather than dropping it.
+    if (Array.from(row.cells).some(cell => Array.from(cell.childNodes).some(node =>
+      node.nodeType !== this.view.Node.ELEMENT_NODE
+      && (node.nodeType !== this.view.Node.TEXT_NODE || (node.textContent ?? "").trim() !== "")))) {
+      return fallback();
+    }
+
     const emptyRow = row.cloneNode(false) as HTMLTableRowElement;
     for (const cell of Array.from(row.cells)) emptyRow.appendChild(cell.cloneNode(false));
     const wrapper = element === table ? null : element;
