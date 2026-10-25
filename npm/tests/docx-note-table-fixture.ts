@@ -7,7 +7,8 @@ import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
  * #1178; docs/ooxml_corner_cases.md).
  */
 export function generateNoteTableDocx(bodyLines: number, citingLine: number, rows: number, headerRow = false,
-  nested = false): Uint8Array {
+  shape: 'rows' | 'nested' | 'tall-row' = 'rows',
+  { columns = 1, singleParagraph = false, cantSplit = false } = {}): Uint8Array {
   const text = (value: string) => `<w:r><w:t xml:space="preserve">${value}</w:t></w:r>`;
   const reference = '<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="1"/></w:r>';
   const body = Array.from({ length: bodyLines }, (_, index) => {
@@ -17,17 +18,22 @@ export function generateNoteTableDocx(bodyLines: number, citingLine: number, row
   const paragraph = (value: string, first: boolean) => '<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>'
     + (first ? '<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r>' : '')
     + `${text(value)}</w:p>`;
-  const cell = (content: string) => '<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr>' + content + '</w:tc>';
-  const table = (content: string) => '<w:tbl><w:tblPr><w:tblW w:w="4000" w:type="dxa"/><w:tblBorders>'
+  const cell = (content: string, count = columns) => `<w:tc><w:tcPr><w:tcW w:w="${4000 / count}" w:type="dxa"/></w:tcPr>` + content + '</w:tc>';
+  const table = (content: string, count = columns) => '<w:tbl><w:tblPr><w:tblW w:w="4000" w:type="dxa"/><w:tblBorders>'
     + ['top', 'bottom', 'insideH'].map(side => `<w:${side} w:val="single" w:sz="4" w:space="0" w:color="000000"/>`).join('')
-    + '</w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid>'
+    + '</w:tblBorders></w:tblPr><w:tblGrid>' + `<w:gridCol w:w="${4000 / count}"/>`.repeat(count) + '</w:tblGrid>'
     + content
     + '</w:tbl>';
-  const paragraphs = Array.from({ length: rows }, (_, index) =>
-    paragraph(`Note table row ${String(index + 1).padStart(3, '0')}.`, index === 0 && !headerRow));
-  let noteTable = table((headerRow ? `<w:tr><w:trPr><w:tblHeader/></w:trPr>${cell(paragraph('Note table heading.', true))}</w:tr>` : '')
-    + paragraphs.map(p => `<w:tr>${cell(p)}</w:tr>`).join(''));
-  if (nested) noteTable = table(`<w:tr>${cell(noteTable + '<w:p/>')}</w:tr>`);
+  const labels = (col: number) => Array.from({ length: rows }, (_, i) => `${col === 0 ? 'Note' : 'Side'} table row ${String(i + 1).padStart(3, '0')}.`);
+  const paragraphs = Array.from({ length: columns }, (_, col) => labels(col).map((label, i) => paragraph(label, col === 0 && i === 0 && !headerRow)));
+  const rowContent = shape === 'tall-row' || singleParagraph
+    ? '<w:tr>' + (cantSplit ? '<w:trPr><w:cantSplit/></w:trPr>' : '') + paragraphs.map((items, col) => cell(singleParagraph
+      ? paragraph('', col === 0 && !headerRow).replace('</w:p>', labels(col).map(text).join('<w:r><w:br/></w:r>') + '</w:p>')
+      : items.join(''))).join('') + '</w:tr>'
+    : paragraphs[0].map((_, i) => '<w:tr>' + paragraphs.map(items => cell(items[i])).join('') + '</w:tr>').join('');
+  let noteTable = table((headerRow ? '<w:tr><w:trPr><w:tblHeader/></w:trPr>'
+    + Array.from({ length: columns }, (_, col) => cell(paragraph(col === 0 ? 'Note table heading.' : 'Side heading.', col === 0))).join('') + '</w:tr>' : '') + rowContent);
+  if (shape === 'nested') noteTable = table(`<w:tr>${cell(noteTable + '<w:p/>', 1)}</w:tr>`, 1);
   const separator = (type: string, id: number, mark: string) =>
     `<w:footnote w:type="${type}" w:id="${id}"><w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:${mark}/></w:r></w:p></w:footnote>`;
   const parts: Record<string, string> = {

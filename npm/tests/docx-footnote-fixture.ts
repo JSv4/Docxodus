@@ -74,6 +74,7 @@ function footnote(
  *   word counts for constructing notes with uneven continuation pressure.
  * @param noteParagraphProperties extra `w:pPr` children for every note paragraph, e.g. a
  *   hanging `w:ind`.
+ * @param firstCitationLine one-based body paragraph that cites the first note; later notes follow.
  */
 export function generateFootnoteDocx(
   noteCount = 1,
@@ -85,10 +86,12 @@ export function generateFootnoteDocx(
     continuationText?: string;
   } = {},
   noteParagraphProperties = '',
+  firstCitationLine = 1,
 ): Uint8Array {
   const noteIds = Array.from({ length: noteCount }, (_, i) => i + 1);
   const body = Array.from({ length: bodyLines }, (_, i) =>
-    bodyParagraph(i, i < noteCount ? i + 1 : null)).join('');
+    bodyParagraph(i, i >= firstCitationLine - 1 && i < firstCitationLine - 1 + noteCount
+      ? i - firstCitationLine + 2 : null)).join('');
 
   const separatorRun = (marker: 'separator' | 'continuationSeparator', text?: string) =>
     `<w:p><w:r><w:${marker}/>${text ? `<w:t xml:space="preserve"> ${text}</w:t>` : ''}</w:r></w:p>`;

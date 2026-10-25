@@ -3871,8 +3871,25 @@ synthetic nonbreaking-space run. Its descendant box protruded from the note area
 PDF verification rejected it as clipped. `WmlToHtmlConverter` now skips that placeholder for
 paragraphs marked as structural table ends and gives the empty paragraph a one-twip minimum
 height. Its source anchor remains measurable; explicit paragraph formatting and ordinary blank
-paragraphs retain their normal rendering. This does not add splitting inside oversized rows or
-nested note tables.
+paragraphs retain their normal rendering. Oversized rows and nested note tables use the separate
+content-splitting path below.
+
+For oversized note tables (#1217), `splitNoteTable` first tries complete row groups, then fills
+an ordinary row's cells in one measured note band. It keeps complete paragraphs and keep chains
+where possible, and uses the existing range fragmenter or recurses into an inner table when a
+child cannot fit. Both the citation page and carried continuations use this path. Repeated
+headers and column widths survive, and shared fragment identity reconciliation keeps one editor
+anchor while retaining canonical source geometry on each page.
+
+The converter exposes `w:cantSplit` and declared row-height rules as row metadata, including when
+CSS classes are generated. Rows with those constraints, vertical merges or non-top alignment
+retain the indivisible fallback; a header alone is not split as ordinary data. These cases need
+separate layout rules. No clipping check or export verification rule is relaxed.
+
+With paragraph fragmentation disabled in the editor, an oversized kept note paragraph is deferred
+to a note-only page (#1217). The continuation path places that indivisible block once and advances,
+preserving later body text and note order. The read-only split/clip fallback stays separate; this
+editor placement rule does not claim that Word clips an oversized kept paragraph.
 
 ## Footnotes: a continued note stays last, and notes keep their order (issue #1179)
 

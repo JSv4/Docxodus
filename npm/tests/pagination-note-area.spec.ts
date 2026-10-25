@@ -1,6 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { generateFootnoteDocx } from './docx-footnote-fixture.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -64,18 +65,27 @@ interface Layout {
   band: number[];
   /** The note text each page shows. */
   notes: string[];
+  citationPage: number;
 }
 
-async function paginate(page: Page, html: string, fragmentParagraphs = true): Promise<Layout> {
+async function paginate(page: Page, html: string | Uint8Array, fragmentParagraphs = true): Promise<Layout> {
+  if (typeof html !== 'string') {
+    await page.goto('/test-harness.html');
+    await page.waitForFunction(() => (window as any).DocxodusReady === true);
+    html = await page.evaluate((input): string => (window as any).Docxodus.DocumentConverter.ConvertDocxToHtmlComplete(
+      new Uint8Array(input), 'Document', 'docx-', false, '', 0, 'comment-', 1, 1, 'page-', false, 0, 'annot-',
+      true, false, false, false, false, false, null, false), Array.from(html));
+  }
   await page.setContent(html);
   await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
   return page.evaluate((fragmentParagraphs) => {
     const { PaginationEngine } = (window as any).DocxodusPagination;
-    new PaginationEngine(document.getElementById('staging'), document.getElementById('container'), {
+    new PaginationEngine(document.querySelector('#staging, #pagination-staging'), document.querySelector('#container, #pagination-container'), {
       scale: 1, showPageNumbers: false, fragmentParagraphs,
     }).paginate();
-    const boxes = Array.from(document.querySelectorAll<HTMLElement>('#container .page-box'));
+    const boxes = Array.from(document.querySelectorAll<HTMLElement>('#container .page-box, #pagination-container .page-box'));
     return {
+      citationPage: boxes.findIndex(box => box.querySelector('.page-content [data-footnote-id]')) + 1,
       body: boxes.map((box) => box.querySelector('.page-content')!.children.length),
       bodyVisible: boxes.map((box) => {
         const content = box.querySelector<HTMLElement>('.page-content')!;
@@ -161,3 +171,58 @@ test.describe('Paginated note area', () => {
     expect(layout.body.reduce((sum, count) => sum + count, 0)).toBe(11);
   });
 });
+
+for (const lineCount of [10, 30]) {
+  test(`editor mode ${lineCount}-line kept note ${lineCount > 20 ? 'defers oversized paragraph' : 'fits beside citation'}`, async ({ page }) => {
+    const layout = await paginate(page, staging(
+      `${bodyLines(1, 5)}<p>cites${reference('1')}</p>${bodyLines(6, 5)}`,
+      note('1', [lines('kept note', lineCount)]).replace('<p>', '<p data-keep-lines="true">')), false);
+    expect(layout.bodyVisible.every(Boolean)).toBe(true);
+    expect(layout.body.reduce((sum, count) => sum + count, 0)).toBe(11);
+    if (lineCount > 20) {
+      expect(layout.notes[0]).toBe('');
+      expect(layout.notes[1]).toContain('kept note 1');
+      expect(layout.body[1]).toBe(0);
+    } else {
+      expect(layout.notes[0]).toContain('kept note 1');
+    }
+  });
+}
+
+for (const precedingNote of [false, true]) {
+  test(`editor oversized note advances alone ${precedingNote ? 'after an earlier note' : 'when cited first'}`, async ({ page }) => {
+    const layout = await paginate(page, staging(
+      `${precedingNote ? `<p>earlier${reference('1')}</p>` : ''}<p>cites${reference('2')}</p>${bodyLines(1, 5)}`,
+      (precedingNote ? note('1', ['earlier definition']) : '')
+        + note('2', [lines('oversized line', 30)]).replace('<p>', '<p data-keep-lines="true">')), false);
+    const ownPage = layout.notes.findIndex(text => text.includes('oversized line 1'));
+    expect(ownPage).toBeGreaterThan(0);
+    expect(layout.body[ownPage]).toBe(0);
+    expect(layout.bodyVisible.every(Boolean)).toBe(true);
+    expect(layout.body.reduce((sum, count) => sum + count, 0)).toBe(precedingNote ? 7 : 6);
+    expect(layout.notes.join(' ').match(/oversized line \d+/g)).toEqual(
+      Array.from({ length: 30 }, (_, index) => `oversized line ${index + 1}`));
+    if (precedingNote) expect(layout.notes[0]).toContain('earlier definition');
+    expect(layout.body.length).toBeLessThan(5);
+  });
+}
+
+
+for (const [name, words, firstCitation] of [
+  ['mid-page oversized', 1200, 16], ['first-line oversized', 1200, 1], ['mid-page fitting', 60, 16],
+] as const) {
+  test(`editor DOCX ${name} preserves note text and deferral placement`, async ({ page }) => {
+    const layout = await paginate(page,
+      generateFootnoteDocx(1, 30, 1, words, {}, '<w:keepLines/>', firstCitation), false);
+    const notePage = layout.notes.findIndex(text => text.includes('footnote-1-1-1')) + 1;
+    expect(layout.body.reduce((sum, count) => sum + count, 0)).toBe(30);
+    expect(layout.bodyVisible.every(Boolean)).toBe(true);
+    expect(layout.notes.join(' ').match(/footnote-1-1-\d+/g)).toEqual(
+      Array.from({ length: words }, (_, i) => `footnote-1-1-${i + 1}`));
+    if (words > 60) {
+      expect(notePage).toBeGreaterThan(layout.citationPage);
+      expect(layout.body[notePage - 1]).toBe(0);
+    } else expect(notePage).toBe(layout.citationPage);
+    expect(layout.body.length).toBeLessThan(5);
+  });
+}
