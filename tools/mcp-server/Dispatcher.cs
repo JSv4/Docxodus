@@ -160,6 +160,8 @@ internal static partial class Dispatcher
         {
             TrackedChanges = tracked,
             RevisionAuthor = OptStr(args, "revisionAuthor"),
+            RevisionIdentities = args.TryGetProperty("revisionIdentities", out var identities)
+                ? DocxSessionJson.ParseRevisionIdentities(identities.GetRawText()) : null,
             UndoDepth = IntOpt(args, "undoDepth", settingDefaults.UndoDepth),
             UndoMemoryBudgetBytes = LongOpt(
                 args, "undoMemoryBudgetBytes", settingDefaults.UndoMemoryBudgetBytes),
@@ -523,7 +525,8 @@ internal static partial class Dispatcher
         "replace_text" => DocxSessionOps.ReplaceText(session.Handle, Str(args, "anchorId"), Str(args, "markdown")),
         "replace_text_at_span_with_format" => DocxSessionOps.ReplaceTextAtSpanWithFormat(
             session.Handle, Str(args, "anchorId"), Int(args, "spanStart"), Int(args, "spanLength"),
-            Str(args, "replace"), ParseFormatOp(args), preconditions),
+            Str(args, "replace"), ParseFormatOp(args), preconditions,
+            DocxSessionJson.ParseDeletedTextSide(OptStr(args, "deletedTextSide"))),
         "replace_text_range" => DocxSessionOps.ReplaceTextRange(
             session.Handle, Str(args, "anchorId"), Str(args, "find"), Str(args, "replace"),
             DocxSessionJson.ParseReplaceOptions(ObjectArguments.Read(args, "docxodus_edit", "replace_text_range")),
@@ -1147,6 +1150,14 @@ internal static partial class Dispatcher
             case "reject_all":
                 return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
                     DocxSessionOps.RejectAllRevisions(session.Handle));
+            case "author_name_status":
+                return DocxSessionOps.GetRevisionAuthorNameStatus(session.Handle, OptStr(args, "author"));
+            case "set_identities":
+            {
+                DocxSessionOps.SetRevisionIdentities(session.Handle, args.TryGetProperty("revisionIdentities", out var identities)
+                    ? identities.GetRawText() : null);
+                return "{\"success\":true," + DocxSessionOps.GetRevisionAuthorNameStatus(session.Handle).Substring(1);
+            }
             case "set_mode":
             {
                 var modeStr = Str(args, "mode");

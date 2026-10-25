@@ -204,6 +204,13 @@ IR read (shared `DocxDiff.PreAccept`), and the configured
 `OnCompatibilityWarning`/`ThrowOnCompatibilityWarning` gate runs exactly as it
 does for `Compare`/`GetRevisions` (shared `DocxDiff.PreflightCompatibility`).
 
+Package limits apply to the supplied bytes before conversion. The package supplement
+and IR reader reuse a single Strict-to-Transitional conversion of each input. The
+supplement inspects the converted package for structural validity, retaining entry-count
+and URI limits, but does not reapply byte-size or compression-ratio limits to the
+converter's own namespace expansion and ZIP recompression. Disabling the supplement
+still validates both original packages before either is converted.
+
 `DocxSession.GetSemanticChanges` compares like against like: the retained opening
 package is rendered through the same checkpoint serialization as the current
 side (lazily, cached), so SDK clone normalization — dropped orphan parts, stray

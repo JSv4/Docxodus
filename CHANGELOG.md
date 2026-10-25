@@ -6,6 +6,28 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Sessions can identify revision owners by account through `RevisionIdentities` and
+  `SetRevisionIdentities` (#1317). Word's `people.xml` reviewer mappings distinguish namesakes
+  and recognize the same AD account under another display name, by principal name or object id.
+  `GetRevisionAuthorNameStatus` reports whether a name is free, owned or taken before editing.
+  New claims are saved with the first tracked revision or comment and follow document Undo/Redo.
+  The setting, configuration operation and query are available in WASM, npm, Python and MCP;
+  callers without identities retain the existing display-name comparison.
+
+- `ReplaceTextAtSpan` and `ReplaceTextAtSpanWithFormat` take an optional side for a zero-length insertion
+  next to tracked deleted text (#1290): `DeletedTextSide.Before`/`After` through new .NET overloads,
+  `deletedTextSide: "before" | "after"` on the stdio host, MCP (`docxodus_edit
+  replace_text_at_span_with_format`), the WASM bridge and npm's `replaceMatch`, and `deleted_text_side`
+  in Python. Deleted text takes no room in a paragraph's offsets, so an offset beside it names both of
+  its sides, and the insertion went before it whichever side was meant. Range markers between the live
+  text and the deletion stay with the live text, so text typed into a heading whose only text is deleted
+  stays inside its TOC bookmark. Omitted, the placement is unchanged. The browser editor now sets the
+  side from where the text was typed, so typing right after a struck word under tracked changes no
+  longer shows the insertion before it. In a paragraph whose only text is a shown deletion, plain typed
+  text now goes in beside the deletion on that side instead of through a whole-paragraph rewrite.
+  A side hint changes no interior text offset and keeps new text outside a native move source's range.
+  A range boundary in another paragraph is refused rather than letting accept-all erase the new text.
+
 - Word's All Markup print layout for the paginated view and the PDF export (#1300):
   `commentColumnPlacement: "balloons"` (`--comment-column-placement balloons` in the export CLI) keeps
   each page's paper size and shrinks the page beside a markup area, where comments, their replies and
@@ -52,6 +74,189 @@ All notable changes to this project will be documented in this file.
   neither are end-aligned ones. A table that names a style the document does not define takes the
   default table style, as one naming none does.
   The Word for the web measurements are in `docs/ooxml_corner_cases.md`.
+
+- Zero-width fixed table cells now keep the one-point content width observed in Word, with
+  horizontal clipping. Exact-height rows can paginate and export to PDF without missing-fragment
+  errors, and the narrow cell's visible sliver retains its PageMap anchors (#1201).
+
+- Table rows with an exact height of zero now use their content height, matching Word (#1339).
+  Their text remains visible in HTML, pagination and PDF export. Positive exact heights still clip,
+  including a one-twip row; missing heights and automatic row heights remain unconstrained.
+
+- Accepting or rejecting a native move preserves untracked text, bookmarks, empty fields and
+  content controls inside its range (#1340). Sessions resolve multiple disjoint source or
+  destination ranges with one move name as one revision, including ranges spanning paragraphs;
+  reused IDs, overlapping ranges and inconsistent ownership remain refused.
+
+- Floating DrawingML shapes and groups retain their SVG, anchor geometry, text clearance and
+  paint order in HTML, paginated views and PDF export (#1346). Top/bottom wrapping reserves space
+  independently of the drawing, and no-wrap objects retain their paragraph-mark line. Background
+  drawings remain behind text and above the paper in standalone export. Unsupported geometry,
+  interior wrapping and undrawn VML shapes are reported through the unsupported-content policy;
+  fallback labels inherit the document font instead of introducing a generic font requirement.
+  Preset hexagons and simple inline VML rectangles draw their actual geometry without adding label text.
+
+- Comments anchored in a header, footer, footnote or endnote now render like body comments (#1310).
+  The HTML converter read them but emitted nothing for them, in every comment mode: no highlighted
+  range, no marker and no entry, so a paginated export or PDF finished without them and without a
+  warning. Each now gets its highlight, its marker and its entry. The comments section and the margin
+  column list comments by story (the body, then headers and footers, footnotes, endnotes), the same in
+  continuous and paginated renders. In the paginated view a header or footer comment's margin note
+  prints on every page that header or footer prints on, the rule balloons already follow. A comment range
+  left open in one story no longer runs on into the next story converted.
+
+- Literal tab characters inside `w:t` and `w:delText` use the same paragraph tab stops and leaders
+  as explicit `w:tab` elements (#1353). This keeps docx-js tab-only runs and right-aligned running
+  headers/footers on their declared stops, while preserving text, run formatting and revision marks.
+  Visible revision text uses the shared browser-aligned tab renderer; hidden deletions no longer
+  consume the following live text's tab stops.
+
+
+- Accepting or rejecting revisions preserves tables that were already adjacent in the input (#1341).
+  Final and original PDF exports retain each table's own borders, width and cell margins. Tables
+  brought together by removing a tracked separator still join; the comparison reader uses the same
+  boundary-preserving path instead of reconstructing table boundaries afterward.
+
+
+- Text-span, search-range and match replacement keep tabs and breaks between text nodes in the
+  same run (#1337). Untracked edits change only the selected text nodes; tracked edits keep the
+  intervening non-text content outside deletion envelopes. Accepting and rejecting therefore retain
+  each marker on the correct side of the edited text, including repeated matches in one run.
+
+- A tracked column insertion remains one resolvable revision when intermediate rows grow an
+  omitted column or a merged cell instead of gaining a new cell (#1330). The registry verifies
+  the complete inserted-column geometry and matching saved properties before joining separated
+  cell marks, their grid change and the affected row/cell properties. Unrelated formatting and
+  competing column operations remain separate or ambiguous.
+
+- Untracked column insertion and deletion keep a pending table grid revision consistent with the
+  edited rows (#1342). Saved cell spans, row omissions and cloned cell properties receive the same
+  structural edit, so rejecting older formatting preserves the column change. An incompatible
+  saved column layout is refused before mutation or undo history is recorded.
+
+- Block insertion now refuses table-cell, row, grid-column and inline content-control anchors with
+  `AnchorWrongKind` before mutation or undo history (#1331). `InsertParagraph`, `InsertHorizontalRule`
+  and `InsertTable` share a check that their anchor has block siblings; previously they could report
+  success after inserting a paragraph or table directly into a row or another invalid container.
+  Paragraphs, tables, block-level content controls and paragraphs in block wrappers remain supported. To insert inside
+  a cell, anchor on one of its paragraphs or use `ReplaceCellContent`.
+
+- Tracked `SetColumnWidths` writes a schema-valid `w:tblGridChange` with only `w:id` (#1322).
+  The revision registry joins it to the matching table and cell width changes, including edits
+  that leave some columns unchanged, so one edit still accepts or rejects as one revision.
+
+- Semantic comparison applies package size and compression limits to the caller's original bytes
+  (#1352). Strict-to-Transitional namespace expansion no longer rejects an input that passed those
+  limits. The package supplement and IR reader reuse one conversion of each Strict input.
+
+- `MergeParagraphs` keeps the second paragraph's section boundary, including its section properties,
+  instead of dropping it and applying the final section's layout to the merged text (#1350). A
+  section boundary on the first paragraph is removed with its mark. A non-paragraph anchor now
+  returns `AnchorWrongKind` without mutation in either tracking mode, rather than moving a table's
+  children into a paragraph or returning a tracking-specific refusal.
+
+- An untracked `ReplaceText` no longer drops a pending tracked deletion or move source in the paragraph
+  (#1292), including one in an otherwise empty hyperlink, content control or simple field.
+  Typing into a paragraph whose only text was deleted, in the browser editor's default mode
+  (edits untracked, revisions hidden), rewrote the paragraph and removed the deletion, so rejecting
+  revisions could no longer restore its text and the revision list lost it, with no edit failure
+  reported. Nested range markers stay with the removed text, and an outside end follows its start
+  when necessary. The replacement now keeps removed text, and a move source keeps its range markers so the
+  move's destination is not orphaned: removed text that led the paragraph stays first, any other
+  follows the new text.
+
+- DrawingML shapes and groups that are not text boxes no longer disappear from the HTML, and PDF
+  export of a document holding one no longer fails (#1270). Only pictures, charts and text boxes were
+  drawn, so a plain `wps:wsp` rectangle or a `wpg:wgp` group produced no HTML; its paragraph, still
+  counted as holding content, got no line box, and the PDF export's PageMap check failed with
+  `output_verification_failure: source anchor … has no measurable fragment`. Inline shapes now render
+  as SVG at their `wp:extent`: rectangles, rounded rectangles, ellipses and lines with their fill
+  (solid, translucent, a gradient's first stop, a pattern's foreground or the group's fill) and outline
+  (explicit, or from the shape style's theme references), rotated and flipped as written, and a group's
+  children placed through its child coordinate space (`a:chOff`/`a:chExt`) without scaling their
+  outlines. A tracked deletion around the drawing stays visible in markup mode. Not drawn: other
+  geometry, preset colours, arrowheads, dashes and effects, and pictures inside groups.
+  Any inline drawing that cannot be drawn (that geometry, SmartArt, a chart type that is not projected,
+  a picture whose image is missing or linked) now keeps its extent instead of collapsing: a blank box
+  marked `data-docx-shape="unrendered"`, or, with unsupported-content placeholders on, the standard
+  placeholder at that size. The PDF export therefore reports such a drawing as an
+  `unsupported_content_placeholder` warning and **rejects it under `unsupportedContent: 'strict'`**,
+  including documents that used to export under strict because the drawing silently vanished beside
+  other text. Partly drawn groups and unsupported shape fills are reported too. A picture is still
+  omitted when the caller passes no image handler. The empty-paragraph
+  check now also follows the `mc:AlternateContent` branch the converter renders, so a drawing in an
+  unselected `mc:Choice` no longer leaves its paragraph without a line. Floating (`wp:anchor`) shapes
+  are still not drawn (#1346). Charts share the shapes' colour resolver, so a series colour's shade or
+  tint now applies (on an sRGB colour too, as do luminance modifiers), and `tx1`/`bg1`/`tx2`/`bg2`,
+  system, scRGB and HSL colours resolve.
+
+- Under tracked changes, text inserted through `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`)
+  that would land strictly inside another author's tracked insertion now splits their insertion and goes
+  between the halves in the session author's own `w:ins`, as Word does (#1318). A zero-length insert inside
+  one of their runs was refused, and the browser editor's fallback then struck the neighbouring character
+  and retyped it with the keystroke inside their insertion; between two of their runs, or through a span
+  replacement, the new `w:ins` was nested inside theirs and listed as their text. The insertion is split
+  in place inside a hyperlink, content control or smart tag, as with tracking off (#1319); a content
+  control inside the insertion still cannot be split. A zero-length insertion inside a simple field's
+  cached result is refused even inside a tracked insertion; typing at the field's edge lands outside it.
+  Inside the session author's own insertion the text now extends it. Replacing or deleting every
+  character of an insertion that also wraps a bookmark or other range marker now unwraps it instead of
+  leaving an empty insertion listed with no text.
+
+- Since #1319 refuses new text strictly inside a tracked move destination, a `ReplaceTextRange` call
+  whose matches include one inside moved text now fails as a whole with `UnsupportedInlineBoundary` and
+  changes nothing, including its other matches. Replace those through `Grep` and `ReplaceMatch`, skipping
+  the match inside the move.
+
+- HTML right-tab segments now cover three more leader-line shapes (#1285). A page number held in a
+  complex field, as table-of-contents `PAGEREF` numbers are, ends on its right stop instead of falling
+  short of it or wrapping to the next line. A title that wraps keeps its page number on its last line, on
+  the stop, with the leader from the title's end; the number had dropped to a line of its own. And a tab
+  after a stretch right-aligned on a stop inside the right indent stays on the line, on its own stop,
+  instead of sending the paragraph's tab stretches to the next line.
+  Longer text after the final left stop keeps the ordinary wrapping path, so keeping a short suffix
+  beside an overhanging stop does not force long text past the page.
+
+- HTML output now draws an underline or strikethrough across a tab in an underlined or struck run,
+  such as the signature line in `By: ____`; it drew no line, because CSS does not decorate the tab's
+  box (#1285). A bookmark inside a hyperlink no longer writes an `<a>` inside the link's `<a>`, which
+  the HTML parser split apart, leaving the entry's text outside the link and off its tab stops; the
+  bookmark target is now an empty `<span id>` there (#1285). A leading decorated tab keeps its run's
+  colour and font, and a complex HYPERLINK before or across a tab keeps its leading label and bookmark
+  targets inside the link.
+
+- A table no longer starts 7.5pt below a paragraph that has no space after it, or below another table
+  (#1244). The HTML converter gave such a table a top margin of its own "for visual separation", which
+  moved the first row and everything after it down in the HTML, the paginated view and the PDF export.
+  That covered every table whose preceding block was not a paragraph with after-spacing, so tables at
+  the top of a table cell (after its `w:tcPr`), after headings without after-spacing, and in footnotes
+  and endnotes also lose the 7.5pt. Word puts nothing there: measured in Word for the web, the first row
+  starts where the paragraph's line ends whether its after-spacing is absent or zero (including zero
+  inherited from the document defaults), with or without table borders, and a table that directly
+  follows another starts where that one ends. A paragraph's own after-spacing still separates it from
+  the table, and a floating table keeps its `w:tblpPr` distance from the text above. The measurements
+  are in `docs/ooxml_corner_cases.md`.
+
+- With tracked changes off, text inserted through `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`)
+  that would land strictly inside a tracked insertion now goes in its own plain run, splitting the insertion
+  (#1319). A zero-length insert inside one of the insertion's runs was refused, and the browser editor's
+  fallback then grew the insertion's run; between two of its runs, or through a span replacement (typing
+  over a selection), the text joined the insertion. Either way it was credited to the insertion's author and
+  removed when that insertion was rejected. The second half keeps the author and date under a fresh `w:id`,
+  as `SplitParagraph` already does. An insertion inside a hyperlink, content control or smart tag is split
+  inside that container. Text typed strictly inside a tracked move destination (`w:moveTo`) is now refused
+  with `UnsupportedInlineBoundary` in every mode, as `SplitParagraph` refuses it, and text typed at a move's
+  end goes past its range marker; before, it landed inside the moved range, where `RevisionProcessor` drops
+  it on reject (#1340).
+
+- PDF and standalone HTML export no longer fails with `pagination_failure` ("A footnote continuation is
+  clipped") for a fitting footnote whose text carries a formatting revision, a comment highlight or a custom
+  annotation (#1271). Those inline marks draw a border (and annotations some padding) below their text that
+  CSS does not make room for, and the clipping check counted it as clipped content. The check, for note
+  bands and body bands alike, now measures an inline box down to its text, leaving out its own bottom
+  padding and border; text, images and blocks are measured as before, so a note that really is cut off
+  still fails. The decoration is still cut at the band's edge: in the default markup presentation the dotted
+  rule under a formatting change on a note's last line does not appear in the PDF.
 - Under tracked changes, deleting or replacing text in the session author's own pending insertion through
   `ReplaceTextAtSpan` (and `ReplaceTextRange`/`ReplaceMatch`) now removes it from the insertion instead of
   recording a deletion nested inside it (#1316). A Backspace in text still being typed left a struck
@@ -73,6 +278,49 @@ All notable changes to this project will be documented in this file.
   now leave out text in a tracked deletion or move source too, nested or directly in the paragraph, so a
   `Grep` span can guard the next edit without a spurious precondition failure.
 
+- `DocxCompare.Compare` and `Consolidate` keep a reply the revision adds under the original's comment it
+  answers (#1312). The redline takes its comment definitions from the original, but the added reply
+  names its parent by the revised document's `w14:paraId` for that comment. When the original's comment
+  had no paraId (a tool that writes none) or a different one (an editor that renumbers them on save),
+  the reply's `w15:paraIdParent` named nothing, or another comment that happened to hold that paraId,
+  and `ListComments` showed the reply as top-level. The reply's parent is now found through the
+  revised comment with that paraId, which the comparison has already matched to the original's comment
+  by author, date and text; the original's comment gets a fresh paraId if it had none, and the reply's
+  link is re-pointed at it. Only replies the revision adds are linked: comments the original already
+  holds keep the original's threading and resolved state, since neither is a tracked change. A reply
+  whose parent the redline does not hold, or whose parent matches two identical comments of the
+  original, now lists as top-level instead of naming a missing or guessed comment. Every comment with
+  a paraId now has its own entry in each of the redline's `commentsExtended` and `commentsIds` parts,
+  and an added comment renamed for a colliding paraId can no longer be given a paraId a later added
+  comment holds, which had moved that comment's reply under the wrong parent.
+
+- Three session edits now honour tracked-change mode (#1313):
+  - With tracked changes on, `InsertCrossReference` records the REF field as an insertion. It is
+    written as complex-field runs inside one `w:ins`, the form Word records, because a `w:ins` cannot
+    hold the `w:fldSimple` an untracked insertion writes. Before, the field was written untracked,
+    so `ListRevisions` did not show it and `RejectAllRevisions` left it in place.
+  - Tracked `MergeParagraphs` now records Word's tracked join instead of failing with
+    `TrackedOperationUnsupported`, as the architecture doc already said it did. It deletes the first
+    paragraph's mark (`w:pPr/w:rPr/w:del`). The separator space it adds is an insertion. The second
+    paragraph takes the first's properties as a tracked property change. Accepting everything gives
+    what an untracked merge gives; rejecting gives back both paragraphs unchanged. Both paragraphs
+    stay until review, so `EditResult.Modified` lists both, as the document now has them (the
+    second paragraph can change kind), and `Removed` is empty. The editor's Backspace at the start
+    of a paragraph, which did nothing while tracking, now records the join and keeps both
+    paragraphs on the page; a second Backspace there steps over the struck pilcrow and removes the
+    live character before it, as Word does. A tracked merge is refused, writing nothing, when the
+    first paragraph ends a section (`TrackedOperationUnsupported`), and with
+    `UnresolvedStructuralRevision` when another revision already deleted or moved either
+    paragraph's mark, when the first paragraph or its mark has a pending property change, or when
+    the second has one the merge would not simply take back to its baseline: one copy of the first
+    paragraph's properties cannot follow both outcomes of such a change.
+  - `SplitParagraph` no longer cuts a field in two. A split at an offset strictly between a
+    field's begin and end marks, with both in the paragraph, is refused with
+    `UnsupportedInlineBoundary`, tracked or untracked. Before, the field's begin went to one
+    paragraph and its end to the other. A split right before or after the field keeps the field
+    whole, even when its mark shares a run, hyperlink or tracked insertion with the text beyond it;
+    before, a split right after the field moved its `end` mark to the next paragraph. A field
+    that already spans paragraphs, such as a table of contents, can still be split inside.
 - HTML to DOCX now adds a nested element's `text-decoration` lines to those of the elements around it
   instead of replacing them (#1280). The converter treated `text-decoration` as an inherited property,
   so a struck span inside an underlined span produced only `<w:strike/>`, and a DOCX → HTML → DOCX round
@@ -97,6 +345,101 @@ All notable changes to this project will be documented in this file.
     paragraph indented -360 twips now reaches the margin rather than 0.5in, and at -725 or -1080 twips
     it reaches -0.5in.
 
+- A pending section-property change no longer shows up as an extra section (#1314). A tracked
+  `w:sectPrChange` keeps the section's earlier properties as a nested `w:sectPr`, and the anchor
+  index listed that copy as one more `sec` anchor, so a document with two sections reported three
+  and a caller listing sections saw one that does not exist; a tracked `SetPageSetup` added one
+  each time. Other surfaces read the copy as a section too:
+  - the package manifest's `sectionCount` (npm `sectionCount`, Python `section_count`) counted it,
+    so a two-section document reported four;
+  - the OpenContracts export took a page size from it, exporting the earlier page size;
+  - the HTML converter laid out the last paragraph of the document with the earlier page geometry
+    whenever the final section had a pending change, so a page-anchored floating picture could flip
+    sides with tracked changes rendered;
+  - its tracked-changes view numbered footnotes and endnotes in the format the change replaced.
+
+  Every walk that counts or indexes sections now goes through one helper. It also leaves out a
+  `w:sectPr` inside a text box, which is no section break. The paginated HTML render, and with it
+  the page map, used to start an extra section at such a `w:sectPr`, laid out on the text box's
+  page size. That no longer happens, and the text box's `w:sectPr` is no longer a section or a
+  `sec` anchor on any surface.
+- Section reads and edits now act on the section an anchor names (#1308). A `sec` anchor of an
+  earlier section resolved to the document's final section, so `GetSectionInfo` reported the last
+  section's page and `SetPageSetup`, `SetPageNumbering` and the header/footer operations changed
+  the last section while reporting success. A paragraph that carries a section break resolved to
+  the next section whenever a later paragraph carried another, a table whose cell carries a break
+  resolved past it, and a paragraph inside a text box resolved to the final section. A block now
+  belongs to the first section break at or after the main-story block holding it; text-box
+  content belongs to the section of the paragraph that holds the text box. A `w:sectPr` inside a
+  text box, or the earlier properties a pending `w:pPrChange` keeps, is not a section break, so
+  `ListBlocks` and the windowed editor's chrome render also no longer start an extra section at a
+  table containing one, matching the full render.
+
+- `ReplaceCellContent` no longer replaces a cell's content untracked while tracked changes are on
+  (#1311). Under `TrackedChangeMode.RenderInline` it reported success, wrote the new paragraphs
+  directly and recorded nothing, so the old text was gone and could not be rejected. It now records
+  the old content as a deletion and the new as an insertion, as a tracked `SetHeaderText` does for a
+  story, so `ListRevisions()` shows the deletion and insertion, reject-all gives back the original
+  cell and accept-all leaves the new content. As when typing over a cell in Word, what a deletion
+  does not remove survives an accept: the cell's last paragraph keeps its mark and that mark's run
+  formatting, bookmark, comment and permission range markers stay where they were, and an inline
+  content control keeps its (now empty) shell. A cell that holds a nested table or a block-level
+  content control besides its paragraphs (which the untracked edit keeps), or whose last paragraph
+  holds a bookmark, is refused with `TrackedOperationUnsupported` and nothing is written. Untracked
+  behaviour is unchanged.
+
+- Tracked `InsertTableColumn` writes schema-valid revisions (#1309). Its `w:tblGridChange` carried
+  `w:author` and `w:date`, which the schema does not allow on that element, so every tracked column
+  insertion failed Open XML validation; it now carries only `w:id`. A new cell, in a new column or a
+  new row, copied its neighbour's pending `w:tcPrChange`, so it claimed a property change by an
+  author who never touched it, and in a new column the `w:cellIns` landed after that change, out of
+  schema order; under tracked changes new cells now copy only the neighbour's live properties. A
+  tracked column insertion that would have to add a second property change to the grid, a row or a
+  widened merged cell that already has one is refused with `UnresolvedStructuralRevision` before
+  anything is written or recorded in the undo history, instead of writing two. A grid change Word
+  writes alongside a tracked table, row or cell property edit, whose old grid is the live grid, records
+  nothing; the insertion replaces it rather than being refused. The HTML converter's tracked table
+  mark takes its author and date from the inserted cells when the grid change carries none.
+
+- A PAGE or NUMPAGES field that is deleted or inserted as a whole under tracked changes now shows
+  each page its own number in paginated markup (#1272). A deleted field keeps its code in
+  `w:delInstrText`, which the field reader ignored, and the fields inside a `w:del`, `w:ins`,
+  `w:moveFrom` or `w:moveTo` were never grouped as fields at all, so the page-number marker was
+  missing and every page repeated the cached result, for example "Folio 1 / 2". The field still
+  renders inside the deletion or insertion, including when Word writes it as one deletion per run,
+  and has no marker when deleted content is hidden. The deleted code is read only for a deleted
+  field, so a live field whose code was edited under tracking still means its new code. The accepted
+  view, and markup with deleted content hidden, are unchanged: a deleted field is not shown there. A
+  live page field whose cached result alone is deleted now prints its page number struck through,
+  inside that deletion. The editor no longer counts a deleted page field's result in its caret
+  offsets.
+- A HYPERLINK field now renders its result's own markup inside the link (#1272): a tracked deletion
+  or insertion there stays a `<del>` or `<ins>`, and a bookmark or comment range inside the link is
+  kept, where the link used to flatten its runs to plain text and drop them. A HYPERLINK field
+  inserted or deleted whole now renders as a link inside its `<ins>` or `<del>` (was plain text), but
+  never as a link inside a link: inside a `w:hyperlink` it is that link's content, a `w:hyperlink` in
+  its result gives up its own link, and a bookmark target inside it keeps its id on a `<span>`. The
+  anchors generated for a note reference or comment marker inside a link stay anchors, as before. A
+  TOC deleted whole keeps its entries' TOC presentation.
+
+- Strict Open XML documents (Word's "Strict Open XML Document" format) are now read like ordinary ones
+  by the `WmlDocument` APIs and `DocxSession` (#1268). Their XML uses different namespace URIs, which
+  only the comparison engine and the byte-based HTML entry points converted. Elsewhere a Strict package
+  went unrecognised: `RevisionProcessor.AcceptRevisions`/`RejectRevisions` and the session's
+  `AcceptAllRevisions`/`RejectAllRevisions` left every insertion and deletion in place,
+  `HasTrackedRevisions` returned `false`, `WmlToHtmlConverter.ConvertToHtml(WmlDocument, …)` and
+  `DocumentStructureAnalyzer.Analyze` threw `NullReferenceException`, the markdown projection and
+  `OpenContractExporter.Export` were empty, `MetricsGetter` reported partial metrics, and
+  `GetSemanticChanges` on an unedited session reported changes. Code that opens a `WmlDocument` to read
+  or change it now converts a Strict package to the transitional namespaces first, so these behave as
+  they do for the equivalent transitional document. `DocumentBuilder` therefore accepts Strict sources
+  (it threw "saved in strict mode, not supported"), keeping their glossary and normalizing their style
+  ids. A session opened on Strict bytes works on the conversion but keeps the caller's exact bytes as
+  its opening package, so its delivery source and verification baseline are unchanged;
+  `SemanticDiff` compares a Strict package's conversion at package level, so that session's semantic
+  changes and delivery receipt report only its edits. The
+  `WordprocessingDocument` overloads take a package that is already open and are not converted, and
+  Strict value spaces such as `w:jc="start"` are not rewritten.
 - Tracked formatting of a run that already has another author's pending format change is now
   credited to the person who made it (#1295). The session folded the new formatting into the
   existing `w:rPrChange` but left that change's author, date and `w:id` alone, so `ListRevisions()`

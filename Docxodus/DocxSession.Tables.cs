@@ -32,10 +32,23 @@ public sealed partial class DocxSession
         if (ValidatePendingHyperlinks(parsed.Blocks.SelectMany(b => b.RunElements), cellAnchorId) is { } linkError)
             return linkError;
 
-        // Replacing cell content removes every block in the cell, including nested tables and
-        // structured wrappers; validate the whole cell subtree rather than only direct paragraphs.
+        // Bookmarks are validated over the whole cell subtree, a conservative superset of the
+        // direct paragraphs the edit replaces.
         if (ValidateBookmarkRemoval(new[] { cell! }, cellAnchorId) is { } bookmarkError)
             return bookmarkError;
+        // Tracked, the cell's content is recorded as replaced the way a running story's is. The
+        // untracked edit replaces only the cell's direct paragraphs and keeps any other block
+        // beside them (a nested table, a block-level content control), which the tracked
+        // replacement would delete, so a cell holding one is refused. Content inside a paragraph,
+        // such as an inline content control, is replaced with its paragraph in both modes.
+        var tracked = _trackedChanges == TrackedChangeMode.RenderInline;
+        if (tracked && cell!.Elements().FirstOrDefault(e => e.Name == W.tbl || e.Name == W.sdt
+                || e.Name == W.customXml || e.Name == W.altChunk) is { } otherBlock)
+            return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
+                $"the cell holds a block-level {otherBlock.Name.LocalName} besides its paragraphs, which the untracked edit keeps, so replacing its content cannot be tracked; no changes were made.",
+                cellAnchorId);
+        if (tracked && RefuseTrackedStoryReplacement(cell!, cellAnchorId, "table cell") is { } cellRefusal)
+            return cellRefusal;
         var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, cell!);
         var oldHyperlinkIds = cell!.Descendants(W.hyperlink)
             .Select(h => (string?)h.Attribute(R.id)).Where(id => !string.IsNullOrEmpty(id)).Cast<string>().ToList();
@@ -43,16 +56,32 @@ public sealed partial class DocxSession
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            foreach (var p in cell!.Elements(W.p).ToList()) p.Remove();
-
             var lists = new PayloadListState(parsed.Blocks);
+            var paras = new List<XElement>();
             foreach (var block in parsed.Blocks)
             {
                 var p = BuildParagraphFromParsedBlock(block);
                 AssignPayloadListNumbering(p, block, lists);
                 UnidHelper.AssignToSelfAndDescendants(p);
-                cell.Add(p);
-                PromoteHyperlinkRelationships(p);
+                paras.Add(p);
+            }
+            if (tracked)
+            {
+                // The cell's last paragraph keeps its mark and takes the last new paragraph's
+                // runs, so an empty payload still needs one (empty) paragraph to give it.
+                if (paras.Count == 0) paras.Add(new XElement(W.p));
+                var retained = ReplaceStoryContentTracked(cell, paras);
+                foreach (var p in retained is null ? paras : paras.SkipLast(1).Append(retained))
+                    PromoteHyperlinkRelationships(p);
+            }
+            else
+            {
+                foreach (var p in cell.Elements(W.p).ToList()) p.Remove();
+                foreach (var p in paras)
+                {
+                    cell.Add(p);
+                    PromoteHyperlinkRelationships(p);
+                }
             }
             if (hyperlinkOwner is { } owner)
             {
@@ -156,27 +185,39 @@ public sealed partial class DocxSession
     private static void SetGridSpan(XElement tc, int span)
     {
         if (span <= 1) { tc.Element(W.tcPr)?.Elements(W.gridSpan).Remove(); return; }
-        SetChildInOrder(GetOrCreateTcPr(tc),
+        SetGridSpanProperty(GetOrCreateTcPr(tc), span);
+    }
+
+    private static void SetGridSpanProperty(XElement properties, int span)
+    {
+        if (span <= 1) { properties.Elements(W.gridSpan).Remove(); return; }
+        SetChildInOrder(properties,
             new XElement(W.gridSpan, new XAttribute(W.val, span)), TcPrChildOrder);
     }
 
     private static void SetCellWidth(XElement tc, int twips) =>
-        SetChildInOrder(GetOrCreateTcPr(tc),
+        SetCellWidthProperty(GetOrCreateTcPr(tc), twips);
+
+    private static void SetCellWidthProperty(XElement properties, int twips) =>
+        SetChildInOrder(properties,
             new XElement(W.tcW, new XAttribute(W._w, twips), new XAttribute(W.type, "dxa")),
             TcPrChildOrder);
 
     /// <summary>Grow/shrink an existing dxa cell width by <paramref name="delta"/> twips; a cell
     /// sized any other way (pct/auto) is left alone.</summary>
     private static void BumpCellWidth(XElement tc, int delta)
+        => BumpCellWidthProperty(tc.Element(W.tcPr), delta);
+
+    private static void BumpCellWidthProperty(XElement? properties, int delta)
     {
-        var tcW = tc.Element(W.tcPr)?.Element(W.tcW);
+        var tcW = properties?.Element(W.tcW);
         if (tcW is null || (string?)tcW.Attribute(W.type) != "dxa") return;
         tcW.SetAttributeValue(W._w, Math.Max(0, ((int?)tcW.Attribute(W._w) ?? 0) + delta));
     }
 
-    private static void SetRowGridOmission(XElement row, XName name, int value)
+    private static void SetRowGridOmissionProperty(XElement? properties, XName name, int value)
     {
-        var property = row.Element(W.trPr)?.Element(name);
+        var property = properties?.Element(name);
         if (value <= 0)
         {
             property?.Remove();
@@ -185,6 +226,26 @@ public sealed partial class DocxSession
         if (property is null)
             throw new InvalidOperationException($"row has no existing {name.LocalName} omission to adjust");
         property.SetAttributeValue(W.val, value);
+    }
+
+    private void SetColumnRowOmission(XElement row, XName name, int value)
+    {
+        SetRowGridOmissionProperty(row.Element(W.trPr), name, value);
+        if (_trackedChanges != TrackedChangeMode.RenderInline
+            && row.Element(W.trPr)?.Element(W.trPrChange)?.Element(W.trPr) is { } previous)
+            SetRowGridOmissionProperty(previous, name, value);
+    }
+
+    private void SetColumnCellGeometry(XElement cell, int span, int widthDelta, int previousWidthDelta)
+    {
+        SetGridSpan(cell, span);
+        BumpCellWidth(cell, widthDelta);
+        if (_trackedChanges != TrackedChangeMode.RenderInline
+            && cell.Element(W.tcPr)?.Element(W.tcPrChange)?.Element(W.tcPr) is { } previous)
+        {
+            SetGridSpanProperty(previous, span);
+            BumpCellWidthProperty(previous, previousWidthDelta);
+        }
     }
 
     private static List<int> GridColWidths(XElement tbl) =>
@@ -213,6 +274,28 @@ public sealed partial class DocxSession
             grid.Add(column);
         }
     }
+
+    /// <summary>Insert a copy of <paramref name="columns"/>[<paramref name="source"/>] (without its
+    /// Unid) at grid position <paramref name="boundary"/>, and return it.</summary>
+    private static XElement CloneGridColumn(List<XElement> columns, int source, int boundary)
+    {
+        var clone = new XElement(W.gridCol,
+            columns[source].Attributes().Where(attribute => attribute.Name != PtOpenXml.Unid));
+        if (boundary >= columns.Count) columns[^1].AddAfterSelf(clone);
+        else columns[boundary].AddBeforeSelf(clone);
+        return clone;
+    }
+
+    /// <summary>The columns of the old grid a pending <c>w:tblGridChange</c> keeps, when it has as
+    /// many as the live grid (<paramref name="liveColumns"/>) before an untracked column insertion
+    /// or deletion. The edit is mirrored there so that rejecting the change later restores a grid
+    /// as wide as the rows. An old grid of another width has no column that matches by position,
+    /// so the caller must refuse that layout before mutation.</summary>
+    private static List<XElement>? PendingOldGridColumns(XElement grid, int liveColumns) =>
+        grid.Element(W.tblGridChange)?.Element(W.tblGrid)?.Elements(W.gridCol).ToList() is { } old
+            && old.Count == liveColumns
+            ? old
+            : null;
 
     private static int SumGridWidths(List<int> widths, int from, int toExclusive)
     {
@@ -366,7 +449,11 @@ public sealed partial class DocxSession
     /// <summary>An empty clone of <paramref name="referenceCell"/>'s shell (width, borders, shading,
     /// valign). Merge markup is always dropped — a clone is a fresh cell, never half of somebody
     /// else's merge — except <c>w:gridSpan</c> when <paramref name="keepSpan"/> is set, which a new
-    /// row needs so its cells still line up with w:tblGrid.</summary>
+    /// row needs so its cells still line up with w:tblGrid. Under tracking the reference cell's
+    /// pending <c>w:tcPrChange</c> is dropped too: the new cell is this author's insertion, and a
+    /// copy would credit another author with a change to it (and put its <c>w:cellIns</c> after a
+    /// <c>w:tcPrChange</c>). Tracked callers have already refused tables with pending cell marks.
+    /// Untracked, copies keep their own fresh ids.</summary>
     private XElement NewEmptyCellLike(XElement referenceCell, bool keepSpan = false)
     {
         var tcPr = referenceCell.Element(W.tcPr);
@@ -374,9 +461,10 @@ public sealed partial class DocxSession
         if (tcPr is not null)
         {
             var clone = new XElement(tcPr);
-            clone.Elements(W.vMerge).Remove();
-            clone.Elements(W.hMerge).Remove();
-            if (!keepSpan) clone.Elements(W.gridSpan).Remove();
+            bool tracked = _trackedChanges == TrackedChangeMode.RenderInline;
+            clone.Elements().Where(e => e.Name == W.vMerge || e.Name == W.hMerge
+                || (!keepSpan && e.Name == W.gridSpan)
+                || (tracked && e.Name == W.tcPrChange)).Remove();
             Internal.RevisionOps.RenumberCopiedRevisions(clone, NextRevisionId);
             tc.Add(clone);
         }
@@ -447,6 +535,57 @@ public sealed partial class DocxSession
         }
     }
 
+    /// <summary>What inserting a grid column at <paramref name="boundary"/> does to
+    /// <paramref name="row"/> in place: grow the omitted columns before or after its cells
+    /// (<c>Omission</c> names which), or widen the cell straddling the boundary
+    /// (<c>Straddle</c>). Neither means the row gains a new cell.</summary>
+    private static (XName? Omission, GridCell Straddle) ColumnInsertionInRow(XElement row, int boundary)
+    {
+        var rowGrid = RowGrid(row);
+        int gridBefore = Internal.TableGridModel.GridBefore(row);
+        int rowEnd = rowGrid.Count == 0 ? gridBefore : rowGrid[^1].End;
+        int gridAfter = Internal.TableGridModel.GridAfter(row);
+        if (boundary < gridBefore) return (W.gridBefore, default);
+        if (boundary > rowEnd && boundary <= rowEnd + gridAfter) return (W.gridAfter, default);
+        // A cell straddling the boundary extends rather than splits: inserting "inside" a
+        // horizontal merge widens it.
+        return (null, rowGrid.FirstOrDefault(c => c.Start < boundary && c.End > boundary));
+    }
+
+    private static (XName? Omission, GridCell Cell) ColumnDeletionInRow(XElement row, int column)
+    {
+        var cells = RowGrid(row);
+        int before = Internal.TableGridModel.GridBefore(row);
+        int end = cells.Count == 0 ? before : cells[^1].End;
+        if (column < before) return (W.gridBefore, default);
+        if (column >= end && column < end + Internal.TableGridModel.GridAfter(row))
+            return (W.gridAfter, default);
+        return (null, CellCovering(cells, column) ?? default);
+    }
+
+    private EditResult? RefuseIncompatibleColumnBaselines(XElement table, string anchorId)
+    {
+        if (_trackedChanges == TrackedChangeMode.RenderInline) return null;
+        EditResult Refuse() => EditResult.Fail(EditErrorCode.UnresolvedStructuralRevision,
+            "pending table properties describe a different column layout; resolve them before editing columns", anchorId);
+        if (table.Element(W.tblGrid)?.Element(W.tblGridChange) is { } gridChange
+            && gridChange.Element(W.tblGrid)?.Elements(W.gridCol).Count() != GridColumnCount(table))
+            return Refuse();
+
+        foreach (var row in WordprocessingMLUtil.TableRows(table))
+        {
+            if (row.Element(W.trPr)?.Element(W.trPrChange)?.Element(W.trPr) is { } previousRow
+                && (((int?)previousRow.Element(W.gridBefore)?.Attribute(W.val) ?? 0) != Internal.TableGridModel.GridBefore(row)
+                    || ((int?)previousRow.Element(W.gridAfter)?.Attribute(W.val) ?? 0) != Internal.TableGridModel.GridAfter(row)))
+                return Refuse();
+            foreach (var cell in RowGrid(row))
+                if (cell.Tc.Element(W.tcPr)?.Element(W.tcPrChange)?.Element(W.tcPr) is { } previousCell
+                    && Math.Max(1, (int?)previousCell.Element(W.gridSpan)?.Attribute(W.val) ?? 1) != cell.Span)
+                    return Refuse();
+        }
+        return null;
+    }
+
     /// <summary>Insert a grid column before/after the one holding <paramref name="cellAnchorId"/>:
     /// a new empty cell in every row (cloning that column's width) plus a matching w:gridCol. A row
     /// whose cell straddles the new boundary — a horizontal merge spanning it — widens by one
@@ -461,9 +600,32 @@ public sealed partial class DocxSession
         var anchorCell = RowGrid(tr!).First(g => g.Tc == tc);
         int boundary = pos == Position.Before ? anchorCell.Start : anchorCell.End;
 
+        // A tracked insertion stamps the grid and every row or cell it changes in place, and each
+        // holds at most one pending property change, so one already there is refused, as
+        // SetColumnWidths does, before anything (history included) is touched. The exception is a
+        // grid change whose old grid is the live grid: Word writes that alongside any tracked
+        // table, row or cell property edit, it records nothing, and this insertion's own grid
+        // change replaces it.
+        var liveGrid = tbl!.Element(W.tblGrid);
+        bool noOpGridChange = liveGrid?.Element(W.tblGridChange) is { } gridChange
+            && PropertySnapshotEquals(PropertySnapshot(gridChange.Element(W.tblGrid), W.tblGrid,
+                W.tblGridChange), liveGrid, W.tblGridChange);
+        if (RefuseNestedTrackedPropertyChange(
+                tbl.Elements(W.tr).Select(row => ColumnInsertionInRow(row, boundary) is var step
+                        && step.Omission is not null
+                    ? (row.Element(W.trPr), W.trPrChange)
+                    : (step.Straddle.Tc?.Element(W.tcPr), W.tcPrChange))
+                    .Prepend((noOpGridChange ? null : liveGrid, W.tblGridChange)),
+                cellAnchorId) is { } nested)
+            return nested;
+
+        if (RefuseIncompatibleColumnBaselines(tbl, cellAnchorId) is { } incompatible)
+            return incompatible;
+
         var before = CaptureTableMetadata(tbl!);
         var tracked = _trackedChanges == TrackedChangeMode.RenderInline;
-        var oldGrid = tracked ? new XElement(tbl!.Element(W.tblGrid) ?? new XElement(W.tblGrid)) : null;
+        var oldGrid = tracked ? new XElement(liveGrid ?? new XElement(W.tblGrid)) : null;
+        oldGrid?.Elements(W.tblGridChange).Remove();
         var oldRows = tracked ? tbl!.Elements(W.tr).ToDictionary(row => row,
             row => PropertySnapshot(row.Element(W.trPr), W.trPr, W.trPrChange, W.ins, W.del)) : null;
         var oldCells = tracked ? tbl!.Descendants(W.tc).ToDictionary(cell => cell,
@@ -479,46 +641,47 @@ public sealed partial class DocxSession
             int srcCol = Math.Clamp(pos == Position.Before ? anchorCell.Start : anchorCell.End - 1,
                 0, Math.Max(0, widths.Count - 1));
             int newWidth = widths.Count > 0 ? widths[srcCol] : 0;
+            int previousNewWidth = newWidth;
             if (tbl!.Element(W.tblGrid) is { } grid && grid.Elements(W.gridCol).ToList() is { Count: > 0 } cols)
             {
-                var clone = new XElement(W.gridCol,
-                    cols[srcCol].Attributes().Where(attribute => attribute.Name != PtOpenXml.Unid));
-                UnidHelper.AssignToSelfAndDescendants(clone);
-                if (boundary >= cols.Count) cols[^1].AddAfterSelf(clone);
-                else cols[boundary].AddBeforeSelf(clone);
+                // Untracked, a pending grid change's old grid gains the column too (tracked, this
+                // insertion's own grid change replaces it), so a later reject stays as wide as the rows.
+                if (!tracked && PendingOldGridColumns(grid, cols.Count) is { } oldColumns)
+                {
+                    previousNewWidth = (int?)oldColumns[srcCol].Attribute(W._w) ?? 0;
+                    CloneGridColumn(oldColumns, srcCol, boundary);
+                }
+                UnidHelper.AssignToSelfAndDescendants(CloneGridColumn(cols, srcCol, boundary));
             }
 
             var newCells = new List<XElement>();
             foreach (var row in tbl.Elements(W.tr))
             {
+                var (omission, straddle) = ColumnInsertionInRow(row, boundary);
+                if (omission is not null)
+                {
+                    SetColumnRowOmission(row, omission, (omission == W.gridBefore
+                        ? Internal.TableGridModel.GridBefore(row)
+                        : Internal.TableGridModel.GridAfter(row)) + 1);
+                    continue;
+                }
+                if (straddle.Tc is not null)
+                {
+                    SetColumnCellGeometry(straddle.Tc, straddle.Span + 1, newWidth, previousNewWidth);
+                    continue;
+                }
                 var rowGrid = RowGrid(row);
-                int gridBefore = Internal.TableGridModel.GridBefore(row);
-                int rowEnd = rowGrid.Count == 0 ? gridBefore : rowGrid[^1].End;
-                int gridAfter = Internal.TableGridModel.GridAfter(row);
-                if (boundary < gridBefore)
-                {
-                    SetRowGridOmission(row, W.gridBefore, gridBefore + 1);
-                    continue;
-                }
-                if (boundary > rowEnd && boundary <= rowEnd + gridAfter)
-                {
-                    SetRowGridOmission(row, W.gridAfter, gridAfter + 1);
-                    continue;
-                }
-                // A cell straddling the boundary extends rather than splits: inserting "inside"
-                // a horizontal merge widens it.
-                if (rowGrid.FirstOrDefault(c => c.Start < boundary && c.End > boundary) is { Tc: not null } straddle)
-                {
-                    SetGridSpan(straddle.Tc, straddle.Span + 1);
-                    BumpCellWidth(straddle.Tc, newWidth);
-                    continue;
-                }
                 var left = rowGrid.LastOrDefault(c => c.End <= boundary);
                 var right = rowGrid.FirstOrDefault(c => c.Start >= boundary);
                 var refTc = left.Tc ?? right.Tc;
                 if (refTc is null) continue; // an empty row has nothing to clone a shell from
                 var newTc = NewEmptyCellLike(refTc);
                 if (newWidth > 0) SetCellWidth(newTc, newWidth);
+                if (!tracked && newTc.Element(W.tcPr)?.Element(W.tcPrChange)?.Element(W.tcPr) is { } previousCell)
+                {
+                    SetGridSpanProperty(previousCell, 1);
+                    if (previousNewWidth > 0) SetCellWidthProperty(previousCell, previousNewWidth);
+                }
                 UnidHelper.AssignToSelfAndDescendants(newTc);
                 newCells.Add(newTc);
                 if (left.Tc is not null) left.Tc.AddAfterSelf(newTc);
@@ -527,24 +690,33 @@ public sealed partial class DocxSession
 
             if (tracked)
             {
-                var author = _revisionAuthor ?? "docxodus";
-                var date = NextTrackedFormatRevisionDate();
                 var trackedGrid = tbl.Element(W.tblGrid)
                     ?? throw new InvalidOperationException("tracked column insertion has no table grid");
-                trackedGrid.Add(CreateRevisionEnvelope(W.tblGridChange, author, date, oldGrid!));
+                var changedRows = oldRows!.Where(pair => !PropertySnapshotEquals(pair.Value,
+                    pair.Key.Element(W.trPr), W.trPrChange, W.ins, W.del)).ToList();
+                var changedCells = oldCells!.Where(pair => !PropertySnapshotEquals(pair.Value,
+                    pair.Key.Element(W.tcPr), W.tcPrChange, W.cellIns, W.cellDel, W.cellMerge)).ToList();
+                if (changedRows.Any(pair => pair.Key.Element(W.trPr)?.Element(W.trPrChange) is not null)
+                    || changedCells.Any(pair => pair.Key.Element(W.tcPr)?.Element(W.tcPrChange) is not null))
+                    throw new InvalidOperationException(
+                        "tracked column insertion changed a row or cell the up-front check did not foresee");
+                var author = _revisionAuthor ?? "docxodus";
+                var date = NextTrackedFormatRevisionDate();
+                // CT_TblGridChange is CT_Markup: only w:id. The registry credits the bare grid
+                // change to the cell insertion it travels with.
+                EnsureTrackRevisionsEnabled();
+                trackedGrid.Elements(W.tblGridChange).Remove(); // only a no-op one gets this far
+                trackedGrid.Add(new XElement(W.tblGridChange,
+                    new XAttribute(W.id, NextRevisionId()), oldGrid!));
 
-                foreach (var pair in oldRows!)
+                foreach (var pair in changedRows)
                 {
-                    if (PropertySnapshotEquals(pair.Value, pair.Key.Element(W.trPr), W.trPrChange,
-                        W.ins, W.del)) continue;
                     var trPr = pair.Key.Element(W.trPr) ?? new XElement(W.trPr);
                     if (trPr.Parent is null) pair.Key.AddFirst(trPr);
                     trPr.Add(CreateRevisionEnvelope(W.trPrChange, author, date, pair.Value));
                 }
-                foreach (var pair in oldCells!)
+                foreach (var pair in changedCells)
                 {
-                    if (PropertySnapshotEquals(pair.Value, pair.Key.Element(W.tcPr), W.tcPrChange,
-                        W.cellIns, W.cellDel, W.cellMerge)) continue;
                     var tcPr = GetOrCreateTcPr(pair.Key);
                     tcPr.Add(CreateRevisionEnvelope(W.tcPrChange, author, date, pair.Value));
                 }
@@ -656,6 +828,9 @@ public sealed partial class DocxSession
 
         int doomed = RowGrid(tr!).First(g => g.Tc == tc).Start;
         int existingColumns = GridColumnCount(tbl!);
+        if (existingColumns > 1
+            && RefuseIncompatibleColumnBaselines(tbl!, cellAnchorId) is { } incompatible)
+            return incompatible;
         var removalRoots = existingColumns <= 1
             ? new List<XElement> { tbl! }
             : WordprocessingMLUtil.TableRows(tbl!).Select(row => CellCovering(RowGrid(row), doomed))
@@ -673,37 +848,36 @@ public sealed partial class DocxSession
             var grid = tbl!.Element(W.tblGrid);
             int colCount = existingColumns;
             int lostWidth = GridColWidths(tbl) is { } widths && doomed < widths.Count ? widths[doomed] : 0;
+            int previousLostWidth = grid is not null && PendingOldGridColumns(grid, colCount) is { } previousColumns
+                ? (int?)previousColumns[doomed].Attribute(W._w) ?? 0 : lostWidth;
 
             if (colCount <= 1) tbl.Remove();
             else
             {
                 foreach (var row in WordprocessingMLUtil.TableRows(tbl).ToList())
                 {
-                    var rowGrid = RowGrid(row);
-                    int gridBefore = Internal.TableGridModel.GridBefore(row);
-                    int rowEnd = rowGrid.Count == 0 ? gridBefore : rowGrid[^1].End;
-                    int gridAfter = Internal.TableGridModel.GridAfter(row);
-                    if (doomed < gridBefore)
+                    var (omission, shape) = ColumnDeletionInRow(row, doomed);
+                    if (omission is not null)
                     {
-                        SetRowGridOmission(row, W.gridBefore, gridBefore - 1);
+                        int value = (int?)row.Element(W.trPr)?.Element(omission)?.Attribute(W.val) ?? 0;
+                        SetColumnRowOmission(row, omission, value - 1);
                         continue;
                     }
-                    if (doomed >= rowEnd && doomed < rowEnd + gridAfter)
-                    {
-                        SetRowGridOmission(row, W.gridAfter, gridAfter - 1);
-                        continue;
-                    }
-                    if (CellCovering(rowGrid, doomed) is not { } cell) continue;
+                    if (shape.Tc is null) continue;
+                    var cell = shape;
                     if (cell.Span > 1)
                     {
-                        SetGridSpan(cell.Tc, cell.Span - 1);
-                        BumpCellWidth(cell.Tc, -lostWidth);
+                        SetColumnCellGeometry(cell.Tc, cell.Span - 1, -lostWidth, -previousLostWidth);
                         continue;
                     }
                     cell.Tc.Remove();
                 }
                 var cols = grid?.Elements(W.gridCol).ToList();
-                if (cols is not null && doomed < cols.Count) cols[doomed].Remove();
+                if (cols is not null && doomed < cols.Count)
+                {
+                    PendingOldGridColumns(grid!, cols.Count)?[doomed].Remove();
+                    cols[doomed].Remove();
+                }
             }
 
             var prunedNoteAnchors = new List<Anchor>();

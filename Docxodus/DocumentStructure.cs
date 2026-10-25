@@ -204,7 +204,7 @@ public static class DocumentStructureAnalyzer
     /// </summary>
     public static DocumentStructure Analyze(WmlDocument doc)
     {
-        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var ms = new MemoryStream(doc.GetTransitionalBytes());
         using var wordDoc = WordprocessingDocument.Open(ms, false);
 
         var mainPart = wordDoc.MainDocumentPart;

@@ -574,6 +574,14 @@ export interface DocxDiffBatchCandidate {
 /** Stable v1 operation names emitted by the semantic-change schema. */
 export type SemanticChangeOperation = "insert" | "delete" | "move" | "modify";
 
+/**
+ * Which side of tracked deleted text (a `w:del` or `w:moveFrom`) a zero-length span insertion
+ * goes on. Deleted text takes no room in a paragraph's offsets, so an offset next to it names both
+ * of its sides; omit the side for the engine's default placement. With no deleted text at the
+ * offset the side has no effect (issue #1290).
+ */
+export type DeletedTextSide = "before" | "after";
+
 /** Stable v1 semantic families. New schema versions may append families. */
 export type SemanticChangeFamily =
   | "text"
@@ -1982,8 +1990,9 @@ export interface DocxodusWasmExports {
     Grep: (handle: number, pattern: string, optionsJson: string) => string;
     GrepCrossBlock: (handle: number, pattern: string, optionsJson: string) => string;
     ReplaceTextRange: (handle: number, anchor: string, find: string, replace: string, optionsJson: string) => string;
-    ReplaceTextAtSpan: (handle: number, anchor: string, spanStart: number, spanLength: number, replace: string) => string;
-    ReplaceTextAtSpanWithFormat?: (handle: number, anchor: string, spanStart: number, spanLength: number, replace: string, formatJson: string) => string;
+    /** `deletedTextSide`: "before" | "after" | "" (see {@link DeletedTextSide}); an engine older than issue #1290 ignores it. */
+    ReplaceTextAtSpan: (handle: number, anchor: string, spanStart: number, spanLength: number, replace: string, deletedTextSide?: string) => string;
+    ReplaceTextAtSpanWithFormat?: (handle: number, anchor: string, spanStart: number, spanLength: number, replace: string, formatJson: string, deletedTextSide?: string) => string;
     ReplaceInner: (
       handle: number,
       matchText: string,
@@ -2058,6 +2067,8 @@ export interface DocxodusWasmExports {
     Redo: (handle: number) => boolean;
     SetTrackedChanges: (handle: number, mode: number) => void;
     SetRevisionAuthor: (handle: number, author: string) => void;
+    SetRevisionIdentities: (handle: number, identitiesJson: string) => void;
+    GetRevisionAuthorNameStatus: (handle: number, author: string) => string;
     Save: (handle: number) => Uint8Array;
     /** Save KEEPING the projector's `PtOpenXml:Unid` bookkeeping. Exists for the in-browser
      *  editor's remount, which re-renders these bytes and needs the anchors to survive the hop.
@@ -3103,6 +3114,19 @@ export interface TableBorderSpec {
   color?: string;
 }
 
+/** An account identifier in Word's people.xml reviewer list. AD uses S::principal-name::object-id. */
+export interface RevisionIdentity {
+  readonly providerId: string;
+  readonly userId: string;
+}
+
+export type RevisionAuthorNameStatus = "free" | "own" | "taken";
+
+export interface RevisionAuthorNameInfo {
+  author: string;
+  status: RevisionAuthorNameStatus;
+}
+
 export interface DocxSessionSettings {
   /**
    * Maximum undo steps retained. Default 20 (was 50).
@@ -3122,6 +3146,8 @@ export interface DocxSessionSettings {
   validateRawOps?: boolean;
   trackedChanges?: "accept" | "render_inline" | "strip_deletions";
   revisionAuthor?: string;
+  /** Account-based ownership. Absent, null or empty retains the legacy display-name comparison. */
+  revisionIdentities?: readonly RevisionIdentity[] | null;
   /**
    * When false (default), `save()` strips the projector's internal `PtOpenXml:Unid`
    * attributes before serializing — they aren't OOXML schema, and persisting them
@@ -4520,6 +4546,8 @@ export type WorkerRequestType =
   | "getVersion"
   | "prepare"
   | "sessionOpen"
+  | "sessionSetRevisionIdentities"
+  | "sessionGetRevisionAuthorNameStatus"
   | "sessionGetPackageManifest"
   | "sessionGetSemanticChanges"
   | "sessionVerifyDeliverable"
@@ -4727,6 +4755,20 @@ export interface WorkerSessionOpenRequest extends WorkerRequestBase {
   settingsJson?: string;
 }
 
+/** Configure accounts without mutating the worker session's document or undo history. */
+export interface WorkerSessionSetRevisionIdentitiesRequest extends WorkerRequestBase {
+  type: "sessionSetRevisionIdentities";
+  handle: number;
+  identities: readonly RevisionIdentity[] | null;
+}
+
+/** Check the current or proposed reviewer name against a worker session's accounts. */
+export interface WorkerSessionGetRevisionAuthorNameStatusRequest extends WorkerRequestBase {
+  type: "sessionGetRevisionAuthorNameStatus";
+  handle: number;
+  author?: string | null;
+}
+
 /** Generate a manifest from the current logical checkpoint of a worker session. */
 export interface WorkerSessionGetPackageManifestRequest extends WorkerRequestBase {
   type: "sessionGetPackageManifest";
@@ -4823,6 +4865,8 @@ export type WorkerRequest =
   | WorkerGetVersionRequest
   | WorkerPrepareRequest
   | WorkerSessionOpenRequest
+  | WorkerSessionSetRevisionIdentitiesRequest
+  | WorkerSessionGetRevisionAuthorNameStatusRequest
   | WorkerSessionGetPackageManifestRequest
   | WorkerSessionGetSemanticChangesRequest
   | WorkerSessionVerifyDeliverableRequest
@@ -5007,6 +5051,15 @@ export interface WorkerSessionOpenResponse extends WorkerResponseBase {
   handle?: number;
 }
 
+export interface WorkerSessionSetRevisionIdentitiesResponse extends WorkerResponseBase {
+  type: "sessionSetRevisionIdentities";
+}
+
+export interface WorkerSessionGetRevisionAuthorNameStatusResponse extends WorkerResponseBase {
+  type: "sessionGetRevisionAuthorNameStatus";
+  authorNameInfo?: RevisionAuthorNameInfo;
+}
+
 /** Response containing the current worker-session package manifest. */
 export interface WorkerSessionGetPackageManifestResponse extends WorkerResponseBase {
   type: "sessionGetPackageManifest";
@@ -5069,6 +5122,8 @@ export type WorkerResponse =
   | WorkerGetVersionResponse
   | WorkerPrepareResponse
   | WorkerSessionOpenResponse
+  | WorkerSessionSetRevisionIdentitiesResponse
+  | WorkerSessionGetRevisionAuthorNameStatusResponse
   | WorkerSessionGetPackageManifestResponse
   | WorkerSessionGetSemanticChangesResponse
   | WorkerSessionVerifyDeliverableResponse

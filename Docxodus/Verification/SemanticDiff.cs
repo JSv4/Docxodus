@@ -129,11 +129,17 @@ internal sealed record SemanticChangeDraft(
 /// </summary>
 internal interface ISemanticPackageChangeDetector
 {
-    IReadOnlyList<SemanticChangeDraft> Compare(
+    SemanticPackageComparison Compare(
         byte[] leftBytes,
         byte[] rightBytes,
         SemanticDiffOptions options);
 }
+
+// The bounded package pass supplies the same normalized bytes to the supplement and IR reader.
+internal sealed record SemanticPackageComparison(
+    byte[] LeftBytes,
+    byte[] RightBytes,
+    IReadOnlyList<SemanticChangeDraft> Changes);
 
 internal static class SemanticDiffEngine
 {
@@ -155,10 +161,10 @@ internal static class SemanticDiffEngine
         // This overload owns the raw-byte trust boundary: do not construct WmlDocument (whose
         // constructor opens the OPC package to identify its document type) until inspection has
         // enforced all declared archive and XML limits.
-        var packageChanges = PackageDetector.Compare(leftBytes, rightBytes, options);
-        var left = new WmlDocument("left.docx", leftBytes);
-        var right = new WmlDocument("right.docx", rightBytes);
-        return CompareValidated(left, right, options, packageChanges, maximumChanges);
+        var packages = PackageDetector.Compare(leftBytes, rightBytes, options);
+        var left = new WmlDocument("left.docx", packages.LeftBytes);
+        var right = new WmlDocument("right.docx", packages.RightBytes);
+        return CompareValidated(left, right, options, packages.Changes, maximumChanges);
     }
 
     public static SemanticChangeSet Compare(
@@ -170,12 +176,18 @@ internal static class SemanticDiffEngine
         // Inspect the raw package before the Open XML SDK/IR path. This makes the declared package
         // limits an actual boundary for the default public operation instead of a late supplement
         // reached only after an untrusted archive has already been expanded.
-        var packageChanges = PackageDetector.Compare(
+        var packages = PackageDetector.Compare(
             originalLeft.DocumentByteArray,
             originalRight.DocumentByteArray,
             options);
+        var left = ReferenceEquals(packages.LeftBytes, originalLeft.DocumentByteArray)
+            ? originalLeft
+            : new WmlDocument(originalLeft.FileName, packages.LeftBytes);
+        var right = ReferenceEquals(packages.RightBytes, originalRight.DocumentByteArray)
+            ? originalRight
+            : new WmlDocument(originalRight.FileName, packages.RightBytes);
         return CompareValidated(
-            originalLeft, originalRight, options, packageChanges, maximumChanges);
+            left, right, options, packages.Changes, maximumChanges);
     }
 
     private static SemanticChangeSet CompareValidated(

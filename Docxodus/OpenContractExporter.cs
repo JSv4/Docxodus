@@ -399,7 +399,7 @@ public static class OpenContractExporter
     {
         if (doc == null) throw new ArgumentNullException(nameof(doc));
 
-        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var ms = new MemoryStream(doc.GetTransitionalBytes());
         using var wordDoc = WordprocessingDocument.Open(ms, false);
 
         return Export(wordDoc);
@@ -588,8 +588,8 @@ public static class OpenContractExporter
         var sections = new List<ExtractedSection>();
         int index = 0;
 
-        // Find section properties within paragraphs (for section breaks)
-        foreach (var sectPr in body.Descendants(W + "sectPr"))
+        // One entry per section break, in order (not a pending change's stored earlier properties)
+        foreach (var sectPr in Internal.BlockMetadataOps.SectionBreaks(body))
         {
             var section = ParseSectionProperties(sectPr, index++);
             sections.Add(section);

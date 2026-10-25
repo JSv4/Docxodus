@@ -127,6 +127,10 @@ internal static class DocxSessionJson
     public static Position? ParseOptionalPos(string? s) => ParseToken<Position?>(s, "position", null,
         ("before", Position.Before), ("after", Position.After));
 
+    /// <summary>"before" | "after"; absent → null, the engine's own placement beside deleted text.</summary>
+    public static DeletedTextSide? ParseDeletedTextSide(string? s) => ParseToken<DeletedTextSide?>(s, "deleted text side", null,
+        ("before", DeletedTextSide.Before), ("after", DeletedTextSide.After));
+
     /// <summary>
     /// Parse the numeric grep options object the stdio host and the WASM bridge share:
     /// <c>{ regexOptions?, scope?, contextChars?, whitespace?, boundary?, maxResults?, citation? }</c>,
@@ -640,6 +644,8 @@ internal static class DocxSessionJson
             ValidateRawOps = validateRawOps,
             TrackedChanges = tracked,
             RevisionAuthor = revisionAuthor,
+            RevisionIdentities = root.TryGetProperty("revisionIdentities", out var identities)
+                ? ParseRevisionIdentities(identities) : null,
             PersistAnchorIds = persistAnchorIds,
             SmartQuotes = smartQuotes,
             EmitMarkdownPatch = emitMarkdownPatch,
@@ -647,6 +653,30 @@ internal static class DocxSessionJson
             CaptureDeliveryEvidence = captureDeliveryEvidence,
             ProjectionSettings = projectionSettings,
         };
+    }
+
+    public static IReadOnlyList<RevisionIdentity>? ParseRevisionIdentities(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        using var document = JsonDocument.Parse(json);
+        return ParseRevisionIdentities(document.RootElement);
+    }
+
+    private static IReadOnlyList<RevisionIdentity>? ParseRevisionIdentities(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Null) return null;
+        if (value.ValueKind != JsonValueKind.Array)
+            throw new System.ArgumentException("revisionIdentities must be an array or null");
+        var result = new List<RevisionIdentity>();
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object
+                || !item.TryGetProperty("providerId", out var provider) || provider.ValueKind != JsonValueKind.String
+                || !item.TryGetProperty("userId", out var user) || user.ValueKind != JsonValueKind.String)
+                throw new System.ArgumentException("each revision identity needs string providerId and userId values");
+            result.Add(new RevisionIdentity(provider.GetString()!, user.GetString()!));
+        }
+        return result;
     }
 
     /// <summary>

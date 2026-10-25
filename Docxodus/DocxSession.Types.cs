@@ -22,6 +22,22 @@ namespace Docxodus;
 public enum Position { Before, After }
 
 /// <summary>
+/// Which side of tracked deleted text (a <c>w:del</c> or <c>w:moveFrom</c>) a zero-length
+/// <see cref="DocxSession.ReplaceTextAtSpan(string, int, int, string, DeletedTextSide)"/> inserts
+/// on. Deleted text takes no room in a paragraph's offsets, so an offset next to it names both of
+/// its sides; an editor knows which side the caret was on. With no deleted text at the offset the
+/// side has no effect.
+/// </summary>
+public enum DeletedTextSide
+{
+    /// <summary>Immediately before the deleted text.</summary>
+    Before,
+
+    /// <summary>Immediately after the deleted text.</summary>
+    After,
+}
+
+/// <summary>
 /// How <see cref="DocxSession.Grep"/> and the <c>FindBy*</c> helpers treat Unicode
 /// whitespace variants (NBSP, narrow NBSP, thin space) when matching. Word documents
 /// routinely use NBSP between ordinals and colons (<c>First<NBSP>:</c>) so a needle
@@ -2161,6 +2177,19 @@ public sealed record AnnotationUpdate
     public IReadOnlyDictionary<string, string?>? MetadataPatch { get; init; }
 }
 
+/// <summary>An account recorded by Word's people.xml reviewer list.</summary>
+/// <param name="ProviderId">The presence provider, such as AD or Windows Live.</param>
+/// <param name="UserId">The provider's account identifier; AD uses S::principal-name::object-id.</param>
+public sealed record RevisionIdentity(string ProviderId, string UserId);
+
+/// <summary>Whether a reviewer name is available to the session's configured account identities.</summary>
+public enum RevisionAuthorNameStatus
+{
+    Free,
+    Own,
+    Taken,
+}
+
 public sealed class DocxSessionSettings
 {
     /// <summary>
@@ -2191,6 +2220,11 @@ public sealed class DocxSessionSettings
     public bool ValidateRawOps { get; init; } = false;
     public TrackedChangeMode TrackedChanges { get; init; } = TrackedChangeMode.Accept;
     public string? RevisionAuthor { get; init; }
+    /// <summary>
+    /// Accounts used to recognize the session author's pending revisions. Null or empty keeps
+    /// the historical display-name comparison. The session takes a defensive copy on opening.
+    /// </summary>
+    public IReadOnlyList<RevisionIdentity>? RevisionIdentities { get; init; }
     public WmlToMarkdownConverterSettings ProjectionSettings { get; init; } = new();
 
     /// <summary>

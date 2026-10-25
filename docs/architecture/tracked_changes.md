@@ -689,3 +689,19 @@ This design provides a comprehensive approach to rendering tracked changes in HT
 - Generating semantic HTML (`<ins>`, `<del>`)
 - Including machine-readable metadata for tooling
 - Producing accessible and visually clear output
+
+
+## Adjacent table boundaries
+
+`RevisionProcessor` preserves table boundaries that existed before accepting or rejecting revisions
+(#1341). Before the transforms run, temporary identities record a table's source predecessor.
+After resolution, compatible tables join only when their surviving adjacency was created by the
+resolution. The identity distinguishes removal of an entire intervening table from an original
+boundary. Each retained table keeps its own properties, including borders, width and cell margins;
+all temporary identity attributes are removed before saving.
+
+The comparison reader and final/original review-profile projections use this same accept path.
+The former IR-only capture-and-restore workaround is unnecessary: it no longer joins clean tables
+and then searches for matching rows to split them again. The optional
+`AcceptRevisionsForPart(..., preservePreexistingCleanTableRuns)` argument remains source compatible;
+all callers now preserve existing boundaries regardless of that argument.

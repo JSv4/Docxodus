@@ -10,6 +10,7 @@ using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using Docxodus;
+using Docxodus.Tests.Ir;
 using Xunit;
 
 namespace Docxodus.Tests;
@@ -163,6 +164,265 @@ public class DocxSessionStructuralRevisionTests
         Assert.True(XNode.DeepEquals(MainRoot(expected), MainRoot(actual)),
             FirstDifference(MainRoot(expected), MainRoot(actual)));
         Assert.Equal(ValidationErrors(expected), ValidationErrors(actual));
+    }
+
+    /// <summary>
+    /// A 2x2 table whose first cell carries another reviewer's pending width change. CT_TcPr puts
+    /// <c>w:cellIns</c> before <c>w:tcPrChange</c>, and <c>w:tblGridChange</c> carries only
+    /// <c>w:id</c>, so a tracked insertion next to that cell exposes both schema rules at once.
+    /// </summary>
+    private static byte[] BuildTableWithPendingCellChange(bool pending) =>
+        IrTestDocuments.FromBodyXml(
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/></w:tblGrid>"
+            + "<w:tr><w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/>"
+            + (pending
+                ? "<w:tcPrChange w:id=\"5\" w:author=\"Alice\" w:date=\"2025-01-01T00:00:00Z\">"
+                    + "<w:tcPr><w:tcW w:w=\"2500\" w:type=\"dxa\"/></w:tcPr></w:tcPrChange>"
+                : "")
+            + "</w:tcPr><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc>"
+            + "<w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc></w:tr>"
+            + "<w:tr><w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>A2</w:t></w:r></w:p></w:tc>"
+            + "<w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>B2</w:t></w:r></w:p></w:tc></w:tr>"
+            + "</w:tbl><w:p><w:r><w:t>after</w:t></w:r></w:p>").DocumentByteArray;
+
+    private static string CellAnchor(DocxSession session, string text) =>
+        session.Project().AnchorIndex.Values
+            .First(a => a.Anchor.Kind == "tc" && a.TextPreview.StartsWith(text, StringComparison.Ordinal))
+            .Anchor.Id;
+
+    private static string[] Office2019Errors(byte[] bytes) =>
+        PackageValidation.Errors(bytes, DocumentFormat.OpenXml.FileFormatVersions.Office2019)
+            .Select(PackageValidation.Keys.IdDescriptionXPath)
+            .ToArray();
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DS45540_TrackedColumnInsert_WritesSchemaValidMarkup(bool pendingNeighbourChange)
+    {
+        var baseline = BuildTableWithPendingCellChange(pendingNeighbourChange);
+        Assert.Empty(Office2019Errors(baseline));
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Bob",
+        });
+
+        var result = session.InsertTableColumn(CellAnchor(session, "A1"), Position.Before);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var saved = session.Save();
+        Assert.Empty(Office2019Errors(saved));
+        var gridChange = Assert.Single(MainRoot(saved).Descendants(W.tblGridChange));
+        Assert.Equal(new[] { W.id }, gridChange.Attributes().Select(a => a.Name));
+    }
+
+    /// <summary>A new cell is a fresh cell: it copies its neighbour's live shell, never the
+    /// neighbour's pending property revision, so nothing credits Alice with a cell she never saw.
+    /// Rejecting Bob's one revision restores the original table with Alice's change intact.</summary>
+    [Theory]
+    [InlineData("insert_column", RevisionFamily.CellInsert)]
+    [InlineData("insert_row", RevisionFamily.RowInsert)]
+    public void DS45541_TrackedInsertNextToPendingCellChange_DoesNotCopyTheNeighboursRevision(
+        string operation, RevisionFamily family)
+    {
+        var baseline = BuildTableWithPendingCellChange(pending: true);
+        using var session = new DocxSession(baseline,
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline, RevisionAuthor = "Bob" });
+
+        var result = InsertBeforeFirstCell(session, operation);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var saved = session.Save();
+        Assert.Empty(Office2019Errors(saved));
+        var aliceChange = Assert.Single(MainRoot(saved).Descendants(W.tcPrChange));
+        Assert.Equal("5", (string?)aliceChange.Attribute(W.id));
+        var bob = Assert.Single(session.ListRevisions(), r => r.Author == "Bob");
+        Assert.Equal(family, bob.Family);
+        Assert.Equal(RevisionResolutionStatus.Supported, bob.ResolutionStatus);
+
+        Assert.True(session.RejectRevision(bob.Id).Success);
+        Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())),
+            FirstDifference(MainRoot(baseline), MainRoot(session.Save())));
+    }
+
+    /// <summary>
+    /// A tracked column insertion stamps the grid, every row whose <c>w:gridBefore</c> grows and
+    /// every merged cell it widens. Each of those holds at most one pending property revision, so
+    /// when one already carries another reviewer's the insertion is refused before anything is
+    /// written or recorded: with a one-step history, an earlier edit can still be undone and an
+    /// undone one redone.
+    /// </summary>
+    [Theory]
+    [InlineData("pending_grid_change")]
+    [InlineData("widened_merged_cell")]
+    [InlineData("grown_grid_before")]
+    public void DS45543_TrackedColumnInsert_RefusesOverAPendingChangeItWouldStamp(string shape)
+    {
+        const string Alice = "w:id=\"5\" w:author=\"Alice\" w:date=\"2025-01-01T00:00:00Z\"";
+        string Cell(string text, string properties = "<w:tcW w:w=\"2000\" w:type=\"dxa\"/>") =>
+            $"<w:tc><w:tcPr>{properties}</w:tcPr><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        var firstRow = shape switch
+        {
+            "pending_grid_change" => Cell("A1") + Cell("B1"),
+            "widened_merged_cell" => Cell("Merged", "<w:tcW w:w=\"4000\" w:type=\"dxa\"/><w:gridSpan w:val=\"2\"/>"
+                + $"<w:tcPrChange {Alice}><w:tcPr><w:tcW w:w=\"4500\" w:type=\"dxa\"/><w:gridSpan w:val=\"2\"/></w:tcPr></w:tcPrChange>"),
+            "grown_grid_before" => "<w:trPr><w:gridBefore w:val=\"1\"/>"
+                + $"<w:trPrChange {Alice}><w:trPr><w:gridBefore w:val=\"1\"/><w:cantSplit/></w:trPr></w:trPrChange></w:trPr>"
+                + Cell("B1"),
+            _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+        };
+        var gridChange = shape == "pending_grid_change"
+            ? "<w:tblGridChange w:id=\"5\"><w:tblGrid><w:gridCol w:w=\"3000\"/><w:gridCol w:w=\"1000\"/></w:tblGrid></w:tblGridChange>"
+            : "";
+        var baseline = IrTestDocuments.FromBodyXml(
+            $"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/>{gridChange}</w:tblGrid>"
+            + $"<w:tr>{firstRow}</w:tr><w:tr>{Cell("A2")}{Cell("B2")}</w:tr></w:tbl>"
+            + "<w:p><w:r><w:t>after</w:t></w:r></w:p>").DocumentByteArray;
+        Assert.Empty(Office2019Errors(baseline));
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Bob",
+            UndoDepth = 1,
+        });
+        var after = session.Project().AnchorIndex.Values
+            .First(a => a.Anchor.Kind == "p" && a.TextPreview.StartsWith("after", StringComparison.Ordinal)).Anchor.Id;
+        Assert.True(session.InsertParagraph(after, Position.After, "earlier edit").Success);
+        var edited = session.Save();
+        long version = session.Version;
+
+        var result = session.InsertTableColumn(CellAnchor(session, "A2"),
+            shape == "grown_grid_before" ? Position.Before : Position.After);
+
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.UnresolvedStructuralRevision, result.Error!.Code);
+        Assert.Equal(version, session.Version);
+        Assert.True(XNode.DeepEquals(MainRoot(edited), MainRoot(session.Save())),
+            FirstDifference(MainRoot(edited), MainRoot(session.Save())));
+        Assert.True(session.Undo());
+        Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())),
+            FirstDifference(MainRoot(baseline), MainRoot(session.Save())));
+        Assert.True(session.Redo());
+    }
+
+    /// <summary>
+    /// Word writes a grid change whose old grid is the live grid alongside any tracked table, row
+    /// or cell property edit. It records nothing, so a tracked column insertion replaces it with
+    /// its own instead of being refused. The other author's property revisions are untouched:
+    /// rejecting the insertion gives back the original document (less that no-op grid change),
+    /// and accepting everything gives what accepting everything after the untracked insertion does.
+    /// </summary>
+    [Theory]
+    [InlineData("RP/RP029-Table-Row-Props-Change.docx")]
+    [InlineData("FA/RevTracking/023-CellPropertiesChange.docx")]
+    public void DS45544_TrackedColumnInsert_ReplacesWordsNoOpGridChange(string relative)
+    {
+        var baseline = File.ReadAllBytes(Fixture(relative));
+        Assert.Contains(MainRoot(baseline).Descendants(W.tblGridChange), IsNoOpGridChange);
+        byte[] untracked;
+        using (var direct = new DocxSession(baseline))
+        {
+            Assert.True(direct.InsertTableColumn(FirstCellAnchor(direct), Position.After).Success);
+            untracked = direct.Save();
+        }
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Bob",
+        });
+        // The no-op grid change lists as an unattributed entry of its own; it is the one replaced.
+        var others = OtherAuthorsRevisions(session).Where(k => !k.StartsWith('|')).ToArray();
+
+        var result = session.InsertTableColumn(FirstCellAnchor(session), Position.After);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var saved = session.Save();
+        PackageValidation.AssertValid(saved, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
+        PackageValidation.AssertValid(saved, DocumentFormat.OpenXml.FileFormatVersions.Office2021);
+        // A new cell between two of the other author's changed cells can split their entry in
+        // two, so only their authorship and status are compared until Bob's cells are rejected.
+        Assert.All(session.ListRevisions(), r => Assert.Equal(RevisionResolutionStatus.Supported, r.ResolutionStatus));
+        Assert.Equal(others.Distinct(), OtherAuthorsRevisions(session).Distinct());
+        var bob = session.ListRevisions().Where(r => r.Author == "Bob").ToList();
+        Assert.NotEmpty(bob);
+
+        foreach (var revision in bob) Assert.True(session.RejectRevision(revision.Id).Success);
+        Assert.Equal(others, OtherAuthorsRevisions(session));
+        Assert.Equal(WithoutNoOpGridChanges(baseline).ToString(), WithoutNoOpGridChanges(session.Save()).ToString());
+
+        // Untracked, the new cells carry copies of the other author's pending changes (RID009)
+        // and Word's grid change stays as it was, so the accepted outcomes are compared.
+        using var accepting = new DocxSession(saved);
+        Assert.True(accepting.AcceptAllRevisions().Success);
+        using var acceptedDirect = new DocxSession(untracked);
+        Assert.True(acceptedDirect.AcceptAllRevisions().Success);
+        Assert.Equal(MainRoot(acceptedDirect.Save()).ToString(), MainRoot(accepting.Save()).ToString());
+    }
+
+    /// <summary>A grid change that did change the grid is still refused, so the reject that
+    /// restores the other author's widths is never overwritten.</summary>
+    [Theory]
+    [InlineData("RP/RP032-Table-Prop-Change.docx")]
+    [InlineData("FA/RevTracking/021-TableGridChange.docx")]
+    public void DS45546_TrackedColumnInsert_StillRefusesWordsRealGridChange(string relative)
+    {
+        var baseline = File.ReadAllBytes(Fixture(relative));
+        Assert.DoesNotContain(MainRoot(baseline).Descendants(W.tblGridChange), IsNoOpGridChange);
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Bob",
+        });
+
+        var result = session.InsertTableColumn(FirstCellAnchor(session), Position.After);
+
+        Assert.Equal(EditErrorCode.UnresolvedStructuralRevision, result.Error?.Code);
+        Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())));
+    }
+
+    /// <summary>The non-Bob revisions as (author, family, kind): ids derive from the content
+    /// around a revision, so they change when the table does.</summary>
+    private static string[] OtherAuthorsRevisions(DocxSession session) =>
+        session.ListRevisions().Where(r => r.Author != "Bob")
+            .Select(r => $"{r.Author}|{r.Family}|{r.Type}").OrderBy(k => k, StringComparer.Ordinal).ToArray();
+
+    private static bool IsNoOpGridChange(XElement change) =>
+        XNode.DeepEquals(
+            new XElement(W.tblGrid, change.Parent!.Elements(W.gridCol)),
+            new XElement(W.tblGrid, change.Element(W.tblGrid)?.Elements(W.gridCol)));
+
+    private static XElement WithoutNoOpGridChanges(byte[] bytes)
+    {
+        var root = MainRoot(bytes);
+        root.Descendants(W.tblGridChange).Where(IsNoOpGridChange).ToList().Remove();
+        return root;
+    }
+
+    /// <summary>The HTML table mark for a tracked column insertion names its author: the bare
+    /// grid change has none, so the converter takes it from the inserted cells.</summary>
+    [Fact]
+    public void DS45545_TrackedColumnInsert_HtmlTableMarkNamesTheInsertingAuthor()
+    {
+        using var session = new DocxSession(BuildTableWithPendingCellChange(pending: false),
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline, RevisionAuthor = "Bob" });
+        Assert.True(session.InsertTableColumn(CellAnchor(session, "A1"), Position.Before).Success);
+
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("t.docx", session.Save()),
+            new WmlToHtmlConverterSettings { RenderTrackedChanges = true, IncludeRevisionMetadata = true });
+
+        var table = Assert.Single(html.Descendants(), e => e.Name.LocalName == "table"
+            && ((string?)e.Attribute("class") ?? "").Contains("table-format-change", StringComparison.Ordinal));
+        Assert.Equal("Bob", (string?)table.Attribute("data-author"));
+        Assert.NotNull(table.Attribute("data-date"));
+    }
+
+    private static EditResult InsertBeforeFirstCell(DocxSession session, string operation)
+    {
+        var anchor = CellAnchor(session, "A1");
+        return operation == "insert_column"
+            ? session.InsertTableColumn(anchor, Position.Before)
+            : session.InsertTableRow(anchor, Position.Before);
     }
 
     [Fact]
@@ -423,7 +683,6 @@ public class DocxSessionStructuralRevisionTests
     }
 
     [Theory]
-    [InlineData("merge")]
     [InlineData("insert_table")]
     public void DS45513_UnsafeTrackedStructuralOperations_FailTypedAndUndoFree(string operation)
     {
@@ -438,7 +697,6 @@ public class DocxSessionStructuralRevisionTests
 
         var result = operation switch
         {
-            "merge" => session.MergeParagraphs(paragraphs[0], paragraphs[1]),
             "insert_table" => session.InsertTable(paragraphs[0], Position.After, 1, 1),
             _ => throw new ArgumentOutOfRangeException(nameof(operation)),
         };
@@ -503,6 +761,158 @@ public class DocxSessionStructuralRevisionTests
         Assert.True(XNode.DeepEquals(expectedRoot, actualRoot),
             FirstDifference(expectedRoot, actualRoot));
         Assert.Equal(ValidationErrors(expected), ValidationErrors(actual));
+    }
+
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, true)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, true)]
+    public void ColumnWidthRevision_HasASchemaValidGridAndResolvesAsOneEdit(bool accept, bool wordStyleGrid, bool partial)
+    {
+        var baseline = BuildTableDocument();
+        byte[] expected = baseline;
+        if (accept)
+        {
+            using var direct = new DocxSession(baseline);
+            Assert.True(direct.SetColumnWidths(FirstCellAnchor(direct), new[] { partial ? 2400 : 2600, 3000 }).Success);
+            expected = direct.Save();
+        }
+        var pending = PendingColumnWidths(baseline, partial ? 2400 : 2600);
+        // Word emits a bare CT_Markup grid change too. Exercise registry inference separately
+        // from the session writer so restoring attribution cannot make the grouping test pass.
+        if (wordStyleGrid)
+            pending = MutateMain(pending, root => root.Descendants(W.tblGridChange)
+                .Attributes().Where(a => a.Name == W.author || a.Name == W.date).Remove());
+        var gridChange = Assert.Single(MainRoot(pending).Descendants(W.tblGridChange));
+        Assert.Equal(new[] { W.id }, gridChange.Attributes().Where(a => !a.IsNamespaceDeclaration).Select(a => a.Name));
+        Assert.Empty(PackageValidation.Errors(pending, DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+
+        using var reopened = new DocxSession(pending);
+        var revision = Assert.Single(reopened.ListRevisions());
+        Assert.Equal("Format Reviewer", revision.Author);
+        Assert.Equal(RevisionFamily.PropertiesChange, revision.Family);
+        Assert.True((accept ? reopened.AcceptRevision(revision.Id) : reopened.RejectRevision(revision.Id)).Success);
+        Assert.Empty(reopened.ListRevisions());
+        var actual = reopened.Save();
+        Assert.True(XNode.DeepEquals(MainRoot(expected), MainRoot(actual)), FirstDifference(MainRoot(expected), MainRoot(actual)));
+        Assert.Empty(PackageValidation.Errors(actual, DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+    }
+
+    [Fact]
+    public void UntrackedColumnWidths_StayRevisionFreeAndSchemaValid()
+    {
+        using var session = new DocxSession(BuildTableDocument());
+        Assert.True(ApplyPropertyMutation(session, "column_widths").Success);
+        Assert.Empty(session.ListRevisions());
+        Assert.Empty(PackageValidation.Errors(session.Save(), DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+    }
+
+    [Theory]
+    [InlineData("shading")]
+    [InlineData("other_author")]
+    public void BareGridChange_DoesNotJoinAnIncompleteOrMixedPropertyEdit(string shape)
+    {
+        var pending = PendingColumnWidths(BuildTableDocument());
+        pending = MutateMain(pending, root =>
+        {
+            var change = root.Descendants(W.tcPrChange).First();
+            if (shape == "shading")
+                change.Element(W.tcPr)!.Add(new XElement(W.shd,
+                    new XAttribute(W.val, "clear"), new XAttribute(W.fill, "ABCDEF")));
+            else
+                change.SetAttributeValue(W.author, "Other Reviewer");
+        });
+        Assert.Empty(PackageValidation.Errors(pending, DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+        using var session = new DocxSession(pending);
+        var revisions = session.ListRevisions();
+        Assert.True(revisions.Count > 1);
+        Assert.Contains(revisions, revision => string.IsNullOrEmpty(revision.Author) && revision.ConstituentIds.Count == 1);
+    }
+
+    [Fact]
+    public void ColumnWidthRevisions_InDifferentTablesRemainIndependentAtTheSameStamp()
+    {
+        var baseline = MutateMain(BuildTableDocument(), root =>
+        {
+            var table = root.Descendants(W.tbl).Single();
+            table.AddAfterSelf(new XElement(table));
+        });
+        var pending = PendingColumnWidths(baseline, 2600, 0, 4);
+        pending = MutateMain(pending, root =>
+        {
+            foreach (var change in root.Descendants().Where(e => e.Attribute(W.date) is not null))
+                change.SetAttributeValue(W.date, "2026-01-01T00:00:00Z");
+        });
+        Assert.Empty(PackageValidation.Errors(pending, DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+        using var session = new DocxSession(pending);
+        Assert.Equal(2, session.ListRevisions().Count);
+        Assert.True(session.AcceptRevision(session.ListRevisions()[0].Id).Success);
+        Assert.Single(MainRoot(session.Save()).Descendants(W.tblGridChange));
+        Assert.True(session.RejectRevision(Assert.Single(session.ListRevisions()).Id).Success);
+        Assert.Empty(session.ListRevisions());
+        var grids = MainRoot(session.Save()).Descendants(W.tbl).Select(table =>
+            string.Join(",", table.Element(W.tblGrid)!.Elements(W.gridCol).Select(col => (string?)col.Attribute(W._w)))).ToArray();
+        Assert.Contains("2400,3200", grids);
+        Assert.Contains("2600,3000", grids);
+        Assert.Empty(PackageValidation.Errors(session.Save(), DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+    }
+
+    private static byte[] PendingColumnWidths(byte[] baseline, int firstWidth = 2600, params int[] targetCells)
+    {
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Format Reviewer",
+        });
+        var cells = session.Project().AnchorIndex.Values.Where(a => a.Anchor.Kind == "tc").Select(a => a.Anchor.Id).ToArray();
+        foreach (var index in targetCells.DefaultIfEmpty(0))
+            Assert.True(session.SetColumnWidths(cells[index], new[] { firstWidth, 3000 }).Success);
+        return session.Save();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ColumnWidths_LeaveANestedTablesOwnGridAlone(bool accept)
+    {
+        var baseline = MutateMain(BuildTableDocument(), root =>
+        {
+            var table = root.Descendants(W.tbl).Single();
+            var nested = new XElement(table);
+            table.Descendants(W.tc).First().Add(nested, new XElement(W.p));
+        });
+        var pending = PendingColumnWidths(baseline);
+        using var session = new DocxSession(pending);
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.True((accept ? session.AcceptRevision(revision.Id) : session.RejectRevision(revision.Id)).Success);
+        var tables = MainRoot(session.Save()).Descendants(W.tbl).ToArray();
+        Assert.Equal("2400,3200", string.Join(",", tables[1].Element(W.tblGrid)!.Elements(W.gridCol).Select(col => (string?)col.Attribute(W._w))));
+        Assert.Empty(session.ListRevisions());
+        Assert.Empty(PackageValidation.Errors(session.Save(), DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+    }
+
+    [Fact]
+    public void ColumnWidthRevision_DoesNotAbsorbARowHeightEditAtTheSameStamp()
+    {
+        var pending = PendingColumnWidths(BuildTableDocument());
+        pending = MutateMain(pending, root =>
+        {
+            var stamp = root.Descendants(W.tcPrChange).First();
+            root.Descendants(W.tr).First().AddFirst(new XElement(W.trPr,
+                new XElement(W.trHeight, new XAttribute(W.val, 480)),
+                new XElement(W.trPrChange, new XAttribute(W.id, 9000),
+                    new XAttribute(W.author, (string)stamp.Attribute(W.author)!),
+                    new XAttribute(W.date, (string)stamp.Attribute(W.date)!),
+                    new XElement(W.trPr))));
+        });
+        Assert.Empty(PackageValidation.Errors(pending, DocumentFormat.OpenXml.FileFormatVersions.Office2019));
+        using var session = new DocxSession(pending);
+        Assert.Equal(2, session.ListRevisions().Count);
     }
 
     [Fact]

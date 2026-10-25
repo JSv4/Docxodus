@@ -1093,8 +1093,15 @@ export class PaginationEngine {
       );
       const header = this.selectHeader(page.sectionIndex, pageInSection, displayedPageNumber);
       const footer = this.selectFooter(page.sectionIndex, pageInSection, displayedPageNumber);
-      if (header) this.collectExpectedSourceAnchors(header, this.expectedPageMapAnchorIds);
-      if (footer) this.collectExpectedSourceAnchors(footer, this.expectedPageMapAnchorIds);
+      for (const story of [header, footer]) {
+        if (!story) continue;
+        this.collectExpectedSourceAnchors(story, this.expectedPageMapAnchorIds);
+        // The story's margin comments materialize with it (issue #1310).
+        for (const reference of Array.from(story.querySelectorAll<HTMLElement>("[data-comment-id]"))) {
+          const source = this.commentMarginRegistry.get(reference.dataset.commentId ?? "");
+          if (source) this.collectExpectedSourceAnchors(source, this.expectedPageMapAnchorIds);
+        }
+      }
     }
 
     // Establish one active editor anchor and page-qualify every presentation fragment.
@@ -1533,6 +1540,7 @@ export class PaginationEngine {
     sectionIndex: number,
   ): MeasuredBlock[] {
     const blocks: MeasuredBlock[] = [];
+    this.prepareShapeClearance(section, dims);
 
     // Get direct children (paragraphs, tables, divs, etc.)
     const children = Array.from(section.children) as HTMLElement[];
@@ -1899,6 +1907,7 @@ export class PaginationEngine {
     element: HTMLElement,
     dims: PageDimensions,
     sectionIndex: number,
+    preceding: readonly HTMLElement[] = [],
   ): MeasuredBlock {
     const measurementHost = this.document.createElement("div");
     measurementHost.style.position = "absolute";
@@ -1907,6 +1916,7 @@ export class PaginationEngine {
     measurementHost.style.width = `${dims.contentWidth}pt`;
 
     const measuredElement = element.cloneNode(true) as HTMLElement;
+    for (const previous of preceding) measurementHost.appendChild(previous.cloneNode(true));
     measurementHost.appendChild(measuredElement);
     this.stagingElement.appendChild(measurementHost);
 
@@ -2943,15 +2953,23 @@ export class PaginationEngine {
     availableHeightPt: number,
     effectiveMarginTopPt: number,
     notesStart?: (footnoteIds: string[], headHeightPt: number) => boolean,
+    preceding: readonly HTMLElement[] = [],
   ): MeasuredBlock[] | null {
     if (availableHeightPt <= effectiveMarginTopPt) return null;
 
     // Continuations are detached Range clones. Validate their computed layout
     // in the same staging context used for measurement before splitting again.
-    const host = !block.element.isConnected ? this.document.createElement("div") : null;
+    // A preceding float still narrows this paragraph's first lines. Measure candidate heads
+    // beside the actual page prefix, not in a full-width paragraph in isolation. Continuations
+    // on another page do not inherit that page-owned exclusion.
+    const floatSelector = '[data-docx-edge-picture],[data-docx-shape-exclusion]';
+    const prefix = preceding.some(element => element.matches(floatSelector) || element.querySelector(floatSelector))
+      ? preceding : [];
+    const host = !block.element.isConnected || prefix.length > 0 ? this.document.createElement("div") : null;
     const paragraph = host ? block.element.cloneNode(true) as HTMLElement : block.element;
     if (host) {
       host.style.cssText = `position:absolute;visibility:hidden;left:-9999px;width:${dims.contentWidth}pt`;
+      for (const previous of prefix) host.appendChild(previous.cloneNode(true));
       host.appendChild(paragraph);
       this.stagingElement.appendChild(host);
     }
@@ -2987,7 +3005,7 @@ export class PaginationEngine {
       // A head whose notes do not start may still fit by ending earlier on the citing line, so a
       // note-aware split breaks only where a line starts: the citing line moves whole.
       split = this.splitParagraphAtLargestFit(paragraph, (head) => {
-        const measured = this.measureElement(head, dims, block.sectionIndex);
+        const measured = this.measureElement(head, dims, block.sectionIndex, prefix);
         return effectiveMarginTopPt + measured.heightPt <= headLimitPt
           && (!notesStart || notesStart(this.extractFootnoteRefs(head), measured.heightPt));
       }, { lineStartsOnly: notesStart !== undefined });
@@ -2996,8 +3014,8 @@ export class PaginationEngine {
     }
     if (split.kind !== "split") return null;
 
-    return [split.head, split.tail].map(element => ({
-      ...this.measureElement(element, dims, block.sectionIndex),
+    return [split.head, split.tail].map((element, index) => ({
+      ...this.measureElement(element, dims, block.sectionIndex, index === 0 ? prefix : []),
       element,
       keepWithNext: false,
       keepLines: false,
@@ -4548,17 +4566,18 @@ export class PaginationEngine {
             const last = keepChain[keepChain.length - 1];
             const precedingNoteIds = this.collectNewFootnoteIds(keepChain.slice(0, -1), currentFootnoteIds);
             const fragmentLast = (chainHeight: number, available: number, band: number,
-              payload: FootnotePackingContext, closed: boolean) => {
+              payload: FootnotePackingContext, closed: boolean, preceding: readonly HTMLElement[]) => {
               const beforeLastHeight = chainHeight - last.heightPt;
               return this.tryFragmentParagraph(last, blockDimensions, available - beforeLastHeight, 0,
                 (ids, headHeight) => chainNotesStart(beforeLastHeight + headHeight, band, payload, closed,
-                  [...new Set([...precedingNoteIds, ...ids])].filter(id => !currentFootnoteIds.includes(id))));
+                  [...new Set([...precedingNoteIds, ...ids])].filter(id => !currentFootnoteIds.includes(id))),
+                [...preceding, ...keepChain.slice(0, -1).map(item => item.element)]);
             };
             const fragments = fragmentLast(currentChainHeight, currentAvailableHeight, remainingHeight, {
               footnoteIds: currentFootnoteIds,
               continuation: currentContinuation,
               partialFootnotes: currentPartialFootnotes,
-            }, laterNotesClosed());
+            }, laterNotesClosed(), currentContent);
             if (fragments) {
               blocks.splice(i + keepChain.length - 1, 1, ...fragments);
               i--;
@@ -4591,7 +4610,7 @@ export class PaginationEngine {
                 && chainNotesStart(freshChainBodyHeight, nextPageBands.bodyHeight,
                   { footnoteIds: [], continuation: null, partialFootnotes: [] }, false))
               || fragmentLast(freshChainBodyHeight, nextPageBands.bodyHeight, nextPageBands.bodyHeight,
-                { footnoteIds: [], continuation: null, partialFootnotes: [] }, false) !== null
+                { footnoteIds: [], continuation: null, partialFootnotes: [] }, false, []) !== null
             ) {
               // Start the chain over on the fresh page, so that page's carried note is
               // partitioned first and the chain is judged again beside it.
@@ -4688,6 +4707,7 @@ export class PaginationEngine {
           effectiveRemainingHeight,
           effectiveMarginTop,
           headNotesStart,
+          currentContent,
         );
         if (paragraphFragments) {
           blocks.splice(i, 1, ...paragraphFragments);
@@ -4748,6 +4768,7 @@ export class PaginationEngine {
               effectiveRemainingHeight,
               effectiveMarginTop,
               headNotesStart,
+              currentContent,
             ) ?? this.tryFragmentCitingTable(block, blockDimensions, effectiveRemainingHeight,
               effectiveMarginTop, headNotesStart);
             if (fragments) {
@@ -5106,6 +5127,59 @@ export class PaginationEngine {
     return frames;
   }
 
+  private sizeDrawingAnchor(anchor: HTMLElement, dims: PageDimensions, pageNumber: number,
+    context: { staticLeft: number; staticTop: number; lineHeight: number; paragraphLeft: number;
+      paragraphTop: number; paragraphWidth: number; paragraphHeight: number }): void {
+    const widthReference = this.horizontalAnchorReference(
+      anchor.getAttribute('data-docx-anchor-width-relative') ?? 'margin',
+      dims,
+      pageNumber,
+      context,
+    );
+    const widthPercent = this.anchorNumber(anchor, 'width-percent');
+    // Word supports strictly positive relative dimensions (MS-ODRAWXML 2.18.3.1/2).
+    // Zero is schema-valid but must not collapse a visible object with a stored extent.
+    if (widthPercent !== undefined && widthPercent > 0) {
+      anchor.style.width = `${widthReference.size * widthPercent / 100}pt`;
+    }
+
+    const heightReference = this.verticalAnchorReference(
+      anchor.getAttribute('data-docx-anchor-height-relative') ?? 'margin',
+      dims,
+      pageNumber,
+      context,
+    );
+    const heightPercent = this.anchorNumber(anchor, 'height-percent');
+    if (heightPercent !== undefined && heightPercent > 0 && anchor.dataset.docxAnchorAutofit !== 'true') {
+      anchor.style.height = `${heightReference.size * heightPercent / 100}pt`;
+    }
+  }
+
+  private prepareShapeClearance(section: HTMLElement, dims: PageDimensions): void {
+    const context = {staticLeft: 0, staticTop: 0, lineHeight: 0, paragraphLeft: 0,
+      paragraphTop: 0, paragraphWidth: dims.contentWidth, paragraphHeight: 0};
+    const bottoms = new Map<HTMLElement, number>();
+    for (const anchor of Array.from(section.querySelectorAll<HTMLElement>('[data-docx-shape-anchor="true"]'))) {
+      // Page/margin percentages are independent of the eventual page number. Page-dependent
+      // margin variants retain unsupported metadata from conversion until they can be laid out.
+      this.sizeDrawingAnchor(anchor, dims, 1, context);
+      const width = parseFloat(anchor.style.width) || this.anchorNumber(anchor, 'extent-width') || 0;
+      const height = parseFloat(anchor.style.height) || this.anchorNumber(anchor, 'extent-height') || 0;
+      const exclusion = anchor.parentElement?.closest<HTMLElement>('[data-docx-shape-exclusion]');
+      if (exclusion) { exclusion.style.width = `${width}pt`; exclusion.style.height = `${height}pt`; }
+      if (anchor.dataset.docxAnchorWrap !== 'wrapTopAndBottom') continue;
+      const paragraph = anchor.closest<HTMLElement>('p,h1,h2,h3,h4,h5,h6');
+      if (!paragraph) continue;
+      const offset = anchor.dataset.docxAnchorVRelative === 'paragraph' ? this.anchorNumber(anchor, 'v-offset') ?? 0 : 0;
+      bottoms.set(paragraph, Math.max(bottoms.get(paragraph) ?? 0,
+        height + offset + (this.anchorNumber(anchor, 'wrap-bottom') ?? 0)));
+    }
+    for (const [paragraph, height] of bottoms) {
+      const spacer = Array.from(paragraph.children).find(e => e.hasAttribute('data-docx-shape-clearance')) as HTMLElement | undefined;
+      if (spacer) spacer.style.height = `${Math.max(0, height)}pt`;
+    }
+  }
+
   private positionDrawingAnchors(
     pageBox: HTMLElement,
     contentArea: HTMLElement,
@@ -5140,29 +5214,7 @@ export class PaginationEngine {
         paragraphHeight: paragraphRect.height / pixelsPerPoint,
       };
 
-      const widthReference = this.horizontalAnchorReference(
-        anchor.getAttribute('data-docx-anchor-width-relative') ?? 'margin',
-        dims,
-        pageNumber,
-        context,
-      );
-      const widthPercent = this.anchorNumber(anchor, 'width-percent');
-      // Word supports strictly positive relative dimensions (MS-ODRAWXML 2.18.3.1/2).
-      // Zero is schema-valid but must not collapse a visible object with a stored extent.
-      if (widthPercent !== undefined && widthPercent > 0) {
-        anchor.style.width = `${widthReference.size * widthPercent / 100}pt`;
-      }
-
-      const heightReference = this.verticalAnchorReference(
-        anchor.getAttribute('data-docx-anchor-height-relative') ?? 'margin',
-        dims,
-        pageNumber,
-        context,
-      );
-      const heightPercent = this.anchorNumber(anchor, 'height-percent');
-      if (heightPercent !== undefined && heightPercent > 0 && anchor.dataset.docxAnchorAutofit !== 'true') {
-        anchor.style.height = `${heightReference.size * heightPercent / 100}pt`;
-      }
+      this.sizeDrawingAnchor(anchor, dims, pageNumber, context);
 
       // Read the final border-box size after relative sizing and before reparenting. The stored
       // wp:extent remains the fallback; wps:bodyPr insets stay inside it through border-box sizing.
@@ -5211,6 +5263,16 @@ export class PaginationEngine {
       anchor.style.top = `${top}pt`;
       anchor.style.margin = '0';
     }
+
+    // relativeHeight is an unsigned 32-bit value; using it directly as a CSS z-index would
+    // clamp distinct values above 2^31. Dense ranks also keep every behindDoc object below
+    // the text, independently of its relativeHeight and XML order.
+    const paintOrder = [...anchors].sort((a, b) =>
+      (this.anchorNumber(a, 'order') ?? 0) - (this.anchorNumber(b, 'order') ?? 0));
+    paintOrder.forEach((anchor, index) => {
+      anchor.style.zIndex = String(anchor.dataset.docxAnchorBehind === 'true'
+        ? index - paintOrder.length : index + 1);
+    });
   }
 
   private anchorNumber(anchor: HTMLElement, suffix: string): number | undefined {
@@ -5350,6 +5412,9 @@ export class PaginationEngine {
     pageBox.style.height = `${dims.pageHeight}pt`;
     pageBox.style.overflow = "hidden";
     pageBox.style.position = "relative";
+    // Standalone export removes contain/will-change. Keep negative drawing layers above
+    // this page's paper background after those performance hints are stripped.
+    pageBox.style.isolation = "isolate";
     // Use CSS zoom for better text rendering when supported, fall back to transform
     // Zoom affects layout (no negative margin hack needed) and renders text more crisply
     // Note: zoom is non-standard but supported in all major browsers
@@ -5451,11 +5516,15 @@ export class PaginationEngine {
     }
 
     // Materialize margin comments after footnotes exist so markers inside a
-    // note participate in the same page-owned comment story as body markers.
+    // note participate in the same page-owned comment story as body markers. The page's header
+    // and footer count too: a running story's comment prints on every page that story prints on,
+    // as its balloon does (issue #1310). The footer is placed below, so read it from its source.
+    const footerSource = isSectionFiller
+      ? undefined
+      : this.selectFooter(sectionIndex, pageInSection, displayedPageNumber);
     const pageCommentIds: string[] = [];
-    for (const marker of Array.from(
-      pageBox.querySelectorAll<HTMLElement>("[data-comment-id]"),
-    )) {
+    for (const marker of [pageBox, footerSource].flatMap((story) =>
+      Array.from(story?.querySelectorAll<HTMLElement>("[data-comment-id]") ?? []))) {
       if (marker.closest(`.${this.cssPrefix}comment-margin`)) continue;
       const id = marker.dataset.commentId;
       if (id && this.commentMarginRegistry.has(id) && !pageCommentIds.includes(id)) {
@@ -5503,9 +5572,6 @@ export class PaginationEngine {
     }
 
     // Add footer if available for this section/page
-    const footerSource = isSectionFiller
-      ? undefined
-      : this.selectFooter(sectionIndex, pageInSection, displayedPageNumber);
     if (footerSource) {
       const footerDiv = this.document.createElement("div");
       footerDiv.className = `${this.cssPrefix}footer`;
@@ -5576,9 +5642,10 @@ export class PaginationEngine {
 
     // Floating objects need the final page and anchor-paragraph boxes. Resolve them only after
     // append, when getBoundingClientRect() is meaningful, and lift them out of content clipping.
-    const textFrames = this.positionTextFrames(pageBox, dims, pageNumber);
-    this.positionDrawingAnchors(pageBox, contentArea, dims, pageNumber);
-    for (const frame of textFrames) this.positionDrawingAnchors(pageBox, frame, dims, pageNumber);
+    this.positionTextFrames(pageBox, dims, pageNumber);
+    // One page-wide pass includes running stories and compares all drawings in the same
+    // stacking order, including those nested in a promoted paragraph frame.
+    this.positionDrawingAnchors(pageBox, pageBox, dims, pageNumber);
 
     // Body and notes must occupy DISJOINT bands. The note block is absolutely positioned against
     // the page bottom and grows upward, while the content area spans the whole text height — so

@@ -160,7 +160,7 @@ w:br/w:cr   ──►  <br> with directional marks
 
 w:sym       ──►  <span>&#NNN;</span> (symbol as entity)
 
-w:bookmarkStart ──► <a id="..."></a>
+w:bookmarkStart ──► <a id="..."></a>  (<span id="..."></span> inside a link: an <a> cannot nest)
 
 w:noBreakHyphen ──► "-" (text)
 ```
@@ -300,6 +300,19 @@ result. Removing rather than replacing them exposes the document's underlying TO
 
 ### Tabs
 
+Before revision acceptance, simplification and formatting, `ExpandLiteralTextTabs` replaces literal
+U+0009 characters in `w:t` and `w:delText` with canonical `w:tab` elements across all content parts
+(#1353). This includes a tab-only run, mixed text, and leading, consecutive or trailing tabs. Text
+fragments retain their attributes and their run's formatting/revision owner. Field instructions
+(`w:instrText`) remain unchanged: their tab characters are instruction whitespace, not layout tabs.
+The normal stop, leader and browser-flex calculations below then handle both representations.
+Revision wrappers reuse the same aligned-tab renderer as paragraph content when field boundaries
+permit it. Tab measurements include visible deleted text and skip hidden deletion/move-source
+content, so hidden revisions do not advance the live pen. Revision ownership and formatting stay
+on the outer wrapper and its runs. Neutral flex segments and text items explicitly inherit
+text decoration, because CSS does not paint an outer revision's underline or strike through
+an atomic inline flex box.
+
 `CalculateSpanWidthForTabs` measures the current position and following segment, then annotates each
 tab with the advance needed for its OOXML target. Left/right tab sequences use character-class
 fallback widths to choose a stop; fixed-pitch prefixes retain constant advances. Plain left/right
@@ -309,7 +322,27 @@ stops and page-number right edges follow actual glyph widths. The same grouping 
 `w:hyperlink`. Bookmarks, non-breaking hyphens and underlined or struck tab runs stay on the flex path. A
 right stop past the line end (inside the paragraph's right indent, or past the column edge) gives its segment
 a negative `margin-right` equal to the overhang, so the segment fits on its line and still ends on the stop.
-Bidirectional paragraphs, complex fields, breaks, active comment/annotation ranges (including a bookmark
+Past the line end the line has no room left, yet LibreOffice keeps a short later tab stretch on the same line, so
+the following content goes in one nowrap, content-wide box whose left margin undoes that overhang and whose `-100%` right margin takes it off the line; a
+second right or left stop inside the indent then lands on its own stop (issue #1285). A pen past the line
+end only because a right-aligned stretch ended on such a stop does not count as wrapped text.
+If text after the final left tab would exceed the column edge, the paragraph keeps the ordinary wrapping
+path. Forcing that text into the same nowrap box would send it past the page and lose visible words.
+
+Complex fields stay on the flex path: their begin, instruction, separator and end runs draw nothing, so a
+table-of-contents page number held in a `PAGEREF` field ends on the stop like plain text (issue #1285).
+Each stretch converts its fields on its own, so a field open across a tab would be cut in two; a field the
+converter wraps whole (a `HYPERLINK` link, or a `PAGE`/`NUMPAGES` marker) therefore keeps the run-aware
+path when it is cut. A form field's begin carries form data that renders, and also keeps that path.
+
+Text before a right tab that runs past the line end usually keeps the run-aware path (issue #891). When
+that text began at the left indent, where its later lines begin too (a long hanging-indent TOC title), the
+segment instead starts at the left indent and reaches the stop. The text wraps inside it at the line end,
+and the segment aligns its last line with the following text (`align-items: last baseline`), so the page
+number ends on the stop beside the last title line. The tab takes no room after the title's last word;
+its leader is as wide as the segment and is clipped (`overflow-x: clip`) where the number begins.
+
+Bidirectional paragraphs, breaks, active comment/annotation ranges (including a bookmark
 that opens a rendered annotation) and tab runs with visibility, revision or exceptional geometry retain
 the run-aware path and its conservative following-text reservations. Leader rules inherit the tab run's resolved foreground color.
 
@@ -704,3 +737,17 @@ hyperlink still suppresses its underline without removing a strike.
 Heavy variants increase decoration thickness. CSS has no direct double-wave or dot-dash equivalent;
 those variants use wavy or dashed lines respectively. Word's word-only underline retains the existing
 continuous underline rendering. These approximations do not change run text or line metrics.
+
+CSS paints a decoration across text only, never across an atomic inline box, so a tab advance in an
+underlined or struck run (a `By: ____` signature line) would show no line (issue #1285). The tab box
+draws the run's lines itself: each is the top border of an empty block inside the tab, moved with a
+relative offset to where Chromium draws a text underline (`0.05em` below the baseline) or line-through
+(`0.3em` above it). The blocks take no room, so neither the advance nor the line height changes, and a
+leader keeps the tab's own bottom border. Double lines use a double border, a heavy underline a 2px
+border, and a wavy one a solid border. A word-only underline skips tabs, and a cached TOC hyperlink
+drops the underline from its tabs as from its text.
+
+Both fixed and flexible tabs go through the run renderer, so a leading tab keeps its run's font,
+colour and visibility. A complex HYPERLINK before or spanning a tab stays whole; converting its runs
+individually would leave its text and bookmark targets outside the link. The paragraph uses the shared
+field-context annotations to choose that path.

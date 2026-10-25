@@ -156,10 +156,12 @@ internal static partial class Dispatcher
         "replace_text_range" => DocxSessionOps.ReplaceTextRange(
             Handle(args), Str(args, "anchorId"), Str(args, "find"), Str(args, "replace"), ParseReplaceOptions(args)),
         "replace_text_at_span" => DocxSessionOps.ReplaceTextAtSpan(
-            Handle(args), Str(args, "anchorId"), Int(args, "spanStart"), Int(args, "spanLength"), Str(args, "replace")),
+            Handle(args), Str(args, "anchorId"), Int(args, "spanStart"), Int(args, "spanLength"), Str(args, "replace"),
+            deletedTextSide: DocxSessionJson.ParseDeletedTextSide(OptStr(args, "deletedTextSide"))),
         "replace_text_at_span_with_format" => DocxSessionOps.ReplaceTextAtSpanWithFormat(
             Handle(args), Str(args, "anchorId"), Int(args, "spanStart"), Int(args, "spanLength"),
-            Str(args, "replace"), ParseFormatOp(args, "format")),
+            Str(args, "replace"), ParseFormatOp(args, "format"),
+            deletedTextSide: DocxSessionJson.ParseDeletedTextSide(OptStr(args, "deletedTextSide"))),
         "replace_inner" => DocxSessionOps.ReplaceInner(
             Handle(args), Str(args, "matchText"), Str(args, "anchorId"),
             Int(args, "spanStart"), Int(args, "spanLength"), Str(args, "newInner")),
@@ -429,6 +431,8 @@ internal static partial class Dispatcher
 
         "set_tracked_changes" => SetTrackedChanges(args),
         "set_revision_author" => SetRevisionAuthor(args),
+        "set_revision_identities" => SetRevisionIdentities(args),
+        "get_revision_author_name_status" => DocxSessionOps.GetRevisionAuthorNameStatus(Handle(args), OptStr(args, "author")),
 
         _ => throw new UnknownOpException(op),
     };
@@ -568,6 +572,13 @@ internal static partial class Dispatcher
         // revisionAuthor, as on MCP (issue #1023); author is this host's deprecated spelling.
         DocxSessionOps.SetRevisionAuthor(Handle(args),
             DocxSessionJson.AliasedString(args, "revisionAuthor", "author"));
+        return "null";
+    }
+
+    private static string SetRevisionIdentities(JsonElement args)
+    {
+        DocxSessionOps.SetRevisionIdentities(Handle(args), args.TryGetProperty("revisionIdentities", out var identities)
+            ? identities.GetRawText() : null);
         return "null";
     }
 

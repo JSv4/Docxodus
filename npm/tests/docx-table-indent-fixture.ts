@@ -23,8 +23,11 @@ export const cellMargins108 =
 export function tableIndentDocx({ mode, tableProps = '', defaultTableStyle = false }: TableIndentOptions): Uint8Array {
   const borders = '<w:tblBorders>' + ['top', 'left', 'bottom', 'right']
     .map(side => `<w:${side} w:val="single" w:sz="8" w:color="000000"/>`).join('') + '</w:tblBorders>';
+  // SDK order places cell margins after borders and layout.
+  const margins = tableProps.match(/<w:tblCellMar>[\s\S]*?<\/w:tblCellMar>/)?.[0] ?? '';
+  const properties = margins ? tableProps.replace(margins, '') : tableProps;
   const body = '<w:p><w:r><w:t>IndentBefore</w:t></w:r></w:p>'
-    + `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="dxa"/>${tableProps}${borders}<w:tblLayout w:type="fixed"/></w:tblPr>`
+    + `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="dxa"/>${properties}${borders}<w:tblLayout w:type="fixed"/>${margins}</w:tblPr>`
     + '<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/></w:tcPr>'
     + '<w:p><w:r><w:t>IndentCell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>IndentAfter</w:t></w:r></w:p>';
   const tableStyle = defaultTableStyle

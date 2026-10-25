@@ -2,6 +2,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 import type {
+  DeletedTextSide,
   AnchorInfo,
   AnchorRef,
   AnchorTargetRef,
@@ -22,6 +23,8 @@ import type {
   DocxodusWasmExports,
   DocxSessionProjection,
   DocxSessionSettings,
+  RevisionIdentity,
+  RevisionAuthorNameInfo,
   EditError,
   EditResult,
   EditSummary,
@@ -1782,19 +1785,23 @@ export class DocxSession {
    * Pass `format` to replace text and format exactly the replacement atomically, with one
    * undo/version unit. This interactive path returns an ordinary EditResult and avoids the
    * package checkpoint/hash required by executeBatch's receipt. Empty replacements only delete.
+   *
+   * For a zero-length span (an insertion) next to tracked deleted text, `deletedTextSide` puts the
+   * new text immediately before or after that deleted text; omit it for the default placement.
    */
-  replaceMatch(match: TextMatch, replace: string, format?: FormatOp): EditResult {
+  replaceMatch(match: TextMatch, replace: string, format?: FormatOp, deletedTextSide?: DeletedTextSide): EditResult {
     if (format !== undefined) {
       if (!this.wasm.ReplaceTextAtSpanWithFormat) {
         throw new Error("This WASM bundle predates atomic text-plus-format edits; rebuild docxodus.");
       }
       return JSON.parse(this.wasm.ReplaceTextAtSpanWithFormat(
         this.handle, match.enclosingAnchor.id, match.span.start, match.span.length, replace,
-        JSON.stringify(format),
+        JSON.stringify(format), deletedTextSide ?? "",
       )) as EditResult;
     }
     return JSON.parse(
-      this.wasm.ReplaceTextAtSpan(this.handle, match.enclosingAnchor.id, match.span.start, match.span.length, replace)
+      this.wasm.ReplaceTextAtSpan(
+        this.handle, match.enclosingAnchor.id, match.span.start, match.span.length, replace, deletedTextSide ?? "")
     ) as EditResult;
   }
 
@@ -2324,6 +2331,18 @@ export class DocxSession {
     this.wasm.SetRevisionAuthor(this.handle, author ?? "");
   }
 
+  /** Configure accounts and remember names already in use; null or empty restores name-only ownership. */
+  setRevisionIdentities(identities: readonly RevisionIdentity[] | null): void {
+    requireRevisionIdentitySupport(this.wasm, identities);
+    if (typeof this.wasm.SetRevisionIdentities === 'function')
+      this.wasm.SetRevisionIdentities(this.handle, JSON.stringify(identities));
+  }
+
+  /** Check the current or proposed display name before recording an edit under it. */
+  getRevisionAuthorNameStatus(author?: string | null): RevisionAuthorNameInfo {
+    return JSON.parse(this.wasm.GetRevisionAuthorNameStatus(this.handle, author ?? "")) as RevisionAuthorNameInfo;
+  }
+
   undo(): boolean {
     return this.wasm.Undo(this.handle);
   }
@@ -2366,9 +2385,18 @@ export function openDocxSession(
   settings?: DocxSessionSettings,
 ): DocxSession {
   const bridge = wasmExports.DocxSessionBridge;
+  requireRevisionIdentitySupport(bridge, settings?.revisionIdentities);
   const handle = bridge.OpenSession(bytes, settings ? JSON.stringify(settings) : "");
   return new DocxSession(handle, bridge);
 }
 
-export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, CrossReferenceOptions, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, FormattingInspection, GrepOptions, InlineSpan, MarkdownPatch, MarkdownPatchBlock, MutationBatchChangeSet, MutationBatchFailure, MutationBatchMode, MutationBatchPreviewOptions, MutationBatchPreviewStep, MutationBatchResult, MutationBatchStep, MutationBatchStepResult, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, ParagraphFormatting, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFormattingInfo, RunFragment, StyleInfo, TableStyleFormatting, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
+/** @internal Account opt-in must not silently degrade when a host supplies an older WASM bridge. */
+export function requireRevisionIdentitySupport(
+  bridge: {SetRevisionIdentities?: unknown}, identities?: readonly RevisionIdentity[] | null,
+): void {
+  if (identities?.length && typeof bridge.SetRevisionIdentities !== 'function')
+    throw new Error('Account-based revision ownership requires a renderer that supports it.');
+}
+
+export type { RevisionIdentity, RevisionAuthorNameStatus, RevisionAuthorNameInfo, AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, CrossReferenceOptions, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, FormattingInspection, GrepOptions, InlineSpan, MarkdownPatch, MarkdownPatchBlock, MutationBatchChangeSet, MutationBatchFailure, MutationBatchMode, MutationBatchPreviewOptions, MutationBatchPreviewStep, MutationBatchResult, MutationBatchStep, MutationBatchStepResult, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, ParagraphFormatting, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFormattingInfo, RunFragment, StyleInfo, TableStyleFormatting, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
 export { ContextBoundary, PlaceholderKinds } from "./types.js";

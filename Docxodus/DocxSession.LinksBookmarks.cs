@@ -300,7 +300,9 @@ public sealed partial class DocxSession
     /// <c>w:fldSimple</c> whose instruction carries the requested switches and whose cached
     /// result run holds the value Word would currently render (the bookmarked text, or the
     /// target's auto-number under <c>\r</c>), so renderers that do not recompute fields show a
-    /// faithful snapshot and Word updates it like any hand-authored cross-reference. This is a
+    /// faithful snapshot and Word updates it like any hand-authored cross-reference. Under
+    /// <see cref="TrackedChangeMode.RenderInline"/> the same field is written as complex-field runs
+    /// inside one <c>w:ins</c>, so it is a tracked insertion (issue #1313). This is a
     /// real <c>REF</c> field, not an internal hyperlink: it re-resolves with the target's
     /// number/text when Word refreshes fields. The bookmark must already exist as one coherent
     /// same-story pair (<see cref="AddBookmark"/> creates one); a missing or incoherent target
@@ -387,9 +389,14 @@ public sealed partial class DocxSession
             var cachedText = new XElement(W.t, cached);
             if (cached.Length == 0 || char.IsWhiteSpace(cached[0]) || char.IsWhiteSpace(cached[^1]))
                 cachedText.SetAttributeValue(XNamespace.Xml + "space", "preserve");
-            var field = new XElement(W.fldSimple,
-                new XAttribute(W.instr, instruction.ToString()),
-                new XElement(W.r, cachedText));
+            // Tracked, the field is the author's insertion, written as Word records one: its
+            // complex-field runs inside a w:ins, which cannot hold a w:fldSimple.
+            var field = _trackedChanges == TrackedChangeMode.RenderInline
+                ? CreateRevisionEnvelope(W.ins, NewDistinctRevisionStamp(),
+                    ComplexFieldRuns(instruction.ToString(), cachedText))
+                : new XElement(W.fldSimple,
+                    new XAttribute(W.instr, instruction.ToString()),
+                    new XElement(W.r, cachedText));
             UnidHelper.AssignToSelfAndDescendants(field);
             InsertInlineAtOffset(element, characterOffset, field);
 

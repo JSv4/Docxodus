@@ -1,0 +1,97 @@
+{
+  "issue": 1219,
+  "pr": 1338,
+  "method": "Native Word for the web PDF export through authenticated Playwright; original PDFs and hashes retained.",
+  "scope": "The two left-cell origins adjudicate margins. Whole-table column allocation remains a separate existing difference, so this is not a full Word raster score.",
+  "sourcePolicy": "The original CI input has two SDK property-order findings; these controls only reorder those properties, with a separate font-only Times New Roman variant. The untouched original Word capture has identical marker coordinates.",
+  "cases": [
+    {
+      "id": "nested-benchmark-schema-order-corrected",
+      "inputSha256": "b217d592fe7b34a8a7c4c1debd168317661cf73f242fab97afbc0aa769cb6687",
+      "wordPdfSha256": "92323569bcec58e2a548611f1c33fb6818c9c5b2f4c805e48c6ea851a4b7383b",
+      "capturedAtUtc": "2026-10-25T01:12:00.835Z",
+      "reportedBuild": null,
+      "observedFonts": [
+        "TimesNewRomanPS-BoldMT",
+        "TimesNewRomanPSMT"
+      ],
+      "fontSubstituted": true,
+      "wordMarkers": {
+        "OuterLeft": [
+          73.025,
+          106.499,
+          116.541,
+          118.676
+        ],
+        "InnerLeft": [
+          73.775,
+          127.749,
+          115.542,
+          139.926
+        ],
+        "AfterTable": [
+          72.025,
+          149.749,
+          120.37,
+          161.926
+        ],
+        "OuterRight": [
+          450.95,
+          106.499,
+          500.483,
+          118.676
+        ],
+        "InnerRight": [
+          171.83,
+          127.749,
+          219.372,
+          139.926
+        ]
+      }
+    },
+    {
+      "id": "nested-benchmark-times-new-roman-schema-order-corrected",
+      "inputSha256": "2c4880356e5cc3b2ed874d2d308ec34435ccee6423830875bb6213a56b89c828",
+      "wordPdfSha256": "f97449f09ca84c223766ec8804ecd6f04777557b04889a8d5821f3fb537be053",
+      "capturedAtUtc": "2026-10-25T01:12:16.244Z",
+      "reportedBuild": null,
+      "observedFonts": [
+        "TimesNewRomanPS-BoldMT",
+        "TimesNewRomanPSMT"
+      ],
+      "fontSubstituted": false,
+      "wordMarkers": {
+        "OuterLeft": [
+          73.025,
+          106.499,
+          116.541,
+          118.676
+        ],
+        "InnerLeft": [
+          73.775,
+          127.749,
+          115.542,
+          139.926
+        ],
+        "AfterTable": [
+          72.025,
+          149.749,
+          120.37,
+          161.926
+        ],
+        "OuterRight": [
+          450.95,
+          106.499,
+          500.483,
+          118.676
+        ],
+        "InnerRight": [
+          171.83,
+          127.749,
+          219.372,
+          139.926
+        ]
+      }
+    }
+  ]
+}

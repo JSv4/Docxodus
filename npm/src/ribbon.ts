@@ -687,6 +687,7 @@ class RibbonSurface implements RibbonEditor {
       trackedChanges: tracked,
       showRevisions: this.showRevisions,
       revisionAuthor: this.author,
+      revisionIdentities: this.options.revisionIdentities,
       comments: this.options.comments,
       commentAuthor: this.author,
     });

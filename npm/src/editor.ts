@@ -37,6 +37,7 @@ import {
   autoScrollWindowForElements,
 } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
 import { TrackedChangeMode } from "./types.js";
+import { requireRevisionIdentitySupport } from "./session.js";
 import type {
   CommentListEntry,
   EditErrorCode,
@@ -49,6 +50,8 @@ import type {
   NumberFormat,
   PageSetupOp,
   RevisionListEntry,
+  RevisionIdentity,
+  RevisionAuthorNameInfo,
   SectionInfo,
   StyleInfo,
   TableBorderSpec,
@@ -73,6 +76,7 @@ export interface DocxEditorExports {
       spanStart: number,
       spanLength: number,
       replace: string,
+      deletedTextSide?: string,
     ) => string;
     SplitParagraph: (handle: number, anchor: string, offset: number) => string;
     MergeParagraphs: (handle: number, first: string, second: string) => string;
@@ -188,6 +192,8 @@ export interface DocxEditorExports {
     /** Review-mode controls (optional). */
     SetTrackedChanges?: (handle: number, mode: number) => void;
     SetRevisionAuthor?: (handle: number, author: string) => void;
+    SetRevisionIdentities?: (handle: number, identitiesJson: string) => void;
+    GetRevisionAuthorNameStatus?: (handle: number, author: string) => string;
     ListRevisions?: (handle: number) => string;
     AcceptRevision?: (handle: number, revisionId: string) => string;
     RejectRevision?: (handle: number, revisionId: string) => string;
@@ -296,6 +302,8 @@ export interface DocxEditorOptions {
   showRevisions?: boolean;
   /** Author stamped on native Word revisions. Default "docxodus". */
   revisionAuthor?: string;
+  /** Account identifiers for ownership; absent, null or empty retains display-name ownership. */
+  revisionIdentities?: readonly RevisionIdentity[] | null;
   /**
    * Render comments Word-style: the commented range highlighted inline and each thread as a
    * bubble in a gutter beside the page. Default true. With it off the document renders without
@@ -738,7 +746,9 @@ const NOTE_NUMBER_SELECTOR = ".footnote-number, .endnote-number";
  * runs hold `w:t`, as Word writes it, or `w:delText` (issue #1282), so the editor does as well.
  */
 const RENDERED_TEXT_DELETION_SELECTOR = 'del[class*="-del"], del[class*="move-from"]';
-const RENDERED_DELETION_SELECTOR = RENDERED_TEXT_DELETION_SELECTOR + ', span[class*="para-mark-del"]';
+/** The pilcrow the renderer draws at the end of a paragraph whose mark is a pending deletion. */
+const DELETED_PARAGRAPH_MARK_SELECTOR = 'span[class*="para-mark-del"]';
+const RENDERED_DELETION_SELECTOR = RENDERED_TEXT_DELETION_SELECTOR + ", " + DELETED_PARAGRAPH_MARK_SELECTOR;
 
 const GENERATED_CHROME_SELECTOR =
   '[data-list-marker], a.footnote-ref, a.endnote-ref, a[class$="-backref"], a.comment-marker, '
@@ -908,7 +918,8 @@ function contentOffsetOf(block: HTMLElement, container: Node, offset: number): n
   let done = false;
   const walk = (node: Node): void => {
     if (done) return;
-    if (isField(node)) {
+    // A field inside a rendered deletion is deleted text: the walk below skips it like any other.
+    if (isField(node) && !isInMarker(node)) {
       // Atomic: a point inside a field resolves to the field's end; the field counts its
       // cached text either way.
       const inside = node === container || node.contains(container);
@@ -946,12 +957,44 @@ function caretOffsetIn(block: HTMLElement): number | null {
   return contentOffsetOf(block, range.startContainer, range.startOffset);
 }
 
+/**
+ * Which side of a rendered tracked deletion the text the user typed sits on, for an insertion of
+ * `length` characters at content offset `start` of the block's current text. Deleted text takes no
+ * room in the content offsets, so the offset alone names both sides of it, and the commit runs on
+ * blur, when the caret is gone; where the typed characters landed in the DOM still says (issue
+ * #1290). Undefined when no deletion touches the insertion, or one touches each side.
+ */
+function deletedTextSideOf(block: HTMLElement, start: number, length: number): "before" | "after" | undefined {
+  let before = false;
+  let after = false;
+  // Only whitespace may separate the deletion from the typed text: an empty paragraph's
+  // placeholder space can sit between them, on either side.
+  const text = blockContentText(block);
+  const blank = (from: number, to: number) => from <= to && text.slice(from, to).trim().length === 0;
+  for (const deletion of Array.from(block.querySelectorAll(RENDERED_TEXT_DELETION_SELECTOR))) {
+    const parent = deletion.parentNode;
+    if (!parent) continue;
+    const at = contentOffsetOf(block, parent, Array.prototype.indexOf.call(parent.childNodes, deletion));
+    if (blank(at, start)) after = true;
+    else if (blank(start + length, at)) before = true;
+  }
+  return before === after ? undefined : before ? "before" : "after";
+}
+
+/** True when nothing in `block` would serialize as inline markdown: no bold, italic, link or
+ *  line break, so its text can go in as a plain span insertion without losing anything. */
+function holdsOnlyPlainText(block: HTMLElement): boolean {
+  const segs: InlineSeg[] = [];
+  collectInlineSegments(block, segs);
+  return segs.every((seg) => !seg.bold && !seg.italic && seg.href === null && seg.text !== "\n");
+}
+
 /** Visible content text of `block`, excluding generated list-marker text (the same content
  *  caretOffsetIn/contentOffsetOf count). */
 function blockContentText(block: HTMLElement): string {
   let out = "";
   const walk = (node: Node): void => {
-    if (isField(node)) {
+    if (isField(node) && !isInMarker(node)) {
       out += stripBidi(fieldText(node));
     } else if (node.nodeType === 3 /* TEXT_NODE */) {
       if (!isInMarker(node)) out += stripBidi(node.textContent ?? "");
@@ -1024,7 +1067,7 @@ function contentPositionIn(el: HTMLElement, offset: number): { node: Node; offse
   let lastText: Node | null = null;
   const walk = (node: Node): void => {
     if (result) return;
-    if (isField(node)) {
+    if (isField(node) && !isInMarker(node)) {
       // Never land inside a field: an offset at its start sits before it, anything up to its
       // cached length sits after it.
       const len = stripBidi(fieldText(node)).length;
@@ -1688,6 +1731,7 @@ export class DocxEditor {
       trackedChanges: options.trackedChanges ?? TrackedChangeMode.Accept,
       showRevisions: options.showRevisions,
       revisionAuthor: options.revisionAuthor ?? "docxodus",
+      revisionIdentities: options.revisionIdentities?.map(identity => ({...identity})) ?? null,
       comments: options.comments ?? true,
       commentAuthor: options.commentAuthor ?? options.revisionAuthor ?? "Reviewer",
       onEdit: options.onEdit,
@@ -1710,10 +1754,12 @@ export class DocxEditor {
     // save/re-render hop, and it asks for that per call via SaveWithAnchorIds.
     // emitMarkdownPatch off: the editor re-renders from HTML, never from markdown patches,
     // so paying a whole-document re-projection per op would be dead weight.
+    requireRevisionIdentitySupport(exports.DocxSessionBridge, opts.revisionIdentities);
     const handle = exports.DocxSessionBridge.OpenSession(bytes, JSON.stringify({
       emitMarkdownPatch: false,
       trackedChanges: trackedChangeWireName(opts.trackedChanges),
       revisionAuthor: opts.revisionAuthor,
+      revisionIdentities: opts.revisionIdentities,
     }));
     return new DocxEditor(container, exports, handle, opts);
   }
@@ -3031,6 +3077,14 @@ export class DocxEditor {
         const prev = this.previousEditable(el);
         if (prev) {
           ev.preventDefault();
+          // The previous paragraph's mark is already a pending deletion (a tracked join waiting
+          // for review), so the two are joined already. As in Word, Backspace steps over the
+          // struck pilcrow and removes the live character before it, instead of joining again.
+          if (prev.querySelector(DELETED_PARAGRAPH_MARK_SELECTOR)) {
+            placeCaretAtOffset(prev, blockContentText(prev).length);
+            deleteLiveCharacterBeyond(prev, "deleteContentBackward");
+            return;
+          }
           this.mergeWithPrevious(prev, el);
         }
       }
@@ -3171,8 +3225,10 @@ export class DocxEditor {
     if (!merged) return;
 
     // Merging list items renumbers the list, and merging across a border <div> boundary changes the
-    // border grouping — both need a whole-document re-render (caret at the merge boundary).
-    if (this.affectsList(res) || wrappedInBorder) {
+    // border grouping — both need a whole-document re-render (caret at the merge boundary). So does a
+    // tracked merge, which removes nothing: both paragraphs stay until the deleted paragraph mark
+    // is accepted, so the second must not be dropped from the page.
+    if (this.affectsList(res) || wrappedInBorder || !res.removed?.length) {
       this.refreshAfter(el, prevIdx, true);
       this.options.onEdit?.({ anchorId: merged.id, unid: merged.unid });
       return;
@@ -3233,7 +3289,13 @@ export class DocxEditor {
       // typed text then goes in as a plain insertion at its start, which cannot carry a line
       // break or inline formatting.
       const tracked = this.options.trackedChanges === TrackedChangeMode.RenderInline;
-      if (tracked || !el.querySelector(RENDERED_TEXT_DELETION_SELECTOR)) {
+      const typed = next.trim() + (keepsTrailingSpace(el) ? " " : "");
+      // The side of a shown deletion the text was typed on. A whole-paragraph rewrite would put
+      // it after the deletion whichever side that was, so plain text goes in as a span insertion
+      // on its own side; a line break or inline formatting still needs the rewrite.
+      const side = deletedTextSideOf(el, next.indexOf(typed.trimEnd()), typed.trimEnd().length);
+      const besideShownDeletion = side !== undefined && holdsOnlyPlainText(el);
+      if (!besideShownDeletion && (tracked || !el.querySelector(RENDERED_TEXT_DELETION_SELECTOR))) {
         const whole = this.parseEdit(
           this.exports.DocxSessionBridge.ReplaceText(this.handle, fullId, serializeInlineMarkdown(el)),
           { expectRejection: true },
@@ -3243,9 +3305,8 @@ export class DocxEditor {
           return whole;
         }
       }
-      const typed = next.trim() + (keepsTrailingSpace(el) ? " " : "");
       return this.parseEdit(
-        this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, 0, 0, typed),
+        this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, 0, 0, typed, side ?? ""),
       );
     }
 
@@ -3261,13 +3322,19 @@ export class DocxEditor {
 
     if (len === 0) {
       // A pure insertion. The engine inserts a NEW run at a run boundary (and steps outside a
-      // field's chrome, so typing after "Page X of Y" never lands inside the NUMPAGES result);
-      // an offset inside a run's text is not a boundary and is refused, as is the op on an
-      // older engine build. Then anchor a neighbour char so the span is non-empty and the
+      // field's chrome, so typing after "Page X of Y" never lands inside the NUMPAGES result) or
+      // inside an ordinary text run, and inside a tracked insertion it splits another author's
+      // insertion around the new text or extends the typist's own (issue #1318). It refuses an
+      // offset inside a hyperlink, field or other inline container or a mixed-content run, as
+      // does an older engine build. Then anchor a neighbour char so the span is non-empty and the
       // inserted text inherits an adjacent run's rPr (the LEFT run when there is one, matching
-      // contenteditable; the first run at the very start).
+      // contenteditable; the first run at the very start). Under tracking that records the
+      // neighbour as deleted and retyped: the accepted and rejected text are right, but the
+      // markup has one extra pair of revisions.
+      // Beside a shown deletion, the side the text was typed on decides where it goes (#1290).
+      const side = deletedTextSideOf(el, start, middle.length) ?? "";
       const inserted = this.parseEdit(
-        this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, start, 0, middle),
+        this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, start, 0, middle, side),
         { expectRejection: true }, // a refusal here only selects the fallback below
       );
       if (inserted.success) return inserted;
@@ -4700,6 +4767,23 @@ export class DocxEditor {
     this.assertOpen();
     this.options.revisionAuthor = author;
     this.exports.DocxSessionBridge.SetRevisionAuthor?.(this.handle, author);
+  }
+
+  /** Configure account ownership without changing the document or its history. */
+  setRevisionIdentities(identities: readonly RevisionIdentity[] | null): void {
+    this.assertOpen();
+    const copied = identities?.map(identity => ({...identity})) ?? null;
+    const bridge = this.exports.DocxSessionBridge;
+    requireRevisionIdentitySupport(bridge, copied);
+    bridge.SetRevisionIdentities?.(this.handle, JSON.stringify(copied));
+    this.options.revisionIdentities = copied;
+  }
+
+  getRevisionAuthorNameStatus(author?: string | null): RevisionAuthorNameInfo {
+    this.assertOpen();
+    const query = this.exports.DocxSessionBridge.GetRevisionAuthorNameStatus;
+    if (typeof query !== 'function') throw new Error('Revision author name queries require a renderer that supports them.');
+    return JSON.parse(query(this.handle, author ?? '')) as RevisionAuthorNameInfo;
   }
 
   /** Every tracked revision in the document, from the session's registry. */

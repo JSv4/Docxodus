@@ -118,7 +118,8 @@ public sealed partial class DocxSession : IDisposable
         long BaseVersion,
         byte[] BaseBytes,
         TrackedChangeMode TrackedChanges,
-        string? RevisionAuthor);
+        string? RevisionAuthor,
+        RevisionIdentityContext? RevisionIdentities);
 
     private sealed record TransactionState(
         long Id,
@@ -129,6 +130,7 @@ public sealed partial class DocxSession : IDisposable
         long MutationEpoch,
         TrackedChangeMode TrackedChanges,
         string? RevisionAuthor,
+        RevisionIdentityContext? RevisionIdentities,
         Exception? LastInternalError,
         Exception? LastRollbackError);
 
@@ -153,10 +155,14 @@ public sealed partial class DocxSession : IDisposable
             onRecordPreOp: _ => OnHistoryRecordPreOp(),
             onPopUndo: snapshot => OnHistoryPopUndo(snapshot),
             sharedPayloadsOf: static snapshot => snapshot.SharedPayloads);
+        // Every op matches transitional W.* names, so a STRICT package is opened as its transitional
+        // conversion (issue #1268). The caller's exact bytes stay the retained opening package below.
+        var packageBytes = StrictOoxmlNormalizer.NormalizeForReading(docxBytes);
         _stream = new MemoryStream();
-        _stream.Write(docxBytes, 0, docxBytes.Length);
+        _stream.Write(packageBytes, 0, packageBytes.Length);
         _stream.Position = 0;
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
+        SetRevisionIdentities(_settings.RevisionIdentities);
         // Stamp list numbering's inputs before anything counts a list, so the first edit can tell
         // whether the counts it finds are still current (see ResetProjectionCache).
         ResetProjectionCache();
@@ -749,9 +755,7 @@ public sealed partial class DocxSession : IDisposable
     /// <summary>Whether a body block carries the section break that ends its section: a
     /// paragraph's own <c>w:pPr/w:sectPr</c>, or one on a paragraph inside a table's cells.</summary>
     internal static bool ClosesSection(XElement block) =>
-        block.Name == W.p
-            ? block.Element(W.pPr)?.Element(W.sectPr) is not null
-            : block.Name == W.tbl && block.Descendants(W.sectPr).Any(s => s.Parent?.Name == W.pPr);
+        (block.Name == W.p || block.Name == W.tbl) && Internal.BlockMetadataOps.SectionBreakIn(block) is not null;
 
     private static bool IsRemovedInAcceptedRevisionView(XElement block)
     {
@@ -967,6 +971,7 @@ public sealed partial class DocxSession : IDisposable
         if (main.WordprocessingCommentsPart is not null) yield return main.WordprocessingCommentsPart;
         if (main.WordprocessingCommentsExPart is not null) yield return main.WordprocessingCommentsExPart;
         if (main.WordprocessingCommentsIdsPart is not null) yield return main.WordprocessingCommentsIdsPart;
+        if (main.WordprocessingPeoplePart is not null) yield return main.WordprocessingPeoplePart;
         if (main.DocumentSettingsPart is not null) yield return main.DocumentSettingsPart;
         if (main.StyleDefinitionsPart is not null) yield return main.StyleDefinitionsPart;
         // Custom XML parts hold annotation metadata; include them so callers that
@@ -1001,6 +1006,7 @@ public sealed partial class DocxSession : IDisposable
         // driven by DocumentSnapshot.PartRelationships below.
         if (main.WordprocessingCommentsExPart is not null) yield return main.WordprocessingCommentsExPart;
         if (main.WordprocessingCommentsIdsPart is not null) yield return main.WordprocessingCommentsIdsPart;
+        if (main.WordprocessingPeoplePart is not null) yield return main.WordprocessingPeoplePart;
 
         // Settings and styles are not walked by the PROJECTOR, but they are WRITTEN by ops, which is
         // what decides snapshot membership. InsertFootnote/InsertEndnote declare w:footnotePr /
@@ -1899,12 +1905,16 @@ public sealed partial class DocxSession : IDisposable
     };
 
     /// <summary>A paragraph child a replacement keeps where it sits: a bare range/marker
-    /// element, a marker-only run, or an envelope or carrier containing nothing else.</summary>
+    /// element, a marker-only run, removed text, or a carrier containing only those.</summary>
     private static bool IsZeroWidthMarker(XElement e) =>
-        PreservedMarkerNames.Contains(e.Name)
+        PreservedMarkerNames.Contains(e.Name) || IsRemovedText(e)
         || (e.Name == W.r ? IsMarkerOnlyRun(e)
             : e.Name == W.sdt ? e.Element(W.sdtContent) is not { } content || IsZeroWidthMarker(content)
             : ZeroWidthCarrierNames.Contains(e.Name) && e.Elements().All(IsZeroWidthMarker));
+
+    private static bool IsPendingRemoval(XElement e) =>
+        IsRemovedText(e) || e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd
+        || (IsZeroWidthMarker(e) && e.Descendants().Any(IsRemovedText));
 
     private sealed record PreservedMarkerPosition(XElement Element, int Offset, int Order);
 
@@ -1916,15 +1926,39 @@ public sealed partial class DocxSession : IDisposable
     /// </summary>
     private static List<PreservedMarkerPosition> CapturePreservedMarkerPositions(XElement paragraph)
     {
+        // Pending removed text (a deletion or move source, with its move range) takes no room in
+        // the paragraph's text either, and is not the text being replaced: dropping it would
+        // silently resolve another reviewer's change, or orphan a move's destination (#1292).
+        // Its old coordinate means nothing in the new text, and keeping it would cut a word in
+        // two, so removed text that led the paragraph stays first and any other follows it.
+        // If a range starts inside removed text that moves to the end, its outside endpoint
+        // must follow it too. Leaving that endpoint at its old text coordinate would invert it.
+        var trailingRangeEnds = paragraph.Elements()
+            .Where(e => IsPendingRemoval(e) && MarkerOffset(paragraph, e) > 0)
+            .SelectMany(e => e.Descendants())
+            .Where(e => (e.Name == W.bookmarkStart || e.Name == W.commentRangeStart || e.Name == W.permStart)
+                && e.Attribute(W.id) is not null)
+            .Select(e => (Name: e.Name == W.bookmarkStart ? W.bookmarkEnd
+                : e.Name == W.commentRangeStart ? W.commentRangeEnd : W.permEnd, Id: (string?)e.Attribute(W.id)))
+            .ToHashSet();
         var candidates = paragraph.Elements()
-            .Where(IsZeroWidthMarker)
+            .Where(e => IsZeroWidthMarker(e) || IsPendingRemoval(e))
             .Concat(paragraph.Descendants()
                 .Where(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd))
+            // A preserved removal carries its own nested markers; extracting them would move
+            // their range off the removed text and onto the replacement.
+            .Where(e => !e.Ancestors().Any(a => ReferenceEquals(a.Parent, paragraph) && IsPendingRemoval(a)))
             .Distinct()
             .OrderBy(e => e, Comparer<XElement>.Create(XNode.DocumentOrderComparer.Compare))
             .ToList();
         var result = candidates.Select((element, order) =>
-            new PreservedMarkerPosition(element, MarkerOffset(paragraph, element), order)).ToList();
+        {
+            int offset = MarkerOffset(paragraph, element);
+            bool followsRemoval = element.DescendantsAndSelf()
+                .Any(e => trailingRangeEnds.Contains((e.Name, (string?)e.Attribute(W.id))));
+            return new PreservedMarkerPosition(element,
+                (IsPendingRemoval(element) && offset > 0) || followsRemoval ? int.MaxValue : offset, order);
+        }).ToList();
         foreach (var marker in candidates) marker.Remove();
         return result;
     }
@@ -2856,20 +2890,93 @@ public sealed partial class DocxSession : IDisposable
             if (consumed >= localOffset) movedChildren.Add(child);
             consumed += len;
         }
+        SplitContainerBefore(container, movedChildren, nextRevisionId);
+    }
+
+    /// <summary>
+    /// Where new text goes so it does not join a tracked insertion it must not belong to (issues
+    /// #1319, #1318). <paramref name="anchor"/> is the node the text goes after
+    /// (<paramref name="afterAnchor"/>) or before. When a tracked insertion (<c>w:ins</c>; a
+    /// <c>w:moveTo</c> is atomic and refused by the callers) that <paramref name="mayJoin"/>
+    /// rejects encloses it, that insertion is cut
+    /// in two at the anchor, together with any hyperlink or smart tag between the anchor and it
+    /// (each half keeps its attributes; a revision half takes a fresh id), and the returned
+    /// position is between the halves, still inside whatever contains the envelope. A cut that
+    /// would leave a half with no content is not made: the position moves to that edge instead.
+    /// Null when another kind of container (a content control, simple field) lies between the
+    /// anchor and the envelope, which cannot be cut.
+    /// </summary>
+    private (XElement Anchor, bool After)? OutsideForeignInsertion(
+        XElement paragraph, XElement anchor, bool afterAnchor, Func<XElement, bool> mayJoin)
+    {
+        var envelope = anchor.Ancestors().TakeWhile(a => !ReferenceEquals(a, paragraph))
+            .LastOrDefault(a => a.Name == W.ins && !mayJoin(a));
+        if (envelope is null) return (anchor, afterAnchor);
+        var node = anchor;
+        bool after = afterAnchor;
+        while (!ReferenceEquals(node, envelope))
+        {
+            var container = node.Parent!;
+            if (!BoundaryContainers.Contains(container.Name)) return null;
+            var leading = after ? node.ElementsBeforeSelf().Append(node) : node.ElementsBeforeSelf();
+            var trailing = after ? node.ElementsAfterSelf() : node.ElementsAfterSelf().Prepend(node);
+            if (!trailing.All(IsContentless))
+            {
+                if (leading.All(IsContentless)) after = false;
+                else
+                {
+                    SplitContainerBefore(container, trailing.ToList(), NextRevisionId);
+                    after = true;
+                }
+            }
+            else after = true;
+            node = container;
+        }
+        return (node, after);
+    }
+
+    /// <summary>Whether <see cref="OutsideForeignInsertion"/> has an envelope to leave from
+    /// <paramref name="anchor"/>, and whether it can (null when it would need to cut a container
+    /// other than a hyperlink, smart tag or revision envelope).</summary>
+    private static bool? NeedsToLeaveInsertion(XElement paragraph, XElement anchor, Func<XElement, bool> mayJoin)
+    {
+        var path = anchor.Ancestors().TakeWhile(a => !ReferenceEquals(a, paragraph)).ToList();
+        int outer = path.FindLastIndex(a => a.Name == W.ins && !mayJoin(a));
+        if (outer < 0) return false;
+        return path.Take(outer + 1).All(a => BoundaryContainers.Contains(a.Name)) ? true : null;
+    }
+
+    /// <summary>A sibling that gives a container half no content of its own: a range or proofing
+    /// marker, or a run holding nothing but properties and empty text.</summary>
+    private static bool IsContentless(XElement e) =>
+        IsInlineMarker(e)
+        || (e.Name == W.r && e.Elements().All(c => c.Name == W.rPr || (c.Name == W.t && c.Value.Length == 0)));
+
+    /// <summary>Move <paramref name="movedChildren"/> (the container's trailing children) into a
+    /// copy of <paramref name="container"/> placed right after it. Nothing to move, nothing done.</summary>
+    internal static void SplitContainerBefore(XElement container, IReadOnlyList<XElement> movedChildren, Func<int> nextRevisionId)
+    {
         if (movedChildren.Count == 0) return;
 
+        var second = SecondHalfOf(container, nextRevisionId);
+        foreach (var child in movedChildren) { child.Remove(); second.Add(child); }
+        container.AddAfterSelf(second);
+    }
+
+    /// <summary>An empty container to hold the second half of <paramref name="container"/> when it
+    /// is cut in two. Every attribute EXCEPT the Unid: that one is this container's identity, and a
+    /// hyperlink's public hl:&lt;scope&gt;:&lt;unid&gt; id is derived from it. Cloning it would give
+    /// the two halves the same id, so FindHyperlinkElement would match only the first and
+    /// Update/RemoveHyperlink would silently act on half the link. An insertion's w:id is likewise
+    /// its own (issue #1298).</summary>
+    private static XElement SecondHalfOf(XElement container, Func<int> nextRevisionId)
+    {
         var second = new XElement(container.Name);
-        // Every attribute EXCEPT the Unid: that one is this container's identity, and a
-        // hyperlink's public hl:<scope>:<unid> id is derived from it. Cloning it would give the
-        // two halves the same id, so FindHyperlinkElement would match only the first and
-        // Update/RemoveHyperlink would silently act on half the link. An insertion's w:id is
-        // likewise its own (issue #1298).
         foreach (var a in container.Attributes())
             if (a.Name != PtOpenXml.Unid) second.SetAttributeValue(a.Name, a.Value);
         second.SetAttributeValue(PtOpenXml.Unid, UnidHelper.GenerateUnid());
         Internal.RevisionOps.RenumberCopiedRevisions(second, nextRevisionId);
-        foreach (var child in movedChildren) { child.Remove(); second.Add(child); }
-        container.AddAfterSelf(second);
+        return second;
     }
 
     /// <summary>
@@ -2878,19 +2985,135 @@ public sealed partial class DocxSession : IDisposable
     /// <paramref name="paragraph"/> into <paramref name="destination"/>. Inline
     /// children advance the position counter by their text length; markers
     /// (bookmarkStart/End, comment range markers, etc.) advance it by 0 and so
-    /// inherit the position they're sandwiched between.
+    /// inherit the position they're sandwiched between. The exception is the end of a
+    /// field whose result ends at the offset: a field's <c>end</c> mark has no text, so it
+    /// sits at the offset too, and it stays with the field's <c>begin</c> (issue #1313).
     /// </summary>
     internal static void MoveInlineChildrenAfter(XElement paragraph, int offset, XElement destination)
     {
+        var endOf = ParagraphFields(paragraph).ToDictionary(field => field.Begin, field => field.End);
+        var awaitedEnds = new HashSet<XElement>();
         int consumed = 0;
         var toMove = new List<XElement>();
         foreach (var child in paragraph.Elements().ToList())
         {
             if (child.Name == W.pPr) continue;
             int len = IsInlineChild(child) ? InlineChildTextLength(child) : 0;
-            if (consumed >= offset) toMove.Add(child);
+            bool keep = consumed < offset || (consumed == offset && len == 0 && awaitedEnds.Count > 0);
+            if (!keep) toMove.Add(child);
+            else
+            {
+                foreach (var mark in child.DescendantsAndSelf(W.fldChar))
+                {
+                    if (endOf.TryGetValue(mark, out var end)) awaitedEnds.Add(end);
+                    else awaitedEnds.Remove(mark);
+                }
+            }
             consumed += len;
         }
         foreach (var c in toMove) { c.Remove(); destination.Add(c); }
+    }
+
+    /// <summary>Split the content of <paramref name="paragraph"/> at <paramref name="offset"/>,
+    /// moving everything after it into <paramref name="destination"/>: the run and container
+    /// splits <see cref="MoveInlineChildrenAfter"/> needs, then the move itself. A field whose
+    /// begin or end mark sits at the offset is first cut free of what shares its run, hyperlink or
+    /// insertion on the other side, so a split at the field's edge keeps the field whole.</summary>
+    private static void SplitParagraphContent(XElement paragraph, int offset, XElement destination,
+        Func<int> nextRevisionId)
+    {
+        foreach (var field in ParagraphFields(paragraph))
+        {
+            if (field.BeginAt == offset) SeparateFieldMark(field.Begin, paragraph, before: true, nextRevisionId);
+            else if (field.EndAt == offset) SeparateFieldMark(field.End, paragraph, before: false, nextRevisionId);
+        }
+        SplitRunsAtOffset(paragraph, offset, nextRevisionId);
+        SplitInlineContainersAtOffset(paragraph, offset, nextRevisionId);
+        MoveInlineChildrenAfter(paragraph, offset, destination);
+    }
+
+    /// <summary>A complex field that begins and ends in one paragraph: its begin and end marks
+    /// and their text offsets, in the paragraph's <see cref="ParagraphText"/> coordinates.</summary>
+    private readonly record struct ParagraphField(XElement Begin, XElement End, int BeginAt, int EndAt);
+
+    /// <summary>The complex fields (<c>w:fldChar</c> begin … end) that both begin and end in
+    /// <paramref name="paragraph"/>, nested ones included. A field that runs on from an earlier
+    /// paragraph or into a later one (a table of contents) is not listed; neither is a field in a
+    /// text box's own paragraphs.</summary>
+    private static List<ParagraphField> ParagraphFields(XElement paragraph)
+    {
+        var fields = new List<ParagraphField>();
+        if (!paragraph.Descendants(W.fldChar).Any()) return fields;
+        var textRuns = InlineRuns(paragraph).ToHashSet();
+        var open = new Stack<(XElement Mark, int At)>();
+        int at = 0;
+        foreach (var element in paragraph.Descendants())
+        {
+            if (element.Name == W.t && element.Parent is { } run && textRuns.Contains(run))
+                at += element.Value.Length;
+            if (element.Name != W.fldChar || !ReferenceEquals(element.Ancestors(W.p).FirstOrDefault(), paragraph))
+                continue;
+            switch ((string?)element.Attribute(W.fldCharType))
+            {
+                case "begin": open.Push((element, at)); break;
+                case "end" when open.Count > 0:
+                    var begin = open.Pop();
+                    fields.Add(new ParagraphField(begin.Mark, element, begin.At, at));
+                    break;
+            }
+        }
+        return fields;
+    }
+
+    /// <summary>
+    /// Cut the run holding a field's <paramref name="mark"/>, and each hyperlink or tracked
+    /// insertion around it, so that the mark starts (<paramref name="before"/>) or ends its
+    /// top-level paragraph child: Word may write a field's end mark and the text after it in one
+    /// run. Each cut is the one a text split makes, so the later half of a run keeps its revision
+    /// ids and the later half of a container takes fresh ones. Stops at any other container,
+    /// which a split keeps whole.
+    /// </summary>
+    private static void SeparateFieldMark(XElement mark, XElement paragraph, bool before, Func<int> nextRevisionId)
+    {
+        var node = mark;
+        while (node.Parent is { } parent && !ReferenceEquals(parent, paragraph))
+        {
+            if (parent.Name != W.r && !SplittableInlineContainers.Contains(parent.Name)) return;
+            var moving = (before ? node.ElementsAfterSelf().Prepend(node) : node.ElementsAfterSelf()).ToList();
+            bool nothingAhead = before && !node.ElementsBeforeSelf().Any(e => e.Name != W.rPr);
+            if (moving.Count == 0 || nothingAhead)
+            {
+                node = parent;
+                continue;
+            }
+            XElement second;
+            if (parent.Name == W.r)
+            {
+                second = new XElement(W.r);
+                if (parent.Element(W.rPr) is { } rPr)
+                {
+                    second.Add(new XElement(rPr));
+                    Internal.RevisionOps.RenumberCopiedRevisions(rPr, nextRevisionId);
+                }
+            }
+            else second = SecondHalfOf(parent, nextRevisionId);
+            foreach (var element in moving) { element.Remove(); second.Add(element); }
+            parent.AddAfterSelf(second);
+            node = before ? second : parent;
+        }
+    }
+
+    /// <summary>Whether splitting <paramref name="paragraph"/> at <paramref name="offset"/> would
+    /// leave a field's begin in one paragraph and its end in the other: an offset strictly inside
+    /// the field, or, at its edge, a mark held in a container the split keeps whole (a content
+    /// control). Answered by splitting a copy, so every container the field's marks can sit in (a
+    /// tracked insertion, a hyperlink) is split exactly as the real split would.</summary>
+    private static bool SplitWouldCutAField(XElement paragraph, int offset)
+    {
+        if (ParagraphFields(paragraph).Count == 0) return false;
+        var copy = new XElement(paragraph);
+        var fields = ParagraphFields(copy);
+        SplitParagraphContent(copy, offset, new XElement(W.p), () => 0);
+        return fields.Any(field => !ReferenceEquals(field.Begin.Ancestors(W.p).First(), field.End.Ancestors(W.p).First()));
     }
 }

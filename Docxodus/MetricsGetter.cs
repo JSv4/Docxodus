@@ -41,11 +41,12 @@ namespace Docxodus
 
         public static XElement GetDocxMetrics(WmlDocument wmlDoc, MetricsGetterSettings settings)
         {
+            var bytes = wmlDoc.GetTransitionalBytes();
             try
             {
                 using (MemoryStream ms = new MemoryStream())
                 {
-                    ms.Write(wmlDoc.DocumentByteArray, 0, wmlDoc.DocumentByteArray.Length);
+                    ms.Write(bytes, 0, bytes.Length);
                     using (WordprocessingDocument document = WordprocessingDocument.Open(ms, true))
                     {
                         bool hasTrackedRevisions = RevisionAccepter.HasTrackedRevisions(document);
@@ -64,7 +65,7 @@ namespace Docxodus
                 {
                     using (MemoryStream ms = new MemoryStream())
                     {
-                        ms.Write(wmlDoc.DocumentByteArray, 0, wmlDoc.DocumentByteArray.Length);
+                        ms.Write(bytes, 0, bytes.Length);
                         UriFixer.FixInvalidUri(ms, brokenUri => FixUri(brokenUri));
                         wmlDoc = new WmlDocument("dummy.docx", ms.ToArray());
                     }

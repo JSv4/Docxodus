@@ -273,6 +273,7 @@ public sealed partial class DocxSession
         try
         {
             var part = Internal.CommentOps.EnsureCommentsPart(main);
+            RecordRevisionIdentity(author);
             Internal.StyleFactory.EnsureCommentStyles(_doc!);
             var id = Internal.CommentOps.NextCommentId(main);
             var idStr = id.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -396,6 +397,7 @@ public sealed partial class DocxSession
         _history.RecordPreOp(TakeSnapshot());
         try
         {
+            RecordRevisionIdentity(author);
             Internal.StyleFactory.EnsureCommentStyles(_doc!);
             var id = Internal.CommentOps.NextCommentId(main);
             var idStr = id.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -661,6 +663,7 @@ public sealed partial class DocxSession
         var element = target.Resolve(_doc!);
         if (element is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        if (RefuseNonBlockSibling(element, target.Anchor, "InsertTable") is { } notBlock) return notBlock;
 
         var opts = options ?? new TableInsertOptions();
         var contents = opts.CellContents;

@@ -627,6 +627,25 @@ The SDK `OpenXmlValidator` (Microsoft365) checks the value range though not uniq
 
 Docxodus: `CommentOps.ParaIdAllocator` scans every paraId-bearing part plus the threading keys and mints one past the largest id below `0x80000000`, falling back to the lowest free value; `NextDurableId` does the same below `0x7FFFFFFF`. `MergeRightCommentDefinitions` re-mints a right-added definition's paraId when the output's comments or threading already use it, re-keying its threading entries with it, and gives its `commentsIds` entry a fresh durable id when the output already uses its own. (Docxodus merges no `commentsExtensible` (`w16cex`) entries, so there is nothing to re-key there.) A last render pass, `ParagraphIds.MakeUnique`, then renames any remaining duplicate story paragraph (comment definitions and threading keys are read first and keep their values; nothing refers to a story paragraph's paraId). `w14:textId` is left alone: it is a version identifier for the paragraph's text, not an identity, so the validator's range check is the only constraint enforced on it here.
 
+#### A reply added in the revision names its parent by the revision's paraId (issue #1312)
+
+The redline's comment definitions are the original's. A reply the revision adds is merged in with its own `commentsExtended` entry, whose `w15:paraIdParent` is the paraId the **revised** package gives the parent comment. Nothing makes that value the original's: a tool that writes no comment paraIds leaves the original's root without one, and an editor that renumbers paraIds on save gives the same comment a different value in each version. Minimal reproducer (original, no `commentsExtended` part):
+
+```xml
+<w:comment w:id="0" w:author="Ann"><w:p><w:r><w:t>Root comment.</w:t></w:r></w:p></w:comment>
+```
+
+The revision adds `<w:comment w:id="1">` with `w14:paraId="00000002"`, gives the root `w14:paraId="00000001"`, and threads `<w15:commentEx w15:paraId="00000002" w15:paraIdParent="00000001"/>`.
+
+| | Redline root paraId | Reply's `paraIdParent` | Reply in `ListComments` |
+|---|---|---|---|
+| Docxodus before | none | `00000001` (names nothing) | top-level |
+| Docxodus after | freshly minted | that minted paraId | under the root |
+
+Word was not measured. Adopting the revised paraId for the root is not a fix: when the original already gives that value to another comment, the reply would thread under that comment, or the original comment would be renamed and lose its own entry and resolved state to the root. `MergeRightCommentDefinitions` (`LinkRepliesToOriginalParents`) instead follows the parent through its comment id, which `CommentOps.AlignIds` has aligned between the inputs by author, date and text, and re-points the reply at the output definition's own paraId, minting one when it has none. A reworded root is a different comment by that identity, so the redline deletes the original's and inserts the revision's, and the reply threads under the inserted one as before.
+
+Threading and resolution are not tracked changes, and the redline's definitions are the original's, so only the link of a reply the revision **adds** is translated. A comment the original already holds keeps the original's state: no entry in the original means open and top-level, and the redline states exactly that, even when the revision resolved it or threaded it under another original comment. This also makes a consolidation independent of reviewer order. When two original comments share author, date and text, the id alignment may pair them crosswise, so a reply to one of them lists top-level rather than under a guess. Finally, every comment with a paraId gets its own entry in each threading part the redline has (`CompleteCommentThreadingEntries`), since either input may lack a part the other brings.
+
 #### v1 limitation: cross-document comment id / paraId collision (independent documents only)
 
 The comment merge (`MergeRightCommentDefinitions`) and collapse assume a comment present in both sides carries the SAME `w:id` — true when the two inputs are two versions of ONE document (Word never reassigns a comment's id, so an edited doc's comment ids are stable). Two **independent** documents that each happened to assign `w:id="0"` to a DIFFERENT comment anchored on the same text, are out of v1 scope: the cross-document case can leave `accept` showing the left comment's text (the right definition is not re-id'd and merged). (A right-added comment whose `w14:paraId` collides with a left one's is handled: it takes a fresh paraId, issue #1170.) The output stays schema-valid and every reference resolves to exactly ONE comment (the `(C)` backstop guarantees that) — it is a content/threading-attribution gap, not a structural corruption, and it does not arise from the diff/review workflow the engine targets (before/after of one document). Re-id'ing right-sourced markers for a genuinely independent-document merge is a follow-on.
@@ -2902,11 +2921,65 @@ Two separate causes:
   flex path. A bookmark that opens a rendered annotation range still falls back, as an annotation
   range that is already open does. Underline and strike were rejected, but CSS text decoration
   does not paint an empty tab box on either path, so the rejection cost alignment and bought no
-  decoration. LibreOffice does draw the underline under an underlined tab; Docxodus still does not,
-  before or after this fix.
+  decoration. LibreOffice does draw the underline (and the strike) across an underlined (or struck)
+  tab. Since issue #1285 the tab box draws them too, as borders of empty blocks inside it.
+- A bookmark inside a `w:hyperlink` rendered as an `<a id>` inside the link's `<a href>`. HTML
+  forbids nested links, so the browser's parser closed the link at the bookmark and left the label,
+  title and number outside it, off their stops (issue #1285). Inside a link the bookmark target is
+  now an empty `<span id>`.
 
 - Code: `Docxodus/WmlToHtmlConverter.cs`: `CalculateSpanWidthTransform` (right-tab branch),
   `ConvertAlignedTabRuns`, `CanFlexTabRun`.
+- Tests: `Docxodus.Tests/RightTabLeaderLineTests.cs`, `npm/tests/right-tab-leader-lines.spec.ts`.
+
+## Leader lines with field page numbers, wrapping titles, and a second stop in the indent (issue #1285)
+
+Three more shapes of the entry above (left stop at 1296, `w:ind w:left="1296" w:right="864"
+w:hanging="648"`, Letter page, one-inch margins, so the line ends at 8496 twips):
+
+- The page number is a `PAGEREF` complex field (`w:fldChar` begin, `w:instrText`, separate, result,
+  end), as in every Word-built table of contents.
+- The title runs past the line end and wraps, so the page number belongs on its last line.
+- A first right stop at 8800 lies inside the right indent, and a second stop follows it: a right stop
+  at 9360 or a left stop at 8900.
+
+| Shape | LibreOffice 25.8.7.3 | Docxodus (before) | Docxodus (after) |
+|---|---|---|---|
+| `PAGEREF` number | One line, number ending on the stop (540pt) | Fixed server-estimated tab: number on the next line (with `w:right`), or ending at 609.5px and 617px instead of 624px (without) | One line, number ending at 624px |
+| Wrapping title | Title on two lines, number at the end of line 2 on the stop (540.1pt), leader from the title's last word | Number on a third line, at 528–544px | Title on two lines, number at the end of line 2 ending at 624px, leader from the last word |
+| Right 8800, then right 9360 | One line: "12" ends at 512pt (8800), "34" at 540.1pt (9360) | Both numbers on line 2, at 86–160px | One line: "12" ends at 586.7px, "34" at 624px |
+| Right 8800, then left 8900 | One line: "A" starts at 517.1pt (8900) | Line 2 | One line: "A" starts at 593.3px |
+| Word | Not measured | | |
+
+LibreOffice keeps text after the left stop at 8900 on the line only while it fits before the column
+edge (9360); a wider word moves to the next line, behind a leader. Forcing a 24-word suffix into the
+nowrap tail extended it beyond the page; only seven words fit within the column. The tab-width pass
+now identifies overflowing text after that final left tab and keeps the paragraph on its ordinary
+wrapping path. All 24 words then stay in the column. The preceding number retains the ordinary path's
+different placement from LibreOffice, visible in the benchmark captures. Word is unmeasured.
+
+Causes and fixes, all in `Docxodus/WmlToHtmlConverter.cs`:
+
+- `ConvertAlignedTabRuns` refused every run that held a `w:fldChar` or `w:instrText`, so every field
+  paragraph used the fixed tab widths. Those runs draw nothing, so they now stay on the flex path. A
+  stretch converts its fields on its own, so a field open across a tab is cut in two; a `HYPERLINK`
+  (rendered as one link) or a `PAGE`/`NUMPAGES` marker cut that way keeps the old path, as does a form
+  field, whose begin carries form data.
+- `CalculateSpanWidthTransform` marked any tab whose pen was past the line end as following wrapped
+  text (issue #891). After a right stretch ends on a stop inside the indent, the pen is past the line
+  end without any wrap; the pass now allows the pen to reach the furthest such stop. In
+  `ConvertAlignedTabRuns`, the segment that ends there hands its overhang back with a negative
+  `margin-right`, which would also pull everything after it left by that much. So what follows goes in
+  one nowrap, content-wide box whose left margin undoes the overhang and whose `-100%` right margin
+  takes it off the line (a zero-width box let a `pre-wrap` run wrap inside it in the paginated view).
+- A right tab after wrapped text kept the fixed path, sized from an estimate of where the last line
+  ends. When the wrapped text began at the left indent, where its later lines also begin, the pass
+  records the stop's distance from that indent (`pt:TabWrappedSegmentWidth`). The segment then spans
+  from the indent to the stop: the text wraps inside it at the line end, `align-items: last baseline`
+  puts the number on the text's last line, and the tab, which takes no room after the last word,
+  draws a leader as wide as the segment, clipped (`overflow-x: clip`) where the number begins.
+  Wrapped text that began elsewhere keeps the fixed path.
+
 - Tests: `Docxodus.Tests/RightTabLeaderLineTests.cs`, `npm/tests/right-tab-leader-lines.spec.ts`.
 
 ## `w:defaultTabStop` of 0 or a few twips: automatic stops past the pen, and none at 0 (issue #1269)
@@ -3353,6 +3426,46 @@ the whole marked result (`substitutePageNumberFields`), so the cached run's form
 intentionally not reproduced. A `\* MERGEFORMAT` result that should keep prior formatting, and Word's
 own output, still need a Word capture before Docxodus models them. Evidence: docx-fidelity-bench
 `paragraphs-page-number-*` cases (bench issue #26).
+
+## Fields: a deleted `PAGE` field keeps its code in `w:delInstrText` (issue #1272)
+
+**Status:** fixed; Docxodus matches LibreOffice; Word not yet captured (October 2026)
+
+A field deleted under tracked changes moves its instruction from `w:instrText` to `w:delInstrText`,
+just as its text moves from `w:t` to `w:delText`:
+
+```xml
+<w:del w:id="31" w:author="Review Example" w:date="2026-09-12T10:00:00Z">
+  <w:r><w:delText xml:space="preserve">Folio </w:delText></w:r>
+  <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+  <w:r><w:delInstrText xml:space="preserve"> PAGE </w:delInstrText></w:r>
+  <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+  <w:r><w:delText>1</w:delText></w:r>
+  <w:r><w:fldChar w:fldCharType="end"/></w:r>
+</w:del>
+```
+
+| Two-page footer, markup view | Word | LibreOffice | Docxodus before #1272 | Docxodus now |
+|---|---|---|---|---|
+| Deleted `Folio {PAGE} / {NUMPAGES}` | Not yet captured | `Folio 1 / 2`, `Folio 2 / 2` | `Folio 1 / 2` on both pages | `Folio 1 / 2`, `Folio 2 / 2`, struck through |
+| Same footer, not deleted (control) | Not yet captured | `Folio 1 / 2`, `Folio 2 / 2` | `Folio 1 / 2`, `Folio 2 / 2` | unchanged |
+
+`FieldRetriever.InstrText` read only `w:instrText`, and `WmlToHtmlConverter`'s revision wrappers
+(`w:del`, `w:ins`, `w:moveFrom`, `w:moveTo`) converted their children run by run, so a field wholly
+inside one was never grouped and never got its `data-field` marker. The field reader now reads
+`w:delInstrText` for a deleted field, one whose begin character is inside a `w:del` or `w:moveFrom`
+(a move source may also keep its code as `w:instrText`, as Word writes it). A live field still means
+only its live `w:instrText`: one whose code was edited under tracking carries the old code as
+`w:delInstrText` beside the new code as `w:instrText`, and a live field whose whole code was deleted
+has no code at all. A wrapper that wholly contains a field groups it like paragraph content; a wrapper
+inside an open field, or one a field crosses, does not, because the enclosing content already grouped
+that field. Word often writes a deleted field as one `w:del` per run, each with its own id and
+sometimes its own date. When every part of the field that shows text is the same kind of revision
+(deletion or insertion), the marker is placed inside the revision that holds the result, because the
+paginator replaces the marker's text and would otherwise drop the deletion styling. With deleted
+content hidden, a deleted field shows nothing and gets no marker. The accepted view never sees the deleted
+field: revisions are accepted before conversion. Evidence: docx-fidelity-bench `paragraphs-page-number-deleted-field` and its `-control`.
+
 ## Footnotes: how much of a page a long note may take (issue #1119)
 
 **Status:** Docxodus matches LibreOffice; Word not yet captured (October 2026)
@@ -3606,6 +3719,96 @@ A header row (`w:tblHeader`) repeats at the top of each page the table continues
 `w:hRule` (reported for Word in issue #1171; not yet measured here). Docxodus repeated no header row,
 whatever its rule, before that issue.
 
+## Tables: nothing separates a table from the block above it (issue #1244)
+
+Word starts a table's first row where the block above it ends. A paragraph's own after-spacing is the
+only gap; with none (absent, zero or inherited as zero) there is no gap at all, and a table that
+follows another table directly starts where that one ends. Compatibility mode 14 behaves the same.
+
+```xml
+<w:p><w:pPr><w:spacing w:after="0"/></w:pPr><w:r><w:t>WillowBefore boundary.</w:t></w:r></w:p>
+<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr>
+  <w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>
+  <w:tr><w:trPr><w:trHeight w:val="360" w:hRule="atLeast"/></w:trPr>
+    <w:tc><w:p><w:r><w:t>WillowCell content.</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+```
+
+Distance from the paragraph's line to the first cell's line, in points, with exact 16pt lines and
+18pt minimum rows. Word is a Word for the web PDF export (October 23, 2026; no build reported);
+Docxodus is the HTML converter's output laid out by Chromium:
+
+| Block above the table | Word | Docxodus before | Docxodus after |
+|---|---:|---:|---:|
+| paragraph, after-spacing absent | 16.0 | 23.5 | 16.0 |
+| paragraph, `w:after="0"` | 16.0 | 23.5 | 16.0 |
+| paragraph, `w:after="0"`, table with a 1pt top border | 17.0 | 24.25 | 16.75 |
+| paragraph, `w:after="120"` | 22.0 | 22.0 | 22.0 |
+| paragraph, `w:after="240"` | 28.0 | 28.0 | 28.0 |
+| paragraph, after-spacing 200 inherited from `w:docDefaults` | 26.0 | 26.0 | 26.0 |
+| paragraph, `w:after="0"`, compatibility mode 14 | 16.0 | 23.5 | 16.0 |
+| another table (first cell to second table's first cell) | 18.0 | 25.5 | 18.0 |
+
+The converter used to give a table a 7.5pt top margin of its own whenever the block before it was a
+paragraph without after-spacing, or anything other than a paragraph, to "separate" them (#108). Word
+has no such rule, so the margin is gone. A floating table's `w:tblpPr/@w:topFromText` still becomes its
+top margin.
+
+Three differences remain, none part of this fix:
+
+- When the second of two adjacent tables has a top border, Word does not add the border's width between
+  them: its first line is still 18.0pt below the first table's. The HTML converter's output adds 0.75pt.
+- The PDF export previously merged already adjacent tables during its `final` review-profile
+  projection, dropping the second table's own properties (#1341). Revision acceptance now records
+  source boundaries and joins compatible tables only when resolution creates their adjacency. Final
+  and original exports therefore retain each table's own properties. The Word measurements above
+  remain the original plain-HTML comparison; the fix adds native and production-export regressions.
+  An original #1341 benchmark fixture adds a reference-engine caveat: LibreOffice 25.8.7.3 loads
+  adjacent 4,800/6,000-twip tables with left cell margins 0/720 as one two-row table using the second
+  table's width and margin. A paragraph-separated control stays as two tables. The saved DOCX and
+  rendered PDF both confirm the difference. The new LibreOffice reference therefore is not proof of
+  Word's table-boundary semantics; benchmark eligibility and full pixel measurements are retained.
+  Native and export regressions assert each source table's properties independently. No new Word
+  capture is claimed for this fixture.
+- Word gives the exact zero-height rows of `tables-row-height-exact-zero-borderless` and
+  `tables-row-height-exact-zero-only` (docx-fidelity-bench) the height of their content. In the second,
+  the paragraph after the table starts 58.5pt below the one before it: four 14.6pt lines, one for that
+  paragraph and one for each row. The #1339 fix treats an exact zero as unconstrained, matching the
+  native Word captures; positive exact heights retain #1168's clipping. See the detailed entry below.
+
+- Code: `Docxodus/WmlToHtmlConverter.cs` (`ProcessTable`).
+- Tests: `HtmlConverterBlockSiblingTests`, `HC056_TablePrecededByParagraph_HasNoImplicitTopMargin`,
+  `npm/tests/export-table-boundary.spec.ts`; bench cases `tables-boundary-*` (core-v51).
+
+## Exact table rows: zero uses the content height (issue #1339)
+
+`<w:trHeight w:val="0" w:hRule="exact"/>` is schema-valid, but Word for the web renders it at its
+content height. It does not hide the row. Native PDFs captured on 2026-10-24 show this in borderless
+and bordered rows, including a three-line cell. An exact row with its value omitted is likewise
+unconstrained. Positive exact rows still clip: the separate Times New Roman control includes
+one-twip empty rows and an 8pt row whose content exceeds its height. Those controls are not evidence
+that an ordinary exact-zero row should disappear.
+
+The [MS-OI29500 trHeight note](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/5919e0bd-e6ce-477e-8d66-0e5282f5c506)
+(Part 1 §17.4.80, note c) distinguishes the standard, which permits exact zero, from Word's authoring
+restriction against that combination. It does not prescribe Word's reader fallback. The content-height
+fallback here follows the observed native Word PDFs. Note d also describes Word's bottom-padding
+addition to a positive exact height; this fix does not change that separate geometry rule.
+
+`ProcessTableRow` parses the height once and emits a height constraint and exact-row clip only for a
+positive value. Zero therefore reaches pagination and export as ordinary cell content, with no clip
+that would remove its PageMap fragments or PDF text. A positive height consumed entirely by borders
+or padding can still produce a zero-area clip; synthetic PageMap tests retain that distinction.
+
+`TestFiles/ZeroExactRows/word-observations.json` pins the two Times New Roman source packages,
+native PDF hashes, fonts, pages and observed words. Source bytes are unchanged and validate against
+Open XML SDK 3.5.1 Microsoft365. The earlier two Liberation Serif fixtures were also captured; Word
+substituted Times New Roman, so those PDFs are diagnostic evidence rather than eligible font-matched
+references. The source-identical Word downloads did not normalize the zero height. Word exposed no
+exact build number. The PDF and UI evidence remain in the durable per-issue fixture pack.
+
+Tests: `TableRowHeightRuleTests`, `TableRowHeightUnitTests`, `npm/tests/export-exact-row.spec.ts`
+and `npm/tests/page-map-exact-row.spec.ts`.
+
 ## Footnotes: how much of a page the note area takes (issue #1178)
 
 Four shapes, Letter page, 1in margins (648pt of body), Times New Roman 12pt single-spaced body
@@ -3741,6 +3944,100 @@ heading as the baseline, and reject would keep the heading that the pending chan
 Code: `DocxSession.SplitParagraph`, `TrackSplitOffProperties`, `RemoveMarkOwnedProperties`.
 Tests: `DocxSessionClonedRevisionTests` (RID003, RID004, RID007, RID010, RID011, RID020, RID022).
 
+## Merging paragraphs under tracking: the deleted mark and whose properties survive (issue #1313)
+
+A tracked join (Delete at a paragraph's end, Backspace at the next one's start) is the inverse of
+the tracked Enter above: the mark that ends the first paragraph is marked deleted, and both
+paragraphs stay until review.
+
+```xml
+<w:p>
+  <w:pPr><w:jc w:val="center"/><w:rPr><w:del w:id="7" w:author="Bob" w:date="…"/><w:b/></w:rPr></w:pPr>
+  <w:r><w:t>First.</w:t></w:r>
+  <w:ins w:id="8" w:author="Bob" w:date="…"><w:r><w:t xml:space="preserve"> </w:t></w:r></w:ins>
+</w:p>
+<w:p>
+  <w:pPr><w:jc w:val="center"/>
+    <w:rPr><w:b/><w:rPrChange w:id="9" w:author="Bob" w:date="…"><w:rPr/></w:rPrChange></w:rPr>
+    <w:pPrChange w:id="10" w:author="Bob" w:date="…"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr>
+  <w:r><w:t>Second.</w:t></w:r>
+</w:p>
+```
+
+Accepting the deleted mark joins the first paragraph into the second. The question is again which
+paragraph's properties the joined paragraph keeps:
+
+| Accept a deleted mark between P1 (`jc=center`) and P2 (`jc=right`), no property change recorded | Joined paragraph keeps |
+|---|---|
+| Word | unmeasured |
+| LibreOffice | unmeasured |
+| Docxodus (`RevisionOps.MergeParagraphWithNext`) | P2's `w:pPr` (`right`), the surviving mark's |
+| Untracked `DocxSession.MergeParagraphs` | P1's formatting (`center`); P2's section boundary |
+
+The tracked merge does not depend on the answer. It writes P1's properties onto P2 as the editor's
+own `w:pPrChange`, and P1's mark formatting as the editor's `w:rPrChange` on P2's mark. The only
+row the encoding needs is the one Docxodus measures: accepting everything gives P1's properties,
+which is what an untracked merge gives. A consumer that keeps P1's properties on accept gives the
+same result. Rejecting everything resolves the property changes and restores the mark, so both
+paragraphs come back exactly. What belongs to P2's mark alone (its own revision, its section break)
+is not touched, so a section break that P2 ends stays where it was.
+
+A tracked merge whose first mark ends a section remains unsupported. An untracked merge removes
+that boundary and keeps the second mark's entire `w:sectPr`, including its pending section-property
+change, if present (#1350). Previously it kept the first boundary and discarded the second; merging
+two paragraphs before the next section could silently make both sections use the final section's
+layout. The first paragraph's other properties still survive. Word and LibreOffice section-boundary
+behaviour has not been measured for this reproducer.
+
+The copy of P1's properties is one value, so it cannot follow a pending change to them. Say Alice
+centred P1 (`w:pPrChange`, before: `left`) and Bob then merges. Bob's copy is `center`. Reject
+Alice's change and accept Bob's merge, and the joined paragraph comes out `center`, the formatting
+Alice's rejection was meant to remove; rejecting her change first and then merging untracked gives
+`left`. So a tracked merge is refused (`UnresolvedStructuralRevision`) while P1 or its mark has a
+pending property change, whoever made it. A pending change on P2 is refused too: the merge would
+fold its own change into it, so one revision would record two edits, and a change of Alice's the
+merge took back to its baseline would simply be gone. The one exception is the editor's own change
+that the merge takes back to its baseline, the Enter-then-Backspace case, which is resolved.
+
+Code: `DocxSession.MergeParagraphs`, `RefuseTrackedMerge`, `TrackMergedProperties`.
+Tests: `DocxSessionTrackedEditGapTests` (`TrackedMerge_*`, `TrackedSplitThenMerge_*`,
+`TrackedEnterAfterAHeadingThenBackspace_*`).
+
+## Splitting a paragraph inside a field's result (issue #1313)
+
+```xml
+<w:p><w:r><w:t xml:space="preserve">See </w:t></w:r>
+  <w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> REF x </w:instrText></w:r>
+  <w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Clause twelve</w:t></w:r>
+  <w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t xml:space="preserve"> now</w:t></w:r></w:p>
+```
+
+Word lets a field's result span paragraphs: a table of contents is one field across many. But a
+split at an offset inside "Clause twelve" splits the field's displayed result, not the field.
+Before #1313, Docxodus put `begin`, the instruction, `separate` and "Clause" in the first paragraph,
+and " twelve" with the `end` mark in the second. The same thing happened at offset 17, right after
+the result. The `end` mark has no text, so it sits at offset 17 too, and every zero-width child at
+the split offset moved to the second paragraph.
+
+| Split at | Docxodus before | Docxodus now |
+|---|---|---|
+| 4 (before the field) | field whole in the second paragraph | same |
+| 10 (inside the result) | field cut in two | refused, `UnsupportedInlineBoundary` |
+| 17 (after the result) | field cut: `end` alone in the second paragraph | field whole in the first paragraph |
+
+Only an offset strictly between a field's begin and end marks is refused, and only for a field
+whose begin and end are both in the paragraph. A field that already runs across paragraphs is not
+the paragraph's to keep whole, so a split inside it goes ahead. Word may write a mark in the same
+run as text on the far side of an edge (`<w:r><w:fldChar w:fldCharType="end"/><w:t> now</w:t></w:r>`),
+or inside the same hyperlink or tracked insertion as that text. A split at that edge first cuts the
+run and each such container at the mark, as a text split cuts them, so the field stays whole on its
+side. The check splits a copy of the paragraph and compares where each field's marks land, so a
+field inside a tracked insertion or a hyperlink is covered as well; an edge inside a container a
+split keeps whole (a content control) is refused like the inside.
+
+Code: `DocxSession.SplitWouldCutAField`, `ParagraphFields`, `SeparateFieldMark`, `MoveInlineChildrenAfter`.
+Tests: `DocxSessionTrackedEditGapTests` (`Split*Field*`).
+
 ## Hidden paragraph mark: which paragraph's keep properties govern the joined block (issue #1294)
 
 A paragraph whose mark is hidden (`w:pPr/w:rPr/w:vanish`) is joined to the paragraph after it, the
@@ -3812,6 +4109,54 @@ the balloons out, and `docs/architecture/all_markup_layout.md` gives the design.
 Word does when a page's balloons cannot fit beside it. Docxodus never overlaps them: it shortens the
 tallest a line at a time, lets any that still do not fit run off the page's foot, and reports every
 cut balloon in a `comment_balloon_truncated` export warning.
+
+## Comments in a footer or footnote (issue #1310)
+
+OOXML permits a comment anchor outside the body. Docxodus preserves it under its documented
+export contract, even though Word ignores these non-body anchors. Minimal
+reproducer, a footer holding the range and its reference (the footnote form is the same markup inside
+`w:footnote`):
+
+```xml
+<w:ftr><w:p>
+  <w:commentRangeStart w:id="5"/><w:r><w:t>OakFooterLine Ledger copy.</w:t></w:r>
+  <w:commentRangeEnd w:id="5"/><w:r><w:commentReference w:id="5"/></w:r>
+</w:p></w:ftr>
+```
+
+| | Footer or footnote comment with a reference | The same range with no `w:commentReference` | Body comment with no reference |
+|---|---|---|---|
+| Word | Microsoft documents that these non-body anchor elements are ignored; no new capture | same documented restriction | no new capture |
+| LibreOffice 25.8.7.3 | will not open the package: `soffice --convert-to pdf` reports "source file could not be loaded" | opens; draws no comment | opens; draws no comment |
+| Docxodus before the fix | no highlight, marker or entry, in every comment mode; no export warning | the same | highlight and note |
+| Docxodus now | highlight, marker and entry, as a body comment | highlight and note | unchanged |
+
+**Analysis.** Microsoft's [commentReference implementation note](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/84a35ef3-9c12-4b59-ab4c-4a88f520d06c)
+and [commentRangeStart note](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/64b95366-980f-4c75-9519-b745345ded9a)
+say that OOXML permits these anchors but Word ignores them outside the body. Preserving their
+content here follows Docxodus's export contract; it does not claim Word parity.
+LibreOffice's failure is a load failure, not a rendering choice. It reproduces with the
+reference run on its own (no range) and with a `CommentReference` character style; removing only the
+reference run makes the package load. A comment with no reference has no annotation in LibreOffice,
+so it prints nothing even in the body. Docxodus lost the comment because its comment state was
+attached to the body's part only; a range in another story found none.
+
+**Code.** `WmlToHtmlConverter.ConvertToHtml` annotates a per-story `CommentTracker` onto every story
+root and each individual note; `npm/src/pagination.ts` places a footer comment's margin note.
+The nearest tracker scopes open ranges to one note, so an open range cannot highlight its peer.
+A rendered range without a reference also keeps its entry when another story contains a real
+reference; selecting only reference-mark IDs previously discarded that note.
+
+**Validation.** Open XML SDK 3.5.1 reports `Sem_MissingReferenceElement` for permitted non-body
+comment anchors even when the matching comment exists in the main document's comments part.
+The SDK disallows adding that comments part directly to a header/footer. Tests retain only this
+bounded semantic finding for these four story part types and verify every target id against the
+actual comments part; all other validation errors fail. This does not suppress renderer or export
+warnings. Benchmark metadata retains each SDK finding verbatim. Design:
+`docs/architecture/comment_rendering.md`, "Comments outside the body". Tests:
+`StoryCommentRenderingTests`, `HtmlConversionEditorRenderTests.HER007`,
+`npm/tests/export-story-comments.spec.ts`. The paired fidelity-bench story cases use the range-only
+form, because the LibreOffice reference track cannot open the other.
 
 ## Contributing
 
@@ -4041,3 +4386,190 @@ a paragraph whose run uses it (`w:rStyle="DocID"`); then the mirror case, an ori
 by a kept run and a revision inserting a paragraph with paragraph style `DocID`. Record whether Word drops,
 renames or merges the revised style, what the inserted run's or paragraph's style reference names, and
 whether `w:name` changes.
+
+### Plain text inside a move-destination range (issue #1340)
+
+A run between `w:moveToRangeStart` and `w:moveToRangeEnd`, outside any `w:moveTo`, is ordinary content. Word for the web preserves it when rejecting the move:
+
+```xml
+<w:moveToRangeStart w:id="3" w:name="move1" w:author="Alex" w:date="2026-05-01T09:00:00Z"/>
+<w:moveTo w:id="4" w:author="Alex" w:date="2026-05-01T09:00:00Z"><w:r><w:t>amount</w:t></w:r></w:moveTo>
+<w:r><w:t>XY</w:t></w:r>
+<w:moveToRangeEnd w:id="3"/>
+```
+
+| Reader | Reject all |
+|---|---|
+| Word for the web, captured 2026-10-24 | keeps `XY`; removes only the moved destination text |
+| LibreOffice | not adjudicated for these exact source inputs |
+| `RevisionProcessor.RejectRevisions` before #1340 | drops `XY` |
+| `RevisionProcessor.RejectRevisions` after #1340 | keeps `XY` |
+| `DocxSession.RejectAllRevisions` | keeps `XY` |
+
+Word also accepts and rejects two disjoint destination ranges with the same `w:name`, including a
+range spanning paragraphs. The session now lists them as one supported move and resolves all its
+ranges together. Each range still needs its own paired `w:id`, coherent author/date ownership and
+ordered, disjoint source and destination content. Reused IDs, overlapping same-named ranges and
+crossed ranges remain refused. A named range links explicitly marked moved content; its position
+alone does not make ordinary content part of the move (ECMA-376 §17.13.5.24 and §17.13.5.28).
+
+The processor inspects live content before removing moved wrappers. Range cleanup preserves
+untracked runs and non-run content, including bookmarks, fields and originally empty content controls,
+with their containers and properties. Controls emptied by the move and comment ranges whose moved
+reference disappears do not preserve a second copy. Later passes still resolve deleted paragraph marks
+and deleted content controls. This applies to
+accepting source ranges and rejecting destination ranges.
+
+`MoveRangeWordOracleTests` pins six original literal-OOXML source documents in
+`TestFiles/RP/MoveRangeMembership/`: an unsplit control, plain text after and between moved wrappers,
+a split destination, plain text outside the range, and a cross-paragraph split. Their manifest records
+source hashes and native Word accept/reject DOCX, document XML and PDF hashes. All source packages
+validate with Open XML SDK 3.5.1 (`Microsoft365`). The 36 endpoint checks exercise the stateless
+processor, session bulk resolution and selective resolution against Word's actual paragraph lists;
+all resulting packages must validate and contain no move markers. Native Word output is retained
+unchanged in the evidence pack; some Word downloads contain unrelated settings-order findings, so
+those outputs are evidence rather than validator-clean fixture inputs. Word exposed no build number.
+
+Editing strictly inside a `w:moveTo` remains refused by `ReplaceTextAtSpan` and `SplitParagraph`:
+coordinating changes to both moved sides is a separate editing operation. Text inserted at a same-
+paragraph move edge still goes past its range marker. Existing ordinary content inside a range,
+including text at an edge in another paragraph, now survives resolution by both APIs.
+
+---
+
+## Strict conformance: the same markup under different namespace URIs (issue #1268)
+
+ISO/IEC 29500 Strict packages, which Word writes as "Strict Open XML Document", spell every
+WordprocessingML name and relationship type in the `http://purl.oclc.org/ooxml/` family instead of
+the transitional `http://schemas.openxmlformats.org/` one. For this reproducer the markup is otherwise
+identical:
+
+```xml
+<w:document xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main"><w:body><w:p>
+  <w:del w:id="31" w:author="Review Example"><w:r><w:delText>Amber prism</w:delText></w:r></w:del>
+  <w:ins w:id="32" w:author="Review Example"><w:r><w:t>Indigo prism</w:t></w:r></w:ins>
+</w:p></w:body></w:document>
+```
+
+with `_rels/.rels` naming the main part through
+`http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument`.
+
+| Consumer | Strict input |
+|---|---|
+| Open XML SDK 3.5.1 validator (Office 2021) | 0 findings, as for the transitional twin |
+| LibreOffice | renders the revisions as it does for the transitional twin |
+| Word | converts Strict to transitional on open (not re-run for this reproducer) |
+| Docxodus before #1268 | `DocxDiff`/`DocxCompare` and `HtmlConversionOps` converted; every other entry point matched transitional `W.*` names against Strict XML and found nothing — accept/reject left the markup, `HasTrackedRevisions` was `false`, `WmlToHtmlConverter.ConvertToHtml(WmlDocument)` threw because it found no `w:document` |
+| Docxodus after | identical results to the transitional twin |
+
+**Why.** The XDocument pipelines compare element names, and an element in a different namespace is a
+different name. The Open XML SDK converts the namespaces when the package is written back, which is why accept/reject
+returned a transitional package that still held the unresolved `w:ins`/`w:del`: the translation came
+after the revision transforms had already skipped them.
+
+**Code.** `StrictOoxmlNormalizer` rewrites the URIs. Code that opens a `WmlDocument` to read or change
+its content takes the bytes from `DocxodusDocument.GetTransitionalBytes()`: the
+`OpenXmlMemoryStreamDocument` constructor, `DocumentBuilder` (which converts each Strict source once on
+entry), `DocumentStructureAnalyzer`, `MetricsGetter`, `OpenContractExporter`, `WmlDocument.MainDocumentPart`
+and the rest. Code that reports on the package itself (hashes, manifests, deliverable verification)
+keeps reading `DocumentByteArray`. `DocxSession` opens its live package from the conversion, keeps the
+caller's exact bytes as the opening package (delivery source, verification baseline). `SemanticDiff`
+runs its bounded package inspection on the bytes as given, then compares a Strict side's conversion,
+so the semantic changes and delivery receipt of a session opened on Strict bytes show only its edits.
+The Strict test reads only the main part's root start tag, so a transitional package costs one small
+read. A damaged zip entry is copied through unconverted, and a package the conversion cannot read at
+all is opened as it is, so damage fails where and how it did before the conversion existed. The `WordprocessingDocument` overloads receive a package the
+caller already opened and are not converted. Tests: `StrictOoxmlRevisionTests`.
+
+**Known limitation: value spaces.** `StrictOoxmlNormalizer` rewrites namespace and relationship URIs
+only. Strict also narrows some value spaces, and those values pass through unchanged: `w:jc` is
+`start`/`end` rather than `left`/`right`, `w:ind` uses `w:start`/`w:end`, and percentage widths are
+written as `"50%"`. Docxodus already reads the `w:ind` and percent-suffixed spellings (see the sections
+on each), but `WmlToHtmlConverter.CreateStyleFromJc` maps only `left`, `right`, `center` and `both`,
+so a Strict `start`/`end` paragraph alignment is not rendered.
+
+
+## Literal tabs inside text nodes (#1353)
+
+The issue's Word example treats `<w:t xml:space="preserve">&#9;</w:t>` like `<w:tab/>`:
+its position is the paragraph's next declared stop. A common docx-js shape has an empty run,
+a tab-only text run, then a header label. The converter previously emitted the literal character
+as browser whitespace, so a right-aligned label stayed near the left margin.
+
+The converter now expands literal tabs in live and deleted text before the normal formatting
+and tab-width pipeline. Body text, headers and footers use the same path. Each text fragment
+keeps its attributes, formatting and revision owner; leading, consecutive and trailing tabs stay
+in order. Field instructions retain literal tab whitespace and do not acquire layout tabs.
+Native regressions compare complete visible text and tab markup with explicit-tab controls;
+worker/pagination and export regressions check the physical right edge and PDF text/drawing facts.
+Browser verification also found explicit tabs inside visible deletion wrappers using a full-width
+spacer without accounting for the deleted text. The label wrapped back to the left margin. Revision
+content now reuses the shared browser-aligned tab renderer, measuring visible deleted text and
+skipping hidden deletion/move-source content. Guards keep field boundaries and revision ownership.
+This implements the reported equivalence; no new Word capture is claimed.
+
+## Floating shape clearance and stacking (#1346)
+
+A 144 × 72pt `wps:wsp` rectangle, or the same rectangle inside `wpg:wgp`, can be
+placed between two paragraphs with `wp:anchor`, column-relative horizontal offset 0,
+paragraph-relative vertical offset 0, and `wp:wrapTopAndBottom`. The drawing is outside
+its paragraph's text line. Dropping its SVG also drops its wrapping exclusion; treating
+it as an inline SVG makes `wrapNone` consume height. The complete valid packages are
+constructed by [the floating-shape fixture](../npm/tests/docx-floating-shape-fixture.ts).
+
+The converter now separates SVG ink from text clearance. Top/bottom drawings reserve
+the union of their bottom edges in the anchor paragraph. The paginator places the ink
+and assigns drawing layers on the physical page. An explicit page stacking context is
+necessary in standalone export: its cleanup removes `contain` and `will-change`, and
+without another context a negative `z-index` drawing paints below the opaque paper.
+The export regressions inspect PDF drawing/text operators as well as HTML geometry.
+
+The local comparison used LibreOffice 25.8.7.3 and source-bound Chromium PDF exports.
+Office Online was unavailable; these observations do not establish Word parity.
+
+| Input | Word | LibreOffice | Docxodus |
+| --- | --- | --- | --- |
+| Paragraph-relative rectangle/group, top/bottom wrapping | Not captured | Keeps ink and clearance | Keeps ink and clearance |
+| `behindDoc="1"`, no wrapping, with body text | Not captured | Ink behind text | Ink behind text and above paper |
+| Teal `relativeHeight="4294967295"` followed by orange `relativeHeight="2147483648"` | Not captured | Orange above teal | Teal above orange |
+| Filled rectangle with a triangular tight/through wrap polygon | Not captured | Uses rectangular clearance | Uses the supplied contour |
+| Floating hexagon / simple inline VML rectangle | Not captured | Draws the geometry | Draws the geometry |
+
+The SDK exposes `relativeHeight` as an unsigned 32-bit value
+([Microsoft API reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.wordprocessing.anchor.relativeheight?view=openxml-3.0.1)).
+Docxodus maps numeric order to dense CSS ranks rather than clamping it to CSS's signed
+range. The high-value ordering and contour differences above need a Word capture
+before either renderer can be treated as a Word reference for those variants. The
+benchmark records them rather than changing the source values to match LibreOffice.
+
+Hexagon geometry follows the ECMA preset equations (`adj=25000`, `vf=115470` by default),
+including the shorter source side and subsequent group transform. The definitions were checked
+against [LibreOffice's published copy at 5044a9a](https://github.com/LibreOffice/core/blob/5044a9a5719bba9402184438e5d66586de01d20f/oox/source/drawingml/customshapes/presetShapeDefinitions.xml).
+Simple VML rectangles follow the declared fill/stroke flags and colours. Their default outline is
+one pixel ([Microsoft VML reference](https://learn.microsoft.com/en-us/windows/win32/vml/msdn-online-vml-strokeweight-attribute));
+unitless stroke weights are EMUs. Drawing these primitives avoids injecting a placeholder label
+into the PDF text inventory. Other geometry, unsupported formulas and positioned VML retain the
+ordinary unsupported-content policy.
+
+
+## Tables: zero-width fixed cells keep a measurable sliver (issue #1201)
+
+A fixed-layout table with `gridCol w:w="0"`, `tcW w:w="0" w:type="dxa"`, and zero
+cell margins does not have an entirely invisible first cell in Word for the web. Native PDF
+captures put the following cell about **1pt** after the body edge. With two zero grid columns
+spanned by one cell, the borderless offset is still 1pt; two separate zero-width cells give
+2pt. Explicit 12pt side padding remains additional to that content width. Default margins and
+borders have further geometry differences; these observations do not resolve their general rules.
+
+The converter gives this combination 1pt of content width and clips horizontal overflow.
+It checks all grid columns the cell spans, its zero absolute preferred width, and fixed layout.
+A missing grid width, a positive preferred width, and explicit autofit do not trigger the rule.
+The shared cell-width calculation uses the same content width for tab placement. PageMap
+registration retains measurable cell and paragraph fragments, including empty paragraphs;
+there is no exception that forgives missing zero-width anchors.
+
+The byte-exact native Word inputs, hashes, fonts, and capture geometry are recorded in
+`TestFiles/ZeroWidthColumns/word-observations.json`. The original author fix is reused for
+its grid-span lookup and horizontal clipping; the native captures correct its assumption
+that the resulting column has exactly zero width. Tests: `ZeroWidthColumnTests` and
+`npm/tests/zero-width-column.spec.ts`.

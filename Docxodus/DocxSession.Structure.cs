@@ -236,6 +236,31 @@ public sealed partial class DocxSession
         return targets;
     }
 
+    /// <summary>The elements whose children are blocks (paragraphs, tables, block content
+    /// controls) wherever they appear. A content control's content or a custom XML element holds
+    /// blocks only when the control itself sits among blocks.</summary>
+    private static readonly HashSet<XName> BlockContainerNames = new()
+    {
+        W.body, W.tc, W.txbxContent, W.hdr, W.ftr, W.footnote, W.endnote, W.comment, W.docPartBody,
+    };
+
+    private static bool HoldsBlocks(XElement? container) => container is not null
+        && (BlockContainerNames.Contains(container.Name)
+            || (container.Name == W.sdtContent && HoldsBlocks(container.Parent?.Parent))
+            || (container.Name == W.customXml && HoldsBlocks(container.Parent)));
+
+    /// <summary>Refuse an anchor that a new paragraph or table cannot be placed beside. Only a
+    /// paragraph, a table or a block content control qualifies: a sibling of a cell, row, grid
+    /// column, section break, note, comment or a run-, row- or cell-level content control would
+    /// be schema-invalid (a <c>w:p</c> directly inside a <c>w:tr</c>, say).</summary>
+    private static EditResult? RefuseNonBlockSibling(XElement element, Anchor anchor, string operation) =>
+        (element.Name == W.p || element.Name == W.tbl || element.Name == W.sdt) && HoldsBlocks(element.Parent)
+            ? null
+            : EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"{operation} places a block beside a paragraph, table or block content control; got kind={anchor.Kind}. "
+                + "To add content inside a table cell, anchor on one of its paragraphs or use ReplaceCellContent",
+                anchor.Id);
+
     private static bool IsEditorBodyBlock(XElement block, XElement parent)
     {
         if (block.Name != W.p && block.Name != W.tbl) return false;
@@ -532,6 +557,14 @@ public sealed partial class DocxSession
             }
             emptied.Remove();
         }
+        // An insertion left holding only range markers (a bookmark it wrapped) would list as an
+        // insertion with no text: unwrap it, keeping the markers where they were.
+        if (parent is { Parent: not null } && parent.Name == W.ins && parent.Elements().All(IsContentless))
+        {
+            var kept = parent.Elements().ToList();
+            foreach (var child in kept) child.Remove();
+            parent.ReplaceWith(kept);
+        }
     }
 
     /// <summary>Convert a deleted run-level element's text to its deleted spelling in place,
@@ -551,14 +584,14 @@ public sealed partial class DocxSession
         text.Ancestors().TakeWhile(a => !ReferenceEquals(a, runLevel))
             .Any(a => RevisionWrapperNames.Contains(a.Name));
 
-    private static bool IsOwnInsertion(XElement? insertion, string author) =>
+    private bool IsOwnInsertion(XElement? insertion, string author) =>
         insertion is not null
-        && string.Equals((string?)insertion.Attribute(W.author), author, StringComparison.Ordinal);
+        && IsOwnRevisionAuthor((string?)insertion.Attribute(W.author), author);
 
     /// <summary>The <c>w:ins</c> that most closely encloses <paramref name="element"/> when it is
     /// <paramref name="author"/>'s own; null when the nearest insertion-like ancestor is another
     /// author's or a move destination (which is never un-inserted), or there is none.</summary>
-    private static XElement? OwnPendingInsertion(XElement element, string author) =>
+    private XElement? OwnPendingInsertion(XElement element, string author) =>
         element.Ancestors().FirstOrDefault(e => e.Name == W.ins || e.Name == W.moveTo) is { } insertion
         && insertion.Name == W.ins && IsOwnInsertion(insertion, author)
             ? insertion
@@ -567,7 +600,7 @@ public sealed partial class DocxSession
     /// <summary>Whether a tracked deletion of <paramref name="root"/> removes content outright
     /// rather than marking it: a run (other than a marker-only one) inside the session author's
     /// own pending insertion, which <see cref="DeleteInlineElementInPlace"/> un-inserts.</summary>
-    private static bool HasOwnInsertedContent(XElement root, string author) =>
+    private bool HasOwnInsertedContent(XElement root, string author) =>
         root.Descendants(W.r).Any(run => !IsMarkerOnlyRun(run)
             && !run.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom)
             && OwnPendingInsertion(run, author) is not null);
@@ -577,7 +610,7 @@ public sealed partial class DocxSession
     /// the author's insertion (directly, or through a hyperlink, field or smart tag holding only
     /// the author's insertions), with no range marker whose partner may lie elsewhere. Such a
     /// paragraph is un-inserted outright by a tracked deletion, as Word does.</summary>
-    private static bool IsWhollyOwnInsertion(XElement paragraph, string author) =>
+    private bool IsWhollyOwnInsertion(XElement paragraph, string author) =>
         IsOwnInsertion(paragraph.Element(W.pPr)?.Element(W.rPr)?.Element(W.ins), author)
         && paragraph.Elements().Where(child => child.Name != W.pPr).All(child => IsOwnInsertedContent(child, author))
         && !paragraph.Descendants().Any(d => d.Name == W.bookmarkStart || d.Name == W.bookmarkEnd
@@ -586,7 +619,7 @@ public sealed partial class DocxSession
             || d.Name == W.moveFromRangeStart || d.Name == W.moveFromRangeEnd
             || d.Name == W.moveToRangeStart || d.Name == W.moveToRangeEnd);
 
-    private static bool IsOwnInsertedContent(XElement element, string author) =>
+    private bool IsOwnInsertedContent(XElement element, string author) =>
         element.Name == W.proofErr
         || (element.Name == W.ins && IsOwnInsertion(element, author))
         || ((element.Name == W.hyperlink || element.Name == W.fldSimple || element.Name == W.smartTag)
@@ -643,6 +676,7 @@ public sealed partial class DocxSession
         var element = target.Resolve(_doc!);
         if (element is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        if (RefuseNonBlockSibling(element, target.Anchor, "InsertParagraph") is { } notBlock) return notBlock;
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -763,6 +797,12 @@ public sealed partial class DocxSession
             return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
                 "SplitParagraph offset falls inside a revision or unsupported inline container; " +
                 "choose a boundary before or after that container", anchorId);
+        // A field whose begin and end are both here stays whole: an offset between its begin and
+        // end marks would leave one in each paragraph. Its edges stay splittable.
+        if (SplitWouldCutAField(element, characterOffset))
+            return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
+                "SplitParagraph offset falls between a field's begin and end marks; split before or after the field",
+                anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -788,9 +828,7 @@ public sealed partial class DocxSession
             // Split any run that straddles the offset (descends into hyperlinks/sdts),
             // then split any container (hyperlink) that still straddles, then move all
             // inline children + markers at-or-past the offset to `second`.
-            SplitRunsAtOffset(element, characterOffset, NextRevisionId);
-            SplitInlineContainersAtOffset(element, characterOffset, NextRevisionId);
-            MoveInlineChildrenAfter(element, characterOffset, second);
+            SplitParagraphContent(element, characterOffset, second, NextRevisionId);
 
             if (newPPr is not null)
             {
@@ -898,6 +936,113 @@ public sealed partial class DocxSession
         return (string?)style?.Element(W.next)?.Attribute(W.val);
     }
 
+    /// <summary>
+    /// Why a tracked merge of <paramref name="first"/> into the paragraph after it cannot be
+    /// recorded, or null when it can (issue #1313):
+    /// <list type="bullet">
+    /// <item>the deleted mark that records the join needs two paragraphs;</item>
+    /// <item>a mark another revision already deleted or moved, on either paragraph, is that
+    /// revision's to resolve first: a deleted second mark would join a third paragraph on accept;</item>
+    /// <item>a first mark that ends a section owns the section break, which accepting the deletion
+    /// would lose where an untracked merge keeps it;</item>
+    /// <item>a pending property change on the first paragraph (its <c>w:pPrChange</c> or its
+    /// mark's <c>w:rPrChange</c>, by anyone): the merge copies the first paragraph's properties
+    /// onto the second, and one copy cannot follow both outcomes of that change, so rejecting it
+    /// while accepting the merge would bring back the formatting it rejected;</item>
+    /// <item>a pending property change on the second paragraph, unless it is the editor's own
+    /// and the merge takes it back to its baseline (Enter then Backspace), which resolves it.
+    /// Otherwise the merge would fold into it and the one change would record both edits, so
+    /// neither could be reviewed on its own; and resolving another author's change would discard
+    /// it, so rejecting the merge would not bring it back.</item>
+    /// </list>
+    /// </summary>
+    private EditResult? RefuseTrackedMerge(XElement first, XElement second, string anchorId)
+    {
+        var firstPPr = first.Element(W.pPr);
+        var secondPPr = second.Element(W.pPr);
+        if (firstPPr is not null && ParagraphMarkRevisions(firstPPr).FirstOrDefault(r => r.Name != W.ins) is { } firstMark)
+            return UnresolvedBeforeMerge($"the first paragraph's mark has an unresolved {firstMark.Name.LocalName} revision", anchorId);
+        if (secondPPr is not null && ParagraphMarkRevisions(secondPPr)
+                .FirstOrDefault(r => r.Name == W.del || r.Name == W.moveFrom) is { } secondMark)
+            return UnresolvedBeforeMerge($"the second paragraph's mark has an unresolved {secondMark.Name.LocalName} revision", anchorId);
+        if (firstPPr?.Element(W.sectPr) is not null)
+            return TrackedStructureUnsupported("MergeParagraphs", anchorId);
+        if ((firstPPr?.Element(W.pPrChange) ?? firstPPr?.Element(W.rPr)?.Element(W.rPrChange)) is { } firstChange)
+            return UnresolvedBeforeMerge($"the first paragraph has an unresolved {firstChange.Name.LocalName}", anchorId);
+
+        var author = _revisionAuthor ?? "docxodus";
+        var markRevisions = Internal.RevisionOps.RevWrapperNames;
+        bool Resolves(XElement change, XName propertyName, XElement? target, params XName[] excluded) =>
+            IsOwnRevisionAuthor((string?)change.Attribute(W.author), author)
+            && XNode.DeepEquals(
+                PropertySnapshot(change.Element(propertyName), propertyName, change.Name, excluded),
+                PropertySnapshot(target, propertyName, change.Name, excluded));
+        if (secondPPr?.Element(W.pPrChange) is { } secondChange
+            && !Resolves(secondChange, W.pPr, firstPPr, W.rPr, W.sectPr))
+            return UnresolvedBeforeMerge("the second paragraph has an unresolved pPrChange", anchorId);
+        if (secondPPr?.Element(W.rPr)?.Element(W.rPrChange) is { } secondMarkChange
+            && !Resolves(secondMarkChange, W.rPr, firstPPr?.Element(W.rPr), markRevisions))
+            return UnresolvedBeforeMerge("the second paragraph's mark has an unresolved rPrChange", anchorId);
+        return null;
+    }
+
+    private static EditResult UnresolvedBeforeMerge(string what, string anchorId) =>
+        EditResult.Fail(EditErrorCode.UnresolvedStructuralRevision,
+            $"{what}; resolve it before a tracked MergeParagraphs", anchorId);
+
+    /// <summary>
+    /// Accepting a deleted paragraph mark joins its paragraph into the next one, which keeps its
+    /// own mark and so its own properties. An untracked merge keeps the first paragraph's other
+    /// properties and the second's section boundary, so a
+    /// tracked merge gives the second paragraph the first's properties (its mark formatting
+    /// included) as this edit's property changes: accepting everything gives what the untracked
+    /// merge gives, and rejecting gives the second paragraph its own back. What belongs to the
+    /// second mark alone — its own revision and its section break — stays. The mirror of
+    /// <see cref="TrackSplitOffProperties"/>.
+    /// </summary>
+    private void TrackMergedProperties(XElement? firstPPr, XElement second, RevisionStamp stamp)
+    {
+        var markRevisions = Internal.RevisionOps.RevWrapperNames;
+        var pPr = second.Element(W.pPr);
+        if (pPr is null)
+        {
+            pPr = new XElement(W.pPr);
+            second.AddFirst(pPr);
+        }
+
+        var mark = pPr.Element(W.rPr) ?? new XElement(W.rPr);
+        var markBefore = PropertySnapshot(mark, W.rPr, W.rPrChange, markRevisions);
+        var markSource = PropertySnapshot(firstPPr?.Element(W.rPr), W.rPr, W.rPrChange, markRevisions);
+        Internal.RevisionOps.RenumberCopiedRevisions(markSource, NextRevisionId);
+        mark.Elements().Where(e => e.Name != W.rPrChange && !markRevisions.Contains(e.Name)).Remove();
+        // CT_ParaRPr: the mark's own revisions, then its run properties, then rPrChange.
+        if (mark.Elements().LastOrDefault(e => markRevisions.Contains(e.Name)) is { } lastRevision)
+            lastRevision.AddAfterSelf(markSource.Elements());
+        else
+            mark.AddFirst(markSource.Elements());
+        TrackPropertyEdit(mark, W.rPrChange, markBefore, stamp, markRevisions);
+        if (mark.Parent is null && mark.HasElements) GetOrCreatePPrChild(pPr, W.rPr).Add(mark.Elements());
+        else if (mark.Parent is not null && !mark.HasElements) mark.Remove();
+
+        var before = PropertySnapshot(pPr, W.pPr, W.pPrChange, W.rPr, W.sectPr);
+        var source = PropertySnapshot(firstPPr, W.pPr, W.pPrChange, W.rPr, W.sectPr);
+        Internal.RevisionOps.RenumberCopiedRevisions(source, NextRevisionId);
+        pPr.Elements().Where(e => e.Name != W.rPr && e.Name != W.sectPr && e.Name != W.pPrChange).Remove();
+        pPr.AddFirst(source.Elements());
+        TrackPropertyEdit(pPr, W.pPrChange, before, stamp, W.rPr, W.sectPr);
+        if (!pPr.HasElements) pPr.Remove();
+    }
+
+    /// <summary>
+    /// Join the paragraph <paramref name="secondAnchorId"/> names onto the end of the one
+    /// <paramref name="firstAnchorId"/> names, its immediate previous sibling, with a separating
+    /// space when neither side has one. The joined paragraph keeps the first paragraph's
+    /// properties except for its section boundary, which comes from the second paragraph.
+    /// Under <see cref="TrackedChangeMode.RenderInline"/> the join is recorded as Word
+    /// records it: the first paragraph's mark is deleted, both paragraphs stay until review (so
+    /// both are in <see cref="EditResult.Modified"/>), and accepting gives the untracked result
+    /// (issue #1313).
+    /// </summary>
     public EditResult MergeParagraphs(string firstAnchorId, string secondAnchorId)
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
@@ -913,15 +1058,22 @@ public sealed partial class DocxSession
         if (firstEl is null || secondEl is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null");
 
+        if (firstEl.Name != W.p)
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "first anchor must name a paragraph", firstAnchorId);
+        if (secondEl.Name != W.p)
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "second anchor must name a paragraph", secondAnchorId);
+
         if (!ReferenceEquals(firstEl.NextNode, secondEl))
             return EditResult.Fail(EditErrorCode.AnchorsNotAdjacent,
                 "MergeParagraphs requires second anchor to be the immediate next sibling of first");
-        if (_trackedChanges == TrackedChangeMode.RenderInline)
-            return TrackedStructureUnsupported("MergeParagraphs", firstAnchorId);
+        bool tracked = _trackedChanges == TrackedChangeMode.RenderInline;
+        if (tracked && RefuseTrackedMerge(firstEl, secondEl, firstAnchorId) is { } trackedRefusal)
+            return trackedRefusal;
 
         _history.RecordPreOp(TakeSnapshot());
         try
         {
+            var stamp = tracked ? NewDistinctRevisionStamp() : default;
             // Insert a single-space separator if both sides end/start with non-whitespace.
             // Sentences from two paragraphs should not jam into one another.
             var firstTail = ParagraphText(firstEl);
@@ -930,9 +1082,46 @@ public sealed partial class DocxSession
                 && !char.IsWhiteSpace(firstTail[^1])
                 && !char.IsWhiteSpace(secondHead[0]))
             {
-                firstEl.Add(new XElement(W.r,
+                var separator = new XElement(W.r,
                     new XElement(W.t,
-                        new XAttribute(XNamespace.Xml + "space", "preserve"), " ")));
+                        new XAttribute(XNamespace.Xml + "space", "preserve"), " "));
+                firstEl.Add(tracked ? CreateRevisionEnvelope(W.ins, stamp, separator) : separator);
+            }
+
+            if (tracked)
+            {
+                // Word's tracked join: the first paragraph's mark is deleted, and both paragraphs
+                // stay until the deletion is accepted.
+                TrackMergedProperties(firstEl.Element(W.pPr), secondEl, stamp);
+                MarkParagraphMark(firstEl, W.del, stamp.Author, stamp.Date);
+                InvalidateProjectionCache();
+                // The second paragraph took the first's properties, so its kind can change
+                // (p → h, p → li): report the anchors as the fresh index has them.
+                return new EditResult
+                {
+                    Success = true,
+                    Modified = new[]
+                    {
+                        AnchorForUnid(firstTarget.Unid, firstTarget.PartUri) ?? firstTarget.Anchor,
+                        AnchorForUnid(secondTarget.Unid, secondTarget.PartUri) ?? secondTarget.Anchor,
+                    },
+                    Patch = PatchFor(firstTarget),
+                };
+            }
+
+            // The second mark survives the join, so its section boundary survives too.
+            // Removing the first mark removes its boundary even if the second has none.
+            firstEl.Element(W.pPr)?.Elements(W.sectPr).Remove();
+            if (secondEl.Element(W.pPr)?.Element(W.sectPr) is { } section)
+            {
+                section.Remove();
+                var pPr = firstEl.Element(W.pPr);
+                if (pPr is null)
+                {
+                    pPr = new XElement(W.pPr);
+                    firstEl.AddFirst(pPr);
+                }
+                SetPPrChildInOrder(pPr, section);
             }
 
             // Move every paragraph-level child from secondEl into firstEl in document
@@ -941,7 +1130,7 @@ public sealed partial class DocxSession
             // children which silently discarded everything else.
             foreach (var child in secondEl.Elements().ToList())
             {
-                if (child.Name == W.pPr) continue; // second's pPr is dropped; first's wins
+                if (child.Name == W.pPr) continue; // other properties come from the first
                 child.Remove();
                 firstEl.Add(child);
             }

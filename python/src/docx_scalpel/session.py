@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 from ._transport import call as _call
 from .enums import (
     ContextBoundary,
+    DeletedTextSide,
     DiffFormat,
     HeaderFooterKind,
     HyperlinkKind,
@@ -71,6 +72,8 @@ from .types import (
     DocxDiffRevision,
     DocxDiffSettings,
     DocxSessionSettings,
+    RevisionIdentity,
+    RevisionAuthorNameInfo,
     DeliverableVerificationResult,
     DeliverableVerificationRequest,
     DeliveryReceiptVerificationResult,
@@ -754,6 +757,16 @@ class DocxSession:
     def set_revision_author(self, author: str | None) -> None:
         """Author stamped on subsequent tracked-change markup; ``None`` restores the ``"docxodus"`` default."""
         self._call("set_revision_author", {"revisionAuthor": author})
+
+    def set_revision_identities(self, identities: Sequence[RevisionIdentity] | None) -> None:
+        """Configure account ownership; None or empty restores the display-name comparison."""
+        self._call("set_revision_identities", {
+            "revisionIdentities": None if identities is None else [identity.to_wire() for identity in identities],
+        })
+
+    def get_revision_author_name_status(self, author: str | None = None) -> RevisionAuthorNameInfo:
+        """Check whether the current or proposed display name is free, own or taken."""
+        return RevisionAuthorNameInfo._from_wire(self._call("get_revision_author_name_status", {"author": author}))
 
     def undo(self) -> bool:
         """Undo one snapshot. Returns ``True`` if the undo ring had something to pop."""
@@ -1582,11 +1595,14 @@ class DocxSession:
 
     def replace_text_at_span(
         self, anchor_id: str, span_start: int, span_length: int, replace: str,
-        *, format: FormatOp | None = None,
+        *, format: FormatOp | None = None, deleted_text_side: DeletedTextSide | None = None,
     ) -> EditResult:
         """Replace a span, optionally formatting the replacement as one atomic undo unit.
 
-        Returns an ordinary edit result; use execute_batch for a package-hashed receipt.
+        ``deleted_text_side`` places a zero-length insertion immediately before or after
+        tracked deleted text at the offset (which takes no room in the offsets); omit it for
+        the default placement. Returns an ordinary edit result; use execute_batch for a
+        package-hashed receipt.
         """
         return EditResult._from_wire(
             self._call(
@@ -1597,6 +1613,8 @@ class DocxSession:
                     "spanLength": span_length,
                     "replace": replace,
                     **({"format": format.to_wire()} if format is not None else {}),
+                    **({"deletedTextSide": DeletedTextSide(deleted_text_side).value}
+                       if deleted_text_side is not None else {}),
                 },
             )
         )

@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 import { cellMargins108, tableIndentDocx, type TableIndentOptions } from './docx-table-indent-fixture.js';
 
@@ -19,7 +21,7 @@ async function lineStarts(bytes: Uint8Array): Promise<Record<string, number>> {
   try {
     const page = await (await task.promise).getPage(1);
     const items = (await page.getTextContent()).items.filter(item => 'str' in item);
-    return Object.fromEntries(items.filter(item => /^Indent/.test(item.str)).map(item => [item.str, item.transform[4]]));
+    return Object.fromEntries(items.filter(item => /^(Indent|Outer|Inner)/.test(item.str)).map(item => [item.str, item.transform[4]]));
   } finally { await task.destroy(); }
 }
 
@@ -46,5 +48,24 @@ for (const [name, options, wordOffset] of cases) {
     const x = await lineStarts(actual.pdf!);
     expect(x.IndentAfter).toBeCloseTo(x.IndentBefore, 1);
     expect(x.IndentCell - x.IndentBefore).toBeCloseTo(wordOffset, 0);
+  });
+}
+
+
+const wordFixtureRoot = new URL('../../TestFiles/TableHorizontalPlacement/', import.meta.url);
+const wordCases = JSON.parse(readFileSync(new URL('word-observations.json', wordFixtureRoot), 'utf8')) as {
+  cases: Array<{ id: string; inputSha256: string; wordMarkers: Record<string, number[]> }>;
+};
+for (const observed of wordCases.cases) {
+  test(`${observed.id}: nested table margins match the captured Word origins`, async ({ browser }) => {
+    test.setTimeout(120_000);
+    const bytes = new Uint8Array(readFileSync(fileURLToPath(new URL(observed.id + '.docx', wordFixtureRoot))));
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(observed.inputSha256);
+    const actual = await renderDocxArtifacts(bytes, { browser, outputs: ['pdf'], reviewProfile: 'final',
+      commentProfile: 'hidden', timeoutMs: 120_000 });
+    expect(actual.pageCount).toBe(1);
+    const starts = await lineStarts(actual.pdf!);
+    for (const marker of ['OuterLeft', 'InnerLeft'])
+      expect(starts[marker]).toBeCloseTo(observed.wordMarkers[marker][0], 0);
   });
 }

@@ -563,8 +563,7 @@ internal static class IrReader
             case RevisionView.Reject:
                 // A revision-free input's accepted/rejected VIEW is the input itself.  Skip the full
                 // RevisionProcessor package round-trip in that common case: besides being expensive,
-                // its document normalizers (notably adjacent-table coalescing) deliberately change
-                // clean structure even though there is no revision to accept/reject.  The scan set
+                // its document normalizers can change non-revision markup too. The scan set
                 // covers every revision element the processor reacts to, across every story the reader
                 // consumes, so any document that actually needs a revision transform still takes that
                 // path.  See the masking analysis on ProcessorActsOnNameSet for why w:instrText/w:t are
@@ -572,7 +571,7 @@ internal static class IrReader
                 if (!HasRevisionMarkup(wdoc, ProcessorActsOnNameSet))
                     return null;
                 return view == RevisionView.Accept
-                    ? RevisionProcessor.AcceptRevisionsForIrReader(working)
+                    ? RevisionProcessor.AcceptRevisions(working)
                     : RevisionProcessor.RejectRevisions(working);
 
             default:
@@ -863,7 +862,9 @@ internal static class IrReader
         // the emitter and anchor index can reproduce that without re-walking the skipped pPr, and (A3) its
         // modeled section-format so a mid-document sectPr-only change is diffable. The trailing top-level
         // body sectPr is a standalone IrSectionBreak block, handled elsewhere.
-        var inlineSectPr = pPr?.Element(W + "sectPr");
+        var inlineSectPr = pPr?.Element(W + "sectPr") is { } carried && BlockMetadataOps.IsSectionBreak(carried)
+            ? carried
+            : null;
         IrAnchor? inlineSectAnchor = inlineSectPr is null
             ? null
             : AnchorFor(IrAnchorKind.Sec, inlineSectPr, ctx);
@@ -3169,7 +3170,7 @@ internal static class IrReader
 
         var refs = new List<IrHeaderFooterRef>();
         int sectionIndex = 0;
-        foreach (var sectPr in body.Descendants(W + "sectPr"))
+        foreach (var sectPr in BlockMetadataOps.SectionBreaks(body))
         {
             foreach (var reference in sectPr.Elements(referenceName))
                 if ((string?)reference.Attribute(R + "id") == relId)

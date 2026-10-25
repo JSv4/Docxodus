@@ -134,6 +134,36 @@
         "stdio": { "op": "set_revision_author" },
         "mcp": { "tool": "docxodus_track_changes", "action": "set_mode" }
       }
+    },
+    {
+      "op": "setRevisionIdentities",
+      "facade": "SetRevisionIdentities",
+      "result": "void",
+      "args": [
+        { "name": "revisionIdentities", "type": "array", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "SetRevisionIdentities" },
+        "npm": { "method": "setRevisionIdentities" },
+        "python": { "method": "set_revision_identities" },
+        "stdio": { "op": "set_revision_identities" },
+        "mcp": { "tool": "docxodus_track_changes", "action": "set_identities" }
+      }
+    },
+    {
+      "op": "getRevisionAuthorNameStatus",
+      "facade": "GetRevisionAuthorNameStatus",
+      "result": "RevisionAuthorNameInfo",
+      "args": [
+        { "name": "author", "type": "string", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "GetRevisionAuthorNameStatus" },
+        "npm": { "method": "getRevisionAuthorNameStatus" },
+        "python": { "method": "get_revision_author_name_status" },
+        "stdio": { "op": "get_revision_author_name_status" },
+        "mcp": { "tool": "docxodus_track_changes", "action": "author_name_status" }
+      }
     }
   ]
 }

@@ -369,37 +369,34 @@ internal static class RevisionOps
 
             if (group.Family == RevisionFamily.Move)
             {
-                var fromStarts = group.RangeMarkers.Where(marker =>
-                    marker.Name == W.moveFromRangeStart).ToArray();
-                var fromEnds = group.RangeMarkers.Where(marker =>
-                    marker.Name == W.moveFromRangeEnd).ToArray();
-                var toStarts = group.RangeMarkers.Where(marker =>
-                    marker.Name == W.moveToRangeStart).ToArray();
-                var toEnds = group.RangeMarkers.Where(marker =>
-                    marker.Name == W.moveToRangeEnd).ToArray();
-                bool duplicate = fromStarts.Length > 1 || fromEnds.Length > 1
-                    || toStarts.Length > 1 || toEnds.Length > 1;
-                bool complete = fromStarts.Length == 1 && fromEnds.Length == 1
-                    && toStarts.Length == 1 && toEnds.Length == 1
+                // One move may own several ranges per side: the name, not a single container,
+                // links move source content to move destination content (ECMA-376 §17.13.5.24,
+                // §17.13.5.28), and RevisionProcessor resolves such a split move (issue #1340).
+                var (fromRanges, fromAmbiguous) = PairMoveRanges(
+                    group.RangeMarkers, W.moveFromRangeStart, W.moveFromRangeEnd);
+                var (toRanges, toAmbiguous) = PairMoveRanges(
+                    group.RangeMarkers, W.moveToRangeStart, W.moveToRangeEnd);
+                bool duplicate = fromAmbiguous || toAmbiguous;
+                bool complete = fromRanges.Count > 0 && toRanges.Count > 0
                     && group.Units.Any(unit => unit.Element.Name == W.moveFrom)
                     && group.Units.Any(unit => unit.Element.Name == W.moveTo);
                 bool pairedIds = complete
-                    && string.Equals((string?)fromStarts[0].Attribute(W.id),
-                        (string?)fromEnds[0].Attribute(W.id), StringComparison.Ordinal)
-                    && string.Equals((string?)toStarts[0].Attribute(W.id),
-                        (string?)toEnds[0].Attribute(W.id), StringComparison.Ordinal);
-                bool distinctRangeIds = complete && !string.Equals(
-                    (string?)fromStarts[0].Attribute(W.id),
-                    (string?)toStarts[0].Attribute(W.id), StringComparison.Ordinal);
+                    && fromRanges.Concat(toRanges).All(range => range.End is not null);
+                bool distinctRangeIds = complete && !fromRanges
+                    .Select(range => (string?)range.Start.Attribute(W.id))
+                    .Intersect(toRanges.Select(range => (string?)range.Start.Attribute(W.id)),
+                        StringComparer.Ordinal)
+                    .Any();
                 var metadataElements = group.Units.Select(unit => unit.Element)
-                    .Concat(fromStarts).Concat(toStarts).ToArray();
+                    .Concat(fromRanges.Select(range => range.Start))
+                    .Concat(toRanges.Select(range => range.Start)).ToArray();
                 bool coherentMetadata = metadataElements.All(element =>
                     string.Equals(AuthorOf(element), group.Author, StringComparison.Ordinal)
                     && string.Equals((string?)element.Attribute(W.date), group.Date,
                         StringComparison.Ordinal)
                     && string.Equals(DateUtcOf(element), group.DateUtc,
                         StringComparison.Ordinal));
-                if (!complete || !pairedIds || !distinctRangeIds || !coherentMetadata)
+                if (duplicate || !complete || !pairedIds || !distinctRangeIds || !coherentMetadata)
                 {
                     group.ResolutionStatus = duplicate || !distinctRangeIds || !coherentMetadata
                         ? RevisionResolutionStatus.Ambiguous
@@ -410,7 +407,7 @@ internal static class RevisionOps
                         : !coherentMetadata ? "incoherent_move_metadata"
                         : "malformed_move_topology",
                         duplicate
-                            ? "A native move name identifies duplicate source or destination range markers."
+                            ? "A native move name identifies source or destination ranges that reuse a w:id or overlap."
                             : !distinctRangeIds
                                 ? "A native move reuses one w:id for distinct source and destination ranges."
                             : !coherentMetadata
@@ -419,19 +416,14 @@ internal static class RevisionOps
                     continue;
                 }
 
-
-                bool fromOrdered = RangeContainsAll(
-                    fromStarts[0], fromEnds[0], group.Units
-                        .Where(unit => unit.Kind == UnitKind.Content
-                            && unit.Element.Name == W.moveFrom)
-                        .Select(unit => unit.Element));
-                bool toOrdered = RangeContainsAll(
-                    toStarts[0], toEnds[0], group.Units
-                        .Where(unit => unit.Kind == UnitKind.Content
-                            && unit.Element.Name == W.moveTo)
-                        .Select(unit => unit.Element));
-                bool disjoint = IsBefore(fromEnds[0], toStarts[0])
-                    || IsBefore(toEnds[0], fromStarts[0]);
+                bool fromOrdered = EachInSomeRange(fromRanges, group.Units
+                    .Where(unit => unit.Kind == UnitKind.Content && unit.Element.Name == W.moveFrom)
+                    .Select(unit => unit.Element));
+                bool toOrdered = EachInSomeRange(toRanges, group.Units
+                    .Where(unit => unit.Kind == UnitKind.Content && unit.Element.Name == W.moveTo)
+                    .Select(unit => unit.Element));
+                bool disjoint = fromRanges.All(from => toRanges.All(to =>
+                    IsBefore(from.End!, to.Start) || IsBefore(to.End!, from.Start)));
                 if (!fromOrdered || !toOrdered || !disjoint)
                 {
                     group.ResolutionStatus = RevisionResolutionStatus.Malformed;
@@ -641,10 +633,34 @@ internal static class RevisionOps
         value.EndsWith("Z", StringComparison.Ordinal)
         && IsValidRevisionDate(value);
 
-    private static bool RangeContainsAll(
-        XElement start, XElement end, IEnumerable<XElement> contents) =>
-        IsBefore(start, end) && contents.All(element =>
-            IsBefore(start, element) && IsBefore(element, end));
+    /// <summary>
+    /// Pair each move range start of one side with its same-<c>w:id</c> end, in document order.
+    /// The side is ambiguous when two of its ranges reuse a <c>w:id</c> or overlap: the spec settles
+    /// text surrounded by several containers by "the last valid container", which a selective
+    /// resolver cannot apply safely. A start with no end keeps a null <c>End</c>.
+    /// </summary>
+    private static (List<(XElement Start, XElement? End)> Ranges, bool Ambiguous) PairMoveRanges(
+        IEnumerable<XElement> markers, XName startName, XName endName)
+    {
+        var sideMarkers = markers.Where(marker => marker.Name == startName || marker.Name == endName)
+            .OrderBy(marker => marker, XNode.DocumentOrderComparer).ToArray();
+        var ranges = sideMarkers.Where(marker => marker.Name == startName)
+            .Select(start => (Start: start, End: sideMarkers.FirstOrDefault(end =>
+                end.Name == endName && IsBefore(start, end)
+                && string.Equals((string?)end.Attribute(W.id), (string?)start.Attribute(W.id),
+                    StringComparison.Ordinal))))
+            .ToList();
+        bool reusedId = ranges.GroupBy(range => (string?)range.Start.Attribute(W.id),
+            StringComparer.Ordinal).Any(byId => byId.Count() > 1);
+        bool overlapping = ranges.Zip(ranges.Skip(1)).Any(pair =>
+            pair.First.End is { } end && !IsBefore(end, pair.Second.Start));
+        return (ranges, reusedId || overlapping);
+    }
+
+    private static bool EachInSomeRange(
+        IReadOnlyList<(XElement Start, XElement? End)> ranges, IEnumerable<XElement> contents) =>
+        contents.All(element => ranges.Any(range =>
+            IsBefore(range.Start, element) && IsBefore(element, range.End!)));
 
     private static bool IsBefore(XElement left, XElement right) =>
         ReferenceEquals(left.Document, right.Document)
@@ -1631,6 +1647,30 @@ internal static class RevisionOps
         return live is not null && XNode.DeepEquals(Rest(live), Rest(change.Element(live.Name)));
     }
 
+    private static bool ColumnWidthCellsAccountForGridChange(
+        XElement table, HashSet<XElement> changedCells, XElement gridChange)
+    {
+        var cells = table.Elements(W.tr).SelectMany(TableGridModel.RowGrid).ToList();
+        if (cells.Count == 0 || changedCells.Count == 0) return false;
+        if (cells.All(cell => changedCells.Contains(cell.Tc))) return true;
+
+        static int? Width(XElement column) =>
+            int.TryParse((string?)column.Attribute(W._w), out var width) && width >= 0 ? width : null;
+        var oldWidths = gridChange.Element(W.tblGrid)?.Elements(W.gridCol).Select(Width).ToArray();
+        var widths = table.Element(W.tblGrid)?.Elements(W.gridCol).Select(Width).ToArray();
+        if (oldWidths is null || widths is null || oldWidths.Length != widths.Length
+            || widths.Any(width => width is null) || oldWidths.Any(width => width is null)
+            || oldWidths.SequenceEqual(widths))
+            return false;
+
+        // Cells without a property revision must span the same total width in both grids.
+        // Otherwise a different stamp's cell edit would be missing from this operation.
+        return cells.Where(cell => !changedCells.Contains(cell.Tc)).All(cell =>
+            cell.Start >= 0 && cell.End >= cell.Start && cell.End <= widths.Length
+            && oldWidths.Skip(cell.Start).Take(cell.Span).Sum(width => (long)width!.Value)
+                == widths.Skip(cell.Start).Take(cell.Span).Sum(width => (long)width!.Value));
+    }
+
     /// <summary>
     /// Coalesce only property revisions that have a concrete table-operation topology. This
     /// preserves one-operation/one-entry semantics for row shading and column-width edits without
@@ -1654,38 +1694,44 @@ internal static class RevisionOps
         }))
         {
             var remaining = byStamp.Where(groups.Contains).ToList();
-            var tableLevel = remaining.Where(group => group.Units.All(unit =>
+            // A schema-valid grid change has no stamp. Consider the table's single bare grid
+            // only for the complete column-width topology below; unrelated property edits must
+            // never acquire it just because they sit in the same table.
+            var bareGrids = propertyGroups.Where(group => groups.Contains(group)
+                && ReferenceEquals(group.Units[0].Table, byStamp.Key.Table)
+                && string.IsNullOrEmpty(group.Author) && group.Date is null && group.DateUtc is null
+                && group.Units.All(unit => unit.Element.Name == W.tblGridChange)).ToList();
+            var widthGroups = bareGrids.Count == 1 ? remaining.Union(bareGrids).ToList() : remaining;
+            var tableLevel = widthGroups.Where(group => group.Units.All(unit =>
                     unit.Element.Name == W.tblGridChange
                     || unit.Element.Name == W.tblPrChange
                     || unit.Element.Name == W.tblPrExChange))
                 .ToList();
-            var tableCells = byStamp.Key.Table!.Descendants(W.tc).ToHashSet();
             var changedCells = remaining.SelectMany(group => group.Units)
                 .Where(unit => unit.Element.Name == W.tcPrChange)
                 .Select(unit => unit.MarkedCell)
                 .Where(cell => cell is not null)
                 .Select(cell => cell!)
                 .ToHashSet();
-            // A column-width edit changes the grid and every cell's width and nothing else of the
-            // cells; the table's own properties change only when its total width or layout did,
+            // A column-width edit changes the grid and the affected cells' widths and nothing else
+            // of the cells; the table's own properties change only when its total width or layout did,
             // so they may be absent. Anything more under the same stamp (Word dates have minute
             // resolution) is a separate edit, such as shading the whole table.
-            var stampUnits = remaining.SelectMany(group => group.Units).ToList();
-            bool completeColumnWidthTopology = tableCells.Count > 0
-                && tableCells.SetEquals(changedCells)
-                && tableLevel.Any(group => group.Units.Any(unit =>
-                    unit.Element.Name == W.tblGridChange))
+            var stampUnits = widthGroups.SelectMany(group => group.Units).ToList();
+            var gridChanges = tableLevel.SelectMany(group => group.Units)
+                .Where(unit => unit.Element.Name == W.tblGridChange).ToList();
+            bool completeColumnWidthTopology = gridChanges.Count == 1
+                && ColumnWidthCellsAccountForGridChange(byStamp.Key.Table!, changedCells, gridChanges[0].Element)
                 && stampUnits.Where(unit => unit.Element.Name == W.tcPrChange)
                     .All(unit => ChangesOnly(unit.Element, W.tcW))
                 && stampUnits.Where(unit => unit.Element.Name == W.tblPrChange)
                     .All(unit => ChangesOnly(unit.Element, W.tblW, W.tblLayout));
             if (completeColumnWidthTopology)
             {
-                var structural = remaining.Where(group => group.Units.All(unit =>
+                var structural = widthGroups.Where(group => group.Units.All(unit =>
                         unit.Element.Name == W.tblGridChange
                         || unit.Element.Name == W.tblPrChange
                         || unit.Element.Name == W.tblPrExChange
-                        || unit.Element.Name == W.trPrChange
                         || unit.Element.Name == W.tcPrChange))
                     .ToList();
                 MergeGroups(structural, groups);
@@ -1736,6 +1782,95 @@ internal static class RevisionOps
         }
     }
 
+    /// <summary>A one-column insertion can cross rows that grow an omission or a merged cell
+    /// instead of gaining a physical cell. Join those separated cell marks only when every row
+    /// and the saved grid describe that same column insertion.</summary>
+    private static RevisionGroup? CoalesceInsertedColumnGroups(
+        List<RevisionGroup> groups, IReadOnlyList<RevisionGroup> tableGroups, XElement table, int partIndex)
+    {
+        var grids = groups.Where(group => group.PartIndex == partIndex
+            && group.Units.Count == 1 && group.Units[0].Element.Name == W.tblGridChange
+            && ReferenceEquals(group.Units[0].Table, table)
+            && string.IsNullOrEmpty(group.Author) && group.Date is null && group.DateUtc is null).ToList();
+        if (grids.Count != 1) return null;
+        var gridGroup = grids[0];
+        var gridChange = gridGroup.Units[0].Element;
+        var columns = table.Element(W.tblGrid)?.Elements(W.gridCol).ToList();
+        var oldColumns = gridChange.Element(W.tblGrid)?.Elements(W.gridCol).ToList();
+        if (columns is null || oldColumns is null || columns.Count != oldColumns.Count + 1) return null;
+        static XElement Value(XElement element) => new(element.Name,
+            element.Attributes().Where(attribute => attribute.Name.Namespace != PtOpenXml.pt));
+        static int Property(XElement? properties, XName name, int fallback = 0) =>
+            (int?)properties?.Element(name)?.Attribute(W.val) ?? fallback;
+
+        var plans = new List<List<RevisionGroup>>();
+        foreach (var byStamp in tableGroups.Where(group => group.Family == RevisionFamily.CellInsert)
+            .GroupBy(group => new { group.Author, group.Date, group.DateUtc }))
+        {
+            var cluster = byStamp.ToList();
+            var inserted = cluster.SelectMany(group => group.Units).Where(unit => unit.Kind == UnitKind.CellMark)
+                .Select(unit => unit.MarkedCell).Where(cell => cell is not null).Select(cell => cell!).ToHashSet();
+            var shapes = WordprocessingMLUtil.TableRows(table).SelectMany(TableGridModel.RowGrid)
+                .Where(cell => inserted.Contains(cell.Tc)).ToList();
+            if (shapes.Count != inserted.Count || shapes.Count == 0 || shapes.Any(cell => cell.Span != 1)) continue;
+            int column = shapes[0].Start;
+            if (column < 0 || column >= columns.Count || shapes.Any(cell => cell.Start != column)
+                || !columns.Where((_, index) => index != column).Select(Value)
+                    .Zip(oldColumns.Select(Value), XNode.DeepEquals).All(equal => equal))
+                continue;
+
+            var changes = new HashSet<XElement> { gridChange };
+            bool covered = true;
+            foreach (var row in WordprocessingMLUtil.TableRows(table))
+            {
+                var cells = TableGridModel.RowGrid(row);
+                int before = TableGridModel.GridBefore(row), after = TableGridModel.GridAfter(row);
+                if (cells.Count == 0 || cells[^1].End + after != columns.Count) { covered = false; break; }
+                XName? omission = column < before ? W.gridBefore : column >= cells[^1].End ? W.gridAfter : null;
+                if (omission is not null)
+                {
+                    var properties = row.Element(W.trPr);
+                    var change = properties?.Element(W.trPrChange);
+                    if (change is null || !ChangesOnly(change, omission)
+                        || Property(properties, omission) != Property(change.Element(W.trPr), omission) + 1)
+                    { covered = false; break; }
+                    changes.Add(change);
+                    continue;
+                }
+                var cell = TableGridModel.CellCovering(cells, column)!.Value;
+                if (inserted.Contains(cell.Tc)) continue;
+                var cellProperties = cell.Tc.Element(W.tcPr);
+                var cellChange = cellProperties?.Element(W.tcPrChange);
+                var previous = cellChange?.Element(W.tcPr);
+                if (cellChange is null || cell.Span != Math.Max(1, Property(previous, W.gridSpan, 1)) + 1
+                    || !ChangesOnly(cellChange, W.gridSpan, W.tcW))
+                { covered = false; break; }
+                var width = cellProperties?.Element(W.tcW);
+                var oldWidth = previous?.Element(W.tcW);
+                bool widthMatches = (string?)oldWidth?.Attribute(W.type) == "dxa"
+                    ? (string?)width?.Attribute(W.type) == "dxa"
+                        && (long?)width?.Attribute(W._w) == Math.Max(0L,
+                            ((long?)oldWidth.Attribute(W._w) ?? 0) + ((long?)columns[column].Attribute(W._w) ?? 0))
+                    : width is null ? oldWidth is null : oldWidth is not null && XNode.DeepEquals(Value(width), Value(oldWidth));
+                if (!widthMatches) { covered = false; break; }
+                changes.Add(cellChange);
+            }
+            if (!covered) continue;
+            var propertiesToJoin = groups.Where(group => group.PartIndex == partIndex
+                && group.Units.Count > 0 && group.Units.All(unit => changes.Contains(unit.Element))
+                && (ReferenceEquals(group, gridGroup)
+                    || (group.Author == byStamp.Key.Author && group.Date == byStamp.Key.Date
+                        && group.DateUtc == byStamp.Key.DateUtc))).ToList();
+            if (!changes.SetEquals(propertiesToJoin.SelectMany(group => group.Units).Select(unit => unit.Element))) continue;
+            plans.Add(cluster.Concat(propertiesToJoin).ToList());
+        }
+        // A bare grid has no author or time. Geometry must identify one complete operation,
+        // never whichever of several plausible columns happened to be enumerated first.
+        if (plans.Count != 1) return null;
+        MergeGroups(plans[0], groups);
+        return plans[0][0];
+    }
+
     /// <summary>
     /// Word records one cell-structure action as live cell marks plus associated table,
     /// cell, paragraph-property, and content revisions. Fold that coherent stamp into
@@ -1753,7 +1888,8 @@ internal static class RevisionOps
         foreach (var byTable in cellGroups.GroupBy(g => g.Units[0].Table))
         {
             if (byTable.Key is null) continue;
-            var tableCellGroups = byTable.ToList();
+            var insertedColumn = CoalesceInsertedColumnGroups(groups, byTable.ToList(), byTable.Key, partIndex);
+            var tableCellGroups = byTable.Where(groups.Contains).ToList();
             var markedCells = tableCellGroups.SelectMany(group => group.Units)
                 .Select(unit => unit.MarkedCell)
                 .Where(cell => cell is not null)
@@ -1778,6 +1914,9 @@ internal static class RevisionOps
                 var matches = tableCellGroups.Where(c =>
                     c.Author == candidate.Author && c.Date == candidate.Date
                     && c.DateUtc == candidate.DateUtc
+                    // The proven column already owns every geometry property it needs. Other
+                    // property revisions remain separate even if they share its stamp.
+                    && (!ReferenceEquals(c, insertedColumn) || candidate.Units.All(unit => unit.Kind != UnitKind.PropsChange))
                     && (candidate.Units.All(unit => unit.Element.Name == W.tblGridChange)
                         || candidate.Units.All(unit => unit.Element.Name == W.tblPrChange
                             || unit.Element.Name == W.tblPrExChange)

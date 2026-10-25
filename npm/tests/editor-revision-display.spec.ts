@@ -145,7 +145,8 @@ test.describe('DocxEditor — showing revisions apart from recording them (#1279
     await page.keyboard.type('New');
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
-    expect(await page.evaluate(() => (window as any).revisions())).toEqual(['delete:Gone clause', 'insert:New']);
+    // Typed after Home, so before the deletion (#1290).
+    expect(await page.evaluate(() => (window as any).revisions())).toEqual(['insert:New', 'delete:Gone clause']);
   });
 
   test('control: untracked, typing into a paragraph that shows only its deleted mark keeps the mark deleted', async ({ page }) => {
@@ -204,6 +205,48 @@ test.describe('DocxEditor — showing revisions apart from recording them (#1279
     await page.evaluate(() => (window as any).editor.showRevisions(true));
     await page.evaluate(() => (window as any).editor.setTrackedChanges(0));
     expect(await shown(page)).toEqual({ ins: 1, del: 1, text: WITH_MARKUP, trackedChanges: 0 });
+  });
+
+  // Backspace at a paragraph's start joins it to the one before. Recorded, the join is a deleted
+  // paragraph mark: both paragraphs stay, on the page too, until the deletion is accepted (#1313).
+  test('recording, Backspace at a paragraph start records the join and keeps both paragraphs until it is accepted', async ({ page }) => {
+    await openEditor(page, { trackedChanges: 1 }, revisionFixture(
+      '<w:p><w:r><w:t>First.</w:t></w:r></w:p><w:p><w:r><w:t>Second.</w:t></w:r></w:p>'));
+    const paragraphs = () => page.evaluate(() => Array.from(document.querySelectorAll('p[data-anchor]'))
+      .map((p) => (p.textContent ?? '').replace(/ /g, ' ').trim()));
+    await page.evaluate(() => document.querySelectorAll<HTMLElement>('p[data-anchor]')[1].focus());
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Backspace');
+
+    expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+    // The first paragraph ends in the inserted separator space and its deleted, struck mark.
+    expect(await paragraphs()).toEqual(['First. ¶', 'Second.']);
+    expect(await page.evaluate(() => (window as any).editor.listRevisions().length)).toBeGreaterThan(0);
+    expect(await page.evaluate(() => (window as any).editor.acceptAllRevisions())).toBe(true);
+    expect(await paragraphs()).toEqual(['First. Second.']);
+  });
+
+  // A second Backspace at the same place: the paragraphs are joined already, so as in Word the key
+  // steps over the struck pilcrow and removes the live character before it (#1313).
+  test('recording, a second Backspace at the joined paragraph steps over the deleted mark', async ({ page }) => {
+    await openEditor(page, { trackedChanges: 1 }, revisionFixture(
+      '<w:p><w:r><w:t>First.</w:t></w:r></w:p><w:p><w:r><w:t>Second.</w:t></w:r></w:p>'));
+    const paragraphs = () => page.evaluate(() => Array.from(document.querySelectorAll('p[data-anchor]'))
+      .map((p) => (p.textContent ?? '').replace(/ /g, ' ')));
+    const backspaceAtSecond = async () => {
+      await page.evaluate(() => document.querySelectorAll<HTMLElement>('p[data-anchor]')[1].focus());
+      await page.keyboard.press('Home');
+      await page.keyboard.press('Backspace');
+    };
+    await backspaceAtSecond();
+    await backspaceAtSecond();
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+    expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+    // The separator space the join inserted was the live character before the mark.
+    expect(await paragraphs()).toEqual(['First.¶', 'Second.']);
+    expect(await page.evaluate(() => (window as any).editor.acceptAllRevisions())).toBe(true);
+    expect(await paragraphs()).toEqual(['First.Second.']);
   });
 
   test('control: left unset, the display follows the recording mode as before', async ({ page }) => {

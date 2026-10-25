@@ -137,6 +137,7 @@ public sealed partial class DocxSession
                 _transactionMutationEpoch,
                 _trackedChanges,
                 _revisionAuthor,
+                _revisionIdentityContext,
                 LastInternalError,
                 LastRollbackError);
             _transactions.Push(state);
@@ -227,6 +228,7 @@ public sealed partial class DocxSession
             _transactionMutationEpoch = state.MutationEpoch;
             _trackedChanges = state.TrackedChanges;
             _revisionAuthor = state.RevisionAuthor;
+            _revisionIdentityContext = state.RevisionIdentities;
             LastInternalError = state.LastInternalError;
             LastRollbackError = state.LastRollbackError;
         }
@@ -712,8 +714,9 @@ public sealed partial class DocxSession
                 _initialCheckpointBytes = _initialCheckpointBytes,
                 _trackedChanges = _trackedChanges,
                 _revisionAuthor = _revisionAuthor,
+                _revisionIdentityContext = _revisionIdentityContext,
                 _shadowOrigin = new ShadowOrigin(
-                    this, _version, snapshot.PackageBytes!, _trackedChanges, _revisionAuthor),
+                    this, _version, snapshot.PackageBytes!, _trackedChanges, _revisionAuthor, _revisionIdentityContext),
             };
             return shadow;
         }
@@ -849,6 +852,7 @@ public sealed partial class DocxSession
             HashPackageBytes(snapshot.PackageBytes!),
             origin.TrackedChanges,
             origin.RevisionAuthor,
+            origin.RevisionIdentities,
             result);
         if (store.Add(retained)) return retention;
         warnings.Add(
@@ -892,11 +896,12 @@ public sealed partial class DocxSession
                     retention);
             }
             if (_trackedChanges != retained.TrackedChanges
-                || !string.Equals(_revisionAuthor, retained.RevisionAuthor, StringComparison.Ordinal))
+                || !string.Equals(_revisionAuthor, retained.RevisionAuthor, StringComparison.Ordinal)
+                || !SameRevisionIdentityContext(_revisionIdentityContext, retained.RevisionIdentities))
             {
                 return CommitPreviewFailure(
                     EditErrorCode.PreviewStale,
-                    $"the tracked-changes mode or revision author changed since preview {previewId}",
+                    $"the tracked-changes mode, revision author or account identities changed since preview {previewId}",
                     retention);
             }
             string liveHash;

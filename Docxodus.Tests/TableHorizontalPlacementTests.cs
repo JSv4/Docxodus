@@ -216,6 +216,7 @@ public class TableHorizontalPlacementTests
                 + "w:left=\"1440\" w:header=\"720\" w:footer=\"720\"/></w:sectPr></w:body></w:document>");
             Feed(main.AddNewPart<StyleDefinitionsPart>(), $"<w:styles xmlns:w=\"{W}\">{styles}</w:styles>");
             Feed(main.AddNewPart<DocumentSettingsPart>(), $"<w:settings xmlns:w=\"{W}\">{compat}</w:settings>");
+            PackageValidation.AssertValid(document, DocumentFormat.OpenXml.FileFormatVersions.Microsoft365);
         }
         return WmlToHtmlConverter.ConvertToHtml(new WmlDocument("Juniper.docx", stream.ToArray()),
             new WmlToHtmlConverterSettings { FabricateCssClasses = false });
@@ -223,7 +224,8 @@ public class TableHorizontalPlacementTests
 
     private static void Feed(OpenXmlPart part, string xml)
     {
-        using var data = new MemoryStream(Encoding.UTF8.GetBytes(xml));
+        var ordered = (XElement)WordprocessingMLUtil.WmlOrderElementsPerStandard(XElement.Parse(xml));
+        using var data = new MemoryStream(Encoding.UTF8.GetBytes(ordered.ToString()));
         part.FeedData(data);
     }
 

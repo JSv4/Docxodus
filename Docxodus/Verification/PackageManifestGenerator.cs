@@ -971,7 +971,8 @@ public static class PackageManifestGenerator
             if (mainDocumentUri is not null
                 && isWordPart
                 && PartNameComparer.Equals(work.Uri, mainDocumentUri))
-                sectionCount += wordElements.Count(element => element.Name.LocalName == "sectPr");
+                sectionCount += wordElements.Count(element =>
+                    element.Name.LocalName == "sectPr" && Internal.BlockMetadataOps.IsSectionBreak(element));
             if (IsContentType(work, "footnotes"))
                 footnoteCount += CountPositiveDefinitions(wordElements, "footnote");
             if (IsContentType(work, "endnotes"))

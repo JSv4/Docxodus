@@ -501,6 +501,214 @@ public class DocxSessionMetadataTests
         Assert.False(span.Effective.Bold);
     }
 
+    // Issue #1308: a block belongs to the first section break at or after it in document order,
+    // and a sec anchor names its own section. Each block's text is mapped to the page width of the
+    // section it sits in (see BuildFourSectionDocument).
+    [Theory]
+    [InlineData("One.", 12240)]
+    [InlineData("End one.", 12240)]     // carries break A; a later paragraph carries break B
+    [InlineData("Boxed.", 12240)]       // a text box inside "End one."
+    [InlineData("End two.", 13000)]
+    [InlineData("Cell three.", 14000)]
+    [InlineData("End three.", 14000)]   // break C sits on a table-cell paragraph
+    [InlineData("Four.", 15840)]
+    public void BM023_GetSectionInfo_ResolvesEachBlockToTheSectionItIsIn(string text, int expectedWidth)
+    {
+        using var session = new DocxSession(BuildFourSectionDocument());
+        var anchor = session.Project().AnchorIndex.Values
+            .Single(v => v.Anchor.Scope == "body" && v.Anchor.Kind == "p" && v.TextPreview.StartsWith(text)).Anchor.Id;
+
+        Assert.Equal(expectedWidth, session.GetSectionInfo(anchor)!.PageWidthTwips);
+    }
+
+    [Fact]
+    public void BM024_GetSectionInfo_SecAndTableAnchorsResolveToTheirOwnSection()
+    {
+        using var session = new DocxSession(BuildFourSectionDocument());
+        var index = session.Project().AnchorIndex.Values;
+        var sections = index.Where(v => v.Anchor.Kind == "sec").Select(v => v.Anchor).ToList();
+
+        Assert.Equal(new[] { 12240, 13000, 14000, 15840 },
+            sections.Select(s => session.GetSectionInfo(s.Id)!.PageWidthTwips));
+        Assert.All(sections, s => Assert.Equal(s.Unid, session.GetSectionInfo(s.Id)!.SectionUnid));
+        var table = index.Single(v => v.Anchor.Kind == "tbl").Anchor.Id;
+        Assert.Equal(14000, session.GetSectionInfo(table)!.PageWidthTwips);
+    }
+
+    [Fact]
+    public void BM025_SectionEdits_OnAnEarlierSecAnchor_ChangeThatSectionOnly()
+    {
+        using var session = new DocxSession(BuildFourSectionDocument());
+        var first = session.Project().AnchorIndex.Values.First(v => v.Anchor.Kind == "sec").Anchor.Id;
+
+        Assert.True(session.SetPageSetup(first, new PageSetupOp { MarginLeftTwips = 999 }).Success);
+        Assert.True(session.SetPageNumbering(first, new PageNumberingOp { Start = 7 }).Success);
+        Assert.True(session.SetHeaderText(first, HeaderFooterKind.First, "Section one").Success);
+
+        using var stream = new MemoryStream(session.Save());
+        using var doc = WordprocessingDocument.Open(stream, false);
+        var sectPrs = doc.MainDocumentPart!.GetXDocument().Root!.Descendants(W.sectPr).ToList();
+        Assert.Equal(new string?[] { "999", "1440", "1440", "1440" },
+            sectPrs.Select(s => (string?)s.Element(W.pgMar)!.Attribute(W.left)));
+        Assert.Equal(new string?[] { "7", null, null, null },
+            sectPrs.Select(s => (string?)s.Element(W.pgNumType)?.Attribute(W.start)));
+        Assert.Equal(new[] { true, false, false, false },
+            sectPrs.Select(s => s.Element(W.headerReference) is not null && s.Element(W.titlePg) is not null));
+    }
+
+    // A pending w:sectPrChange keeps the section's earlier properties as a nested w:sectPr. That
+    // copy is not a section of its own; it belongs to the section whose change it records.
+    [Fact]
+    public void BM026_FindGoverningSectPr_ResolvesAPendingChangesEarlierPropertiesToItsSection()
+    {
+        var body = System.Xml.Linq.XElement.Parse(
+            """
+            <w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:p><w:pPr><w:sectPr><w:sectPrChange w:id="1"><w:sectPr/></w:sectPrChange></w:sectPr></w:pPr></w:p>
+              <w:p/>
+              <w:sectPr><w:sectPrChange w:id="2"><w:sectPr/></w:sectPrChange></w:sectPr>
+            </w:body>
+            """);
+        var sections = body.Descendants(W.sectPr).Where(BlockMetadataOps.IsSectionBreak).ToList();
+
+        Assert.Equal(2, sections.Count);
+        Assert.All(sections, s => Assert.Same(s,
+            BlockMetadataOps.FindGoverningSectPr(s.Element(W.sectPrChange)!.Element(W.sectPr)!)));
+
+        // Through the public entry: no anchor reports a stored earlier copy's page (9999/9998).
+        static string Pending(int width, int before) => Sect(width).Replace("</w:sectPr>",
+            $"<w:sectPrChange w:id=\"{before}\" w:author=\"Alice\"><w:sectPr><w:pgSz w:w=\"{before}\" w:h=\"15840\"/></w:sectPr></w:sectPrChange></w:sectPr>");
+        using var session = new DocxSession(BuildLiteralXmlDocument(
+            $"<w:body><w:p><w:pPr>{Pending(12240, 9999)}</w:pPr><w:r><w:t>One.</w:t></w:r></w:p><w:p><w:r><w:t>Two.</w:t></w:r></w:p>{Pending(15840, 9998)}</w:body>",
+            NormalStyles));
+        var widths = session.Project().AnchorIndex.Values.Where(v => v.Anchor.Scope == "body")
+            .Select(v => session.GetSectionInfo(v.Anchor.Id)!.PageWidthTwips).Distinct().OrderBy(w => w);
+        Assert.Equal(new[] { 12240, 15840 }, widths);
+    }
+
+    // A w:sectPr that is no section break (one inside a text box, or the earlier properties a
+    // w:pPrChange keeps) sits in a container between "A." and the real break that ends A's section.
+    // Lookups pass over it; an edit through A changes the real break, never the decoy (width 9999).
+    [Theory]
+    [InlineData("tbl")]
+    [InlineData("sdt")]
+    [InlineData("pPrChange")]
+    public void BM028_SectionLookups_SkipASectPrThatIsNoSectionBreak(string decoy)
+    {
+        string boxed = $"<w:r><w:pict><v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\"><v:textbox><w:txbxContent><w:p><w:pPr>{Sect(9999)}</w:pPr><w:r><w:t>Boxed.</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>";
+        string container = decoy switch
+        {
+            "tbl" => $"<w:tbl><w:tblGrid><w:gridCol w:w=\"5000\"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Held.</w:t></w:r>{boxed}</w:p></w:tc></w:tr></w:tbl>",
+            "sdt" => $"<w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>Held.</w:t></w:r>{boxed}</w:p></w:sdtContent></w:sdt>",
+            _ => $"<w:tbl><w:tblGrid><w:gridCol w:w=\"5000\"/></w:tblGrid><w:tr><w:tc><w:p><w:pPr><w:pPrChange w:id=\"5\" w:author=\"Alice\"><w:pPr>{Sect(9999)}</w:pPr></w:pPrChange></w:pPr><w:r><w:t>Held.</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+        };
+        using var session = new DocxSession(BuildLiteralXmlDocument(
+            $"<w:body><w:p><w:r><w:t>A.</w:t></w:r></w:p>{container}<w:p><w:pPr>{Sect(12240)}</w:pPr><w:r><w:t>B.</w:t></w:r></w:p>{Sect(15840)}</w:body>",
+            NormalStyles));
+        var anchor = session.Project().AnchorIndex.Values.First(v => v.Anchor.Kind == "p" && v.TextPreview == "A.").Anchor.Id;
+
+        Assert.Equal(12240, session.GetSectionInfo(anchor)!.PageWidthTwips);
+        Assert.All(session.ListBlocks().Body, unit => Assert.Equal(0, unit.Section));   // A, the container, B
+        var chrome = HtmlConversionOps.RenderChromeHtml(session, new HtmlConversionOptions { PaginationMode = 1 });
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(chrome, "<div[^>]*data-section-index=").Count);
+        Assert.True(session.SetPageSetup(anchor, new PageSetupOp { MarginLeftTwips = 999 }).Success);
+        Assert.Equal(new[] { ("9999", "1440"), ("12240", "999"), ("15840", "1440") }, SectionMargins(session.Save()));
+    }
+
+    // Content after the body's trailing w:sectPr (invalid, but seen in the wild) belongs to that
+    // section; an edit must change it rather than append a second body-level w:sectPr.
+    [Fact]
+    public void BM029_ContentAfterTheTrailingSectPr_EditsThatSection()
+    {
+        using var session = new DocxSession(BuildLiteralXmlDocument(
+            $"<w:body><w:p><w:r><w:t>A.</w:t></w:r></w:p>{Sect(15840)}<w:p><w:r><w:t>After.</w:t></w:r></w:p></w:body>",
+            NormalStyles));
+        var after = session.Project().AnchorIndex.Values.First(v => v.Anchor.Kind == "p" && v.TextPreview == "After.").Anchor.Id;
+
+        Assert.Equal(15840, session.GetSectionInfo(after)!.PageWidthTwips);
+        Assert.True(session.SetPageSetup(after, new PageSetupOp { MarginLeftTwips = 999 }).Success);
+        Assert.Equal(new[] { ("15840", "999") }, SectionMargins(session.Save()));
+    }
+
+    private const string NormalStyles =
+        """<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>""";
+
+    private static string Sect(int width) =>
+        $"<w:sectPr><w:pgSz w:w=\"{width}\" w:h=\"15840\"/>"
+        + "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/></w:sectPr>";
+
+    /// <summary>(page width, left margin) of every w:sectPr in the saved body, in document order.</summary>
+    private static (string, string)[] SectionMargins(byte[] saved)
+    {
+        using var stream = new MemoryStream(saved);
+        using var doc = WordprocessingDocument.Open(stream, false);
+        return doc.MainDocumentPart!.GetXDocument().Root!.Descendants(W.sectPr)
+            .Select(s => ((string?)s.Element(W.pgSz)?.Attribute(W._w) ?? "", (string?)s.Element(W.pgMar)?.Attribute(W.left) ?? ""))
+            .ToArray();
+    }
+
+    // Issue #1314: the index lists one sec anchor per section, never the earlier-properties copy a
+    // pending w:sectPrChange keeps, whether the change came in with the document or was just made.
+    [Fact]
+    public void BM027_AnchorIndex_DoesNotListAPendingSectionChangesCopyAsASection()
+    {
+        using var session = new DocxSession(BuildLiteralXmlDocument(
+            """
+            <w:body>
+              <w:p><w:pPr><w:sectPr><w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/>
+                <w:sectPrChange w:id="5" w:author="Alice" w:date="2025-01-01T00:00:00Z">
+                  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:sectPrChange>
+              </w:sectPr></w:pPr><w:r><w:t>One.</w:t></w:r></w:p>
+              <w:p><w:r><w:t>Two.</w:t></w:r></w:p>
+              <w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>
+            </w:body>
+            """,
+            """<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"""));
+        string[] SectionWidths() => session.Project().AnchorIndex.Values
+            .Where(v => v.Anchor.Kind == "sec")
+            .Select(v => $"{session.GetSectionInfo(v.Anchor.Id)!.PageWidthTwips}").ToArray();
+
+        Assert.Equal(new[] { "15840", "12240" }, SectionWidths());
+
+        session.SetTrackedChanges(TrackedChangeMode.RenderInline);
+        var final = session.Project().AnchorIndex.Values.Last(v => v.Anchor.Kind == "sec").Anchor.Id;
+        Assert.True(session.SetPageSetup(final, new PageSetupOp { MarginLeftTwips = 999 }).Success);
+
+        Assert.Equal(new[] { "15840", "12240" }, SectionWidths());
+    }
+
+    /// <summary>Four sections: break A and break B on consecutive body paragraphs, break C on a
+    /// paragraph inside a table cell, and the body-level final section. Each section has its own
+    /// page width so a test can tell which one a lookup resolved to.</summary>
+    private static byte[] BuildFourSectionDocument()
+    {
+        return BuildLiteralXmlDocument(
+            $"""
+            <w:body>
+              <w:p><w:r><w:t>One.</w:t></w:r></w:p>
+              <w:p><w:pPr>{Sect(12240)}</w:pPr><w:r><w:t>End one.</w:t></w:r><w:r><w:pict>
+                <v:shape xmlns:v="urn:schemas-microsoft-com:vml"><v:textbox><w:txbxContent>
+                  <w:p><w:r><w:t>Boxed.</w:t></w:r></w:p>
+                </w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>
+              <w:p><w:pPr>{Sect(13000)}</w:pPr><w:r><w:t>End two.</w:t></w:r></w:p>
+              <w:tbl>
+                <w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>
+                <w:tr><w:tc>
+                  <w:p><w:r><w:t>Cell three.</w:t></w:r></w:p>
+                  <w:p><w:pPr>{Sect(14000)}</w:pPr><w:r><w:t>End three.</w:t></w:r></w:p>
+                </w:tc></w:tr>
+              </w:tbl>
+              <w:p><w:r><w:t>Four.</w:t></w:r></w:p>
+              {Sect(15840)}
+            </w:body>
+            """,
+            """
+            <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+            </w:styles>
+            """);
+    }
+
     /// <summary>
     /// A document written as literal XML, so <c>ST_OnOff</c> values keep the exact lexical form
     /// under test (the SDK's <c>OnOffValue</c> would normalize "False" to "false").

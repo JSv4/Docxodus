@@ -31,6 +31,14 @@ namespace Docxodus
         public bool DiscardHeadersAndFootersInKeptSections { get; set; }
         public string? InsertId { get; set; }
 
+        /// <summary>A copy of this source, every setting kept, that reads <paramref name="document"/>.</summary>
+        internal Source WithDocument(WmlDocument document)
+        {
+            var copy = (Source)MemberwiseClone();
+            copy.WmlDocument = document;
+            return copy;
+        }
+
         public Source(string fileName)
         {
             WmlDocument = new WmlDocument(fileName);
@@ -334,6 +342,9 @@ namespace Docxodus
 
         private static void BuildDocument(List<Source> sources, WordprocessingDocument output, DocumentBuilderSettings settings)
         {
+            // Convert each STRICT source once, up front (issue #1268): the builder opens a source's
+            // bytes in several places, and every one of them matches transitional W.* names.
+            sources = sources.Select(TransitionalSource).ToList();
             WmlDocument? wmlGlossaryDocument = CoalesceGlossaryDocumentParts(sources, settings);
 
             if (RelationshipMarkup == null)
@@ -641,6 +652,14 @@ namespace Docxodus
                 newSources.Add(newSrc);
             }
             return newSources;
+        }
+
+        private static Source TransitionalSource(Source src)
+        {
+            var bytes = src.WmlDocument.GetTransitionalBytes();
+            if (ReferenceEquals(bytes, src.WmlDocument.DocumentByteArray))
+                return src;
+            return src.WithDocument(new WmlDocument(src.WmlDocument.FileName, bytes));
         }
 
         private static Source AddAndRectify(Source src, Dictionary<string, string> styleNameMap, HashSet<string> styleIds)
@@ -1410,9 +1429,6 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
         {
             if (doc.MainDocumentPart!.GetXDocument().Root == null)
                 throw new DocumentBuilderException(string.Format("Source {0} is an invalid document - MainDocumentPart contains no content.", sourceNumber));
-
-            if ((string)doc.MainDocumentPart!.GetXDocument().Root!.Name.NamespaceName == "http://purl.oclc.org/ooxml/wordprocessingml/main")
-                throw new DocumentBuilderException(string.Format("Source {0} is saved in strict mode, not supported", sourceNumber));
 
             // note: if ever want to support section changes, need to address the code that rationalizes headers and footers, propagating to sections that inherit headers/footers from prev section
             foreach (var d in doc.MainDocumentPart!.GetXDocument().Descendants())
@@ -2270,7 +2286,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
 
             using (MemoryStream ms = new MemoryStream())
             {
-                ms.Write(wmlGlossaryDocument.DocumentByteArray, 0, wmlGlossaryDocument.DocumentByteArray.Length);
+                var bytes = wmlGlossaryDocument.GetTransitionalBytes();
+                ms.Write(bytes, 0, bytes.Length);
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, false))
                 {
                     if (wDoc.MainDocumentPart!.GlossaryDocumentPart == null)

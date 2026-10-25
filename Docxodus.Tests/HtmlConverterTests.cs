@@ -1092,6 +1092,35 @@ namespace Docxodus.Tests
         }
 
         [Fact]
+        public void HC008h_EndnoteMarkers_IgnoreAPendingSectionChangesEarlierFormat()
+        {
+            // Issue #1314: a tracked section-property change keeps the section's earlier properties
+            // as a nested w:sectPr inside w:sectPrChange. Here the earlier properties numbered
+            // endnotes in decimal and the current ones declare nothing, so the markers keep Word's
+            // lowerRoman default; the earlier copy must not be read as a section's own format.
+            byte[] byteArray = File.ReadAllBytes(Path.Combine("../../../../TestFiles/WC", "WC036-Endnote-With-Table-Before.docx"));
+            using MemoryStream ms = new MemoryStream();
+            ms.Write(byteArray, 0, byteArray.Length);
+            using WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true);
+            var mainXDoc = wDoc.MainDocumentPart!.GetXDocument();
+            mainXDoc.Root!.Element(W.body)!.Element(W.sectPr)!.Add(
+                new XElement(W.sectPrChange, new XAttribute(W.id, "9"), new XAttribute(W.author, "A"),
+                    new XElement(W.sectPr, new XElement(W.endnotePr,
+                        new XElement(W.numFmt, new XAttribute(W.val, "decimal"))))));
+            wDoc.MainDocumentPart.PutXDocument();
+
+            XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, new WmlToHtmlConverterSettings
+            {
+                RenderFootnotesAndEndnotes = true,
+                RenderTrackedChanges = true,
+            });
+
+            var endnoteRef = html.Descendants().First(e => e.Name.LocalName == "a" &&
+                ((string?)e.Attribute("class") ?? "").Contains("endnote-ref"));
+            Assert.Equal("i", endnoteRef.Value);
+        }
+
+        [Fact]
         public void HC009_HeadersAndFooters_CssEnabled()
         {
             // Test that header/footer CSS is generated when RenderHeadersAndFooters is true
@@ -3221,10 +3250,12 @@ namespace Docxodus.Tests
             }
         }
 
+        private static XElement TableOf(XElement html) => html.Descendants().Single(e => e.Name.LocalName == "table");
+
         [Fact]
-        public void HC056_TablePrecededByParagraph_HasTopMargin()
+        public void HC056_TablePrecededByParagraph_HasNoImplicitTopMargin()
         {
-            // Test that a table preceded by a paragraph with no after-spacing gets a default margin-top
+            // Word adds no space between a paragraph with no after-spacing and the table after it (issue #1244)
             using (MemoryStream ms = new MemoryStream())
             {
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -3263,14 +3294,14 @@ namespace Docxodus.Tests
 
                     var settings = new WmlToHtmlConverterSettings
                     {
-                        PageTitle = "Table Spacing Test"
+                        PageTitle = "Table Spacing Test",
+                        FabricateCssClasses = false,
                     };
 
                     var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
                     var htmlString = html.ToString();
 
-                    // Table should have a margin-top for visual separation
-                    Assert.Contains("margin-top: 7.5pt", htmlString);
+                    Assert.Contains("margin-top: .001pt", (string?)TableOf(html).Attribute("style"));
                     Assert.Contains("Text before table", htmlString);
                     Assert.Contains("Table cell", htmlString);
                 }
@@ -3280,7 +3311,8 @@ namespace Docxodus.Tests
         [Fact]
         public void HC057_TableWithParagraphSpacing_NoExtraMargin()
         {
-            // Test that when the preceding paragraph has after-spacing, no extra margin-top is added
+            // A paragraph's after-spacing (here 10pt from w:docDefaults) is what separates it from the
+            // table after it: the paragraph carries it as its bottom margin and the table adds none.
             using (MemoryStream ms = new MemoryStream())
             {
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -3322,14 +3354,16 @@ namespace Docxodus.Tests
 
                     var settings = new WmlToHtmlConverterSettings
                     {
-                        PageTitle = "Table Spacing Test"
+                        PageTitle = "Table Spacing Test",
+                        FabricateCssClasses = false,
                     };
 
                     var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
                     var htmlString = html.ToString();
 
-                    // Table should NOT have the default 7.5pt margin-top since paragraph has spacing
-                    Assert.DoesNotContain("margin-top: 7.5pt", htmlString);
+                    var paragraph = html.Descendants().First(e => e.Name.LocalName == "p" && e.Value.Contains("Spaced paragraph"));
+                    Assert.Contains("margin-bottom: 10pt", (string?)paragraph.Attribute("style"));
+                    Assert.Contains("margin-top: .001pt", (string?)TableOf(html).Attribute("style"));
                     Assert.Contains("Spaced paragraph", htmlString);
                     Assert.Contains("Table cell", htmlString);
                 }

@@ -769,15 +769,19 @@ internal static class DocxSessionOps
             SessionRegistry.Get(handle).ReplaceTextRange(anchorId, find, replace, options));
     }
 
+    /// <summary><paramref name="deletedTextSide"/> places a zero-length insertion beside tracked
+    /// deleted text (see <see cref="DeletedTextSide"/>); null keeps the engine's own placement.</summary>
     public static string ReplaceTextAtSpan(int handle, string anchorId, int spanStart, int spanLength,
-        string replace, MutationPreconditions? preconditions = null) =>
+        string replace, MutationPreconditions? preconditions = null, DeletedTextSide? deletedTextSide = null) =>
         Mutate(handle, preconditions, anchorId,
-            s => s.ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace));
+            s => deletedTextSide is { } side
+                ? s.ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace, side)
+                : s.ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace));
 
     public static string ReplaceTextAtSpanWithFormat(int handle, string anchorId, int spanStart, int spanLength,
-        string replace, FormatOp? format, MutationPreconditions? preconditions = null) =>
+        string replace, FormatOp? format, MutationPreconditions? preconditions = null, DeletedTextSide? deletedTextSide = null) =>
         Mutate(handle, preconditions, anchorId,
-            s => s.ReplaceTextAtSpanWithFormat(anchorId, spanStart, spanLength, replace, format ?? new FormatOp()));
+            s => s.ReplaceTextAtSpanWithFormat(anchorId, spanStart, spanLength, replace, format ?? new FormatOp(), deletedTextSide));
 
     /// <summary>
     /// Bracket-aware variant of <see cref="ReplaceTextAtSpan"/>. Parses the brackets out
@@ -1476,6 +1480,17 @@ internal static class DocxSessionOps
 
     public static void SetRevisionAuthor(int handle, string? author) =>
         SessionRegistry.Get(handle).SetRevisionAuthor(author);
+
+    public static void SetRevisionIdentities(int handle, string? identitiesJson) =>
+        SessionRegistry.Get(handle).SetRevisionIdentities(DocxSessionJson.ParseRevisionIdentities(identitiesJson));
+
+    public static string GetRevisionAuthorNameStatus(int handle, string? author = null)
+    {
+        var session = SessionRegistry.Get(handle);
+        var name = author ?? session.RevisionAuthor ?? "docxodus";
+        return "{\"author\":" + DocxSessionJson.JsonString(name) + ",\"status\":"
+            + DocxSessionJson.JsonString(session.GetRevisionAuthorNameStatus(name).ToString().ToLowerInvariant()) + "}";
+    }
 
     public static string GetTrackedChanges(int handle)
     {
