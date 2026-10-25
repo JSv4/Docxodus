@@ -114,7 +114,7 @@ public class RenderingFidelityInheritanceTests
     public void UnformattedNestedTableEndParagraphKeepsACompactSourceAnchor(string tail)
     {
         var html = Render(NestedCell(tail));
-        var paragraph = html.Descendants().Single(e => e.Name.LocalName == "p" && string.IsNullOrWhiteSpace(e.Value));
+        var paragraph = html.Descendants().Single(e => e.Name.LocalName == "p" && e.Ancestors().Any(a => a.Name.LocalName == "td") && string.IsNullOrWhiteSpace(e.Value));
         var style = (string?)paragraph.Attribute("style");
         Assert.Contains("line-height: 0.05pt", style);
         Assert.Contains("margin-top: 0", style);
@@ -133,7 +133,7 @@ public class RenderingFidelityInheritanceTests
     public void IntentionalNestedTableEndParagraphRetainsItsLine(string tail)
     {
         var html = Render(NestedCell(tail));
-        var paragraph = html.Descendants().Last(e => e.Name.LocalName == "p");
+        var paragraph = html.Descendants().Last(e => e.Name.LocalName == "p" && e.Ancestors().Any(a => a.Name.LocalName == "td"));
         Assert.DoesNotContain("line-height: 0.05pt", (string?)paragraph.Attribute("style"));
         Assert.NotNull(paragraph.Attribute("data-source-anchor-id"));
         if (tail.Contains("after=")) Assert.Contains("margin-bottom: 12pt", (string?)paragraph.Attribute("style"));
