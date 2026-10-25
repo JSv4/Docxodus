@@ -62,6 +62,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Automatic line spacing retains fractional font metrics through layout and painting, avoiding
+  cumulative baseline drift from rounding each line early. The shared font probe now measures
+  at the same precision as the SVG painter; native Word controls cover multiple fonts, sizes
+  and spacing multiples. Matching browser line breaks preserve flow geometry while vector
+  paint uses unrounded font advances for word positions and alignment (#1124).
+
 - Split oversized footnote-table rows through their cell content, including nested tables and
   wrapped paragraphs. Continuations preserve complete text, repeated headers and source geometry;
   explicit no-split rows remain intact (#1217).

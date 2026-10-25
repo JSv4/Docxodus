@@ -1,0 +1,677 @@
+{
+  "schema": 1,
+  "sourceFile": "baseline-rounding-font-size-holdouts.docx",
+  "sourceSha256": "0786185c0b446e25276a81e87feb9b83e80c14017a849366fcf834eb3f58a805",
+  "nativePdfSha256": "118e28b93eb01c08cd6094bd7a8c5ea7d3bd839801480aa05e6d543781c2db30",
+  "capture": "Signed-in Word for the web, unedited source, File > Export > Download as PDF; source/returnedDOCX/rawPDF retained in task evidence.",
+  "reportedBuild": null,
+  "sourceSdkFindings": 0,
+  "nativePageCount": 3,
+  "qualification": "Relative baseline pitch checks use separately recorded first baselines on each page segment. These observations do not claim arbitrary raster parity. Open-font test scaffolds share the captured font hhea metrics; public export uses exact installed declared fonts.",
+  "paragraphs": [
+    {
+      "fontFamily": "Times New Roman",
+      "fontSizePt": 10,
+      "multiple": 1.15,
+      "line240ths": 276,
+      "widthPt": 144,
+      "afterPt": 3,
+      "text": "Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word",
+      "cssFont": "Liberation Serif",
+      "nativeHhea": [
+        1825,
+        -443,
+        87,
+        2048
+      ],
+      "nativeLines": [
+        {
+          "page": 1,
+          "baselinePt": 81.280029296875,
+          "text": "Ag test word Ag test word Ag test"
+        },
+        {
+          "page": 1,
+          "baselinePt": 94.530029296875,
+          "text": "word Ag test word Ag test word Ag"
+        },
+        {
+          "page": 1,
+          "baselinePt": 107.780029296875,
+          "text": "test word Ag test word Ag test"
+        },
+        {
+          "page": 1,
+          "baselinePt": 121.04998779296875,
+          "text": "word Ag test word Ag test word Ag"
+        },
+        {
+          "page": 1,
+          "baselinePt": 134.29998779296875,
+          "text": "test word Ag test word Ag test"
+        },
+        {
+          "page": 1,
+          "baselinePt": 147.29998779296875,
+          "text": "word Ag test word Ag test word Ag"
+        },
+        {
+          "page": 1,
+          "baselinePt": 160.54998779296875,
+          "text": "test word Ag test word Ag test"
+        },
+        {
+          "page": 1,
+          "baselinePt": 173.79998779296875,
+          "text": "word Ag test word Ag test word Ag"
+        },
+        {
+          "page": 1,
+          "baselinePt": 187.04998779296875,
+          "text": "test word Ag test word Ag test"
+        },
+        {
+          "page": 1,
+          "baselinePt": 200.33001708984375,
+          "text": "word Ag test word"
+        }
+      ]
+    },
+    {
+      "fontFamily": "Times New Roman",
+      "fontSizePt": 13,
+      "multiple": 1.15,
+      "line240ths": 276,
+      "widthPt": 144,
+      "afterPt": 3,
+      "text": "Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word",
+      "cssFont": "Liberation Serif",
+      "nativeHhea": [
+        1825,
+        -443,
+        87,
+        2048
+      ],
+      "nativeLines": [
+        {
+          "page": 1,
+          "baselinePt": 219.58001708984375,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 1,
+          "baselinePt": 236.83001708984375,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 1,
+          "baselinePt": 253.83001708984375,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 1,
+          "baselinePt": 271.07000732421875,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 1,
+          "baselinePt": 288.3500061035156,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 1,
+          "baselinePt": 305.6000061035156,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 1,
+          "baselinePt": 322.8500061035156,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 1,
+          "baselinePt": 339.8500061035156,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 1,
+          "baselinePt": 357.1199951171875,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 1,
+          "baselinePt": 374.3699951171875,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 1,
+          "baselinePt": 391.6199951171875,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 1,
+          "baselinePt": 408.6199951171875,
+          "text": "Ag test word Ag test word"
+        }
+      ]
+    },
+    {
+      "fontFamily": "Times New Roman",
+      "fontSizePt": 16,
+      "multiple": 1.15,
+      "line240ths": 276,
+      "widthPt": 144,
+      "afterPt": 3,
+      "text": "Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word",
+      "cssFont": "Liberation Serif",
+      "nativeHhea": [
+        1825,
+        -443,
+        87,
+        2048
+      ],
+      "nativeLines": [
+        {
+          "page": 1,
+          "baselinePt": 431.6199951171875,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 1,
+          "baselinePt": 452.8999938964844,
+          "text": "word Ag test word Ag"
+        },
+        {
+          "page": 1,
+          "baselinePt": 473.8999938964844,
+          "text": "test word Ag test"
+        },
+        {
+          "page": 1,
+          "baselinePt": 495.1499938964844,
+          "text": "word Ag test word Ag"
+        },
+        {
+          "page": 1,
+          "baselinePt": 516.4200439453125,
+          "text": "test word Ag test"
+        },
+        {
+          "page": 1,
+          "baselinePt": 537.4199829101562,
+          "text": "word Ag test word Ag"
+        },
+        {
+          "page": 1,
+          "baselinePt": 558.6699829101562,
+          "text": "test word Ag test"
+        },
+        {
+          "page": 1,
+          "baselinePt": 579.9199829101562,
+          "text": "word Ag test word Ag"
+        },
+        {
+          "page": 1,
+          "baselinePt": 600.9500122070312,
+          "text": "test word Ag test"
+        },
+        {
+          "page": 1,
+          "baselinePt": 622.2000122070312,
+          "text": "word Ag test word Ag"
+        },
+        {
+          "page": 1,
+          "baselinePt": 643.2000122070312,
+          "text": "test word Ag test"
+        },
+        {
+          "page": 1,
+          "baselinePt": 664.4500122070312,
+          "text": "word Ag test word Ag"
+        },
+        {
+          "page": 1,
+          "baselinePt": 685.719970703125,
+          "text": "test word Ag test"
+        },
+        {
+          "page": 1,
+          "baselinePt": 706.7249755859375,
+          "text": "word Ag test word Ag"
+        },
+        {
+          "page": 2,
+          "baselinePt": 87.030029296875,
+          "text": "test word Ag test"
+        },
+        {
+          "page": 2,
+          "baselinePt": 108.280029296875,
+          "text": "word Ag test word"
+        }
+      ]
+    },
+    {
+      "fontFamily": "Arial",
+      "fontSizePt": 10,
+      "multiple": 1.15,
+      "line240ths": 276,
+      "widthPt": 144,
+      "afterPt": 3,
+      "text": "Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word",
+      "cssFont": "Liberation Sans",
+      "nativeHhea": [
+        1854,
+        -434,
+        67,
+        2048
+      ],
+      "nativeLines": [
+        {
+          "page": 2,
+          "baselinePt": 126.79998779296875,
+          "text": "Ag test word Ag test word Ag"
+        },
+        {
+          "page": 2,
+          "baselinePt": 140.04998779296875,
+          "text": "test word Ag test word Ag test"
+        },
+        {
+          "page": 2,
+          "baselinePt": 153.29998779296875,
+          "text": "word Ag test word Ag test word"
+        },
+        {
+          "page": 2,
+          "baselinePt": 166.54998779296875,
+          "text": "Ag test word Ag test word Ag"
+        },
+        {
+          "page": 2,
+          "baselinePt": 179.79998779296875,
+          "text": "test word Ag test word Ag test"
+        },
+        {
+          "page": 2,
+          "baselinePt": 193.04998779296875,
+          "text": "word Ag test word Ag test word"
+        },
+        {
+          "page": 2,
+          "baselinePt": 206.33001708984375,
+          "text": "Ag test word Ag test word Ag"
+        },
+        {
+          "page": 2,
+          "baselinePt": 219.58001708984375,
+          "text": "test word Ag test word Ag test"
+        },
+        {
+          "page": 2,
+          "baselinePt": 232.58001708984375,
+          "text": "word Ag test word Ag test word"
+        },
+        {
+          "page": 2,
+          "baselinePt": 245.83001708984375,
+          "text": "Ag test word Ag test word Ag"
+        },
+        {
+          "page": 2,
+          "baselinePt": 259.08001708984375,
+          "text": "test word"
+        }
+      ]
+    },
+    {
+      "fontFamily": "Arial",
+      "fontSizePt": 13,
+      "multiple": 1.15,
+      "line240ths": 276,
+      "widthPt": 144,
+      "afterPt": 3,
+      "text": "Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word",
+      "cssFont": "Liberation Sans",
+      "nativeHhea": [
+        1854,
+        -434,
+        67,
+        2048
+      ],
+      "nativeLines": [
+        {
+          "page": 2,
+          "baselinePt": 278.0999755859375,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 2,
+          "baselinePt": 295.3500061035156,
+          "text": "word Ag test word Ag"
+        },
+        {
+          "page": 2,
+          "baselinePt": 312.6000061035156,
+          "text": "test word Ag test word"
+        },
+        {
+          "page": 2,
+          "baselinePt": 329.6000061035156,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 2,
+          "baselinePt": 346.8500061035156,
+          "text": "word Ag test word Ag"
+        },
+        {
+          "page": 2,
+          "baselinePt": 364.1199951171875,
+          "text": "test word Ag test word"
+        },
+        {
+          "page": 2,
+          "baselinePt": 381.3699951171875,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 2,
+          "baselinePt": 398.3699951171875,
+          "text": "word Ag test word Ag"
+        },
+        {
+          "page": 2,
+          "baselinePt": 415.6199951171875,
+          "text": "test word Ag test word"
+        },
+        {
+          "page": 2,
+          "baselinePt": 432.8999938964844,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 2,
+          "baselinePt": 450.1499938964844,
+          "text": "word Ag test word Ag"
+        },
+        {
+          "page": 2,
+          "baselinePt": 467.3999938964844,
+          "text": "test word Ag test word"
+        },
+        {
+          "page": 2,
+          "baselinePt": 484.3999938964844,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 2,
+          "baselinePt": 501.6499938964844,
+          "text": "word Ag test word Ag"
+        },
+        {
+          "page": 2,
+          "baselinePt": 518.9200439453125,
+          "text": "test word"
+        }
+      ]
+    },
+    {
+      "fontFamily": "Arial",
+      "fontSizePt": 16,
+      "multiple": 1.15,
+      "line240ths": 276,
+      "widthPt": 144,
+      "afterPt": 3,
+      "text": "Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word",
+      "cssFont": "Liberation Sans",
+      "nativeHhea": [
+        1854,
+        -434,
+        67,
+        2048
+      ],
+      "nativeLines": [
+        {
+          "page": 2,
+          "baselinePt": 541.9199829101562,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 2,
+          "baselinePt": 562.9199829101562,
+          "text": "word Ag test word"
+        },
+        {
+          "page": 2,
+          "baselinePt": 584.1699829101562,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 2,
+          "baselinePt": 605.2000122070312,
+          "text": "word Ag test word"
+        },
+        {
+          "page": 2,
+          "baselinePt": 626.4500122070312,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 2,
+          "baselinePt": 647.7000122070312,
+          "text": "word Ag test word"
+        },
+        {
+          "page": 2,
+          "baselinePt": 668.7000122070312,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 2,
+          "baselinePt": 689.969970703125,
+          "text": "word Ag test word"
+        },
+        {
+          "page": 2,
+          "baselinePt": 711.2249755859375,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 3,
+          "baselinePt": 87.030029296875,
+          "text": "word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 108.280029296875,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 3,
+          "baselinePt": 129.29998779296875,
+          "text": "word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 150.54998779296875,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 3,
+          "baselinePt": 171.79998779296875,
+          "text": "word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 192.79998779296875,
+          "text": "Ag test word Ag test"
+        },
+        {
+          "page": 3,
+          "baselinePt": 214.08001708984375,
+          "text": "word Ag test word"
+        }
+      ]
+    },
+    {
+      "fontFamily": "Times New Roman",
+      "fontSizePt": 12,
+      "multiple": 1,
+      "line240ths": 240,
+      "widthPt": 144,
+      "afterPt": 3,
+      "text": "Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word",
+      "cssFont": "Liberation Serif",
+      "nativeHhea": [
+        1825,
+        -443,
+        87,
+        2048
+      ],
+      "nativeLines": [
+        {
+          "page": 3,
+          "baselinePt": 234.33001708984375,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 248.33001708984375,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 262.07000732421875,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 275.8499755859375,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 289.6000061035156,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 303.3500061035156,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 317.3500061035156,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 331.1000061035156,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 344.8500061035156,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 358.6199951171875,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 372.3699951171875,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 386.3699951171875,
+          "text": "Ag test word Ag test word"
+        }
+      ]
+    },
+    {
+      "fontFamily": "Times New Roman",
+      "fontSizePt": 12,
+      "multiple": 1.5,
+      "line240ths": 360,
+      "widthPt": 144,
+      "afterPt": 3,
+      "text": "Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word Ag test word",
+      "cssFont": "Liberation Serif",
+      "nativeHhea": [
+        1825,
+        -443,
+        87,
+        2048
+      ],
+      "nativeLines": [
+        {
+          "page": 3,
+          "baselinePt": 403.1199951171875,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 423.8699951171875,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 444.3999938964844,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 465.1499938964844,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 485.8999938964844,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 506.6499938964844,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 527.4200439453125,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 547.9199829101562,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 568.6699829101562,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 589.4299926757812,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 610.2000122070312,
+          "text": "Ag test word Ag test word"
+        },
+        {
+          "page": 3,
+          "baselinePt": 630.7000122070312,
+          "text": "Ag test word Ag test word"
+        }
+      ]
+    }
+  ]
+}
