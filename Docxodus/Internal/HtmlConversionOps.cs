@@ -142,8 +142,7 @@ internal static class HtmlConversionOps
             CssClassPrefix = options.CssClassPrefix,
             FabricateCssClasses = options.FabricateCssClasses,
             AdditionalCss = options.AdditionalCss,
-            GeneralCss = $"body {{ font-family: Arial, sans-serif; margin: {bodyMargin}; }} " +
-                         "span { white-space: pre-wrap; }",
+            GeneralCss = $"body {{ font-family: Arial, sans-serif; margin: {bodyMargin}; }}",
             RenderComments = renderComments,
             CommentRenderMode = renderComments
                 ? (CommentRenderMode)options.CommentRenderMode
