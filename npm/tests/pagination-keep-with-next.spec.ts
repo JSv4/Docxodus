@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function section(blocks: string, footnoteRegistry = ''): string {
+function section(blocks: string, footnoteRegistry = '', height = 100, width = 100): string {
   return `
     <style>
       #staging { font: 12px/12px Arial; }
@@ -13,8 +13,8 @@ function section(blocks: string, footnoteRegistry = ''): string {
     </style>
     <div id="staging">
       <div data-section-index="0"
-           data-page-width="102" data-page-height="102"
-           data-content-width="100" data-content-height="100"
+           data-page-width="${width + 2}" data-page-height="${height + 2}"
+           data-content-width="${width}" data-content-height="${height}"
            data-margin-top="1" data-margin-right="1"
            data-margin-bottom="1" data-margin-left="1">
         ${blocks}
@@ -246,3 +246,137 @@ test.describe('Pagination keep-with-next chains', () => {
     expect(result.footnotePages).toEqual([true, true, true, true]);
   });
 });
+
+
+const wordNoteSeparator = (kind: string) => `<div data-footnote-separator="${kind}" style="font-size:11pt;line-height:normal;height:1lh"></div>`;
+
+function wordNoteFlowCss(pitch: number): string {
+  return `
+      #staging, #container { font:11pt/15pt 'Times New Roman'; }
+      #container p { box-sizing:border-box; margin:0; padding:0; width:100%; }
+      .footnote-item { line-height:0; }
+      .footnote-content { display:contents; }
+      .footnote-content p { font:11pt/${pitch}pt 'Times New Roman'; }
+      .footnote-number { display:none; }
+    `;
+}
+
+// Native Word controls use a 300pt band, six 15pt lead lines, a 15pt keep-next heading,
+// and a 17-line kept citing paragraph. Word retries the chain on a fresh page, then
+// relaxes its keeps; the widow switch decides whether one or two final lines move.
+for (const [pitch, keepLines, widow] of [
+  [20, true, undefined], [40, true, undefined], [40, true, false], [40, true, true],
+  [20, false, undefined], [40, false, undefined],
+] as const) {
+  test(`Word kept citation retry: ${pitch}pt note, keep ${keepLines}, widow ${widow ?? 'default'}`, async ({ page }) => {
+    const line = (n: number) => `Line${String(n).padStart(2, '0')}`;
+    const text = Array.from({ length: 17 }, (_, i) => line(i + 1)).join('<br>');
+
+    await page.setContent(section(
+      Array.from({ length: 6 }, (_, i) => `<p style="height:15pt">Lead${i + 1}</p>`).join('')
+        + `<p data-keep-with-next="true" style="height:15pt">Heading</p>`
+        + `<p data-keep-lines="${keepLines}" ${widow === undefined ? '' : `data-widow-control="${widow}"`}
+            style="font:11pt/15pt 'Times New Roman'">${text}<sup data-footnote-id="f1" style="font-size:8pt;line-height:0">1</sup></p><p style="height:15pt">Tail</p>`,
+      registry(wordNoteSeparator('normal'), wordNoteSeparator('continuation'), note('f1', '1', [pitch, pitch, pitch])), 300, 380));
+    await page.addStyleTag({ content: wordNoteFlowCss(pitch) });
+    const result = await paginateWithFootnoteInfo(page, true);
+    const lines = result.content.map(parts => parts.join('').match(/Line\d{2}/g) ?? []);
+    expect(lines.flat()).toEqual(Array.from({ length: 17 }, (_, i) => line(i + 1)));
+    expect(result.content.flat().filter(s => s === 'Heading')).toHaveLength(1);
+    expect(result.content.flat().filter(s => s === 'Tail')).toHaveLength(1);
+    const noteParts = await page.locator('.page-footnotes .footnote-content p:not([aria-hidden="true"])').allTextContents();
+    expect(noteParts).toEqual(['f1-0', 'f1-1', 'f1-2']);
+    if (!keepLines) {
+      expect(lines).toEqual([Array.from({ length: 13 }, (_, i) => line(i + 1)), [14, 15, 16, 17].map(line)]);
+      expect(result.footnotePages).toEqual([false, true]);
+    } else {
+      expect(result.content[0]).toEqual(Array.from({ length: 6 }, (_, i) => `Lead${i + 1}`));
+      expect(result.content[1]).toEqual(['Heading']);
+      const count = pitch === 20 ? 17 : widow === false ? 16 : 15;
+      expect(lines).toEqual([[], [], Array.from({ length: count }, (_, i) => line(i + 1)),
+        Array.from({ length: 17 - count }, (_, i) => line(i + count + 1))]);
+      expect(result.footnotePages).toEqual(pitch === 20 ? [false, false, true, true] : [false, false, false, true]);
+    }
+  });
+}
+
+// Literal page membership from seven independent native Word captures.
+const wordDenseLayouts = [
+  {
+    pitch: 20,
+    headingPages: [1, 1, 1, 2, 2, 2, 3, 3],
+    citationPages: [1, 1, 1, 2, 2, 2, 3, 3],
+    notePages: [1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3],
+    tailPage: 3
+  },
+  {
+    pitch: 39,
+    headingPages: [1, 1, 2, 2, 3, 3, 4, 5],
+    citationPages: [1, 1, 2, 2, 3, 3, 4, 5],
+    notePages: [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5],
+    tailPage: 5
+  },
+  {
+    pitch: 40,
+    headingPages: [1, 1, 2, 2, 3, 3, 4, 5],
+    citationPages: [1, 1, 2, 2, 3, 3, 4, 5],
+    notePages: [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5],
+    tailPage: 5
+  },
+  {
+    pitch: 41,
+    headingPages: [1, 1, 2, 2, 3, 3, 4, 5],
+    citationPages: [1, 1, 2, 2, 3, 3, 4, 5],
+    notePages: [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5],
+    tailPage: 5
+  },
+  {
+    pitch: 89,
+    headingPages: [1, 2, 3, 5, 6, 7, 9, 10],
+    citationPages: [1, 2, 4, 5, 6, 8, 9, 10],
+    notePages: [1, 1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 8, 9, 9, 10, 10, 11, 11],
+    tailPage: 11
+  },
+  {
+    pitch: 90,
+    headingPages: [1, 2, 3, 5, 6, 7, 9, 10],
+    citationPages: [1, 2, 4, 5, 6, 8, 9, 10],
+    notePages: [1, 1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 8, 9, 9, 10, 10, 11, 11],
+    tailPage: 11
+  },
+  {
+    pitch: 91,
+    headingPages: [1, 2, 3, 5, 6, 8, 9, 11],
+    citationPages: [1, 2, 4, 5, 7, 8, 10, 11],
+    notePages: [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12],
+    tailPage: 12
+  }
+] as const;
+
+for (const expected of wordDenseLayouts) {
+  test(`Word dense kept citations: ${expected.pitch}pt note lines`, async ({ page }) => {
+    const body = Array.from({ length: 8 }, (_, i) =>
+      `<p data-keep-with-next="true" style="height:15pt">Heading${i + 1}</p>`
+      + `<p data-keep-lines="true" style="height:15pt">Cite${i + 1}<sup data-footnote-id="f${i + 1}" style="font-size:8pt;line-height:0">${i + 1}</sup></p>`).join('')
+      + '<p style="height:15pt">Tail</p>';
+    await page.setContent(section(body, registry(wordNoteSeparator('normal'), wordNoteSeparator('continuation'),
+      ...Array.from({ length: 8 }, (_, i) => note(`f${i + 1}`, String(i + 1),
+        [expected.pitch, expected.pitch, expected.pitch]))), 300, 380));
+    await page.addStyleTag({ content: wordNoteFlowCss(expected.pitch) });
+    await paginateWithFootnoteInfo(page, true);
+    const observed = await page.evaluate(() => Array.from(document.querySelectorAll('.page-box'), box => ({
+      body: box.querySelector('.page-content')?.textContent ?? '',
+      notes: box.querySelector('.page-footnotes')?.textContent ?? '',
+    })));
+    const pageOf = (marker: string, story: 'body' | 'notes') => observed.flatMap((p, i) =>
+      p[story].split(marker).slice(1).map(() => i + 1));
+    for (let i = 1; i <= 8; i++) {
+      expect(pageOf(`Heading${i}`, 'body'), `Heading${i}`).toEqual([expected.headingPages[i - 1]]);
+      expect(pageOf(`Cite${i}`, 'body'), `Cite${i}`).toEqual([expected.citationPages[i - 1]]);
+      for (let part = 0; part < 3; part++)
+        expect(pageOf(`f${i}-${part}`, 'notes'), `note${i} part${part + 1}`).toEqual([expected.notePages[(i - 1) * 3 + part]]);
+    }
+    expect(pageOf('Tail', 'body')).toEqual([expected.tailPage]);
+    expect(observed).toHaveLength(Math.max(...expected.notePages, expected.tailPage));
+  });
+}

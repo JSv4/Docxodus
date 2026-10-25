@@ -727,7 +727,7 @@ namespace Docxodus.Tests
 
                     // Stock marker-only stories contain formatting properties
                     // under pPr/rPr, but no authored presentation paragraph.
-                    // They must render exactly the rule, without an empty line.
+                    // They render the rule in its own line box, without a second blank paragraph.
                     var separatorStories = footnoteRegistry.Elements()
                         .Where(e => e.Attribute("data-footnote-separator") != null)
                         .ToList();
