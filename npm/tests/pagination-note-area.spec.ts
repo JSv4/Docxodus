@@ -1,7 +1,9 @@
 import { test, expect, Page } from '@playwright/test';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { generateFootnoteDocx } from './docx-footnote-fixture.js';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { generateFootnoteDocx, generateNormalKeptNoteDocx } from './docx-footnote-fixture.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -65,10 +67,12 @@ interface Layout {
   band: number[];
   /** The note text each page shows. */
   notes: string[];
+  /** Every nonempty text range lies inside its painted footnote band. */
+  notesVisible: boolean[];
   citationPage: number;
 }
 
-async function paginate(page: Page, html: string | Uint8Array, fragmentParagraphs = true): Promise<Layout> {
+async function paginate(page: Page, html: string | Uint8Array, fragmentParagraphs = true, embedHtml = false): Promise<Layout> {
   if (typeof html !== 'string') {
     await page.goto('/test-harness.html');
     await page.waitForFunction(() => (window as any).DocxodusReady === true);
@@ -76,13 +80,14 @@ async function paginate(page: Page, html: string | Uint8Array, fragmentParagraph
       new Uint8Array(input), 'Document', 'docx-', false, '', 0, 'comment-', 1, 1, 'page-', false, 0, 'annot-',
       true, false, false, false, false, false, null, false), Array.from(html));
   }
-  await page.setContent(html);
+  await page.setContent(embedHtml ? '<div id="viewer"></div>' : html);
   await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
-  return page.evaluate((fragmentParagraphs) => {
-    const { PaginationEngine } = (window as any).DocxodusPagination;
-    new PaginationEngine(document.querySelector('#staging, #pagination-staging'), document.querySelector('#container, #pagination-container'), {
-      scale: 1, showPageNumbers: false, fragmentParagraphs,
-    }).paginate();
+  return page.evaluate(({ fragmentParagraphs, embeddedHtml }) => {
+    const { PaginationEngine, paginateHtml } = (window as any).DocxodusPagination;
+    const options = { scale: 1, showPageNumbers: false, fragmentParagraphs };
+    if (embeddedHtml) paginateHtml(embeddedHtml, document.querySelector('#viewer'), options);
+    else new PaginationEngine(document.querySelector('#staging, #pagination-staging'),
+      document.querySelector('#container, #pagination-container'), options).paginate();
     const boxes = Array.from(document.querySelectorAll<HTMLElement>('#container .page-box, #pagination-container .page-box'));
     return {
       citationPage: boxes.findIndex(box => box.querySelector('.page-content [data-footnote-id]')) + 1,
@@ -100,8 +105,21 @@ async function paginate(page: Page, html: string | Uint8Array, fragmentParagraph
         return notes ? notes.getBoundingClientRect().height * 0.75 : 0;
       }),
       notes: boxes.map((box) => (box.querySelector('.page-footnotes')?.textContent || '').replace(/\s+/g, ' ').trim()),
+      notesVisible: boxes.map((box) => {
+        const band = box.querySelector<HTMLElement>('.page-footnotes');
+        if (!band) return true;
+        const area = band.getBoundingClientRect();
+        const walker = document.createTreeWalker(band, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (!node.textContent?.trim()) continue;
+          const range = document.createRange(); range.selectNodeContents(node);
+          if (Array.from(range.getClientRects()).some(rect => rect.width > 0 && rect.height > 0
+            && (rect.top < area.top - 0.5 || rect.bottom > area.bottom + 0.5))) return false;
+        }
+        return true;
+      }),
     };
-  }, fragmentParagraphs);
+  }, { fragmentParagraphs, embeddedHtml: embedHtml ? html : null });
 }
 
 test.describe('Paginated note area', () => {
@@ -224,5 +242,102 @@ for (const [name, words, firstCitation] of [
       expect(layout.body[notePage - 1]).toBe(0);
     } else expect(notePage).toBe(layout.citationPage);
     expect(layout.body.length).toBeLessThan(5);
+  });
+}
+
+for (const firstCitation of [1, 16]) {
+  test(`read-only DOCX oversized kept note: citation line ${firstCitation}`, async ({ page }) => {
+    const layout = await paginate(page,
+      generateFootnoteDocx(1, 30, 1, 1200, {}, '<w:keepLines/>', firstCitation,
+        { compatibilityMode: 15, fontFamily: 'Times New Roman' }));
+    const firstNotePage = layout.notes.findIndex(text => text.includes('footnote-1-1-1')) + 1;
+    // Native Word retries a mid-page citation once, then leaves the whole kept note
+    // until a note-only page. Following body stays with the citation, ahead of the note.
+    expect(layout.citationPage).toBe(firstCitation === 1 ? 1 : 2);
+    expect(firstNotePage).toBe(layout.citationPage + 1);
+    expect(layout.body.slice(0, firstNotePage - 1)).toEqual(firstCitation === 1 ? [30] : [15, 15]);
+    expect(layout.body.slice(firstNotePage - 1).every(count => count === 0)).toBe(true);
+    expect(layout.bodyVisible.every(Boolean)).toBe(true);
+    expect(layout.notesVisible.every(Boolean)).toBe(true);
+    expect(layout.notes.join(' ').match(/footnote-1-1-\d+/g)).toEqual(
+      Array.from({ length: 1200 }, (_, i) => `footnote-1-1-${i + 1}`));
+    expect(layout.body.length).toBeLessThan(9);
+  });
+}
+
+test('read-only DOCX fitting kept note stays beside its mid-page citation', async ({ page }) => {
+  const layout = await paginate(page,
+    generateFootnoteDocx(1, 30, 1, 60, {}, '<w:keepLines/>', 16,
+      { compatibilityMode: 15, fontFamily: 'Times New Roman' }));
+  expect(layout.citationPage).toBe(1);
+  expect(layout.body).toEqual([30]);
+  expect(layout.notes[0]).toContain('footnote-1-1-60');
+  expect(layout.notesVisible).toEqual([true]);
+});
+
+for (const [count, widow, firstPageLines] of [
+  [18, undefined, 18], [19, undefined, 17], [19, false, 18], [19, true, 17],
+  [20, undefined, 18], [20, false, 18], [20, true, 18], [21, undefined, 18],
+] as const) {
+  test(`Word normal kept note ${count} lines, widow ${widow ?? 'default'} starts beside citation`, async ({ page }) => {
+    const layout = await paginate(page, generateNormalKeptNoteDocx(count, widow));
+    expect(layout.citationPage).toBe(1);
+    expect(layout.body).toEqual([1, 1]);
+    expect(layout.notesVisible.every(Boolean)).toBe(true);
+    expect(layout.notes.map(text => text.match(/SpruceNoteLine\d{2}/g) ?? [])).toEqual([
+      Array.from({ length: firstPageLines }, (_, i) => `SpruceNoteLine${String(i + 1).padStart(2, '0')}`),
+      Array.from({ length: count - firstPageLines }, (_, i) => `SpruceNoteLine${String(i + firstPageLines + 1).padStart(2, '0')}`),
+    ]);
+  });
+}
+
+for (const mode of [14, undefined, 15]) {
+  test(`Word compatibility ${mode ?? 'absent'} controls oversized kept-note deferral`, async ({ page }) => {
+    const layout = await paginate(page, generateNormalKeptNoteDocx(21, undefined, mode), true, true);
+    expect(layout.citationPage).toBe(1);
+    expect(layout.body).toEqual(mode === 15 ? [2, 0, 0] : [1, 1]);
+    expect(layout.notesVisible.every(Boolean)).toBe(true);
+    const markers = layout.notes.map(text => text.match(/SpruceNoteLine\d{2}/g) ?? []);
+    expect(markers.map(m => m.length)).toEqual(mode === 15 ? [0, 19, 2] : [18, 3]);
+    expect(markers.flat()).toEqual(Array.from({ length: 21 }, (_, i) => `SpruceNoteLine${String(i + 1).padStart(2, '0')}`));
+  });
+}
+
+for (const compatibilityMode of [14, undefined]) {
+  test(`Word original long kept note compatibility ${compatibilityMode ?? 'absent'} begins beside citation`, async ({ page }) => {
+    const layout = await paginate(page, generateFootnoteDocx(1, 30, 1, 1200, {}, '<w:keepLines/>', 1,
+      { compatibilityMode, fontFamily: 'Times New Roman' }));
+    expect(layout.citationPage).toBe(1);
+    expect(layout.notes[0]).toContain('footnote-1-1-1');
+    expect(layout.body[0]).toBe(1);
+    expect(layout.notesVisible.every(Boolean)).toBe(true);
+    expect(layout.bodyVisible.every(Boolean)).toBe(true);
+    expect(layout.body.reduce((sum, count) => sum + count, 0)).toBe(30);
+    expect(layout.notes.join(' ').match(/footnote-1-1-\d+/g)).toEqual(
+      Array.from({ length: 1200 }, (_, i) => `footnote-1-1-${i + 1}`));
+  });
+}
+
+// These exact native inputs expose a cumulative natural-line-height error that
+// the 15pt exact-spacing controls cannot: mode 14 put lines 54 and 109 one page early.
+const longNoteWordCases: { id: string; inputSha256: string; pages: number; markerPages: Record<string, number> }[] = JSON.parse(
+  readFileSync(new URL('../../TestFiles/KeptNoteFlow/word-observations.json', import.meta.url), 'utf8')).cases;
+for (const c of longNoteWordCases) {
+  test(`Word long kept note native pages: ${c.id}`, async ({ page }) => {
+    const input = readFileSync(new URL(`../../TestFiles/KeptNoteFlow/${c.id}.docx`, import.meta.url));
+    expect(createHash('sha256').update(input).digest('hex')).toBe(c.inputSha256);
+    const layout = await paginate(page, new Uint8Array(input), true, true);
+    expect(layout.body.length).toBe(c.pages);
+    expect(layout.bodyVisible.every(Boolean)).toBe(true);
+    expect(layout.notesVisible.every(Boolean)).toBe(true);
+    const actual = await page.locator('#pagination-container .page-box').evaluateAll(boxes => {
+      const pages: Record<string, number[]> = {};
+      boxes.forEach((box, index) => {
+        for (const match of box.textContent!.matchAll(/Spruce(?:Body\d{2}|LongNote\d{3})/g))
+          (pages[match[0]] ??= []).push(index + 1);
+      });
+      return pages;
+    });
+    expect(actual).toEqual(Object.fromEntries(Object.entries(c.markerPages).map(([marker, page]) => [marker, [page]])));
   });
 }

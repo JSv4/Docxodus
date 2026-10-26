@@ -2256,7 +2256,8 @@ Exact and at-least heights had a converter-side quantization of the same kind: t
 with one decimal, so `w:line="253"` (12.65 pt) rendered as 12.7 pt. They now keep twentieths of a
 point (`{0:0.0#}pt`). The paginated export now runs `applyUnroundedNormalLineHeights`
 (`npm/src/line-metrics.ts`) before pagination. It gives every element whose computed line height is
-`normal` an explicit height for its own font, measured at 1000 px, where pixel rounding is negligible.
+`normal` an explicit height for its own font, measured at 10000 px to reduce rounding of its
+ascent, descent and line gap.
 The converter's output is unchanged. Since issue #1151 the paginator itself runs the same pass on its
 staging tree, so the paginated view and the paginated editor lay single-spaced lines out at the same
 unrounded pitch as the export; after the export's earlier pass no line height is `normal`, so the
@@ -3925,6 +3926,34 @@ With paragraph fragmentation disabled in the editor, an oversized kept note para
 to a note-only page (#1217). The continuation path places that indivisible block once and advances,
 preserving later body text and note order. The read-only split/clip fallback stays separate; this
 editor placement rule does not claim that Word clips an oversized kept paragraph.
+
+With paragraph fragmentation enabled, oversized kept note paragraphs split without clipping once
+their keep can no longer be satisfied. Their first placement depends on compatibility mode. Matched
+Word for the web exports captured on 2026-10-25 change only the settings part and its package
+declarations; the body, note, styles and page geometry stay unchanged:
+
+| Source | Compatibility 15 | Compatibility 14 or omitted |
+|---|---|---|
+| Two body lines; the first cites one kept 21-line note; 400 x 320pt page, 10pt margins, 15pt exact lines | Both body lines on p1; note alone on p2/p3, split 19/2 lines | Citation and 18 note lines on p1; following body and last three note lines on p2 |
+| Thirty body paragraphs; the first cites a kept 1,200-word note; Letter page, 1in margins | All body on p1; note alone on p2-p5 | Citation and note start on p1; note continues alone on p2/p3; body resumes beside the note's end on p4, finishing on p5 |
+
+The paginator therefore preserves the whole-note deferral in mode 15. Older modes relax an oversized
+keep beside a fresh citation. Both paths retain the safe-inline fragmentation checks, source
+identities, and widow control: the default or explicit on preserves two trailing lines; explicit off
+permits one. A kept paragraph reaching an empty continuation band is split there rather than clipped
+as a whole. The converter carries compatibility mode on staging as well as the body, because
+embedding complete HTML in a viewer discards the body tag.
+
+The natural-height probe also needs enough precision: Times New Roman measured at 1000px
+produces a ratio of 1.149, versus its 2355/2048 metric ratio of 1.149902. At 10000px the probe gives
+1.1499. The earlier underestimate accumulates through a long note and can admit one extra line.
+Four native 120-line controls, with the citation first or mid-page and modes 14/15, assert every
+body/note label's page. Mode 14 starts 53 lines beside a fresh citation, then carries 55 per full
+note band. Mode 15 defers the note, then carries 55 per full band. Fresh note-only fragments use
+the same measured physical band as carried continuations; the fixed whole-note guard is not also
+subtracted from an already measured fragment's space. Text visibility and export clipping checks
+remain required. This fixes the separately observed read-only kept-note clipping failure; it does not establish the missing original carried-note
+"no measurable fragment" reproducer from #1217.
 
 For a keep-with-next heading followed by a kept citing paragraph (#1217), the read-only path
 tries the chain on a fresh page once. If its note still cannot start beside it, the heading may

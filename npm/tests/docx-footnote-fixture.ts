@@ -20,6 +20,35 @@ export const FOOTNOTE_PAGE = {
 /** Twips → points, the unit the rendered page boxes are sized in. */
 export const twipsToPt = (twips: number): number => twips / 20;
 
+/** Literal six-part source used by the native Word kept-note/widow controls. */
+export function generateNormalKeptNoteDocx(lineCount: number, widow?: boolean, compatibilityMode?: number): Uint8Array {
+  const spacing = '<w:spacing w:before="0" w:after="0" w:line="300" w:lineRule="exact"/>';
+  const body = `<w:p><w:pPr>${spacing}</w:pPr><w:r><w:t>SpruceCite01</w:t></w:r>`
+    + '<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="1"/></w:r></w:p>'
+    + `<w:p><w:pPr>${spacing}</w:pPr><w:r><w:t>SpruceTail01</w:t></w:r></w:p>`;
+  const widowControl = widow === undefined ? '' : widow ? '<w:widowControl/>' : '<w:widowControl w:val="0"/>';
+  const content = '<w:r><w:footnoteRef/></w:r>' + Array.from({ length: lineCount }, (_, i) =>
+    `<w:r><w:t>SpruceNoteLine${String(i + 1).padStart(2, '0')}</w:t></w:r>`).join('<w:r><w:br/></w:r>');
+  const pkg = 'http://schemas.openxmlformats.org/package/2006/relationships';
+  const overrides = [['document', 'document.main'], ['styles', 'styles'], ['footnotes', 'footnotes'],
+    ...(compatibilityMode === undefined ? [] : [['settings', 'settings']])]
+    .map(([part, kind]) => `<Override PartName="/word/${part}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${kind}+xml"/>`).join('');
+  const parts: Record<string, string> = {
+    '[Content_Types].xml': `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${overrides}</Types>`,
+    '_rels/.rels': `<Relationships xmlns="${pkg}"><Relationship Id="rId1" Type="${R_NS}/officeDocument" Target="word/document.xml"/></Relationships>`,
+    'word/_rels/document.xml.rels': `<Relationships xmlns="${pkg}"><Relationship Id="rId1" Type="${R_NS}/styles" Target="styles.xml"/><Relationship Id="rId2" Type="${R_NS}/footnotes" Target="footnotes.xml"/>${compatibilityMode === undefined ? '' : `<Relationship Id="rIdFixtureSettings" Type="${R_NS}/settings" Target="settings.xml"/>`}</Relationships>`,
+    'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr>${spacing}</w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>`,
+    'word/footnotes.xml': `<w:footnotes xmlns:w="${W_NS}"><w:footnote w:id="1"><w:p><w:pPr><w:keepLines/>${widowControl}${spacing}</w:pPr>${content}</w:p></w:footnote></w:footnotes>`,
+    'word/document.xml': `<w:document xmlns:w="${W_NS}"><w:body>${body}<w:sectPr><w:pgSz w:w="8000" w:h="6400"/><w:pgMar w:top="200" w:right="200" w:bottom="200" w:left="200" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr></w:body></w:document>`,
+  };
+  if (compatibilityMode !== undefined) parts['word/settings.xml'] = compatibilitySettings(compatibilityMode);
+  return storedZip(Object.entries(parts).map(([name, value]) => ({ name, data: xml(value) })));
+}
+
+function compatibilitySettings(mode: number): string {
+  return `<w:settings xmlns:w="${W_NS}"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="${mode}"/></w:compat></w:settings>`;
+}
+
 function bodyParagraph(index: number, noteId: number | null): string {
   const citation = noteId === null
     ? ''
@@ -87,7 +116,9 @@ export function generateFootnoteDocx(
   } = {},
   noteParagraphProperties = '',
   firstCitationLine = 1,
+  options: { compatibilityMode?: number; fontFamily?: 'Liberation Serif' | 'Times New Roman' } = {},
 ): Uint8Array {
+  const { compatibilityMode, fontFamily = 'Liberation Serif' } = options;
   const noteIds = Array.from({ length: noteCount }, (_, i) => i + 1);
   const body = Array.from({ length: bodyLines }, (_, i) =>
     bodyParagraph(i, i >= firstCitationLine - 1 && i < firstCitationLine - 1 + noteCount
@@ -106,6 +137,7 @@ export function generateFootnoteDocx(
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>
+  ${compatibilityMode === undefined ? '' : '<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>'}
 </Types>`),
     },
     {
@@ -121,6 +153,7 @@ export function generateFootnoteDocx(
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="${R_NS}/styles" Target="styles.xml"/>
   <Relationship Id="rId2" Type="${R_NS}/footnotes" Target="footnotes.xml"/>
+  ${compatibilityMode === undefined ? '' : `<Relationship Id="rIdFixtureSettings" Type="${R_NS}/settings" Target="settings.xml"/>`}
 </Relationships>`),
     },
     {
@@ -128,7 +161,7 @@ export function generateFootnoteDocx(
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="${W_NS}">
   <w:docDefaults><w:rPrDefault><w:rPr>
-    <w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/>
+    <w:rFonts w:ascii="${fontFamily}" w:hAnsi="${fontFamily}"/>
     <w:sz w:val="24"/><w:szCs w:val="24"/>
   </w:rPr></w:rPrDefault></w:docDefaults>
   <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
@@ -169,5 +202,6 @@ export function generateFootnoteDocx(
   </w:sectPr>
 </w:body></w:document>`),
     },
+    ...(compatibilityMode === undefined ? [] : [{ name: 'word/settings.xml', data: xml(compatibilitySettings(compatibilityMode)) }]),
   ]);
 }

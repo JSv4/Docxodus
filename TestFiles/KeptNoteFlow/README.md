@@ -1,0 +1,5 @@
+These four original literal-OOXML inputs exercise oversized kept note paragraphs with 120 explicitly broken, unbreakable note labels. The citation is in body paragraph 1 or 16; compatibility mode is 14 or 15. The author is John Scrudato IV and the repository MIT license applies. No font binaries or external document content are included.
+
+`word-observations.json` binds each exact input hash to its unmodified Microsoft Word for the web PDF hash and every body/note label's page. Native PDFs and returned DOCX copies remain in the durable per-issue fixture cache. The benchmark generator reproduces these packages byte-for-byte, with independent full-token/page assertions.
+
+The earlier candidate `a10d411f` puts note lines 54 and 109 one page too early in mode 14. A 1000px natural-font probe understates Times New Roman's height; increasing probe precision exposes an additional, inconsistent guard subtraction on the first note-only band. The regression checks every label and text visibility for all four cases. It does not establish the missing original no-measurable-fragment report in issue #1217.
