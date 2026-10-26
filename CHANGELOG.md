@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [14.2.0] - 2026-10-26
+
 ### Added
 
 - Sessions can identify revision owners by account through `RevisionIdentities` and
