@@ -11,10 +11,11 @@ import { gzipSync } from 'node:zlib';
 const budgetsKiB = {
   'embed.bundle.js': 135,
   'embed.iife.js': 135,
-  'editor.bundle.js': 112,
-  // Merged main a10772a8 measures 29.8 KiB gzip. Word-matched note-table cell/paragraph
-  // fragmentation (#1217) adds about 0.7 KiB (2%); deliberately raise only this budget to 31 KiB.
-  'pagination.bundle.js': 31,
+  // Main 44ebb107 measures 111.6/30.8 KiB for editor/pagination. Word-matched kept-note
+  // retries and continuations (#1373, #1374) add about 0.5 KiB to each; allow that reviewed
+  // growth and variation between gzip implementations without changing the other budgets.
+  'editor.bundle.js': 113,
+  'pagination.bundle.js': 32,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,
