@@ -508,7 +508,8 @@ internal static class IrCompositeMarkupRenderer
             if (diff.BaseNoteId is { } baseId)
             {
                 // Base-matched: locate the base-cloned definition by its base id.
-                noteEl = root.Elements(noteName).FirstOrDefault(e => (string?)e.Attribute(W.id) == baseId);
+                noteEl = root.Elements(noteName).FirstOrDefault(e => (string?)e.Attribute(W.id) == baseId
+                    && !WmlToMarkdownConverter.IsBoilerplateNote(e));
                 if (noteEl == null)
                     continue;
             }
@@ -594,7 +595,7 @@ internal static class IrCompositeMarkupRenderer
     }
 
     /// <summary>Return the output's footnotes/endnotes part, creating one seeded with the FIRST inserting
-    /// reviewer's reserved boilerplate notes (ids ≤ 0) when the base package lacks the part but a reviewer
+    /// reviewer's reserved boilerplate notes when the base package lacks the part but a reviewer
     /// inserted a note of that kind (the composite analogue of the two-way <c>EnsureNotePart</c>). Null only
     /// when there is genuinely no part to apply to.</summary>
     private static OpenXmlPart? EnsureCompositeNotePart(
@@ -628,7 +629,7 @@ internal static class IrCompositeMarkupRenderer
         var newRoot = new XElement(rootName,
             reviewerRoot?.Attributes() ?? new[] { new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName) });
         foreach (var note in (reviewerRoot?.Elements(noteName) ?? Enumerable.Empty<XElement>())
-                     .Where(n => int.TryParse((string?)n.Attribute(W.id), out var id) && id <= 0))
+                     .Where(WmlToMarkdownConverter.IsBoilerplateNote))
             newRoot.Add(IrMarkupRenderer.StripUnids(new XElement(note)));
         var xDoc = newPart.GetXDocument();
         if (xDoc.Root == null)
