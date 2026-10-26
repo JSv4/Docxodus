@@ -1092,6 +1092,32 @@ namespace Docxodus
             }
         }
 
+        private static void AddImpliedFootnoteSeparators(WordprocessingDocument wordDoc)
+        {
+            var part = wordDoc.MainDocumentPart?.FootnotesPart;
+            var root = part?.GetXDocument().Root;
+            if (root == null) return;
+            var ids = new HashSet<string>(root.Elements(W.footnote)
+                .Select(note => (string?)note.Attribute(W.id)).OfType<string>());
+            var added = new List<XElement>();
+            foreach (var (kind, preferredId, marker) in new[]
+            {
+                ("separator", -1, W.separator),
+                ("continuationSeparator", 0, W.continuationSeparator),
+            })
+            {
+                if (root.Elements(W.footnote).Any(note => (string?)note.Attribute(W.type) == kind)) continue;
+                var id = preferredId;
+                while (ids.Contains(id.ToString(CultureInfo.InvariantCulture))) id--;
+                ids.Add(id.ToString(CultureInfo.InvariantCulture));
+                added.Add(new XElement(W.footnote, new XAttribute(W.type, kind), new XAttribute(W.id, id),
+                    new XElement(W.p, new XElement(W.r, new XElement(marker)))));
+            }
+            if (added.Count == 0) return;
+            root.AddFirst(added);
+            part!.PutXDocument();
+        }
+
         public static XElement ConvertToHtml(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings htmlConverterSettings)
         {
             // Some older Word producers store a DrawingML textbox's body in a related XML part
@@ -1143,6 +1169,11 @@ namespace Docxodus
             MarkupSimplifier.SimplifyMarkup(wordDoc, simplifyMarkupSettings);
 
             AddImpliedBodyFinalParagraph(wordDoc);
+            // An absent reserved story still paints Word's default rule. Assemble its font
+            // with the other note paragraphs so its natural line box is measured as well.
+            if (htmlConverterSettings.RenderPagination == PaginationMode.Paginated
+                && htmlConverterSettings.RenderFootnotesAndEndnotes)
+                AddImpliedFootnoteSeparators(wordDoc);
             MarkStructuralTableEndParagraphs(wordDoc);
             ResolveTableIndentInputs(wordDoc);
             // Balloon wording compares direct properties, which assembly replaces (issue #1300).
@@ -2485,6 +2516,12 @@ namespace Docxodus
             // rule roughly a descent-plus-ascent (~6-8px) above the first note's ink; 6pt doubled it.
             sb.AppendLine("    margin: 0 0 3pt 0;");
             sb.AppendLine("    opacity: 0.6;");
+            sb.AppendLine("}");
+            // A stock separator is a mark on an otherwise empty line. Its shell reserves
+            // that font's natural line; the rule retains the existing gap above note text.
+            sb.AppendLine($".{prefix}footnotes .footnote-separator-line hr {{");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    bottom: 0;");
             sb.AppendLine("}");
             // A continuation separator spans the text column; Word's ordinary
             // separator remains the calibrated two-inch rule above. Both the
@@ -4427,6 +4464,21 @@ namespace Docxodus
             {
                 story.Add(new XElement(Xhtml.hr,
                     new XAttribute("data-footnote-separator-rule", markerName.LocalName)));
+                if (!hasAuthoredContent)
+                {
+                    story.SetAttributeValue("class", (string?)story.Attribute("class") + " footnote-separator-line");
+                    var lineStyle = new Dictionary<string, string>
+                    {
+                        { "position", "relative" },
+                        { "height", "1lh" },
+                        // A tiny separator font must still contain the existing rule and gap.
+                        { "min-height", "calc(1px + 3pt)" },
+                        { "line-height", "normal" },
+                    };
+                    var paragraph = source.Descendants(markerName).First().Ancestors(W.p).FirstOrDefault();
+                    if (paragraph != null) DefineStrutFont(lineStyle, paragraph);
+                    story.AddAnnotation(lineStyle);
+                }
             }
 
             if (hasAuthoredContent)

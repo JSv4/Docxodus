@@ -75,6 +75,10 @@ All notable changes to this project will be documented in this file.
   and spacing multiples. Matching browser line breaks preserve flow geometry while vector
   paint uses unrounded font advances for word positions and alignment (#1124).
 
+- Paginated kept citing paragraphs retry their heading chain once, then relax keeps with Word's
+  widow/orphan rule when needed. Dense note chains may defer a whole later note, and body text
+  resumes where a newly split note ends. Default separator rules reserve their font's natural
+  line without adding a blank text paragraph (#1217).
 - Split oversized footnote-table rows through their cell content, including nested tables and
   wrapped paragraphs. Continuations preserve complete text, repeated headers and source geometry;
   explicit no-split rows remain intact (#1217).

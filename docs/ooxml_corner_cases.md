@@ -3926,6 +3926,25 @@ to a note-only page (#1217). The continuation path places that indivisible block
 preserving later body text and note order. The read-only split/clip fallback stays separate; this
 editor placement rule does not claim that Word clips an oversized kept paragraph.
 
+For a keep-with-next heading followed by a kept citing paragraph (#1217), the read-only path
+tries the chain on a fresh page once. If its note still cannot start beside it, the heading may
+remain while the paragraph moves; on a fresh page, that paragraph may relax keep-lines and split
+before the citation. A relaxed paragraph keeps at least two visible lines on each side unless
+`w:widowControl` explicitly disables the rule. Source keep metadata and canonical identities are
+retained. The editor's paragraph-fragmentation switch remains authoritative.
+
+Dense chains also distinguish a carried tail from a note that has finished beside a citation on
+the current page. After such a note, a later kept citing chain can remain while its whole note
+is deferred. A note already continuing from this page closes that option. Following body text
+waits until the page where a newly split note ends, preserving body and note order.
+
+A stock separator is a rule on an otherwise empty line. Its font is assembled with the document
+styles and its shell reserves one natural `1lh`, resolved by the existing unrounded line-height
+pass. The rule retains its gap above note text, with the extra reserve above the rule rather than
+an added blank paragraph below it. Missing reserved definitions receive the same default layout;
+custom separator stories with authored content retain their converted content. The separator is
+presentation and never adds a note number, editor anchor or PageMap source fragment.
+
 ## Footnotes: a continued note stays last, and notes keep their order (issue #1179)
 
 Five shapes, Letter page, 12pt body, single-line note paragraphs except in D and E, whose note 1 is

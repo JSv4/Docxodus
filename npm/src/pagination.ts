@@ -100,6 +100,8 @@ export interface MeasuredBlock {
   keepWithNext: boolean;
   /** Whether to keep all lines of this block together */
   keepLines: boolean;
+  /** A fresh-page attempt could not honor this paragraph's keep-lines constraint. */
+  relaxedKeepLines?: boolean;
   /** Whether to force a page break before this block */
   pageBreakBefore: boolean;
   /** Whether this is a page break marker */
@@ -2695,7 +2697,7 @@ export class PaginationEngine {
    * line-layout rules and retain the established whole-block fallback instead
    * of risking broken content or duplicate anchors.
    */
-  private canFragmentParagraph(block: MeasuredBlock): boolean {
+  private canFragmentParagraph(block: MeasuredBlock, relaxKeepLines = false): boolean {
     if (!this.fragmentParagraphs) {
       return false;
     }
@@ -2703,10 +2705,10 @@ export class PaginationEngine {
     const paragraph = block.element;
     if (
       block.keepWithNext ||
-      block.keepLines ||
+      (block.keepLines && !relaxKeepLines && !block.relaxedKeepLines) ||
       block.pageBreakBefore ||
       block.isPageBreak ||
-      paragraph.dataset.widowControl === "true" ||
+      (paragraph.dataset.widowControl === "true" && !relaxKeepLines && !block.relaxedKeepLines) ||
       paragraph.hasAttribute("contenteditable")
     ) {
       return false;
@@ -2714,7 +2716,8 @@ export class PaginationEngine {
 
     // A body paragraph may cite notes: the paginator places a fragment's notes with the
     // fragment, so a citation never splits from its note (see notesCanStartOnPage).
-    return this.canRangeFragmentParagraph(paragraph, false, true);
+    return this.canRangeFragmentParagraph(paragraph, false, true,
+      relaxKeepLines || block.relaxedKeepLines === true);
   }
 
   /**
@@ -2727,6 +2730,7 @@ export class PaginationEngine {
     paragraph: HTMLElement,
     allowInlineRoot: boolean = false,
     bodyParagraph: boolean = false,
+    relaxKeepLines = false,
   ): boolean {
     // The converter writes a Word paragraph with an outline level (a heading style) as h1-h6;
     // it breaks across pages like any other paragraph unless it keeps its lines together.
@@ -2736,9 +2740,9 @@ export class PaginationEngine {
     if (
       !wordParagraph ||
       paragraph.dataset.keepWithNext === "true" ||
-      paragraph.dataset.keepLines === "true" ||
+      (paragraph.dataset.keepLines === "true" && !relaxKeepLines) ||
       paragraph.dataset.pageBreakBefore === "true" ||
-      paragraph.dataset.widowControl === "true" ||
+      (paragraph.dataset.widowControl === "true" && !relaxKeepLines) ||
       paragraph.hasAttribute("contenteditable")
     ) {
       return false;
@@ -2783,7 +2787,7 @@ export class PaginationEngine {
     }
 
     const isValidatedEndnote = paragraph.dataset.paginationSafeEndnote === "true";
-    return isValidatedEndnote || this.hasRangeFragmentSafeLayout(paragraph, allowInlineRoot);
+    return isValidatedEndnote || this.hasRangeFragmentSafeLayout(paragraph, allowInlineRoot, relaxKeepLines);
   }
 
   /**
@@ -2794,6 +2798,7 @@ export class PaginationEngine {
   private hasRangeFragmentSafeLayout(
     paragraph: HTMLElement,
     allowInlineRoot: boolean = false,
+    relaxKeepLines = false,
   ): boolean {
     const paragraphStyle = this.view.getComputedStyle(paragraph);
     if (
@@ -2804,10 +2809,10 @@ export class PaginationEngine {
       (paragraphStyle.whiteSpace !== "normal" && paragraphStyle.whiteSpace !== "pre-wrap") ||
       paragraphStyle.breakBefore !== "auto" ||
       paragraphStyle.breakAfter !== "auto" ||
-      paragraphStyle.breakInside === "avoid" ||
+      (paragraphStyle.breakInside === "avoid" && !relaxKeepLines) ||
       paragraphStyle.pageBreakBefore !== "auto" ||
       paragraphStyle.pageBreakAfter !== "auto" ||
-      paragraphStyle.pageBreakInside === "avoid"
+      (paragraphStyle.pageBreakInside === "avoid" && !relaxKeepLines)
     ) {
       return false;
     }
@@ -2843,34 +2848,50 @@ export class PaginationEngine {
    */
   private startsVisualLine(paragraph: HTMLElement, endpoint: ParagraphFragmentEndpoint): boolean {
     if (endpoint.consumeBreak) return true;
-    const glyph = (forward: boolean): DOMRect | null => {
-      const range = this.document.createRange();
-      range.selectNodeContents(paragraph);
-      if (forward) range.setStart(endpoint.node, endpoint.offset);
-      else range.setEnd(endpoint.node, endpoint.offset);
-      const walker = this.document.createTreeWalker(range.commonAncestorContainer, this.view.NodeFilter.SHOW_TEXT);
-      const texts: Text[] = [];
-      for (let node = walker.nextNode(); node; node = walker.nextNode())
-        if (range.intersectsNode(node)) texts.push(node as Text);
-      if (!forward) texts.reverse();
-      for (const text of texts) {
-        const start = text === range.startContainer ? range.startOffset : 0;
-        const end = text === range.endContainer ? range.endOffset : text.data.length;
-        for (let k = 0; k < end - start; k++) {
-          const index = forward ? start + k : end - 1 - k;
-          if (/\s/.test(text.data[index])) continue;
-          const character = this.document.createRange();
-          character.setStart(text, index);
-          character.setEnd(text, index + 1);
-          const rect = character.getBoundingClientRect();
-          if (rect.height > 0) return rect;
-        }
-      }
-      return null;
-    };
-    const before = glyph(false);
-    const after = glyph(true);
+    const range = this.document.createRange();
+    range.selectNodeContents(paragraph);
+    range.setEnd(endpoint.node, endpoint.offset);
+    const before = this.rangeEdgeGlyph(range, false);
+    range.selectNodeContents(paragraph);
+    range.setStart(endpoint.node, endpoint.offset);
+    const after = this.rangeEdgeGlyph(range, true);
     return !before || !after || after.top > before.top + before.height / 2;
+  }
+
+  /** The first/last painted text glyph in a range, excluding whitespace and zero-width marks. */
+  private rangeEdgeGlyph(range: Range, forward: boolean): DOMRect | null {
+    const root = range.commonAncestorContainer;
+    const texts: Text[] = [];
+    if (root.nodeType === this.view.Node.TEXT_NODE) texts.push(root as Text);
+    else {
+      const walker = this.document.createTreeWalker(root, this.view.NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        this.checkpoint();
+        if (range.intersectsNode(node)) texts.push(node as Text);
+      }
+    }
+    if (!forward) texts.reverse();
+    for (const text of texts) {
+      const start = text === range.startContainer ? range.startOffset : 0;
+      const end = text === range.endContainer ? range.endOffset : text.data.length;
+      for (let k = 0; k < end - start; k++) {
+        this.checkpoint();
+        const index = forward ? start + k : end - 1 - k;
+        if (!this.hasVisibleText(text.data[index])) continue;
+        const character = this.document.createRange();
+        character.setStart(text, index);
+        character.setEnd(text, index + 1);
+        const rect = character.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) return rect;
+      }
+    }
+    return null;
+  }
+
+  private rangeHasMultipleTextLines(range: Range): boolean {
+    const first = this.rangeEdgeGlyph(range, true);
+    const last = this.rangeEdgeGlyph(range, false);
+    return !!first && !!last && last.top > first.top + first.height / 2;
   }
 
   /**
@@ -3010,6 +3031,8 @@ export class PaginationEngine {
       forceFirstOnNoFit?: boolean;
       /** Break only where a visual line starts, never within a line. */
       lineStartsOnly?: boolean;
+      /** Keep at least two text lines on each side when relaxing a kept paragraph. */
+      preserveWidowLines?: boolean;
     } = {},
   ): ParagraphSplitAttempt {
     const largestFit = (endpoints: ParagraphFragmentEndpoint[]) => {
@@ -3058,11 +3081,22 @@ export class PaginationEngine {
 
     let endpoints = this.paragraphFragmentEndpoints(paragraph);
     let best = largestFit(endpoints);
-    if (best && options.lineStartsOnly && !this.startsVisualLine(paragraph, best.endpoint)) {
+    const legalBreak = (endpoint: ParagraphFragmentEndpoint) => {
+      if (options.lineStartsOnly && !this.startsVisualLine(paragraph, endpoint)) return false;
+      if (!options.preserveWidowLines) return true;
+      const range = this.document.createRange();
+      range.selectNodeContents(paragraph);
+      range.setEnd(endpoint.node, endpoint.offset);
+      if (!this.rangeHasMultipleTextLines(range)) return false;
+      range.selectNodeContents(paragraph);
+      range.setStart(endpoint.node, endpoint.offset + (endpoint.consumeBreak ? 1 : 0));
+      return this.rangeHasMultipleTextLines(range);
+    };
+    if (best && !legalBreak(best.endpoint)) {
       // Fit is monotone in the head's length, so the nearest earlier endpoint that ends a line
       // fits as well: it is the head without the partly-filled last line.
       let index = endpoints.indexOf(best.endpoint) - 1;
-      while (index >= 0 && !this.startsVisualLine(paragraph, endpoints[index])) index--;
+      while (index >= 0 && !legalBreak(endpoints[index])) index--;
       if (index < 0) {
         best = null;
       } else {
@@ -3206,6 +3240,7 @@ export class PaginationEngine {
     effectiveMarginTopPt: number,
     notesStart?: (footnoteIds: string[], headHeightPt: number) => boolean,
     preceding: readonly HTMLElement[] = [],
+    relaxKeepLines = false,
   ): MeasuredBlock[] | null {
     if (availableHeightPt <= effectiveMarginTopPt) return null;
     if (block.element.localName === "div") {
@@ -3230,7 +3265,7 @@ export class PaginationEngine {
     }
     let split: ParagraphSplitAttempt;
     try {
-      if (!this.canFragmentParagraph({ ...block, element: paragraph })) return null;
+      if (!this.canFragmentParagraph({ ...block, element: paragraph }, relaxKeepLines)) return null;
 
       // Word moves a citing line, never part of one, to the page where its note can begin:
       // stop the head above the first citation whose note cannot start beside it. A head
@@ -3263,7 +3298,11 @@ export class PaginationEngine {
         const measured = this.measureElement(head, dims, block.sectionIndex, prefix);
         return effectiveMarginTopPt + measured.heightPt <= headLimitPt
           && (!notesStart || notesStart(this.extractFootnoteRefs(head), measured.heightPt));
-      }, { lineStartsOnly: notesStart !== undefined });
+      }, {
+        lineStartsOnly: notesStart !== undefined,
+        preserveWidowLines: (relaxKeepLines || block.relaxedKeepLines === true)
+          && paragraph.dataset.widowControl !== "false",
+      });
     } finally {
       host?.remove();
     }
@@ -3274,6 +3313,7 @@ export class PaginationEngine {
       element,
       keepWithNext: false,
       keepLines: false,
+      relaxedKeepLines: relaxKeepLines || block.relaxedKeepLines,
       pageBreakBefore: false,
       isPageBreak: false,
     }));
@@ -4763,6 +4803,11 @@ export class PaginationEngine {
     // to it, no later note starts on this page. Its notes start on the next page instead, below
     // the continuation and after the deferred notes.
     const laterNotesClosed = () => nextPageContinuation !== null || deferredFootnoteIds.length > 0;
+    // A keep chain gets one fresh-page retry. If its own note still cannot start there,
+    // Word can leave the heading and move/split the citing paragraph rather than retrying
+    // the same chain on every page beside a carried note.
+    const retriedKeepChains = new Set<MeasuredBlock>();
+    const releasedKeepPredecessors = new Set<MeasuredBlock>();
 
     for (let i = 0; i < blocks.length; i++) {
       this.checkpoint();
@@ -4876,7 +4921,17 @@ export class PaginationEngine {
       // no blocks yet. In that case a feasible chain may need to move past the
       // continuation as a unit.
       const pageHasOccupiedSpace = currentContent.length > 0 || currentFootnoteHeight > 0;
-      if (pageHasOccupiedSpace && block.keepWithNext && startsKeepChain) {
+      if (!pageHasOccupiedSpace && block.keepWithNext && startsKeepChain) {
+        const chain = this.getKeepWithNextChain(blocks, i);
+        const last = chain[chain.length - 1];
+        if (chain.length > 1 && this.fragmentParagraphs && last.keepLines
+          && this.isWordParagraphElement(last.element)
+          && this.collectNewFootnoteIds(chain, currentFootnoteIds).length > 0) {
+          retriedKeepChains.add(block);
+          releasedKeepPredecessors.add(last);
+        }
+      }
+      if (pageHasOccupiedSpace && block.keepWithNext && startsKeepChain && !retriedKeepChains.has(block)) {
         const keepChain = this.getKeepWithNextChain(blocks, i);
         if (keepChain.length > 1) {
           const newChainFootnoteIds = this.collectNewFootnoteIds(
@@ -4899,15 +4954,25 @@ export class PaginationEngine {
               pageInSection(block.sectionIndex)
             );
           const currentAvailableHeight = remainingHeight - currentFootnoteHeight;
+          // Once a note cited here has ended, Word may defer a later whole note while
+          // keeping its short, kept citing chain here. A carried tail alone, or a note
+          // already running on from this page, does not permit that deferral.
+          const canDeferChainNote = this.fragmentParagraphs
+            && keepChain[keepChain.length - 1].keepLines
+            && this.isWordParagraphElement(keepChain[keepChain.length - 1].element)
+            && newChainFootnoteIds.length > 0 && currentPageHasFootnoteReference
+            && currentFootnoteIds.length > 0 && !laterNotesClosed();
           const chainFitsHere = currentChainHeight <= currentAvailableHeight
-            && chainNotesStart(currentChainHeight, remainingHeight, {
+            && (canDeferChainNote || chainNotesStart(currentChainHeight, remainingHeight, {
               footnoteIds: currentFootnoteIds,
               continuation: currentContinuation,
               partialFootnotes: currentPartialFootnotes,
-            }, laterNotesClosed());
+            }, laterNotesClosed()));
 
           if (!chainFitsHere) {
             const last = keepChain[keepChain.length - 1];
+            const canRelaxChain = this.fragmentParagraphs && last.keepLines
+              && this.isWordParagraphElement(last.element) && newChainFootnoteIds.length > 0;
             const precedingNoteIds = this.collectNewFootnoteIds(keepChain.slice(0, -1), currentFootnoteIds);
             const fragmentLast = (chainHeight: number, available: number, band: number,
               payload: FootnotePackingContext, closed: boolean, preceding: readonly HTMLElement[]) => {
@@ -4951,19 +5016,31 @@ export class PaginationEngine {
             // left alone at this page's foot.
             if (
               (freshChainBodyHeight <= nextPageBands.bodyHeight
-                && chainNotesStart(freshChainBodyHeight, nextPageBands.bodyHeight,
-                  { footnoteIds: [], continuation: null, partialFootnotes: [] }, false))
+                && (canRelaxChain || chainNotesStart(freshChainBodyHeight, nextPageBands.bodyHeight,
+                  { footnoteIds: [], continuation: null, partialFootnotes: [] }, false)))
               || fragmentLast(freshChainBodyHeight, nextPageBands.bodyHeight, nextPageBands.bodyHeight,
                 { footnoteIds: [], continuation: null, partialFootnotes: [] }, false, []) !== null
             ) {
               // Start the chain over on the fresh page, so that page's carried note is
               // partitioned first and the chain is judged again beside it.
+              if (canRelaxChain) {
+                retriedKeepChains.add(block);
+                releasedKeepPredecessors.add(last);
+              }
               finishPage(block.sectionIndex);
               i--;
               continue;
             }
           }
         }
+      }
+
+      // After a newly split note, body text resumes on the page where that note ends.
+      // Keep-chain handling above records its retry before this page turn.
+      if (this.fragmentParagraphs && nextPageContinuation && currentContent.length > 0) {
+        finishPage(block.sectionIndex);
+        i--;
+        continue;
       }
 
       // Extract footnote references from this block
@@ -5052,6 +5129,8 @@ export class PaginationEngine {
           effectiveMarginTop,
           headNotesStart,
           currentContent,
+          block.keepLines && isFirstOnPage && block.heightPt > freshBlockPageBodyHeight
+            && allBlockFootnoteIds.some(id => this.footnoteRegistry.has(id)),
         );
         if (paragraphFragments) {
           blocks.splice(i, 1, ...paragraphFragments);
@@ -5113,6 +5192,7 @@ export class PaginationEngine {
               effectiveMarginTop,
               headNotesStart,
               currentContent,
+              block.keepLines && isFirstOnPage && currentFootnoteHeight === 0 && !currentContinuation,
             ) ?? this.tryFragmentCitingTable(block, blockDimensions, effectiveRemainingHeight,
               effectiveMarginTop, headNotesStart);
             if (fragments) {
@@ -5126,7 +5206,7 @@ export class PaginationEngine {
               blockDimensions.contentWidth, { footnoteIds: [], continuation: null, partialFootnotes: [] }, false));
             // A preceding keep-with-next block belongs with the citation; the chain path owns it.
             if (currentContent.length > 0 && canMoveWhole
-                && !blocks[i - 1]?.keepWithNext) {
+                && (!blocks[i - 1]?.keepWithNext || releasedKeepPredecessors.has(block))) {
               finishPage(block.sectionIndex);
               i--;
               continue;
