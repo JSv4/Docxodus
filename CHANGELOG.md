@@ -62,6 +62,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Keep normal footnote/endnote citations paired with their definitions through comparison and
+  consolidation, including id-zero and explicitly typed normal notes. Drop unresolved references
+  without inventing ids, and preserve citations when a note's text is emptied (#1377).
+
 - Automatic line spacing retains fractional font metrics through layout and painting, avoiding
   cumulative baseline drift from rounding each line early. The shared font probe now measures
   at the same precision as the SVG painter; native Word controls cover multiple fonts, sizes
