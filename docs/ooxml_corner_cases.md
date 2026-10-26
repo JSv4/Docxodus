@@ -4403,19 +4403,25 @@ styles of different types:
   <w:rPr><w:b w:val="0"/><w:sz w:val="16"/></w:rPr></w:style>
 ```
 
-| Revised document's `DocID` | Word's compare | Docxodus before | Docxodus after |
+The [three comparison outputs supplied for #1187](https://github.com/JSv4/Docxodus/issues/1187#issuecomment-6415309420)
+were produced with default options in Word for Mac, reported as approximately Word 2016. Their metadata
+says `Microsoft Macintosh Word`, `AppVersion=15.0000`; the exact build and Formatting option were not
+recorded. These observations describe those files, rather than every Word version or comparison setting.
+
+| Revised document's `DocID` | Word's compare | Docxodus before #1185 | Docxodus after #1185 |
 |---|---|---|---|
-| Nothing in the revised document uses it | Keeps only the original's paragraph style; the character style is gone (seen in a real document pair) | Both styles under `DocID`: invalid package | Original's style only |
-| An inserted run uses it (`w:rStyle="DocID"`) | **Not yet verified** | Both styles under `DocID`: invalid package, and which one the run's reference names is ambiguous | Original's style keeps `DocID`; the revised style is copied as `DocID1` and the run names `DocID1` |
+| Nothing in the revised document uses it | Original's paragraph style only in the #1184 real pair; **revised character style only** in the #1187 Mac control | Both styles under `DocID`: invalid package | Original's style only |
+| An inserted run uses it (`w:rStyle="DocID"`) | Revised character style only, with `styleId=DocID`, `name=DocID`; inserted run still names `DocID` | Both styles under `DocID`: invalid package | Original's paragraph style keeps `DocID`; revised character style is copied as `DocID1` and the run names `DocID1` |
+| An inserted paragraph uses it; the original's `DocID` is a character style | Revised paragraph style only, with `styleId=DocID`, `name=DocID`; inserted paragraph still names `DocID` | Both styles under `DocID`: invalid package | Original's character style keeps `DocID`; revised paragraph style is copied as `DocID1` and the paragraph names `DocID1` |
 
-LibreOffice's own document comparison was not tried for either row.
+LibreOffice's own document comparison was not tried for these pairs.
 
-**Analysis.** The comparison output keeps the original's styles part and copies in the revised styles it
+**Analysis.** Docxodus keeps the original's styles part and copies in the revised styles it
 lacks. The copy matched a revised style to an original one by type *and* id, so a revised character style
 found no match and was copied in beside the paragraph style under the same id. Keying on the id alone
-fixes the validity; the remaining question is what the copied style should be called when inserted
-content still uses it. Dropping it would point the inserted run at a paragraph style, which a character
-reference cannot use, so the formatting would be lost. Docxodus copies it under the first free id
+fixes the validity, but both source styles can still be needed. Dropping the revised style would point
+the inserted run at a paragraph style, which a character reference cannot use, so the formatting would
+be lost. Docxodus copies it under the first free id
 `DocID1`, `DocID2`, …, and rewrites the references that mean it. Which style a reference means is read
 off the reference: `w:rStyle` names a character style, `w:pStyle` a paragraph style, `w:tblStyle` a table
 style, `w:numStyleLink`/`w:styleLink` a numbering style, `w:basedOn`/`w:next` a style of their own style's
@@ -4432,8 +4438,8 @@ definitions copied from the revised document are rewritten. Content both documen
 revised style, which is what the revised document meant by it: an unchanged run is written from the
 revised side, and a header or footer story the revision leaves unchanged is carried over from the
 original but reads the same in both documents, so its references are rewritten as well. The copied style keeps its `w:name`, so the package carries two
-styles with the display name `DocID`; the validator accepts that, and how Word presents it is also
-unverified.
+styles with the display name `DocID`; the validator accepts that. Retaining both source names is
+intentional; the style ids distinguish their references.
 
 "Uses" counts only what enters the output: the stories that carry the revised content (body, headers,
 footers, footnotes, endnotes, comments), outside original-only content; the revised styles that are
@@ -4449,12 +4455,18 @@ two reviewers both use a colliding style, the first reviewer's copy serves both,
 rewrite `StyleIdRemap`), called from `IrMarkupRenderer.TrackStyleDefinitionChanges` (two-way compare) and
 `PackageMerge.CopyMissingStylesFromOneDocToAnother` (consolidate). Tests: `DocxDiffCrossTypeStyleIdTests`.
 
-**To settle the unverified row**, compare two documents in Word: an original whose paragraph style
-`DocID` is used by a kept paragraph, and a revision that defines `DocID` as a character style and inserts
-a paragraph whose run uses it (`w:rStyle="DocID"`); then the mirror case, an original character style used
-by a kept run and a revision inserting a paragraph with paragraph style `DocID`. Record whether Word drops,
-renames or merges the revised style, what the inserted run's or paragraph's style reference names, and
-whether `w:name` changes.
+**Decision for #1187.** The supplied Mac results neither rename nor merge the styles: they discard the
+original style and retain the revised style's id and display name unchanged, even in the unused control.
+In the referenced pair the original 8pt paragraph style is gone; in the reverse pair the original
+bold/red character style is gone. Neither output archives the removed reference in a `w:pPrChange` or
+`w:rPrChange`, so rejecting cannot restore that original formatting. The earlier #1184 observation is
+therefore specific to its real document pair, not a universal rule about Word.
+
+Docxodus deliberately keeps its existing policy rather than reproducing this formatting loss. Both
+referenced styles survive under distinct ids, and formatting changes remain reversible. The two
+referenced fixture shapes are checked through `DocxCompare.Compare`: accept and reject must match each
+source's text, bold, colour and size after resolving style inheritance, with unique ids and no new
+validation errors. No comparison implementation change was needed.
 
 ### Plain text inside a move-destination range (issue #1340)
 

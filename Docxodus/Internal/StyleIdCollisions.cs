@@ -15,9 +15,11 @@ namespace Docxodus.Internal;
 /// <para>A <c>w:styleId</c> names one style across all style types, but the copy matched a revised style to an
 /// original one by type and id together, so a revised character style whose id the original uses for a paragraph
 /// style was copied in beside it under the same id. The original's style keeps the id. The revised style is left
-/// out when nothing that enters the output uses it, which is what Word's compare does. When something does — an
-/// inserted run's <c>w:rStyle</c>, a copied style's <c>w:basedOn</c> or <c>w:link</c>, a copied numbering level —
-/// it is copied under a fresh id and those references follow it.</para>
+/// out when nothing that enters the output uses it, matching Word's result for the original #1184 pair.
+/// When something does — an inserted run's <c>w:rStyle</c>, a copied style's <c>w:basedOn</c> or <c>w:link</c>,
+/// a copied numbering level —
+/// it is copied under a fresh id and those references follow it. This preserves both views' formatting; the Word
+/// for Mac outputs supplied in #1187 instead keep only the revised style and lose the original formatting.</para>
 /// <para>Which of the two styles a reference means is read off the reference itself: a <c>w:rStyle</c> names a
 /// character style, a <c>w:pStyle</c> a paragraph style, and so on (<see cref="ReferencedType"/>). A reference of the
 /// revised style's type to the colliding id cannot validly mean the original's style. It is rewritten unless it sits

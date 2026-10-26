@@ -19,8 +19,8 @@ namespace Docxodus.Tests;
 /// A style id names one style across all types, so a comparison whose two documents use one id for styles of
 /// different types (a paragraph style in one, a character style in the other) must not write both under that id
 /// (issue #1184). The original document's style keeps the id. The revised document's style is left out when
-/// nothing in the redline uses it, as Word's compare does; when inserted content uses it, it is imported under
-/// a fresh id and those references follow it.
+/// nothing in the redline uses it; when inserted content uses it, it is imported under a fresh id and those
+/// references follow it. Both views retain their formatting, unlike the Word for Mac outputs in issue #1187.
 /// </summary>
 public class DocxDiffCrossTypeStyleIdTests
 {
@@ -96,6 +96,37 @@ public class DocxDiffCrossTypeStyleIdTests
     }
 
     // --------------------------------------------------------------------------- referenced revised style
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Compare_CrossTypeStyleCollision_PreservesFormattingInBothViews(bool reverse)
+    {
+        // The two referenced shapes from #1187. Fix Normal's size explicitly so this checks the
+        // collision rather than compare's separate stock-docDefaults backfill.
+        var normal = Normal.Replace("</w:style>", "<w:rPr><w:sz w:val=\"24\"/></w:rPr></w:style>");
+        var characterStyle = CharacterDocId.Replace("<w:sz w:val=\"16\"/>", "<w:color w:val=\"C00000\"/>");
+        WmlDocument Fixture(string body, string style) =>
+            IrTestDocuments.FromParts(body + "<w:sectPr/>", normal + style);
+        const string paragraphProperties = "<w:pPr><w:pStyle w:val=\"DocID\"/></w:pPr>";
+        var keptText = reverse ? "Kept bold red run" : "Document reference 123";
+        var left = Fixture(P("The original paragraph.") + (reverse
+            ? $"<w:p>{StyledRun("DocID", keptText)}</w:p>" : P(keptText, paragraphProperties)),
+            reverse ? characterStyle : ParagraphDocId);
+        var right = Fixture(P("The original paragraph.") + P(keptText) + (reverse
+            ? P("Inserted small paragraph", paragraphProperties)
+            : $"<w:p>{StyledRun("DocID", "Inserted bold red run")}</w:p>"),
+            reverse ? ParagraphDocId : characterStyle);
+
+        var redline = DocxCompare.Compare(left, right);
+
+        AssertUniqueStyleIds(redline);
+        AssertNoNewValidationErrors(redline, left, right);
+        Assert.Equal(2, Styles(redline).Count(s => (string?)s.Element(W + "name")?.Attribute(W + "val") == "DocID"));
+        Assert.Contains(Body(redline).Descendants(), e => e.Name == W + "pPrChange" || e.Name == W + "rPrChange");
+        Assert.Equal(Presentation(left), Presentation(RevisionProcessor.RejectRevisions(redline)));
+        Assert.Equal(Presentation(right), Presentation(RevisionProcessor.AcceptRevisions(redline)));
+    }
 
     [Theory]
     [MemberData(nameof(Engines))]
@@ -551,6 +582,20 @@ public class DocxDiffCrossTypeStyleIdTests
     }
 
     // ---------------------------------------------------------------------------------------- helpers
+
+    private static string[] Presentation(WmlDocument document)
+    {
+        var assembled = FormattingAssembler.AssembleFormatting(document, new FormattingAssemblerSettings());
+        return Body(assembled).Elements(W + "p").Select(p => string.Concat(p.Descendants(W + "r").SelectMany(run =>
+        {
+            var properties = run.Element(W + "rPr");
+            var size = (string?)properties?.Element(W + "sz")?.Attribute(W + "val");
+            var color = (string?)properties?.Element(W + "color")?.Attribute(W + "val") ?? "auto";
+            var bold = properties?.Element(W + "b") is { } b && (string?)b.Attribute(W + "val") is not ("0" or "false" or "off");
+            return string.Concat(run.Descendants(W + "t").Select(t => t.Value))
+                .Select(character => $"{character}:{size}:{color}:{bold}|");
+        }))).ToArray();
+    }
 
     private static XDocument Part(WmlDocument document, string path)
     {
