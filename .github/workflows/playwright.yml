@@ -112,7 +112,7 @@ jobs:
           (cd npm-export && npm ci --ignore-scripts)
 
       - name: Download the built package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: docxodus-build
 
@@ -181,7 +181,7 @@ jobs:
           (cd npm-export && npm ci --ignore-scripts)
 
       - name: Download the built package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: docxodus-build
 
@@ -249,7 +249,7 @@ jobs:
           (cd npm-export && npm ci --ignore-scripts)
 
       - name: Download the built package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: docxodus-build
 
@@ -317,7 +317,7 @@ jobs:
       # Each lane uploaded one directory holding its blob-report and test output, so merged into
       # npm/ they land where a single run would have written them.
       - name: Download every lane's report and test output
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: playwright-lane-*
           merge-multiple: true
