@@ -39,6 +39,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Recorded Word for Mac's cross-type style collision results (#1187) and pinned formatting preservation
+  in both accepted and rejected views. Docxodus deliberately retains both referenced styles under unique
+  IDs; the supplied Word outputs discard the original style. Comparison behavior is unchanged.
 - The Word revision presentation's first two author colours are now Word's, `#0078D4` and `#D13438`
   (were `#C00000` and `#0070C0`), and its change bar sits 30pt left of the text column (was 0.25in), as
   measured from Word-printed All Markup PDFs (#1300). Its other six colours change too and remain this
