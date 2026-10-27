@@ -692,8 +692,9 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
   }
   if (commentColumnPlacement === "balloons" && options.commentProfile === "inline") {
     fail("invalid_argument", "input_validation",
-      "The balloon layout cannot hold inline comments.",
-      "Use the margin, endnotes or hidden comment profile with balloons.");
+      "Inline comments sit in the text, where no balloon can show them.",
+      "Choose commentProfile margin to put comments in balloons, endnotes to list them after the text, " +
+        "or hidden to leave them out; or keep commentColumnPlacement margin.");
   }
   if (commentColumnPlacement === "balloons" && options.reviewProfile === "markup" && markupPresentation !== "word") {
     fail("invalid_argument", "input_validation",

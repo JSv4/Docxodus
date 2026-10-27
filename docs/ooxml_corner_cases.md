@@ -4227,10 +4227,69 @@ Then print or save as PDF with All Markup and "Show only comments and formatting
   the run and does not end the revision; Docxodus 14.2.0 ended it there and started a new balloon.
 
 **Docxodus.** `Internal/WordFormatWording.cs` writes the wording, `npm/src/markup-balloons.ts` lays
-the balloons out, and `docs/architecture/all_markup_layout.md` gives the design. **Pending:** what
-Word does when a page's balloons cannot fit beside it. Docxodus never overlaps them: it shortens the
-tallest a line at a time, lets any that still do not fit run off the page's foot, and reports every
-cut balloon in a `comment_balloon_truncated` export warning.
+the balloons out, and `docs/architecture/all_markup_layout.md` gives the design.
+
+### When a page's balloons cannot all fit beside it
+
+**Reproducer.** One Letter page of short paragraphs, each carrying a long comment, 25 of them. In the
+measured document each comment filled eight lines of its balloon (about 430 characters), and one
+comment ran to several paragraphs with empty ones between. Each comment's `w:date` (the author's
+clock) differs from the UTC date the modern comment parts record:
+
+```xml
+<!-- document.xml, repeated for ids 0 to 24 -->
+<w:p><w:commentRangeStart w:id="0"/><w:r><w:t>Section 1 applies to the transferred assets.</w:t></w:r>
+  <w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>
+<!-- comments.xml -->
+<w:comment w:id="0" w:author="Ines Moreau" w:initials="IM" w:date="2025-06-11T16:05:00Z">
+  <w:p w14:paraId="10000000"><w:r><w:t>Note 0: the warranty period … (a few hundred characters)</w:t></w:r></w:p>
+</w:comment>
+<!-- commentsIds.xml maps paraId 10000000 to durableId 20000000; commentsExtensible.xml: -->
+<w16cex:commentExtensible w16cex:durableId="20000000" w16cex:dateUtc="2025-06-11T21:05:00Z"/>
+```
+
+`printOverflowFixture()` in `npm/tests/docx-markup-balloons-fixture.ts` builds this document with
+shorter comments (about six balloon lines each). Print it with All Markup and comments in balloons,
+once with Save as PDF and once to a PDF printer.
+
+| | Word, Save as PDF | Word, Print to PDF | Docxodus 14.2.0 | Docxodus since PR #1392 and PR #1393 |
+|---|---|---|---|---|
+| Which balloons are cut | Balloons stay whole from the top while the rest, each cut to one line, still fit at or below their own lines: 3 whole, 22 cut | Same | Lines come off the tallest balloon until the stack fits, so the longest comments all end part way | Word's rule; on the measured document 4 whole, see Residuals |
+| A cut balloon | First line only, 16.1pt tall at 9pt, ending in a small white box with a hairline border holding `…` | Same box, reading `… [n]` | Lines cut from the tallest, ending in a text ellipsis | As Word |
+| The rest of a cut comment | Printed nowhere | Printed in full on pages after the last, under a bar naming page, number, label, author and date | Printed nowhere | `balloonOverflow: "truncate"` (default) prints nowhere; `"appendix"` prints the full text as Print to PDF does, without Word's leaders (see Residuals) |
+| The date in that bar | — | `w:date`'s digits, not the UTC date | — | As Word |
+
+LibreOffice: not compared; it has no equivalent balloon print layout.
+
+**Why.** Word gives the space to the earliest balloons, and keeps every balloon at or below its own
+line rather than pulling the stack up to keep one more whole. It treats the full text as a printing
+matter: the file-saving route drops it, the printer route appends it.
+
+**Docxodus outside the measured case.**
+- A stack the page could hold if pulled up from its foot is pulled up and printed whole, unchanged
+  from 14.2.0. This is assumed, not measured: in the measured case the stack could not fit even
+  pulled up.
+- If even the cut balloons cannot fit, they run off the page's foot and are cut there. Such a balloon
+  has no box, but `"appendix"` still lists its comment.
+- Every cut balloon is reported in the export's `comment_balloon_truncated` warning.
+
+**Residuals.**
+- On the measured document Docxodus keeps 4 balloons whole where Word keeps 3. Measured on a host
+  without Segoe UI and Times New Roman, the substitutes make an eight-line balloon 87.9pt tall
+  against Word's 88.5pt. Four whole balloons then end 2.9pt above the page's foot, where Word's
+  would end within about a point of it.
+- `"appendix"` omits three things Word's Print to PDF also prints: a leader from each comment out
+  past the paper's edge, a mark in the left margin, and a final page holding only the last leader.
+  So Word's PDF has one more page.
+- Not measured yet:
+  - whether Word pulls up a stack that fits only that way;
+  - what Word does when even its cut balloons cannot fit;
+  - whether the appendix bar names the physical or the displayed page number;
+  - whether page-count fields count the appendix pages (Docxodus counts only the document's own).
+
+**Code.** `fit()` and `cutShort()` in `npm/src/markup-balloons.ts`, and `npm/src/balloon-appendix.ts`.
+**Tests.** `npm/tests/markup-balloons.spec.ts` and `npm/tests/export-markup-balloons.spec.ts`; the
+tests named for cut balloons, the pull-up case and the appendix.
 
 ## Comments in a footer or footnote (issue #1310)
 
