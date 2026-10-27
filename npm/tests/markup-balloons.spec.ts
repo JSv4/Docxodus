@@ -344,3 +344,51 @@ test('a formatting change in the header and one in the body never share a balloo
   const { balloons } = await paginate(page, balloonDocx({ body, header }), 'balloons');
   expect(balloons.map(b => b.text)).toEqual(['Formatted: Font: Bold', 'Formatted: Font: Bold']);
 });
+
+test('the appendix keeps every line above the foot and two lines each side of a break, at any zoom', async ({ page }) => {
+  await open(page);
+  // Hyphenated words and a long address put Chromium's line breaks inside tokens.
+  const remark = (id: number) => `${id}: The non-exclusive, worldwide licence is well-known to the counter-party; ` +
+    'see https://example.com/agreements/master-services/schedules/exhibit-b/pricing-and-service-levels-v2 for the ' +
+    'pre-agreed figures. '.repeat(3) + 'Confirm the long-stop date before signing. '.repeat(4);
+  const ids = Array.from({ length: 25 }, (_, id) => id);
+  const comments = ids.map(id => ({ id, author: 'Ines Moreau', initials: 'IM', text: remark(id) }));
+  const bytes = balloonDocx({ body: ids.map(id => `<w:p>${commented(id, `Section ${id} `)}</w:p>`).join(''), comments });
+  const result = await page.evaluate(({ bytes }) => {
+    const html: string = (window as any).Docxodus.DocumentConverter.ConvertDocxToHtmlComplete(
+      new Uint8Array(bytes), 'Appendix', 'docx-', false, '', 2, 'comment-',
+      1, 1, 'page-', false, 0, 'annot-', false, true, true, true, true, false, null, false, 1);
+    const parsed = new DOMParser().parseFromString(html, 'text/html');
+    document.head.insertAdjacentHTML('beforeend', parsed.head.innerHTML);
+    document.body.innerHTML = '<div id="host"></div>';
+    const host = document.querySelector<HTMLElement>('#host')!;
+    (window as any).DocxodusPagination.paginateHtml(parsed.body.innerHTML, host, {
+      showPageNumbers: false, commentColumnPlacement: 'balloons', balloonOverflow: 'appendix', scale: 0.75,
+    });
+    return Array.from(host.querySelectorAll<HTMLElement>('.page-box'))
+      .filter(box => box.querySelector('.page-balloon-appendix'))
+      .map(box => {
+        const frame = box.getBoundingClientRect();
+        const k = 792 / frame.height;
+        return Array.from(box.querySelectorAll<HTMLElement>('.page-balloon-appendix > *')).map(element => {
+          const rect = element.getBoundingClientRect();
+          return { bar: element.matches('.page-balloon-appendix-bar'), text: element.textContent!,
+            bottom: (rect.bottom - frame.top) * k, lines: Math.round(rect.height * k / 11.5) };
+        });
+      });
+  }, { bytes: Array.from(bytes) });
+  expect(result.length).toBeGreaterThan(1);
+  for (const blocks of result) for (const block of blocks) expect(block.bottom).toBeLessThanOrEqual(720 + 0.5);
+  // A paragraph broken across pages: its last piece on one page and the first on the next.
+  for (let index = 1; index < result.length; index++) {
+    const before = result[index - 1].at(-1)!, after = result[index][0];
+    if (before.bar || after.bar) continue;
+    expect(before.lines).toBeGreaterThanOrEqual(2);
+    expect(after.lines).toBeGreaterThanOrEqual(2);
+  }
+  // Nothing is lost or repeated at the breaks, which may fall inside a word (after a hyphen).
+  const squeeze = (text: string) => text.replace(/\s+/g, '');
+  const printed = squeeze(result.flat().filter(block => !block.bar).map(block => block.text).join(''));
+  const cut = result.flat().filter(block => block.bar).map(block => Number(/Commented \[IM(\d+)\]/.exec(block.text)![1]) - 1);
+  expect(printed).toBe(squeeze(cut.map(id => remark(id)).join('')));
+});

@@ -60,6 +60,9 @@ const WORD = {
   paleFills: { "#0078D4": "#D5EDFF", "#D13438": "#F8DCDD" } as Record<string, string>,
 };
 
+/** The balloon font when the document names none: Word's own. */
+export const DEFAULT_BALLOON_FONT: { family: string; sizePt: number } = WORD.font;
+
 /** Anchors whose line tops are this close share a line. */
 const SAME_LINE = 2;
 

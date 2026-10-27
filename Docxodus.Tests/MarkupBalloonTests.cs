@@ -202,6 +202,11 @@ public class MarkupBalloonTests
         Assert.Equal("2025-03-04T16:45:00Z", Data(word, "date"));
         Assert.Equal("2025-03-04T11:45:00Z", Data(word, "date-as-written"));
         Assert.Null(Data(docxodus, "date-as-written"));
+        // Like the author and the UTC date, it is comment metadata, which a caller can withhold.
+        var withheld = Notes(RenderWithCommentDates(body, comment, "0A1B2C3D", "2025-03-04T16:45:00Z",
+            RevisionPresentation.Word, includeMetadata: false))["7"];
+        Assert.Null(Data(withheld, "date-as-written"));
+        Assert.Null(Data(withheld, "date"));
     }
 
     [Fact]
@@ -273,7 +278,7 @@ public class MarkupBalloonTests
     /// parts (commentsIds keyed by its last paragraph, commentsExtensible by durable id).
     /// </summary>
     private static XElement RenderWithCommentDates(string body, string comment, string lastParaId, string dateUtc,
-        RevisionPresentation presentation)
+        RevisionPresentation presentation, bool includeMetadata = true)
     {
         const string ns = "xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main' " +
             "xmlns:w14='http://schemas.microsoft.com/office/word/2010/wordml'";
@@ -302,6 +307,7 @@ public class MarkupBalloonTests
             RevisionPresentation = presentation,
             RenderComments = true,
             CommentRenderMode = CommentRenderMode.Margin,
+            IncludeCommentMetadata = includeMetadata,
         };
         return XElement.Parse(WmlToHtmlConverter.ConvertToHtml(new WmlDocument("dates.docx", bytes.ToArray()), settings).ToString());
     }

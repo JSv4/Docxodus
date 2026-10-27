@@ -8,7 +8,7 @@
  * at a line break only where two lines stay on each side, and a bar may close a page alone. The
  * geometry below was measured from Word's Print to PDF of a page of 25 long comments, in points.
  */
-import { fontStack, type CutComment, type MarkupBalloonPage } from "./markup-balloons.js";
+import { DEFAULT_BALLOON_FONT, fontStack, type CutComment, type MarkupBalloonPage } from "./markup-balloons.js";
 
 const APPENDIX = {
   /** The bar's outer edges stand this far outside the text column on either side. */
@@ -42,8 +42,8 @@ export class BalloonAppendix {
   constructor(
     private readonly document: Document,
     comments: CutComment[],
-    private readonly font: { family: string; sizePt: number },
     private readonly cssPrefix: string,
+    private readonly font: { family: string; sizePt: number } = DEFAULT_BALLOON_FONT,
   ) {
     this.queue = comments.flatMap((comment, index): Block[] => [
       { kind: "bar", comment, number: index + 1 },
@@ -85,10 +85,21 @@ export class BalloonAppendix {
       }
       const rows = lineBoxes(this.document, element);
       const room = rows.filter((row) => (row.bottom - origin.top) * k <= contentHeight + 0.01).length;
-      const keep = !previous ? Math.max(1, Math.min(room, rows.length - 1)) : Math.min(room, rows.length - APPENDIX.minLines);
-      const split = keep >= (previous ? APPENDIX.minLines : 1) ? lineStart(this.document, element, rows, keep) : -1;
-      if (split > 0) {
+      // Two lines stay on each side of the break; alone on its page, a paragraph keeps what fits.
+      let keep = Math.min(room, rows.length - APPENDIX.minLines);
+      if (!previous) keep = Math.max(1, keep);
+      let split = -1;
+      // Rows start wherever Chromium broke the line, inside a word too (after a hyphen, or in a long
+      // address). Cut there, then step back a row while the head still runs past the column.
+      for (; keep >= (previous ? APPENDIX.minLines : 1); keep--) {
+        element.textContent = block.text;
+        split = rowStart(this.document, element, rows[keep]);
+        if (split <= 0) continue;
         element.textContent = block.text.slice(0, split).trimEnd();
+        if (bottomOf(element) <= contentHeight + 0.01) break;
+        split = -1;
+      }
+      if (split > 0) {
         this.queue[0] = { ...block, text: block.text.slice(split).trimStart() };
       } else if (previous) {
         element.remove();
@@ -151,18 +162,29 @@ function lineBoxes(document: Document, element: HTMLElement): DOMRect[] {
   return rows.length > 0 ? rows : [element.getBoundingClientRect()];
 }
 
-/** Where line `index` (from 0) of a paragraph's text begins: the first word that starts on it. */
-function lineStart(document: Document, element: HTMLElement, rows: DOMRect[], index: number): number {
+/**
+ * The offset in a paragraph's text of the first character laid out on `row` or below it: characters
+ * run down the lines in order, so a binary search over them finds it. -1 when there is none.
+ */
+function rowStart(document: Document, element: HTMLElement, row: DOMRect | undefined): number {
   const text = element.firstChild;
-  if (!text || index >= rows.length) return -1;
+  const length = text?.textContent?.length ?? 0;
+  if (!text || !row) return -1;
   const range = document.createRange();
-  for (const word of (text.textContent ?? "").matchAll(/\S+/g)) {
-    range.setStart(text, word.index);
-    range.setEnd(text, word.index + 1);
-    const rect = range.getClientRects()[0];
-    if (rect && rect.top >= rows[index].top - rows[index].height / 2) return word.index;
+  const below = (offset: number) => {
+    range.setStart(text, offset);
+    range.setEnd(text, offset + 1);
+    const rect = Array.from(range.getClientRects()).find((candidate) => candidate.width > 0) ?? range.getBoundingClientRect();
+    return rect.top >= row.top - row.height / 2;
+  };
+  let low = 0;
+  let high = length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (below(middle)) high = middle;
+    else low = middle + 1;
   }
-  return -1;
+  return low < length ? low : -1;
 }
 
 /**

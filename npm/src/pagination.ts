@@ -115,9 +115,6 @@ export interface MeasuredBlock {
 /**
  * Information about a rendered page.
  */
-/** The balloon layout's result, with the pages its appendix added after the last (if any). */
-export type MarkupBalloonLayout = MarkupBalloonResult & { appendedPages: PageInfo[] };
-
 export interface PageInfo {
   /** 1-based page number */
   pageNumber: number;
@@ -128,6 +125,9 @@ export interface PageInfo {
   /** The page container element */
   element: HTMLElement;
 }
+
+/** The balloon layout's result, with the pages its appendix added after the last (if any). */
+export type MarkupBalloonLayout = MarkupBalloonResult & { appendedPages: PageInfo[] };
 
 /**
  * Result of pagination operation.
@@ -370,6 +370,8 @@ export interface PaginationOptions {
   /**
    * Skip the "balloons" layout at the end of paginate(); the caller runs layoutMarkupBalloons()
    * itself once it has finished changing the page tree (the standalone export). Default: false.
+   * Pages the balloon appendix adds then arrive only in that call's `appendedPages`; they are not
+   * in the result paginate() returned, and a PageMap must be materialized after it.
    */
   deferMarkupBalloons?: boolean;
   /**
@@ -1161,8 +1163,9 @@ export class PaginationEngine {
     // Glyph placement only: run once every page and running story is final.
     if (this.alignBaselines) alignBaselinesToWord(this.containerElement);
     this.activateCommentReturnLinks(pages);
-    this.lastPages = pages;
-    if (!this.deferMarkupBalloons) this.layoutMarkupBalloons();
+    // A copy: pages the balloon appendix adds join this list, not the caller's result.
+    this.lastPages = [...pages];
+    if (!this.deferMarkupBalloons) pages.push(...(this.layoutMarkupBalloons()?.appendedPages ?? []));
 
       const result = {
         totalPages: pages.length,
@@ -1210,9 +1213,11 @@ export class PaginationEngine {
     });
     const appendedPages: PageInfo[] = [];
     if (appendix && layout.cutComments.length > 0) {
-      const pages = new BalloonAppendix(this.document, layout.cutComments, font ?? { family: "Segoe UI", sizePt: 9 },
-        this.cssPrefix);
-      while (!pages.finished) pages.fill(this.appendBlankPage(appendedPages));
+      const pages = new BalloonAppendix(this.document, layout.cutComments, this.cssPrefix, font);
+      while (!pages.finished) {
+        this.checkpoint();
+        pages.fill(this.appendBlankPage(appendedPages));
+      }
     }
     return this.markupBalloons.result = { ...layout, appendedPages };
   }

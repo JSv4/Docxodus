@@ -3911,9 +3911,12 @@ export async function convertDocxToPaginatedHtml(
         message: `Balloons too many to fit beside their page were cut short: ${balloons.truncatedCommentIds.length} ` +
           `comment(s) and ${balloons.truncatedFormatting} formatting change(s).` +
           (balloons.appendedPages.length > 0 ? " The cut comments are printed in full after the last page." : ""),
-        remediation: balloons.appendedPages.length > 0
-          ? "Use the margin placement to print every formatting change in full."
-          : "Use balloonOverflow appendix, or the margin placement with the endnotes comment profile, to print every comment in full.",
+        remediation: [
+          balloons.truncatedCommentIds.length > 0 && options.balloonOverflow !== "appendix"
+            ? "Use balloonOverflow appendix, or the margin placement with the endnotes comment profile, to print every comment in full."
+            : "",
+          balloons.truncatedFormatting > 0 ? "Use the margin placement to print every formatting change in full." : "",
+        ].filter(Boolean).join(" "),
         ...(balloons.truncatedCommentIds.length > 0 ? { resource: balloons.truncatedCommentIds.join(",") } : {}),
       });
     }

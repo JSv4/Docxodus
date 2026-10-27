@@ -268,6 +268,8 @@ test('a long cut comment runs on across the appended pages with every word print
   const appendix = (await pdfPages(result.pdf!)).slice(1);
   expect(appendix.length).toBeGreaterThan(1);
   expect(appendix.map(page => page.text).join(' ').match(/\bw\d+\b/g)).toEqual(words);
+  // The comment itself crosses a page break.
+  expect(appendix.filter(page => /\bw\d+\b/.test(page.text)).length).toBeGreaterThan(1);
 });
 
 test('the appendix overflow without the balloon layout is an invalid argument', async ({ browser }) => {

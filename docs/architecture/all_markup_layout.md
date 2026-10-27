@@ -204,6 +204,10 @@ full on pages after the last. Measured from its Print to PDF of a page of 25 lon
   each side; a bar may close a page alone.
 - Not reproduced: Word also draws a leader from each comment past the paper's edge and a mark in the
   left margin, and prints a page holding only the last leader.
+- *Pending*, not measured against Word: the bar names the physical page (`Page 3:` for the third
+  page), which the measured one-page document cannot tell apart from a restarted displayed page
+  number; and page-count fields (`NUMPAGES`) are filled in before the appendix pages exist, so they
+  count the document's own pages only.
 
 `npm/src/balloon-appendix.ts` lays the appendix out; `PaginationEngine` hands it blank pages one at a
 time until it has placed everything.

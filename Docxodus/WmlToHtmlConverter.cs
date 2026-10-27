@@ -5712,7 +5712,7 @@ namespace Docxodus
                 // A cut-short comment's printed heading shows its date as the author's clock read it.
                 // data-date is the true UTC instant whenever the package records one, so keep w:date.
                 var written = (string?)comment.SourceElement.Attribute(W.date);
-                if (!string.IsNullOrEmpty(written))
+                if (settings.IncludeCommentMetadata && !string.IsNullOrEmpty(written))
                     note.Add(new XAttribute("data-date-as-written", written));
             }
 
