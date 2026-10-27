@@ -260,6 +260,51 @@ test('long comments near the page\'s foot are pulled up whole while the page can
   expectNoOverlap(balloons);
 });
 
+/** Converts with endnote-style comments in the Word presentation and paginates with balloons. */
+async function paginateEndnotes(page: Page, bytes: Uint8Array) {
+  return page.evaluate(({ bytes }) => {
+    // Word presentation (last argument), endnote-style comments (0), paginated.
+    const html: string = (window as any).Docxodus.DocumentConverter.ConvertDocxToHtmlComplete(
+      new Uint8Array(bytes), 'Cedar markup', 'docx-', false, '', 0, 'comment-',
+      1, 1, 'page-', false, 0, 'annot-', false, true, true, true, true, false, null, false, 1);
+    if (html.startsWith('{')) throw new Error(html);
+    const parsed = new DOMParser().parseFromString(html, 'text/html');
+    document.head.insertAdjacentHTML('beforeend', parsed.head.innerHTML);
+    document.body.innerHTML = '<div id="host"></div>';
+    const host = document.querySelector<HTMLElement>('#host')!;
+    (window as any).DocxodusPagination.paginateHtml(parsed.body.innerHTML, host, {
+      showPageNumbers: false, commentColumnPlacement: 'balloons',
+    });
+    return {
+      balloons: Array.from(host.querySelectorAll<HTMLElement>('.page-balloon')).map(b => b.textContent!.replace(/\s+/g, ' ').trim()),
+      markerWidths: Array.from(host.querySelectorAll<HTMLElement>('.page-box a.comment-marker')).map(a => a.getBoundingClientRect().width),
+      highlights: Array.from(host.querySelectorAll<HTMLElement>('.page-box span.comment-highlight')).map(s => getComputedStyle(s).backgroundColor),
+      listed: Array.from(host.querySelectorAll('.page-box')).some(p => p.textContent!.includes('Is delivery the right trigger?')),
+      scale: Number(host.querySelector<HTMLElement>('.page-box')!.dataset.docxMarkupScale ?? '1'),
+    };
+  }, { bytes: Array.from(bytes) });
+}
+
+test('with comments listed as endnotes, balloons hold the formatting changes and the text keeps its reference marks', async ({ page }) => {
+  await open(page);
+  const result = await paginateEndnotes(page, markupBalloonsFixture());
+  expect(result.balloons).toEqual(['Formatted: Font: Bold', 'Formatted: Indent: Left: 0.5"']);
+  expect(result.listed).toBe(true);
+  // The comments are not in balloons, so Word's rules for balloon comments do not apply to them.
+  expect(result.markerWidths.length).toBeGreaterThan(0);
+  for (const width of result.markerWidths) expect(width).toBeGreaterThan(0);
+  expect(result.highlights.length).toBeGreaterThan(0);
+  for (const background of result.highlights) expect(background).not.toBe('rgba(0, 0, 0, 0)');
+});
+
+test('with comments listed as endnotes and nothing to put in a balloon, the pages are left as they are', async ({ page }) => {
+  await open(page);
+  const result = await paginateEndnotes(page, anchorlessCommentsFixture());
+  expect(result.balloons).toEqual([]);
+  expect(result.scale).toBe(1);
+  expect(result.listed).toBe(false);
+});
+
 /** The top of the line holding the span whose text is `text`, in points from its page box's top. */
 async function lineTopOf(page: Page, text: string): Promise<number> {
   return page.evaluate((text) => {

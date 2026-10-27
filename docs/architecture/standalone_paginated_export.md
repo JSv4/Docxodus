@@ -747,8 +747,9 @@ only then does it enter the layout digest, so every default report and digest is
 `commentColumnPlacement: "balloons"` prints Word's All Markup layout (issue #1300, design in
 `all_markup_layout.md`): each page keeps its paper size and is shrunk beside a grey markup area whose
 balloons hold the margin comments and, with the Word presentation, the formatting changes in Word's
-wording; insertions and deletions stay inline. It needs the `margin` or `hidden` comment profile and,
-with `markup`, `markupPresentation: "word"`; otherwise it is `invalid_argument`. In `final` and
+wording; insertions and deletions stay inline. It takes any comment profile but `inline` (`endnotes`
+keeps the comments in their list and prints formatting balloons only) and, with `markup`, needs
+`markupPresentation: "word"`; otherwise it is `invalid_argument`. In `final` and
 `original` the converter still runs in the Word presentation, for the comments' balloon data. Page
 boxes keep the paper size, so PageMap pages and the print checks are unchanged; the balloons, like
 the outside comment panel, are excluded from the PageMap. The report's options name

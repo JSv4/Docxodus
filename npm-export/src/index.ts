@@ -483,11 +483,11 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
     exportError("invalid_argument", "input_validation", "commentColumnPlacement is invalid.",
       "Use margin or balloons.");
   }
-  if (options.commentColumnPlacement === "balloons" && (!["margin", "hidden"].includes(options.commentProfile)
+  if (options.commentColumnPlacement === "balloons" && (options.commentProfile === "inline"
     || (options.reviewProfile === "markup" && options.markupPresentation !== "word"))) {
     exportError("invalid_argument", "input_validation",
-      "The balloon layout needs the margin or hidden comment profile and, with markup, the Word presentation.",
-      "Use margin or hidden comments, and markupPresentation word with the markup profile.");
+      "The balloon layout cannot hold inline comments and, with markup, needs the Word presentation.",
+      "Use the margin, endnotes or hidden comment profile, and markupPresentation word with the markup profile.");
   }
   if (options.reviewProfileAlreadyApplied === true && options.reviewProfile === "markup") {
     exportError(
