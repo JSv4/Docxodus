@@ -11,6 +11,13 @@ All notable changes to this project will be documented in this file.
   list after the text, keeping their reference marks and highlights, and the balloons hold the
   formatting changes; only `inline` comments conflict with the layout.
 
+- In the All Markup balloon layout (`commentColumnPlacement: "balloons"`), a "Formatted" balloon no
+  longer starts anew at a paragraph whose own mark is tracked, and does start anew after one whose
+  mark is tracked. A paragraph mark stands at its paragraph's end, so a formatting change that runs
+  on across paragraphs crosses the earlier paragraph's mark, never the later one's; only the marks
+  it crosses can end the revision. A change in a header or footer never shares a balloon with one
+  in the body.
+
 ## [14.2.0] - 2026-10-26
 
 ### Added

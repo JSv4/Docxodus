@@ -125,7 +125,11 @@ have anchors, but no balloon), the pages are left as they are. Otherwise:
   `Commented [AA1]:`, a reply under its root as `Commented [BB2R1]:`, with initials derived from
   the name when `w:initials` is absent.
 - One balloon per formatting revision: consecutive changes with the same wording, colour and
-  recorded properties share a balloon across list numbers and untracked paragraph marks.
+  recorded properties share a balloon across list numbers and untracked paragraph marks. A
+  tracked paragraph mark between two changes ends the revision. A mark stands at its paragraph's
+  end, so the marks between two changes are the earlier change's own paragraph mark and those of
+  whole paragraphs between them; the later change's paragraph mark comes after it and does not
+  count. A change in a header or footer and one in the body are never one revision.
   Description: `Formatted:` followed by the wording. A paragraph's balloon follows its runs'.
 - A comment thread's balloons are anchored where its range ends, on the page and line holding that
   end, since Word's leader starts there. A point comment, an empty-range comment, or a reply with no
