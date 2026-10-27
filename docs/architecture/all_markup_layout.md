@@ -25,8 +25,8 @@ share the markup area because Word ties them to the same setting.
 Alternatives that were rejected:
 
 - **A new `commentProfile` value.** Comment profiles choose how the converter renders comments, and
-  delivery bundles share their strings. The balloon layout needs exactly margin mode's converter
-  output.
+  delivery bundles share their strings. Margin mode's converter output already carries the comment
+  balloon data.
 - **A boolean beside `commentProfile`.** That would mean two options describing one geometry.
 - **A new converter setting.** It would ripple through every transport, for data that only the
   paginator reads.
@@ -34,7 +34,10 @@ Alternatives that were rejected:
 The export accepts `"margin" | "balloons"` (`"outside"` widens the output past the paper), and
 validates them as follows:
 
-- `"balloons"` needs comment profile `margin`, or `hidden` for formatting balloons only.
+- `"balloons"` takes any comment profile but `inline`, whose comments sit in the text: `margin`
+  comments go in the balloons; `endnotes` comments stay in their list after the text, with their
+  reference marks and highlights, and the balloons hold the formatting changes; `hidden` prints
+  formatting balloons only.
 - With the markup review profile it also needs `markupPresentation: "word"`.
 
 ## Responsibilities
@@ -87,18 +90,22 @@ These apply with or without balloons, so they are listed under `### Changed`.
 
 ### Paginator: lays out (`npm/src/markup-balloons.ts`)
 
-Before measuring, `paginate()` (and the export, before its own measuring passes) turns on two rules:
+Before measuring, `paginate()` (and the export, before its own measuring passes) turns on two rules
+for comments that are in the balloons:
 
 - comment reference marks take no width, because Word prints none;
 - the commented range loses the converter's highlight.
 
-The rules apply only inside elements carrying `data-docx-markup-balloons`, which `scopeMarkupBalloons`
-puts on that pagination's staging and page containers. A later pagination with another placement
-removes the attribute from its containers, so the rules never leak into it.
+The rules apply only inside elements carrying `data-docx-markup-balloons="comments"`, which
+`scopeMarkupBalloons` puts on that pagination's staging and page containers when the converter's
+margin-note registry is present. Under the endnotes profile the attribute is empty: the comments keep
+their reference marks and highlights, and only the balloon geometry rules apply. A later pagination
+with another placement removes the attribute from its containers, so the rules never leak into it.
 
 After the page tree is final, `layoutMarkupBalloons()` runs. It is called at the end of `paginate()`,
 or explicitly with `deferMarkupBalloons` after the export's text and border painting. If the
-document has no comment or formatting change, the pages are left as they are. Otherwise:
+document has no formatting change and no comment that the balloons show (comments listed as endnotes
+have anchors, but no balloon), the pages are left as they are. Otherwise:
 
 **Sheet.**
 

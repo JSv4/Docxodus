@@ -172,8 +172,9 @@ export interface PaginatedHtmlOptions {
   markupPresentation?: MarkupPresentation;
   commentProfile: CommentProfile;
   /**
-   * Default "margin". "balloons" needs the margin or hidden comment profile, and with the markup
-   * profile the Word presentation.
+   * Default "margin". "balloons" takes any comment profile but inline (margin comments go in the
+   * balloons; endnotes keep their list; hidden prints formatting balloons only), and with the
+   * markup profile needs the Word presentation.
    */
   commentColumnPlacement?: CommentColumnPlacement;
   title?: string;
@@ -674,10 +675,10 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
   if (!ALLOWED_COMMENT_COLUMN_PLACEMENTS.has(commentColumnPlacement)) {
     fail("invalid_argument", "input_validation", "commentColumnPlacement is invalid.", "Use margin or balloons.");
   }
-  if (commentColumnPlacement === "balloons" && options.commentProfile !== "margin" && options.commentProfile !== "hidden") {
+  if (commentColumnPlacement === "balloons" && options.commentProfile === "inline") {
     fail("invalid_argument", "input_validation",
-      "The balloon layout shows margin comments only.",
-      "Use the margin or hidden comment profile with balloons.");
+      "The balloon layout cannot hold inline comments.",
+      "Use the margin, endnotes or hidden comment profile with balloons.");
   }
   if (commentColumnPlacement === "balloons" && options.reviewProfile === "markup" && markupPresentation !== "word") {
     fail("invalid_argument", "input_validation",
@@ -3855,7 +3856,8 @@ export async function convertDocxToPaginatedHtml(
     // The markup area shrinks each page's content, so it comes after every pass that measures it.
     const balloons = await runPhase(state, "output_verification", ["markup balloons"], () => engine.layoutMarkupBalloons());
     if (balloons && balloons.unplacedCommentIds.length > 0) {
-      // Under balloons the comment sources are not in the PageMap, so this is the coverage check.
+      // Balloon comments' sources are not in the PageMap, so this is their coverage check; comments
+      // listed as endnotes are paginated text, which the PageMap audits itself.
       fail("output_verification_failure", "output_verification",
         `Comments ${balloons.unplacedCommentIds.join(", ")} are marked in the document but got no balloon.`,
         "Report the source document to Docxodus, or export with the margin placement.");

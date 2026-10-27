@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The All Markup balloon layout (`commentColumnPlacement: "balloons"`) accepts the `endnotes` comment
+  profile, which the export and the CLI refused as an invalid argument. The comments stay in their
+  list after the text, keeping their reference marks and highlights, and the balloons hold the
+  formatting changes; only `inline` comments conflict with the layout.
+
 - In the All Markup balloon layout (`commentColumnPlacement: "balloons"`), a "Formatted" balloon no
   longer starts anew at a paragraph whose own mark is tracked, and does start anew after one whose
   mark is tracked. A paragraph mark stands at its paragraph's end, so a formatting change that runs
