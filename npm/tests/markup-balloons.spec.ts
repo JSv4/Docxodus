@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import {
-  anchorlessCommentsFixture, balloonDocx, commented, crowdedCommentsFixture, formatted, markupBalloonsFixture, plain,
-  reformatted,
+  anchorlessCommentsFixture, balloonDocx, commented, crowdedCommentsFixture, formatted, markedParagraph,
+  markupBalloonsFixture, plain, reformatted,
 } from './docx-markup-balloons-fixture.js';
 
 /** Inert data the Word presentation records for balloons; nothing reads it under other placements. */
@@ -186,4 +186,44 @@ test('the margin placement ignores the balloon data the Word presentation record
   expect(recorded.pages[0].scale).toBe(1);
   expect(recorded.balloons).toHaveLength(0);
   expect(recorded.pageTree).toBe(stripped.pageTree);
+});
+
+/** The top of the line holding the span whose text is `text`, in points from its page box's top. */
+async function lineTopOf(page: Page, text: string): Promise<number> {
+  return page.evaluate((text) => {
+    const span = Array.from(document.querySelectorAll<HTMLElement>('#host .page-box span')).find(s => s.textContent === text)!;
+    return (span.getBoundingClientRect().top - span.closest('.page-box')!.getBoundingClientRect().top) * 0.75;
+  }, text);
+}
+
+test('one formatting revision runs on across paragraphs until a tracked paragraph mark is crossed', async ({ page }) => {
+  await open(page);
+  // The same bold change in three paragraphs. Only the third paragraph's own mark is tracked, and it
+  // comes after the third change: nothing tracked lies between the changes, so they are one revision.
+  const three = `<w:p>${formatted(41, 'alpha')}</w:p><w:p>${formatted(42, 'beta')}</w:p>` +
+    markedParagraph(90, 'ins', formatted(43, 'gamma'));
+  const merged = await paginate(page, balloonDocx({ body: three }), 'balloons');
+  expect(merged.balloons.map(b => b.text)).toEqual(['Formatted: Font: Bold']);
+  // A fourth paragraph's change lies beyond the third's tracked mark: a second revision, at its own line.
+  const split = await paginate(page, balloonDocx({ body: three + `<w:p>${formatted(44, 'delta')}</w:p>` }), 'balloons');
+  expect(split.balloons.map(b => b.text)).toEqual(['Formatted: Font: Bold', 'Formatted: Font: Bold']);
+  expect(split.balloons[0].top).toBeCloseTo(await lineTopOf(page, 'alpha'), 0);
+  expect(split.balloons[1].top).toBeCloseTo(await lineTopOf(page, 'delta'), 0);
+});
+
+test('a tracked mark on the first paragraph ends the formatting revision there', async ({ page }) => {
+  await open(page);
+  const body = markedParagraph(91, 'del', formatted(45, 'alpha')) + `<w:p>${formatted(46, 'beta')}</w:p>`;
+  const { balloons, pages } = await paginate(page, balloonDocx({ body }), 'balloons');
+  expect(balloons.map(b => b.text)).toEqual(['Formatted: Font: Bold', 'Formatted: Font: Bold']);
+  // Anchored at its own line, but pushed just below the first balloon, which is taller than a text line.
+  expect(balloons[1].top).toBeCloseTo(balloons[0].bottom + 1 * pages[0].scale, 0);
+});
+
+test('a formatting change in the header and one in the body never share a balloon', async ({ page }) => {
+  await open(page);
+  const header = `<w:p>${formatted(21, 'Header run')}</w:p>`;
+  const body = `<w:p>${formatted(22, 'Body run')}</w:p>${plain('Body line.')}`;
+  const { balloons } = await paginate(page, balloonDocx({ body, header }), 'balloons');
+  expect(balloons.map(b => b.text)).toEqual(['Formatted: Font: Bold', 'Formatted: Font: Bold']);
 });

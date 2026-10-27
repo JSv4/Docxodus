@@ -4219,7 +4219,12 @@ Then print or save as PDF with All Markup and "Show only comments and formatting
 - **Colours.** Authors take `#0078D4`, then `#D13438`. Comment authors are numbered on their own.
   The change bar sits 30pt left of the text.
 - **One balloon per formatting revision.** Runs that share the wording and the recorded properties
-  get a single balloon. A move to another level of the same list is undescribed.
+  get a single balloon. A move to another level of the same list is undescribed. A tracked paragraph
+  mark between two such runs ends the revision (reported from a Word print of a document whose
+  tracked highlighting ran across paragraphs, some with tracked marks; not re-measured here). The
+  mark stands at its paragraph's end, so the marks between the runs are the earlier run's own
+  paragraph mark and those of whole paragraphs between them. The later run's paragraph mark follows
+  the run and does not end the revision; Docxodus 14.2.0 ended it there and started a new balloon.
 
 **Docxodus.** `Internal/WordFormatWording.cs` writes the wording, `npm/src/markup-balloons.ts` lays
 the balloons out, and `docs/architecture/all_markup_layout.md` gives the design. **Pending:** what
