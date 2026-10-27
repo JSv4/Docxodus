@@ -51,6 +51,7 @@ interface ExportOptions {
   markupPresentation?: MarkupPresentation; // markup only; default "docxodus"
   commentProfile: CommentProfile;
   commentColumnPlacement?: "margin" | "balloons"; // default "margin"
+  balloonOverflow?: "truncate" | "appendix"; // balloons only; default "truncate"
   title?: string;
   additionalCss?: string; // appended before pagination; default empty
   unsupportedContent?: "warn" | "strict";
@@ -756,7 +757,11 @@ the outside comment panel, are excluded from the PageMap. The report's options n
 `commentColumnPlacement` only when it is `balloons`, and only then does it enter the layout digest.
 The CLI flag is `--comment-column-placement`. A comment marked in the document that gets no balloon
 fails the export (`output_verification_failure`). Balloons cut short to fit beside their page are
-reported in a `comment_balloon_truncated` warning.
+reported in a `comment_balloon_truncated` warning. Their text is printed nowhere else by default, as
+with Word's Save as PDF; `balloonOverflow: "appendix"` (CLI `--balloon-overflow appendix`) numbers
+each cut comment's box and prints the comments in full on pages added after the last, as Word's Print
+to PDF does, so the PDF and the PageMap gain pages. It needs the balloon layout, and the report and
+layout digest name it only when it is `appendix`.
 
 Comments are orthogonal: `hidden`, `inline`, `endnotes`, or `margin`. A visible profile retains
 range, body, author, and date in body, headers, footers, footnotes, and endnotes, and draws the

@@ -658,6 +658,10 @@
             "description": "Present only when the export printed Word's All Markup balloon layout (issue #1300): each page shrunk beside a markup area holding its comments and formatting changes; absent means comments in the page margin.",
             "const": "balloons"
           },
+          "balloonOverflow": {
+            "description": "Present only when the balloon layout printed every comment cut short to fit beside its page in full, on pages added after the last (Word's Print to PDF); absent means the rest of a cut comment is printed nowhere (Word's Save as PDF).",
+            "const": "appendix"
+          },
           "commentProfile": {
             "enum": [
               "hidden",

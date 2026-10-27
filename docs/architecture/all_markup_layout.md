@@ -73,7 +73,13 @@ unchanged, and its tooltips (`title`, from `DescribeFormatChange`) keep their wo
 - `data-initials` (`w:initials`);
 - `data-author-color`: comment authors are numbered on their own, in the order the comments part
   first names them, and `AuthorColors` overrides by name;
-- `data-font-family`: the font of the comment's first text run, which its balloon keeps.
+- `data-font-family`: the font of the comment's first text run, which its balloon keeps;
+- `data-date-as-written`: `w:date` as written, the author's clock time, which heads the comment's full
+  text in the appendix (below). `data-date` prefers the true UTC instant when the package records one,
+  and Word prints `w:date`.
+
+The Word presentation also keeps a comment's blank paragraphs, as empty paragraphs with no source
+identity, because Word prints them as blank lines; the Docxodus presentation drops them, as before.
 
 **Balloon font.** The pagination staging element carries `data-balloon-font-family` and
 `data-balloon-font-size`. They come from the document's Balloon Text paragraph style when it has
@@ -176,7 +182,35 @@ have anchors, but no balloon), the pages are left as they are. Otherwise:
   (the balloon becomes a two-column grid), because positioned absolutely it made Chromium shrink every
   printed page. If even the cut balloons cannot fit,
   they run off the page's foot and are cut there. Either way the balloon is marked
-  `data-balloon-truncated`, and `layoutMarkupBalloons()` reports it. No page is added.
+  `data-balloon-truncated`, and `layoutMarkupBalloons()` reports it. By default no page is added,
+  as with Word's Save as PDF: the rest of a cut comment is printed nowhere.
+
+**Appendix (`balloonOverflow: "appendix"`).** Word's Print to PDF instead prints every cut comment in
+full on pages after the last. Measured from its Print to PDF of a page of 25 long comments:
+
+- Each cut balloon's box reads `… [n]`, numbered through the document in the order the balloons
+  print. A comment cut on every page (in a header) keeps its first number; a balloon cut off at the
+  page's foot has no box but is still listed.
+- The pages after the last are blank pages of the last page's section, without running stories. They
+  join the pagination's result and the PageMap, so the PDF gains pages. Their text column is excluded
+  from the PageMap and the pages are not shrunk.
+- Each comment starts with a bar in its balloon's colours: a 0.48pt border, a 0.96pt shadow cast right
+  and down, 14.88pt tall, its outer edges 4.92pt outside the text column. It reads `Page p: [n]
+  Commented [AB3]` at the left, the author centred on the column and the date at the right, 4pt inside
+  the column, in the bold balloon font. The date is `w:date`'s digits as M/D/YYYY h:mm:ss AM/PM.
+- The comment's paragraphs follow at 10pt (Word's Comment Text size), blank ones as blank lines,
+  5.9pt between one comment's text and the next bar and 2.2pt between a bar and its text.
+- A comment runs on from page to page. A paragraph splits at a line break only where two lines stay on
+  each side; a bar may close a page alone.
+- Not reproduced: Word also draws a leader from each comment past the paper's edge and a mark in the
+  left margin, and prints a page holding only the last leader.
+- *Pending*, not measured against Word: the bar names the physical page (`Page 3:` for the third
+  page), which the measured one-page document cannot tell apart from a restarted displayed page
+  number; and page-count fields (`NUMPAGES`) are filled in before the appendix pages exist, so they
+  count the document's own pages only.
+
+`npm/src/balloon-appendix.ts` lays the appendix out; `PaginationEngine` hands it blank pages one at a
+time until it has placed everything.
 
 **Leaders and marks.**
 
@@ -205,8 +239,13 @@ with `"outside"`. Comment citations are therefore unavailable under this placeme
   export fails with `output_verification_failure`.
 - **Truncation warning.** If any balloon was cut short, the report carries a
   `comment_balloon_truncated` warning. Its `resource` lists the comment ids, and its message counts
-  comments and formatting changes. Warning codes are open strings in the report schema, so the
-  schema itself did not change.
+  comments and formatting changes, and says when the comments are printed in full after the last page.
+  Warning codes are open strings in the report schema, so the schema itself did not change.
+- `balloonOverflow` (`"truncate"`, the default, or `"appendix"`) is validated in both places, and
+  `"appendix"` without `commentColumnPlacement: "balloons"` is `invalid_argument`. The CLI flag is
+  `--balloon-overflow`. The report and the layout digest name it only when it is `"appendix"`. The
+  pages the appendix adds are released from the viewer's compositing hints and named for print like
+  the rest, after the page tree was finalized.
 - No C#, WASM, stdio-host, Python or MCP surface changes: `RevisionPresentation` already flows
   through all of them.
 
@@ -277,5 +316,6 @@ own and is not described. A move to another level of the same list is left undes
 | Tests | `MarkupBalloonTests.cs` |
 | Paginator | `npm/src/pagination.ts` (placement value, `deferMarkupBalloons`, `layoutMarkupBalloons()`), `npm/src/markup-balloons.ts` |
 | Export | `npm/src/export-browser.ts`, `npm-export/src/{index,host,cli}.ts`, `docs/schemas/render-report-v2.schema.json` |
+| Appendix | `npm/src/balloon-appendix.ts`; bundle budgets in `npm/scripts/check-bundle-sizes.mjs` rose 2 KiB |
 | Specs | `markup-balloons.spec.ts`, `export-markup-balloons.spec.ts`; existing change-bar expectations moved to 30pt |
 | Bundle budget | `pagination.bundle.js` is 27.6 KiB gzip; its budget rose from 25 to 29 KiB |

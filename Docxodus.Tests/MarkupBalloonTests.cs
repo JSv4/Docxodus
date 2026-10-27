@@ -180,6 +180,46 @@ public class MarkupBalloonTests
         Assert.Contains("Paragraph formatting changed", titles);
     }
 
+    [Fact]
+    public void WordPresentation_CommentNotes_KeepBlankParagraphs_AndTheDateAsWritten()
+    {
+        // w:date is the author's wall-clock time; the comments-extensible part records the true UTC
+        // instant five hours later, which data-date prefers.
+        var body = "<w:p><w:commentRangeStart w:id='7'/><w:r><w:t>term</w:t></w:r><w:commentRangeEnd w:id='7'/>" +
+            "<w:r><w:commentReference w:id='7'/></w:r></w:p>";
+        var comment = "<w:comment w:id='7' w:author='Omar Quist' w:initials='OQ' w:date='2025-03-04T11:45:00Z'>" +
+            "<w:p><w:r><w:annotationRef/></w:r><w:r><w:t>First point.</w:t></w:r></w:p><w:p/>" +
+            "<w:p><w:r><w:t> </w:t></w:r></w:p><w:p w14:paraId='0A1B2C3D'><w:r><w:t>Second point.</w:t></w:r></w:p></w:comment>";
+
+        XElement Note(RevisionPresentation presentation) =>
+            Notes(RenderWithCommentDates(body, comment, "0A1B2C3D", "2025-03-04T16:45:00Z", presentation))["7"];
+        var word = Note(RevisionPresentation.Word);
+        var docxodus = Note(RevisionPresentation.Docxodus);
+
+        string[] Paragraphs(XElement note) => note.Descendants(Html + "p").Select(p => p.Value).ToArray();
+        Assert.Equal(new[] { "First point.", "", "", "Second point." }, Paragraphs(word));
+        Assert.Equal(new[] { "First point.", "Second point." }, Paragraphs(docxodus));
+        Assert.Equal("2025-03-04T16:45:00Z", Data(word, "date"));
+        Assert.Equal("2025-03-04T11:45:00Z", Data(word, "date-as-written"));
+        Assert.Null(Data(docxodus, "date-as-written"));
+        // Like the author and the UTC date, it is comment metadata, which a caller can withhold.
+        var withheld = Notes(RenderWithCommentDates(body, comment, "0A1B2C3D", "2025-03-04T16:45:00Z",
+            RevisionPresentation.Word, includeMetadata: false))["7"];
+        Assert.Null(Data(withheld, "date-as-written"));
+        Assert.Null(Data(withheld, "date"));
+    }
+
+    [Fact]
+    public void WordPresentation_EmptyComment_StillGetsItsPlaceholder()
+    {
+        var body = "<w:p><w:r><w:commentReference w:id='8'/></w:r></w:p>";
+        var comment = "<w:comment w:id='8' w:author='Omar Quist' w:date='2025-03-04T10:00:00Z'><w:p><w:r><w:annotationRef/></w:r></w:p><w:p/></w:comment>";
+
+        var note = Notes(Render(body, comment))["8"];
+
+        Assert.Equal(new[] { "(empty comment)" }, note.Descendants(Html + "p").Select(p => p.Value).ToArray());
+    }
+
     private static string BalloonText(string wording) => wording.Length == 0 ? "Formatted" : $"Formatted: {wording}";
 
     private static string? Data(XElement element, string name) => (string?)element.Attribute("data-" + name);
@@ -231,5 +271,44 @@ public class MarkupBalloonTests
             RenderPagination = paginated ? PaginationMode.Paginated : PaginationMode.None,
         };
         return XElement.Parse(WmlToHtmlConverter.ConvertToHtml(new WmlDocument("balloons.docx", bytes.ToArray()), settings).ToString());
+    }
+
+    /// <summary>
+    /// Converts a document whose one comment also has its UTC date recorded in the modern comment
+    /// parts (commentsIds keyed by its last paragraph, commentsExtensible by durable id).
+    /// </summary>
+    private static XElement RenderWithCommentDates(string body, string comment, string lastParaId, string dateUtc,
+        RevisionPresentation presentation, bool includeMetadata = true)
+    {
+        const string ns = "xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main' " +
+            "xmlns:w14='http://schemas.microsoft.com/office/word/2010/wordml'";
+        var bytes = new MemoryStream();
+        using (var package = WordprocessingDocument.Create(bytes, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = package.AddMainDocumentPart();
+            void Write(OpenXmlPart part, string xml)
+            {
+                using var stream = part.GetStream(FileMode.Create);
+                stream.Write(System.Text.Encoding.UTF8.GetBytes(xml));
+            }
+            Write(main, $"<w:document {ns}><w:body>{body}<w:sectPr/></w:body></w:document>");
+            Write(main.AddNewPart<StyleDefinitionsPart>(), $"<w:styles {ns}>{StylesXml}</w:styles>");
+            Write(main.AddNewPart<WordprocessingCommentsPart>(), $"<w:comments {ns}>{comment}</w:comments>");
+            Write(main.AddNewPart<WordprocessingCommentsIdsPart>(),
+                "<w16cid:commentsIds xmlns:w16cid='http://schemas.microsoft.com/office/word/2016/wordml/cid'>" +
+                $"<w16cid:commentId w16cid:paraId='{lastParaId}' w16cid:durableId='5E6F7A8B'/></w16cid:commentsIds>");
+            Write(main.AddNewPart<WordCommentsExtensiblePart>(),
+                "<w16cex:commentsExtensible xmlns:w16cex='http://schemas.microsoft.com/office/word/2018/wordml/cex'>" +
+                $"<w16cex:commentExtensible w16cex:durableId='5E6F7A8B' w16cex:dateUtc='{dateUtc}'/></w16cex:commentsExtensible>");
+        }
+        var settings = new WmlToHtmlConverterSettings
+        {
+            FabricateCssClasses = false,
+            RevisionPresentation = presentation,
+            RenderComments = true,
+            CommentRenderMode = CommentRenderMode.Margin,
+            IncludeCommentMetadata = includeMetadata,
+        };
+        return XElement.Parse(WmlToHtmlConverter.ConvertToHtml(new WmlDocument("dates.docx", bytes.ToArray()), settings).ToString());
     }
 }

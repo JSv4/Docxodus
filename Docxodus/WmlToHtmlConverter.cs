@@ -5702,11 +5702,19 @@ namespace Docxodus
             }
             // The Word presentation's markup balloon labels the comment by its initials, colours it
             // by its author and sets its text in the comment's own font (issue #1300).
-            if (settings.RevisionPresentation == RevisionPresentation.Word)
+            var wordPresentation = settings.RevisionPresentation == RevisionPresentation.Word;
+            if (wordPresentation)
+            {
                 note.Add(
                     comment.Initials is { Length: > 0 } initials ? new XAttribute("data-initials", initials) : null,
                     new XAttribute("data-author-color", WordAuthorColor(settings, comment.Author, comment.AuthorNumber)),
                     comment.TextFont is { } font ? new XAttribute("data-font-family", font) : null);
+                // A cut-short comment's printed heading shows its date as the author's clock read it.
+                // data-date is the true UTC instant whenever the package records one, so keep w:date.
+                var written = (string?)comment.SourceElement.Attribute(W.date);
+                if (settings.IncludeCommentMetadata && !string.IsNullOrEmpty(written))
+                    note.Add(new XAttribute("data-date-as-written", written));
+            }
 
             // Header with author, date, and back link
             var header = new XElement(Xhtml.div,
@@ -5748,6 +5756,10 @@ namespace Docxodus
             var body = new XElement(Xhtml.div,
                 new XAttribute("class", prefix + "margin-note-body"));
 
+            // Word prints a comment's blank paragraphs as blank lines, so the Word presentation keeps
+            // them (with nothing to cite, they carry no source identity); the Docxodus presentation
+            // drops them. A comment with no text at all still gets the placeholder below.
+            var hasText = false;
             foreach (var para in comment.ContentParagraphs)
             {
                 // Skip the annotation reference run and get text content
@@ -5756,15 +5768,16 @@ namespace Docxodus
                     .Select(t => t.Value)
                     .StringConcatenate();
 
-                if (!string.IsNullOrWhiteSpace(textContent))
+                var blank = string.IsNullOrWhiteSpace(textContent);
+                hasText |= !blank;
+                if (!blank || wordPresentation)
                 {
                     body.Add(new XElement(Xhtml.p,
-                        SourceAnchorIdentityAttribute(settings, para), textContent));
+                        blank ? null : SourceAnchorIdentityAttribute(settings, para), blank ? string.Empty : textContent));
                 }
             }
 
-            // Only add if body has content
-            if (body.HasElements)
+            if (hasText)
             {
                 note.Add(body);
             }
