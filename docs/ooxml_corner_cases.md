@@ -4248,7 +4248,7 @@ clock) differs from the UTC date the modern comment parts record:
 <w16cex:commentExtensible w16cex:durableId="20000000" w16cex:dateUtc="2025-06-11T21:05:00Z"/>
 ```
 
-`printOverflowFixture()` in `npm/tests/docx-markup-balloons-fixture.ts` builds this document with
+`printOverflowFixture()` in `npm/tests/docx-print-overflow-fixture.ts` builds this document with
 shorter comments (about six balloon lines each). Print it with All Markup and comments in balloons,
 once with Save as PDF and once to a PDF printer.
 
