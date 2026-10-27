@@ -161,7 +161,9 @@ document has no comment or formatting change, the pages are left as they are. Ot
   pulled up) the first rule is assumed. A cut balloon is 16.1pt tall at the 9pt balloon font (scaled
   with it) and ends in a box at its lower right corner, 11.6pt tall with 4pt horizontal padding, a
   0.2pt black border and a white fill, holding an ellipsis; the line's text ends at least 1pt before
-  the box, and only the first line's own box stays visible. If even the cut balloons cannot fit,
+  the box, and only the first line's own box stays visible. The box is laid out in the balloon's flow
+  (the balloon becomes a two-column grid), because positioned absolutely it made Chromium shrink every
+  printed page. If even the cut balloons cannot fit,
   they run off the page's foot and are cut there. Either way the balloon is marked
   `data-balloon-truncated`, and `layoutMarkupBalloons()` reports it. No page is added.
 

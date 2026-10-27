@@ -430,7 +430,9 @@ function fit(entries: Entry[], top: number, bottom: number, lineHeight: number,
 /**
  * Cuts a balloon to its first line, as Word does: the line's text stops short of a small white box
  * at the balloon's lower right corner that holds an ellipsis, and the balloon takes Word's height for
- * a cut balloon.
+ * a cut balloon. The balloon becomes a two-column grid, the line and the box, and the box's negative
+ * margins carry its edges onto the balloon's padding edge. It stays in the flow: positioned
+ * absolutely, it made Chromium shrink every printed page.
  */
 function cutShort(document: Document, entry: Entry, font: { family: string; sizePt: number }, cssPrefix: string,
   sheet: MarkupSheet): void {
@@ -444,17 +446,17 @@ function cutShort(document: Document, entry: Entry, font: { family: string; size
     element.append(box);
   }
   const boxHeight = WORD.cut.boxHeight * scale;
-  box.style.cssText = `position:absolute;right:0;bottom:0;box-sizing:border-box;height:${boxHeight}pt;` +
-    `line-height:${boxHeight - 2 * WORD.hairline}pt;padding:0 ${WORD.cut.boxPadInline * scale}pt;` +
-    `border:${WORD.hairline}pt solid #000;background:#fff;color:#000;white-space:nowrap;` +
-    `font-size:${font.sizePt}pt;font-family:${fontStack(font.family)}`;
+  box.style.cssText = `align-self:end;box-sizing:border-box;height:${boxHeight}pt;` +
+    `margin:0 -${WORD.padInline}pt -${WORD.padBlock}pt 0;line-height:${boxHeight - 2 * WORD.hairline}pt;` +
+    `padding:0 ${WORD.cut.boxPadInline * scale}pt;border:${WORD.hairline}pt solid #000;background:#fff;color:#000;` +
+    `white-space:nowrap;font-size:${font.sizePt}pt;font-family:${fontStack(font.family)}`;
+  element.style.display = "grid";
+  element.style.gridTemplateColumns = "minmax(0, 1fr) auto";
   element.style.minHeight = `${WORD.cut.height * scale}pt`;
-  // The content already ends a padding's width before the box's edge; the text stops the gap short
-  // of the box itself. Then the first line's own box, whose height the label's font and the text's
-  // share, is all that stays visible.
-  const boxRect = sheet.box(box.getBoundingClientRect())!;
+  // The text stops the gap short of the box; then the first line's own box, whose height the label's
+  // font and the text's share, is all that stays visible.
   const content = element.firstElementChild as HTMLElement;
-  content.style.cssText = `margin-right:${Math.max(0, boxRect.right - boxRect.left + WORD.cut.textGap * scale - WORD.padInline)}pt`;
+  content.style.cssText = `align-self:start;margin-right:${WORD.cut.textGap * scale}pt`;
   const rows = lines(content, document).map((rect) => sheet.box(rect)!);
   const onFirst = rows.filter((row) => row.top < rows[0].bottom - 0.5);
   const firstLine = Math.max(...onFirst.map((row) => row.bottom)) - Math.min(...onFirst.map((row) => row.top));
@@ -467,6 +469,8 @@ function cutShort(document: Document, entry: Entry, font: { family: string; size
 function restore(entry: Entry, cssPrefix: string, sheet: MarkupSheet): void {
   const element = entry.element!;
   element.querySelector(`:scope > .${cssPrefix}balloon-cut`)?.remove();
+  element.style.display = "";
+  element.style.gridTemplateColumns = "";
   element.style.minHeight = "";
   (element.firstElementChild as HTMLElement).style.cssText = "";
   delete element.dataset.balloonTruncated;
