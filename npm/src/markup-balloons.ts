@@ -198,7 +198,8 @@ export function layoutMarkupBalloons(options: {
   // Headers and footers print on every page, and their balloons with them. In the body, a
   // paragraph's balloon goes on the page holding its mark (its last fragment), and a comment's on
   // the page where its range ends, as its leader starts there.
-  const repeats = (element: Element) => element.closest(`.${cssPrefix}header, .${cssPrefix}footer`) !== null;
+  const story = (element: Element) => element.closest(`.${cssPrefix}header, .${cssPrefix}footer`);
+  const repeats = (element: Element) => story(element) !== null;
   const lastPage = new Map<string, number>();
   pages.forEach((page, index) => anchored[index].forEach((element) => {
     if (repeats(element)) return;
@@ -272,9 +273,9 @@ export function layoutMarkupBalloons(options: {
         continue;
       }
       // One formatting revision, one balloon, however many runs, list numbers and untracked
-      // paragraph marks it spans.
+      // paragraph marks it spans. A header's or footer's change never continues in the body.
       const key = [color, wording, element.dataset.formatKey].join("\n");
-      if (lastRun?.key === key && onlyMarksBetween(document, lastRun.element, element)) {
+      if (lastRun?.key === key && story(lastRun.element) === story(element) && onlyMarksBetween(document, lastRun.element, element)) {
         lastRun.element = element;
         continue;
       }
@@ -547,15 +548,22 @@ function isBlock(element: Element): boolean {
 
 /**
  * Whether only list numbers and blank text lie between two changes, with no tracked paragraph mark:
- * then Word treats them as one revision.
+ * then Word treats them as one revision. A paragraph's mark stands at its end, so the marks crossed
+ * are those of the paragraphs the span leaves behind: the earlier change's own paragraph and every
+ * whole paragraph between. The later change's paragraph is entered, not left; its mark comes after
+ * the change and is not between them.
  */
 function onlyMarksBetween(document: Document, earlier: HTMLElement, later: HTMLElement): boolean {
+  const trackedMark = (element: Element) => isBlock(element) && /(^|\s)\S*para-(ins|del)(\s|$)/.test(element.className);
+  for (let block = earlier.parentElement; block && !block.contains(later); block = block.parentElement) {
+    if (trackedMark(block)) return false;
+  }
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
   walker.currentNode = earlier;
   for (let node = walker.nextNode(); node && node !== later; node = walker.nextNode()) {
     if (earlier.contains(node)) continue;
     if (node instanceof Element) {
-      if (isBlock(node) && /(^|\s)\S*para-(ins|del)(\s|$)/.test(node.className)) return false;
+      if (trackedMark(node) && !node.contains(later)) return false;
     } else if (node.textContent?.trim() && !node.parentElement?.closest("[data-list-marker]")) {
       return false;
     }

@@ -14,6 +14,13 @@ All notable changes to this project will be documented in this file.
   down until the stack fit, so the longest comments never printed whole. A stack the page can hold
   when pulled up from its foot is still printed whole, as before; one-line balloons are never cut.
 
+- In the All Markup balloon layout (`commentColumnPlacement: "balloons"`), a "Formatted" balloon no
+  longer starts anew at a paragraph whose own mark is tracked, and does start anew after one whose
+  mark is tracked. A paragraph mark stands at its paragraph's end, so a formatting change that runs
+  on across paragraphs crosses the earlier paragraph's mark, never the later one's; only the marks
+  it crosses can end the revision. A change in a header or footer never shares a balloon with one
+  in the body.
+
 ## [14.2.0] - 2026-10-26
 
 ### Added
