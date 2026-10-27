@@ -3,8 +3,9 @@ import { writeFile } from 'node:fs/promises';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 import {
-  anchorlessCommentsFixture, balloonDocx, commented, crowdedCommentsFixture, formatted, markupBalloonsFixture, plain, printOverflowFixture, reformatted,
+  anchorlessCommentsFixture, balloonDocx, commented, crowdedCommentsFixture, formatted, markupBalloonsFixture, plain, reformatted,
 } from './docx-markup-balloons-fixture.js';
+import { printOverflowFixture } from './docx-print-overflow-fixture.js';
 
 async function pdfText(pdf: Uint8Array): Promise<string> {
   const task = getDocument({ data: new Uint8Array(pdf), verbosity: 0 });

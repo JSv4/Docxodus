@@ -3,23 +3,9 @@ import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
 const W14 = 'http://schemas.microsoft.com/office/word/2010/wordml';
 const W15 = 'http://schemas.microsoft.com/office/word/2012/wordml';
 const DATE = 'w:date="2025-01-02T09:00:00Z"';
-const W16CID = 'http://schemas.microsoft.com/office/word/2016/wordml/cid';
-const W16CEX = 'http://schemas.microsoft.com/office/word/2018/wordml/cex';
-const MODERN_COMMENT_TYPES: Record<string, string> = {
-  commentsIds: 'application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml',
-  commentsExtensible: 'application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml',
-};
-const durableId = (id: number) => (0x20000000 + id).toString(16).toUpperCase();
 
-/**
- * A comment for `balloonDocx`; `parent` makes it a reply. `paragraphs` replaces `text` with several
- * paragraphs ('' for a blank one); `date` replaces the default w:date, and `dateUtc` records the
- * true UTC instant in the modern comment parts.
- */
-export interface FixtureComment {
-  id: number; author: string; initials: string; text: string; parent?: number;
-  paragraphs?: string[]; date?: string; dateUtc?: string;
-}
+/** A comment for `balloonDocx`; `parent` makes it a reply. */
+export interface FixtureComment { id: number; author: string; initials: string; text: string; parent?: number }
 
 /** Text wrapped in comment `id`'s range, followed by its reference. */
 export const commented = (id: number, text: string) =>
@@ -56,34 +42,22 @@ export function balloonDocx(options: {
       '</w:sectPr></w:body></w:document>',
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:styleId="BalloonText"><w:name w:val="Balloon Text"/><w:rPr><w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/><w:sz w:val="18"/></w:rPr></w:style></w:styles>`,
     'word/settings.xml': `<w:settings xmlns:w="${W_NS}"/>`,
-    'word/comments.xml': `<w:comments xmlns:w="${W_NS}" xmlns:w14="${W14}">${comments.map(({ id, author, initials, text, paragraphs, date }) =>
-      `<w:comment w:id="${id}" w:author="${author}" w:initials="${initials}" ${date ? `w:date="${date}"` : DATE}>` +
-      (paragraphs ?? [text]).map((paragraph, index, all) =>
-        `<w:p${index === all.length - 1 ? ` w14:paraId="${paraId(id)}"` : ''}>` +
-        `${paragraph ? `<w:r><w:t>${paragraph}</w:t></w:r>` : ''}</w:p>`).join('') + '</w:comment>').join('')}</w:comments>`,
+    'word/comments.xml': `<w:comments xmlns:w="${W_NS}" xmlns:w14="${W14}">${comments.map(({ id, author, initials, text }) =>
+      `<w:comment w:id="${id}" w:author="${author}" w:initials="${initials}" ${DATE}><w:p w14:paraId="${paraId(id)}">` +
+      `<w:r><w:t>${text}</w:t></w:r></w:p></w:comment>`).join('')}</w:comments>`,
     'word/commentsExtended.xml': `<w15:commentsEx xmlns:w15="${W15}">${comments.map(({ id, parent }) =>
       `<w15:commentEx w15:paraId="${paraId(id)}"${parent === undefined ? '' : ` w15:paraIdParent="${paraId(parent)}"`}/>`).join('')}</w15:commentsEx>`,
     ...(options.header ? { 'word/header1.xml': `<w:hdr xmlns:w="${W_NS}">${options.header}</w:hdr>` } : {}),
-    ...(comments.some((comment) => comment.dateUtc) ? {
-      'word/commentsIds.xml': `<w16cid:commentsIds xmlns:w16cid="${W16CID}">${comments.map(({ id }) =>
-        `<w16cid:commentId w16cid:paraId="${paraId(id)}" w16cid:durableId="${durableId(id)}"/>`).join('')}</w16cid:commentsIds>`,
-      'word/commentsExtensible.xml': `<w16cex:commentsExtensible xmlns:w16cex="${W16CEX}">${comments.flatMap(({ id, dateUtc }) =>
-        dateUtc ? [`<w16cex:commentExtensible w16cex:durableId="${durableId(id)}" w16cex:dateUtc="${dateUtc}"/>`] : []).join('')}` +
-        '</w16cex:commentsExtensible>',
-    } : {}),
   };
   const overrides = Object.keys(parts).map((path) => {
     const part = path.slice('word/'.length, -'.xml'.length);
     const type = part === 'document' ? 'document.main' : part === 'header1' ? 'header' : part;
-    const contentType = MODERN_COMMENT_TYPES[part] ?? `application/vnd.openxmlformats-officedocument.wordprocessingml.${type}+xml`;
-    return `<Override PartName="/${path}" ContentType="${contentType}"/>`;
+    return `<Override PartName="/${path}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${type}+xml"/>`;
   }).join('');
   const relationships = ['styles', 'settings', 'comments'].map((p) =>
     `<Relationship Id="r${p}" Type="${R_NS}/${p}" Target="${p}.xml"/>`).join('') +
     `<Relationship Id="rTopology" Type="http://schemas.microsoft.com/office/2011/relationships/commentsExtended" Target="commentsExtended.xml"/>` +
-    (options.header ? `<Relationship Id="rheader" Type="${R_NS}/header" Target="header1.xml"/>` : '') +
-    (parts['word/commentsIds.xml'] ? '<Relationship Id="rIds" Type="http://schemas.microsoft.com/office/2016/09/relationships/commentsIds" Target="commentsIds.xml"/>' +
-      '<Relationship Id="rExt" Type="http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible" Target="commentsExtensible.xml"/>' : '');
+    (options.header ? `<Relationship Id="rheader" Type="${R_NS}/header" Target="header1.xml"/>` : '');
   return storedZip(Object.entries({
     '[Content_Types].xml': `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${overrides}</Types>`,
     '_rels/.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rDoc" Type="${R_NS}/officeDocument" Target="word/document.xml"/></Relationships>`,
@@ -140,25 +114,5 @@ export function crowdedCommentsFixture(count: number, perLine: number, text: str
   return balloonDocx({
     body: lines.join(''),
     comments: ids.map((id) => ({ id, author: id % 2 ? 'Bob Baker' : 'Alice Archer', initials: id % 2 ? 'BB' : 'AA', text: `${id}: ${text}` })),
-  });
-}
-
-/**
- * A one-page letter of 25 short lines, each carrying a long comment: more than its markup area holds,
- * so most balloons are cut. Comment 12 runs to several paragraphs with blank ones between. Every
- * comment was written at 4:05 PM on its author's clock, which the comment parts record as 21:05 UTC.
- */
-export function printOverflowFixture(): Uint8Array {
-  const ids = Array.from({ length: 25 }, (_, id) => id);
-  const remark = (id: number) => `Note ${id}: the warranty period in this section should run from acceptance, not delivery. ` +
-    'Please align it with the acceptance certificate and the payment milestones in the schedule. ' +
-    'The supplier has asked for twelve months; procurement prefers eighteen. Raise it at the next drafting call.';
-  return balloonDocx({
-    body: ids.map((id) => `<w:p>${commented(id, `Section ${id + 1} applies to the transferred assets.`)}</w:p>`).join(''),
-    comments: ids.map((id) => ({
-      id, author: id % 2 ? 'Kwame Asante' : 'Ines Moreau', initials: id % 2 ? 'KA' : 'IM', text: remark(id),
-      date: '2025-06-11T16:05:00Z', dateUtc: '2025-06-11T21:05:00Z',
-      ...(id === 12 ? { paragraphs: ['First, the cap.', '', 'Second, the basket.', '', 'Third, the survival period.'] } : {}),
-    })),
   });
 }
