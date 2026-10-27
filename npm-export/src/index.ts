@@ -484,11 +484,18 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
     exportError("invalid_argument", "input_validation", "commentColumnPlacement is invalid.",
       "Use margin or balloons.");
   }
-  if (options.commentColumnPlacement === "balloons" && (options.commentProfile === "inline"
-    || (options.reviewProfile === "markup" && options.markupPresentation !== "word"))) {
+  // The same refusals, in the same words, as the browser export's normalizeOptions.
+  if (options.commentColumnPlacement === "balloons" && options.commentProfile === "inline") {
     exportError("invalid_argument", "input_validation",
-      "The balloon layout cannot hold inline comments and, with markup, needs the Word presentation.",
-      "Use the margin, endnotes or hidden comment profile, and markupPresentation word with the markup profile.");
+      "Inline comments sit in the text, where no balloon can show them.",
+      "Choose commentProfile margin to put comments in balloons, endnotes to list them after the text, " +
+        "or hidden to leave them out; or keep commentColumnPlacement margin.");
+  }
+  if (options.commentColumnPlacement === "balloons" && options.reviewProfile === "markup"
+    && options.markupPresentation !== "word") {
+    exportError("invalid_argument", "input_validation",
+      "The balloon layout with the markup profile needs the Word presentation.",
+      "Set markupPresentation to word, or keep the margin placement.");
   }
   if (options.balloonOverflow !== undefined && options.balloonOverflow !== "truncate" && options.balloonOverflow !== "appendix") {
     exportError("invalid_argument", "input_validation", "balloonOverflow is invalid.", "Use truncate or appendix.");
