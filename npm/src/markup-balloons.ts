@@ -71,6 +71,8 @@ export interface MarkupBalloonComment {
   initials?: string;
   color?: string;
   fontFamily?: string;
+  /** w:date as the author's clock read it, for the printed heading of a comment cut short. */
+  dateAsWritten?: string;
   paragraphs: string[];
 }
 
@@ -92,11 +94,11 @@ export function readMarkupBalloonComments(registry: Element | null): {
     const noteClass = Array.from(note.classList).find((name) => name.endsWith("margin-note"));
     if (!noteClass) return [];
     commentPrefix = noteClass.replace(/margin-note$/, "");
-    const { commentId: id = "", author, initials, authorColor: color, fontFamily } = note.dataset;
+    const { commentId: id = "", author, initials, authorColor: color, fontFamily, dateAsWritten } = note.dataset;
     const body = note.querySelector(`:scope > .${commentPrefix}margin-note-body`);
     const parentId = note.parentElement?.closest<HTMLElement>("[data-comment-id]")?.dataset.commentId;
     const paragraphs = Array.from(body?.children ?? [], (paragraph) => paragraph.textContent?.trim() ?? "");
-    return [{ id, parentId, author, initials, color, fontFamily, paragraphs }];
+    return [{ id, parentId, author, initials, color, fontFamily, dateAsWritten, paragraphs }];
   });
   return { comments, commentPrefix };
 }
@@ -155,6 +157,26 @@ export interface MarkupBalloonResult {
   truncatedFormatting: number;
   /** Comments marked on a page that got no balloon at all. */
   unplacedCommentIds: string[];
+  /**
+   * Every comment whose balloon was cut short, once each, in the order their balloons print: what a
+   * page listing their full text needs. With `numberCutBoxes`, entry n's box reads "… [n]".
+   */
+  cutComments: CutComment[];
+}
+
+/** A comment whose balloon was cut short. */
+export interface CutComment {
+  commentId: string;
+  /** The page its balloon is on, counted from 1. */
+  pageNumber: number;
+  /** Its balloon's label without the colon, as `Commented [AB3]`. */
+  label: string;
+  author?: string;
+  dateAsWritten?: string;
+  color: string;
+  fill: string;
+  textFont?: string;
+  paragraphs: string[];
 }
 
 /** A balloon to place: what it says, how it is drawn, and the line it belongs to. */
@@ -170,6 +192,7 @@ interface Entry {
   /** Where the leader leaves the text. */
   from: { x: number; y: number };
   commentId?: string;
+  comment?: MarkupBalloonComment;
   element?: HTMLElement;
   height: number;
   top: number;
@@ -185,9 +208,11 @@ export function layoutMarkupBalloons(options: {
   commentPrefix: string;
   cssPrefix: string;
   font?: { family: string; sizePt: number };
+  /** Number each cut comment's box, "… [n]", for a listing of their full text (Word's Print to PDF). */
+  numberCutBoxes?: boolean;
 }): MarkupBalloonResult {
   const { document, pages, comments, commentPrefix, cssPrefix } = options;
-  const result: MarkupBalloonResult = { truncatedCommentIds: [], truncatedFormatting: 0, unplacedCommentIds: [] };
+  const result: MarkupBalloonResult = { truncatedCommentIds: [], truncatedFormatting: 0, unplacedCommentIds: [], cutComments: [] };
   const font = options.font && options.font.sizePt > 0 ? options.font : WORD.font;
   // The registry lists a root before its replies, so each reply's thread is already known.
   const thread = new Map<string, string>();
@@ -265,7 +290,7 @@ export function layoutMarkupBalloons(options: {
           entries.push({
             label: `Commented [${comment.initials || initialsOf(comment.author)}${comments.indexOf(comment) + 1}${reply}]:`,
             text: comment.paragraphs, color, fill: paleFill(color), textFont: comment.fontFamily, order: order++,
-            lineTop: last.top, from: { x: last.right, y: last.bottom }, height: 0, top: 0, commentId: comment.id,
+            lineTop: last.top, from: { x: last.right, y: last.bottom }, height: 0, top: 0, commentId: comment.id, comment,
           });
         }
         if (spans.length > 0) {
@@ -326,8 +351,20 @@ export function layoutMarkupBalloons(options: {
         // Past the page's foot a balloon is cut off by the paper's edge.
         if (entry.top + entry.height > bottom + 0.01) entry.element!.dataset.balloonTruncated = "true";
         if (entry.element!.dataset.balloonTruncated !== "true") continue;
-        if (entry.commentId === undefined) result.truncatedFormatting++;
-        else if (!result.truncatedCommentIds.includes(entry.commentId)) result.truncatedCommentIds.push(entry.commentId);
+        if (entry.commentId === undefined) {
+          result.truncatedFormatting++;
+        } else if (!result.truncatedCommentIds.includes(entry.commentId)) {
+          result.truncatedCommentIds.push(entry.commentId);
+          const { author, dateAsWritten, paragraphs } = entry.comment!;
+          result.cutComments.push({ commentId: entry.commentId, pageNumber: pageIndex + 1, label: entry.label.replace(/:$/, ""),
+            author, dateAsWritten, color: entry.color, fill: entry.fill, textFont: entry.textFont, paragraphs });
+        }
+        // Word numbers the boxes through the document; a header's comment cut on every page keeps its
+        // first number. A balloon cut off at the page's foot has no box.
+        const box = entry.element!.querySelector(`:scope > .${cssPrefix}balloon-cut`);
+        if (options.numberCutBoxes && box && entry.commentId !== undefined) {
+          box.textContent = `\u2026 [${result.cutComments.findIndex((cut) => cut.commentId === entry.commentId) + 1}]`;
+        }
       }
       connect(document, sheet, entries, marks, left);
     }
@@ -600,7 +637,7 @@ function paleFill(color: string): string {
   return WORD.paleFills[color.toUpperCase()] ?? `color-mix(in srgb, ${color} 17%, white)`;
 }
 
-function fontStack(family: string): string {
+export function fontStack(family: string): string {
   return `${JSON.stringify(family)}, sans-serif`;
 }
 

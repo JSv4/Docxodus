@@ -3,8 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 import {
-  anchorlessCommentsFixture, balloonDocx, commented, crowdedCommentsFixture, formatted, markupBalloonsFixture, plain,
-  reformatted,
+  anchorlessCommentsFixture, balloonDocx, commented, crowdedCommentsFixture, formatted, markupBalloonsFixture, plain, printOverflowFixture, reformatted,
 } from './docx-markup-balloons-fixture.js';
 
 async function pdfText(pdf: Uint8Array): Promise<string> {
@@ -189,4 +188,90 @@ test('the endnotes comment profile prints formatting balloons and lists the comm
   // The page container carries the balloon scope without Word's comment rules, so the marks print.
   expect(result.html).toMatch(/<[^>]* data-docx-markup-balloons=""/);
   expect(result.html).not.toMatch(/<[^>]* data-docx-markup-balloons="comments"/);
+});
+
+/** Each PDF page's text, whitespace collapsed, and the left edge of its text, in points. */
+async function pdfPages(pdf: Uint8Array): Promise<Array<{ text: string; left: number }>> {
+  const task = getDocument({ data: new Uint8Array(pdf), verbosity: 0 });
+  try {
+    const document = await task.promise;
+    const pages = await Promise.all(Array.from({ length: document.numPages }, (_, i) => document.getPage(i + 1)));
+    return await Promise.all(pages.map(async (page) => {
+      const { width, height } = page.getViewport({ scale: 1 });
+      expect([Math.round(width), Math.round(height)]).toEqual([612, 792]);
+      const items = (await page.getTextContent()).items.filter(item => 'str' in item && item.str.trim());
+      return {
+        text: items.map(item => 'str' in item ? item.str : '').join(' ').replace(/\s+/g, ' '),
+        left: Math.min(...items.map(item => 'transform' in item ? item.transform[4] : Infinity)),
+      };
+    }));
+  } finally { await task.destroy(); }
+}
+
+const overflowOptions = {
+  outputs: ['html', 'pdf'] as Array<'html' | 'pdf'>, reviewProfile: 'final' as const, commentProfile: 'margin' as const,
+  commentColumnPlacement: 'balloons' as const, timeoutMs: 120_000,
+};
+
+test('by default the rest of a cut comment is printed nowhere, as Word\'s Save as PDF does', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const result = await renderDocxArtifacts(printOverflowFixture(), { browser, ...overflowOptions });
+  expect('balloonOverflow' in result.renderReport.options).toBe(false);
+  const pages = await pdfPages(result.pdf!);
+  expect(pages).toHaveLength(1);
+  expect(result.pageMap.pages).toHaveLength(1);
+  expect(pages[0].text).toContain('…');
+  expect(pages[0].text).not.toMatch(/… \[\d+\]/);
+});
+
+test('the appendix overflow prints each cut comment in full after the last page, as Word\'s Print to PDF does', async ({ browser }, testInfo) => {
+  test.setTimeout(120_000);
+  const result = await renderDocxArtifacts(printOverflowFixture(), { browser, ...overflowOptions, balloonOverflow: 'appendix' });
+  await writeFile(testInfo.outputPath('balloon-appendix.pdf'), result.pdf!);
+  expect(result.renderReport.options.balloonOverflow).toBe('appendix');
+  const warning = result.warnings.find(w => w.code === 'comment_balloon_truncated')!;
+  expect(warning.message).toMatch(/in full after the last page/);
+  const cut = warning.resource!.split(',');
+  const pages = await pdfPages(result.pdf!);
+  expect(pages.length).toBeGreaterThan(1);
+  expect(result.pageMap.pages).toHaveLength(pages.length);
+  // The boxes are numbered through the document, and each number heads its comment's full text.
+  expect(pages[0].text).toContain('… [1]');
+  expect(pages[0].text).toContain(`… [${cut.length}]`);
+  const appendix = pages.slice(1).map(page => page.text).join(' ');
+  expect(appendix.match(/Page 1: \[\d+\] Commented \[(IM|KA)\d+\]/g)).toHaveLength(cut.length);
+  expect(appendix).toContain('Page 1: [1] Commented [');
+  expect(appendix).toMatch(/Ines Moreau|Kwame Asante/);
+  // The date as its author's clock read it, not the UTC instant the comment parts record.
+  expect(appendix).toContain('6/11/2025 4:05:00 PM');
+  expect(appendix).not.toContain('9:05:00 PM');
+  for (const id of cut.filter(id => id !== '12')) {
+    expect(appendix).toContain(`Note ${id}: the warranty period in this section should run from acceptance, not delivery.`);
+  }
+  // The shrunk page and the full-size appended pages each print at their own scale.
+  expect(pages[0].left).toBeCloseTo(72 * 612 / (612 - 72 + 266.4), 0);
+  for (const page of pages.slice(1)) expect(page.left).toBeCloseTo(72, 0);
+  // The comment of several paragraphs keeps its blank lines.
+  const paragraphs = [...result.html!.matchAll(/class="page-balloon-appendix-text"[^>]*>([^<]*)</g)].map(match => match[1]);
+  const start = paragraphs.indexOf('First, the cap.');
+  expect(paragraphs.slice(start, start + 5)).toEqual(['First, the cap.', '', 'Second, the basket.', '', 'Third, the survival period.']);
+});
+
+test('a long cut comment runs on across the appended pages with every word printed once, in order', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const words = Array.from({ length: 900 }, (_, i) => `w${i + 1}`);
+  const ids = Array.from({ length: 25 }, (_, id) => id);
+  const body = ids.map(id => `<w:p>${commented(id, `Line ${id} `)}</w:p>`).join('');
+  const filler = 'The schedule of deliverables needs a second look before the closing date. '.repeat(6);
+  const comments = ids.map(id => ({ id, author: 'Nadia Okafor', initials: 'NO', text: id === 12 ? words.join(' ') : filler }));
+  const result = await renderDocxArtifacts(balloonDocx({ body, comments }), { browser, ...overflowOptions, balloonOverflow: 'appendix' });
+  const appendix = (await pdfPages(result.pdf!)).slice(1);
+  expect(appendix.length).toBeGreaterThan(1);
+  expect(appendix.map(page => page.text).join(' ').match(/\bw\d+\b/g)).toEqual(words);
+});
+
+test('the appendix overflow without the balloon layout is an invalid argument', async ({ browser }) => {
+  await expect(renderDocxArtifacts(markupBalloonsFixture(), {
+    browser, outputs: ['html'], reviewProfile: 'final', commentProfile: 'margin', balloonOverflow: 'appendix', timeoutMs: 60_000,
+  })).rejects.toHaveProperty('code', 'invalid_argument');
 });

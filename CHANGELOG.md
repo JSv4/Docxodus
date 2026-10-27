@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- The All Markup balloon layout can print the full text of comments whose balloons were cut short
+  to fit beside their page, as Word's Print to PDF does: `balloonOverflow: "appendix"` on the export
+  (`--balloon-overflow appendix` in the CLI) and on `PaginationOptions`. Each cut balloon's box is
+  numbered, and pages added after the last list every cut comment under a bar naming its page, number,
+  label, author and the date as its author wrote it, running on from page to page with Word's widow and
+  orphan control. The added pages join the PageMap. The default, `"truncate"`, prints as before, as
+  Word's Save as PDF does. The report and layout digest name the option only when it is `"appendix"`.
+
+### Changed
+
+- The Word revision presentation keeps a comment's blank paragraphs in its margin notes, as empty
+  paragraphs, because Word prints them as blank lines; balloons now show them. Its margin notes also
+  carry `data-date-as-written`, the comment's `w:date` as written. The Docxodus presentation is
+  unchanged.
+
 ### Fixed
 
 - When a page's balloons cannot all stand beside it in the All Markup balloon layout

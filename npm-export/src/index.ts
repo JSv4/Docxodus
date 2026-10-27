@@ -429,6 +429,7 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
     "markupPresentation",
     "commentProfile",
     "commentColumnPlacement",
+    "balloonOverflow",
     "title",
     "additionalCss",
     "unsupportedContent",
@@ -488,6 +489,13 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
     exportError("invalid_argument", "input_validation",
       "The balloon layout cannot hold inline comments and, with markup, needs the Word presentation.",
       "Use the margin, endnotes or hidden comment profile, and markupPresentation word with the markup profile.");
+  }
+  if (options.balloonOverflow !== undefined && options.balloonOverflow !== "truncate" && options.balloonOverflow !== "appendix") {
+    exportError("invalid_argument", "input_validation", "balloonOverflow is invalid.", "Use truncate or appendix.");
+  }
+  if (options.balloonOverflow === "appendix" && options.commentColumnPlacement !== "balloons") {
+    exportError("invalid_argument", "input_validation", "balloonOverflow appendix needs the balloon layout.",
+      "Set commentColumnPlacement to balloons, or omit balloonOverflow.");
   }
   if (options.reviewProfileAlreadyApplied === true && options.reviewProfile === "markup") {
     exportError(
@@ -769,6 +777,7 @@ function browserOptions(options: NodeExportOptions): Omit<PaginatedHtmlOptions, 
     reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied,
     markupPresentation: options.markupPresentation,
     commentColumnPlacement: options.commentColumnPlacement,
+    balloonOverflow: options.balloonOverflow,
     commentProfile: options.commentProfile,
     title: options.title,
     additionalCss: options.additionalCss,

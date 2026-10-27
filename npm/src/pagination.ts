@@ -27,6 +27,7 @@ import {
   type MarkupBalloonComment,
   type MarkupBalloonResult,
 } from "./markup-balloons.js";
+import { BalloonAppendix } from "./balloon-appendix.js";
 
 export type { PageBands, PageDimensions } from "./page-geometry.js";
 
@@ -114,6 +115,9 @@ export interface MeasuredBlock {
 /**
  * Information about a rendered page.
  */
+/** The balloon layout's result, with the pages its appendix added after the last (if any). */
+export type MarkupBalloonLayout = MarkupBalloonResult & { appendedPages: PageInfo[] };
+
 export interface PageInfo {
   /** 1-based page number */
   pageNumber: number;
@@ -330,6 +334,13 @@ export interface PaginationOptions {
    * "outside", comments then have no PageMap citations.
    */
   commentColumnPlacement?: "margin" | "outside" | "balloons";
+  /**
+   * Under "balloons", what becomes of the rest of a comment whose balloon is cut short to fit beside
+   * its page. "truncate" (the default) prints it nowhere, as Word's Save as PDF does. "appendix"
+   * numbers each cut comment's box and prints the comments in full on pages added after the last,
+   * as Word's Print to PDF does; those pages join the result and the PageMap.
+   */
+  balloonOverflow?: "truncate" | "appendix";
   /** Outside comment-column width in points. Default: 144 (2 inches). */
   commentColumnWidthPt?: number;
   /** Gap between the page and an outside comment column, in points. Default: 12. */
@@ -771,7 +782,8 @@ export class PaginationEngine {
   private pageGap: number;
   private commentColumnPlacement: "margin" | "outside" | "balloons";
   private deferMarkupBalloons: boolean;
-  private markupBalloons?: { comments: MarkupBalloonComment[]; commentPrefix: string; result?: MarkupBalloonResult };
+  private balloonOverflow: "truncate" | "appendix";
+  private markupBalloons?: { comments: MarkupBalloonComment[]; commentPrefix: string; result?: MarkupBalloonLayout };
   private commentColumnWidthPt: number;
   private commentColumnGapPt: number;
   private fragmentParagraphs: boolean;
@@ -855,6 +867,10 @@ export class PaginationEngine {
       throw new RangeError("commentColumnPlacement must be one of margin, outside, balloons");
     }
     this.deferMarkupBalloons = options.deferMarkupBalloons ?? false;
+    this.balloonOverflow = options.balloonOverflow ?? "truncate";
+    if (this.balloonOverflow !== "truncate" && this.balloonOverflow !== "appendix") {
+      throw new RangeError("balloonOverflow must be one of truncate, appendix");
+    }
     if (!Number.isFinite(this.commentColumnWidthPt) || this.commentColumnWidthPt <= 0) {
       throw new RangeError("commentColumnWidthPt must be a finite positive number");
     }
@@ -1175,20 +1191,45 @@ export class PaginationEngine {
    * (once; later calls return the first result). Runs inside paginate() unless deferMarkupBalloons
    * is set. Returns what could not be printed in full; undefined under other placements.
    */
-  layoutMarkupBalloons(): MarkupBalloonResult | undefined {
+  layoutMarkupBalloons(): MarkupBalloonLayout | undefined {
     if (!this.markupBalloons || this.markupBalloons.result) return this.markupBalloons?.result;
     if (this.lastPages.length === 0) throw new Error("paginate() must complete before layoutMarkupBalloons()");
-    const font = this.stagingElement.dataset;
-    return this.markupBalloons.result = layoutMarkupBalloons({
+    const staging = this.stagingElement.dataset;
+    const font = staging.balloonFontFamily && Number.parseFloat(staging.balloonFontSize ?? "") > 0
+      ? { family: staging.balloonFontFamily, sizePt: Number.parseFloat(staging.balloonFontSize!) }
+      : undefined;
+    const appendix = this.balloonOverflow === "appendix";
+    const layout = layoutMarkupBalloons({
       document: this.document,
       pages: this.lastPages,
       comments: this.markupBalloons.comments,
       commentPrefix: this.markupBalloons.commentPrefix,
       cssPrefix: this.cssPrefix,
-      font: font.balloonFontFamily
-        ? { family: font.balloonFontFamily, sizePt: Number.parseFloat(font.balloonFontSize ?? "") }
-        : undefined,
+      font,
+      numberCutBoxes: appendix,
     });
+    const appendedPages: PageInfo[] = [];
+    if (appendix && layout.cutComments.length > 0) {
+      const pages = new BalloonAppendix(this.document, layout.cutComments, font ?? { family: "Segoe UI", sizePt: 9 },
+        this.cssPrefix);
+      while (!pages.finished) pages.fill(this.appendBlankPage(appendedPages));
+    }
+    return this.markupBalloons.result = { ...layout, appendedPages };
+  }
+
+  /**
+   * A page after the last, in the last page's section, with no running stories: one more page of the
+   * pagination, its result and its PageMap.
+   */
+  private appendBlankPage(appended: PageInfo[]): PageInfo {
+    const last = this.lastPages[this.lastPages.length - 1];
+    const number = (key: string, fallback: number) => Number.parseInt(last.element.dataset[key] ?? "", 10) || fallback;
+    const page = this.createPage(last.dimensions, last.pageNumber + 1, last.sectionIndex,
+      number("displayedPageNumber", last.pageNumber) + 1, [], number("pageInSection", 1) + 1, [], 0, null, undefined, true);
+    page.element.dataset.balloonAppendix = "true";
+    this.lastPages.push(page);
+    appended.push(page);
+    return page;
   }
 
   /**

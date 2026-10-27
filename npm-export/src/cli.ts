@@ -36,6 +36,10 @@ Options:
   --comment-column-placement <margin|balloons>
                                      Where margin comments go (default margin; balloons =
                                      Word's All Markup print layout, with formatting balloons)
+  --balloon-overflow <truncate|appendix>
+                                     With balloons, where the rest of a cut-short comment goes
+                                     (default truncate: nowhere, as Word's Save as PDF; appendix:
+                                     in full after the last page, as Word's Print to PDF)
   --document-version <integer>       Immutable source version (default: 0)
   --expected-source-digest <sha256>  Required source digest
   --unsupported-content <warn|strict>
@@ -155,6 +159,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
         "review-profile": { type: "string" },
         "markup-presentation": { type: "string" },
         "comment-column-placement": { type: "string" },
+        "balloon-overflow": { type: "string" },
         comments: { type: "string" },
         "document-version": { type: "string" },
         "expected-source-digest": { type: "string" },
@@ -239,6 +244,9 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       ...(parsed.values["comment-column-placement"] === undefined ? {} : {
         commentColumnPlacement: oneOf(parsed.values["comment-column-placement"], ["margin", "balloons"] as const,
           "--comment-column-placement"),
+      }),
+      ...(parsed.values["balloon-overflow"] === undefined ? {} : {
+        balloonOverflow: oneOf(parsed.values["balloon-overflow"], ["truncate", "appendix"] as const, "--balloon-overflow"),
       }),
       documentVersion: integer(parsed.values["document-version"], "--document-version"),
       expectedSourceDigest: parsed.values["expected-source-digest"],

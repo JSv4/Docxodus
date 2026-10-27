@@ -85,6 +85,12 @@ export type CommentProfile = "hidden" | "inline" | "endnotes" | "margin";
  * comments and, with the Word presentation, the formatting changes.
  */
 export type CommentColumnPlacement = "margin" | "balloons";
+/**
+ * Under balloons, what becomes of the rest of a comment cut short to fit beside its page:
+ * `truncate` prints it nowhere (Word's Save as PDF), `appendix` prints it on pages after the last
+ * (Word's Print to PDF).
+ */
+export type BalloonOverflow = "truncate" | "appendix";
 export type UnsupportedContentPolicy = "warn" | "strict";
 
 export type ExportPhase =
@@ -177,6 +183,11 @@ export interface PaginatedHtmlOptions {
    * markup profile needs the Word presentation.
    */
   commentColumnPlacement?: CommentColumnPlacement;
+  /**
+   * Only with the balloon layout; default "truncate". "appendix" numbers each cut comment's box and
+   * prints every cut comment in full on pages added after the last, so the PDF gains pages.
+   */
+  balloonOverflow?: BalloonOverflow;
   title?: string;
   /** CSS appended to the converter stylesheet before pagination. */
   additionalCss?: string;
@@ -245,6 +256,8 @@ export interface RenderReportBase {
     commentProfile: CommentProfile;
     /** Present only for the balloon layout. */
     commentColumnPlacement?: "balloons";
+    /** Present only when the balloon layout printed cut comments in full after the last page. */
+    balloonOverflow?: "appendix";
     title: string;
     /** Present only when a nonempty additional stylesheet was applied. */
     additionalCss?: string;
@@ -516,6 +529,7 @@ interface NormalizedOptions {
   markupPresentation: MarkupPresentation;
   commentProfile: CommentProfile;
   commentColumnPlacement: CommentColumnPlacement;
+  balloonOverflow: BalloonOverflow;
   title: string;
   additionalCss: string;
   unsupportedContent: UnsupportedContentPolicy;
@@ -578,6 +592,7 @@ const ALLOWED_REVIEW_PROFILES = new Set<ReviewProfile>(["final", "original", "ma
 const ALLOWED_COMMENT_PROFILES = new Set<CommentProfile>(["hidden", "inline", "endnotes", "margin"]);
 const ALLOWED_MARKUP_PRESENTATIONS = new Set<MarkupPresentation>(["docxodus", "word"]);
 const ALLOWED_COMMENT_COLUMN_PLACEMENTS = new Set<CommentColumnPlacement>(["margin", "balloons"]);
+const ALLOWED_BALLOON_OVERFLOWS = new Set<BalloonOverflow>(["truncate", "appendix"]);
 const ALLOWED_UNSUPPORTED_POLICIES = new Set<UnsupportedContentPolicy>(["warn", "strict"]);
 const PACKAGE_LIMIT_FINDINGS = new Set([
   "entry_count_limit_exceeded",
@@ -685,6 +700,14 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
       "The balloon layout with the markup profile needs the Word presentation.",
       "Set markupPresentation to word, or keep the margin placement.");
   }
+  const balloonOverflow = options.balloonOverflow ?? "truncate";
+  if (!ALLOWED_BALLOON_OVERFLOWS.has(balloonOverflow)) {
+    fail("invalid_argument", "input_validation", "balloonOverflow is invalid.", "Use truncate or appendix.");
+  }
+  if (balloonOverflow === "appendix" && commentColumnPlacement !== "balloons") {
+    fail("invalid_argument", "input_validation", "balloonOverflow appendix needs the balloon layout.",
+      "Set commentColumnPlacement to balloons, or omit balloonOverflow.");
+  }
   const unsupportedContent = options.unsupportedContent ?? "warn";
   if (!ALLOWED_UNSUPPORTED_POLICIES.has(unsupportedContent)) {
     fail("invalid_argument", "input_validation", "unsupportedContent is invalid.",
@@ -782,6 +805,7 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     markupPresentation,
     commentProfile: options.commentProfile,
     commentColumnPlacement,
+    balloonOverflow,
     title,
     additionalCss,
     unsupportedContent,
@@ -2722,17 +2746,23 @@ function normalizeFragmentTargets(
   }
 }
 
+/** Names a page box for print by its section and records its size; returns the name and size. */
+function namePageForPrint(page: HTMLElement): { name: string; width: number; height: number } {
+  const sectionIndex = Number.parseInt(page.dataset.sectionIndex ?? "0", 10);
+  const width = Number.parseFloat(page.style.width);
+  const height = Number.parseFloat(page.style.height);
+  const name = `docxodus-section-${sectionIndex}`;
+  page.style.setProperty("page", name);
+  page.dataset.pageWidthPt = String(width);
+  page.dataset.pageHeightPt = String(height);
+  return { name, width, height };
+}
+
 function standaloneStyle(pages: HTMLElement[]): string {
   const namedPages = new Map<string, { width: number; height: number }>();
   for (const page of pages) {
-    const sectionIndex = Number.parseInt(page.dataset.sectionIndex ?? "0", 10);
-    const width = Number.parseFloat(page.style.width);
-    const height = Number.parseFloat(page.style.height);
-    const name = `docxodus-section-${sectionIndex}`;
+    const { name, width, height } = namePageForPrint(page);
     if (!namedPages.has(name)) namedPages.set(name, { width, height });
-    page.style.setProperty("page", name);
-    page.dataset.pageWidthPt = String(width);
-    page.dataset.pageHeightPt = String(height);
   }
   const rules = Array.from(namedPages, ([name, dimensions]) =>
     `@page ${name} { size: ${dimensions.width}pt ${dimensions.height}pt; margin: 0; }`).join("\n");
@@ -2773,6 +2803,13 @@ html, body { margin: 0; padding: 0; }
 }`;
 }
 
+/** Drops the viewer's page-box styling and compositing hints, which a printed page must not keep. */
+function releasePageBox(page: HTMLElement): void {
+  for (const property of [
+    "zoom", "transform", "transform-origin", "margin-right", "margin-bottom", "box-shadow", "will-change", "contain",
+  ]) page.style.removeProperty(property);
+}
+
 function finalizePageTree(
   document: Document,
   pages: HTMLElement[],
@@ -2788,11 +2825,7 @@ function finalizePageTree(
     element.style.removeProperty("will-change");
     element.style.removeProperty("contain");
   }
-  for (const page of pages) {
-    for (const property of [
-      "zoom", "transform", "transform-origin", "margin-right", "margin-bottom", "box-shadow",
-    ]) page.style.removeProperty(property);
-  }
+  for (const page of pages) releasePageBox(page);
   normalizeFragmentTargets(document, pages, state, options);
   document.documentElement.dataset.docxodusStandalone = "v1";
   const policy = document.querySelector<HTMLMetaElement>(
@@ -3033,13 +3066,15 @@ function automaticResourceCount(document: Document): { count: number; bytes: num
   return { count, bytes };
 }
 
-type PresentationFields = Pick<RenderReportBase["options"], "markupPresentation" | "commentColumnPlacement" | "additionalCss">;
+type PresentationFields = Pick<RenderReportBase["options"],
+  "markupPresentation" | "commentColumnPlacement" | "balloonOverflow" | "additionalCss">;
 
 /** Record non-default presentation settings in both the report and layout digest. */
 function presentationFields(options: NormalizedOptions): PresentationFields {
   return {
     ...(options.markupPresentation === "word" ? { markupPresentation: "word" as const } : {}),
     ...(options.commentColumnPlacement === "balloons" ? { commentColumnPlacement: "balloons" as const } : {}),
+    ...(options.balloonOverflow === "appendix" ? { balloonOverflow: "appendix" as const } : {}),
     ...(options.additionalCss ? { additionalCss: options.additionalCss } : {}),
   };
 }
@@ -3731,7 +3766,7 @@ export async function convertDocxToPaginatedHtml(
           // would be a second full forced-layout pass whose result is immediately overwritten.
           deferFragmentIdentities: true,
           ...(options.commentColumnPlacement === "balloons"
-            ? { commentColumnPlacement: "balloons" as const, deferMarkupBalloons: true }
+            ? { commentColumnPlacement: "balloons" as const, balloonOverflow: options.balloonOverflow, deferMarkupBalloons: true }
             : {}),
           bodyBudgetReductionsPt,
           checkCancellation: () => {
@@ -3855,6 +3890,12 @@ export async function convertDocxToPaginatedHtml(
       paintParagraphBorders(renderDocument.getElementById("pagination-container") as HTMLElement));
     // The markup area shrinks each page's content, so it comes after every pass that measures it.
     const balloons = await runPhase(state, "output_verification", ["markup balloons"], () => engine.layoutMarkupBalloons());
+    // Pages the balloon appendix added come after the page tree was finalized and named for print.
+    for (const { element } of balloons?.appendedPages ?? []) {
+      releasePageBox(element);
+      namePageForPrint(element);
+      pages.push(element);
+    }
     if (balloons && balloons.unplacedCommentIds.length > 0) {
       // Balloon comments' sources are not in the PageMap, so this is their coverage check; comments
       // listed as endnotes are paginated text, which the PageMap audits itself.
@@ -3868,8 +3909,11 @@ export async function convertDocxToPaginatedHtml(
         severity: "warning",
         phase: "output_verification",
         message: `Balloons too many to fit beside their page were cut short: ${balloons.truncatedCommentIds.length} ` +
-          `comment(s) and ${balloons.truncatedFormatting} formatting change(s).`,
-        remediation: "Use the margin placement with the endnotes comment profile to print every comment in full.",
+          `comment(s) and ${balloons.truncatedFormatting} formatting change(s).` +
+          (balloons.appendedPages.length > 0 ? " The cut comments are printed in full after the last page." : ""),
+        remediation: balloons.appendedPages.length > 0
+          ? "Use the margin placement to print every formatting change in full."
+          : "Use balloonOverflow appendix, or the margin placement with the endnotes comment profile, to print every comment in full.",
         ...(balloons.truncatedCommentIds.length > 0 ? { resource: balloons.truncatedCommentIds.join(",") } : {}),
       });
     }
