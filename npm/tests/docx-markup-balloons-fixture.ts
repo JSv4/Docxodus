@@ -24,6 +24,10 @@ export const reformatted = (id: number, text: string, now = '<w:ind w:left="720"
 
 export const plain = (text: string) => `<w:p><w:r><w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
 
+/** A paragraph holding `content` whose own mark is a tracked insertion or deletion. */
+export const markedParagraph = (id: number, mark: 'ins' | 'del', content: string) =>
+  `<w:p><w:pPr><w:rPr><w:${mark} w:id="${id}" w:author="Alice Archer" ${DATE}/></w:rPr></w:pPr>${content}</w:p>`;
+
 /** An original one-section document with the given body, comments and optional default header. */
 export function balloonDocx(options: {
   body: string; comments?: FixtureComment[]; header?: string; paper?: 'letter' | 'a4';
