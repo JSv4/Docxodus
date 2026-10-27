@@ -126,3 +126,18 @@ for (const [name, options] of [
     })).rejects.toHaveProperty('code', 'invalid_argument');
   });
 }
+
+test('the endnotes comment profile prints formatting balloons and lists the comments after the text', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const result = await renderDocxArtifacts(markupBalloonsFixture(), {
+    browser, outputs: ['html', 'pdf'], reviewProfile: 'markup', markupPresentation: 'word', commentProfile: 'endnotes',
+    commentColumnPlacement: 'balloons', timeoutMs: 120_000,
+  });
+  const text = await pdfText(result.pdf!);
+  expect(text).toContain('Formatted: Font: Bold');
+  expect(text).not.toContain('Commented [');
+  expect(text).toContain('Is delivery the right trigger?');
+  // The page container carries the balloon scope without Word's comment rules, so the marks print.
+  expect(result.html).toMatch(/<[^>]* data-docx-markup-balloons=""/);
+  expect(result.html).not.toMatch(/<[^>]* data-docx-markup-balloons="comments"/);
+});

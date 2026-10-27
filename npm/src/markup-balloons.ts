@@ -93,27 +93,44 @@ export function readMarkupBalloonComments(registry: Element | null): {
   return { comments, commentPrefix };
 }
 
-/** The attribute that scopes the balloon rules to the pagination using them. */
+/**
+ * The converter's margin-note registry inside `root`: the comments the balloons show. Null when the
+ * comments are rendered another way (as endnotes, or not at all), or there are none.
+ */
+export function marginNoteRegistry(root: ParentNode): Element | null {
+  return root.querySelector("#pagination-comment-margin-registry");
+}
+
+/**
+ * The attribute that scopes the balloon rules to the pagination using them. Its value is "comments"
+ * when the comments themselves are in the balloons, which is when Word's rules for them apply.
+ */
 const SCOPE = "data-docx-markup-balloons";
 
 /**
  * Turns the balloon rules on or off for one pagination's staging and page containers. On, they go in
  * before anything is measured, because they change line breaks: Word prints no comment reference
- * mark, and paints the commented range itself (see `layoutMarkupBalloons`). The rules apply only
- * inside elements carrying the scope attribute, so a later pagination in the same document is not
- * affected, and turning them off for its containers clears any attribute left behind.
+ * mark, and paints the commented range itself (see `layoutMarkupBalloons`). Those two rules apply
+ * only when the comments are in the balloons; comments listed as endnotes keep their marks and
+ * highlights, since the list is reached through them. The rules apply only inside elements carrying
+ * the scope attribute, so a later pagination in the same document is not affected, and turning them
+ * off for its containers clears any attribute left behind.
  */
 export function scopeMarkupBalloons(
   document: Document, containers: HTMLElement[], on: boolean, commentPrefix = "comment-", cssPrefix = "page-",
 ): void {
-  for (const container of containers) container.toggleAttribute(SCOPE, on);
+  const commentsInBalloons = on && containers.some((container) => marginNoteRegistry(container) !== null);
+  for (const container of containers) {
+    if (on) container.setAttribute(SCOPE, commentsInBalloons ? "comments" : "");
+    else container.removeAttribute(SCOPE);
+  }
   const key = `${commentPrefix} ${cssPrefix}`;
   if (!on || Array.from(document.querySelectorAll(`style[${SCOPE}]`)).some((style) => style.getAttribute(SCOPE) === key)) return;
   const rules = document.createElement("style");
   rules.setAttribute(SCOPE, key);
   rules.textContent = [
-    `[${SCOPE}] a.${commentPrefix}marker { font-size: 0 !important; margin: 0 !important; padding: 0 !important; visibility: hidden !important; }`,
-    `[${SCOPE}] span.${commentPrefix}highlight { background: none !important; border: 0 !important; }`,
+    `[${SCOPE}="comments"] a.${commentPrefix}marker { font-size: 0 !important; margin: 0 !important; padding: 0 !important; visibility: hidden !important; }`,
+    `[${SCOPE}="comments"] span.${commentPrefix}highlight { background: none !important; border: 0 !important; }`,
     `[${SCOPE}] .${cssPrefix}balloon { position: absolute; box-sizing: border-box; border: ${WORD.border}pt solid;` +
       ` border-radius: ${WORD.corner}pt; padding: ${WORD.padBlock}pt ${WORD.padInline}pt; line-height: ${WORD.leading};` +
       " color: #000; text-align: left; overflow: hidden; overflow-wrap: anywhere; }",
@@ -164,14 +181,17 @@ export function layoutMarkupBalloons(options: {
   const { document, pages, comments, commentPrefix, cssPrefix } = options;
   const result: MarkupBalloonResult = { truncatedCommentIds: [], truncatedFormatting: 0, unplacedCommentIds: [] };
   const font = options.font && options.font.sizePt > 0 ? options.font : WORD.font;
-  const anchored = pages.map((page) =>
-    Array.from(page.element.querySelectorAll<HTMLElement>("[data-comment-id], [data-format-description]")));
-  // Word prints a document without comments or formatting changes as it is.
-  if (anchored.every((elements) => elements.length === 0)) return result;
-
   // The registry lists a root before its replies, so each reply's thread is already known.
   const thread = new Map<string, string>();
   for (const { id, parentId } of comments) thread.set(id, parentId !== undefined && thread.has(parentId) ? thread.get(parentId)! : id);
+  // Comment anchors count only for comments the balloons show; comments listed as endnotes have
+  // anchors too, but no balloon.
+  const anchored = pages.map((page) =>
+    Array.from(page.element.querySelectorAll<HTMLElement>("[data-comment-id], [data-format-description]"))
+      .filter((element) => element.dataset.formatDescription !== undefined || thread.has(element.dataset.commentId ?? "")));
+  // Word prints a document without comments or formatting changes as it is.
+  if (anchored.every((elements) => elements.length === 0)) return result;
+
   const byId = new Map(comments.map((comment) => [comment.id, comment]));
   const authorsSeen: string[] = [];
   const colorOf = ({ color, author = "" }: MarkupBalloonComment) => {

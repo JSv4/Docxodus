@@ -21,6 +21,7 @@ import { EXACT_ROW_CELL } from "./exact-row-text.js";
 import { omitPaintedBorderSide, PAINT as PAINTED_BORDER } from "./paragraph-borders.js";
 import {
   layoutMarkupBalloons,
+  marginNoteRegistry,
   readMarkupBalloonComments,
   scopeMarkupBalloons,
   type MarkupBalloonComment,
@@ -898,8 +899,7 @@ export class PaginationEngine {
     // Any other placement clears what an earlier balloon pagination left on these containers.
     const balloons = this.commentColumnPlacement === "balloons";
     if (balloons) {
-      const registry = this.stagingElement.querySelector("#pagination-comment-margin-registry");
-      this.markupBalloons = readMarkupBalloonComments(registry);
+      this.markupBalloons = readMarkupBalloonComments(marginNoteRegistry(this.stagingElement));
     }
     scopeMarkupBalloons(this.document, [this.stagingElement, this.containerElement], balloons,
       this.markupBalloons?.commentPrefix, this.cssPrefix);
@@ -3513,9 +3513,7 @@ export class PaginationEngine {
   /** Parses the hidden source notes used to render paginated margin comments. */
   private parseCommentMarginRegistry(): Map<string, HTMLElement> {
     const registry = new Map<string, HTMLElement>();
-    const registryEl = this.stagingElement.querySelector(
-      "#pagination-comment-margin-registry",
-    );
+    const registryEl = marginNoteRegistry(this.stagingElement);
     if (!registryEl) return registry;
 
     for (const entry of Array.from(
