@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- When a page's balloons cannot all stand beside it in the All Markup balloon layout
+  (`commentColumnPlacement: "balloons"`), they are now cut as Word cuts them, measured from Word's
+  PDFs: balloons stay whole from the top for as long as the rest, each cut to its first line, still
+  fit at or below their own lines; the first that cannot stay whole and every later one keep their
+  first line and end in Word's small boxed ellipsis. Before, balloons lost lines from the tallest
+  down until the stack fit, so the longest comments never printed whole. A stack the page can hold
+  when pulled up from its foot is still printed whole, as before; one-line balloons are never cut.
+
 ## [14.2.0] - 2026-10-26
 
 ### Added

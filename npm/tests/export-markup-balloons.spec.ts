@@ -126,3 +126,24 @@ for (const [name, options] of [
     })).rejects.toHaveProperty('code', 'invalid_argument');
   });
 }
+
+test('balloons cut to fit keep the first whole, cut the rest to one line, and report only the cut comments', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const remark = 'Please confirm the delivery window with the carrier before this clause is finalised. '.repeat(5);
+  const result = await renderDocxArtifacts(crowdedCommentsFixture(25, 1, remark), {
+    browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'margin', commentColumnPlacement: 'balloons',
+    timeoutMs: 120_000,
+  });
+  const warning = result.warnings.find(w => w.code === 'comment_balloon_truncated');
+  expect(warning).toBeDefined();
+  const cut = warning!.resource!.split(',');
+  expect(cut).not.toContain('0');
+  expect(cut.length).toBeLessThan(25);
+  expect(result.pageMap.pages.map(p => [p.width, p.height])).toEqual([[612, 792]]);
+  const text = await pdfText(result.pdf!);
+  // The first comment prints whole; a cut comment prints its first line and the boxed ellipsis, nothing more.
+  expect(text).toContain(`0: ${remark.trim()}`);
+  expect(text).toContain(`${cut[0]}: Please confirm the delivery`);
+  expect(text).not.toContain(`${cut[0]}: ${remark.trim()}`);
+  expect(text.match(/…/g)).toHaveLength(cut.length);
+});

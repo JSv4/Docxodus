@@ -40,6 +40,14 @@ const WORD = {
   /** Balloons keep this far inside the page's top and foot. */
   pageInset: 2,
   hairline: 0.2,
+  /**
+   * A balloon cut short to its first line, at the 9pt balloon font and scaled with it: Word's height
+   * for it, and the box at its lower right corner holding the ellipsis (its height and horizontal
+   * padding), measured from Word's Save as PDF and Print to PDF of one page with 25 long comments.
+   * The line's text ends at least this far before the box; Word's lines break a word earlier, so
+   * the exact gap was not measurable.
+   */
+  cut: { height: 16.1, boxHeight: 11.6, boxPadInline: 4, textGap: 1 },
   markSize: 3,
   grey: "#F2F2F2",
   font: { family: "Segoe UI", sizePt: 9 },
@@ -289,7 +297,8 @@ export function layoutMarkupBalloons(options: {
       }
       const top = sheet.pageTop + WORD.pageInset;
       const bottom = sheet.pageTop + page.dimensions.pageHeight - WORD.pageInset;
-      fit(entries, bottom - top, font.sizePt * WORD.leading, sheet);
+      fit(entries, top, bottom, font.sizePt * WORD.leading,
+        (entry) => cutShort(document, entry, font, cssPrefix, sheet), (entry) => restore(entry, cssPrefix, sheet));
       stack(entries, top, bottom);
       for (const entry of entries) {
         entry.element!.style.top = `${entry.top}pt`;
@@ -394,24 +403,74 @@ function balloon(document: Document, entry: Entry, font: { family: string; sizeP
 }
 
 /**
- * When a page's balloons cannot all stand beside it, takes a line at a time off the tallest until
- * they can. Word's own behaviour here has not been measured.
+ * Which balloons to cut short when a page's cannot all stand level with their lines. A stack the
+ * page's height can hold is never cut: `stack` pulls it up from the foot as far as the room above
+ * allows, as Word does with a balloon near the foot. When even that cannot hold it, Word keeps
+ * balloons whole from the top for as long as the rest, each cut to its first line, still follow at
+ * or below their own lines and end above the page's foot; the first balloon that cannot stay whole,
+ * and every one after it, is cut, and none is moved above its line to keep another whole. Measured
+ * on a page of 25 long comments: 3 whole, 22 cut. A balloon of one line is never cut.
  */
-function fit(entries: Entry[], room: number, lineHeight: number, sheet: MarkupSheet): void {
-  const chrome = 2 * (WORD.padBlock + WORD.border);
-  const total = () => entries.reduce((sum, entry) => sum + entry.height + WORD.between, -WORD.between);
-  while (total() > room) {
-    const tallest = entries.reduce((a, b) => (b.height > a.height ? b : a));
-    const keep = Math.round((tallest.height - chrome) / lineHeight) - 1;
-    if (keep < 1) return;
-    const content = tallest.element!.firstElementChild as HTMLElement;
-    content.style.cssText = `display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;-webkit-line-clamp:${keep}`;
-    tallest.element!.dataset.balloonTruncated = "true";
-    const before = tallest.height;
-    tallest.height = sheet.height(tallest.element!);
-    // Text that will not wrap to fewer lines cannot be shortened this way.
-    if (tallest.height >= before) return;
+function fit(entries: Entry[], top: number, bottom: number, lineHeight: number,
+  shorten: (entry: Entry) => void, lengthen: (entry: Entry) => void): void {
+  const whole = entries.map((entry) => entry.height);
+  if (whole.reduce((sum, height) => sum + height + WORD.between, -WORD.between) <= bottom - top + 0.01) return;
+  const oneLine = lineHeight + 2 * (WORD.padBlock + WORD.border);
+  const cuttable = whole.map((height) => height > oneLine + lineHeight / 2);
+  entries.forEach((entry, index) => { if (cuttable[index]) shorten(entry); });
+  const cut = entries.map((entry) => entry.height);
+  const stackedFoot = (heightOf: (index: number) => number) => entries.reduce((floor, entry, index) =>
+    Math.max(floor, entry.lineTop) + heightOf(index) + WORD.between, top) - WORD.between;
+  const fits = (keptWhole: number) => stackedFoot((index) => (index < keptWhole ? whole[index] : cut[index])) <= bottom + 0.01;
+  let keptWhole = 0;
+  while (keptWhole < entries.length && fits(keptWhole + 1)) keptWhole++;
+  for (let index = 0; index < keptWhole; index++) if (cuttable[index]) lengthen(entries[index]);
+}
+
+/**
+ * Cuts a balloon to its first line, as Word does: the line's text stops short of a small white box
+ * at the balloon's lower right corner that holds an ellipsis, and the balloon takes Word's height for
+ * a cut balloon.
+ */
+function cutShort(document: Document, entry: Entry, font: { family: string; sizePt: number }, cssPrefix: string,
+  sheet: MarkupSheet): void {
+  const element = entry.element!;
+  const scale = font.sizePt / WORD.font.sizePt;
+  let box = element.querySelector<HTMLElement>(`:scope > .${cssPrefix}balloon-cut`);
+  if (!box) {
+    box = document.createElement("span");
+    box.className = `${cssPrefix}balloon-cut`;
+    box.textContent = "\u2026";
+    element.append(box);
   }
+  const boxHeight = WORD.cut.boxHeight * scale;
+  box.style.cssText = `position:absolute;right:0;bottom:0;box-sizing:border-box;height:${boxHeight}pt;` +
+    `line-height:${boxHeight - 2 * WORD.hairline}pt;padding:0 ${WORD.cut.boxPadInline * scale}pt;` +
+    `border:${WORD.hairline}pt solid #000;background:#fff;color:#000;white-space:nowrap;` +
+    `font-size:${font.sizePt}pt;font-family:${fontStack(font.family)}`;
+  element.style.minHeight = `${WORD.cut.height * scale}pt`;
+  // The content already ends a padding's width before the box's edge; the text stops the gap short
+  // of the box itself. Then the first line's own box, whose height the label's font and the text's
+  // share, is all that stays visible.
+  const boxRect = sheet.box(box.getBoundingClientRect())!;
+  const content = element.firstElementChild as HTMLElement;
+  content.style.cssText = `margin-right:${Math.max(0, boxRect.right - boxRect.left + WORD.cut.textGap * scale - WORD.padInline)}pt`;
+  const rows = lines(content, document).map((rect) => sheet.box(rect)!);
+  const onFirst = rows.filter((row) => row.top < rows[0].bottom - 0.5);
+  const firstLine = Math.max(...onFirst.map((row) => row.bottom)) - Math.min(...onFirst.map((row) => row.top));
+  content.style.cssText += `;max-height:${firstLine}pt;overflow:hidden`;
+  element.dataset.balloonTruncated = "true";
+  entry.height = sheet.height(element);
+}
+
+/** Undoes `cutShort`. */
+function restore(entry: Entry, cssPrefix: string, sheet: MarkupSheet): void {
+  const element = entry.element!;
+  element.querySelector(`:scope > .${cssPrefix}balloon-cut`)?.remove();
+  element.style.minHeight = "";
+  (element.firstElementChild as HTMLElement).style.cssText = "";
+  delete element.dataset.balloonTruncated;
+  entry.height = sheet.height(element);
 }
 
 /**
