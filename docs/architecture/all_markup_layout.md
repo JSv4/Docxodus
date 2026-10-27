@@ -162,10 +162,21 @@ have anchors, but no balloon), the pages are left as they are. Otherwise:
 - Balloons are sorted by line, then by document order within a line.
 - Each sits level with its anchor's line where room allows, pushed down past the one above, then
   pulled up from the page's foot as far as the room above allows. Balloons never overlap.
-- If they still cannot fit, the tallest balloon loses a line at a time until they do. Balloons that
-  cannot shrink further run off the page's foot and are cut there. Either way the balloon is marked
-  `data-balloon-truncated`, and `layoutMarkupBalloons()` reports it. No page is added. Word's own
-  overflow behaviour is *pending*.
+- A stack the page's height can hold is never cut, however low its anchors: pulled up, it prints
+  whole. If the page cannot hold it even pulled up, Word's rule applies, measured from its Save as
+  PDF and Print to PDF of a page with 25 long comments (3 whole, 22 cut, none moved above its line):
+  balloons stay whole from the top for as long as the rest, each cut to its first line, still follow
+  at or below their own lines and end above the page's foot. The first balloon that cannot stay
+  whole, and every one after it, is cut; none is moved above its line to keep another whole. A
+  balloon of one line is never cut. Between the two measured cases (a stack that fits only when
+  pulled up) the first rule is assumed. A cut balloon is 16.1pt tall at the 9pt balloon font (scaled
+  with it) and ends in a box at its lower right corner, 11.6pt tall with 4pt horizontal padding, a
+  0.2pt black border and a white fill, holding an ellipsis; the line's text ends at least 1pt before
+  the box, and only the first line's own box stays visible. The box is laid out in the balloon's flow
+  (the balloon becomes a two-column grid), because positioned absolutely it made Chromium shrink every
+  printed page. If even the cut balloons cannot fit,
+  they run off the page's foot and are cut there. Either way the balloon is marked
+  `data-balloon-truncated`, and `layoutMarkupBalloons()` reports it. No page is added.
 
 **Leaders and marks.**
 

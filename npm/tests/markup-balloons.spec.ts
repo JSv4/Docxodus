@@ -188,6 +188,78 @@ test('the margin placement ignores the balloon data the Word presentation record
   expect(recorded.pageTree).toBe(stripped.pageTree);
 });
 
+test('balloons too many for their page stay whole from the top, and the rest are cut to one line', async ({ page }) => {
+  await open(page);
+  const remark = 'Please confirm the delivery window with the carrier before this clause is finalised. '.repeat(5);
+  const { balloons, pages } = await paginate(page, crowdedCommentsFixture(25, 1, remark), 'balloons');
+  expect(balloons).toHaveLength(25);
+  const firstCut = balloons.findIndex(b => b.truncated);
+  expect(firstCut).toBeGreaterThanOrEqual(1);
+  expect(balloons.slice(firstCut).every(b => b.truncated)).toBe(true);
+  const scale = pages[0].scale;
+  for (const balloon of balloons.slice(0, firstCut)) expect(balloon.text).toContain(remark.trim());
+  for (const balloon of balloons.slice(firstCut)) {
+    // Word's cut balloon: 16.1pt tall at the 9pt balloon font, its first line ending in a boxed ellipsis.
+    expect(balloon.bottom - balloon.top).toBeCloseTo(16.1 * scale, 0);
+    expect(balloon.text).toMatch(/…$/);
+  }
+  // Nothing moves above its line: the first balloon stays level with line 1.
+  const firstLineTop = await page.evaluate(() => {
+    const span = Array.from(document.querySelectorAll<HTMLElement>('#host .page-box span')).find(s => s.textContent === 'w0 ')!;
+    return (span.getBoundingClientRect().top - span.closest('.page-box')!.getBoundingClientRect().top) * 0.75;
+  });
+  expect(balloons[0].top).toBeCloseTo(firstLineTop, 0);
+  expectNoOverlap(balloons);
+  // As many whole as the page allows: the stack ends above the page's foot, and one more whole balloon would not have.
+  const foot = pages[0].height - 10.8 - 2 * scale;
+  const wholeHeight = balloons[0].bottom - balloons[0].top;
+  const cutHeight = balloons[firstCut].bottom - balloons[firstCut].top;
+  expect(balloons[24].bottom).toBeLessThanOrEqual(foot + 0.1);
+  expect(balloons[24].bottom + (wholeHeight - cutHeight)).toBeGreaterThan(foot);
+});
+
+test('a balloon of one line is never cut, however crowded the page', async ({ page }) => {
+  await open(page);
+  const long = 'Please confirm the delivery window with the carrier before this clause is finalised. '.repeat(5);
+  const ids = Array.from({ length: 24 }, (_, id) => id);
+  const body = ids.map(id => `<w:p>${commented(id, `w${id} `)}</w:p>`).join('');
+  const comments = ids.map(id => ({ id, author: id % 2 ? 'Nadia Okafor' : 'Tomas Lindqvist', initials: id % 2 ? 'NO' : 'TL',
+    text: id % 3 === 0 ? `Short note ${id}.` : `${id}: ${long}` }));
+  const { balloons } = await paginate(page, balloonDocx({ body, comments }), 'balloons');
+  expect(balloons).toHaveLength(24);
+  expect(balloons.some(b => b.truncated)).toBe(true);
+  // One comment per line, so the balloons are in document order.
+  const shorts = balloons.filter((_, index) => index % 3 === 0);
+  expect(shorts).toHaveLength(8);
+  for (const balloon of shorts) {
+    expect(balloon.text).toMatch(/^Commented \[\w+\]: Short note \d+\.$/);
+    expect(balloon.truncated).toBe(false);
+  }
+  expectNoOverlap(balloons);
+});
+
+test('long comments near the page\'s foot are pulled up whole while the page can hold them', async ({ page }) => {
+  await open(page);
+  const long = 'Please confirm the delivery window with the carrier before this clause is finalised. '.repeat(5);
+  const body = Array.from({ length: 40 }, (_, i) => plain(`Filler line ${i + 1}.`)).join('') +
+    [0, 1, 2].map(id => `<w:p>${commented(id, `late${id} `)}</w:p>`).join('');
+  const comments = [0, 1, 2].map(id => ({ id, author: 'Tomas Lindqvist', initials: 'TL', text: `${id}: ${long}` }));
+  const { balloons, pages } = await paginate(page, balloonDocx({ body, comments }), 'balloons');
+  expect(balloons).toHaveLength(3);
+  expect(pages).toHaveLength(1);
+  for (const balloon of balloons) {
+    expect(balloon.truncated).toBe(false);
+    expect(balloon.text).toContain(long.trim());
+  }
+  const lineTop = await page.evaluate(() => {
+    const span = Array.from(document.querySelectorAll<HTMLElement>('#host .page-box span')).find(s => s.textContent === 'late0 ')!;
+    return (span.getBoundingClientRect().top - span.closest('.page-box')!.getBoundingClientRect().top) * 0.75;
+  });
+  expect(balloons[0].top).toBeLessThan(lineTop);
+  expect(balloons[2].bottom).toBeLessThanOrEqual(pages[0].height - 10.8 - 2 * pages[0].scale + 0.1);
+  expectNoOverlap(balloons);
+});
+
 /** Converts with endnote-style comments in the Word presentation and paginates with balloons. */
 async function paginateEndnotes(page: Page, bytes: Uint8Array) {
   return page.evaluate(({ bytes }) => {

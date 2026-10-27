@@ -3,7 +3,8 @@ import { writeFile } from 'node:fs/promises';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 import {
-  anchorlessCommentsFixture, balloonDocx, crowdedCommentsFixture, formatted, markupBalloonsFixture, plain, reformatted,
+  anchorlessCommentsFixture, balloonDocx, commented, crowdedCommentsFixture, formatted, markupBalloonsFixture, plain,
+  reformatted,
 } from './docx-markup-balloons-fixture.js';
 
 async function pdfText(pdf: Uint8Array): Promise<string> {
@@ -126,6 +127,54 @@ for (const [name, options] of [
     })).rejects.toHaveProperty('code', 'invalid_argument');
   });
 }
+
+test('balloons cut to fit keep the first whole, cut the rest to one line, and report only the cut comments', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const remark = 'Please confirm the delivery window with the carrier before this clause is finalised. '.repeat(5);
+  const result = await renderDocxArtifacts(crowdedCommentsFixture(25, 1, remark), {
+    browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'margin', commentColumnPlacement: 'balloons',
+    timeoutMs: 120_000,
+  });
+  const warning = result.warnings.find(w => w.code === 'comment_balloon_truncated');
+  expect(warning).toBeDefined();
+  const cut = warning!.resource!.split(',');
+  expect(cut).not.toContain('0');
+  expect(cut.length).toBeLessThan(25);
+  expect(result.pageMap.pages.map(p => [p.width, p.height])).toEqual([[612, 792]]);
+  const text = await pdfText(result.pdf!);
+  // The first comment prints whole; a cut comment prints its first line and the boxed ellipsis, nothing more.
+  expect(text).toContain(`0: ${remark.trim()}`);
+  expect(text).toContain(`${cut[0]}: Please confirm the delivery`);
+  expect(text).not.toContain(`${cut[0]}: ${remark.trim()}`);
+  expect(text.match(/…/g)).toHaveLength(cut.length);
+});
+
+test('pages after a page of cut balloons print at the markup layout\'s own scale', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const remark = 'Please confirm the delivery window with the carrier before this clause is finalised. '.repeat(5);
+  const ids = Array.from({ length: 25 }, (_, id) => id);
+  const body = ids.map(id => `<w:p>${commented(id, `w${id} `)}</w:p>`).join('') +
+    Array.from({ length: 90 }, (_, i) => plain(`Later line ${i + 1}.`)).join('');
+  const comments = ids.map(id => ({ id, author: 'Tomas Lindqvist', initials: 'TL', text: `${id}: ${remark}` }));
+  const result = await renderDocxArtifacts(balloonDocx({ body, comments }), {
+    browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'margin', commentColumnPlacement: 'balloons',
+    timeoutMs: 120_000,
+  });
+  expect(result.warnings.map(w => w.code)).toContain('comment_balloon_truncated');
+  // Every page starts its text column at the 1in margin shrunk by the markup factor. Chromium shrinks
+  // the whole print instead when anything inside a page box escapes it.
+  const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
+  try {
+    const pdf = await task.promise;
+    expect(pdf.numPages).toBeGreaterThan(1);
+    for (let number = 1; number <= pdf.numPages; number++) {
+      const content = await (await pdf.getPage(number)).getTextContent();
+      const lefts = content.items.flatMap(item => 'transform' in item && /^(w\d|Later)/.test(item.str) ? [item.transform[4]] : []);
+      expect(lefts.length).toBeGreaterThan(0);
+      expect(Math.min(...lefts)).toBeCloseTo(72 * 612 / (612 - 72 + 266.4), 0);
+    }
+  } finally { await task.destroy(); }
+});
 
 test('the endnotes comment profile prints formatting balloons and lists the comments after the text', async ({ browser }) => {
   test.setTimeout(120_000);
