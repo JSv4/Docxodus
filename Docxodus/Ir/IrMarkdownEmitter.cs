@@ -546,8 +546,8 @@ internal static class IrMarkdownEmitter
 
     /// <summary>
     /// Mirror the oracle's <c>HasVisibleInlineContent</c>: true when the paragraph would emit any
-    /// visible text under the markdown grouping (which DROPS inline-SDT-spliced runs and w:fldSimple
-    /// text — see GroupInlineRuns). Used by Suppress mode and the empty-paragraph trim, so it must match
+    /// visible text under the markdown grouping (which drops textbox content but keeps inline-SDT and
+    /// w:fldSimple text — see GroupInlineRuns). Used by Suppress mode and the empty-paragraph trim, so it must match
     /// what is actually rendered, NOT the richer TextPreview text.
     /// </summary>
     private static bool ParagraphHasVisibleText(IrParagraph p)
@@ -570,7 +570,7 @@ internal static class IrMarkdownEmitter
     /// <summary>
     /// Whether the paragraph keeps its own AnchorIndex entry under Suppress mode. The oracle's index
     /// walk drops a paragraph only when <c>Descendants(w:t)</c> is empty — and that walk SEES textbox
-    /// w:t text (and inline-SDT/fldSimple text, which the rendered-text predicate drops). So a
+    /// w:t text, which the rendered-text predicate drops. So a
     /// paragraph whose only text lives in a textbox is NOT dropped from the index, even though its
     /// rendered markdown line is empty. This is the index-walk parity predicate, distinct from
     /// <see cref="ParagraphHasVisibleText"/> (the rendered-text predicate used for the markdown spacer).
@@ -1013,10 +1013,6 @@ internal static class IrMarkdownEmitter
                     Flush();
                     break;
                 case IrTextRun tr:
-                    // Inline-SDT/smartTag-spliced runs are DROPPED from the markdown (the oracle's
-                    // GroupInlineRuns never visits a w:sdt), though they still count toward TextPreview
-                    // (AppendInlineText keeps them, mirroring the oracle's Descendants(w:t)).
-                    if (tr.FromInlineSdt) break;
                     Add(tr, ReadRunFmt(tr.Format));
                     break;
                 case IrFieldRun f:

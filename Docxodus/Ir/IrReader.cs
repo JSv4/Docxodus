@@ -1370,9 +1370,9 @@ internal static class IrReader
             else if (child.Name == W + "sdt")
             {
                 // N12: inline content control — splice w:sdtContent's children into the inline
-                // stream so the runs inside join the paragraph and coalesce normally. The spliced
-                // text runs are flagged FromInlineSdt (equality-neutral) so the markdown emitter can
-                // mirror the oracle, which drops inline-SDT content from the rendered markdown.
+                // stream so the runs inside join the paragraph. The spliced text runs are flagged
+                // FromInlineSdt (equality-neutral) so they keep the control's boundary: they never
+                // coalesce with the runs outside it.
                 var content = child.Element(W + "sdtContent");
                 if (content is not null)
                     SpliceWithInlineSdtMark(() =>
@@ -1669,8 +1669,8 @@ internal static class IrReader
         /// Run an inline-SDT/smartTag splice, then flag every <see cref="IrTextRun"/> it appended to the
         /// active sink (<see cref="_output"/> outside a field, <see cref="_result"/> inside one's result)
         /// with <see cref="IrTextRun.FromInlineSdt"/>. The flag is equality-neutral so this preserves the
-        /// content-transparency of content controls while letting the markdown emitter drop the spliced
-        /// text (the oracle's GroupInlineRuns never visits a w:sdt). Nested splices compound naturally:
+        /// content-transparency of content controls while keeping the spliced runs from coalescing
+        /// across the control's boundary. Nested splices compound naturally:
         /// an inner splice marks its runs, and the outer pass re-marking an already-true flag is a no-op.
         /// </summary>
         private void SpliceWithInlineSdtMark(Action splice)
@@ -2325,8 +2325,8 @@ internal static class IrReader
                 && result.Count > 0
                 && result[^1] is IrTextRun prev
                 && prev.Format.Equals(run.Format)
-                // Don't coalesce across the inline-SDT boundary: the flag is the emitter's drop signal,
-                // so a spliced run must not absorb (or be absorbed into) an unflagged neighbor.
+                // Don't coalesce across the inline-SDT boundary: a spliced run must not absorb (or be
+                // absorbed into) an unflagged neighbor.
                 && prev.FromInlineSdt == run.FromInlineSdt)
             {
                 result[^1] = prev with { Text = prev.Text + run.Text };

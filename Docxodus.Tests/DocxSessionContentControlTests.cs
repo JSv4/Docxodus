@@ -1574,4 +1574,70 @@ public sealed class DocxSessionContentControlTests
     private static bool IsMaterialValidationError(PackageValidationError error) =>
         error.Description?.Contains("The 'Ignorable' attribute", StringComparison.Ordinal) != true
         && error.Description?.Contains("http://powertools.codeplex.com/2011:Unid", StringComparison.Ordinal) != true;
+
+    // Issue #1386: an inline content control's or smart tag's content is what Word shows, so the
+    // projection prints it in place, as the HTML render and Grep already did.
+    private const string Bound = "<w:sdt><w:sdtPr><w:id w:val=\"7\"/><w:dataBinding w:xpath=\"/record[1]/version[1]\" " +
+        "w:storeItemID=\"{00000000-0000-0000-0000-000000000001}\"/><w:text/></w:sdtPr><w:sdtContent><w:r><w:t>3.1</w:t></w:r></w:sdtContent></w:sdt>";
+    private const string TextBox = "<w:pict><v:shape><v:textbox><w:txbxContent><w:p><w:r><w:t>Boxed note</w:t></w:r></w:p>" +
+        "</w:txbxContent></v:textbox></v:shape></w:pict>";
+
+    [Theory]
+    [InlineData("bound", Bound, "Version 3.1 approved.", "Version 3.1 approved.")]
+    [InlineData("placeholder", "<w:sdt><w:sdtPr><w:id w:val=\"9\"/><w:showingPlcHdr/><w:text/></w:sdtPr>" +
+        "<w:sdtContent><w:r><w:t>Enter a value</w:t></w:r></w:sdtContent></w:sdt>", "Version Enter a value approved.", "Version Enter a value approved.")]
+    [InlineData("citation", "<w:sdt><w:sdtPr><w:id w:val=\"8\"/><w:citation/></w:sdtPr><w:sdtContent>" +
+        "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> CITATION Src1 \\l 1033 </w:instrText></w:r>" +
+        "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>Source 2020</w:t></w:r>" +
+        "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:sdtContent></w:sdt>", "Version Source 2020 approved.", "Version Source 2020 approved.")]
+    [InlineData("in a hyperlink", "<w:hyperlink w:anchor=\"spec\">" + Bound + "</w:hyperlink>", "Version [3.1](#spec) approved.", "Version 3.1 approved.")]
+    [InlineData("nested", "<w:sdt><w:sdtPr><w:id w:val=\"10\"/></w:sdtPr><w:sdtContent>" + Bound +
+        "<w:r><w:t xml:space=\"preserve\"> final</w:t></w:r></w:sdtContent></w:sdt>", "Version 3.1 final approved.", "Version 3.1 final approved.")]
+    [InlineData("in a field result", "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> REF Spec </w:instrText></w:r>" +
+        "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>" + Bound + "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>", "Version 3.1 approved.", "Version 3.1 approved.")]
+    [InlineData("smart tag", "<w:smartTag w:element=\"place\"><w:r><w:t>3.1</w:t></w:r></w:smartTag>", "Version 3.1 approved.", "Version 3.1 approved.")]
+    // A text box anchored in the control's run is its own story: it stays out of the host line, as it
+    // does for a run outside any control. (Grep's flat text includes it; see the notes for #1386.)
+    [InlineData("text box in a control", "<w:sdt><w:sdtPr><w:id w:val=\"11\"/></w:sdtPr><w:sdtContent><w:r><w:t>3.1</w:t>" + TextBox +
+        "</w:r></w:sdtContent></w:sdt>", "Version 3.1 approved.", null)]
+    [InlineData("text box in a smart tag", "<w:smartTag w:element=\"place\"><w:r><w:t>3.1</w:t>" + TextBox + "</w:r></w:smartTag>",
+        "Version 3.1 approved.", null)]
+    [InlineData("control: text box in a plain run", "<w:r><w:t>3.1</w:t>" + TextBox + "</w:r>", "Version 3.1 approved.", null)]
+    public void CC036_InlineControlContent_IsProjectedInPlace(string shape, string inline, string projected, string? grepped) =>
+        AssertProjectedInPlace(shape, inline, TrackedChangeMode.Accept, projected, grepped);
+
+    // A control inside a tracked change takes the change's state, and a change inside a control keeps
+    // its own: deleted text stays out of the accepted view and renders struck in RenderInline.
+    private const string Rev = "w:id=\"1\" w:author=\"Reviewer A\" w:date=\"2026-01-01T00:00:00Z\"";
+    private const string Sdt0 = "<w:sdt><w:sdtPr><w:id w:val=\"12\"/></w:sdtPr><w:sdtContent>";
+    private const string Sdt1 = "</w:sdtContent></w:sdt>";
+
+    [Theory]
+    [InlineData("control in a deletion", "<w:del " + Rev + ">" + Sdt0 + "<w:r><w:delText>GONE</w:delText></w:r>" + Sdt1 + "</w:del>",
+        TrackedChangeMode.Accept, "Version  approved.")]
+    [InlineData("control in a deletion", "<w:del " + Rev + ">" + Sdt0 + "<w:r><w:delText>GONE</w:delText></w:r>" + Sdt1 + "</w:del>",
+        TrackedChangeMode.RenderInline, "Version {-GONE-} approved.")]
+    [InlineData("control in an insertion", "<w:ins " + Rev + ">" + Sdt0 + "<w:r><w:t>NEW</w:t></w:r>" + Sdt1 + "</w:ins>",
+        TrackedChangeMode.Accept, "Version NEW approved.")]
+    [InlineData("control in an insertion", "<w:ins " + Rev + ">" + Sdt0 + "<w:r><w:t>NEW</w:t></w:r>" + Sdt1 + "</w:ins>",
+        TrackedChangeMode.RenderInline, "Version {+NEW+} approved.")]
+    [InlineData("changes in a control", Sdt0 + "<w:del " + Rev + "><w:r><w:delText>OLD</w:delText></w:r></w:del>" +
+        "<w:ins " + Rev + "><w:r><w:t>NEW</w:t></w:r></w:ins>" + Sdt1, TrackedChangeMode.Accept, "Version NEW approved.")]
+    [InlineData("changes in a control", Sdt0 + "<w:del " + Rev + "><w:r><w:delText>OLD</w:delText></w:r></w:del>" +
+        "<w:ins " + Rev + "><w:r><w:t>NEW</w:t></w:r></w:ins>" + Sdt1, TrackedChangeMode.RenderInline, "Version {-OLD-}{+NEW+} approved.")]
+    public void CC036_InlineControlContent_TakesItsRevisionState(string shape, string inline, TrackedChangeMode mode, string projected) =>
+        AssertProjectedInPlace(shape, inline, mode, projected, grepped: projected.Contains('{') ? null : projected);
+
+    private static void AssertProjectedInPlace(string shape, string inline, TrackedChangeMode mode, string projected, string? grepped)
+    {
+        using var session = new DocxSession(DocxSessionSpanRevisionTests.Build(
+            XElement.Parse($"<root xmlns:w=\"{W}\" xmlns:v=\"urn:schemas-microsoft-com:vml\">" +
+                "<w:r><w:t xml:space=\"preserve\">Version </w:t></w:r>" + inline +
+                "<w:r><w:t xml:space=\"preserve\"> approved.</w:t></w:r></root>").Elements().ToArray()),
+            new DocxSessionSettings { ProjectionSettings = new WmlToMarkdownConverterSettings { TrackedChanges = mode } });
+        var line = Assert.Single(session.Project().Markdown.Split('\n'), l => l.Contains("approved."));
+        Assert.True(line.EndsWith("} " + projected, StringComparison.Ordinal), $"{shape}: {line}");
+        if (grepped is not null)
+            Assert.Single(session.Grep(System.Text.RegularExpressions.Regex.Escape(grepped)));
+    }
 }

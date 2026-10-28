@@ -23,11 +23,9 @@ internal abstract record IrInline;
 /// <see cref="FromInlineSdt"/> marks a run the reader spliced out of an inline <c>w:sdt</c>/<c>w:smartTag</c>
 /// content control. It is EQUALITY-NEUTRAL (excluded from <see cref="Equals(IrTextRun?)"/>/<see cref="GetHashCode"/>),
 /// preserving the IR's content-transparency invariant for content controls (a run reads the same value
-/// whether or not it came through an SDT wrapper — see <c>Read_InlineSdt_Spliced</c>). The markdown
-/// emitter reads the flag to mirror the ORACLE, whose <c>GroupInlineRuns</c> walks only
-/// <c>w:r</c>/<c>w:hyperlink</c>/<c>w:ins</c>/<c>w:del</c> children and so DROPS inline-SDT content from
-/// the rendered markdown — though that text still counts toward TextPreview (the oracle's
-/// <c>Descendants(w:t)</c>), which the IR matches because the run is present in the inline list.
+/// whether or not it came through an SDT wrapper — see <c>Read_InlineSdt_Spliced</c>). It only keeps the
+/// spliced runs from coalescing with the runs outside the control; the markdown emitter projects them
+/// like any other run, as the oracle does (issue #1386).
 /// </remarks>
 internal sealed record IrTextRun(string Text, IrRunFormat Format) : IrInline
 {
