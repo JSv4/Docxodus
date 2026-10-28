@@ -1026,7 +1026,11 @@ class DocxSession:
         max_results: int | None = None,
     ) -> tuple[TextMatch, ...]:
         """Regex search over the projection. ``context_chars`` omitted takes the engine's
-        default (80); ``max_results`` returns at most that many matches, in document order."""
+        default (80); ``max_results`` returns at most that many matches, in document order.
+
+        A ``w:tab`` is one character, ``"\\t"``, of the searched text and of every span, as the
+        projection prints it, so ``"\\t"`` matches a tab and a phrase copied from the projection
+        across a tab matches."""
         args: dict[str, Any] = {
             "pattern": pattern,
             "regexOptions": int(regex_options),
@@ -1601,7 +1605,8 @@ class DocxSession:
 
         ``deleted_text_side`` places a zero-length insertion immediately before or after
         tracked deleted text at the offset (which takes no room in the offsets); omit it for
-        the default placement. Returns an ordinary edit result; use execute_batch for a
+        the default placement. A ``w:tab`` takes one offset, ``"\\t"``: a span covering it removes
+        it, and a ``"\\t"`` in ``replace`` is written as a ``w:tab``. Returns an ordinary edit result; use execute_batch for a
         package-hashed receipt.
         """
         return EditResult._from_wire(

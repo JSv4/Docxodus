@@ -74,6 +74,8 @@ Anchors appear at the start of the line they refer to (block-level) or as inline
 | `w:r` with `w:rStyle="Code"` or monospace | `` `code` `` | |
 | `w:r` with `w:strike` | `~~strike~~` | GFM extension |
 | `w:hyperlink` | `[text](url)` | Internal links use anchor: `[text](#anchor)` |
+| `w:tab` (in a run) | A tab character, `\t` | The same one character the session's text holds for it, so a phrase copied from the projection across a tab is a valid `Grep` pattern (issue #1387; it printed as four spaces before). `w:ptab`, `w:noBreakHyphen`, `w:softHyphen` and `w:sym` print nothing, and take no room in the session's text either |
+| `w:br` | Hard line break, two spaces then a newline | Takes no room in the session's text: `Grep("bc")` matches across `ab<br/>cd`, but a phrase copied from the projection across the break (`b  \nc`) does not |
 | `w:tbl` (simple) | GFM pipe table | When no merged cells, nesting, or per-cell formatting |
 | `w:tbl` (complex) | Opaque anchor block | `{#tbl:body:…}` followed by a fenced `text` block with a structural summary |
 | `w:commentRangeStart`…`End` | Inline `{#cmt:cmt:…}` markers wrapping the commented span | Comment text appears in a Comments section at end |

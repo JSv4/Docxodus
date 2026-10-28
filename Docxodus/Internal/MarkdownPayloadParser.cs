@@ -383,9 +383,7 @@ internal static class MarkdownPayloadParser
 
         var run = new XElement(W.r);
         if (rPr.HasElements) run.Add(rPr);
-        run.Add(new XElement(W.t,
-            new XAttribute(XNamespace.Xml + "space", "preserve"),
-            text));
+        run.Add(DocxSession.TextContent(text, W.t));
         return run;
     }
 

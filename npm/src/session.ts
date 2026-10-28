@@ -1829,7 +1829,8 @@ export class DocxSession {
     const l = fold(match.contextBefore.length > 0 ? match.contextBefore[match.contextBefore.length - 1] : undefined);
     const r = fold(match.contextAfter.length > 0 ? match.contextAfter[0] : undefined);
 
-    const isSpace = (c: string | undefined): boolean => c === " " || c === "\t";
+    // A tab is layout, not word spacing: it is never absorbed (issue #1387).
+    const isSpace = (c: string | undefined): boolean => c === " ";
     const isClauseTerm = (c: string | undefined): boolean =>
       c === "." || c === "," || c === ";" || c === ":" || c === "!" || c === "?";
     const isOpen = (c: string | undefined): boolean => c === "(" || c === "[" || c === "{";

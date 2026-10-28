@@ -508,7 +508,7 @@ public sealed partial class DocxSession
             .Select(run => run.Element(W.rPr)).FirstOrDefault(value => value is not null);
         var run = new XElement(W.r,
             oldRunProperties is null ? null : new XElement(oldRunProperties),
-            new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), text));
+            TextContent(text, W.t));
         Internal.RevisionOps.RenumberCopiedRevisions(run, NextRevisionId);
         if (placement == ContentControlPlacement.Inline) return run;
         var oldParagraphProperties = replaced.Where(node => node.Name == W.p)
@@ -1085,7 +1085,7 @@ public sealed partial class DocxSession
             .FirstOrDefault(value => value is not null);
         var run = new XElement(W.r,
             oldRunProperties is null ? null : new XElement(oldRunProperties),
-            new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), text));
+            TextContent(text, W.t));
         if (!string.IsNullOrWhiteSpace(stateFont))
         {
             var runProperties = run.Element(W.rPr);

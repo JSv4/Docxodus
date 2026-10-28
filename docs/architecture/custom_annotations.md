@@ -101,6 +101,11 @@ Location: `/customXml/item{N}.xml` (with corresponding `.rels` and `itemProps{N}
 </annotations>
 ```
 
+An annotation stores its range as that bookmark pair, never as character offsets, so it does not move
+when the offset space changes. The session's `AddAnnotation`/`MoveAnnotation` spans are counted in the
+block's text, where a `w:tab` is one character, `'\t'` (issue #1387; before, a tab took no room), and
+the annotated text read back from the bookmark holds that `'\t'` too.
+
 ### Bookmark Markers in document.xml
 
 ```xml

@@ -96,7 +96,7 @@ public class DocxSessionSpanRevisionTests
 
     [Theory]
     [InlineData(4, 1, "", "\"Pa \" ins:Pat[\"a⇥cd\"]")]
-    [InlineData(5, 1, "X", "\"Pa \" ins:Pat[\"ab⇥Xd\"]")]
+    [InlineData(6, 1, "X", "\"Pa \" ins:Pat[\"ab⇥Xd\"]")]
     public void EditInOwnPendingInsertion_KeepsATabBetweenTwoTextNodesInPlace(int start, int length, string replace, string shape)
     {
         var (session, p) = Open(TrackedChangeMode.RenderInline, "Pat", Run("Pa "), Ins("Pat", 1,

@@ -697,7 +697,8 @@ internal static class CommentOps
     }
 
     /// <summary>
-    /// Flatten a <c>w:comment</c> body to plain text: per-paragraph <c>w:t</c> concatenation,
+    /// Flatten a <c>w:comment</c> body to plain text: per-paragraph visible text (a tab is
+    /// <c>'\t'</c>; see <see cref="DocxSession.VisibleText"/>),
     /// paragraphs joined by a single space, runs carrying the <c>w:annotationRef</c> mark
     /// excluded — the same rule the HTML renderer and the markdown projection apply.
     /// </summary>
@@ -707,9 +708,10 @@ internal static class CommentOps
         foreach (var p in comment.Elements(W.p))
         {
             var text = string.Concat(
-                p.Descendants(W.t)
-                    .Where(t => !t.Ancestors(W.r).Any(r => r.Elements(W.annotationRef).Any()))
-                    .Select(t => (string)t));
+                p.Descendants()
+                    .Where(t => DocxSession.IsVisibleText(t, p)
+                        && !t.Ancestors(W.r).Any(r => r.Elements(W.annotationRef).Any()))
+                    .Select(DocxSession.TextOf));
             if (text.Length == 0) continue;
             if (sb.Length > 0) sb.Append(' ');
             sb.Append(text);

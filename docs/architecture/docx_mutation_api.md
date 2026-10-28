@@ -2420,6 +2420,18 @@ issue #1282 the session counted that form when it was nested, so offsets to its 
 The anchor preview, `AnchorInfo.VisibleText` (the text `ExpectedTextRange` is measured against) and a
 content control's `Text` follow the same rule, so a `Grep` span is also a valid precondition range.
 
+A `w:tab` in a run is one character of the flat text, `'\t'`, and the projection prints it as one
+(issue #1387). So `Grep("\t")` finds tabs, a phrase copied from the projection across a tab matches,
+and every span agrees with its text: replacing or deleting a span that covers a tab removes that
+`w:tab`, and a `'\t'` in replacement or inserted text (`ReplaceTextAtSpan`, `ReplaceMatch`,
+`ReplaceText` markdown, a content control's plain-text fill) is written as a `w:tab` element, never as
+a literal tab character in `w:t`. A tab-stop definition (`w:pPr/w:tabs/w:tab`) and a tab in deleted
+text take no room. Before this change a tab took no room at all, so every offset after a tab was one
+smaller per tab before it; an offset saved from an older version is that much short. Other inline
+markers keep taking no room: `w:br`/`w:cr` (the projection prints a hard break), `w:ptab`,
+`w:noBreakHyphen`, `w:softHyphen` and `w:sym` (the projection prints nothing for them).
+`CoalesceWhitespaceAroundEmptyFill` treats a tab as layout, not word spacing, and never absorbs one.
+
 The fragment breakdown is the whole point: Word splits paragraph text into many `<w:r>` elements at every formatting boundary, so a placeholder like `[_______________]` routinely spans 2–3 runs. Without the fragment list, an agent doing search/replace has to either flatten runs (losing per-fragment formatting) or skip split matches (missing real text). `Grep` does the walk once and hands back the breakdown so callers can preserve each fragment's formatting when rewriting.
 
 ### When to use

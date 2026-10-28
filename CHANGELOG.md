@@ -18,6 +18,19 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Breaking: a tab is now one character in every session offset (#1387).** A `w:tab` in a run is
+  `'\t'` in the text spans count, `Grep`/`GrepCrossBlock` search, `AnchorInfo.VisibleText` and
+  `ExpectedTextRange` read, and the projection prints (it printed four spaces before). Before, a tab
+  took no room. A caller who changes nothing gets every offset after a tab one larger per tab before
+  it, so an offset stored by an older version is that much short; there is no setting to restore the
+  old counting. Spans and text now agree: replacing or deleting a span that covers a tab removes that
+  `w:tab`, a `'\t'` in replacement or inserted text (span and match replacement, `ReplaceText`
+  markdown, a content control's plain-text fill) is written as a `w:tab` element rather than a literal
+  tab character, and the editor counts a rendered tab as one character. A tab-stop definition and a tab
+  in deleted text take no room; line breaks, positional tabs, special hyphens and symbols are counted
+  as before. Annotations store a bookmark pair, not offsets, so saved annotations do not move.
+  `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
+
 - Accepting or rejecting every revision no longer refuses a document over revision metadata (#1385).
   A revision with no author or an invalid date or `w16du:dateUtc` is listed as `Supported` with an
   advisory diagnostic (`missing_revision_author`, `invalid_revision_date`, `invalid_revision_date_utc`)
@@ -38,6 +51,10 @@ All notable changes to this project will be documented in this file.
 
 - Package manifests no longer require internal hyperlink targets to exist in the ZIP (#1407), so
   session semantic comparison and deliverable verification accept relative links to sibling files.
+
+- `Grep` finds a tab (#1387): `\t` matches it, and a phrase copied from the projection across a tab,
+  such as manual numbering `1.2<tab>Title`, matches. Splitting a run for an edit no longer moves a tab
+  or line break that came after the split point to before the run's text.
 
 - Three more shapes from real documents no longer refuse accept-all and reject-all (#1385): a
   paragraph or run property change with no stored property shell (read as an empty baseline, as

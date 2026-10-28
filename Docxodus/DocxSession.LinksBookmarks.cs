@@ -386,9 +386,7 @@ public sealed partial class DocxSession
         {
             SplitRunsAtOffset(element, characterOffset, NextRevisionId);
             SplitInlineContainersAtOffset(element, characterOffset, NextRevisionId);
-            var cachedText = new XElement(W.t, cached);
-            if (cached.Length == 0 || char.IsWhiteSpace(cached[0]) || char.IsWhiteSpace(cached[^1]))
-                cachedText.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+            var cachedText = TextContent(cached, W.t);
             // Tracked, the field is the author's insertion, written as Word records one: its
             // complex-field runs inside a w:ins, which cannot hold a w:fldSimple.
             var field = _trackedChanges == TrackedChangeMode.RenderInline

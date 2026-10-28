@@ -458,8 +458,9 @@ namespace Docxodus
                 throw new InvalidOperationException("Document body not found.");
 
             // Find all text elements and locate the search text
-            var textNodes = body.Descendants(W.t).ToList();
-            var fullText = string.Concat(textNodes.Select(t => t.Value));
+            // The session's visible text, where a tab is '\t' (issue #1387).
+            var textNodes = body.Descendants().Where(e => DocxSession.IsVisibleText(e, body)).ToList();
+            var fullText = string.Concat(textNodes.Select(DocxSession.TextOf));
 
             int startIndex = -1;
             int currentOccurrence = 0;
@@ -493,7 +494,7 @@ namespace Docxodus
 
             foreach (var textNode in textNodes)
             {
-                var text = textNode.Value;
+                var text = DocxSession.TextOf(textNode);
                 var elementStart = currentPos;
                 var elementEnd = currentPos + text.Length;
 
@@ -530,142 +531,47 @@ namespace Docxodus
             int newId = 1;
             while (existingIds.Contains(newId)) newId++;
 
-            // Insert bookmark markers
-            // If start and end are in the same text element
-            if (startTextElement == endTextElement)
-            {
-                InsertBookmarkInSameTextElement(startTextElement, bookmarkName, newId,
-                    startOffsetInElement, endOffsetInElement);
-            }
-            else
-            {
-                // Different text elements
-                InsertBookmarkStart(startTextElement, bookmarkName, newId, startOffsetInElement);
-                InsertBookmarkEnd(endTextElement, bookmarkName, newId, endOffsetInElement);
-            }
+            InsertBookmarkMarkers(startTextElement, startOffsetInElement, endTextElement, endOffsetInElement,
+                bookmarkName, newId);
 
             wordDoc.MainDocumentPart.PutXDocument();
         }
 
-        private static void InsertBookmarkInSameTextElement(
-            XElement textElement,
-            string bookmarkName,
-            int bookmarkId,
-            int startOffset,
-            int endOffset)
+        /// <summary>Put a bookmark from <paramref name="startOffset"/> characters into
+        /// <paramref name="startNode"/> to <paramref name="endOffset"/> characters into
+        /// <paramref name="endNode"/>, each a text node or tab of the session's text. Each marker goes
+        /// at a run boundary, cutting the run there in order, so a tab, break or other run content
+        /// keeps its side of the cut. The end goes first: cutting there leaves the start's node and
+        /// offset where they were.</summary>
+        private static void InsertBookmarkMarkers(XElement startNode, int startOffset, XElement endNode, int endOffset,
+            string bookmarkName, int bookmarkId)
         {
-            var text = textElement.Value;
-            var run = textElement.Parent;
-            if (run?.Name != W.r) return;
-
-            var beforeText = text.Substring(0, startOffset);
-            var markedText = text.Substring(startOffset, endOffset - startOffset);
-            var afterText = text.Substring(endOffset);
-
-            var newElements = new List<object>();
-
-            if (beforeText.Length > 0)
-            {
-                newElements.Add(new XElement(W.r,
-                    run.Elements(W.rPr).Select(e => new XElement(e)),
-                    new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), beforeText)));
-            }
-
-            newElements.Add(new XElement(W.bookmarkStart,
-                new XAttribute(W.id, bookmarkId),
-                new XAttribute(W.name, bookmarkName)));
-
-            newElements.Add(new XElement(W.r,
-                run.Elements(W.rPr).Select(e => new XElement(e)),
-                new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), markedText)));
-
-            newElements.Add(new XElement(W.bookmarkEnd,
-                new XAttribute(W.id, bookmarkId)));
-
-            if (afterText.Length > 0)
-            {
-                newElements.Add(new XElement(W.r,
-                    run.Elements(W.rPr).Select(e => new XElement(e)),
-                    new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), afterText)));
-            }
-
-            run.ReplaceWith(newElements);
+            InsertAtText(endNode, endOffset, new XElement(W.bookmarkEnd, new XAttribute(W.id, bookmarkId)));
+            InsertAtText(startNode, startOffset, new XElement(W.bookmarkStart,
+                new XAttribute(W.id, bookmarkId), new XAttribute(W.name, bookmarkName)));
         }
 
-        private static void InsertBookmarkStart(
-            XElement textElement,
-            string bookmarkName,
-            int bookmarkId,
-            int offset)
+        /// <summary>Put <paramref name="marker"/> <paramref name="offset"/> characters into
+        /// <paramref name="node"/>, cutting its run there in order. Content that takes no room at the
+        /// cut (a break, symbol, drawing or note reference) stays outside the bookmark: a start marker
+        /// (offset 0 of the match's first node) goes after it, an end marker before it.</summary>
+        private static void InsertAtText(XElement node, int offset, XElement marker)
         {
-            var text = textElement.Value;
-            var run = textElement.Parent;
-            if (run?.Name != W.r) return;
-
+            var run = node.Parent!;
+            var tail = new XElement(W.r, run.Attributes().Where(a => a.Name != PtOpenXml.Unid),
+                run.Element(W.rPr) is { } rPr ? new XElement(rPr) : null);
             if (offset == 0)
-            {
-                // Insert bookmark start before the run
-                run.AddBeforeSelf(new XElement(W.bookmarkStart,
-                    new XAttribute(W.id, bookmarkId),
-                    new XAttribute(W.name, bookmarkName)));
-            }
+                foreach (var e in node.ElementsAfterSelf().Prepend(node).ToList()) { e.Remove(); tail.Add(e); }
             else
+                DocxSession.MoveRunContentFrom(run, node.ElementsBeforeSelf().Sum(e => DocxSession.TextOf(e).Length) + offset, tail);
+            static bool HasContent(XElement r) => r.Elements().Any(e => e.Name != W.rPr);
+            if (!HasContent(run))
             {
-                // Split the run
-                var beforeText = text.Substring(0, offset);
-                var afterText = text.Substring(offset);
-
-                var beforeRun = new XElement(W.r,
-                    run.Elements(W.rPr).Select(e => new XElement(e)),
-                    new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), beforeText));
-
-                var bookmarkStart = new XElement(W.bookmarkStart,
-                    new XAttribute(W.id, bookmarkId),
-                    new XAttribute(W.name, bookmarkName));
-
-                var afterRun = new XElement(W.r,
-                    run.Elements(W.rPr).Select(e => new XElement(e)),
-                    new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), afterText));
-
-                run.ReplaceWith(beforeRun, bookmarkStart, afterRun);
+                foreach (var e in tail.Elements().Where(e => e.Name != W.rPr).ToList()) { e.Remove(); run.Add(e); }
+                run.AddBeforeSelf(marker);
             }
-        }
-
-        private static void InsertBookmarkEnd(
-            XElement textElement,
-            string bookmarkName,
-            int bookmarkId,
-            int offset)
-        {
-            var text = textElement.Value;
-            var run = textElement.Parent;
-            if (run?.Name != W.r) return;
-
-            if (offset == text.Length)
-            {
-                // Insert bookmark end after the run
-                run.AddAfterSelf(new XElement(W.bookmarkEnd,
-                    new XAttribute(W.id, bookmarkId)));
-            }
-            else
-            {
-                // Split the run
-                var beforeText = text.Substring(0, offset);
-                var afterText = text.Substring(offset);
-
-                var beforeRun = new XElement(W.r,
-                    run.Elements(W.rPr).Select(e => new XElement(e)),
-                    new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), beforeText));
-
-                var bookmarkEnd = new XElement(W.bookmarkEnd,
-                    new XAttribute(W.id, bookmarkId));
-
-                var afterRun = new XElement(W.r,
-                    run.Elements(W.rPr).Select(e => new XElement(e)),
-                    new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), afterText));
-
-                run.ReplaceWith(beforeRun, bookmarkEnd, afterRun);
-            }
+            else if (!HasContent(tail)) run.AddAfterSelf(marker);
+            else run.AddAfterSelf(marker, tail);
         }
 
         private static void CreateBookmarkFromIndices(
@@ -806,9 +712,10 @@ namespace Docxodus
                     break;
                 }
 
-                if (inBookmark && element.Name == W.t)
+                if (inBookmark && DocxSession.IsVisibleText(element, mainDoc.Root!))
                 {
-                    textBuilder.Append(element.Value);
+                    // The session's visible text: a tab is '\t', deleted text stays out (issue #1387).
+                    textBuilder.Append(DocxSession.TextOf(element));
                 }
             }
 
@@ -973,13 +880,13 @@ namespace Docxodus
             }
 
             // Find all text elements within this element
-            var textNodes = liveElement.Descendants(W.t).ToList();
+            var textNodes = liveElement.Descendants().Where(e => DocxSession.IsVisibleText(e, liveElement)).ToList();
             if (textNodes.Count == 0)
             {
                 throw new InvalidOperationException($"Element '{elementId}' contains no text.");
             }
 
-            var fullText = string.Concat(textNodes.Select(t => t.Value));
+            var fullText = string.Concat(textNodes.Select(DocxSession.TextOf));
 
             int startIndex = -1;
             int currentOccurrence = 0;
@@ -1013,7 +920,7 @@ namespace Docxodus
 
             foreach (var textNode in textNodes)
             {
-                var text = textNode.Value;
+                var text = DocxSession.TextOf(textNode);
                 var elementStart = currentPos;
                 var elementEnd = currentPos + text.Length;
 
@@ -1050,17 +957,8 @@ namespace Docxodus
             int newId = 1;
             while (existingIds.Contains(newId)) newId++;
 
-            // Insert bookmark markers
-            if (startTextElement == endTextElement)
-            {
-                InsertBookmarkInSameTextElement(startTextElement, bookmarkName, newId,
-                    startOffsetInElement, endOffsetInElement);
-            }
-            else
-            {
-                InsertBookmarkStart(startTextElement, bookmarkName, newId, startOffsetInElement);
-                InsertBookmarkEnd(endTextElement, bookmarkName, newId, endOffsetInElement);
-            }
+            InsertBookmarkMarkers(startTextElement, startOffsetInElement, endTextElement, endOffsetInElement,
+                bookmarkName, newId);
 
             wordDoc.MainDocumentPart.PutXDocument();
         }
