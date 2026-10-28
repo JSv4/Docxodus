@@ -374,20 +374,24 @@ internal static class RevisionOps
                     continue;
                 }
 
-                bool fromOrdered = EachInSomeRange(fromRanges, group.Units
+                var fromContent = group.Units
                     .Where(unit => unit.Kind == UnitKind.Content && unit.Element.Name == W.moveFrom)
-                    .Select(unit => unit.Element));
-                bool toOrdered = EachInSomeRange(toRanges, group.Units
+                    .Select(unit => unit.Element).ToArray();
+                var toContent = group.Units
                     .Where(unit => unit.Kind == UnitKind.Content && unit.Element.Name == W.moveTo)
-                    .Select(unit => unit.Element));
-                bool disjoint = fromRanges.All(from => toRanges.All(to =>
-                    IsBefore(from.End!, to.Start) || IsBefore(to.End!, from.Start)));
+                    .Select(unit => unit.Element).ToArray();
+                bool fromOrdered = EachInSomeRange(fromRanges, fromContent);
+                bool toOrdered = EachInSomeRange(toRanges, toContent);
+                // The sides' ranges may touch or interleave at their boundaries; only moved content
+                // that also lies in a range of the other side has two readings.
+                bool disjoint = !fromContent.Any(element => EachInSomeRange(toRanges, new[] { element }))
+                    && !toContent.Any(element => EachInSomeRange(fromRanges, new[] { element }));
                 if (!fromOrdered || !toOrdered || !disjoint)
                 {
                     group.ResolutionStatus = RevisionResolutionStatus.Malformed;
                     group.Diagnostic = new RevisionDiagnostic(
                         "overlapping_move_topology",
-                        "A native move requires ordered, disjoint source and destination ranges.");
+                        "A native move requires its source and destination content each inside its own side's ranges only.");
                     continue;
                 }
 
@@ -416,7 +420,7 @@ internal static class RevisionOps
                 group.ResolutionStatus = RevisionResolutionStatus.Malformed;
                 group.Diagnostic = new RevisionDiagnostic(
                     "malformed_properties_change",
-                    "A property revision must contain exactly one matching stored-property shell under its live property parent.");
+                    "A property revision must contain exactly one matching stored-property shell (paragraph and run changes may omit it) under its live property parent.");
                 continue;
             }
 
@@ -695,8 +699,12 @@ internal static class RevisionOps
             && !change.Ancestors().Skip(1).Any(ancestor => PropsChangeNames.Contains(ancestor.Name))
             && !change.Descendants().Any(descendant =>
                 PropsChangeNames.Contains(descendant.Name))
-            && change.Elements().Count() == 1
-            && change.Elements().Single().Name == expectedProperty;
+            // A paragraph or run change with no stored shell recorded an empty property set, as an
+            // explicit empty shell does. Table and section changes need theirs: an empty baseline
+            // there would un-merge cells and drop grids, page sizes and header rows on reject.
+            && (change.Elements().Count() == 1
+                || (!change.HasElements && (change.Name == W.pPrChange || change.Name == W.rPrChange)))
+            && change.Elements().All(stored => stored.Name == expectedProperty);
     }
 
     /// <summary>
@@ -1501,6 +1509,15 @@ internal static class RevisionOps
                     starts.Count == 0
                         ? $"{label} has a RangeEnd but no RangeStart in its owning part."
                         : $"{label} has a RangeStart but no RangeEnd in its owning part.");
+            }
+            else if (ReferenceEquals(EnvelopeNeighbor(starts[0].ElementsAfterSelf()), ends[0]))
+            {
+                // Nothing between the two markers but transparent boundaries: there is no wrapper
+                // whose existence the pair could revise, so resolution only removes it.
+                group.Inert = true;
+                group.Diagnostic = new RevisionDiagnostic(
+                    "empty_wrapper_range",
+                    $"{label} encloses nothing, so it revises no wrapper; resolving it removes the marker pair and nothing else.");
             }
             else if (markers.All(unownedMoveEnvelopes.Contains))
             {

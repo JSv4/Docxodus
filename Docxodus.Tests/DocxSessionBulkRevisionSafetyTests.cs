@@ -409,6 +409,175 @@ public class DocxSessionBulkRevisionSafetyTests
         Assert.Equal("ambiguous_move_range_id", move.Diagnostic?.Code);
     }
 
+    // ─── Property and range shapes ───────────────────────────────────────
+
+    [Fact]
+    public void ParagraphPropertyChange_WithNoStoredShell_ReadsAsAnEmptyBaseline()
+    {
+        // The stored w:pPr is schema-required; one producer omits it when the old paragraph had no
+        // direct properties. An absent shell can only mean what an explicit empty one means.
+        var bytes = Build("<w:p><w:pPr><w:jc w:val=\"center\"/>"
+            + $"<w:pPrChange w:id=\"1\" {Stamp}/></w:pPr>{Run("Centered title")}</w:p>"
+            + Paragraph(Run("Body")));
+
+        using (var session = new DocxSession(bytes))
+        {
+            var change = Assert.Single(session.ListRevisions());
+            Assert.Equal(RevisionResolutionStatus.Supported, change.ResolutionStatus);
+            Assert.Null(change.Diagnostic);
+        }
+
+        foreach (bool accept in new[] { true, false })
+        {
+            using var session = new DocxSession(bytes);
+            Assert.True((accept ? session.AcceptAllRevisions() : session.RejectAllRevisions()).Success);
+            var first = MainBody(session.Save()).Elements(W.p).First();
+            Assert.Null(first.Descendants(W.pPrChange).FirstOrDefault());
+            Assert.Equal(accept ? "center" : null, (string?)first.Element(W.pPr)?.Element(W.jc)?.Attribute(W.val));
+        }
+        AssertBulkMatchesProcessor(bytes, new[] { "Centered title", "Body" }, new[] { "Centered title", "Body" });
+    }
+
+    [Fact]
+    public void RunPropertyChange_WithNoStoredShell_ReadsAsAnEmptyBaseline()
+    {
+        var bytes = Build(Paragraph(Run("Plain "),
+            $"<w:r><w:rPr><w:b/><w:rPrChange w:id=\"1\" {Stamp}/></w:rPr><w:t>bold</w:t></w:r>"));
+
+        using (var session = new DocxSession(bytes))
+            Assert.Equal(RevisionResolutionStatus.Supported, Assert.Single(session.ListRevisions()).ResolutionStatus);
+        foreach (bool accept in new[] { true, false })
+        {
+            using var session = new DocxSession(bytes);
+            Assert.True((accept ? session.AcceptAllRevisions() : session.RejectAllRevisions()).Success);
+            var bold = MainBody(session.Save()).Descendants(W.r).Single(run => run.Descendants(W.t).Any(t => t.Value == "bold"));
+            Assert.Equal(accept, bold.Element(W.rPr)?.Element(W.b) is not null);
+        }
+        AssertBulkMatchesProcessor(bytes, new[] { "Plain bold" }, new[] { "Plain bold" });
+    }
+
+    public static TheoryData<string, string> TableAndSectionChangesWithoutAShell => new()
+    {
+        {
+            "cell (a vertical-merge continuation would un-merge)",
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:vMerge/>"
+                + $"<w:tcPrChange w:id=\"1\" {Stamp}/></w:tcPr>" + Paragraph(Run("Cell")) + "</w:tc></w:tr></w:tbl>"
+        },
+        {
+            "table grid (reject would leave no grid columns)",
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/><w:tblGridChange w:id=\"1\"/></w:tblGrid>"
+                + "<w:tr><w:tc>" + Paragraph(Run("Cell")) + "</w:tc></w:tr></w:tbl>"
+        },
+        {
+            "row (reject would drop the header-row flag)",
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid><w:tr><w:trPr><w:tblHeader/>"
+                + $"<w:trPrChange w:id=\"1\" {Stamp}/></w:trPr><w:tc>" + Paragraph(Run("Cell")) + "</w:tc></w:tr></w:tbl>"
+        },
+        {
+            "section (reject would drop the page size)",
+            "<w:p><w:pPr><w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/>"
+                + $"<w:sectPrChange w:id=\"1\" {Stamp}/></w:sectPr></w:pPr>{Run("Section end")}</w:p>"
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(TableAndSectionChangesWithoutAShell))]
+    public void TableOrSectionPropertyChange_WithNoStoredShell_StaysMalformed(string shape, string body)
+    {
+        using var session = new DocxSession(Build(body + Paragraph(Run("After"))));
+
+        var change = Assert.Single(session.ListRevisions());
+        Assert.True(change.ResolutionStatus == RevisionResolutionStatus.Malformed, shape);
+        Assert.Equal("malformed_properties_change", change.Diagnostic?.Code);
+        Assert.Equal(EditErrorCode.RevisionMalformed, session.RejectAllRevisions().Error?.Code);
+    }
+
+    [Fact]
+    public void ParagraphPropertyChange_WithTwoStoredShells_StaysMalformed()
+    {
+        var bytes = Build("<w:p><w:pPr><w:jc w:val=\"center\"/>"
+            + $"<w:pPrChange w:id=\"1\" {Stamp}><w:pPr/><w:pPr><w:jc w:val=\"right\"/></w:pPr></w:pPrChange>"
+            + $"</w:pPr>{Run("Centered title")}</w:p>");
+        using var session = new DocxSession(bytes);
+
+        var change = Assert.Single(session.ListRevisions());
+        Assert.Equal(RevisionResolutionStatus.Malformed, change.ResolutionStatus);
+        Assert.Equal("malformed_properties_change", change.Diagnostic?.Code);
+    }
+
+    [Fact]
+    public void WrapperRangePairs_EnclosingNothing_AreRemovedByResolution()
+    {
+        var pairs = string.Concat(new[] { "Del", "Ins", "MoveFrom", "MoveTo" }.Select((kind, index) =>
+            $"<w:customXml{kind}RangeStart w:id=\"{index + 3}\" {Stamp}/><w:customXml{kind}RangeEnd w:id=\"{index + 3}\"/>"));
+        var bytes = Build(Paragraph(Run("Body text"), pairs));
+
+        using (var session = new DocxSession(bytes))
+        {
+            var listed = session.ListRevisions();
+            Assert.Equal(4, listed.Count);
+            Assert.All(listed, entry =>
+            {
+                Assert.Equal(RevisionResolutionStatus.Supported, entry.ResolutionStatus);
+                Assert.Equal("empty_wrapper_range", entry.Diagnostic?.Code);
+            });
+        }
+
+        AssertBulkMatchesProcessor(bytes, new[] { "Body text" }, new[] { "Body text" });
+    }
+
+    [Fact]
+    public void WrapperRangePair_EnclosingContentButNoWrapper_StaysMalformed()
+    {
+        var bytes = Build(Paragraph($"<w:customXmlInsRangeStart w:id=\"3\" {Stamp}/>", Run("Body text"),
+            "<w:customXmlInsRangeEnd w:id=\"3\"/>"));
+        using var session = new DocxSession(bytes);
+
+        var entry = Assert.Single(session.ListRevisions());
+        Assert.Equal(RevisionResolutionStatus.Malformed, entry.ResolutionStatus);
+        Assert.Equal("malformed_range_topology", entry.Diagnostic?.Code);
+    }
+
+    [Fact]
+    public void Move_WhoseRangesInterleaveOnlyAtTheirBoundaries_Resolves()
+    {
+        // The destination range closes just after the source range opens; no content lies in both.
+        var bytes = Build(Paragraph(Run("Alpha "), ToRange(2), MovedIn(3))
+            + Paragraph(FromRange(5), "<w:moveToRangeEnd w:id=\"2\"/>", MovedOut(6),
+                "<w:moveFromRangeEnd w:id=\"5\"/>", Run(" omega")));
+
+        using (var session = new DocxSession(bytes))
+        {
+            var move = Assert.Single(session.ListRevisions());
+            Assert.Equal("move", move.Type);
+            Assert.True(move.ResolutionStatus == RevisionResolutionStatus.Supported, move.Diagnostic?.Code);
+        }
+
+        AssertBulkMatchesProcessor(bytes,
+            accepted: new[] { "Alpha Clause four moves up.", " omega" },
+            rejected: new[] { "Alpha ", "Clause four moves up. omega" });
+    }
+
+    [Fact]
+    public void Move_WithContentInsideTheOtherSidesRange_StaysOverlapping()
+    {
+        var bytes = Build(Paragraph(Run("Alpha "), ToRange(2), MovedIn(3))
+            + Paragraph(FromRange(5), MovedIn(7), "<w:moveToRangeEnd w:id=\"2\"/>", MovedOut(6),
+                "<w:moveFromRangeEnd w:id=\"5\"/>", Run(" omega")));
+        using var session = new DocxSession(bytes);
+
+        var move = Assert.Single(session.ListRevisions());
+        Assert.Equal(RevisionResolutionStatus.Malformed, move.ResolutionStatus);
+        Assert.Equal("overlapping_move_topology", move.Diagnostic?.Code);
+    }
+
+    private static XElement MainBody(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(stream, false);
+        return doc.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     private static void AssertBulkMatchesProcessor(byte[] bytes, string[] accepted, string[] rejected)
@@ -425,6 +594,7 @@ public class DocxSessionBulkRevisionSafetyTests
             Assert.True(result.Success, result.Error?.Message);
             var saved = session.Save();
             Assert.Equal(expected, ParagraphTexts(saved));
+            Assert.Equal(Properties(processor.DocumentByteArray), Properties(saved));
             Assert.Empty(session.ListRevisions());
             Assert.Empty(RevisionMarkers(saved));
         }
@@ -437,6 +607,28 @@ public class DocxSessionBulkRevisionSafetyTests
         return doc.MainDocumentPart!.GetXDocument().Descendants(W.p)
             .Select(p => string.Concat(p.Descendants(W.t).Select(t => t.Value)))
             .Where(text => text.Length > 0).ToList();
+    }
+
+    /// <summary>The paragraph and run properties of every paragraph that has text, normalized so
+    /// two resolvers' output compares property by property, not only by text.</summary>
+    private static List<string> Properties(byte[] bytes)
+    {
+        static string Normalize(XElement? properties)
+        {
+            if (properties is null) return "";
+            var copy = new XElement(properties);
+            copy.DescendantsAndSelf().Attributes()
+                .Where(attribute => attribute.IsNamespaceDeclaration || attribute.Name.Namespace != W.w).Remove();
+            copy.Descendants().Where(element => element.Name == W.rPr && !element.HasElements).Remove();
+            return copy.HasElements ? string.Concat(copy.Elements().Select(element => element.ToString(SaveOptions.DisableFormatting))) : "";
+        }
+        using var stream = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(stream, false);
+        return doc.MainDocumentPart!.GetXDocument().Descendants(W.p)
+            .Where(p => p.Descendants(W.t).Any(t => t.Value.Length > 0))
+            .Select(p => Normalize(p.Element(W.pPr)) + " | "
+                + string.Join(" ", p.Descendants(W.r).Where(r => r.Elements(W.t).Any()).Select(r => Normalize(r.Element(W.rPr)))))
+            .ToList();
     }
 
     private static List<string> RevisionMarkers(byte[] bytes)

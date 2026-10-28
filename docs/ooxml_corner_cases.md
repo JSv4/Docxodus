@@ -4698,6 +4698,57 @@ Code: `RevisionOps.BuildGroups` decides a move only once both named sides are kn
 (a source in a header and a destination in the body are a plain deletion and insertion); the inert
 range pair is its own entry (`inert_move_range`).
 
+### Property changes with no stored shell, empty wrapper ranges, interleaved move ranges
+
+```xml
+<w:pPr><w:pStyle w:val="Heading1"/><w:spacing w:before="240"/>
+  <w:pPrChange w:id="0" w:author="Reviewer A" w:date="2026-03-02T10:00:00Z"/></w:pPr>
+
+<w:customXmlDelRangeStart w:id="3" w:author="Reviewer A"/><w:customXmlDelRangeEnd w:id="3"/>
+
+<w:p>…<w:moveToRangeStart w:id="2" w:name="m1" …/><w:moveTo w:id="3" …>…</w:moveTo></w:p>
+<w:p><w:moveFromRangeStart w:id="5" w:name="m1" …/><w:moveToRangeEnd w:id="2"/>
+  <w:moveFrom w:id="6" …>…</w:moveFrom><w:moveFromRangeEnd w:id="5"/>…</w:p>
+```
+
+| Shape | LibreOffice 25.8 | `RevisionProcessor` | `DocxSession` before #1385 | after |
+|---|---|---|---|---|
+| `w:pPrChange` with no `w:pPr` (schema-required; LibreOffice writes it) | reject clears the paragraph's properties | same | `malformed_properties_change` | reject clears, accept keeps |
+| empty `w:customXml…Range` pairs | not even listed as changes | removes them | `malformed_range_topology` | `empty_wrapper_range`; resolution removes them |
+| destination range ending just after the source range starts, no content in both | ignores the move (resolves only the nested deletions) | resolves the move | `overlapping_move_topology` | resolves the move, same text as `RevisionProcessor` |
+
+For a paragraph or run change, an absent stored shell can only mean the empty set an explicit
+`<w:pPr/>` or `<w:rPr/>` spells, which the session already accepted. Table and section changes stay
+refused without their shell: an empty baseline would un-merge cells or drop the grid, a header-row
+flag or the page size on reject, and `RevisionProcessor` removes an empty `w:tblGrid` outright, so
+the two resolvers would disagree. Ranges of the two sides of a move matter only for which side the content between
+them belongs to; the session resolves moved content by its own `w:moveFrom`/`w:moveTo` element, so
+markers interleaving with no content between them have one reading.
+
+### Still refused: a deleted first cell, and cells inside content controls
+
+```xml
+<w:tr><w:trPr><w:gridAfter w:val="1"/></w:trPr>
+  <w:tc><w:tcPr><w:cellDel w:id="1" …/></w:tcPr>…</w:tc><w:tc>…</w:tc><w:tc>…</w:tc></w:tr>
+```
+
+Accepting a deleted cell absorbs its grid column into the preceding cell; a row's first cell has
+none. `RevisionProcessor` removes the cell and leaves the row one grid column short (`w:gridAfter`
+unchanged); LibreOffice deletes the entire first column of the table, including cells that were not
+deleted, and the text of one surviving cell. Without Word's own result for this case there is no
+verified resolution, so the session keeps `unabsorbable_cell_deletion`. Rejecting it would be safe,
+but resolution status is per revision, not per direction.
+
+```xml
+<w:tr><w:sdt><w:sdtContent><w:tc><w:tcPr><w:cellIns …/></w:tcPr>…</w:tc></w:sdtContent></w:sdt>…</w:tr>
+```
+
+Cells wrapped one by one in content controls (one online editor exports every cell this way) have
+`w:sdtContent`, not `w:tr`, as their parent. The resolver's row geometry reads `w:tr/w:tc` and cannot
+place them; `RevisionProcessor`'s accept leaves the `w:cellDel` markers in the output, and LibreOffice
+produces a two-column table on accept and a three-column one on reject. The document stays refused
+(`ambiguous_table_structure_cluster`).
+
 ---
 
 ## Strict conformance: the same markup under different namespace URIs (issue #1268)

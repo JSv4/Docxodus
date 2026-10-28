@@ -34,6 +34,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Three more shapes from real documents no longer refuse accept-all and reject-all (#1385): a
+  paragraph or run property change with no stored property shell (read as an empty baseline, as
+  LibreOffice reads it; table and section changes still need theirs); a `w:customXml…Range` start/end pair enclosing nothing (now an entry,
+  `empty_wrapper_range`, whose resolution removes the pair); and a move whose source and destination
+  ranges interleave only at their boundaries. A deleted first cell of a row and cell edits on cells
+  wrapped in content controls stay refused: neither has a verified unique resolution.
 - A tracked move missing a side no longer refuses accept-all and reject-all (#1385). A
   `w:moveFrom`/`w:moveTo` with no named range, or whose range name has nothing on the other side,
   now resolves as the deletion or insertion it is, the conversion files reported to be Word resaves

@@ -2006,6 +2006,34 @@ header and a destination in the body are a plain deletion, a plain insertion and
 Because grouping now guarantees both sides, `malformed_move_topology` names only an unpaired range start, and
 `ambiguous_move_range_id` only a complete move that reuses one `w:id` for both sides.
 
+Three further shapes have a single safe resolution and resolve:
+
+- **A `w:pPrChange` or `w:rPrChange` with no stored property shell** reads as the empty property
+  set an explicit empty shell spells: accept keeps the current properties, reject clears them
+  (LibreOffice reads a shell-less `w:pPrChange` the same way). The table and section changes
+  (`w:tcPrChange`, `w:trPrChange`, `w:tblPrChange`, `w:tblPrExChange`, `w:tblGridChange`,
+  `w:sectPrChange`) still need exactly one shell: an empty baseline there would un-merge a vertical
+  merge, drop a grid, a header-row flag or the page size on reject. Two stored shells, or a child of
+  another name, stay `malformed_properties_change`.
+- **A paired `w:customXml{Ins,Del,MoveFrom,MoveTo}Range` whose start and end enclose nothing** (only
+  bookmark, comment, proofing, permission or move-range markers between them) revises no wrapper: it is
+  `Supported` with the advisory `empty_wrapper_range`, and resolving it removes the pair; like an
+  inert move range, no wrapper or move topology applies to it. A pair that
+  encloses content without enveloping a wrapper stays `malformed_range_topology`.
+- **A move whose source and destination ranges interleave only at their boundaries** (one side's
+  range closes just after the other's opens, with no moved content in both) is an ordinary move.
+  Moved content that lies inside a range of the other side still reports `overlapping_move_topology`.
+
+Two table shapes stay refused, each for want of a unique resolution, not out of caution about
+metadata: a deleted first cell of a row (`unabsorbable_cell_deletion` — no predecessor exists to absorb
+its grid column and Word's rule for that case is unverified; `RevisionProcessor` leaves a row one
+column short, and LibreOffice deletes the whole first column, including cells that were not deleted),
+and cell operations on cells wrapped in cell-level content controls (`w:tr/w:sdt/w:sdtContent/w:tc`,
+as one online editor exports them), whose row geometry the resolver does not model
+(`ambiguous_table_structure_cluster`, or `unabsorbable_cell_deletion` once the grid change is set
+aside; `RevisionProcessor`'s accept leaves the `w:cellDel` markers in place there). See
+`docs/ooxml_corner_cases.md`.
+
 `RevisionProcessor.AcceptRevisions`/`RejectRevisions` still handle all of them and remain
 public, so a caller that needs the old always-succeeding behaviour can run the transform over
 saved bytes and reopen the session. Whether the session surface should grow an explicit
