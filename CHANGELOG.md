@@ -80,6 +80,34 @@ All notable changes to this project will be documented in this file.
   percent-escaped string is reserved: it is read as the library's own encoding and written back
   decoded.
 
+- Packages the Open XML SDK rejects are repaired as they are read where the package says what the
+  repair is, so a session, a comparison, HTML conversion and the DocxDiff compatibility probe open
+  them and a session saves them (#1384). A part a relationship reaches with no content type keeps
+  its bytes and gains the type the relationship implies (an embedded `.ttf` font becomes
+  `application/x-font-ttf`; images and thumbnails are typed by extension, `.jpeg` included); a
+  relationship to an embedded font, image or thumbnail the zip lacks is dropped, with any Override
+  for it. Before, a session opened such a package and `Save` threw "Part ... doesn't exist in the
+  package". A part a known relationship reaches but typed only as generic XML (`application/xml`),
+  such as a glossary document or custom XML properties, takes the content type the relationship
+  requires; it used to fail at open (a session over custom XML properties failed only at save). Two
+  relationships sharing an Id, which failed at open, are renumbered when at most one of them is
+  referenced by Id, in a part's relationships or the package's. Anything without such evidence is
+  left as before: an untyped part nothing types, an absent part of any other kind (a header, footer,
+  notes, comments, glossary, OLE object), and an Id shared by two relationships referenced by Id. A
+  session still fails on those. Comparison, accept and conversion of a `WmlDocument` behave as on
+  main, except that an internal hyperlink to a file beside the package is now kept: they still drop
+  a relationship to any part System.IO.Packaging cannot see, which includes an untyped OLE `.bin`
+  (its relationship goes and the zip entry stays behind, unreachable), an internal attached template
+  outside the package and an absent header (accept writes the dangling `w:headerReference` back).
+  Deliverable verification of an edit to an input with a repaired content type or shared Id counts
+  the input's own defects as pre-existing; after an absent font or image is dropped it still reports
+  the semantic comparison as unavailable, because the reference is left unresolved on both sides.
+  Whether a part is present is decided as System.IO.Packaging decides it for ordinary part names
+  (dot segments, fragments, interleaved storage included), a part name that more than one zip entry
+  forms is left alone, and a relationship whose target does not resolve to a valid part name, or
+  whose `TargetMode` is anything but absent or `Internal`, is never dropped. A package that needs no
+  repair is read unchanged.
+
 ## [14.2.0] - 2026-10-26
 
 ### Added

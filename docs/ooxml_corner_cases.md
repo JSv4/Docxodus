@@ -4981,3 +4981,112 @@ read back through the funnel, and undo snapshots keep a relationship's `Uri.Orig
 that open caller bytes without the funnel are left on the SDK's own swap, which only `TargetText`'s
 `Uri.ToString()` fallback covers. A package with no such target is read as the same array. Tests:
 `UnparsedExternalTargetTests`.
+
+## Packages with untyped, missing or generically typed parts, or duplicate relationship Ids (issue #1384)
+
+Four package defects found in documents from converters and in LibreOffice's regression files:
+
+```xml
+<!-- (a) word/_rels/fontTable.xml.rels targets a font the zip holds, but [Content_Types].xml has
+     no Default for "ttf" and no Override for the part -->
+<Relationship Id="rIdEmb1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font"
+  Target="fonts/ExampleSans-regular.ttf"/>
+<!-- (b) the same relationship with no zip entry at all -->
+<!-- (c) a glossary document or custom XML properties part typed only by
+     <Default Extension="xml" ContentType="application/xml"/> -->
+<!-- (d) two relationships in one .rels part sharing an Id -->
+<Relationship Id="rId5" Type=".../relationships/fontTable" Target="fontTable.xml"/>
+<Relationship Id="rId5" Type=".../relationships/image" Target="media/image2.wmf"/>
+```
+
+| Consumer | (a) untyped part | (b) missing part | (c) generic XML type | (d) duplicate Id |
+|---|---|---|---|---|
+| LibreOffice 25.8 (`--convert-to pdf`) | opens | **refuses** ("source file could not be loaded") | opens | opens; see below |
+| Open XML SDK 3.5.1 | System.IO.Packaging ignores a zip item with no content type, so the part does not exist; the first full part-graph load (a session `Save`) throws "Part ... doesn't exist in the package" | same | open throws "invalid part with an unexpected content type" | open throws `XmlException` "ID conflicts with the ID of an existing relationship" |
+| Docxodus before #1384 | a session opened and projected but `Save` threw; compare dropped the relationship and with it the font | session `Save` threw; compare dropped the relationship | every front door threw at open, except that a session over custom XML properties threw only at save | every front door threw at open |
+| Docxodus after | the part keeps its bytes and gains an Override, under its zip entry name, typed by the relationship (fonts, images and thumbnails by extension); a part nothing types is left, and the open fails as before | for an embedded font, an image or the package thumbnail the relationship and any Override for the part are dropped; for any other kind (header, footer, notes, comments, glossary, OLE, ...) the read step leaves it: a session fails as before, and the `WmlDocument` paths drop the relationship as before | the part gains an Override with the type the relationship requires | renumbered when at most one of the colliding relationships is referenced by Id; otherwise left, with every member also excluded from the other repairs, and the open fails as before |
+
+The issue reports Word opening and saving (a); Word was not re-run for this entry, and neither was
+Word's handling of (b), so the drop is Docxodus's choice, not a copy of Word's.
+
+**Duplicate Ids.** OPC (ECMA-376 Part 2) requires each Id to be unique within its relationships part,
+so the package is invalid and the spec names no winner. LibreOffice is not type-aware: given two
+hyperlinks with one Id it links to the second, and given a header and a footer with one Id, which the
+`w:headerReference` and `w:footerReference` both name, it shows the first relationship's story in both
+places and loses the other. Given a styles relationship and a hyperlink with one Id, in either order, it
+keeps both, because it reaches styles by type, not by Id. Docxodus repairs only the shape that has a
+unique answer: among the colliding relationships at most one is of a kind referenced by Id, the rest
+being single-instance kinds reached by type (`PackageOpenRepair.ReachedByType`: styles, theme, font
+table, settings, numbering, notes, comments, glossary, custom XML, properties, thumbnail and the like).
+That one keeps the Id and the others are renumbered `{id}_{n}`, so no part is lost and every reference
+still reaches what it named. This is the wild-caught shape: a writer that numbered appended image
+relationships from Ids the theme and font table already held. When two or more colliding relationships are referenced by Id, nothing says which reference meant
+which, and the package is left for the open to reject. Every member of such a group is also excluded
+from the absent-part and content-type repairs: dropping a header the zip lacks would hand the shared
+Id, and so the header's reference, to the footer, which LibreOffice then shows in both places.
+
+**Which relationships are repaired.** A relationship to a part the zip lacks is dropped only for an
+embedded font, an image or the package thumbnail: the reference that remains (`w:embedRegular r:id`,
+`r:embed`, none for the thumbnail) is harmless on every front door, and LibreOffice loads the saved
+output. Whether a part is present is decided the way System.IO.Packaging decides it for ordinary
+part names: the target is resolved with `PackUriHelper.ResolvePartUri` (dot segments, fragments,
+queries, backslashes and surrounding spaces as the SDK treats them), and compared, without case,
+with the part names the zip entries form under `PackUriHelper.CreatePartUri`, an interleaved part
+stored as `name/[0].piece` ... `name/[n].last.piece` counting as `name`. A name more than one entry
+forms (case variants of an entry, or an entry beside pieces of the same name) is ambiguous, because
+which entry the packaging layer takes depends on their types and order, so the repair neither types
+nor drops it. For entry names System.IO.Packaging never takes as parts (raw non-ASCII characters,
+raw `{`, `}`, `^`, `|` or a backtick, escapes of unreserved characters such as `%41`) the repair sees the normalized
+name as present; the open still fails on such a package, as on main. A target that does not resolve,
+or resolves to something that is not a valid part name (`media/`, `.`), is never dropped. Only a
+relationship whose `TargetMode` is absent or `Internal` (surrounding whitespace ignored, as
+System.IO.Packaging ignores it) is treated as internal; `External` with whitespace is external, and
+any other value is left for the open to reject. An Override is matched to an entry as the packaging
+layer matches it: by the entry's own spelling, case included (the hex digits of an escaped non-ASCII
+byte compare without case; an escaped ASCII character's do not), and an Override that names the
+entry in another case is rewritten under its spelling rather than joined by a second; an added
+Override names the entry that way. For every other kind the package does not say what a document
+without the part should become, so the read step leaves it; that includes headers, footers, notes,
+comments, the glossary, OLE objects and an internal attached template pointing outside the package,
+and a session then fails on it as it always has. A hyperlink is never a part: an internal hyperlink
+to `other.docx` beside the package is kept, and a session opens and saves it.
+`OpenXmlMemoryStreamDocument` (comparison inputs, accept, conversion of a `WmlDocument`) keeps its
+older tolerance unchanged from main except for hyperlinks, which it used to drop and now keeps: it
+drops a relationship to any part System.IO.Packaging cannot see before the SDK loads the package,
+which takes an untyped part nothing types (an OLE `.bin`: the relationship goes, and its zip entry
+stays behind as an unreachable untyped entry), an internal attached template outside the package,
+and an absent header with them. The comparison engine rebuilds the references its output needs;
+`AcceptRevisions` writes the dangling `w:headerReference` back, as on main. External targets are
+never resolved. Content types are repaired only for the fixed-type kinds and for fonts, images and
+thumbnails, so a hyperlink or media reference is never retyped. A dropped relationship's reference
+stays unresolved: `GetSemanticChanges`' package preflight rejects it on both sides, and verifying an
+edit to such a document reports the semantic comparison as unavailable.
+
+**Code.** `PackageOpenRepair.Repair`, in the reading funnel
+`StrictOoxmlNormalizer.NormalizeForReading` (used by `DocxSession`, `GetTransitionalBytes()`,
+`HtmlConversionOps` and the DocxDiff compatibility probe). The `WmlDocument` type probe falls back
+to the funnel when the package relationships cannot be parsed, so a package-level duplicate Id also
+opens for compare, accept and conversion of a `WmlDocument`. Before it, the only repair was
+`OpenXmlMemoryStreamDocument.DropDanglingRelationships`, which reads through System.IO.Packaging, so
+it saw an untyped part as missing and dropped its relationship, leaving the font unreachable; the
+read step now types such a part first, and the older drop no longer touches hyperlinks. The required
+content types are `PackageOpenRepair.FixedContentTypes`, checked against the SDK's typed parts by
+`PackageOpenRepairTests`; fonts and images take the SDK's `FontPartType`/`ImagePartType` type for
+the extension, plus the image extensions those do not name (`.jpeg`, `.jpe`, `.emz`, `.wmz`,
+`.wdp`). A part is matched to the zip entries as System.IO.Packaging names them, and an added
+Override names the part. A package is first checked from scans of its relationships and
+content-types parts that build no tree; one that needs a repair is planned again from its parsed
+parts, so a scan that misreads a layout can cost a parse but cannot misplace an edit, and a
+content-types part that does not parse leaves the package unrepaired. A package that needs none of
+this is read as the same array. Tests: `PackageOpenRepairTests`, `DocxDiffPackageToleranceTests`.
+
+**Verification of repaired outputs.** `RedlineReversibilityVerifier` reads the raw packages it is
+given. For (a), (b) and (d) it refuses the unrepaired baseline at its manifest preflight, as it did
+before. For (c) the repaired content type is a real package difference, so accept and reject each
+report the retyped part as `Modified` beside the engine's usual settings, styles and webSettings
+divergences. A session's delivery receipt identifies the caller's own opening bytes, so it refuses a
+source whose manifest has error findings ((a), (b), (d)) as before; for (c) an unedited session's
+receipt lists no package change. `DeliverableVerifier` inspects a baseline both as given and as the
+read step reads it: the Word-level analysis and semantic comparison use the read form, and a finding
+either form shows is pre-existing, so an edit to a repaired input is not charged with the input's
+own defects. The baseline's reported identity stays the caller's bytes.
