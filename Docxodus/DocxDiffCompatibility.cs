@@ -204,7 +204,7 @@ public static class DocxDiffCompatibility
     public static DocxDiffCompatibilityReport Inspect(byte[] docxBytes)
     {
         if (docxBytes == null) throw new ArgumentNullException(nameof(docxBytes));
-        var roots = ContentRoots(docxBytes);
+        var roots = ContentRoots(StrictOoxmlNormalizer.NormalizeForReading(docxBytes));
         var warnings = new List<DocxDiffCompatibilityFinding>();
         var covered = new List<DocxDiffFeature>();
         foreach (var e in _entries)

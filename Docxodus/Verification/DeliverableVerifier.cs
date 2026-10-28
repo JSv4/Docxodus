@@ -97,13 +97,21 @@ public static class DeliverableVerifier
         DeliverableInspectionSnapshot? baseline = baselineBytes is null
             ? null
             : InspectPackage(baselineBytes, options, "baseline");
+        // The baseline is also inspected as every pipeline reads it (the shared read step, with package
+        // output's spelling restored): its Word-level analysis and semantic comparison use that form,
+        // and a finding either form shows is pre-existing, so a defect the read step repairs, or one
+        // the exact bytes hid from the SDK, is not charged to the deliverable.
+        var baselineRead = baselineBytes is null ? null : StrictOoxmlNormalizer.NormalizeForReading(baselineBytes);
+        var baselineAsRead = baseline;
+        if (baselineRead is not null && !ReferenceEquals(baselineRead, baselineBytes))
+            baselineAsRead = InspectPackage(baselineRead = ZipPackageOutputNormalizer.Normalize(baselineRead), options, "baseline");
 
         var observations = deliverable.Observations.ToList();
         bool analysisCompleted = deliverable.AnalysisCompleted
-            && (baseline?.AnalysisCompleted ?? true);
-        var checks = baseline is null
+            && (baselineAsRead?.AnalysisCompleted ?? true);
+        var checks = baselineAsRead is null
             ? deliverable.Checks.ToList()
-            : baseline.Checks.Concat(deliverable.Checks).ToList();
+            : baselineAsRead.Checks.Concat(deliverable.Checks).ToList();
 
         var artifactMetadata = DeliverableArtifactInspector.Inspect(
             artifacts,
@@ -181,11 +189,11 @@ public static class DeliverableVerifier
                             : "baseline or deliverable manifest is invalid"));
                 analysisCompleted = false;
             }
-            if (CanContinueBoundedWordInspection(baseline.Inspection)
+            if (CanContinueBoundedWordInspection(baselineAsRead!.Inspection)
                 && CanContinueBoundedWordInspection(deliverable.Inspection)
-                && !baseline.DetectorBudgetExhausted
+                && !baselineAsRead.DetectorBudgetExhausted
                 && !deliverable.DetectorBudgetExhausted
-                && baseline.Observations.Count < options.MaxFindings
+                && baselineAsRead.Observations.Count < options.MaxFindings
                 && deliverable.Observations.Count < options.MaxFindings
                 && observations.Count < options.MaxFindings)
             {
@@ -193,7 +201,7 @@ public static class DeliverableVerifier
                 try
                 {
                     semanticChanges = SemanticDiff.CompareBounded(
-                        new WmlDocument("baseline.docx", baselineBytes!),
+                        new WmlDocument("baseline.docx", baselineRead!),
                         new WmlDocument("deliverable.docx", deliverableBytes),
                         new SemanticDiffOptions
                         {
@@ -282,9 +290,9 @@ public static class DeliverableVerifier
             else
             {
                 checks.Add(Skipped("semantic_delta",
-                    baseline.DetectorBudgetExhausted || deliverable.DetectorBudgetExhausted
+                    baselineAsRead.DetectorBudgetExhausted || deliverable.DetectorBudgetExhausted
                         ? "baseline or deliverable detector resource budget was exceeded"
-                        : baseline.Observations.Count >= options.MaxFindings
+                        : baselineAsRead.Observations.Count >= options.MaxFindings
                           || deliverable.Observations.Count >= options.MaxFindings
                           || observations.Count >= options.MaxFindings
                             ? "baseline or deliverable finding limit was reached"
@@ -341,7 +349,9 @@ public static class DeliverableVerifier
 
         var classified = Classify(
             observations,
-            baseline?.Observations,
+            baseline is null || ReferenceEquals(baselineAsRead, baseline)
+                ? baseline?.Observations
+                : WithSurplus(baseline.Observations, baselineAsRead!.Observations),
             options,
             out var resolved);
         if (options.IncludeResolvedFindings
@@ -714,6 +724,18 @@ public static class DeliverableVerifier
             return false;
         return expected.AfterValue is null
             || string.Equals(actual.AfterValue, expected.AfterValue, StringComparison.Ordinal);
+    }
+
+    /// <summary><paramref name="first"/> plus each finding <paramref name="second"/> shows more times.</summary>
+    private static IReadOnlyList<DeliverableFindingObservation> WithSurplus(
+        IReadOnlyList<DeliverableFindingObservation> first,
+        IReadOnlyList<DeliverableFindingObservation> second)
+    {
+        var counts = first.GroupBy(item => item.IdentityKey, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        return first.Concat(second.GroupBy(item => item.IdentityKey, StringComparer.Ordinal)
+                .SelectMany(group => group.Skip(counts.GetValueOrDefault(group.Key))))
+            .ToList();
     }
 
     private static IReadOnlyList<DeliverableFinding> Classify(

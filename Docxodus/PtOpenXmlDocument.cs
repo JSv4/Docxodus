@@ -50,6 +50,7 @@ using System;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
+using System.Xml;
 using System.Xml.Linq;
 using System.IO.Packaging;
 using DocumentFormat.OpenXml.Packaging;
@@ -286,10 +287,10 @@ namespace Docxodus
             {
                 return GetPackageDocumentType(bytes);
             }
-            catch (UriFormatException)
+            catch (Exception e) when (e is UriFormatException or XmlException)
             {
                 // Package relationships only the shared read step can parse (a target System.Uri
-                // rejects): type the package as every pipeline will read it.
+                // rejects, two sharing an Id): type the package as every pipeline will read it.
                 var read = StrictOoxmlNormalizer.NormalizeForReading(bytes);
                 if (ReferenceEquals(read, bytes))
                     throw;
@@ -513,7 +514,10 @@ namespace Docxodus
 
         private static bool IsDanglingInternalRelationship(Package package, PackageRelationship rel)
         {
-            if (rel.TargetMode != TargetMode.Internal)
+            // A hyperlink names a target, never a part the SDK loads, so one pointing outside the
+            // package (an internal link to a file beside it) is not dangling.
+            if (rel.TargetMode != TargetMode.Internal
+                || rel.RelationshipType == "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink")
                 return false;
             Uri target;
             try

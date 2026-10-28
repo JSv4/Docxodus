@@ -598,4 +598,19 @@ public class UnparsedExternalTargetTests
         Assert.Contains(MultiRecipient, XDocument.Load(stream).Root!.Elements(PackageRels + "Relationship")
             .Select(r => (string?)r.Attribute("Target")));
     }
+
+    // System.IO.Packaging reads a target mode with surrounding whitespace as that mode.
+    [Fact]
+    public void A_padded_external_mode_is_still_external()
+    {
+        var package = WithEntry(Doc(("Intro", null), ("Mail the team", MultiRecipient)).DocumentByteArray, RelsEntry, xml =>
+            System.Text.Encoding.UTF8.GetBytes(xml.Replace("TargetMode=\"External\"", "TargetMode=\" External \"")));
+        using var session = new DocxSession(package);
+
+        Assert.Equal(MultiRecipient, Assert.Single(session.ListHyperlinks()).Target);
+        using var zip = new ZipArchive(new MemoryStream(session.Save(false)), ZipArchiveMode.Read);
+        using var stream = zip.GetEntry(RelsEntry)!.Open();
+        Assert.Contains(MultiRecipient, XDocument.Load(stream).Root!.Elements(PackageRels + "Relationship")
+            .Select(r => (string?)r.Attribute("Target")));
+    }
 }
