@@ -75,19 +75,20 @@ test.describe('a tab is one character of the session text (#1387)', () => {
     expect(out.shapes).toEqual(['1.2|Beta', '|Lead', 'Name:||Date', 'Plain control text']);
   });
 
-  async function openEditor(page: Page) {
+  async function openEditor(page: Page, tracked = false) {
     await ready(page);
-    await page.evaluate((bytes) => {
+    await page.evaluate(({ bytes, tracked }) => {
       const w = window as any;
       const container = document.createElement('div');
       document.body.appendChild(container);
       w.failures = [] as unknown[];
       w.editor = w.Docxodus.DocxEditor.open(container, new Uint8Array(bytes), w.Docxodus, {
+        ...(tracked ? { trackedChanges: 1 } : {}), // TrackedChangeMode.RenderInline
         onEditFailed: (info: unknown) => w.failures.push(info),
       });
       w.block = (text: string) => Array.from(container.querySelectorAll<HTMLElement>('p[data-anchor]'))
         .find((p) => (p.textContent ?? '').includes(text));
-    }, Array.from(tabFixture()));
+    }, { bytes: Array.from(tabFixture()), tracked });
   }
 
   /** Put the caret in the block holding `text`, `at` characters into its text node holding `node`. */
@@ -152,6 +153,44 @@ test.describe('a tab is one character of the session text (#1387)', () => {
       expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
     });
   }
+
+  // Chromium's own word deletion beside a tab box removes the word on the other side of the caret
+  // (Ctrl+Delete before a tab deleted "1.2"); a tab is the whitespace between words, so it goes.
+  for (const [key, node, at] of [['Control+Delete', '1.2', 3], ['Control+Backspace', 'Alpha', 0]] as const) {
+    for (const tracked of [false, true]) {
+      test(`${key} beside a tab removes only the tab (tracked: ${tracked})`, async ({ page }) => {
+        await openEditor(page, tracked);
+        await caretIn(page, 'Alpha', node, at);
+        await page.keyboard.press(key);
+        const shapes = await saved(page);
+        const revisions = await page.evaluate(() => (window as any).editor.listRevisions()
+          .map((r: any) => `${r.type}:${JSON.stringify(r.text)}`));
+        // A tracked deletion keeps the tab, inside its w:del, until it is accepted.
+        expect(shapes[0]).toBe(tracked ? '1.2|Alpha' : '1.2Alpha');
+        expect(revisions).toEqual(tracked ? ['delete:"\\t"'] : []);
+        expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+      });
+    }
+  }
+
+  test('typing over a selection that spans a tab replaces the tab with it', async ({ page }) => {
+    await openEditor(page);
+    await page.evaluate(() => {
+      const block: HTMLElement = (window as any).block('Alpha');
+      block.focus();
+      const texts: Text[] = [];
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) texts.push(n as Text);
+      const range = document.createRange();
+      range.setStart(texts.find((t) => t.data === '1.2')!, 2);
+      range.setEnd(texts.find((t) => t.data === 'Alpha')!, 2);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    });
+    await page.keyboard.type('Q');
+    expect((await saved(page))[0]).toBe('1.Qpha');
+    expect(await page.evaluate(() => (window as any).failures)).toEqual([]);
+  });
 
   // The editor counts a rendered tab box as one character; that holds only while the converter
   // renders exactly one box per run tab, and none for numbering's own tab (inside the marker).

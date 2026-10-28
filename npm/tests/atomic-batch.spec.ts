@@ -71,7 +71,9 @@ test.describe('DocxSession atomic batches (#445)', () => {
         bridge.GetPackageContentHash = (...args: any[]) => { packageCalls++; return hash(...args); };
         try {
           const anchor = (Object.entries(session.project().anchorIndex) as [string, any][])
-            .find(([, a]) => a.kind === 'p' && a.scope === scope && a.textPreview.startsWith(prefix))![0];
+            .find(([, a]) => a.kind === 'p' && a.scope === scope
+              // The footnote's text opens with a tab, one character of the text (issue #1387).
+              && a.textPreview.replace(/^\t/, '').startsWith(prefix))![0];
           const formatting = () => session.getFormatting(anchor).runs
             .map(({ text, span, effective }: any) => ({ text, span, effective }));
           const before = formatting();
