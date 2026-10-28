@@ -4664,6 +4664,40 @@ The same holds for a missing `w:author` and an unparseable `w:date` (LibreOffice
 `0-00-00T00:00:00Z`): LibreOffice and `RevisionProcessor` resolve them, and so does the session now,
 listing the defect as an advisory diagnostic. Code: `RevisionOps.MetadataDiagnostic`.
 
+### A move with one side missing is an insertion or a deletion
+
+```xml
+<!-- destination: no move range -->
+<w:p><w:pPr><w:rPr><w:moveTo w:id="5" …/></w:rPr></w:pPr>
+  <w:moveTo w:id="6" …><w:r><w:t>Clause four moves up.</w:t></w:r></w:moveTo></w:p>
+<!-- source: a named range whose name has no destination -->
+<w:p><w:pPr><w:rPr><w:moveFrom w:id="7" …/></w:rPr></w:pPr>
+  <w:moveFromRangeStart w:id="8" w:name="m1" …/>
+  <w:moveFrom w:id="9" …><w:r><w:delText>Clause four moves up.</w:delText></w:r></w:moveFrom></w:p>
+<w:moveFromRangeEnd w:id="8"/>
+```
+
+Files reported to be Word's resave of this input (third-party test files) show Word rewriting the
+destination as `w:ins` (content and paragraph mark) and the source as `w:del`, keeping the source's
+now empty `w:moveFromRangeStart`/`End` pair around the `w:del`. Companion files reported to be Word's
+output after resolving one other revision still contain that pair. There is no Word evidence for the
+pair after its enclosed deletion resolves; both other oracles leave none after accept-all/reject-all. The mirror
+shape (a ranged destination whose source has no range) and a destination with no source at all
+convert the same way. LibreOffice and `RevisionProcessor` produce the same text for accept and
+reject.
+
+| Reader | Accept all | Reject all |
+|---|---|---|
+| Word (files reported to be its resave) | — converts the move to `w:ins` + `w:del`, keeps the empty range pair | — |
+| LibreOffice | moved text at the destination only | moved text at the source only |
+| `RevisionProcessor` | same text as LibreOffice, no markers left | same |
+| `DocxSession` before #1385 | refused (`ambiguous_move_range_id`, or `unsupported_revision_family` on the empty pair) | refused |
+| `DocxSession` after | same text, no markers left | same |
+
+Code: `RevisionOps.BuildGroups` decides a move only once both named sides are known, per story part
+(a source in a header and a destination in the body are a plain deletion and insertion); the inert
+range pair is its own entry (`inert_move_range`).
+
 ---
 
 ## Strict conformance: the same markup under different namespace URIs (issue #1268)

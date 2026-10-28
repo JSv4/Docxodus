@@ -216,6 +216,199 @@ public class DocxSessionBulkRevisionSafetyTests
             rejected: new[] { "Start alpha middle beta end", "Then and done" });
     }
 
+    // ─── Moves missing a side ────────────────────────────────────────────
+
+    private static string FromRange(int id, string name = "m1") =>
+        $"<w:moveFromRangeStart w:id=\"{id}\" w:name=\"{name}\" {Stamp}/>";
+
+    private static string ToRange(int id, string name = "m1") =>
+        $"<w:moveToRangeStart w:id=\"{id}\" w:name=\"{name}\" {Stamp}/>";
+
+    private static string MarkedParagraph(string mark, int markId, string content) =>
+        $"<w:p><w:pPr><w:rPr><w:{mark} w:id=\"{markId}\" {Stamp}/></w:rPr></w:pPr>{content}</w:p>";
+
+    private static string MovedOut(int id) =>
+        $"<w:moveFrom w:id=\"{id}\" {Stamp}><w:r><w:delText>Clause four moves up.</w:delText></w:r></w:moveFrom>";
+
+    private static string MovedIn(int id) => $"<w:moveTo w:id=\"{id}\" {Stamp}>{Run("Clause four moves up.")}</w:moveTo>";
+
+    // A whole paragraph moved above "Clause three", Word's paragraph-move shape, with one side's
+    // move ranges (or the whole of one side) missing.
+    public static TheoryData<string, string, string[]> MovesMissingASide => new()
+    {
+        {
+            "destination without ranges",
+            Paragraph(Run("Clause one.")) + MarkedParagraph("moveTo", 5, MovedIn(6)) + Paragraph(Run("Clause three."))
+                + MarkedParagraph("moveFrom", 7, FromRange(8) + MovedOut(9)) + "<w:moveFromRangeEnd w:id=\"8\"/>"
+                + Paragraph(Run("Clause five.")),
+            new[] { "insert", "delete", "move" }
+        },
+        {
+            "source without ranges",
+            Paragraph(Run("Clause one.")) + MarkedParagraph("moveTo", 5, ToRange(6) + MovedIn(7)) + "<w:moveToRangeEnd w:id=\"6\"/>"
+                + Paragraph(Run("Clause three.")) + MarkedParagraph("moveFrom", 8, MovedOut(9))
+                + Paragraph(Run("Clause five.")),
+            new[] { "move", "insert", "delete" }
+        },
+        {
+            "neither side ranged",
+            Paragraph(Run("Clause one.")) + MarkedParagraph("moveTo", 5, MovedIn(6)) + Paragraph(Run("Clause three."))
+                + MarkedParagraph("moveFrom", 7, MovedOut(8)) + Paragraph(Run("Clause five.")),
+            new[] { "insert", "delete" }
+        },
+        {
+            // Word's own resave of the first shape: the move content becomes a plain insertion and
+            // deletion, and the source's now empty range pair is kept around the deletion.
+            "a range pair around a plain deletion",
+            Paragraph(Run("Clause one.")) + MarkedParagraph("ins", 5, Ins("w:id=\"6\" " + Stamp, "Clause four moves up."))
+                + Paragraph(Run("Clause three."))
+                + MarkedParagraph("del", 7, FromRange(8) + Del("w:id=\"9\" " + Stamp, "Clause four moves up."))
+                + "<w:moveFromRangeEnd w:id=\"8\"/>" + Paragraph(Run("Clause five.")),
+            new[] { "insert", "delete", "move" }
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(MovesMissingASide))]
+    public void MoveMissingASide_ResolvesAsItsPlainInsertionAndDeletion(string shape, string body, string[] types)
+    {
+        var bytes = Build(body);
+        using (var session = new DocxSession(bytes))
+        {
+            var listed = session.ListRevisions();
+            Assert.True(types.Order().SequenceEqual(listed.Select(entry => entry.Type).Order()),
+                $"{shape}: {string.Join(",", listed.Select(entry => entry.Type))}");
+            Assert.All(listed, entry => Assert.True(entry.ResolutionStatus == RevisionResolutionStatus.Supported,
+                $"{shape}: {entry.Diagnostic?.Code}"));
+            // The range markers name no move once a side is missing: listed so resolution removes
+            // them, carrying only an explanation, never a move's text.
+            Assert.All(listed.Where(entry => entry.Type == "move"), entry =>
+            {
+                Assert.Equal("inert_move_range", entry.Diagnostic?.Code);
+                Assert.Equal(string.Empty, entry.Text);
+            });
+        }
+
+        AssertBulkMatchesProcessor(bytes,
+            accepted: new[] { "Clause one.", "Clause four moves up.", "Clause three.", "Clause five." },
+            rejected: new[] { "Clause one.", "Clause three.", "Clause four moves up.", "Clause five." });
+    }
+
+    [Fact]
+    public void MoveWithNoSource_ResolvesAsItsPlainInsertion()
+    {
+        var bytes = Build(Paragraph(Run("Clause one."))
+            + MarkedParagraph("moveTo", 5, ToRange(6) + MovedIn(7)) + "<w:moveToRangeEnd w:id=\"6\"/>"
+            + Paragraph(Run("Clause three.")));
+
+        using (var session = new DocxSession(bytes))
+            Assert.Equal(new[] { "insert", "move" }, session.ListRevisions().Select(entry => entry.Type).Order());
+
+        AssertBulkMatchesProcessor(bytes,
+            accepted: new[] { "Clause one.", "Clause four moves up.", "Clause three." },
+            rejected: new[] { "Clause one.", "Clause three." });
+    }
+
+    [Fact]
+    public void InertMoveRange_StaysUntilItsOwnEntryResolves()
+    {
+        // Word keeps the empty range pair while the deletion inside it is pending, and resolving
+        // that deletion alone leaves the pair to its own entry.
+        var bytes = Build(Paragraph(Run("Keep "), FromRange(8), Del("w:id=\"9\" " + Stamp, "gone "),
+            "<w:moveFromRangeEnd w:id=\"8\"/>", Run("text")));
+        using var session = new DocxSession(bytes);
+
+        var deletion = Assert.Single(session.ListRevisions(), entry => entry.Type == "delete");
+        Assert.True(session.AcceptRevision(deletion.Id).Success);
+
+        var inert = Assert.Single(session.ListRevisions());
+        Assert.Equal("inert_move_range", inert.Diagnostic?.Code);
+        // Like every entry with no text and no paragraph, it has nothing a comment could bracket.
+        var comment = session.AddCommentToRevision(inert.Id, "Reviewer B", "Why is this here?");
+        Assert.Equal(EditErrorCode.RevisionNotFound, comment.Error?.Code);
+        Assert.Contains("no commentable extent", comment.Error?.Message);
+        Assert.Equal(new[] { "moveFromRangeStart", "moveFromRangeEnd" }, RevisionMarkers(session.Save()));
+        Assert.True(session.RejectRevision(inert.Id).Success);
+        Assert.Empty(RevisionMarkers(session.Save()));
+        Assert.Equal(new[] { "Keep text" }, ParagraphTexts(session.Save()));
+    }
+
+    public static TheoryData<string, string, string[], string[]> InertRangeTopologies => new()
+    {
+        {
+            // One name, an empty pair per side reusing w:id 1, each around a plain revision.
+            "empty pairs of one name on both sides sharing an id",
+            Paragraph(Run("Old "), "<w:moveFromRangeStart w:id=\"1\" w:name=\"m\" " + Stamp + "/>",
+                Del("w:id=\"2\" " + Stamp, "text "), "<w:moveFromRangeEnd w:id=\"1\"/>", Run("end"))
+            + Paragraph(Run("New "), "<w:moveToRangeStart w:id=\"1\" w:name=\"m\" " + Stamp + "/>",
+                Ins("w:id=\"3\" " + Stamp, "text "), "<w:moveToRangeEnd w:id=\"1\"/>", Run("end")),
+            new[] { "Old end", "New text end" },
+            new[] { "Old text end", "New end" }
+        },
+        {
+            "an empty range start with no end",
+            Paragraph(Run("Old "), FromRange(1), Del("w:id=\"2\" " + Stamp, "text "), Run("end")),
+            new[] { "Old end" },
+            new[] { "Old text end" }
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(InertRangeTopologies))]
+    public void InertMoveRange_HasNoMoveTopologyToRefuse(string shape, string body, string[] accepted, string[] rejected)
+    {
+        using (var session = new DocxSession(Build(body)))
+            Assert.All(session.ListRevisions(), entry => Assert.True(
+                entry.ResolutionStatus == RevisionResolutionStatus.Supported, $"{shape}: {entry.Diagnostic?.Code}"));
+
+        AssertBulkMatchesProcessor(Build(body), accepted, rejected);
+    }
+
+    [Fact]
+    public void InertMoveRange_CrossingAMovesRange_DoesNotTaintTheMove()
+    {
+        // An empty source-side pair opens inside the move's source range and closes after it.
+        var body = Paragraph(Run("Keep "), FromRange(1), MovedOut(2), FromRange(9, "n2"),
+                "<w:moveFromRangeEnd w:id=\"1\"/>", "<w:moveFromRangeEnd w:id=\"9\"/>", Run(" here"))
+            + Paragraph(Run("Then "), ToRange(3), MovedIn(4), "<w:moveToRangeEnd w:id=\"3\"/>");
+        using (var session = new DocxSession(Build(body)))
+        {
+            var move = Assert.Single(session.ListRevisions(), entry => entry.Diagnostic is null);
+            Assert.Equal("move", move.Type);
+            Assert.Equal(RevisionResolutionStatus.Supported, move.ResolutionStatus);
+            Assert.Equal("inert_move_range", Assert.Single(session.ListRevisions(),
+                entry => entry.Diagnostic is not null).Diagnostic!.Code);
+        }
+
+        AssertBulkMatchesProcessor(Build(body),
+            accepted: new[] { "Keep  here", "Then Clause four moves up." },
+            rejected: new[] { "Keep Clause four moves up. here", "Then " });
+    }
+
+    [Fact]
+    public void CompleteMove_StillListsAsOneMove()
+    {
+        using var session = new DocxSession(Build(Move(Stamp, Stamp, Stamp)));
+
+        var move = Assert.Single(session.ListRevisions());
+        Assert.Equal("move", move.Type);
+        Assert.Equal(RevisionResolutionStatus.Supported, move.ResolutionStatus);
+        Assert.Null(move.Diagnostic);
+    }
+
+    [Fact]
+    public void CompleteMove_ReusingOneRangeIdForBothSides_StaysAmbiguous()
+    {
+        // Control: the range-id check still names its own defect on a move that has both sides.
+        var body = Move(Stamp, Stamp, Stamp).Replace("w:moveToRangeStart w:id=\"3\"", "w:moveToRangeStart w:id=\"1\"")
+            .Replace("<w:moveToRangeEnd w:id=\"3\"/>", "<w:moveToRangeEnd w:id=\"1\"/>");
+        using var session = new DocxSession(Build(body));
+
+        var move = Assert.Single(session.ListRevisions());
+        Assert.Equal(RevisionResolutionStatus.Ambiguous, move.ResolutionStatus);
+        Assert.Equal("ambiguous_move_range_id", move.Diagnostic?.Code);
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     private static void AssertBulkMatchesProcessor(byte[] bytes, string[] accepted, string[] rejected)

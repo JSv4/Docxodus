@@ -1991,6 +1991,21 @@ an unabsorbable cell deletion still reports `unabsorbable_cell_deletion`). In fi
 Word output, `w16du:dateUtc` is stamped on a move's content marks but not on its range starts, so a
 move compares only the `dateUtc` values present.
 
+**A move exists only when both of its named sides are present.** A `w:moveFrom`/`w:moveTo` with no
+enclosing named range, or whose range name has no content on the other side, is listed and resolved
+as its plain part: a move source as a deletion (`ContentDelete`, or `ParagraphMark` for a mark), a
+move destination as an insertion — the conversion that files reported to be Word resaves show. The
+range markers of a name that identifies no move (including Word's leftover empty pair around the
+deletion it converted) are inert: they get their own `Supported` move entry with no text and the
+advisory `inert_move_range`, whose resolution in either direction removes the markers and nothing
+else, and no move-range topology check applies to it (it cannot taint a real move whose ranges it
+crosses). It has no text and no paragraph, so `AddCommentToRevision` refuses it the way it refuses
+every entry with nothing to bracket (`RevisionNotFound`, "no commentable extent"). Resolving the
+enclosed deletion alone leaves the pair. Completeness is decided per story part: a source in a
+header and a destination in the body are a plain deletion, a plain insertion and inert range entries.
+Because grouping now guarantees both sides, `malformed_move_topology` names only an unpaired range start, and
+`ambiguous_move_range_id` only a complete move that reuses one `w:id` for both sides.
+
 `RevisionProcessor.AcceptRevisions`/`RejectRevisions` still handle all of them and remain
 public, so a caller that needs the old always-succeeding behaviour can run the transform over
 saved bytes and reopen the session. Whether the session surface should grow an explicit

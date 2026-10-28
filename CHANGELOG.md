@@ -34,6 +34,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A tracked move missing a side no longer refuses accept-all and reject-all (#1385). A
+  `w:moveFrom`/`w:moveTo` with no named range, or whose range name has nothing on the other side,
+  now resolves as the deletion or insertion it is, the conversion files reported to be Word resaves
+  show; the leftover range
+  markers are listed as an inert entry (`inert_move_range`) whose resolution removes them. Such moves
+  were also mislabelled `ambiguous_move_range_id`; an empty move-range pair around a plain deletion
+  was `unsupported_revision_family`.
 - When a page's balloons cannot all stand beside it in the All Markup balloon layout
   (`commentColumnPlacement: "balloons"`), they are now cut as Word cuts them, measured from Word's
   PDFs: balloons stay whole from the top for as long as the rest, each cut to its first line, still

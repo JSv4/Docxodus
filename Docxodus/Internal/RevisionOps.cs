@@ -65,13 +65,15 @@ internal static class RevisionOps
     {
         required public XElement Element { get; init; }
         required public UnitKind Kind { get; init; }
-        required public string Type { get; init; }
-        required public RevisionFamily Family { get; init; }
+        // Type, Family and MoveName settle once the whole part is walked: a move mark whose
+        // move lacks a side becomes the plain insertion or deletion it then is (BuildGroups).
+        required public string Type { get; set; }
+        required public RevisionFamily Family { get; set; }
         required public string Author { get; init; }
         public string? Date { get; init; }
         /// <summary>Move-range name when the unit sits inside a named move range — such
         /// units group per name (both sides of the pair) rather than by adjacency.</summary>
-        public string? MoveName { get; init; }
+        public string? MoveName { get; set; }
         public XElement? Paragraph { get; init; }
         /// <summary>For RowMark: the <c>w:tr</c> itself. For Content: the marked row the
         /// unit sits inside (so the row group absorbs it), else null.</summary>
@@ -104,6 +106,10 @@ internal static class RevisionOps
         /// refuses resolving the group alone; resolving every group needs no address and proceeds.</summary>
         public bool MarkupResolvable => ResolutionStatus == RevisionResolutionStatus.Supported
             || AddressingOnly;
+        /// <summary>Range markers that revise nothing (a move name with a side missing, a wrapper
+        /// range enclosing nothing): resolving the group removes them and touches nothing else, so
+        /// no move or wrapper topology applies to them.</summary>
+        public bool Inert { get; set; }
         public List<RevisionUnit> Units { get; } = new();
         /// <summary>Move-range marker elements (start/end, both sides) removed when the
         /// group resolves.</summary>
@@ -334,7 +340,7 @@ internal static class RevisionOps
                 }
             }
 
-            if (group.Family == RevisionFamily.Move)
+            if (group.Family == RevisionFamily.Move && !group.Inert)
             {
                 // One move may own several ranges per side: the name, not a single container,
                 // links move source content to move destination content (ECMA-376 §17.13.5.24,
@@ -343,18 +349,15 @@ internal static class RevisionOps
                     group.RangeMarkers, W.moveFromRangeStart, W.moveFromRangeEnd);
                 var (toRanges, toAmbiguous) = PairMoveRanges(
                     group.RangeMarkers, W.moveToRangeStart, W.moveToRangeEnd);
+                // Grouping made every move that is not inert complete (BuildGroups): both sides.
                 bool duplicate = fromAmbiguous || toAmbiguous;
-                bool complete = fromRanges.Count > 0 && toRanges.Count > 0
-                    && group.Units.Any(unit => unit.Element.Name == W.moveFrom)
-                    && group.Units.Any(unit => unit.Element.Name == W.moveTo);
-                bool pairedIds = complete
-                    && fromRanges.Concat(toRanges).All(range => range.End is not null);
-                bool distinctRangeIds = complete && !fromRanges
+                bool pairedIds = fromRanges.Concat(toRanges).All(range => range.End is not null);
+                bool distinctRangeIds = !fromRanges
                     .Select(range => (string?)range.Start.Attribute(W.id))
                     .Intersect(toRanges.Select(range => (string?)range.Start.Attribute(W.id)),
                         StringComparer.Ordinal)
                     .Any();
-                if (duplicate || !complete || !pairedIds || !distinctRangeIds)
+                if (duplicate || !pairedIds || !distinctRangeIds)
                 {
                     group.ResolutionStatus = duplicate || !distinctRangeIds
                         ? RevisionResolutionStatus.Ambiguous
@@ -367,7 +370,7 @@ internal static class RevisionOps
                             ? "A native move name identifies source or destination ranges that reuse a w:id or overlap."
                             : !distinctRangeIds
                                 ? "A native move reuses one w:id for distinct source and destination ranges."
-                                : "A native move requires exactly paired source/destination ranges and both content sides.");
+                                : "A native move requires exactly paired source/destination ranges.");
                     continue;
                 }
 
@@ -504,7 +507,7 @@ internal static class RevisionOps
 
             // Last, so a metadata defect never masks a check above: the markup is resolvable.
             if (group.ResolutionStatus == RevisionResolutionStatus.Supported)
-                group.Diagnostic = MetadataDiagnostic(group);
+                group.Diagnostic ??= MetadataDiagnostic(group);
         }
 
         ValidateGlobalMoveRangeTopology(groups);
@@ -561,7 +564,7 @@ internal static class RevisionOps
 
     private static void ValidateGlobalMoveRangeTopology(List<RevisionGroup> groups)
     {
-        foreach (var partGroups in groups.Where(group => group.Family == RevisionFamily.Move)
+        foreach (var partGroups in groups.Where(group => group.Family == RevisionFamily.Move && !group.Inert)
             .GroupBy(group => group.PartIndex))
         {
             ValidateMoveRangeSide(
@@ -1144,6 +1147,45 @@ internal static class RevisionOps
     private static void BuildGroups(List<RevisionUnit> units, WalkCtx ctx, int partIndex,
         List<RevisionGroup> groups)
     {
+        // A move exists only when both of its named sides are present: the name links source
+        // content to destination content (ECMA-376 §17.13.5.24, §17.13.5.28). A move mark with
+        // no range, or whose name has no partner side, is its plain part — a source a deletion,
+        // a destination an insertion — the conversion files reported to be Word resaves show. Range
+        // markers whose name then identifies no move are inert: their own entry removes them.
+        var moves = units.Where(u => u.MoveName is not null)
+            .GroupBy(u => u.MoveName!, StringComparer.Ordinal)
+            .Where(name => name.Any(u => u.Element.Name == W.moveFrom)
+                && name.Any(u => u.Element.Name == W.moveTo))
+            .Select(name => name.Key).ToHashSet(StringComparer.Ordinal);
+        foreach (var u in units.Where(u => (u.Element.Name == W.moveFrom || u.Element.Name == W.moveTo)
+            && (u.MoveName is null || !moves.Contains(u.MoveName))))
+        {
+            u.Type = u.Element.Name == W.moveFrom ? TypeDelete : TypeInsert;
+            if (u.Family == RevisionFamily.Move)
+                u.Family = u.Type == TypeDelete ? RevisionFamily.ContentDelete : RevisionFamily.ContentInsert;
+            u.MoveName = null;
+        }
+        foreach (var (name, markers) in ctx.RangeMarkers.Where(entry => !moves.Contains(entry.Key)))
+        {
+            var start = markers.First(IsRevisionRangeStart);
+            var inert = new RevisionGroup
+            {
+                Type = TypeMove,
+                Family = RevisionFamily.Move,
+                Author = AuthorOf(start),
+                Date = (string?)start.Attribute(W.date),
+                DateUtc = DateUtcOf(start),
+                PartIndex = partIndex,
+                Inert = true,
+                Diagnostic = new RevisionDiagnostic(
+                    "inert_move_range",
+                    $"Move range '{name}' has no content on one of its sides, so it names no move; "
+                    + "resolving this entry removes only its range markers."),
+            };
+            inert.RangeMarkers.AddRange(markers);
+            groups.Add(inert);
+        }
+
         var moveGroups = new Dictionary<string, RevisionGroup>(StringComparer.Ordinal);
         var rowGroupByTr = new Dictionary<XElement, RevisionGroup>();
         var cellGroups = new List<RevisionGroup>();
