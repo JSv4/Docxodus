@@ -42,6 +42,7 @@ internal static class RevisionOps
     internal const string TypeMove = "move";
     internal const string TypeFormat = "format";
     internal const string TypeStructure = "structure";
+    internal const string DuplicateRevisionIdCode = "duplicate_revision_id";
 
     internal enum UnitKind
     {
@@ -64,13 +65,15 @@ internal static class RevisionOps
     {
         required public XElement Element { get; init; }
         required public UnitKind Kind { get; init; }
-        required public string Type { get; init; }
-        required public RevisionFamily Family { get; init; }
+        // Type, Family and MoveName settle once the whole part is walked: a move mark whose
+        // move lacks a side becomes the plain insertion or deletion it then is (BuildGroups).
+        required public string Type { get; set; }
+        required public RevisionFamily Family { get; set; }
         required public string Author { get; init; }
         public string? Date { get; init; }
         /// <summary>Move-range name when the unit sits inside a named move range — such
         /// units group per name (both sides of the pair) rather than by adjacency.</summary>
-        public string? MoveName { get; init; }
+        public string? MoveName { get; set; }
         public XElement? Paragraph { get; init; }
         /// <summary>For RowMark: the <c>w:tr</c> itself. For Content: the marked row the
         /// unit sits inside (so the row group absorbs it), else null.</summary>
@@ -95,6 +98,18 @@ internal static class RevisionOps
         public string Scope { get; set; } = "body";
         public RevisionResolutionStatus ResolutionStatus { get; set; } = RevisionResolutionStatus.Supported;
         public RevisionDiagnostic? Diagnostic { get; set; }
+        /// <summary>Set with an <see cref="RevisionResolutionStatus.Ambiguous"/> diagnostic that
+        /// concerns only which revision an id names (a native id shared with another group, or a
+        /// move name joining differently stamped moves), never whether the markup resolves.</summary>
+        public bool AddressingOnly { get; set; }
+        /// <summary>Whether this group's own markup resolves safely. An addressing-only defect
+        /// refuses resolving the group alone; resolving every group needs no address and proceeds.</summary>
+        public bool MarkupResolvable => ResolutionStatus == RevisionResolutionStatus.Supported
+            || AddressingOnly;
+        /// <summary>Range markers that revise nothing (a move name with a side missing, a wrapper
+        /// range enclosing nothing): resolving the group removes them and touches nothing else, so
+        /// no move or wrapper topology applies to them.</summary>
+        public bool Inert { get; set; }
         public List<RevisionUnit> Units { get; } = new();
         /// <summary>Move-range marker elements (start/end, both sides) removed when the
         /// group resolves.</summary>
@@ -272,48 +287,6 @@ internal static class RevisionOps
                 continue;
             }
 
-            if (group.Units.Any(unit => string.IsNullOrEmpty(unit.Author)
-                    && unit.Element.Name != W.tblGridChange))
-            {
-                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
-                group.Diagnostic = new RevisionDiagnostic(
-                    "missing_revision_author",
-                    "A live revision marker has no w:author and cannot establish ownership safely.");
-                continue;
-            }
-
-            var metadataCarriers = group.Units.Select(unit => unit.Element)
-                .Concat(group.RangeMarkers.Where(IsRevisionRangeStart)).Distinct().ToArray();
-            if (metadataCarriers.Any(element => element.Name != W.tblGridChange
-                    && string.IsNullOrEmpty((string?)element.Attribute(W.author))))
-            {
-                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
-                group.Diagnostic = new RevisionDiagnostic(
-                    "missing_revision_author",
-                    "A live revision marker has no w:author and cannot establish ownership safely.");
-                continue;
-            }
-
-            if (metadataCarriers.Any(element => (string?)element.Attribute(W.date) is { } date
-                    && !IsValidRevisionDate(date)))
-            {
-                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
-                group.Diagnostic = new RevisionDiagnostic(
-                    "invalid_revision_date",
-                    "A live revision marker has a noncanonical XML Schema date-time value.");
-                continue;
-            }
-
-            if (metadataCarriers.Any(element => DateUtcOf(element) is { } dateUtc
-                    && !IsValidRevisionDateUtc(dateUtc)))
-            {
-                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
-                group.Diagnostic = new RevisionDiagnostic(
-                    "invalid_revision_date_utc",
-                    "A live revision marker has an invalid w16du:dateUtc value.");
-                continue;
-            }
-
             if (group.Units.Any(u => !string.IsNullOrEmpty(u.NativeId) && u.Wid is null)
                 || group.RangeMarkers.Any(marker =>
                     !TryParseCanonicalRevisionId((string?)marker.Attribute(W.id), out _)))
@@ -367,7 +340,7 @@ internal static class RevisionOps
                 }
             }
 
-            if (group.Family == RevisionFamily.Move)
+            if (group.Family == RevisionFamily.Move && !group.Inert)
             {
                 // One move may own several ranges per side: the name, not a single container,
                 // links move source content to move destination content (ECMA-376 §17.13.5.24,
@@ -376,60 +349,67 @@ internal static class RevisionOps
                     group.RangeMarkers, W.moveFromRangeStart, W.moveFromRangeEnd);
                 var (toRanges, toAmbiguous) = PairMoveRanges(
                     group.RangeMarkers, W.moveToRangeStart, W.moveToRangeEnd);
+                // Grouping made every move that is not inert complete (BuildGroups): both sides.
                 bool duplicate = fromAmbiguous || toAmbiguous;
-                bool complete = fromRanges.Count > 0 && toRanges.Count > 0
-                    && group.Units.Any(unit => unit.Element.Name == W.moveFrom)
-                    && group.Units.Any(unit => unit.Element.Name == W.moveTo);
-                bool pairedIds = complete
-                    && fromRanges.Concat(toRanges).All(range => range.End is not null);
-                bool distinctRangeIds = complete && !fromRanges
+                bool pairedIds = fromRanges.Concat(toRanges).All(range => range.End is not null);
+                bool distinctRangeIds = !fromRanges
                     .Select(range => (string?)range.Start.Attribute(W.id))
                     .Intersect(toRanges.Select(range => (string?)range.Start.Attribute(W.id)),
                         StringComparer.Ordinal)
                     .Any();
-                var metadataElements = group.Units.Select(unit => unit.Element)
-                    .Concat(fromRanges.Select(range => range.Start))
-                    .Concat(toRanges.Select(range => range.Start)).ToArray();
-                bool coherentMetadata = metadataElements.All(element =>
-                    string.Equals(AuthorOf(element), group.Author, StringComparison.Ordinal)
-                    && string.Equals((string?)element.Attribute(W.date), group.Date,
-                        StringComparison.Ordinal)
-                    && string.Equals(DateUtcOf(element), group.DateUtc,
-                        StringComparison.Ordinal));
-                if (duplicate || !complete || !pairedIds || !distinctRangeIds || !coherentMetadata)
+                if (duplicate || !pairedIds || !distinctRangeIds)
                 {
-                    group.ResolutionStatus = duplicate || !distinctRangeIds || !coherentMetadata
+                    group.ResolutionStatus = duplicate || !distinctRangeIds
                         ? RevisionResolutionStatus.Ambiguous
                         : RevisionResolutionStatus.Malformed;
                     group.Diagnostic = new RevisionDiagnostic(
                         duplicate ? "ambiguous_move_topology"
                         : !distinctRangeIds ? "ambiguous_move_range_id"
-                        : !coherentMetadata ? "incoherent_move_metadata"
                         : "malformed_move_topology",
                         duplicate
                             ? "A native move name identifies source or destination ranges that reuse a w:id or overlap."
                             : !distinctRangeIds
                                 ? "A native move reuses one w:id for distinct source and destination ranges."
-                            : !coherentMetadata
-                                ? "A native move combines source and destination markup with different author/date ownership."
-                                : "A native move requires exactly paired source/destination ranges and both content sides.");
+                                : "A native move requires exactly paired source/destination ranges.");
                     continue;
                 }
 
-                bool fromOrdered = EachInSomeRange(fromRanges, group.Units
+                var fromContent = group.Units
                     .Where(unit => unit.Kind == UnitKind.Content && unit.Element.Name == W.moveFrom)
-                    .Select(unit => unit.Element));
-                bool toOrdered = EachInSomeRange(toRanges, group.Units
+                    .Select(unit => unit.Element).ToArray();
+                var toContent = group.Units
                     .Where(unit => unit.Kind == UnitKind.Content && unit.Element.Name == W.moveTo)
-                    .Select(unit => unit.Element));
-                bool disjoint = fromRanges.All(from => toRanges.All(to =>
-                    IsBefore(from.End!, to.Start) || IsBefore(to.End!, from.Start)));
+                    .Select(unit => unit.Element).ToArray();
+                bool fromOrdered = EachInSomeRange(fromRanges, fromContent);
+                bool toOrdered = EachInSomeRange(toRanges, toContent);
+                // The sides' ranges may touch or interleave at their boundaries; only moved content
+                // that also lies in a range of the other side has two readings.
+                bool disjoint = !fromContent.Any(element => EachInSomeRange(toRanges, new[] { element }))
+                    && !toContent.Any(element => EachInSomeRange(fromRanges, new[] { element }));
                 if (!fromOrdered || !toOrdered || !disjoint)
                 {
                     group.ResolutionStatus = RevisionResolutionStatus.Malformed;
                     group.Diagnostic = new RevisionDiagnostic(
                         "overlapping_move_topology",
-                        "A native move requires ordered, disjoint source and destination ranges.");
+                        "A native move requires its source and destination content each inside its own side's ranges only.");
+                    continue;
+                }
+
+                // One name over differently stamped carriers may join separate moves under one id.
+                // Files reported to be saved by Word stamp w16du:dateUtc on a move's content marks
+                // but not on its range starts, so only the values present are compared.
+                var carriers = MetadataCarriers(group);
+                if (carriers.Select(AuthorOf).Distinct(StringComparer.Ordinal).Count() > 1
+                    || carriers.Select(element => (string?)element.Attribute(W.date))
+                        .Distinct(StringComparer.Ordinal).Count() > 1
+                    || carriers.Select(DateUtcOf).OfType<string>()
+                        .Distinct(StringComparer.Ordinal).Count() > 1)
+                {
+                    group.ResolutionStatus = RevisionResolutionStatus.Ambiguous;
+                    group.AddressingOnly = true;
+                    group.Diagnostic = new RevisionDiagnostic(
+                        "incoherent_move_metadata",
+                        "A native move name links markup with different author/date stamps, so it may join separate moves; it cannot be resolved on its own.");
                     continue;
                 }
             }
@@ -440,7 +420,7 @@ internal static class RevisionOps
                 group.ResolutionStatus = RevisionResolutionStatus.Malformed;
                 group.Diagnostic = new RevisionDiagnostic(
                     "malformed_properties_change",
-                    "A property revision must contain exactly one matching stored-property shell under its live property parent.");
+                    "A property revision must contain exactly one matching stored-property shell (paragraph and run changes may omit it) under its live property parent.");
                 continue;
             }
 
@@ -528,6 +508,10 @@ internal static class RevisionOps
                     "orphan_numbering_revision",
                     "w:numberingChange is not attached to paragraph numbering properties or a LISTNUM field.");
             }
+
+            // Last, so a metadata defect never masks a check above: the markup is resolvable.
+            if (group.ResolutionStatus == RevisionResolutionStatus.Supported)
+                group.Diagnostic ??= MetadataDiagnostic(group);
         }
 
         ValidateGlobalMoveRangeTopology(groups);
@@ -544,16 +528,47 @@ internal static class RevisionOps
                 .Where(g => g.ResolutionStatus == RevisionResolutionStatus.Supported))
             {
                 group.ResolutionStatus = RevisionResolutionStatus.Ambiguous;
+                group.AddressingOnly = true;
                 group.Diagnostic = new RevisionDiagnostic(
-                    "duplicate_revision_id",
+                    DuplicateRevisionIdCode,
                     $"Native carrier '{collision.Key.Key}' identifies multiple live revisions in {collision.Key.PartUri}.");
             }
         }
     }
 
+    private static XElement[] MetadataCarriers(RevisionGroup group) =>
+        group.Units.Select(unit => unit.Element)
+            .Concat(group.RangeMarkers.Where(IsRevisionRangeStart)).Distinct().ToArray();
+
+    /// <summary>
+    /// An advisory defect in a resolvable group's review metadata. Author and date name who made
+    /// a change and when; no step of accepting or rejecting it reads them, so the group stays
+    /// <see cref="RevisionResolutionStatus.Supported"/> and the diagnostic only reports the defect.
+    /// </summary>
+    private static RevisionDiagnostic? MetadataDiagnostic(RevisionGroup group)
+    {
+        var carriers = MetadataCarriers(group);
+        if (carriers.Any(element => element.Name != W.tblGridChange
+                && string.IsNullOrEmpty(AuthorOf(element))))
+            return new RevisionDiagnostic(
+                "missing_revision_author",
+                "A live revision marker has no w:author, so the revision's owner is unknown.");
+        if (carriers.Any(element => (string?)element.Attribute(W.date) is { } date
+                && !IsValidRevisionDate(date)))
+            return new RevisionDiagnostic(
+                "invalid_revision_date",
+                "A live revision marker has a noncanonical XML Schema date-time value.");
+        if (carriers.Any(element => DateUtcOf(element) is { } dateUtc
+                && !IsValidRevisionDateUtc(dateUtc)))
+            return new RevisionDiagnostic(
+                "invalid_revision_date_utc",
+                "A live revision marker has an invalid w16du:dateUtc value.");
+        return null;
+    }
+
     private static void ValidateGlobalMoveRangeTopology(List<RevisionGroup> groups)
     {
-        foreach (var partGroups in groups.Where(group => group.Family == RevisionFamily.Move)
+        foreach (var partGroups in groups.Where(group => group.Family == RevisionFamily.Move && !group.Inert)
             .GroupBy(group => group.PartIndex))
         {
             ValidateMoveRangeSide(
@@ -684,8 +699,12 @@ internal static class RevisionOps
             && !change.Ancestors().Skip(1).Any(ancestor => PropsChangeNames.Contains(ancestor.Name))
             && !change.Descendants().Any(descendant =>
                 PropsChangeNames.Contains(descendant.Name))
-            && change.Elements().Count() == 1
-            && change.Elements().Single().Name == expectedProperty;
+            // A paragraph or run change with no stored shell recorded an empty property set, as an
+            // explicit empty shell does. Table and section changes need theirs: an empty baseline
+            // there would un-merge cells and drop grids, page sizes and header rows on reject.
+            && (change.Elements().Count() == 1
+                || (!change.HasElements && (change.Name == W.pPrChange || change.Name == W.rPrChange)))
+            && change.Elements().All(stored => stored.Name == expectedProperty);
     }
 
     /// <summary>
@@ -1136,6 +1155,45 @@ internal static class RevisionOps
     private static void BuildGroups(List<RevisionUnit> units, WalkCtx ctx, int partIndex,
         List<RevisionGroup> groups)
     {
+        // A move exists only when both of its named sides are present: the name links source
+        // content to destination content (ECMA-376 §17.13.5.24, §17.13.5.28). A move mark with
+        // no range, or whose name has no partner side, is its plain part — a source a deletion,
+        // a destination an insertion — the conversion files reported to be Word resaves show. Range
+        // markers whose name then identifies no move are inert: their own entry removes them.
+        var moves = units.Where(u => u.MoveName is not null)
+            .GroupBy(u => u.MoveName!, StringComparer.Ordinal)
+            .Where(name => name.Any(u => u.Element.Name == W.moveFrom)
+                && name.Any(u => u.Element.Name == W.moveTo))
+            .Select(name => name.Key).ToHashSet(StringComparer.Ordinal);
+        foreach (var u in units.Where(u => (u.Element.Name == W.moveFrom || u.Element.Name == W.moveTo)
+            && (u.MoveName is null || !moves.Contains(u.MoveName))))
+        {
+            u.Type = u.Element.Name == W.moveFrom ? TypeDelete : TypeInsert;
+            if (u.Family == RevisionFamily.Move)
+                u.Family = u.Type == TypeDelete ? RevisionFamily.ContentDelete : RevisionFamily.ContentInsert;
+            u.MoveName = null;
+        }
+        foreach (var (name, markers) in ctx.RangeMarkers.Where(entry => !moves.Contains(entry.Key)))
+        {
+            var start = markers.First(IsRevisionRangeStart);
+            var inert = new RevisionGroup
+            {
+                Type = TypeMove,
+                Family = RevisionFamily.Move,
+                Author = AuthorOf(start),
+                Date = (string?)start.Attribute(W.date),
+                DateUtc = DateUtcOf(start),
+                PartIndex = partIndex,
+                Inert = true,
+                Diagnostic = new RevisionDiagnostic(
+                    "inert_move_range",
+                    $"Move range '{name}' has no content on one of its sides, so it names no move; "
+                    + "resolving this entry removes only its range markers."),
+            };
+            inert.RangeMarkers.AddRange(markers);
+            groups.Add(inert);
+        }
+
         var moveGroups = new Dictionary<string, RevisionGroup>(StringComparer.Ordinal);
         var rowGroupByTr = new Dictionary<XElement, RevisionGroup>();
         var cellGroups = new List<RevisionGroup>();
@@ -1451,6 +1509,15 @@ internal static class RevisionOps
                     starts.Count == 0
                         ? $"{label} has a RangeEnd but no RangeStart in its owning part."
                         : $"{label} has a RangeStart but no RangeEnd in its owning part.");
+            }
+            else if (ReferenceEquals(EnvelopeNeighbor(starts[0].ElementsAfterSelf()), ends[0]))
+            {
+                // Nothing between the two markers but transparent boundaries: there is no wrapper
+                // whose existence the pair could revise, so resolution only removes it.
+                group.Inert = true;
+                group.Diagnostic = new RevisionDiagnostic(
+                    "empty_wrapper_range",
+                    $"{label} encloses nothing, so it revises no wrapper; resolving it removes the marker pair and nothing else.");
             }
             else if (markers.All(unownedMoveEnvelopes.Contains))
             {
@@ -2272,7 +2339,7 @@ internal static class RevisionOps
         bool preserveUnrelatedMarkup = false,
         IReadOnlyCollection<string>? protectedEmptyContainerKeys = null)
     {
-        if (g.ResolutionStatus != RevisionResolutionStatus.Supported)
+        if (!g.MarkupResolvable)
             throw new InvalidOperationException(g.Diagnostic?.Message
                 ?? "revision cannot be resolved safely");
 

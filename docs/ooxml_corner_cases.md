@@ -4601,9 +4601,10 @@ A run between `w:moveToRangeStart` and `w:moveToRangeEnd`, outside any `w:moveTo
 
 Word also accepts and rejects two disjoint destination ranges with the same `w:name`, including a
 range spanning paragraphs. The session now lists them as one supported move and resolves all its
-ranges together. Each range still needs its own paired `w:id`, coherent author/date ownership and
-ordered, disjoint source and destination content. Reused IDs, overlapping same-named ranges and
-crossed ranges remain refused. A named range links explicitly marked moved content; its position
+ranges together. Each range still needs its own paired `w:id` and ordered, disjoint source and
+destination content. Since issue #1385, author/date disagreement across one name's carriers refuses
+resolving that move by id (it may join two reviewers' moves) but not accept-all or reject-all. Reused
+IDs, overlapping same-named ranges and crossed ranges remain refused. A named range links explicitly marked moved content; its position
 alone does not make ordinary content part of the move (ECMA-376 §17.13.5.24 and §17.13.5.28).
 
 The processor inspects live content before removing moved wrappers. Range cleanup preserves
@@ -4627,6 +4628,126 @@ Editing strictly inside a `w:moveTo` remains refused by `ReplaceTextAtSpan` and 
 coordinating changes to both moved sides is a separate editing operation. Text inserted at a same-
 paragraph move edge still goes past its range marker. Existing ordinary content inside a range,
 including text at an edge in another paragraph, now survives resolution by both APIs.
+
+---
+
+## Revisions: what makes accept-all unsafe, and what does not (issue #1385)
+
+Real documents carry revision markup the selective resolver once refused wholesale. Each shape below
+was checked against `RevisionProcessor`, LibreOffice 25.8 (load, Accept All / Reject All through UNO,
+save as DOCX) and, where the producer was Word, against Word's own saved files.
+
+### `w16du:dateUtc` on a move's content but not on its ranges
+
+```xml
+<w:moveFromRangeStart w:id="7" w:author="Reviewer A" w:date="2026-03-02T10:00:00Z" w:name="move1"/>
+<w:moveFrom w:id="8" w:author="Reviewer A" w:date="2026-03-02T10:00:00Z"
+            w16du:dateUtc="2026-03-02T09:00:00Z">…</w:moveFrom>
+```
+
+Files reported to be saved by Word (third-party test files written by following Word instructions)
+have this shape: `CT_MoveBookmark` range starts carry
+`w:author`/`w:date` only. Docxodus compared `dateUtc` across all of a move's carriers and refused the
+move as `incoherent_move_metadata`. It now compares only the values present. A genuine author/date
+disagreement still refuses resolving the move by id, since one name may then join two reviewers'
+moves, but no longer blocks accept-all or reject-all.
+
+| Reader | Word move with `dateUtc` on content only |
+|---|---|
+| Word (files reported to be its output) | writes it |
+| LibreOffice | accepts and rejects it |
+| `RevisionProcessor` | accepts and rejects it |
+| `DocxSession` before #1385 | `Ambiguous`, `incoherent_move_metadata`; bulk refused |
+| `DocxSession` after | one `Supported` move, no diagnostic |
+
+The same holds for a missing `w:author` and an unparseable `w:date` (LibreOffice writes dates such as
+`0-00-00T00:00:00Z`): LibreOffice and `RevisionProcessor` resolve them, and so does the session now,
+listing the defect as an advisory diagnostic. Code: `RevisionOps.MetadataDiagnostic`.
+
+### A move with one side missing is an insertion or a deletion
+
+```xml
+<!-- destination: no move range -->
+<w:p><w:pPr><w:rPr><w:moveTo w:id="5" …/></w:rPr></w:pPr>
+  <w:moveTo w:id="6" …><w:r><w:t>Clause four moves up.</w:t></w:r></w:moveTo></w:p>
+<!-- source: a named range whose name has no destination -->
+<w:p><w:pPr><w:rPr><w:moveFrom w:id="7" …/></w:rPr></w:pPr>
+  <w:moveFromRangeStart w:id="8" w:name="m1" …/>
+  <w:moveFrom w:id="9" …><w:r><w:delText>Clause four moves up.</w:delText></w:r></w:moveFrom></w:p>
+<w:moveFromRangeEnd w:id="8"/>
+```
+
+Files reported to be Word's resave of this input (third-party test files) show Word rewriting the
+destination as `w:ins` (content and paragraph mark) and the source as `w:del`, keeping the source's
+now empty `w:moveFromRangeStart`/`End` pair around the `w:del`. Companion files reported to be Word's
+output after resolving one other revision still contain that pair. There is no Word evidence for the
+pair after its enclosed deletion resolves; both other oracles leave none after accept-all/reject-all. The mirror
+shape (a ranged destination whose source has no range) and a destination with no source at all
+convert the same way. LibreOffice and `RevisionProcessor` produce the same text for accept and
+reject.
+
+| Reader | Accept all | Reject all |
+|---|---|---|
+| Word (files reported to be its resave) | — converts the move to `w:ins` + `w:del`, keeps the empty range pair | — |
+| LibreOffice | moved text at the destination only | moved text at the source only |
+| `RevisionProcessor` | same text as LibreOffice, no markers left | same |
+| `DocxSession` before #1385 | refused (`ambiguous_move_range_id`, or `unsupported_revision_family` on the empty pair) | refused |
+| `DocxSession` after | same text, no markers left | same |
+
+Code: `RevisionOps.BuildGroups` decides a move only once both named sides are known, per story part
+(a source in a header and a destination in the body are a plain deletion and insertion); the inert
+range pair is its own entry (`inert_move_range`).
+
+### Property changes with no stored shell, empty wrapper ranges, interleaved move ranges
+
+```xml
+<w:pPr><w:pStyle w:val="Heading1"/><w:spacing w:before="240"/>
+  <w:pPrChange w:id="0" w:author="Reviewer A" w:date="2026-03-02T10:00:00Z"/></w:pPr>
+
+<w:customXmlDelRangeStart w:id="3" w:author="Reviewer A"/><w:customXmlDelRangeEnd w:id="3"/>
+
+<w:p>…<w:moveToRangeStart w:id="2" w:name="m1" …/><w:moveTo w:id="3" …>…</w:moveTo></w:p>
+<w:p><w:moveFromRangeStart w:id="5" w:name="m1" …/><w:moveToRangeEnd w:id="2"/>
+  <w:moveFrom w:id="6" …>…</w:moveFrom><w:moveFromRangeEnd w:id="5"/>…</w:p>
+```
+
+| Shape | LibreOffice 25.8 | `RevisionProcessor` | `DocxSession` before #1385 | after |
+|---|---|---|---|---|
+| `w:pPrChange` with no `w:pPr` (schema-required; LibreOffice writes it) | reject clears the paragraph's properties | same | `malformed_properties_change` | reject clears, accept keeps |
+| empty `w:customXml…Range` pairs | not even listed as changes | removes them | `malformed_range_topology` | `empty_wrapper_range`; resolution removes them |
+| destination range ending just after the source range starts, no content in both | ignores the move (resolves only the nested deletions) | resolves the move | `overlapping_move_topology` | resolves the move, same text as `RevisionProcessor` |
+
+For a paragraph or run change, an absent stored shell can only mean the empty set an explicit
+`<w:pPr/>` or `<w:rPr/>` spells, which the session already accepted. Table and section changes stay
+refused without their shell: an empty baseline would un-merge cells or drop the grid, a header-row
+flag or the page size on reject, and `RevisionProcessor` removes an empty `w:tblGrid` outright, so
+the two resolvers would disagree. Ranges of the two sides of a move matter only for which side the content between
+them belongs to; the session resolves moved content by its own `w:moveFrom`/`w:moveTo` element, so
+markers interleaving with no content between them have one reading.
+
+### Still refused: a deleted first cell, and cells inside content controls
+
+```xml
+<w:tr><w:trPr><w:gridAfter w:val="1"/></w:trPr>
+  <w:tc><w:tcPr><w:cellDel w:id="1" …/></w:tcPr>…</w:tc><w:tc>…</w:tc><w:tc>…</w:tc></w:tr>
+```
+
+Accepting a deleted cell absorbs its grid column into the preceding cell; a row's first cell has
+none. `RevisionProcessor` removes the cell and leaves the row one grid column short (`w:gridAfter`
+unchanged); LibreOffice deletes the entire first column of the table, including cells that were not
+deleted, and the text of one surviving cell. Without Word's own result for this case there is no
+verified resolution, so the session keeps `unabsorbable_cell_deletion`. Rejecting it would be safe,
+but resolution status is per revision, not per direction.
+
+```xml
+<w:tr><w:sdt><w:sdtContent><w:tc><w:tcPr><w:cellIns …/></w:tcPr>…</w:tc></w:sdtContent></w:sdt>…</w:tr>
+```
+
+Cells wrapped one by one in content controls (one online editor exports every cell this way) have
+`w:sdtContent`, not `w:tr`, as their parent. The resolver's row geometry reads `w:tr/w:tc` and cannot
+place them; `RevisionProcessor`'s accept leaves the `w:cellDel` markers in the output, and LibreOffice
+produces a two-column table on accept and a three-column one on reject. The document stays refused
+(`ambiguous_table_structure_cluster`).
 
 ---
 

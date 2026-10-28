@@ -147,11 +147,16 @@ public sealed partial class DocxSession
     public EditResult RejectRevision(string revisionId) => ResolveRevision(revisionId, accept: false);
 
     /// <summary>Accept every live revision through the same fail-closed resolver used by
-    /// <see cref="AcceptRevision"/>. The complete operation is one undo step.</summary>
+    /// <see cref="AcceptRevision"/>. The complete operation is one undo step. It refuses on any
+    /// entry whose markup cannot be resolved safely, but not on one that is only ambiguous to
+    /// address (a <c>w:id</c> shared by two revisions, a move name joining differently stamped
+    /// moves): resolving every entry names none of them, while <see cref="AcceptRevision"/>
+    /// refuses those.</summary>
     public EditResult AcceptAllRevisions() => ResolveAllRevisions(accept: true);
 
     /// <summary>Reject every live revision through the same fail-closed resolver used by
-    /// <see cref="RejectRevision"/>. The complete operation is one undo step.</summary>
+    /// <see cref="RejectRevision"/>; refuses exactly where <see cref="AcceptAllRevisions"/>
+    /// does. The complete operation is one undo step.</summary>
     public EditResult RejectAllRevisions() => ResolveAllRevisions(accept: false);
 
     private EditResult ResolveRevision(string revisionId, bool accept)
@@ -245,8 +250,7 @@ public sealed partial class DocxSession
         if (registry.Entries.Count == 0)
             return new EditResult { Success = true };
 
-        var blocked = registry.Entries.FirstOrDefault(g =>
-            g.ResolutionStatus != RevisionResolutionStatus.Supported);
+        var blocked = registry.Entries.FirstOrDefault(g => !g.MarkupResolvable);
         if (blocked is not null)
             return RevisionResolutionError(blocked)!;
 

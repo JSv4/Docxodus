@@ -2324,9 +2324,12 @@ class DocxSession:
 
         Fails closed: an unsupported, malformed, or ambiguous registry entry aborts the
         whole operation (``revision_unsupported``/``revision_malformed``/
-        ``revision_ambiguous``) and nothing is mutated. There is no force mode — call
-        ``list_revisions`` and read each entry's ``diagnostic``. Honors an active
-        ``preconditions`` context like any other mutation."""
+        ``revision_ambiguous``) and nothing is mutated — except an entry that is ambiguous
+        only to address (a ``w:id`` shared by two revisions, a move name joining
+        differently stamped moves), which refuses ``accept_revision`` alone but not this.
+        A ``supported`` entry's ``diagnostic`` is advisory and blocks nothing. There is no
+        force mode — call ``list_revisions`` and read each entry's ``diagnostic``. Honors an
+        active ``preconditions`` context like any other mutation."""
         return EditResult._from_wire(self._call("accept_all_revisions", {}))
 
     def reject_all_revisions(self) -> EditResult:

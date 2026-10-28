@@ -16,6 +16,17 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Accepting or rejecting every revision no longer refuses a document over revision metadata (#1385).
+  A revision with no author or an invalid date or `w16du:dateUtc` is listed as `Supported` with an
+  advisory diagnostic (`missing_revision_author`, `invalid_revision_date`, `invalid_revision_date_utc`)
+  and resolves, alone or in bulk; no step of the resolution reads those values. Two revisions sharing
+  one `w:id` (`duplicate_revision_id`) and a move name whose carriers carry different stamps
+  (`incoherent_move_metadata`, which may join two reviewers' moves) stay `Ambiguous` and still refuse
+  being resolved one at a time, but no longer block `AcceptAllRevisions`/`RejectAllRevisions`. Moves
+  that stamp `w16du:dateUtc` on their content marks but not on their range starts (the shape of files
+  reported to be saved by Word) are no longer incoherent. Deliverable inspection now reports advisory diagnostics as
+  `structure.revision_advisory` at `Info` severity (before, a missing author or invalid date was a
+  blocking `structure.revision_malformed`).
 - The Word revision presentation keeps a comment's blank paragraphs in its margin notes, as empty
   paragraphs, because Word prints them as blank lines; balloons now show them. Its margin notes also
   carry `data-date-as-written`, the comment's `w:date` as written. The Docxodus presentation is
@@ -23,6 +34,19 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Three more shapes from real documents no longer refuse accept-all and reject-all (#1385): a
+  paragraph or run property change with no stored property shell (read as an empty baseline, as
+  LibreOffice reads it; table and section changes still need theirs); a `w:customXml…Range` start/end pair enclosing nothing (now an entry,
+  `empty_wrapper_range`, whose resolution removes the pair); and a move whose source and destination
+  ranges interleave only at their boundaries. A deleted first cell of a row and cell edits on cells
+  wrapped in content controls stay refused: neither has a verified unique resolution.
+- A tracked move missing a side no longer refuses accept-all and reject-all (#1385). A
+  `w:moveFrom`/`w:moveTo` with no named range, or whose range name has nothing on the other side,
+  now resolves as the deletion or insertion it is, the conversion files reported to be Word resaves
+  show; the leftover range
+  markers are listed as an inert entry (`inert_move_range`) whose resolution removes them. Such moves
+  were also mislabelled `ambiguous_move_range_id`; an empty move-range pair around a plain deletion
+  was `unsupported_revision_family`.
 - When a page's balloons cannot all stand beside it in the All Markup balloon layout
   (`commentColumnPlacement: "balloons"`), they are now cut as Word cuts them, measured from Word's
   PDFs: balloons stay whole from the top for as long as the rest, each cut to its first line, still

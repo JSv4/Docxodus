@@ -306,26 +306,35 @@ internal static class DeliverableSessionInspector
             paths.Add(element, path);
             return path;
         }
+        // A resolvable group can still carry an advisory diagnostic (a missing author, an invalid
+        // date, inert range markers): reported for review, at a severity that never blocks.
         foreach (var group in registry.Entries
-            .Where(entry => entry.ResolutionStatus != RevisionResolutionStatus.Supported)
+            .Where(entry => entry.ResolutionStatus != RevisionResolutionStatus.Supported
+                || entry.Diagnostic is not null)
             .OrderBy(entry => entry.PartUri, StringComparer.Ordinal)
             .ThenBy(entry => entry.Id, StringComparer.Ordinal))
         {
             if (observations.Count >= options.MaxFindings || !budget.Step()) return;
-            var status = group.ResolutionStatus.ToString().ToLowerInvariant();
+            bool advisory = group.ResolutionStatus == RevisionResolutionStatus.Supported;
+            var status = advisory ? "advisory" : group.ResolutionStatus.ToString().ToLowerInvariant();
             var element = group.Units.FirstOrDefault()?.Element
                 ?? group.RangeMarkers.FirstOrDefault();
             var path = element is null ? "/revisions/" + group.Id : ElementPath(element);
-            var severity = group.ResolutionStatus == RevisionResolutionStatus.Unsupported
-                ? VerificationFindingSeverity.Warning
-                : VerificationFindingSeverity.Error;
+            var severity = advisory ? VerificationFindingSeverity.Info
+                : group.ResolutionStatus == RevisionResolutionStatus.Unsupported
+                    ? VerificationFindingSeverity.Warning
+                    : VerificationFindingSeverity.Error;
             Add(observations, options.MaxFindings, DeliverableFindingObservation.Create(
                 "structure.revision_" + status,
                 DeliverableFindingCategory.Structure,
                 severity,
-                "A tracked revision group is " + status + ".",
+                advisory
+                    ? "A tracked revision group resolves but carries an advisory diagnostic."
+                    : "A tracked revision group is " + status + ".",
                 group.PartUri,
-                "Repair or remove the implicated tracked revision before delivery.",
+                advisory
+                    ? "Review the reported revision metadata or leftover range markers; they do not block resolution."
+                    : "Repair or remove the implicated tracked revision before delivery.",
                 new ChangeLocation { EntryUri = group.PartUri, PropertyPath = path },
                 scope: group.Scope,
                 xpath: path,
