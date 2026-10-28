@@ -282,6 +282,23 @@ namespace Docxodus
 
         private static Type? GetDocumentType(byte[] bytes)
         {
+            try
+            {
+                return GetPackageDocumentType(bytes);
+            }
+            catch (UriFormatException)
+            {
+                // Package relationships only the shared read step can parse (a target System.Uri
+                // rejects): type the package as every pipeline will read it.
+                var read = StrictOoxmlNormalizer.NormalizeForReading(bytes);
+                if (ReferenceEquals(read, bytes))
+                    throw;
+                return GetPackageDocumentType(read);
+            }
+        }
+
+        private static Type? GetPackageDocumentType(byte[] bytes)
+        {
             using (MemoryStream stream = new MemoryStream())
             {
                 stream.Write(bytes, 0, bytes.Length);

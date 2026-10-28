@@ -4932,3 +4932,52 @@ final paragraphs remain unchanged. Tests retain every physical Word page, includ
 and compare PDF crop boxes and exact per-page word inventories. Microsoft's
 [blank-page guidance](https://support.microsoft.com/en-us/word/delete-a-page-in-word) describes
 the required end paragraph and its ability to cause a blank last page.
+
+## External relationship targets `System.Uri` cannot parse (issue #1388)
+
+A link to several recipients can arrive as one `mailto:` target with the addresses separated by `;`
+(the reporter attributes the shape to Outlook; a LibreOffice regression document carries it too):
+
+```xml
+<Relationship Id="rId9" TargetMode="External"
+  Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+  Target="mailto:a@example.com;b@example.com"/>
+```
+
+`System.Uri` reads `mailto:` as `user@host` and rejects the host `example.com;b@example.com`
+("Invalid URI: The hostname could not be parsed."). A `,` or space between addresses, or a trailing
+`;`, fails the same way; a local part starting with `-` (`mailto:-a@example.com`) parses fine.
+System.IO.Packaging parses every relationship target into a `Uri` when it first reads a part's
+relationships, so it throws.
+
+| Consumer | `mailto:a@example.com;b@example.com` |
+|---|---|
+| LibreOffice 25.8 (`--convert-to docx`) | opens; writes the target back unchanged |
+| Open XML SDK 3.5.1, opened from a stream | opens; swaps the target for a random `rewritten://{guid}` and swaps it back only when that package is disposed |
+| Docxodus before #1388 | `DocxCompare`, `Consolidate`, `RevisionProcessor.AcceptRevisions(WmlDocument)` and `WmlToHtmlConverter.ConvertToHtml(WmlDocument)` threw: `OpenXmlMemoryStreamDocument` reads the relationships through System.IO.Packaging before the SDK can swap them. `DocxSession.Save` worked but wrote `rewritten://{guid}`, because it takes its bytes before disposing the package; compare outputs did too once the throw was bypassed, because relationships copied between packages carry the swapped `Uri` |
+| Docxodus after | the package outputs listed below keep the target as the input spelled it; `ListHyperlinks`, the markdown projection, run formatting, linked-image targets, the IR, semantic changes and HTML `href` values (once HTML-decoded) report it as spelled; `AddHyperlink`, `UpdateHyperlink` and markdown links accept it |
+
+**Code.** `PackageOpenRepair.Repair`, called from `StrictOoxmlNormalizer.NormalizeForReading` (the
+reading funnel behind `GetTransitionalBytes()`, `DocxSession` and the `HtmlConversionOps` byte entry
+points), rewrites each non-empty external target that fails `Uri.TryCreate(...,
+UriKind.RelativeOrAbsolute)` (the SDK's own test) to `x-docxodus-verbatim:` followed by the target,
+percent-escaped (`PackageOpenRepair.EncodeTarget`). That is a valid URI, the same for the same
+target in either compare input, and needs no state to undo (`DecodeTarget`). An empty target is left
+alone, so System.IO.Packaging rejects it as it always has. **Reserved spellings.** A target that
+already starts with the scheme is encoded too, unless the rest of it is a non-empty, canonical
+percent-escaped string (exactly what `Uri.EscapeDataString` writes). Those targets, a whole class
+such as `x-docxodus-verbatim:mailto%3Aa%40example.com`, are read as encodings and decoded on the way
+out; every other spelling, `x-docxodus-verbatim:` alone included, survives. This keeps reading
+idempotent: funnel output read through the funnel again is unchanged. **Where it is undone.** The
+decode runs where a target leaves the package model: `ZipPackageOutputNormalizer.Normalize` for
+package bytes (`DocxSession.Save` and its checkpoints, `OpenXmlMemoryStreamDocument`'s modified
+documents, `BreakLinkToTemplate`, `DocumentBuilder.ExtractGlossaryDocument`), `TargetText` for
+readers, and the semantic package detector. The decoded value is written as XML writes an attribute,
+so a tab or line break in a target comes back as itself, and every relationships part the repair
+rewrites is written as UTF-8, so the output side finds its encodings whatever the part declared.
+Writers take a caller's target through `TargetUri` and refuse one holding a character XML cannot
+carry. A checkpoint the session reopens (undo of a whole-package change, transaction rollback) is
+read back through the funnel, and undo snapshots keep a relationship's `Uri.OriginalString`. Paths
+that open caller bytes without the funnel are left on the SDK's own swap, which only `TargetText`'s
+`Uri.ToString()` fallback covers. A package with no such target is read as the same array. Tests:
+`UnparsedExternalTargetTests`.

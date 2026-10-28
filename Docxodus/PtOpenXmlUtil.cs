@@ -1959,7 +1959,7 @@ listSeparator
                         efpp.PutXDocument();
                     }
                 }
-                var result = new WmlDocument(source.FileName, ms.ToArray());
+                var result = new WmlDocument(source.FileName, ZipPackageOutputNormalizer.Normalize(ms.ToArray()));
                 return result;
             }
         }

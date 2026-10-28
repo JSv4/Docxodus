@@ -67,6 +67,19 @@ All notable changes to this project will be documented in this file.
   it crosses can end the revision. A change in a header or footer never shares a balloon with one
   in the body.
 
+- A document with an external link target that `System.Uri` cannot parse — a multi-recipient
+  `mailto:a@example.com;b@example.com` — no longer fails `DocxCompare`, `Consolidate`,
+  `RevisionProcessor.AcceptRevisions` or HTML conversion with "Invalid URI: The hostname could not
+  be parsed" (#1388). Compare and accept outputs, session saves (including after undo and
+  transaction rollback) and HTML conversion keep the target as the input spelled it, and the
+  session's readers report it so; before, `DocxSession.Save`, which did not fail, wrote the link
+  back as a `rewritten://` address, and an unedited session's `GetSemanticChanges` reported the link
+  as changed. `AddHyperlink`, `UpdateHyperlink` and markdown links in `ReplaceText` now accept such
+  a target instead of refusing it as invalid; they still refuse a target holding a character XML
+  cannot carry. A target that starts with `x-docxodus-verbatim:` followed by a canonical
+  percent-escaped string is reserved: it is read as the library's own encoding and written back
+  decoded.
+
 ## [14.2.0] - 2026-10-26
 
 ### Added

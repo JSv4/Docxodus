@@ -2318,7 +2318,7 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                             CopyGlossaryDocumentPartsFromGD(wDoc, outWDoc, newContent, images);
                             CopyRelatedPartsForContentParts(wDoc.MainDocumentPart!.GlossaryDocumentPart!, mdp, newContent, images);
                         }
-                        return new WmlDocument("Glossary.docx", outMs.ToArray());
+                        return new WmlDocument("Glossary.docx", ZipPackageOutputNormalizer.Normalize(outMs.ToArray()));
                     }
                 }
             }

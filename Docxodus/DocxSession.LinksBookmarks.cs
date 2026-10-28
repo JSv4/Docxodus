@@ -95,7 +95,7 @@ public sealed partial class DocxSession
                 {
                     kind = HyperlinkKind.External;
                     var relationship = owner.Part.HyperlinkRelationships.FirstOrDefault(r => r.Id == relationshipId);
-                    target = relationship?.Uri.ToString();
+                    target = relationship is null ? null : PackageOpenRepair.TargetText(relationship.Uri);
                     external = relationship?.IsExternal;
                     broken = relationship is null;
                 }
@@ -548,8 +548,7 @@ public sealed partial class DocxSession
             if (ResolveBookmarkPair(target.Target, hyperlinkTarget: true, anchorId,
                 out _, out _) is { } pairError) return pairError;
         }
-        else if (!Uri.TryCreate(target.Target, UriKind.RelativeOrAbsolute, out _)
-            || target.Target.StartsWith("#", StringComparison.Ordinal))
+        else if (target.Target.StartsWith("#", StringComparison.Ordinal) || !PackageOpenRepair.IsXmlText(target.Target))
             return EditResult.Fail(EditErrorCode.InvalidHyperlinkTarget,
                 $"invalid external hyperlink target: {target.Target}", anchorId);
         return null;
@@ -628,7 +627,7 @@ public sealed partial class DocxSession
         else
         {
             var relationship = OwnedPartRelationships.FindOrAddExternalHyperlink(
-                owner, new Uri(target.Target, UriKind.RelativeOrAbsolute));
+                owner, PackageOpenRepair.TargetUri(target.Target));
             link.SetAttributeValue(LinkR + "id", relationship.Id);
         }
     }
