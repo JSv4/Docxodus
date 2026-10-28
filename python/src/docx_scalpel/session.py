@@ -1606,8 +1606,8 @@ class DocxSession:
         ``deleted_text_side`` places a zero-length insertion immediately before or after
         tracked deleted text at the offset (which takes no room in the offsets); omit it for
         the default placement. A ``w:tab`` takes one offset, ``"\\t"``: a span covering it removes
-        it, and a ``"\\t"`` in ``replace`` is written as a ``w:tab``. Returns an ordinary edit result; use execute_batch for a
-        package-hashed receipt.
+        it, and a ``"\\t"`` in ``replace`` is written as a ``w:tab``. Returns an ordinary edit
+        result; use execute_batch for a package-hashed receipt.
         """
         return EditResult._from_wire(
             self._call(

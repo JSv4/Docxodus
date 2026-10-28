@@ -540,21 +540,14 @@ function collectInlineSegments(node: Node, out: InlineSeg[]): void {
       if (text) out.push({ text, bold: false, italic: false, href: null });
       return;
     }
+    if (isTab(child)) {
+      out.push(styledSegment("\t", child.parentElement));
+      return;
+    }
     if (child.nodeType === 3 /* TEXT_NODE */) {
       const text = child.textContent ?? "";
       if (!text) return;
-      const parent = child.parentElement;
-      let bold = false;
-      let italic = false;
-      let href: string | null = null;
-      if (parent && typeof getComputedStyle === "function") {
-        const cs = getComputedStyle(parent);
-        bold = fontWeightIsBold(cs.fontWeight);
-        italic = cs.fontStyle === "italic" || cs.fontStyle === "oblique";
-        const a = parent.closest("a");
-        href = a ? a.getAttribute("href") : null;
-      }
-      out.push({ text, bold, italic, href });
+      out.push(styledSegment(text, child.parentElement));
     } else if (child.nodeType === 1 /* ELEMENT_NODE */) {
       const el = child as HTMLElement;
       if (el.tagName === "BR") {
@@ -564,6 +557,32 @@ function collectInlineSegments(node: Node, out: InlineSeg[]): void {
       collectInlineSegments(el, out);
     }
   });
+}
+
+/** `text` with the formatting its parent element renders it in. */
+function styledSegment(text: string, parent: HTMLElement | null): InlineSeg {
+  let bold = false;
+  let italic = false;
+  let href: string | null = null;
+  if (parent && typeof getComputedStyle === "function") {
+    const cs = getComputedStyle(parent);
+    bold = fontWeightIsBold(cs.fontWeight);
+    italic = cs.fontStyle === "italic" || cs.fontStyle === "oblique";
+    const a = parent.closest("a");
+    href = a ? a.getAttribute("href") : null;
+  }
+  return { text, bold, italic, href };
+}
+
+/**
+ * `s` without leading and trailing whitespace OTHER than tabs. A rendered empty paragraph's
+ * placeholder space is not content, but a tab is: it is one character, `"\t"`, of the session's
+ * text (issue #1387), so the offset and commit trims keep it.
+ */
+const LEADING_SPACES = /^[^\S\t]+/;
+const TRAILING_SPACES = /[^\S\t]+$/;
+function trimSpaces(s: string): string {
+  return s.replace(LEADING_SPACES, "").replace(TRAILING_SPACES, "");
 }
 
 function segToMarkdown(seg: InlineSeg): string {
@@ -613,7 +632,7 @@ export function serializeInlineMarkdown(block: HTMLElement): string {
   // browser's bogus trailing <br> serializes as a hard break — EXCEPT the single space a user
   // types before a page-number field goes in: "Page " + PAGE must not commit as "Page". The
   // engine writes it with xml:space="preserve"; `trimBounds` counts it the same way.
-  const md = merged.map(segToMarkdown).join("").replace(/^\s+/, "").replace(/\s+$/, "");
+  const md = trimSpaces(merged.map(segToMarkdown).join(""));
   return escapeLeadingBlockMarkers(md + (keepsTrailingSpace(block) ? " " : ""));
 }
 
@@ -624,7 +643,7 @@ export function serializeInlineMarkdown(block: HTMLElement): string {
  */
 function keepsTrailingSpace(block: HTMLElement): boolean {
   const text = blockContentText(block);
-  if (text.trim().length === 0) return false;
+  if (trimSpaces(text).length === 0) return false;
   // An ordinary trailing space can only have come from the document (the converter renders
   // it from a preserved w:t), so it is content. A trailing NBSP is ambiguous: the browser
   // writes one for a typed space, but the placeholder an empty paragraph renders as is one
@@ -793,8 +812,9 @@ function guardChromeDeletion(block: HTMLElement, ev: InputEvent): void {
 }
 
 /**
- * Content that takes no room in the content offsets but is not chrome either: stepping over a
- * deletion must not also cross one of these to reach a character on its far side.
+ * Content that is not plain text and not chrome either (a tab is one character of the content
+ * offsets, the rest take none): stepping over a deletion must not also cross one of these to
+ * reach a character on its far side.
  */
 const STEP_BLOCKER_SELECTOR =
   'br, img, svg, picture, canvas, video, object, [data-docx-tab], [data-field], [contenteditable="false"]';
@@ -842,6 +862,34 @@ function deleteLiveCharacterBeyond(block: HTMLElement, inputType: string): void 
 }
 
 /**
+ * Backspace just after, or Delete just before, a rendered tab removes that tab, and so does a word
+ * deletion (Ctrl+Backspace, Ctrl+Delete) that starts there: a tab is the whitespace between words.
+ * The browser does not: the tab is an empty box inside the converter's tab-layout wrapper, and
+ * Chromium moves the text after it into the wrapper instead, or, for Ctrl+Delete, deletes the word
+ * BEFORE the caret, so the commit would move the tab or remove the wrong text. The tab is one
+ * character of the session's text (issue #1387), so removing its box is exactly the edit the commit
+ * then sends.
+ */
+function deleteAdjacentTab(block: HTMLElement, ev: InputEvent): void {
+  const backward = ev.inputType === "deleteContentBackward" || ev.inputType === "deleteWordBackward";
+  const forward = ev.inputType === "deleteContentForward" || ev.inputType === "deleteWordForward";
+  if (ev.defaultPrevented || (!backward && !forward)) return;
+  if (!block.ownerDocument.defaultView?.getSelection()?.isCollapsed) return;
+  const caret = caretOffsetIn(block);
+  if (caret === null) return;
+  const at = backward ? caret - 1 : caret;
+  if (blockContentText(block)[at] !== "\t") return;
+  const tab = Array.from(block.querySelectorAll<HTMLElement>("[data-docx-tab]")).find((box) =>
+    !isInMarker(box) && box.parentNode
+    && contentOffsetOf(block, box.parentNode, Array.prototype.indexOf.call(box.parentNode.childNodes, box)) === at);
+  if (!tab) return;
+  ev.preventDefault();
+  tab.remove();
+  placeCaretAtOffset(block, at);
+  block.dispatchEvent(new InputEvent("input", { inputType: ev.inputType, bubbles: true, composed: true }));
+}
+
+/**
  * A rendered field — PAGE / NUMPAGES in a running story, stamped `[data-field]` by the editor
  * render profile. Fields are ATOMIC for editing (`contenteditable=false`, the caret lands on
  * either side), and their content length is the field's CACHED result — the text the session
@@ -856,6 +904,18 @@ function fieldOf(node: Node | null): HTMLElement | null {
 
 function isField(node: Node): node is HTMLElement {
   return node.nodeType === 1 && (node as HTMLElement).hasAttribute("data-field");
+}
+
+/** A rendered tab: an empty box in the DOM, but one character, `"\t"`, of the session's text
+ *  (issue #1387). Like a field it is atomic to the offset helpers, which place the caret on either
+ *  side of it, never inside; the browser's own arrow-key movement around it is not changed. */
+function isTab(node: Node): node is HTMLElement {
+  return node.nodeType === 1 && (node as HTMLElement).hasAttribute("data-docx-tab");
+}
+
+/** The content text of an atomic node (a field's cached result, a tab's `"\t"`), else null. */
+function atomText(node: Node): string | null {
+  return isField(node) ? fieldText(node) : isTab(node) ? "\t" : null;
 }
 
 /** The text a field counts for: the cached result the session holds, else what it shows. */
@@ -918,12 +978,12 @@ function contentOffsetOf(block: HTMLElement, container: Node, offset: number): n
   let done = false;
   const walk = (node: Node): void => {
     if (done) return;
-    // A field inside a rendered deletion is deleted text: the walk below skips it like any other.
-    if (isField(node) && !isInMarker(node)) {
-      // Atomic: a point inside a field resolves to the field's end; the field counts its
-      // cached text either way.
+    // A field or tab inside a rendered deletion is deleted text: the walk below skips it like any other.
+    const atom = atomText(node);
+    if (atom !== null && !isInMarker(node)) {
+      // Atomic: a point inside a field or tab resolves to its end; it counts its text either way.
       const inside = node === container || node.contains(container);
-      if (!inside || offset > 0 || node !== container) count += stripBidi(fieldText(node)).length;
+      if (!inside || offset > 0 || node !== container) count += stripBidi(atom).length;
       if (inside) done = true;
       return;
     }
@@ -970,7 +1030,7 @@ function deletedTextSideOf(block: HTMLElement, start: number, length: number): "
   // Only whitespace may separate the deletion from the typed text: an empty paragraph's
   // placeholder space can sit between them, on either side.
   const text = blockContentText(block);
-  const blank = (from: number, to: number) => from <= to && text.slice(from, to).trim().length === 0;
+  const blank = (from: number, to: number) => from <= to && trimSpaces(text.slice(from, to)).length === 0;
   for (const deletion of Array.from(block.querySelectorAll(RENDERED_TEXT_DELETION_SELECTOR))) {
     const parent = deletion.parentNode;
     if (!parent) continue;
@@ -994,8 +1054,9 @@ function holdsOnlyPlainText(block: HTMLElement): boolean {
 function blockContentText(block: HTMLElement): string {
   let out = "";
   const walk = (node: Node): void => {
-    if (isField(node) && !isInMarker(node)) {
-      out += stripBidi(fieldText(node));
+    const atom = atomText(node);
+    if (atom !== null && !isInMarker(node)) {
+      out += stripBidi(atom);
     } else if (node.nodeType === 3 /* TEXT_NODE */) {
       if (!isInMarker(node)) out += stripBidi(node.textContent ?? "");
     } else {
@@ -1025,10 +1086,10 @@ function trimmedSplitOffset(block: HTMLElement, domOffset: number): number {
 function trimBounds(block: HTMLElement): { leading: number; trimmedLen: number } {
   const content = blockContentText(block);
   return {
-    leading: content.length - content.replace(/^\s+/, "").length,
+    leading: content.length - content.replace(LEADING_SPACES, "").length,
     // Mirrors serializeInlineMarkdown: leading and trailing whitespace dropped, plus the one
     // trailing space a commit keeps.
-    trimmedLen: content.trim().length + (keepsTrailingSpace(block) ? 1 : 0),
+    trimmedLen: trimSpaces(content).length + (keepsTrailingSpace(block) ? 1 : 0),
   };
 }
 
@@ -1067,10 +1128,11 @@ function contentPositionIn(el: HTMLElement, offset: number): { node: Node; offse
   let lastText: Node | null = null;
   const walk = (node: Node): void => {
     if (result) return;
-    if (isField(node) && !isInMarker(node)) {
-      // Never land inside a field: an offset at its start sits before it, anything up to its
-      // cached length sits after it.
-      const len = stripBidi(fieldText(node)).length;
+    const atom = atomText(node);
+    if (atom !== null && !isInMarker(node)) {
+      // Never land inside a field or tab: an offset at its start sits before it, anything up to
+      // its length sits after it.
+      const len = stripBidi(atom).length;
       const parent = node.parentNode;
       if (parent && remaining <= len) {
         const index = Array.prototype.indexOf.call(parent.childNodes, node);
@@ -2923,7 +2985,10 @@ export class DocxEditor {
     });
     el.addEventListener("blur", () => this.commitBlock(el));
     el.addEventListener("input", (ev) => noteTypedSpace(el, ev));
-    el.addEventListener("beforeinput", (ev) => guardChromeDeletion(el, ev as InputEvent));
+    el.addEventListener("beforeinput", (ev) => {
+      guardChromeDeletion(el, ev as InputEvent);
+      deleteAdjacentTab(el, ev as InputEvent);
+    });
     el.addEventListener("keydown", (ev) => this.onKeydown(el, ev as KeyboardEvent));
     // A band block re-rendered by an incremental swap is a fresh DOM node; re-adopt it (with the
     // anchor its caller already stamped) so the band chrome can still address it.
@@ -3282,18 +3347,19 @@ export class DocxEditor {
     // text replaces it wholesale — unless it holds a field whose cached result is empty (a PAGE
     // field in a tool-generated footer): that is content, and the span path below keeps it
     // while inserting the typed text beside it.
-    if (old.trim().length === 0 && !el.querySelector("[data-field]")) {
+    if (trimSpaces(old).length === 0 && !el.querySelector("[data-field]")) {
       // A paragraph whose only text is deleted renders that placeholder too, and with the markup
       // hidden nothing on the page shows the deleted text. Tracked mode refuses the rewrite when
       // the paragraph holds a bookmark; an untracked rewrite would discard a shown deletion. The
       // typed text then goes in as a plain insertion at its start, which cannot carry a line
       // break or inline formatting.
       const tracked = this.options.trackedChanges === TrackedChangeMode.RenderInline;
-      const typed = next.trim() + (keepsTrailingSpace(el) ? " " : "");
+      const typed = trimSpaces(next) + (keepsTrailingSpace(el) ? " " : "");
       // The side of a shown deletion the text was typed on. A whole-paragraph rewrite would put
       // it after the deletion whichever side that was, so plain text goes in as a span insertion
       // on its own side; a line break or inline formatting still needs the rewrite.
-      const side = deletedTextSideOf(el, next.indexOf(typed.trimEnd()), typed.trimEnd().length);
+      const typedText = typed.replace(TRAILING_SPACES, "");
+      const side = deletedTextSideOf(el, next.indexOf(typedText), typedText.length);
       const besideShownDeletion = side !== undefined && holdsOnlyPlainText(el);
       if (!besideShownDeletion && (tracked || !el.querySelector(RENDERED_TEXT_DELETION_SELECTOR))) {
         const whole = this.parseEdit(

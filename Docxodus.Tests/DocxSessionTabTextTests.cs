@@ -102,6 +102,8 @@ public class DocxSessionTabTextTests
         AssertOk(markdown.ReplaceText(Paragraph(markdown), "Left\tRight"));
         Assert.Equal("Left|Right", Shape(markdown.Save()));
         Assert.Single(markdown.Grep(@"Left\tRight"));
+        AssertOk(markdown.ReplaceText(Paragraph(markdown), "\tLead"));
+        Assert.Equal("|Lead", Shape(markdown.Save()));
     }
 
     [Fact]
