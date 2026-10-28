@@ -635,7 +635,11 @@ public static class DeliveryBundleDirectoryPublisher
                     // Validate parents as well as the leaf, without permitting another alias.
                     EnsureNoSymlinks(resolved, includeLeaf: true, stopAt: null,
                         isMacOS: false, readEntry);
-                    if ((readEntry(resolved).Attributes & FileAttributes.Directory) != 0)
+                    // Read again as we step onto it: a link swapped in since the walk above is refused.
+                    var target = readEntry(resolved);
+                    if (target.LinkTarget is null
+                        && (target.Attributes & FileAttributes.ReparsePoint) == 0
+                        && (target.Attributes & FileAttributes.Directory) != 0)
                     {
                         current = resolved;
                         continue;

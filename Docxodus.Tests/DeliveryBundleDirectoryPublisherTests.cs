@@ -152,6 +152,19 @@ public sealed class DeliveryBundleDirectoryPublisherTests
         Assert.DoesNotContain("/outside", tree.Reads);
     }
 
+    [Theory]
+    [InlineData("/tmp/delivery", "/private/tmp")]
+    [InlineData("/var/delivery", "/private/var")]
+    public void EnsureNoSymlinks_AliasTargetSwappedForALinkBetweenReadsIsRefused(string path, string resolved)
+    {
+        var tree = new PolicyTree();
+        tree.Entries["/outside"] = (FileAttributes.Directory, null);
+        tree.Entries["/outside/delivery"] = (FileAttributes.Directory, null);
+        tree.AfterFirstRead[resolved] = (FileAttributes.Directory | FileAttributes.ReparsePoint, "/outside");
+
+        Assert.Throws<IOException>(() => tree.Validate(path, isMacOS: true));
+    }
+
     [UnixTheory]
     [InlineData(true)]
     [InlineData(false)]
@@ -161,6 +174,30 @@ public sealed class DeliveryBundleDirectoryPublisherTests
         tree.Validate("/private/var/delivery", isMacOS);
         tree.Validate("/private/var/missing", isMacOS, includeLeaf: false);
         Assert.Throws<IOException>(() => tree.Validate("/outside", isMacOS, "/private"));
+    }
+
+    [Theory]
+    [InlineData((int)DeliveryBundleDirectoryPublisherCheckpoint.BeforeVerification)]
+    [InlineData((int)DeliveryBundleDirectoryPublisherCheckpoint.BeforeCommit)]
+    [InlineData((int)DeliveryBundleDirectoryPublisherCheckpoint.BeforeDirectoryCommit)]
+    public void Publish_TempAliasRejectsLinkToEmptyDirectoryAtEveryCommitCheckpoint(int checkpointValue)
+    {
+        // An empty link target adds no unexpected file, so only the symlink rejection can stop it.
+        using var temporary = new TemporaryDirectory();
+        var target = Path.Combine(temporary.Path, "delivery");
+        var outside = Path.Combine(temporary.Path, "outside");
+        Directory.CreateDirectory(outside);
+        var injector = new CallbackFaultInjector(context =>
+        {
+            if ((int)context.Checkpoint == checkpointValue)
+                Directory.CreateSymbolicLink(Path.Combine(context.StageDirectory, "injected"), outside);
+        });
+
+        Assert.Throws<IOException>(() =>
+            DeliveryBundleDirectoryPublisher.Publish(Source(), target, injector));
+
+        Assert.False(PathEntryExists(target));
+        Assert.Empty(Directory.GetFileSystemEntries(outside));
     }
 
     [Theory]
@@ -766,6 +803,9 @@ public sealed class DeliveryBundleDirectoryPublisherTests
         internal List<string> Reads { get; } = new();
         internal string? Inaccessible { get; set; }
 
+        // An entry swapped in after the first read of its path: a link raced in between two reads.
+        internal Dictionary<string, (FileAttributes Attributes, string? LinkTarget)> AfterFirstRead { get; } = new();
+
         internal void Validate(string path, bool isMacOS, string? stopAt = null, bool includeLeaf = true) =>
             DeliveryBundleDirectoryPublisher.EnsureNoSymlinks(path, includeLeaf, stopAt, isMacOS, Read);
 
@@ -774,6 +814,8 @@ public sealed class DeliveryBundleDirectoryPublisherTests
             Reads.Add(path);
             if (path == Inaccessible)
                 throw new UnauthorizedAccessException(path);
+            if (Reads.Count(read => read == path) > 1 && AfterFirstRead.TryGetValue(path, out var swapped))
+                return swapped;
             return Entries.TryGetValue(path, out var entry)
                 ? entry
                 : throw new DirectoryNotFoundException(path);
