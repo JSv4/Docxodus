@@ -23,7 +23,20 @@ All notable changes to this project will be documented in this file.
   `ExpectedTextRange` read, and the projection prints (it printed four spaces before). Before, a tab
   took no room. A caller who changes nothing gets every offset after a tab one larger per tab before
   it, so an offset stored by an older version is that much short; there is no setting to restore the
-  old counting. Spans and text now agree: replacing or deleting a span that covers a tab removes that
+  old counting. The texts read alongside those offsets now hold the `'\t'` too: `GetFormatting` run
+  text and spans, `ListBookmarks`/`ListHyperlinks` text and spans, `TextMatch.ContextBefore`/`After`,
+  anchor `TextPreview` (a note's can now start with `'\t'`), the needle `FindByText` matches, a
+  content control's `Text`, `ListComments` text, annotated text (`ListAnnotations` and
+  `AnnotationManager`, whose `FromSearch` text now matches across a tab), and the projection's
+  table-cell text. A tracked-deleted tab stays out of all of them. Those readers now share the
+  visible-text rule `AnchorInfo.VisibleText` has used since #1282, so moved-from text (`w:t` inside a
+  `w:moveFrom`) is left out of them too: a text search annotates the moved-to copy, and a table cell
+  `keep` + moved-from `gone` projects as `| keep |`, where it counted the moved-from text before. Every writer of caller text emits
+  a `w:tab` for `'\t'`: span and match replacement, `ReplaceText`/`InsertParagraph` markdown, note
+  and comment bodies, header and footer text, plain-text content-control fills and a
+  cross-reference's cached result. `WhitespaceMode.Normalize` folds no-break spaces but not a tab, so
+  a tab still matches only `\t`. `MergeParagraphs` adds no separator space after a trailing tab
+  (`first⇥` + `second` gives `first⇥second`). Spans and text now agree: replacing or deleting a span that covers a tab removes that
   `w:tab`, a `'\t'` in replacement or inserted text (span and match replacement, `ReplaceText`
   markdown, a content control's plain-text fill) is written as a `w:tab` element rather than a literal
   tab character, and the editor counts a rendered tab as one character. A tab-stop definition and a tab
@@ -55,6 +68,12 @@ All notable changes to this project will be documented in this file.
 - `Grep` finds a tab (#1387): `\t` matches it, and a phrase copied from the projection across a tab,
   such as manual numbering `1.2<tab>Title`, matches. Splitting a run for an edit no longer moves a tab
   or line break that came after the split point to before the run's text.
+- `AnnotationManager.AddAnnotation` with a text search (`AnnotationRange.FromSearch`,
+  `AnnotationTarget.Search`/`SearchInElement`) no longer deletes the rest of a run it bookmarks inside
+  (#1387). It rebuilt the run from the matched text node alone, so annotating `Alpha` in a run holding
+  `1.2<tab>Alpha` left only `Alpha`, and a match crossing a `w:br` inside one run threw "The parent
+  is missing". The run is now cut in place, keeping every tab, break and text node, and a break or
+  symbol just before the match stays outside the annotation. The search also reads the session's text, so it matches across a tab and skips deleted text.
 
 - Three more shapes from real documents no longer refuse accept-all and reject-all (#1385): a
   paragraph or run property change with no stored property shell (read as an empty baseline, as
