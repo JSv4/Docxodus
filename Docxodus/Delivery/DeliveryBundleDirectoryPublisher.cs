@@ -593,7 +593,15 @@ public static class DeliveryBundleDirectoryPublisher
     private static void EnsureNoSymlinks(
         string path,
         bool includeLeaf,
-        string? stopAt = null)
+        string? stopAt = null) =>
+        EnsureNoSymlinks(path, includeLeaf, stopAt, OperatingSystem.IsMacOS(), ReadPathEntry);
+
+    internal static void EnsureNoSymlinks(
+        string path,
+        bool includeLeaf,
+        string? stopAt,
+        bool isMacOS,
+        Func<string, (FileAttributes Attributes, string? LinkTarget)> readEntry)
     {
         var full = Path.GetFullPath(path);
         var stop = stopAt is null ? Path.GetPathRoot(full)! : Path.GetFullPath(stopAt);
@@ -612,10 +620,39 @@ public static class DeliveryBundleDirectoryPublisher
             current = Path.Combine(current, segments[index]);
             if (!includeLeaf && index == segments.Length - 1)
                 break;
-            if (PathEntryExists(current) && IsSymlink(current))
-                throw new IOException($"Symbolic-link path components are not allowed: '{current}'.");
+            var entry = readEntry(current);
+            if (entry.LinkTarget is null && (entry.Attributes & FileAttributes.ReparsePoint) == 0)
+                continue;
+
+            if (stopAt is null && isMacOS && current is "/var" or "/tmp"
+                && entry.LinkTarget is { Length: > 0 } linkTarget
+                && !linkTarget.Split('/').Any(segment => segment is "." or ".."))
+            {
+                var resolved = Path.TrimEndingDirectorySeparator(
+                    Path.GetFullPath(linkTarget, Path.GetDirectoryName(current)!));
+                if (string.Equals(resolved, "/private" + current, StringComparison.Ordinal))
+                {
+                    // Validate parents as well as the leaf, without permitting another alias.
+                    EnsureNoSymlinks(resolved, includeLeaf: true, stopAt: null,
+                        isMacOS: false, readEntry);
+                    // Read again as we step onto it: a link swapped in since the walk above is refused.
+                    var target = readEntry(resolved);
+                    if (target.LinkTarget is null
+                        && (target.Attributes & FileAttributes.ReparsePoint) == 0
+                        && (target.Attributes & FileAttributes.Directory) != 0)
+                    {
+                        current = resolved;
+                        continue;
+                    }
+                }
+            }
+
+            throw new IOException($"Symbolic-link path components are not allowed: '{current}'.");
         }
     }
+
+    private static (FileAttributes Attributes, string? LinkTarget) ReadPathEntry(string path) =>
+        (File.GetAttributes(path), new FileInfo(path).LinkTarget);
 
     private static bool PathEntryExists(string path)
     {

@@ -34,6 +34,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Delivery bundles can publish under macOS temporary directories through the exact `/var` to
+  `/private/var` and `/tmp` to `/private/tmp` system aliases. Other symlinks remain rejected,
+  including links in the resolved target's parent directories.
+
 - Three more shapes from real documents no longer refuse accept-all and reject-all (#1385): a
   paragraph or run property change with no stored property shell (read as an empty baseline, as
   LibreOffice reads it; table and section changes still need theirs); a `w:customXml…Range` start/end pair enclosing nothing (now an entry,
