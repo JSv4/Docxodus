@@ -3539,7 +3539,7 @@ namespace Docxodus
                         return element.Elements().Select(e =>
                             ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
                     var a = new XElement(Xhtml.a,
-                        new XAttribute("href", relationship.Uri),
+                        new XAttribute("href", PackageOpenRepair.TargetText(relationship.Uri)),
                         ConvertHyperlinkRuns(wordDoc, settings, element)
                         );
                     if (!a.Nodes().Any())
@@ -12338,7 +12338,7 @@ namespace Docxodus
                     var hyperlinkRel = ownerPart.HyperlinkRelationships.FirstOrDefault(hlr => hlr.Id == rId);
                     if (hyperlinkRel != null)
                     {
-                        hyperlinkUri = hyperlinkRel.Uri.ToString();
+                        hyperlinkUri = PackageOpenRepair.TargetText(hyperlinkRel.Uri);
                     }
                 }
             }

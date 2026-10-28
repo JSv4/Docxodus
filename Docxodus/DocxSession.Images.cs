@@ -788,7 +788,7 @@ public sealed partial class DocxSession
                 picturePayload ? ImageMarkupKind.ModernDrawing : ImageMarkupKind.UnsupportedDrawing,
                 placement, canMutate, unsupported,
                 owner.PartUri, owner.Scope, anchor.Value.Id, new CharSpan(offset, 0),
-                embedId ?? linkId, imagePart?.Uri.ToString(), linkId, linked?.Uri.ToString(),
+                embedId ?? linkId, imagePart?.Uri.ToString(), linkId, linked is null ? null : PackageOpenRepair.TargetText(linked.Uri),
                 !string.IsNullOrEmpty(embedId), !string.IsNullOrEmpty(linkId), broken,
                 imagePart is null ? null : Path.GetFileName(imagePart.Uri.OriginalString),
                 imagePart?.ContentType, media.Format, media.ContentTypeMatchesBytes,
@@ -840,7 +840,7 @@ public sealed partial class DocxSession
                 ImageMarkupKind.LegacyVml, null, canMutate, unsupported,
                 owner.PartUri, owner.Scope, anchor.Value.Id, new CharSpan(ImageOffset(paragraph, pict), 0),
                 relationshipId, imagePart?.Uri.ToString(), external is null ? null : relationshipId,
-                external?.Uri.ToString(), imagePart is not null, external is not null,
+                external is null ? null : PackageOpenRepair.TargetText(external.Uri), imagePart is not null, external is not null,
                 !string.IsNullOrEmpty(relationshipId) && (imagePart is null || media.IsMalformed
                     || media.ContentTypeMatchesBytes == false) && external is null,
                 imagePart is null ? null : Path.GetFileName(imagePart.Uri.OriginalString),

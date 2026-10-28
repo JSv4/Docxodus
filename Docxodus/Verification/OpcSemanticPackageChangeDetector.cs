@@ -369,7 +369,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         {
             var target = relationship.TargetMode == "Internal"
                 ? relationship.ResolvedTargetUri ?? relationship.Target
-                : relationship.Target;
+                : PackageOpenRepair.DecodeTarget(relationship.Target);
             var info = new RelationshipInfo(
                 relationship.OwnerUri,
                 relationship.Id,

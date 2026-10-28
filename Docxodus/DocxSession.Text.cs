@@ -1627,7 +1627,7 @@ public sealed partial class DocxSession
                 if (!string.IsNullOrEmpty(rid) && ownerPart is not null)
                 {
                     var rel = ownerPart.HyperlinkRelationships.FirstOrDefault(x => x.Id == rid);
-                    if (rel is not null) hyperlinkUrl = rel.Uri.ToString();
+                    if (rel is not null) hyperlinkUrl = PackageOpenRepair.TargetText(rel.Uri);
                 }
                 break;
             }

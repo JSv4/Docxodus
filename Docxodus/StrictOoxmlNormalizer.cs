@@ -88,15 +88,16 @@ internal static class StrictOoxmlNormalizer
     }
 
     /// <summary>
-    /// <see cref="NormalizeToTransitional(byte[])"/> for code about to open the package to read or
-    /// change its content. A package too damaged to convert is returned unchanged, so the open that
-    /// follows reports the damage exactly as it did before conversion existed.
+    /// <see cref="NormalizeToTransitional(byte[])"/> plus <see cref="PackageOpenRepair.Repair"/>, for
+    /// code about to open the package to read or change its content. A package too damaged to convert
+    /// is returned unchanged, so the open that follows reports the damage exactly as it did before
+    /// conversion existed.
     /// </summary>
     internal static byte[] NormalizeForReading(byte[] docxBytes)
     {
         try
         {
-            return NormalizeToTransitional(docxBytes);
+            return PackageOpenRepair.Repair(NormalizeToTransitional(docxBytes));
         }
         catch (Exception e) when (e is InvalidDataException or IOException)
         {

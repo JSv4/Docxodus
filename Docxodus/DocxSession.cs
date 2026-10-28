@@ -1407,7 +1407,7 @@ public sealed partial class DocxSession : IDisposable
         {
             foreach (var relationship in owner.Part.HyperlinkRelationships)
                 hyperlinkRelationships.Add((owner.PartUri, relationship.Id,
-                    relationship.Uri.ToString(), relationship.IsExternal));
+                    relationship.Uri.OriginalString, relationship.IsExternal));
             foreach (var relationship in Internal.OwnedPartRelationships.ImageRelationships(owner.Part))
             {
                 imageRelationships.Add((owner.PartUri, relationship.RelationshipId,
@@ -1417,7 +1417,7 @@ public sealed partial class DocxSession : IDisposable
                         SnapshotImageBytes(relationship.Target)));
             }
             foreach (var relationship in Internal.OwnedPartRelationships.ExternalImageRelationships(owner.Part))
-                linkedImageRelationships.Add((owner.PartUri, relationship.Id, relationship.Uri.ToString()));
+                linkedImageRelationships.Add((owner.PartUri, relationship.Id, relationship.Uri.OriginalString));
         }
         return new DocumentSnapshot(_version, parts, CapturePartRelationships(parts), hyperlinkRelationships, imageParts,
             imageRelationships, linkedImageRelationships);
@@ -1460,12 +1460,12 @@ public sealed partial class DocxSession : IDisposable
     /// <summary>
     /// The opening package rendered through the same checkpoint pipeline the current side uses,
     /// so <see cref="GetSemanticChanges"/> compares like against like. Opened read-only from the
-    /// retained bytes; a freshly opened package has no cached XDocuments, so the overlay below
-    /// is a no-op for it.
+    /// retained bytes, read through the same funnel the session opened them with; a freshly opened
+    /// package has no cached XDocuments, so the overlay below is a no-op for it.
     /// </summary>
     private static byte[] NormalizeOpeningPackage(byte[] packageBytes)
     {
-        using var source = new MemoryStream(packageBytes, writable: false);
+        using var source = new MemoryStream(StrictOoxmlNormalizer.NormalizeForReading(packageBytes), writable: false);
         using var document = WordprocessingDocument.Open(source, isEditable: false);
         return SerializeCheckpointOf(document);
     }
@@ -1644,6 +1644,9 @@ public sealed partial class DocxSession : IDisposable
         DisposeRenderShell();
         DiscardPackage(_doc, _stream);
 
+        // A checkpoint is package output (relationship targets restored to their spelling), so it is
+        // read back through the same funnel the constructor reads the caller's bytes through.
+        packageBytes = StrictOoxmlNormalizer.NormalizeForReading(packageBytes);
         _stream = new MemoryStream(packageBytes.Length);
         _stream.Write(packageBytes, 0, packageBytes.Length);
         _stream.Position = 0;
@@ -1672,7 +1675,7 @@ public sealed partial class DocxSession : IDisposable
             foreach (var relationship in expected.Values)
             {
                 if (live.TryGetValue(relationship.RelId, out var existing)
-                    && existing.Uri.ToString() == relationship.Uri
+                    && existing.Uri.OriginalString == relationship.Uri
                     && existing.IsExternal == relationship.IsExternal) continue;
                 if (live.ContainsKey(relationship.RelId))
                     owner.Part.DeleteReferenceRelationship(relationship.RelId);
@@ -2173,7 +2176,7 @@ public sealed partial class DocxSession : IDisposable
             else
             {
                 var relationship = Internal.OwnedPartRelationships.FindOrAddExternalHyperlink(
-                    owner.Part, new Uri(url, UriKind.RelativeOrAbsolute));
+                    owner.Part, PackageOpenRepair.TargetUri(url));
                 link.SetAttributeValue(R.id, relationship.Id);
                 link.Attribute(W.anchor)?.Remove();
             }

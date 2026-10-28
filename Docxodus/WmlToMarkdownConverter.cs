@@ -1374,7 +1374,7 @@ public static class WmlToMarkdownConverter
         if (part == null) return null;
         foreach (var rel in part.HyperlinkRelationships)
         {
-            if (rel.Id == relId) return rel.Uri.ToString();
+            if (rel.Id == relId) return PackageOpenRepair.TargetText(rel.Uri);
         }
         return null;
     }

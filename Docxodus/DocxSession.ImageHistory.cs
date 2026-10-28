@@ -119,7 +119,7 @@ public sealed partial class DocxSession
                 liveParts[targetUri] = relationship.Target;
             }
             foreach (var relationship in OwnedPartRelationships.ExternalImageRelationships(owner.Part))
-                liveLinked.Add((owner.PartUri, relationship.Id, relationship.Uri.ToString()));
+                liveLinked.Add((owner.PartUri, relationship.Id, relationship.Uri.OriginalString));
         }
 
         if (!liveRelationships.SetEquals(snapshot.ImageRelationships)

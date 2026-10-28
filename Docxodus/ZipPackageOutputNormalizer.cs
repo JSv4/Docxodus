@@ -12,7 +12,8 @@ namespace Docxodus;
 /// <summary>
 /// Applies the library's final ZIP policy to an OPC package after its owning Open XML package has
 /// finished writing. The package payload is copied entry-for-entry; only ZIP compression and
-/// extraction metadata are normalized.
+/// extraction metadata are normalized, and a relationship target the reading funnel encoded
+/// (<see cref="PackageOpenRepair"/>) is restored to its original spelling.
 /// </summary>
 /// <remarks>
 /// Word-authored packages commonly mark deflated entries with the ZIP "superfast" hint even when
@@ -67,7 +68,16 @@ internal static class ZipPackageOutputNormalizer
 
                     using var input = sourceEntry.Open();
                     using var output = targetEntry.Open();
-                    input.CopyTo(output);
+                    if (sourceEntry.FullName.EndsWith(".rels", StringComparison.OrdinalIgnoreCase))
+                    {
+                        using var rels = new MemoryStream();
+                        input.CopyTo(rels);
+                        output.Write(PackageOpenRepair.RestoreTargets(rels.ToArray()));
+                    }
+                    else
+                    {
+                        input.CopyTo(output);
+                    }
                 }
             }
 

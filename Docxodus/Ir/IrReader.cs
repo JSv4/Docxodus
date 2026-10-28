@@ -1856,7 +1856,7 @@ internal static class IrReader
             return null;
         foreach (var rel in part.HyperlinkRelationships)
             if (rel.Id == relId)
-                return rel.Uri.ToString();
+                return PackageOpenRepair.TargetText(rel.Uri);
         return null;
     }
 
