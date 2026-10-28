@@ -2182,6 +2182,9 @@ With `FillOptions.CoalesceWhitespaceAroundEmptyFill = true`, an empty fill (afte
 | whitespace | `.` `,` `;` `:` `!` `?` | drop the leading space | `"… 2024 [x]."` → `"… 2024."` |
 | `(` `[` `{` | matching `)` `]` `}` | drop both surrounding brackets | `"[[x]]"` → `""` |
 
+A tab is not whitespace here: it is layout, one character of the text (issue #1387), and an emptied
+placeholder between two tabs keeps both.
+
 Default is `false` (preserve the literal-delete behavior). `$`-prefix preservation runs first, so a picker returning `""` for `$[xxx]` with the default `PreserveDollarPrefix = true` ends up replacing with `"$"` (not empty) and coalescing is skipped — set `PreserveDollarPrefix = false` when you want the `$` to drop along with the brackets.
 
 Note the .NET implementation reads the live flat text of the enclosing block to find the immediate neighbors, so the rules work regardless of the `Boundary` setting. The npm TypeScript implementation uses the match's already-populated `contextBefore` / `contextAfter` (zero extra round-trip) — with `boundary: ContextBoundary.Bracket` the outer brackets are not visible to context, so the bracket-coalesce rule won't fire on the JS side. Callers using `CoalesceWhitespaceAroundEmptyFill` should leave `Boundary` at the default `Char`.
@@ -2428,7 +2431,7 @@ and every span agrees with its text: replacing or deleting a span that covers a 
 a literal tab character in `w:t`. A tab-stop definition (`w:pPr/w:tabs/w:tab`) and a tab in deleted
 text take no room. Before this change a tab took no room at all, so every offset after a tab was one
 smaller per tab before it; an offset saved from an older version is that much short. Other inline
-markers keep taking no room: `w:br`/`w:cr` (the projection prints a hard break), `w:ptab`,
+markers keep taking no room: `w:br` (the projection prints a hard break), and `w:cr`, `w:ptab`,
 `w:noBreakHyphen`, `w:softHyphen` and `w:sym` (the projection prints nothing for them).
 `CoalesceWhitespaceAroundEmptyFill` treats a tab as layout, not word spacing, and never absorbs one.
 
