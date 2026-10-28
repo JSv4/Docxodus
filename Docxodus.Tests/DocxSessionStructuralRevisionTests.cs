@@ -1688,8 +1688,9 @@ public class DocxSessionStructuralRevisionTests
 
     /// <summary>
     /// Session-minted <c>w:id</c>s must not collide with ids the document already uses: two live
-    /// groups sharing one id in a part are permanently Ambiguous — neither individually nor bulk
-    /// resolvable. Word and DocxDiff both emit four-digit ids, so a fixed start point collides.
+    /// groups sharing one id in a part are permanently Ambiguous — neither can be resolved on its
+    /// own (bulk resolution still proceeds). Word and DocxDiff both emit four-digit ids, so a fixed
+    /// start point collides.
     /// </summary>
     [Fact]
     public void DS45530_SessionMintedRevisionIds_DoNotCollideWithExistingDocumentIds()

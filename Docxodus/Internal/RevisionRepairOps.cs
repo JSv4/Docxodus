@@ -32,14 +32,14 @@ internal static class RevisionRepairOps
         // unsupported family when the walker never reached it as a unit, and as an orphan
         // when it did. Both are the same misplacement with the same unique-owner repair.
         var units = group.Units;
-        if (group.Diagnostic.Code is "missing_revision_id" or "invalid_revision_id" or "duplicate_revision_id")
+        if (group.Diagnostic.Code is "missing_revision_id" or "invalid_revision_id" or RevisionOps.DuplicateRevisionIdCode)
         {
             var carriers = Carriers(group);
             var defective = carriers.Count(c => !RevisionOps.HasCanonicalRevisionId(c));
             return new[]
             {
                 Proposal(group, RevisionRepairKind.AssignIdentity, repairable: true,
-                    group.Diagnostic.Code == "duplicate_revision_id"
+                    group.Diagnostic.Code == RevisionOps.DuplicateRevisionIdCode
                         ? $"Renumber every one of this entry's {carriers.Count} carriers with fresh document-unique ids; markers sharing one old id keep sharing the new one, so range pairs stay paired."
                         : $"Assign fresh document-unique ids to {defective} carrier(s) lacking a canonical w:id and renumber the rest of the entry consistently."),
             };

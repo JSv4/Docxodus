@@ -4601,9 +4601,10 @@ A run between `w:moveToRangeStart` and `w:moveToRangeEnd`, outside any `w:moveTo
 
 Word also accepts and rejects two disjoint destination ranges with the same `w:name`, including a
 range spanning paragraphs. The session now lists them as one supported move and resolves all its
-ranges together. Each range still needs its own paired `w:id`, coherent author/date ownership and
-ordered, disjoint source and destination content. Reused IDs, overlapping same-named ranges and
-crossed ranges remain refused. A named range links explicitly marked moved content; its position
+ranges together. Each range still needs its own paired `w:id` and ordered, disjoint source and
+destination content. Since issue #1385, author/date disagreement across one name's carriers refuses
+resolving that move by id (it may join two reviewers' moves) but not accept-all or reject-all. Reused
+IDs, overlapping same-named ranges and crossed ranges remain refused. A named range links explicitly marked moved content; its position
 alone does not make ordinary content part of the move (ECMA-376 §17.13.5.24 and §17.13.5.28).
 
 The processor inspects live content before removing moved wrappers. Range cleanup preserves
@@ -4627,6 +4628,41 @@ Editing strictly inside a `w:moveTo` remains refused by `ReplaceTextAtSpan` and 
 coordinating changes to both moved sides is a separate editing operation. Text inserted at a same-
 paragraph move edge still goes past its range marker. Existing ordinary content inside a range,
 including text at an edge in another paragraph, now survives resolution by both APIs.
+
+---
+
+## Revisions: what makes accept-all unsafe, and what does not (issue #1385)
+
+Real documents carry revision markup the selective resolver once refused wholesale. Each shape below
+was checked against `RevisionProcessor`, LibreOffice 25.8 (load, Accept All / Reject All through UNO,
+save as DOCX) and, where the producer was Word, against Word's own saved files.
+
+### `w16du:dateUtc` on a move's content but not on its ranges
+
+```xml
+<w:moveFromRangeStart w:id="7" w:author="Reviewer A" w:date="2026-03-02T10:00:00Z" w:name="move1"/>
+<w:moveFrom w:id="8" w:author="Reviewer A" w:date="2026-03-02T10:00:00Z"
+            w16du:dateUtc="2026-03-02T09:00:00Z">…</w:moveFrom>
+```
+
+Files reported to be saved by Word (third-party test files written by following Word instructions)
+have this shape: `CT_MoveBookmark` range starts carry
+`w:author`/`w:date` only. Docxodus compared `dateUtc` across all of a move's carriers and refused the
+move as `incoherent_move_metadata`. It now compares only the values present. A genuine author/date
+disagreement still refuses resolving the move by id, since one name may then join two reviewers'
+moves, but no longer blocks accept-all or reject-all.
+
+| Reader | Word move with `dateUtc` on content only |
+|---|---|
+| Word (files reported to be its output) | writes it |
+| LibreOffice | accepts and rejects it |
+| `RevisionProcessor` | accepts and rejects it |
+| `DocxSession` before #1385 | `Ambiguous`, `incoherent_move_metadata`; bulk refused |
+| `DocxSession` after | one `Supported` move, no diagnostic |
+
+The same holds for a missing `w:author` and an unparseable `w:date` (LibreOffice writes dates such as
+`0-00-00T00:00:00Z`): LibreOffice and `RevisionProcessor` resolve them, and so does the session now,
+listing the defect as an advisory diagnostic. Code: `RevisionOps.MetadataDiagnostic`.
 
 ---
 

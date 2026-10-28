@@ -42,6 +42,7 @@ internal static class RevisionOps
     internal const string TypeMove = "move";
     internal const string TypeFormat = "format";
     internal const string TypeStructure = "structure";
+    internal const string DuplicateRevisionIdCode = "duplicate_revision_id";
 
     internal enum UnitKind
     {
@@ -95,6 +96,14 @@ internal static class RevisionOps
         public string Scope { get; set; } = "body";
         public RevisionResolutionStatus ResolutionStatus { get; set; } = RevisionResolutionStatus.Supported;
         public RevisionDiagnostic? Diagnostic { get; set; }
+        /// <summary>Set with an <see cref="RevisionResolutionStatus.Ambiguous"/> diagnostic that
+        /// concerns only which revision an id names (a native id shared with another group, or a
+        /// move name joining differently stamped moves), never whether the markup resolves.</summary>
+        public bool AddressingOnly { get; set; }
+        /// <summary>Whether this group's own markup resolves safely. An addressing-only defect
+        /// refuses resolving the group alone; resolving every group needs no address and proceeds.</summary>
+        public bool MarkupResolvable => ResolutionStatus == RevisionResolutionStatus.Supported
+            || AddressingOnly;
         public List<RevisionUnit> Units { get; } = new();
         /// <summary>Move-range marker elements (start/end, both sides) removed when the
         /// group resolves.</summary>
@@ -272,48 +281,6 @@ internal static class RevisionOps
                 continue;
             }
 
-            if (group.Units.Any(unit => string.IsNullOrEmpty(unit.Author)
-                    && unit.Element.Name != W.tblGridChange))
-            {
-                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
-                group.Diagnostic = new RevisionDiagnostic(
-                    "missing_revision_author",
-                    "A live revision marker has no w:author and cannot establish ownership safely.");
-                continue;
-            }
-
-            var metadataCarriers = group.Units.Select(unit => unit.Element)
-                .Concat(group.RangeMarkers.Where(IsRevisionRangeStart)).Distinct().ToArray();
-            if (metadataCarriers.Any(element => element.Name != W.tblGridChange
-                    && string.IsNullOrEmpty((string?)element.Attribute(W.author))))
-            {
-                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
-                group.Diagnostic = new RevisionDiagnostic(
-                    "missing_revision_author",
-                    "A live revision marker has no w:author and cannot establish ownership safely.");
-                continue;
-            }
-
-            if (metadataCarriers.Any(element => (string?)element.Attribute(W.date) is { } date
-                    && !IsValidRevisionDate(date)))
-            {
-                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
-                group.Diagnostic = new RevisionDiagnostic(
-                    "invalid_revision_date",
-                    "A live revision marker has a noncanonical XML Schema date-time value.");
-                continue;
-            }
-
-            if (metadataCarriers.Any(element => DateUtcOf(element) is { } dateUtc
-                    && !IsValidRevisionDateUtc(dateUtc)))
-            {
-                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
-                group.Diagnostic = new RevisionDiagnostic(
-                    "invalid_revision_date_utc",
-                    "A live revision marker has an invalid w16du:dateUtc value.");
-                continue;
-            }
-
             if (group.Units.Any(u => !string.IsNullOrEmpty(u.NativeId) && u.Wid is null)
                 || group.RangeMarkers.Any(marker =>
                     !TryParseCanonicalRevisionId((string?)marker.Attribute(W.id), out _)))
@@ -387,31 +354,19 @@ internal static class RevisionOps
                     .Intersect(toRanges.Select(range => (string?)range.Start.Attribute(W.id)),
                         StringComparer.Ordinal)
                     .Any();
-                var metadataElements = group.Units.Select(unit => unit.Element)
-                    .Concat(fromRanges.Select(range => range.Start))
-                    .Concat(toRanges.Select(range => range.Start)).ToArray();
-                bool coherentMetadata = metadataElements.All(element =>
-                    string.Equals(AuthorOf(element), group.Author, StringComparison.Ordinal)
-                    && string.Equals((string?)element.Attribute(W.date), group.Date,
-                        StringComparison.Ordinal)
-                    && string.Equals(DateUtcOf(element), group.DateUtc,
-                        StringComparison.Ordinal));
-                if (duplicate || !complete || !pairedIds || !distinctRangeIds || !coherentMetadata)
+                if (duplicate || !complete || !pairedIds || !distinctRangeIds)
                 {
-                    group.ResolutionStatus = duplicate || !distinctRangeIds || !coherentMetadata
+                    group.ResolutionStatus = duplicate || !distinctRangeIds
                         ? RevisionResolutionStatus.Ambiguous
                         : RevisionResolutionStatus.Malformed;
                     group.Diagnostic = new RevisionDiagnostic(
                         duplicate ? "ambiguous_move_topology"
                         : !distinctRangeIds ? "ambiguous_move_range_id"
-                        : !coherentMetadata ? "incoherent_move_metadata"
                         : "malformed_move_topology",
                         duplicate
                             ? "A native move name identifies source or destination ranges that reuse a w:id or overlap."
                             : !distinctRangeIds
                                 ? "A native move reuses one w:id for distinct source and destination ranges."
-                            : !coherentMetadata
-                                ? "A native move combines source and destination markup with different author/date ownership."
                                 : "A native move requires exactly paired source/destination ranges and both content sides.");
                     continue;
                 }
@@ -430,6 +385,24 @@ internal static class RevisionOps
                     group.Diagnostic = new RevisionDiagnostic(
                         "overlapping_move_topology",
                         "A native move requires ordered, disjoint source and destination ranges.");
+                    continue;
+                }
+
+                // One name over differently stamped carriers may join separate moves under one id.
+                // Files reported to be saved by Word stamp w16du:dateUtc on a move's content marks
+                // but not on its range starts, so only the values present are compared.
+                var carriers = MetadataCarriers(group);
+                if (carriers.Select(AuthorOf).Distinct(StringComparer.Ordinal).Count() > 1
+                    || carriers.Select(element => (string?)element.Attribute(W.date))
+                        .Distinct(StringComparer.Ordinal).Count() > 1
+                    || carriers.Select(DateUtcOf).OfType<string>()
+                        .Distinct(StringComparer.Ordinal).Count() > 1)
+                {
+                    group.ResolutionStatus = RevisionResolutionStatus.Ambiguous;
+                    group.AddressingOnly = true;
+                    group.Diagnostic = new RevisionDiagnostic(
+                        "incoherent_move_metadata",
+                        "A native move name links markup with different author/date stamps, so it may join separate moves; it cannot be resolved on its own.");
                     continue;
                 }
             }
@@ -528,6 +501,10 @@ internal static class RevisionOps
                     "orphan_numbering_revision",
                     "w:numberingChange is not attached to paragraph numbering properties or a LISTNUM field.");
             }
+
+            // Last, so a metadata defect never masks a check above: the markup is resolvable.
+            if (group.ResolutionStatus == RevisionResolutionStatus.Supported)
+                group.Diagnostic = MetadataDiagnostic(group);
         }
 
         ValidateGlobalMoveRangeTopology(groups);
@@ -544,11 +521,42 @@ internal static class RevisionOps
                 .Where(g => g.ResolutionStatus == RevisionResolutionStatus.Supported))
             {
                 group.ResolutionStatus = RevisionResolutionStatus.Ambiguous;
+                group.AddressingOnly = true;
                 group.Diagnostic = new RevisionDiagnostic(
-                    "duplicate_revision_id",
+                    DuplicateRevisionIdCode,
                     $"Native carrier '{collision.Key.Key}' identifies multiple live revisions in {collision.Key.PartUri}.");
             }
         }
+    }
+
+    private static XElement[] MetadataCarriers(RevisionGroup group) =>
+        group.Units.Select(unit => unit.Element)
+            .Concat(group.RangeMarkers.Where(IsRevisionRangeStart)).Distinct().ToArray();
+
+    /// <summary>
+    /// An advisory defect in a resolvable group's review metadata. Author and date name who made
+    /// a change and when; no step of accepting or rejecting it reads them, so the group stays
+    /// <see cref="RevisionResolutionStatus.Supported"/> and the diagnostic only reports the defect.
+    /// </summary>
+    private static RevisionDiagnostic? MetadataDiagnostic(RevisionGroup group)
+    {
+        var carriers = MetadataCarriers(group);
+        if (carriers.Any(element => element.Name != W.tblGridChange
+                && string.IsNullOrEmpty(AuthorOf(element))))
+            return new RevisionDiagnostic(
+                "missing_revision_author",
+                "A live revision marker has no w:author, so the revision's owner is unknown.");
+        if (carriers.Any(element => (string?)element.Attribute(W.date) is { } date
+                && !IsValidRevisionDate(date)))
+            return new RevisionDiagnostic(
+                "invalid_revision_date",
+                "A live revision marker has a noncanonical XML Schema date-time value.");
+        if (carriers.Any(element => DateUtcOf(element) is { } dateUtc
+                && !IsValidRevisionDateUtc(dateUtc)))
+            return new RevisionDiagnostic(
+                "invalid_revision_date_utc",
+                "A live revision marker has an invalid w16du:dateUtc value.");
+        return null;
     }
 
     private static void ValidateGlobalMoveRangeTopology(List<RevisionGroup> groups)
@@ -2272,7 +2280,7 @@ internal static class RevisionOps
         bool preserveUnrelatedMarkup = false,
         IReadOnlyCollection<string>? protectedEmptyContainerKeys = null)
     {
-        if (g.ResolutionStatus != RevisionResolutionStatus.Supported)
+        if (!g.MarkupResolvable)
             throw new InvalidOperationException(g.Diagnostic?.Message
                 ?? "revision cannot be resolved safely");
 

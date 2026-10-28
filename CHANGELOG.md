@@ -16,6 +16,17 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Accepting or rejecting every revision no longer refuses a document over revision metadata (#1385).
+  A revision with no author or an invalid date or `w16du:dateUtc` is listed as `Supported` with an
+  advisory diagnostic (`missing_revision_author`, `invalid_revision_date`, `invalid_revision_date_utc`)
+  and resolves, alone or in bulk; no step of the resolution reads those values. Two revisions sharing
+  one `w:id` (`duplicate_revision_id`) and a move name whose carriers carry different stamps
+  (`incoherent_move_metadata`, which may join two reviewers' moves) stay `Ambiguous` and still refuse
+  being resolved one at a time, but no longer block `AcceptAllRevisions`/`RejectAllRevisions`. Moves
+  that stamp `w16du:dateUtc` on their content marks but not on their range starts (the shape of files
+  reported to be saved by Word) are no longer incoherent. Deliverable inspection now reports advisory diagnostics as
+  `structure.revision_advisory` at `Info` severity (before, a missing author or invalid date was a
+  blocking `structure.revision_malformed`).
 - The Word revision presentation keeps a comment's blank paragraphs in its margin notes, as empty
   paragraphs, because Word prints them as blank lines; balloons now show them. Its margin notes also
   carry `data-date-as-written`, the comment's `w:date` as written. The Docxodus presentation is

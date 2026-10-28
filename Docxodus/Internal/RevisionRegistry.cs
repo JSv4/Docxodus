@@ -77,8 +77,7 @@ internal sealed class RevisionRegistry
         {
             if (registry.Entries.Count == 0) return removed;
 
-            var blocked = registry.Entries.FirstOrDefault(entry =>
-                entry.ResolutionStatus != RevisionResolutionStatus.Supported);
+            var blocked = registry.Entries.FirstOrDefault(entry => !entry.MarkupResolvable);
             if (blocked is not null)
                 throw new RevisionResolutionException(blocked);
 

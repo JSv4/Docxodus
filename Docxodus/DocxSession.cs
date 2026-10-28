@@ -1687,9 +1687,9 @@ public sealed partial class DocxSession : IDisposable
     /// Mint the next <c>w:id</c> for revision markup this session writes. The counter is
     /// seeded from the document's own markup on first use: a fixed starting point collides
     /// with the four-digit ids Word and DocxDiff already emit, and two live groups sharing a
-    /// <c>w:id</c> in one part are permanently <see cref="RevisionResolutionStatus.Ambiguous"/>
-    /// — neither individually resolvable nor bulk-resolvable, with no recovery short of
-    /// hand-editing the XML.
+    /// <c>w:id</c> in one part are <see cref="RevisionResolutionStatus.Ambiguous"/>: neither can be
+    /// accepted or rejected on its own until <see cref="RepairRevisions"/> assigns fresh ids (bulk
+    /// resolution still proceeds).
     /// </summary>
     internal int NextRevisionId()
     {

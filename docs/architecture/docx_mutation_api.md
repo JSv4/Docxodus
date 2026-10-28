@@ -1927,10 +1927,10 @@ individual and bulk resolution:
 
 | Method | Description |
 |--------|-------------|
-| `ListRevisions()` | Read-only entries in document order across body, headers, footers, footnotes, and endnotes. Each carries an opaque stable `Id` (`rev2-…`), coarse `Type`, exact `Family`, native `ConstituentIds`, owning `PartUri`/canonical `Scope`, primary `AnchorId`, every `AffectedAnchor`, and a `ResolutionStatus` plus optional diagnostic. Authors/dates come from the live markup. Atomic entries include content and paragraph/row/property changes, named moves, cell insert/delete/merge operations, structured-wrapper envelopes (`w:sdt` and `w:customXml` insertion and deletion; a moved wrapper's envelope resolves with its named move, so RP018 round-trips), numbering-property revisions, and math control-character marks (an `m:ctrlPr` mark and the revised runs of its object — the fraction, radical, delimiter… whose existence the mark tracks — resolve as one entry; a paragraph mark carrying both an insertion and a later deletion lists each as its own revision). Unsupported, malformed, and ambiguous markup stays visible and fails closed. Legacy `revNNN` ids are accepted only as unambiguous inputs and are never emitted. |
+| `ListRevisions()` | Read-only entries in document order across body, headers, footers, footnotes, and endnotes. Each carries an opaque stable `Id` (`rev2-…`), coarse `Type`, exact `Family`, native `ConstituentIds`, owning `PartUri`/canonical `Scope`, primary `AnchorId`, every `AffectedAnchor`, and a `ResolutionStatus` plus optional diagnostic (on a `Supported` entry the diagnostic is advisory — see "What blocks bulk resolution" below). Authors/dates come from the live markup. Atomic entries include content and paragraph/row/property changes, named moves, cell insert/delete/merge operations, structured-wrapper envelopes (`w:sdt` and `w:customXml` insertion and deletion; a moved wrapper's envelope resolves with its named move, so RP018 round-trips), numbering-property revisions, and math control-character marks (an `m:ctrlPr` mark and the revised runs of its object — the fraction, radical, delimiter… whose existence the mark tracks — resolve as one entry; a paragraph mark carrying both an insertion and a later deletion lists each as its own revision). Unsupported, malformed, and ambiguous markup stays visible and fails closed. Legacy `revNNN` ids are accepted only as unambiguous inputs and are never emitted. |
 | `AcceptRevision(id)` | Resolve ONE revision, keeping the change: unwrap `w:ins`/`w:moveTo`, carry out `w:del`/`w:moveFrom` (paragraph-mark deletions coalesce into the following paragraph, row deletions drop the row — the last row drops the table), drop the `*PrChange` element keeping current properties. An ordinary undoable mutation returning the `EditResult` envelope (`Modified` = touched blocks, `Removed` = blocks the resolution deleted). |
 | `RejectRevision(id)` | The inverse: remove insertions, restore deletions (`w:delText` → `w:t`, marks stripped), keep a move at its source, restore a format change's stored old properties (preserving the children the `CT_*Base` inner schema excludes — mark revisions on a paragraph-mark `rPr`, header/footer references on `sectPr`, `rPr`/`sectPr` on `pPr`). |
-| `AcceptAllRevisions()` / `RejectAllRevisions()` | Resolve the complete live registry through the same selective resolver as one atomic undo step. The registry is rebuilt after every entry so resolving a property shell can expose older archived revisions safely. Any unsupported, malformed, or ambiguous entry rolls back the whole operation. |
+| `AcceptAllRevisions()` / `RejectAllRevisions()` | Resolve the complete live registry through the same selective resolver as one atomic undo step. The registry is rebuilt after every entry so resolving a property shell can expose older archived revisions safely. Any unsupported, malformed, or ambiguous entry rolls back the whole operation, except one that is ambiguous only to address (`duplicate_revision_id`, `incoherent_move_metadata`), which refuses selective resolution alone. |
 
 Mechanics live in `Docxodus/Internal/RevisionRegistry.cs` and `RevisionOps.cs`; the
 per-element semantics mirror `RevisionProcessor`'s transforms, applied to one atomic group in
@@ -1954,7 +1954,7 @@ Concretely, these shapes were resolvable before and are refused now:
 |-------|--------|-----------|
 | A revision element with no `w:id` | `Malformed` | `missing_revision_id` |
 | A revision element with a non-numeric `w:id` | `Malformed` | `invalid_revision_id` |
-| One `w:id` shared by two distinct live groups in one part | `Ambiguous` | `duplicate_revision_id` (repairable, see below) |
+| One `w:id` shared by two distinct live groups in one part | `Ambiguous` | `duplicate_revision_id` (repairable, see below) — refuses selective resolution only, see below |
 | A structured-wrapper range marker (`w:customXml{Ins,Del,MoveFrom,MoveTo}Range*`) whose id has no counterpart, or more than one | `Malformed` / `Ambiguous` | `unpaired_range_marker`, `duplicate_range_id` |
 | A paired range that does not cross a `w:sdt`/`w:customXml` tag as one half of Word's two-range envelope | `Malformed` | `malformed_range_topology` |
 | A move envelope around a wrapper whose content carries no `w:moveFrom`/`w:moveTo` mark | `Malformed` | `orphan_custom_xml_move_range` |
@@ -1963,6 +1963,33 @@ Concretely, these shapes were resolvable before and are refused now:
 | A revision mark under a run's `w:rPr`, or a `w:del`/move mark under `w:numPr` — positions the schema never allows (`CT_RPr` carries no marks; `CT_NumPr` admits only `w:ins` and `w:numberingChange`, removed numbering being archived in `w:pPrChange`) | `Malformed` | `invalid_revision_carrier` |
 | `w:numberingChange` not attached to `w:numPr` or a LISTNUM field | `Malformed` | `orphan_numbering_revision` |
 | A cell marker that is not a direct `w:tcPr` property, or `w:cellMerge` without `w:vMerge` | `Malformed` | `orphan_cell_revision`, `invalid_cell_merge_state` |
+
+#### What blocks bulk resolution, and what does not (issue #1385)
+
+A refusal is for markup the resolver cannot resolve without risking the document's content. Revision
+metadata and native ids are not that: no step of accepting or rejecting a revision reads its author or
+date, and resolving every entry addresses none of them. So:
+
+| Defect | Listed as | `AcceptRevision`/`RejectRevision` | `AcceptAllRevisions`/`RejectAllRevisions` |
+|--------|-----------|-----------------------------------|--------------------------------------------|
+| No `w:author` on a carrier | `Supported` + `missing_revision_author` | resolves | resolves |
+| A `w:date` that is not a valid XML Schema date-time (`0-00-00T00:00:00Z`, `2026-00-00T28:01:00Z`) | `Supported` + `invalid_revision_date` | resolves | resolves |
+| A `w16du:dateUtc` that is invalid or lacks `Z` | `Supported` + `invalid_revision_date_utc` | resolves | resolves |
+| A move name whose carriers name different authors or dates | `Ambiguous` + `incoherent_move_metadata` | refuses (`RevisionAmbiguous`) | resolves |
+| One `w:id` shared by two live groups | `Ambiguous` + `duplicate_revision_id` | refuses (`RevisionAmbiguous`; `AssignIdentity` repair offered) | resolves |
+
+A `Supported` entry can therefore carry a diagnostic: it is advisory, reporting a defect the
+resolution does not depend on. Deliverable inspection reports it as `structure.revision_advisory`
+at `Info` severity, which never blocks. Two defects are addressing-only: a duplicated id (the id is
+what a caller, a comment anchored with `AddCommentToRevision`, or a legacy `revNNN` input would use to
+name one of the two) and a move name over differently stamped carriers (one name may join two
+reviewers' moves, so accepting "the move" by id would resolve both). Each refuses selective
+resolution; bulk resolution resolves every group by its own markup, so it proceeds. Delivery revision
+policies resolve requested revisions one by one by id, so they keep the selective gate. The metadata checks run
+after every safety check, so a metadata defect never hides a resolution-unsafe one (a missing author on
+an unabsorbable cell deletion still reports `unabsorbable_cell_deletion`). In files reported to be
+Word output, `w16du:dateUtc` is stamped on a move's content marks but not on its range starts, so a
+move compares only the `dateUtc` values present.
 
 `RevisionProcessor.AcceptRevisions`/`RejectRevisions` still handle all of them and remain
 public, so a caller that needs the old always-succeeding behaviour can run the transform over
