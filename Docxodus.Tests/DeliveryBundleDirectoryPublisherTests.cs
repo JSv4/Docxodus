@@ -16,6 +16,192 @@ public sealed class DeliveryBundleDirectoryPublisherTests
     private static readonly byte[] ManifestBytes = Encoding.UTF8.GetBytes(
         "{\"schema\":\"https://docxodus.dev/schemas/delivery/bundle/v1\"}\n");
 
+    [MacOSFact]
+    public void Publish_MacOSTempAlias_PreservesLexicalPathAndPublishesVerifiedBundle()
+    {
+        using var temporary = new TemporaryDirectory();
+        var target = Path.Combine(temporary.Path, "delivery");
+        Assert.StartsWith("/var/", target, StringComparison.Ordinal);
+        var canonicalTarget = "/private" + target;
+        Assert.NotEqual(Path.GetFullPath(target), Path.GetFullPath(canonicalTarget));
+        var bundle = ModelBundle();
+
+        var failure = Record.Exception(() =>
+        {
+            var published = DeliveryBundleDirectoryPublisher.Publish(bundle, target);
+            Assert.Equal(Path.GetFullPath(target), published);
+        });
+
+        Assert.Null(failure);
+        Assert.Equal(bundle.GetArtifactBytes("working"),
+            File.ReadAllBytes(Path.Combine(canonicalTarget, "documents", "working.docx")));
+        var manifest = File.ReadAllBytes(Path.Combine(target, DeliveryBundle.ManifestFileName));
+        Assert.Equal(bundle.ManifestBytes, manifest);
+        Assert.True(DeliveryBundleVerifier.VerifyJson(manifest, new Dictionary<string, byte[]>
+        {
+            ["working"] = File.ReadAllBytes(Path.Combine(target, "documents", "working.docx")),
+        }).IsValid);
+        Assert.Equal(new[] { target }, Directory.GetFileSystemEntries(temporary.Path));
+        AssertNoStageDirectories(temporary.Path);
+    }
+
+    [UnixTheory]
+    [InlineData("/var", "/private/var")]
+    [InlineData("/var", "private/var")]
+    [InlineData("/tmp", "/private/tmp")]
+    [InlineData("/tmp", "private/tmp")]
+    public void EnsureNoSymlinks_AcceptsExactMacOSTempAliases(string alias, string linkTarget)
+    {
+        var tree = new PolicyTree();
+        tree.Entries[alias] = (FileAttributes.Directory | FileAttributes.ReparsePoint, linkTarget);
+
+        var failure = Record.Exception(() => tree.Validate(alias + "/delivery", isMacOS: true));
+
+        Assert.Null(failure);
+        Assert.Contains("/private", tree.Reads);
+        Assert.Contains("/private" + alias, tree.Reads);
+        Assert.Contains("/private" + alias + "/delivery", tree.Reads);
+    }
+
+    [UnixTheory]
+    [InlineData("arbitrary-root-alias")]
+    [InlineData("etc-alias")]
+    [InlineData("wrong-target")]
+    [InlineData("relative-target-elsewhere")]
+    [InlineData("relative-target-hidden-link")]
+    [InlineData("chained-link")]
+    [InlineData("target-parent-link")]
+    [InlineData("nested-link")]
+    [InlineData("dangling-target")]
+    [InlineData("missing-target-parent")]
+    [InlineData("inaccessible-target-parent")]
+    [InlineData("unexpected-reparse-point")]
+    [InlineData("target-is-file")]
+    [InlineData("non-macos-var")]
+    [InlineData("non-macos-tmp")]
+    [InlineData("stage-boundary")]
+    public void EnsureNoSymlinks_AcceptsSafeAliasButRefusesUnsafePaths(string scenario)
+    {
+        var tree = new PolicyTree();
+        // A blanket rejection must not satisfy the security matrix.
+        Assert.Null(Record.Exception(() => tree.Validate("/var/delivery", isMacOS: true)));
+        tree.Reads.Clear();
+        var path = "/var/delivery";
+        var isMacOS = true;
+        string? stopAt = null;
+        switch (scenario)
+        {
+            case "arbitrary-root-alias":
+            case "etc-alias":
+                path = scenario == "etc-alias" ? "/etc/delivery" : "/alias/delivery";
+                tree.Entries[Path.GetDirectoryName(path)!] =
+                    (FileAttributes.Directory | FileAttributes.ReparsePoint, "/private/var");
+                break;
+            case "wrong-target":
+            case "relative-target-elsewhere":
+                tree.Entries["/var"] = (FileAttributes.Directory | FileAttributes.ReparsePoint,
+                    scenario == "wrong-target" ? "/outside" : "../outside");
+                break;
+            case "relative-target-hidden-link":
+                tree.Entries["/var"] =
+                    (FileAttributes.Directory | FileAttributes.ReparsePoint, "private/redirect/../var");
+                tree.Entries["/private/redirect"] =
+                    (FileAttributes.Directory | FileAttributes.ReparsePoint, "/outside");
+                break;
+            case "chained-link":
+                tree.Entries["/private/var"] =
+                    (FileAttributes.Directory | FileAttributes.ReparsePoint, "/outside");
+                break;
+            case "target-parent-link":
+                tree.Entries["/private"] =
+                    (FileAttributes.Directory | FileAttributes.ReparsePoint, "/outside");
+                break;
+            case "nested-link":
+                tree.Entries["/private/var/delivery"] =
+                    (FileAttributes.Directory | FileAttributes.ReparsePoint, "/outside");
+                break;
+            case "dangling-target":
+                tree.Entries.Remove("/private/var");
+                break;
+            case "missing-target-parent":
+                tree.Entries.Remove("/private");
+                break;
+            case "inaccessible-target-parent":
+                tree.Inaccessible = "/private";
+                break;
+            case "unexpected-reparse-point":
+                tree.Entries["/var"] = (FileAttributes.Directory | FileAttributes.ReparsePoint, null);
+                break;
+            case "target-is-file":
+                tree.Entries["/private/var"] = (FileAttributes.Normal, null);
+                break;
+            case "non-macos-var":
+            case "non-macos-tmp":
+                isMacOS = false;
+                path = scenario == "non-macos-var" ? "/var/delivery" : "/tmp/delivery";
+                break;
+            case "stage-boundary":
+                stopAt = "/";
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario));
+        }
+
+        var rejection = Record.Exception(() => tree.Validate(path, isMacOS, stopAt));
+        Assert.True(rejection is IOException or UnauthorizedAccessException, rejection?.ToString());
+        Assert.DoesNotContain("/outside", tree.Reads);
+    }
+
+    [UnixTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EnsureNoSymlinks_OrdinaryPathsAndLeafBoundaryNeedNoAlias(bool isMacOS)
+    {
+        var tree = new PolicyTree();
+        tree.Validate("/private/var/delivery", isMacOS);
+        tree.Validate("/private/var/missing", isMacOS, includeLeaf: false);
+        Assert.Throws<IOException>(() => tree.Validate("/outside", isMacOS, "/private"));
+    }
+
+    [Theory]
+    [InlineData((int)DeliveryBundleDirectoryPublisherCheckpoint.BeforeVerification)]
+    [InlineData((int)DeliveryBundleDirectoryPublisherCheckpoint.BeforeCommit)]
+    [InlineData((int)DeliveryBundleDirectoryPublisherCheckpoint.BeforeDirectoryCommit)]
+    public void Publish_TempAliasRejectsStageLinkAtEveryCommitCheckpoint(int checkpointValue)
+    {
+        using var temporary = new TemporaryDirectory();
+        var target = Path.Combine(temporary.Path, "delivery");
+        var outside = Path.Combine(temporary.Path, "outside");
+        Directory.CreateDirectory(outside);
+        var sentinel = Path.Combine(outside, "keep.txt");
+        File.WriteAllText(sentinel, "attacker destination");
+        string? stage = null;
+        var injector = new CallbackFaultInjector(context =>
+        {
+            if ((int)context.Checkpoint != checkpointValue)
+                return;
+            stage = context.StageDirectory;
+            Directory.CreateSymbolicLink(Path.Combine(stage, "injected"), outside);
+        });
+
+        Assert.Throws<IOException>(() =>
+            DeliveryBundleDirectoryPublisher.Publish(Source(), target, injector));
+
+        Assert.NotNull(stage);
+        Assert.False(PathEntryExists(target));
+        Assert.Equal(new[] { sentinel }, Directory.GetFileSystemEntries(outside));
+        Assert.Equal("attacker destination", File.ReadAllText(sentinel));
+        if (checkpointValue == (int)DeliveryBundleDirectoryPublisherCheckpoint.BeforeDirectoryCommit)
+        {
+            Assert.True(Directory.Exists(stage));
+            Assert.NotNull(new DirectoryInfo(Path.Combine(stage!, "injected")).LinkTarget);
+        }
+        else
+        {
+            AssertNoStageDirectories(temporary.Path);
+        }
+    }
+
     [Fact]
     public void Publish_WritesExactBytesAndManifestLast_ThenVerifiesFreshStage()
     {
@@ -561,6 +747,54 @@ public sealed class DeliveryBundleDirectoryPublisherTests
         internal InjectedPublicationException(string point)
             : base($"Injected failure at {point}.")
         {
+        }
+    }
+
+    private sealed class PolicyTree
+    {
+        internal Dictionary<string, (FileAttributes Attributes, string? LinkTarget)> Entries { get; } = new()
+        {
+            ["/var"] = (FileAttributes.Directory | FileAttributes.ReparsePoint, "private/var"),
+            ["/tmp"] = (FileAttributes.Directory | FileAttributes.ReparsePoint, "private/tmp"),
+            ["/private"] = (FileAttributes.Directory, null),
+            ["/private/var"] = (FileAttributes.Directory, null),
+            ["/private/tmp"] = (FileAttributes.Directory, null),
+            ["/private/var/delivery"] = (FileAttributes.Directory, null),
+            ["/private/tmp/delivery"] = (FileAttributes.Directory, null),
+        };
+
+        internal List<string> Reads { get; } = new();
+        internal string? Inaccessible { get; set; }
+
+        internal void Validate(string path, bool isMacOS, string? stopAt = null, bool includeLeaf = true) =>
+            DeliveryBundleDirectoryPublisher.EnsureNoSymlinks(path, includeLeaf, stopAt, isMacOS, Read);
+
+        private (FileAttributes Attributes, string? LinkTarget) Read(string path)
+        {
+            Reads.Add(path);
+            if (path == Inaccessible)
+                throw new UnauthorizedAccessException(path);
+            return Entries.TryGetValue(path, out var entry)
+                ? entry
+                : throw new DirectoryNotFoundException(path);
+        }
+    }
+
+    private sealed class MacOSFactAttribute : FactAttribute
+    {
+        public MacOSFactAttribute()
+        {
+            if (!OperatingSystem.IsMacOS())
+                Skip = "Requires the real macOS /var temporary-directory alias.";
+        }
+    }
+
+    private sealed class UnixTheoryAttribute : TheoryAttribute
+    {
+        public UnixTheoryAttribute()
+        {
+            if (OperatingSystem.IsWindows())
+                Skip = "Exercises Unix system-alias paths; runs on macOS and Linux.";
         }
     }
 
