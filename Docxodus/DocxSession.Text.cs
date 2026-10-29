@@ -1695,6 +1695,13 @@ public sealed partial class DocxSession
         var oldHyperlinkIds = element.Descendants(W.hyperlink)
             .Select(h => (string?)h.Attribute(R.id)).Where(id => !string.IsNullOrEmpty(id)).Cast<string>().ToList();
 
+        var replacement = _trackedChanges == TrackedChangeMode.RenderInline ? null
+            : new XElement(W.p, parsed.Blocks.Count == 0 ? null : parsed.Blocks[0].RunElements.Select(e => new XElement(e)));
+        var retainedControls = replacement is null ? null : RetainedInlineControls(element, replacement);
+        if (replacement is not null && retainedControls is null)
+            return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
+                "Whole-paragraph replacement cannot safely align unchanged content controls; use span edits or the content-control APIs.", anchorId);
+
         // Snapshot before style synthesis, so undo/rollback restores the styles part too
         // (same ordering as SetParagraphStyle).
         var preOp = TakeSnapshot();
@@ -1724,7 +1731,7 @@ public sealed partial class DocxSession
             }
             else
             {
-                ApplyReplaceTextAccept(element, parsed.Blocks);
+                ApplyReplaceTextAccept(element, replacement!, retainedControls!);
             }
             var removed = new List<Anchor>();
             if (referencedNotesBefore is { } notesBefore)

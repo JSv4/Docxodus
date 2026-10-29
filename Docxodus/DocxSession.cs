@@ -1925,7 +1925,8 @@ public sealed partial class DocxSession : IDisposable
     /// otherwise. This is deterministic and, unlike the old leading-marker fallback, cannot invert
     /// or collapse a range merely because its end marker originally sat between two runs.
     /// </summary>
-    private static List<PreservedMarkerPosition> CapturePreservedMarkerPositions(XElement paragraph)
+    private static List<PreservedMarkerPosition> CapturePreservedMarkerPositions(
+        XElement paragraph, IReadOnlySet<XElement> retainedControls)
     {
         // Pending removed text (a deletion or move source, with its move range) takes no room in
         // the paragraph's text either, and is not the text being replaced: dropping it would
@@ -1949,6 +1950,7 @@ public sealed partial class DocxSession : IDisposable
             // A preserved removal carries its own nested markers; extracting them would move
             // their range off the removed text and onto the replacement.
             .Where(e => !e.Ancestors().Any(a => ReferenceEquals(a.Parent, paragraph) && IsPendingRemoval(a)))
+            .Where(e => !e.AncestorsAndSelf().Any(retainedControls.Contains))
             .Distinct()
             .OrderBy(e => e, Comparer<XElement>.Create(XNode.DocumentOrderComparer.Compare))
             .ToList();
@@ -1995,15 +1997,14 @@ public sealed partial class DocxSession : IDisposable
         return after;
     }
 
-    private void ApplyReplaceTextAccept(XElement paragraph, IReadOnlyList<Internal.ParsedBlock> blocks)
+    private void ApplyReplaceTextAccept(XElement paragraph, XElement replacement, List<RetainedControl> controls)
     {
         var pPr = paragraph.Element(W.pPr);
-        var markers = CapturePreservedMarkerPositions(paragraph);
+        var markers = CapturePreservedMarkerPositions(paragraph, controls.Select(c => c.Element).ToHashSet());
+        foreach (var control in controls.AsEnumerable().Reverse()) RestoreInlineControl(replacement, control);
         paragraph.RemoveNodes();
         if (pPr is not null) paragraph.Add(pPr);
-        if (blocks.Count > 0)
-            foreach (var run in blocks[0].RunElements)
-                paragraph.Add(new XElement(run));
+        paragraph.Add(replacement.Elements());
         RestorePreservedMarkerPositions(paragraph, markers);
     }
 

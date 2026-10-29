@@ -318,7 +318,7 @@ internal static class IrTokenDiffer
     /// left over once that budget is spent stays unanchored (deleted and reinserted), which is the correct
     /// output for text that shares no rare words anyway.
     /// </summary>
-    private static List<(int A, int B)> BoundedAnchors(string[] leftKeys, string[] rightKeys, int[] weights)
+    internal static List<(int A, int B)> BoundedAnchors(string[] leftKeys, string[] rightKeys, int[] weights)
     {
         int n = leftKeys.Length, m = rightKeys.Length;
         var matches = new List<(int A, int B)>();
