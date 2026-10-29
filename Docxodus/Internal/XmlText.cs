@@ -5,6 +5,15 @@ namespace Docxodus.Internal;
 /// <summary>Character checks shared by text payloads and XML attribute values.</summary>
 internal static class XmlText
 {
+    /// <summary>Trim markdown padding while retaining tabs, which are document content.</summary>
+    internal static string TrimWhitespaceExceptTabs(string text, bool trimStart = true)
+    {
+        int start = 0, end = text.Length;
+        while (trimStart && start < end && text[start] != '\t' && char.IsWhiteSpace(text[start])) start++;
+        while (end > start && text[end - 1] != '\t' && char.IsWhiteSpace(text[end - 1])) end--;
+        return text[start..end];
+    }
+
     internal static bool IsCharacterBoundary(string value, int offset) =>
         offset == 0 || offset == value.Length || !char.IsSurrogatePair(value, offset - 1);
 

@@ -1539,7 +1539,8 @@ public static class WmlToMarkdownConverter
     {
         // GFM pipe tables: every "|" must be escaped, every newline collapsed. Strip the
         // anchor markers — they live in the AnchorIndex but would corrupt the pipe layout.
-        var raw = CellTextRaw(tc).Replace('\n', ' ').Replace('\r', ' ').Replace("|", @"\|").Trim();
+        var raw = Internal.XmlText.TrimWhitespaceExceptTabs(
+            CellTextRaw(tc).Replace('\n', ' ').Replace('\r', ' ').Replace("|", @"\|"));
         return raw.Length == 0 ? " " : raw;
     }
 }

@@ -30,6 +30,39 @@ public class DocxSessionTabTextTests
         Assert.Empty(session.Grep("2Alp"));
     }
 
+    [Theory]
+    [InlineData("# \tTitle\t  ", "\tTitle\t")]
+    [InlineData("- \tItem\t  ", "\tItem\t")]
+    [InlineData("2. \tItem\t  ", "\tItem\t")]
+    [InlineData("# Title  ", "Title")]
+    [InlineData("- Item  ", "Item")]
+    public void ReplaceText_HeadingAndListPayloadsKeepEdgeTabsButTrimPadding(string payload, string expected)
+    {
+        using var session = Open(new XElement(W.r, new XElement(W.t, "Original")));
+
+        AssertOk(session.ReplaceText(Paragraph(session), payload));
+
+        Assert.Single(session.Grep("^" + System.Text.RegularExpressions.Regex.Escape(expected) + "$"));
+        Assert.Equal(expected.Count(c => c == '\t'), Body(session.Save()).Descendants(W.tab).Count());
+    }
+
+    [Theory]
+    [InlineData("\tValue\t", "| \tValue\t |")]
+    [InlineData("  Value  ", "| Value |")]
+    public void Project_TableCellsKeepEdgeTabsButTrimPadding(string text, string expected)
+    {
+        var table = new XElement(W.tbl, new XElement(W.tr, new XElement(W.tc,
+            new XElement(W.p, new XElement(W.r, DocxSession.TextContent(text, W.t))))));
+        var bytes = IrTestDocuments.FromBodyXml(table.ToString(SaveOptions.DisableFormatting)).DocumentByteArray;
+        var settings = new WmlToMarkdownConverterSettings();
+
+        var oracle = WmlToMarkdownConverter.Convert(new WmlDocument("tabs.docx", bytes), settings);
+        var ir = IrMarkdownEmitter.Emit(IrReader.Read(new WmlDocument("tabs.docx", bytes)), settings);
+
+        Assert.Contains(expected, oracle.Markdown);
+        Assert.Equal(oracle.Markdown, ir.Markdown);
+    }
+
     [Fact]
     public void Project_PrintsATab_SoAPhraseCopiedFromItMatches_InBothEmitters()
     {

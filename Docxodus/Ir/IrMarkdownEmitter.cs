@@ -1282,7 +1282,8 @@ internal static class IrMarkdownEmitter
     /// trim, and substitute a single space for an empty cell so the pipe layout stays well-formed.</summary>
     private static string CellTextForGfm(IrCell cell)
     {
-        var raw = CellTextRaw(cell).Replace('\n', ' ').Replace('\r', ' ').Replace("|", @"\|").Trim();
+        var raw = Internal.XmlText.TrimWhitespaceExceptTabs(
+            CellTextRaw(cell).Replace('\n', ' ').Replace('\r', ' ').Replace("|", @"\|"));
         return raw.Length == 0 ? " " : raw;
     }
 }
