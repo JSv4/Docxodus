@@ -1634,6 +1634,32 @@ public sealed class DocxSessionContentControlTests
     public void CC036_InlineControlContent_TakesItsRevisionState(string shape, string inline, TrackedChangeMode mode, string projected) =>
         AssertProjectedInPlace(shape, inline, mode, projected, grepped: projected.Contains('{') ? null : projected);
 
+    [Theory]
+    [InlineData("Version 3.1 approved.")]
+    [InlineData("Revised version 3.1 approved.")]
+    [InlineData("Version 3.1 approved today.")]
+    public void CC037_ReplaceText_PreservesAnUnchangedInlineControl(string payload)
+    {
+        var runs = XElement.Parse($"<root xmlns:w=\"{W}\">" +
+            "<w:r><w:t xml:space=\"preserve\">Version </w:t></w:r>" + Bound +
+            "<w:r><w:t xml:space=\"preserve\"> approved.</w:t></w:r></root>");
+        using var session = new DocxSession(DocxSessionSpanRevisionTests.Build(runs.Elements().ToArray()));
+        var anchor = Assert.Single(session.Project().AnchorIndex.Values, a => a.Anchor.Kind == "p").Anchor.Id;
+        var before = Control(session.Save());
+
+        var edit = session.ReplaceText(anchor, payload);
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.True(XNode.DeepEquals(before, Control(session.Save())), "The control and binding must remain intact.");
+        Assert.Contains(payload, session.Project().Markdown);
+
+        static XElement Control(byte[] bytes)
+        {
+            using var package = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+            return new XElement(Assert.Single(package.MainDocumentPart!.GetXDocument().Descendants(W + "sdt")));
+        }
+    }
+
     private static void AssertProjectedInPlace(string shape, string inline, TrackedChangeMode mode, string projected, string? grepped)
     {
         using var session = new DocxSession(DocxSessionSpanRevisionTests.Build(
