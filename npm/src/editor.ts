@@ -857,6 +857,39 @@ function deleteLiveCharacterBeyond(block: HTMLElement, inputType: string): void 
   block.dispatchEvent(new InputEvent("input", { inputType, bubbles: true, composed: true }));
 }
 
+/** Let the browser choose visual direction (including bidi), then cross a tab's empty layout
+ *  wrapper if that step did not advance in the document's content text. */
+function moveAcrossTab(block: HTMLElement, ev: KeyboardEvent): void {
+  if (ev.defaultPrevented || ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey || ev.isComposing
+    || (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight")) return;
+  const selection = block.ownerDocument.defaultView?.getSelection();
+  const at = caretOffsetIn(block);
+  if (!selection?.isCollapsed || !selection.rangeCount || at === null) return;
+  const text = blockContentText(block);
+  if (text[at] !== "\t" && text[at - 1] !== "\t") return;
+  const before = selection.getRangeAt(0).cloneRange();
+  selection.modify("move", ev.key === "ArrowRight" ? "right" : "left", "character");
+  ev.preventDefault();
+  const after = caretOffsetIn(block);
+  if (after === null) return; // Native movement may leave this editing host.
+  const order = before.compareBoundaryPoints(Range.START_TO_START, selection.getRangeAt(0));
+  const source = before.startContainer.nodeType === 1 ? before.startContainer as Element : before.startContainer.parentElement!;
+  const rtl = block.ownerDocument.defaultView!.getComputedStyle(source).direction === "rtl";
+  const step = order < 0 ? 1 : order > 0 ? -1 : (ev.key === "ArrowRight") !== rtl ? 1 : -1;
+  const crossed = after === at && text[step > 0 ? at : at - 1] === "\t";
+  let { node, offset } = contentPositionIn(block, crossed ? at + step : after);
+  // A DOM point after the empty tab still types before it in Chromium while inside the flex
+  // wrapper. Lift an end boundary out of its trailing wrappers into the surrounding content.
+  while (node !== block && node.nodeType === 1 && offset === node.childNodes.length && node.parentNode) {
+    offset = Array.prototype.indexOf.call(node.parentNode.childNodes, node) + 1;
+    node = node.parentNode;
+  }
+  // A terminal empty box has no native caret stop after it. The same unstamped BR Chromium
+  // uses for an empty line supplies one; atomText excludes this placeholder from saved text.
+  if (node === block && offset === block.childNodes.length) block.append(block.ownerDocument.createElement("br"));
+  selection.collapse(node, offset);
+}
+
 /**
  * Backspace just after, or Delete just before, a rendered tab/break removes that atom, and so does a word
  * deletion (Ctrl+Backspace, Ctrl+Delete) that starts there: a tab is the whitespace between words.
@@ -907,7 +940,7 @@ function isField(node: Node): node is HTMLElement {
 
 /** A rendered tab: an empty box in the DOM, but one character, `"\t"`, of the session's text
  *  (issue #1387). Like a field it is atomic to the offset helpers, which place the caret on either
- *  side of it, never inside; the browser's own arrow-key movement around it is not changed. */
+ *  side of it, never inside. Arrow movement also skips empty tab-layout wrappers. */
 function isTab(node: Node): node is HTMLElement {
   return node.nodeType === 1 && (node as HTMLElement).hasAttribute("data-docx-tab");
 }
@@ -1539,6 +1572,7 @@ export class DocxEditor {
     this.handle = handle;
     this.options = options;
     this.editRoot = container;
+    container.addEventListener("copy", this.onCopy);
     this.viewport = new DocumentViewport(container, {
       columnWidth: options.columnWidth,
       fitToWidth: options.fitToWidth,
@@ -1551,6 +1585,66 @@ export class DocxEditor {
       document.addEventListener("mouseup", this.onMouseUp, true);
     }
   }
+
+  /** Native copy treats flex tab-layout wrappers as line boundaries and omits their empty tab.
+   *  Normalize only the clipboard clone; retain inline formatting in the rich representation. */
+  private readonly onCopy = (ev: ClipboardEvent): void => {
+    const selection = this.container.ownerDocument.defaultView?.getSelection();
+    if (this.closed || ev.defaultPrevented || !ev.clipboardData || !selection?.rangeCount || selection.isCollapsed) return;
+    const range = selection.getRangeAt(0);
+    if (!this.container.contains(range.startContainer) || !this.container.contains(range.endContainer)) return;
+    const clone = this.container.ownerDocument.createElement("div");
+    clone.append(range.cloneContents());
+    if (!clone.querySelector("[data-docx-tab]")) return;
+    // Range.cloneContents keeps selected descendants in document order, including partial
+    // ancestors. Read styles and placeholder status from their live counterparts before the
+    // clone loses its editing host and the document's class-based stylesheet.
+    const inlineTextStyle = (copy: HTMLElement, original: Element): CSSStyleDeclaration => {
+      const style = this.container.ownerDocument.defaultView!.getComputedStyle(original);
+      for (const key of ["direction", "unicode-bidi", "white-space", "font-family", "font-size", "font-weight", "font-style", "font-variant", "font-kerning", "letter-spacing", "color", "background-color", "text-decoration", "text-transform", "vertical-align"])
+        copy.style.setProperty(key, style.getPropertyValue(key));
+      return style;
+    };
+    const common = range.commonAncestorContainer;
+    inlineTextStyle(clone, common.nodeType === 1 ? common as Element : common.parentElement!);
+    const source = this.container.ownerDocument.createTreeWalker(common, NodeFilter.SHOW_ELEMENT,
+      { acceptNode: node => range.intersectsNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT });
+    clone.querySelectorAll<HTMLElement>("*").forEach(copy => {
+      const original = source.nextNode() as HTMLElement;
+      if (isPlaceholderBreak(original)) { copy.remove(); return; }
+      const display = inlineTextStyle(copy, original).display;
+      if (display.includes("flex") || display === "none") copy.style.display = display;
+    });
+    const context = (common.nodeType === 1 ? common as Element : common.parentElement!)
+      .closest<HTMLAnchorElement>("a[href]");
+    if (context) {
+      const link = context.cloneNode(false) as HTMLAnchorElement;
+      inlineTextStyle(link, context);
+      link.append(...Array.from(clone.childNodes));
+      clone.append(link);
+    }
+    clone.querySelectorAll<HTMLElement>("span").forEach(span => {
+      if (span.style.display.includes("flex")) {
+        span.style.display = "inline";
+        span.style.removeProperty("width");
+      }
+    });
+    clone.querySelectorAll<HTMLElement>("[data-docx-tab]").forEach(tab => {
+      tab.textContent = "\t";
+      tab.style.cssText = "display: inline; white-space: pre;";
+    });
+    const richHtml = clone.outerHTML;
+    clone.style.position = "fixed";
+    clone.style.left = "-100000px";
+    clone.style.whiteSpace = "pre-wrap";
+    clone.setAttribute("aria-hidden", "true");
+    this.container.ownerDocument.body.append(clone);
+    try {
+      ev.clipboardData.setData("text/plain", stripBidi(clone.innerText));
+      ev.clipboardData.setData("text/html", richHtml);
+      ev.preventDefault();
+    } finally { clone.remove(); }
+  };
 
   /** Track the last meaningful selection so focus-stealing toolbar controls can still target it. */
   private readonly onSelectionChange = (): void => {
@@ -1991,6 +2085,7 @@ export class DocxEditor {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.container.removeEventListener("copy", this.onCopy);
     if (typeof document !== "undefined") {
       document.removeEventListener("selectionchange", this.onSelectionChange);
       document.removeEventListener("mousedown", this.onMouseDown, true);
@@ -2036,8 +2131,10 @@ export class DocxEditor {
     this.gutter?.dispose();
     this.gutter = null;
     const previous = this.container;
+    previous.removeEventListener("copy", this.onCopy);
     container.replaceChildren(...Array.from(previous.childNodes));
     this.container = container;
+    container.addEventListener("copy", this.onCopy);
     this.viewport.adoptHost(container);
     this.setupBlockDrag();
     if (this.options.comments) this.createGutter();
@@ -3105,6 +3202,7 @@ export class DocxEditor {
 
   private onKeydown(el: HTMLElement, ev: KeyboardEvent): void {
     if (this.closed) return;
+    moveAcrossTab(el, ev);
     // Common formatting / history shortcuts.
     if ((ev.ctrlKey || ev.metaKey) && !ev.altKey) {
       const k = ev.key.toLowerCase();
@@ -4949,7 +5047,9 @@ export class DocxEditor {
   revisionAt(el: HTMLElement): RevisionListEntry | null {
     const block = el.closest<HTMLElement>("[data-anchor]");
     const unid = block?.getAttribute("data-anchor");
-    const candidates = this.listRevisions().filter((r) => r.resolutionStatus === "supported");
+    const candidates = this.listRevisions().filter((r) => r.resolutionStatus === "supported"
+      && r.diagnostic?.code !== "inert_move_range" && r.diagnostic?.code !== "empty_wrapper_range"
+      && (r.text.length > 0 || !!r.anchorId || r.affectedAnchors.length > 0));
     if (!unid) return candidates[0] ?? null;
     const inBlock = candidates.filter(
       (r) => r.anchorId?.endsWith(unid) || r.affectedAnchors?.some((a) => a.unid === unid),
