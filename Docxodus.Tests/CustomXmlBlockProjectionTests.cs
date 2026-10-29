@@ -78,9 +78,8 @@ public class CustomXmlBlockProjectionTests
         Assert.Contains("Wrapped item.", oracle.Markdown);
         Assert.Contains("Nested wrapper text.", oracle.Markdown);
         Assert.Contains("| Wrapped cell. |", oracle.Markdown);
-        // A content control's payload stays out of the markdown, wherever the wrappers nest.
-        Assert.DoesNotContain("Control in wrapper.", oracle.Markdown);
-        Assert.DoesNotContain("Wrapper in control.", oracle.Markdown);
+        Assert.Contains("Control in wrapper.", oracle.Markdown);
+        Assert.Contains("Wrapper in control.", oracle.Markdown);
     }
 
     [Fact]

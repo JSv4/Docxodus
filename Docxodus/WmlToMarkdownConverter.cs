@@ -825,7 +825,7 @@ public static class WmlToMarkdownConverter
         ctx.Sb.Append("[^").Append(label).Append("]: ");
         // Notes contain paragraphs; flatten their text inline for the definition.
         var first = true;
-        foreach (var p in ExpandCustomXml(note.Elements()).Where(e => e.Name == W.p))
+        foreach (var p in ExpandBlockWrappers(note.Elements()).Where(e => e.Name == W.p))
         {
             if (!first) ctx.Sb.Append(' ');
             first = false;
@@ -877,7 +877,7 @@ public static class WmlToMarkdownConverter
         ctx.Sb.Append($"- {{#cmt:cmt:{renderedUnid}}} **{author}**");
         if (!string.IsNullOrEmpty(date)) ctx.Sb.Append(" (").Append(date).Append(')');
         ctx.Sb.Append(": ");
-        foreach (var p in ExpandCustomXml(c.Elements()).Where(e => e.Name == W.p))
+        foreach (var p in ExpandBlockWrappers(c.Elements()).Where(e => e.Name == W.p))
         {
             EmitInlineRuns(p, ctx);
             ctx.Sb.Append(' ');
@@ -969,7 +969,7 @@ public static class WmlToMarkdownConverter
 
     private static void EmitBlocks(IEnumerable<XElement> blocks, EmitContext ctx)
     {
-        var blocksList = ExpandCustomXml(blocks).ToList();
+        var blocksList = ExpandBlockWrappers(blocks).ToList();
         for (var i = 0; i < blocksList.Count; i++)
         {
             var b = blocksList[i];
@@ -995,25 +995,27 @@ public static class WmlToMarkdownConverter
     }
 
     /// <summary>
-    /// Replace each block-level <c>w:customXml</c> wrapper with the blocks it carries, recursively. Word
+    /// Replace block-level custom-XML and content-control wrappers with their blocks recursively. Word
     /// renders that content as ordinary paragraphs and tables, and the anchor index already lists them, so
-    /// the projection shows them in place (issue #1114). A block-level <c>w:sdt</c> is not expanded: its
-    /// content is deliberately left out of the markdown. Past <see cref="Ir.IrReader.MaxSdtDepth"/> nested
+    /// the projection shows them in place (issues #1114, #1405). Past <see cref="Ir.IrReader.MaxSdtDepth"/> nested
     /// wrappers a wrapper is left in place, unrendered, as the IR keeps it opaque there.
     /// </summary>
-    internal static IEnumerable<XElement> ExpandCustomXml(IEnumerable<XElement> blocks) =>
-        ExpandCustomXml(blocks, 0);
+    internal static IEnumerable<XElement> ExpandBlockWrappers(IEnumerable<XElement> blocks) =>
+        ExpandBlockWrappers(blocks, 0);
 
-    private static IEnumerable<XElement> ExpandCustomXml(IEnumerable<XElement> blocks, int depth)
+    private static IEnumerable<XElement> ExpandBlockWrappers(IEnumerable<XElement> blocks, int depth)
     {
         foreach (var block in blocks)
         {
-            if (block.Name != W.customXml || depth >= Ir.IrReader.MaxSdtDepth)
+            if ((block.Name != W.customXml && block.Name != W.sdt) || depth >= Ir.IrReader.MaxSdtDepth)
             {
                 yield return block;
                 continue;
             }
-            foreach (var inner in ExpandCustomXml(block.Elements().Where(e => e.Name != W.customXmlPr), depth + 1))
+            var content = block.Name == W.sdt
+                ? block.Element(W.sdtContent)?.Elements() ?? Enumerable.Empty<XElement>()
+                : block.Elements().Where(e => e.Name != W.customXmlPr);
+            foreach (var inner in ExpandBlockWrappers(content, depth + 1))
                 yield return inner;
         }
     }
@@ -1223,6 +1225,10 @@ public static class WmlToMarkdownConverter
 
         void Add(XElement run, RunFormatting fmt)
         {
+            // Field scaffolding has no displayed text and must not split a formatting group.
+            if (run.Elements().All(e => e.Name == W.rPr || e.Name == W.fldChar
+                || e.Name == W.instrText || e.Name == W.delInstrText))
+                return;
             if (!primed)
             {
                 bufFmt = fmt;

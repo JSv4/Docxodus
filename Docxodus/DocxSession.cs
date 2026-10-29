@@ -1832,16 +1832,14 @@ public sealed partial class DocxSession : IDisposable
     }
 
     /// <summary>The anchor id of the nearest preceding block the projection renders, or null: only a
-    /// rendered block is one a client holds. A preceding <c>w:customXml</c> sibling is searched from its
+    /// rendered block is one a client holds. A preceding block wrapper is searched from its
     /// last carried block, since the projection renders that content in its place.</summary>
     private string? PrecedingBlockAnchorId(XElement block, string scope)
     {
         for (var node = block.PreviousNode; node is not null; node = node.PreviousNode)
         {
             if (node is not XElement sibling) continue;
-            IEnumerable<XElement> candidates = sibling.Name == W.customXml
-                ? WmlToMarkdownConverter.ExpandCustomXml(new[] { sibling }).Reverse()
-                : new[] { sibling };
+            var candidates = WmlToMarkdownConverter.ExpandBlockWrappers(new[] { sibling }).Reverse();
             foreach (var candidate in candidates)
                 if (WmlToMarkdownConverter.BlockAnchorId(candidate, scope) is { } id
                     && WmlToMarkdownConverter.RendersBlock(_doc!, _settings.ProjectionSettings, scope, candidate))
