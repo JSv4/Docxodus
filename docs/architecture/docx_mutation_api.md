@@ -27,6 +27,16 @@ remain accepted. Span replacements also reject boundaries inside an existing sur
 with `OffsetOutOfRange`. These refusals preserve the version, undo/redo history and saveability;
 they do not populate `LastInternalError`.
 
+## Text coordinates
+
+Text offsets use UTF-16 characters in the paragraph's visible run text: `w:tab` and `w:ptab`
+are `\t`, `w:br` and `w:cr` are `\n`, special hyphens are U+2011/U+00AD, and valid `w:sym`
+codes contribute their character. Tracked deletions and tab-stop definitions contribute nothing.
+Hyperlinks, fields, content controls and inline custom XML contribute their displayed runs;
+textbox paragraphs have their own anchors and do not join the host paragraph's text.
+Markdown's hard-break spelling (`  \n`) still occupies one character in a text span. Offsets
+stored before #1387/#1409 must be recomputed from a fresh projection/query.
+
 ## Document version and optimistic preconditions
 
 Every session exposes a monotonic `long Version`. It is `0` when the document is

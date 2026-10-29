@@ -2726,7 +2726,7 @@ public sealed partial class DocxSession : IDisposable
     // text name (issue #1282).
     private static readonly HashSet<XName> InlineContainerNames = new()
     {
-        W.hyperlink, W.sdt, W.fldSimple, W.smartTag, W.ins, W.moveTo,
+        W.hyperlink, W.sdt, W.fldSimple, W.smartTag, W.customXml, W.ins, W.moveTo,
     };
 
     private static bool IsInlineChild(XElement e) =>

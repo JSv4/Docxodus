@@ -23,9 +23,9 @@ public class DocxSessionMixedRunEditTests
     public void Replacement_PreservesAnInlineMarkerBetweenTextNodes(string operation, bool tracked, string marker)
     {
         // A tab is one character of the text (issue #1387), so a range across it takes it, and
-        // keeps it only when the replacement writes it back; a break takes no room.
+        // keeps it only when the replacement writes it back. A break also takes one character.
         int c = TextOf(marker).IndexOf('c');
-        var across = marker == "tab" ? "X\t" : "X";
+        var across = marker == "tab" ? "X\t" : "X\n";
         foreach (var (start, length, expected, replacement) in new[]
             { (1, 1, "aX|cd", "X"), (c, 1, "ab|Xd", "X"), (1, c, "aX|d", across) })
             Check(operation, tracked, marker, start, length, expected, replacement);
@@ -40,8 +40,8 @@ public class DocxSessionMixedRunEditTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void RemovingAllText_PreservesTheInlineMarker(bool tracked) =>
-        Check("span", tracked, "br", 0, 4, "|", "");
+    public void RemovingAllText_ConsumesTheBreak(bool tracked) =>
+        Check("span", tracked, "br", 0, 5, "", "");
 
     [Theory]
     [InlineData(false)]
@@ -98,8 +98,8 @@ public class DocxSessionMixedRunEditTests
         Assert.Equal(marker is null ? "abcd" : "ab|cd", Text(session.Save()));
     }
 
-    /// <summary>The paragraph's text as the session counts it: a tab is <c>'\t'</c>, a break nothing.</summary>
-    private static string TextOf(string? marker) => marker == "tab" ? "ab\tcd" : "abcd";
+    /// <summary>The paragraph's text as the session counts it: a tab is '\t', a break '\n'.</summary>
+    private static string TextOf(string? marker) => marker switch { "tab" => "ab\tcd", "br" => "ab\ncd", _ => "abcd" };
 
     private static string Text(byte[] bytes)
     {

@@ -1161,7 +1161,6 @@ namespace Docxodus
                 RemoveProof = true,
                 RemoveRsidInfo = true,
                 RemoveSmartTags = true,
-                RemoveSoftHyphens = true,
                 RemoveGoBackBookmark = true,
                 ReplaceTabsWithSpaces = false,
                 SkipFormattingPartsSimplification = htmlConverterSettings.SkipFormattingPartsSimplification,
@@ -3611,9 +3610,7 @@ namespace Docxodus
             // Transform symbols to spans
             if (element.Name == W.sym)
             {
-                var cs = (string?)element.Attribute(W._char);
-                var c = Convert.ToInt32(cs, 16);
-                return new XElement(Xhtml.span, new XEntity(string.Format("#{0}", c)));
+                return new XElement(Xhtml.span, Internal.XmlText.SymbolText(element));
             }
 
             // Transform tabs that have the pt:TabWidth attribute set
@@ -3622,17 +3619,19 @@ namespace Docxodus
                 return ProcessTab(element);
             }
 
+            // Retain positional tabs in the editor's text coordinates. Their native geometry
+            // stays in the package; this fallback displays a tab rather than discarding it.
+            if (element.Name == W.ptab)
+                return new XElement(Xhtml.span, new XAttribute("data-docx-tab", "positional"), "\t");
+
             // Transform w:br to h:br (or page break div in pagination mode).
             if (element.Name == W.br || element.Name == W.cr)
             {
                 return ProcessBreak(element, settings);
             }
 
-            // Transform w:noBreakHyphen to '-'
-            if (element.Name == W.noBreakHyphen)
-            {
-                return new XText("-");
-            }
+            if (element.Name == W.noBreakHyphen || element.Name == W.softHyphen)
+                return new XText(DocxSession.TextOf(element));
 
             // Transform w:tbl to h:tbl.
             if (element.Name == W.tbl)
@@ -5978,7 +5977,7 @@ namespace Docxodus
                          paragraph.Elements(W.pPr).Elements(W.bidi).Any(b => b.Attribute(W.val) == null ||
                                                                              b.Attribute(W.val).ToBoolean() == true);
             var zeroWidthChar = isBidi ? new XEntity("#x200f") : new XEntity("#x200e");
-            var breakElement = new XElement(Xhtml.br);
+            var breakElement = new XElement(Xhtml.br, new XAttribute("data-docx-break", "true"));
             // In an ordinary LTR exact-line-height paragraph the break already
             // resumes in the paragraph's declared direction. A synthetic LRM
             // contributes no bidi information there, but wrapping it in the

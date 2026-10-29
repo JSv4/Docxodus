@@ -7,7 +7,7 @@ namespace Docxodus.Internal;
 internal static class XmlText
 {
     internal static string SymbolText(XElement symbol) =>
-        ushort.TryParse((string?)symbol.Attribute(W.w + "char"), System.Globalization.NumberStyles.HexNumber,
+        ushort.TryParse((string?)symbol.Attribute(W._char), System.Globalization.NumberStyles.HexNumber,
             System.Globalization.CultureInfo.InvariantCulture, out var code)
         && code >= 0x20 && XmlConvert.IsXmlChar((char)code) ? ((char)code).ToString() : string.Empty;
 

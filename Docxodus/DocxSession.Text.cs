@@ -1261,7 +1261,9 @@ public sealed partial class DocxSession
                 }
                 if (cutFrom > 0) untouched.AddRange(TextContent(value[..cutFrom], W.t));
                 FlushUntouched();
-                var deletedSlice = CloneRunWithRevisionText(run, W.delText, value[cutFrom..cutTo]);
+                var deletedSlice = child.Name == W.t
+                    ? CloneRunWithRevisionText(run, W.delText, value[cutFrom..cutTo])
+                    : CloneRunWithContent(run, new[] { child });
                 replacementNodes.Add(deletedSlice);
                 deletedRuns.Add(deletedSlice);
                 if (cutTo < value.Length) untouched.AddRange(TextContent(value[cutTo..], W.t));
