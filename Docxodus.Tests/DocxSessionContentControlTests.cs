@@ -202,7 +202,7 @@ public sealed class DocxSessionContentControlTests
     }
 
     [Fact]
-    public void CC007_OracleAndIrExposeSameSdtIndex_WithoutChangingMarkdownBytes()
+    public void CC007_OracleAndIrExposeSameSdtIndexAndProjectWrappedContent()
     {
         var fixture = BuildFixture();
         var settings = new WmlToMarkdownConverterSettings();
@@ -210,6 +210,8 @@ public sealed class DocxSessionContentControlTests
         var ir = IrMarkdownEmitter.Emit(IrReader.Read(new WmlDocument("controls.docx", fixture),
             new IrReaderOptions { RetainSources = false }), settings).ToProjection();
         Assert.Equal(oracle.Markdown, ir.Markdown);
+        Assert.Contains("outer value", oracle.Markdown);
+        Assert.Contains("locked child", oracle.Markdown);
         Assert.Equal(oracle.AnchorIndex.Keys, ir.AnchorIndex.Keys);
         Assert.Equal(15, oracle.AnchorIndex.Values.Select(value => value.Anchor.Id).Distinct()
             .Count(id => id.StartsWith("sdt:", StringComparison.Ordinal)));

@@ -413,7 +413,7 @@ public class DocxSessionIncrementalIndexOracleTests
                 || root.Descendants(W.t).Any(t => !string.IsNullOrWhiteSpace(t.Value));
             if (shown)
             {
-                foreach (var block in WmlToMarkdownConverter.ExpandCustomXml(
+                foreach (var block in WmlToMarkdownConverter.ExpandBlockWrappers(
                              PartChangeTracker.ContainerOf(part.GetXDocument())!.Elements()))
                 {
                     if (WmlToMarkdownConverter.BlockAnchorId(block, name) is not { } id) continue;
@@ -601,25 +601,30 @@ public class DocxSessionIncrementalIndexOracleTests
         Assert.Equal(anchors[20], Assert.Single(deleted.Patch.RemovedAnchorIds));
     }
 
-    /// <summary>Issue #1114: the projection shows the blocks inside a block-level <c>w:customXml</c>
+    /// <summary>The projection shows the blocks inside custom-XML and content-control
     /// wrapper, so a client applying patches keeps them current — whatever ops run on or around
     /// them.</summary>
-    [Fact]
-    public void Block_scoped_patches_keep_custom_xml_content_in_sync()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Block_scoped_patches_keep_wrapped_content_in_sync(bool contentControls)
     {
-        var bytes = Ir.IrTestDocuments.FromBodyXml(CustomXmlBody).DocumentByteArray;
+        var bytes = Ir.IrTestDocuments.FromBodyXml(WrappedBody(contentControls)).DocumentByteArray;
         for (int seed = 0; seed < 6; seed++)
             RunPatchSequence(bytes, new DocxSessionSettings(), seed: 1114 + seed, steps: 20, $"custom-xml seed {seed}");
     }
 
-    /// <summary>An edit inside a <c>w:customXml</c> wrapper cannot be patched as one block, so its
+    /// <summary>An edit inside a block wrapper cannot be patched as one block, so its
     /// patch is the whole document; a block after the wrapper follows the wrapper's last block.</summary>
-    [Fact]
-    public void Custom_xml_edits_patch_the_whole_document_and_later_blocks_follow_the_wrapper()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Wrapped_edits_patch_the_whole_document_and_later_blocks_follow_the_wrapper(bool contentControls)
     {
-        using var session = new DocxSession(Ir.IrTestDocuments.FromBodyXml(CustomXmlBody).DocumentByteArray);
+        using var session = new DocxSession(Ir.IrTestDocuments.FromBodyXml(WrappedBody(contentControls)).DocumentByteArray);
         var projection = session.Project();
-        string Id(string text) => projection.AnchorIndex.Keys.Single(k => session.GetAnchorInfo(k)?.TextPreview == text);
+        string Id(string text) => projection.AnchorIndex.Keys.Single(k => k.StartsWith("p:", StringComparison.Ordinal)
+            && session.GetAnchorInfo(k)?.TextPreview == text);
         var inside = Id("Second wrapped.");
         var after = Id("After the wrapper.");
 
@@ -630,6 +635,16 @@ public class DocxSessionIncrementalIndexOracleTests
         var next = session.ReplaceText(after, "Edited after.").Patch!;
         Assert.False(next.IsFullDocument);
         Assert.Equal(inside, Assert.Single(next.Blocks).AfterAnchorId);
+    }
+
+    private static string WrappedBody(bool contentControls)
+    {
+        var body = XElement.Parse($"<w:body xmlns:w=\"{W.w}\">{CustomXmlBody}</w:body>");
+        if (contentControls)
+            foreach (var wrapper in body.Descendants(W.customXml).Reverse().ToList())
+                wrapper.ReplaceWith(new XElement(W.sdt,
+                    new XElement(W.sdtContent, wrapper.Elements().Where(e => e.Name != W.customXmlPr))));
+        return string.Concat(body.Elements());
     }
 
     private const string CustomXmlBody = """

@@ -115,6 +115,10 @@ All notable changes to this project will be documented in this file.
   did not match. Docxodus does not evaluate data bindings; LibreOffice shows a bound control's
   stored custom-XML value instead of its cache when that part is present (#1386).
 
+- Markdown projection includes paragraphs and tables inside block-level content controls (#1405),
+  including nested wrappers, and session patches keep their projected content in sync. Complex
+  field results keep one formatting span with adjacent equally formatted text.
+
 ## [14.2.0] - 2026-10-26
 
 ### Added

@@ -697,7 +697,7 @@ internal static class IrMarkdownEmitter
             var label = $"{kindPrefix}-{NoteLabelSuffix(unid, ctx)}";
             sb.Append("[^").Append(label).Append("]: ");
             var first = true;
-            foreach (var p in ExpandCustomXml(noteScope.Blocks).OfType<IrParagraph>())
+            foreach (var p in ExpandBlockWrappers(noteScope.Blocks).OfType<IrParagraph>())
             {
                 if (!first) sb.Append(' ');
                 first = false;
@@ -731,7 +731,7 @@ internal static class IrMarkdownEmitter
             sb.Append($"- {{#cmt:cmt:{renderedUnid}}} **{author}**");
             if (!string.IsNullOrEmpty(c.Date)) sb.Append(" (").Append(c.Date).Append(')');
             sb.Append(": ");
-            foreach (var p in ExpandCustomXml(c.Blocks).OfType<IrParagraph>())
+            foreach (var p in ExpandBlockWrappers(c.Blocks).OfType<IrParagraph>())
             {
                 EmitInlineRuns(p, sb, ctx);
                 sb.Append(' ');
@@ -764,11 +764,8 @@ internal static class IrMarkdownEmitter
 
     private static void EmitBlocks(IrNodeList<IrBlock> blocks, StringBuilder sb, EmitCtx ctx)
     {
-        // The oracle's EmitBlocks dispatches only w:p/w:tbl/w:sectPr and silently skips a block-level
-        // w:sdt wrapper. Keep that wrapper atomic in the IR, but omit its entire subtree here;
-        // WalkAnchorsForIndex separately descends into the children for index parity. A w:customXml
-        // wrapper is the exception: the oracle renders the blocks it carries in its place.
-        var list = ExpandCustomXml(blocks).Where(b => b is not IrSdtBlock).ToList();
+        // Wrappers retain their IR identity; markdown renders their paragraphs and tables in place.
+        var list = ExpandBlockWrappers(blocks).ToList();
         for (var i = 0; i < list.Count; i++)
         {
             var b = list[i];
@@ -797,15 +794,15 @@ internal static class IrMarkdownEmitter
         }
     }
 
-    /// <summary>Replace each custom-XML envelope with the blocks it carries, recursively — the IR form of
-    /// <see cref="WmlToMarkdownConverter.ExpandCustomXml"/>.</summary>
-    private static IEnumerable<IrBlock> ExpandCustomXml(IEnumerable<IrBlock> blocks)
+    /// <summary>Replace each block wrapper with the blocks it carries, recursively — the IR form of
+    /// <see cref="WmlToMarkdownConverter.ExpandBlockWrappers"/>.</summary>
+    private static IEnumerable<IrBlock> ExpandBlockWrappers(IEnumerable<IrBlock> blocks)
     {
         foreach (var block in blocks)
         {
-            if (block is IrSdtBlock { IsCustomXml: true } wrapper)
+            if (block is IrSdtBlock wrapper)
             {
-                foreach (var inner in ExpandCustomXml(wrapper.Blocks))
+                foreach (var inner in ExpandBlockWrappers(wrapper.Blocks))
                     yield return inner;
             }
             else
@@ -1016,14 +1013,12 @@ internal static class IrMarkdownEmitter
                     Add(tr, ReadRunFmt(tr.Format));
                     break;
                 case IrFieldRun f:
-                    // Both field spellings emit their cached-result text (issue #559): the oracle's
-                    // GroupInlineRuns projects a w:fldSimple's runs as ordinary text inside a Flush
-                    // bracket, and run-based field result runs are direct w:r children it always
-                    // emitted. The field stays atomic for mutation addressing either way.
-                    Flush();
+                    // Simple fields delimit formatting groups. Complex field results are ordinary
+                    // paragraph runs and can merge with equally formatted neighbours.
+                    if (f.IsSimpleField) Flush();
                     foreach (var rr in f.CachedResult)
                         if (rr is IrTextRun ftr) Add(ftr, ReadRunFmt(ftr.Format));
-                    Flush();
+                    if (f.IsSimpleField) Flush();
                     break;
                 case IrTab tab:
                     // A w:tab is a child of a w:r, so the oracle groups it under THAT run's formatting

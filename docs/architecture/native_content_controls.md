@@ -31,8 +31,9 @@ is cloneable only when every nested SDT satisfies the same invariant.
 The IR captures projector-order anchor facts while its private package is open, so
 index parity also holds with `RetainSources=false`. The Markdown oracle indexes the outer
 SDT. It prints an inline SDT's content in place, as `Grep` and the HTML render read it,
-placeholder text included (issue #1386); it still omits a block-level SDT's content. HTML
-and `ListBlocks` remain wrapper-transparent and flatten/render the contained blocks.
+placeholder text included (issue #1386). Block-level SDTs project their contained paragraphs and
+tables, including nested wrappers (#1405), as HTML and `ListBlocks` do. Edits inside a block SDT
+produce a whole-document markdown patch because the wrapper projects several blocks.
 `ListInlineSpans` additionally returns outer-to-inner `contentControlAnchorIds` for each
 run.
 

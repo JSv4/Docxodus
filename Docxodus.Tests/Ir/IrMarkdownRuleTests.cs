@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Xml.Linq;
 using Docxodus;
 using Docxodus.Ir;
 using Xunit;
@@ -438,10 +439,9 @@ public class IrMarkdownRuleTests
             WmlToMarkdownConverter.Convert(new WmlDocument(doc), new WmlToMarkdownConverterSettings()).Markdown);
     }
 
-    /// <summary>A block-level <c>w:sdt</c> wrapping a paragraph is SKIPPED by the oracle's EmitBlocks
-    /// (it dispatches only direct w:p/w:tbl/w:sectPr), so its paragraph does not render.</summary>
+    /// <summary>A block-level content control projects its children and retains its public identity.</summary>
     [Fact]
-    public void Rule_BlockSdt_PublicAnchorIsIndexedButSkippedFromMarkdown()
+    public void Rule_BlockSdt_ProjectsContentAndIndexesBothAnchors()
     {
         var doc = IrTestDocuments.FromBodyXml(
             "<w:p><w:r><w:t>before</w:t></w:r></w:p>" +
@@ -456,9 +456,89 @@ public class IrMarkdownRuleTests
 
         // The wrapper stays visually transparent in markdown, but issue #452 makes its native
         // content-control identity a public anchor alongside the descendant paragraph.
-        Assert.DoesNotContain("inside cc", result.Markdown);
+        Assert.Contains("inside cc", result.Markdown);
         Assert.Contains(inner.Anchor.ToString(), result.AnchorIndex.Keys);
         Assert.Contains(sdt.Anchor.ToString(), result.AnchorIndex.Keys);
+    }
+
+    [Theory]
+    [InlineData("<w:p><w:r><w:t>wrapped content</w:t></w:r></w:p>")]
+    [InlineData("<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2400\"/></w:tblGrid>" +
+        "<w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>wrapped content</w:t></w:r></w:p>" +
+        "</w:tc></w:tr></w:tbl>")]
+    public void Rule_NestedBlockWrappers_ProjectParagraphsAndTables(string content)
+    {
+        var doc = IrTestDocuments.FromBodyXml(
+            "<w:sdt><w:sdtPr><w:alias w:val=\"metadata only\"/></w:sdtPr><w:sdtContent>" +
+            "<w:customXml w:uri=\"urn:test\" w:element=\"clause\"><w:sdt><w:sdtContent>" +
+            content + "</w:sdtContent></w:sdt></w:customXml></w:sdtContent></w:sdt>");
+        AssertEquivalent(doc);
+
+        var projected = WmlToMarkdownConverter.Convert(new WmlDocument(doc), new());
+
+        Assert.Contains("wrapped content", projected.Markdown);
+        Assert.DoesNotContain("metadata only", projected.Markdown);
+    }
+
+    [Fact]
+    public void Rule_BlockSdt_ProjectsEveryStoryIncludingNotesAndComments()
+    {
+        var texts = new[] { "Wrapped header", "Wrapped footer", "Wrapped footnote", "Wrapped endnote", "Wrapped comment" };
+        using var memory = new OpenXmlMemoryStreamDocument(IrTestDocuments.WithMixedReviewParts(
+            texts[0], texts[1], texts[2], texts[3], texts[4]));
+        XNamespace w = W;
+        using (var package = memory.GetWordprocessingDocument())
+        {
+            var main = package.MainDocumentPart!;
+            foreach (var part in main.Parts.Select(p => p.OpenXmlPart).Prepend(main))
+            {
+                var xml = part.GetXDocument();
+                foreach (var paragraph in xml.Descendants(w + "p").Where(p => p.Descendants(w + "t").Any()).ToList())
+                    paragraph.ReplaceWith(new XElement(w + "sdt", new XElement(w + "sdtContent", new XElement(paragraph))));
+                part.PutXDocument();
+            }
+        }
+        var doc = memory.GetModifiedWmlDocument();
+        AssertEquivalent(doc);
+
+        using var session = new DocxSession(doc.DocumentByteArray);
+        var markdown = session.Project().Markdown;
+        foreach (var text in texts) Assert.Contains(text, markdown);
+        Assert.Contains("Comment target", markdown);
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, false)]
+    public void Rule_BlockSdt_ExpansionStopsAtTheWrapperDepthLimit(int extra, bool visible)
+    {
+        var content = "<w:sdt><w:sdtContent><w:p><w:r><w:t>deep content</w:t></w:r></w:p></w:sdtContent></w:sdt>";
+        for (int i = 1; i < IrReader.MaxSdtDepth + extra; i++)
+            content = "<w:customXml>" + content + "</w:customXml>";
+        var doc = IrTestDocuments.FromBodyXml(content);
+        AssertEquivalent(doc);
+
+        var projected = WmlToMarkdownConverter.Convert(new WmlDocument(doc), new());
+        Assert.Equal(visible, projected.Markdown.Contains("deep content", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false, false, "**Prefix 1 \\| **Page")]
+    [InlineData(false, true, "**Prefix 1 \\| **Page")]
+    [InlineData(true, false, "**Prefix ****1**** \\| **Page")]
+    public void Rule_BlockSdt_FieldResultsKeepTheirFormattingBoundaries(bool simple, bool boldEnd, string expected)
+    {
+        const string result = "<w:r><w:rPr><w:b/></w:rPr><w:t>1</w:t></w:r>";
+        var field = simple ? "<w:fldSimple w:instr=\"PAGE\">" + result + "</w:fldSimple>"
+            : "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r>" +
+              "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>" + result +
+              "<w:r>" + (boldEnd ? "<w:rPr><w:b/></w:rPr>" : "") + "<w:fldChar w:fldCharType=\"end\"/></w:r>";
+        var doc = IrTestDocuments.FromBodyXml("<w:sdt><w:sdtContent><w:p>" +
+            "<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">Prefix </w:t></w:r>" + field +
+            "<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\"> | </w:t></w:r>" +
+            "<w:r><w:t>Page</w:t></w:r></w:p></w:sdtContent></w:sdt>");
+        AssertEquivalent(doc);
+        Assert.Contains(expected, WmlToMarkdownConverter.Convert(new WmlDocument(doc), new()).Markdown);
     }
 
     [Fact]
