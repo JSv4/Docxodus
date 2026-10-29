@@ -691,6 +691,9 @@ internal static class DocxSessionOps
     public static string GetAnchorInfos(int handle, System.Collections.Generic.IEnumerable<string> anchorIds) =>
         DocxSessionJson.SerializeAnchorInfoMap(SessionRegistry.Get(handle).GetAnchorInfos(anchorIds));
 
+    public static string GetAnchorLocations(int handle, System.Collections.Generic.IEnumerable<string>? anchorIds = null) =>
+        DocxSessionJson.SerializeAnchorLocations(SessionRegistry.Get(handle).GetAnchorLocations(anchorIds));
+
     public static string GetBlockMetadata(int handle, string anchorId) =>
         DocxSessionJson.SerializeBlockMetadataOrNull(SessionRegistry.Get(handle).GetBlockMetadata(anchorId));
 

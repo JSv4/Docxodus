@@ -411,16 +411,42 @@ public static class WmlToMarkdownConverter
         WordprocessingDocument doc, WmlToMarkdownConverterSettings settings) =>
         BuildAnchorIndex(doc, settings, enrich: false, flushAssignedUnids: false).Index;
 
+    // Index cloned roots through the same projection rules. A session opened without initial
+    // projection must be inspectable without assigning even an in-memory Unid to its live XML.
+    internal static IReadOnlyDictionary<string, AnchorLocation> BuildReadOnlyAnchorLocations(
+        WordprocessingDocument doc, WmlToMarkdownConverterSettings settings)
+    {
+        var (index, scopes, _) = BuildAnchorIndex(doc, settings, enrich: false, flushAssignedUnids: false,
+            readRoot: static part => new XDocument(part.GetXDocument()).Root!);
+        var canonical = new Dictionary<string, AnchorLocation>(StringComparer.Ordinal);
+        foreach (var scope in scopes)
+        {
+            var pending = new Stack<(XElement Element, string Path)>();
+            pending.Push((scope.Root, "/*[1]"));
+            while (pending.TryPop(out var current))
+            {
+                if (IsSkippedNoteBlock(current.Element, scope.Name)) continue;
+                var key = AnchorKeyFor(current.Element, scope.Name, settings, out _, out _);
+                if (key is not null)
+                    canonical.TryAdd(key, new AnchorLocation(key, scope.Part.Uri.ToString(), current.Path));
+                var children = current.Element.Elements().ToArray();
+                for (int i = children.Length - 1; i >= 0; i--)
+                    pending.Push((children[i], current.Path + "/*[" + (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture) + "]"));
+            }
+        }
+        return index.ToDictionary(pair => pair.Key, pair => canonical[pair.Value.Anchor.Id], StringComparer.Ordinal);
+    }
+
     private static (IReadOnlyDictionary<string, AnchorTarget> Index, List<ScopeInfo> Scopes, AnchorIdMap RenderMap)
         BuildAnchorIndex(WordprocessingDocument doc, WmlToMarkdownConverterSettings settings, bool enrich = true,
-            bool flushAssignedUnids = true)
+            bool flushAssignedUnids = true, Func<OpenXmlPart, XElement>? readRoot = null)
     {
         var main = doc.MainDocumentPart
             ?? throw new InvalidOperationException("Document has no MainDocumentPart.");
 
         var scopes = new List<ScopeInfo>();
         foreach (var (name, part) in ProjectedScopes(main, settings))
-            scopes.Add(new ScopeInfo { Name = name, Part = part, Root = part.GetXDocument().Root! });
+            scopes.Add(new ScopeInfo { Name = name, Part = part, Root = readRoot is null ? part.GetXDocument().Root! : readRoot(part) });
 
         var index = new Dictionary<string, AnchorTarget>(StringComparer.Ordinal);
         foreach (var scope in scopes)

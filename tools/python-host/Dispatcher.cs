@@ -406,6 +406,8 @@ internal static partial class Dispatcher
         "exists" => DocxSessionOps.Exists(Handle(args), Str(args, "anchorId")) ? "true" : "false",
         "get_anchor_info" => DocxSessionOps.GetAnchorInfo(Handle(args), Str(args, "anchorId")),
         "get_anchor_infos" => DocxSessionOps.GetAnchorInfos(Handle(args), ParseAnchorIdArray(args)),
+        "get_anchor_locations" => DocxSessionOps.GetAnchorLocations(Handle(args),
+            DocxSessionJson.ParseAnchorLocationIds(args.TryGetProperty("anchorIds", out var locationIds) ? locationIds : null)),
         "get_block_metadata" => DocxSessionOps.GetBlockMetadata(Handle(args), Str(args, "anchorId")),
         "get_block_metadatas" => DocxSessionOps.GetBlockMetadatas(Handle(args), ParseAnchorIdArray(args)),
         "get_list_membership" => DocxSessionOps.GetListMembership(Handle(args), Str(args, "anchorId")),

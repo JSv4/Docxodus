@@ -2036,6 +2036,7 @@ export interface DocxodusWasmExports {
     FindByKindWithCitations: (handle: number, kind: string, scope: string, requestJson: string) => string;
     GetAnchorInfo: (handle: number, anchorId: string) => string;
     GetAnchorInfos: (handle: number, anchorIdsJson: string) => string;
+    GetAnchorLocations: (handle: number, anchorIdsJson: string) => string;
     GetBlockMetadata: (handle: number, anchorId: string) => string;
     GetBlockMetadatas: (handle: number, anchorIdsJson: string) => string;
     GetListMembership: (handle: number, anchorId: string) => string;
@@ -3642,6 +3643,19 @@ export interface AnchorTargetRef extends AnchorRef {
  * Use {@link MarkdownAnchorTarget} when iterating a full projection — it
  * includes the same fields plus `unid` and `partUri`.
  */
+/** One-based element-child XPath within an owning OPC part; it needs no namespace bindings. */
+export interface AnchorLocation {
+  anchorId: string;
+  partUri: string;
+  elementPath: string;
+}
+
+/** Locations in one live version. Version zero also addresses the caller's opening XML. */
+export interface AnchorLocationsResult {
+  version: number;
+  locations: Record<string, AnchorLocation | null>;
+}
+
 export interface AnchorInfo {
   id: string;
   kind: string;
@@ -4549,6 +4563,7 @@ export type WorkerRequestType =
   | "sessionOpen"
   | "sessionSetRevisionIdentities"
   | "sessionGetRevisionAuthorNameStatus"
+  | "sessionGetAnchorLocations"
   | "sessionGetPackageManifest"
   | "sessionGetSemanticChanges"
   | "sessionVerifyDeliverable"
@@ -4770,6 +4785,13 @@ export interface WorkerSessionGetRevisionAuthorNameStatusRequest extends WorkerR
   author?: string | null;
 }
 
+/** Locate projected XML elements without saving a worker session. */
+export interface WorkerSessionGetAnchorLocationsRequest extends WorkerRequestBase {
+  type: "sessionGetAnchorLocations";
+  handle: number;
+  anchorIds?: readonly string[] | null;
+}
+
 /** Generate a manifest from the current logical checkpoint of a worker session. */
 export interface WorkerSessionGetPackageManifestRequest extends WorkerRequestBase {
   type: "sessionGetPackageManifest";
@@ -4868,6 +4890,7 @@ export type WorkerRequest =
   | WorkerSessionOpenRequest
   | WorkerSessionSetRevisionIdentitiesRequest
   | WorkerSessionGetRevisionAuthorNameStatusRequest
+  | WorkerSessionGetAnchorLocationsRequest
   | WorkerSessionGetPackageManifestRequest
   | WorkerSessionGetSemanticChangesRequest
   | WorkerSessionVerifyDeliverableRequest
@@ -5062,6 +5085,11 @@ export interface WorkerSessionGetRevisionAuthorNameStatusResponse extends Worker
 }
 
 /** Response containing the current worker-session package manifest. */
+export interface WorkerSessionGetAnchorLocationsResponse extends WorkerResponseBase {
+  type: "sessionGetAnchorLocations";
+  anchorLocations?: AnchorLocationsResult;
+}
+
 export interface WorkerSessionGetPackageManifestResponse extends WorkerResponseBase {
   type: "sessionGetPackageManifest";
   manifest?: PackageManifest;
@@ -5125,6 +5153,7 @@ export type WorkerResponse =
   | WorkerSessionOpenResponse
   | WorkerSessionSetRevisionIdentitiesResponse
   | WorkerSessionGetRevisionAuthorNameStatusResponse
+  | WorkerSessionGetAnchorLocationsResponse
   | WorkerSessionGetPackageManifestResponse
   | WorkerSessionGetSemanticChangesResponse
   | WorkerSessionVerifyDeliverableResponse

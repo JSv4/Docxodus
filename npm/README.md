@@ -74,6 +74,13 @@ navigateToPageCitation(viewer, citation);
 Continuous renderers return explicit unavailability; Docxodus never estimates a citation page.
 See the [PageMap contract](../docs/architecture/page_map.md).
 
+To join projected anchors to package XML, direct and worker sessions expose
+`getAnchorLocations(anchorIds?)`. The read-only result is `{version, locations}`, with canonical
+`anchorId`, `partUri` and namespace-independent `elementPath` for each known id, and null for unknown
+ids. Omit ids (or pass null) for all, or pass `[]` for none. Version-zero paths address the original
+ZIP parts without a save; re-query after edits. See the
+[path contract](../docs/architecture/docx_mutation_api.md#read-only-package-locations--getanchorlocations-1396).
+
 ## Edit it in place
 
 `DocxEditor` is a framework-agnostic block editor over the live document. Edits go through a

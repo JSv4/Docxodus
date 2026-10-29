@@ -38,6 +38,8 @@ import type {
   WorkerSessionGetRevisionAuthorNameStatusRequest,
   DocxSessionSettings,
   RevisionAuthorNameInfo,
+  WorkerSessionGetAnchorLocationsRequest,
+  AnchorLocationsResult,
   WorkerSessionGetPackageManifestRequest,
   WorkerSessionGetSemanticChangesRequest,
   WorkerSessionVerifyDeliverableRequest,
@@ -683,6 +685,18 @@ function handleSessionGetRevisionAuthorNameStatus(
   }
 }
 
+function handleSessionGetAnchorLocations(
+  request: WorkerSessionGetAnchorLocationsRequest
+): { anchorLocations?: AnchorLocationsResult; error?: string } {
+  try {
+    const json = ensureInitialized().DocxSessionBridge.GetAnchorLocations(request.handle, JSON.stringify(request.anchorIds ?? null));
+    const result = JSON.parse(json) as AnchorLocationsResult & { error?: string };
+    return result.error ? { error: result.error } : { anchorLocations: result };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
 /** Generate a manifest from the current logical checkpoint of a live worker session. */
 function handleSessionGetPackageManifest(
   request: WorkerSessionGetPackageManifestRequest
@@ -1193,6 +1207,13 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
           authorNameInfo: result.authorNameInfo,
           error: result.error,
         };
+        break;
+      }
+
+      case "sessionGetAnchorLocations": {
+        const result = handleSessionGetAnchorLocations(request as WorkerSessionGetAnchorLocationsRequest);
+        response = { id: request.id, type: "sessionGetAnchorLocations", success: !result.error,
+          anchorLocations: result.anchorLocations, error: result.error };
         break;
       }
 

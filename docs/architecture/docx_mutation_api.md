@@ -507,6 +507,33 @@ An anchor id looks like `{#h:body:7b9f61007f9341c8aa5878ee63ffc874}`. The parts:
 
 **Created/Removed/Modified are the contract.** Each mutation returns three anchor lists in its `EditResult`. The lifecycle policy is documented in the [Anchor lifecycle](#anchor-lifecycle) section below — that's the contract the agent's mental model is supposed to track.
 
+### Read-only package locations — `GetAnchorLocations` (#1396)
+
+`session.GetAnchorLocations()` returns `{Version, Locations}` without saving, stamping Unids
+into live XML, changing the version or adding undo history. It works with initial-projection
+capture disabled. Pass anchor ids to select a subset; omitted/null selects all indexed keys,
+including abbreviated/sequential aliases, and an empty collection selects none. Duplicates are
+collapsed and unknown ids map to null. Lookup uses current projected ids; each non-null value
+contains the canonical full `AnchorId`, owning `PartUri` and `ElementPath`.
+
+`ElementPath` is a namespace-independent XPath 1.0 expression: `/*[1]/*[1]/*[12]` selects the
+twelfth element child of the document root's first element child. Every step counts **all
+element children**, including properties and wrappers; text nodes, comments and namespace
+prefixes do not affect it. At version zero, evaluate it against the original ZIP part named by
+`PartUri`. Strict namespace normalization and opening repairs to relationships/content types do
+not change these element positions. After an edit, the path describes the returned live version;
+inserting, moving or removing elements can change it. Re-query after mutations or undo/redo.
+
+The query indexes cloned story XML using the projector's existing anchor rules. It does not
+clone media or serialize the package. Both all-anchor and subset requests build that index once.
+It returns XML locations rather than layout coordinates or persistent identifiers across edits.
+
+The shared wire shape is `{version, locations: {requestedId: {anchorId, partUri, elementPath} | null}}`.
+npm exposes `session.getAnchorLocations(anchorIds?)` on direct and worker sessions; Python exposes
+`session.get_anchor_locations(anchor_ids=None)`. Stdio uses `get_anchor_locations`; MCP uses
+`docxodus_get_content` with `format: "anchor_locations"` and optional `anchorIds` (not `anchorId`).
+Wire selectors accept null or arrays containing only strings.
+
 ## What the markdown payload subset is, and why
 
 When you pass markdown into `ReplaceText`, `InsertParagraph`, or `ReplaceCellContent`, the session runs it through `MarkdownPayloadParser`, a hand-rolled parser that accepts **only** what the projector emits. Block-level: paragraphs, ATX headings (`#`–`######`), bulleted lists, ordered lists (with indent-based nesting), blockquotes, fenced code blocks. Inline: `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[text](url)` links, the GFM hard break (`"  \n"`, two trailing spaces → a real `w:br`), backslash escapes. (A *blank* line still separates paragraphs; a single in-paragraph newline becomes a `w:br`, symmetric with the projector's `w:br → "  \n"`.)

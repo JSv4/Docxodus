@@ -48,6 +48,8 @@ import type {
   WorkerSessionOpenResponse,
   WorkerSessionSetRevisionIdentitiesResponse,
   WorkerSessionGetRevisionAuthorNameStatusResponse,
+  WorkerSessionGetAnchorLocationsResponse,
+  AnchorLocationsResult,
   WorkerSessionGetPackageManifestResponse,
   WorkerSessionGetSemanticChangesResponse,
   WorkerSessionVerifyDeliverableResponse,
@@ -178,6 +180,9 @@ export interface WorkerDocxSession {
 
   /** Check the current or proposed reviewer name before recording changes under it. */
   getRevisionAuthorNameStatus(author?: string | null): Promise<RevisionAuthorNameInfo>;
+
+  /** Locate projected XML elements without saving. Omit ids for all keys; [] selects none. */
+  getAnchorLocations(anchorIds?: readonly string[] | null): Promise<AnchorLocationsResult>;
 
   /** Generate a deterministic manifest of the session's current logical checkpoint. */
   getPackageManifest(): Promise<PackageManifest>;
@@ -1005,6 +1010,13 @@ export async function createWorkerDocxodus(
               author,
             });
             return requireField(res, "authorNameInfo");
+          },
+
+          async getAnchorLocations(anchorIds?: readonly string[] | null): Promise<AnchorLocationsResult> {
+            const res = await send<WorkerSessionGetAnchorLocationsResponse>({
+              id: generateId(), type: "sessionGetAnchorLocations", handle, anchorIds,
+            });
+            return requireField(res, "anchorLocations");
           },
 
           async getPackageManifest(): Promise<PackageManifest> {

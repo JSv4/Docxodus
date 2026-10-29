@@ -1366,6 +1366,23 @@ public static partial class DocxSessionBridge
         return DocxSessionOps.GetAnchorInfos(h, ids);
     }
 
+    /// <summary>Read-only part/path locations. Empty JSON or null selects all anchors; [] selects none.</summary>
+    [JSExport]
+    public static string GetAnchorLocations(int h, string anchorIdsJson)
+    {
+        string[]? anchorIds;
+        try
+        {
+            using var ids = JsonDocument.Parse(string.IsNullOrWhiteSpace(anchorIdsJson) ? "null" : anchorIdsJson);
+            anchorIds = DocxSessionJson.ParseAnchorLocationIds(ids.RootElement);
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException)
+        {
+            return "{\"error\":\"malformed anchor id array\"}";
+        }
+        return DocxSessionOps.GetAnchorLocations(h, anchorIds);
+    }
+
     /// <summary>
     /// Bridge for <see cref="DocxSession.GetBlockMetadata"/>. Returns a JSON
     /// object with style id/name, outline level, list membership (when present),

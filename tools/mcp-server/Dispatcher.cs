@@ -347,6 +347,12 @@ internal static partial class Dispatcher
             case "version":
                 return DocxSessionOps.GetVersionJson(session.Handle);
 
+            case "anchor_locations":
+                if (args.TryGetProperty("anchorId", out _))
+                    throw new McpToolException("anchor_locations takes anchorIds, not anchorId");
+                return DocxSessionOps.GetAnchorLocations(session.Handle,
+                    DocxSessionJson.ParseAnchorLocationIds(args.TryGetProperty("anchorIds", out var locationIds) ? locationIds : null));
+
             case "semantic_changes":
                 // This read is package-wide. Reject the property itself, including null and
                 // non-string values, rather than letting OptStr turn an invalid scoped request

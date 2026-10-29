@@ -4,6 +4,7 @@
 import type {
   DeletedTextSide,
   AnchorInfo,
+  AnchorLocationsResult,
   AnchorRef,
   AnchorTargetRef,
   AnnotationUpdate,
@@ -2215,6 +2216,14 @@ export class DocxSession {
   getAnchorInfos(anchorIds: readonly string[]): Record<string, AnchorInfo | null> {
     const raw = this.wasm.GetAnchorInfos(this.handle, JSON.stringify(anchorIds));
     return JSON.parse(raw) as Record<string, AnchorInfo | null>;
+  }
+
+  /** Read-only part/path lookup without saving or stamping XML. Omit ids for all keys,
+   *  including projection aliases; pass [] for none. Unknown requested ids map to null. */
+  getAnchorLocations(anchorIds?: readonly string[] | null): AnchorLocationsResult {
+    const result = JSON.parse(this.wasm.GetAnchorLocations(this.handle, JSON.stringify(anchorIds ?? null))) as AnchorLocationsResult & { error?: string };
+    if (result.error) throw new Error(result.error);
+    return result;
   }
 
   /**
