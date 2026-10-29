@@ -282,12 +282,12 @@ internal static class IrReader
                 var kind = WmlToMarkdownConverter.KindFor(element);
                 var unid = (string?)element.Attribute(PtOpenXml.Unid);
                 if (kind is null || unid is null) continue;
-                var previewText = string.Concat(element.Descendants(W + "t").Select(t => (string)t));
+                var previewText = DocxSession.VisibleText(element);
                 var preview = previewText.Length > 80 ? previewText.Substring(0, 80) + "…" : previewText;
                 var autoNumber = owner.Scope == "body" && kind is "p" or "h" or "li"
                     ? ListNumberResolver.Resolve(element, document) : null;
                 bool emptyParagraph = element.Name == W + "p"
-                    && !element.Descendants(W + "t").Any(t => !string.IsNullOrEmpty((string)t));
+                    && !element.Descendants().Any(e => DocxSession.IsVisibleText(e, element) && DocxSession.TextOf(e).Length > 0);
                 result.Add(new IrProjectionAnchor(
                     new IrAnchor(IrAnchor.KindFromToken(kind), owner.Scope, unid),
                     owner.PartUri, preview, autoNumber, emptyParagraph));
@@ -341,11 +341,18 @@ internal static class IrReader
         /// anchors, and the body-scope comment-range offset bookkeeping (which counts visible text in
         /// document order against the CURRENT block) has no defined meaning across a textbox boundary —
         /// matching the reader's existing "no offsets inside a field" stance.</summary>
-        public ReadContext IntoTextbox()
+        public ReadContext IntoTextbox() => WithoutComments(TextboxDepth + 1);
+
+        public bool ProjectCustomXml { get; private init; }
+
+        public ReadContext WithoutComments(int? textboxDepth = null, bool projectCustomXml = false)
         {
             var child = new ReadContext(PartUri, Main, Styles, Numbering, Scope, commentTracker: null,
-                textboxDepth: TextboxDepth + 1, retainSources: RetainSources, owningPart: OwningPart,
-                drawingGraphFallbackDocumentHash: DrawingGraphFallbackDocumentHash);
+                textboxDepth: textboxDepth ?? TextboxDepth, retainSources: RetainSources, owningPart: OwningPart,
+                drawingGraphFallbackDocumentHash: DrawingGraphFallbackDocumentHash)
+            {
+                ProjectCustomXml = ProjectCustomXml || projectCustomXml,
+            };
             // Preserve laziness while sharing per-story resolver/hash caches when one has already been created.
             child._relResolver = _relResolver;
             child._drawingGraphHasher = _drawingGraphHasher;
@@ -898,6 +905,9 @@ internal static class IrReader
             Format = paraFormat,
             List = listInfo,
             Inlines = IrNodeList.From(processed),
+            ProjectedInlines = !ctx.ProjectCustomXml && p.Descendants(W + "customXml").Any()
+                ? IrNodeList.From(WalkInlines(p.Elements().Where(c => c.Name != W + "pPr"),
+                    ctx.WithoutComments(projectCustomXml: true))) : null,
             InlineSectionBreakAnchor = inlineSectAnchor,
             InlineSectionFormat = inlineSectionFormat,
             PPrDigest = pPrDigest,
@@ -927,7 +937,7 @@ internal static class IrReader
         XElement paragraph, IReadOnlyList<IrInline> inlines, ReadContext ctx)
     {
         var envelopes = paragraph.Descendants()
-            .Where(element => (element.Name == W + "sdt" || element.Name == W + "smartTag") &&
+            .Where(element => IsInlineEnvelope(element) &&
                 IsOutermostInlineEnvelope(paragraph, element))
             .ToList();
 
@@ -948,7 +958,10 @@ internal static class IrReader
     private static bool IsOutermostInlineEnvelope(XElement paragraph, XElement envelope) =>
         envelope.Ancestors(W + "p").FirstOrDefault() == paragraph &&
         !envelope.Ancestors().TakeWhile(ancestor => ancestor != paragraph).Any(ancestor =>
-            ancestor.Name == W + "sdt" || ancestor.Name == W + "smartTag");
+            IsInlineEnvelope(ancestor));
+
+    private static bool IsInlineEnvelope(XElement element) =>
+        element.Name == W + "sdt" || element.Name == W + "smartTag";
 
     /// <summary>
     /// A run-level carrier with a textbox is modeled as inner blocks, so its outer DrawingML normally has no
@@ -1361,7 +1374,7 @@ internal static class IrReader
                     _fieldScaffold.Add(new XElement(child));
                 EmitInline(BuildFldSimple(child, _ctx), child);
             }
-            else if (depth >= MaxSdtDepth && (child.Name == W + "sdt" || child.Name == W + "smartTag"))
+            else if (depth >= MaxSdtDepth && (IsInlineEnvelope(child) || child.Name == W + "customXml"))
             {
                 // Pathologically deep inline content-control nesting: bound the recursion and
                 // preserve the whole subtree opaquely rather than risk a stack overflow.
@@ -1381,7 +1394,7 @@ internal static class IrReader
                             Feed(inner, depth + 1);
                     });
             }
-            else if (child.Name == W + "smartTag")
+            else if (child.Name == W + "smartTag" || (_ctx.ProjectCustomXml && child.Name == W + "customXml"))
             {
                 // N12: w:smartTag wraps runs (and can nest other smartTags) — splice its children
                 // into the inline stream the same way; recursion handles nesting. Its own
@@ -1389,7 +1402,7 @@ internal static class IrReader
                 // for w:sdt above.
                 SpliceWithInlineSdtMark(() =>
                 {
-                    foreach (var inner in child.Elements().Where(e => e.Name != W + "smartTagPr"))
+                    foreach (var inner in child.Elements().Where(e => e.Name != W + "smartTagPr" && e.Name != W + "customXmlPr"))
                         Feed(inner, depth + 1);
                 });
             }
@@ -1701,8 +1714,11 @@ internal static class IrReader
             sink.Add(new IrTextRun(child.Value, runFormat));
         else if (child.Name == W + "tab")
             sink.Add(new IrTab(runFormat));
-        else if (child.Name == W + "br")
-            sink.Add(new IrBreak(BreakKind(child)));
+        else if (child.Name == W + "br" || child.Name == W + "cr")
+            sink.Add(new IrBreak(BreakKind(child)) { ProjectionFormat = runFormat });
+        else if (child.Name == W + "ptab")
+            sink.Add(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child, ctx.RelResolver))
+                { ProjectedInlines = IrNodeList.From<IrInline>(new[] { new IrTab(runFormat) }) });
         else if (child.Name == W + "noBreakHyphen")
             // N7: non-breaking hyphen → text U+2011, carrying the run format so it coalesces
             // with adjacent same-format text in the post-process pass.
@@ -2276,14 +2292,11 @@ internal static class IrReader
     /// </summary>
     private static void AppendSym(XElement sym, XElement? rPr, IrRunFormat baseFormat, List<IrInline> inlines)
     {
-        var charAttr = (string?)sym.Attribute(W + "char");
-        if (charAttr is not null
-            && int.TryParse(charAttr, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var code)
-            && code is >= 0x20 and <= 0xFFFF)
+        var text = XmlText.SymbolText(sym);
+        if (text.Length > 0)
         {
             // BMP code point (Word's symbol convention uses the F000-F0FF private-use range): emit
             // the codepoint as a single char verbatim — no surrogate handling needed.
-            var text = ((char)code).ToString();
             var symFormat = MapRunFormat(rPr, extraUnmodeled: sym);
             inlines.Add(new IrTextRun(text, symFormat));
             return;

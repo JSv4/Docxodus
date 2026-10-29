@@ -331,8 +331,8 @@ public class DocxSessionTabTextTests
         var doc = new WmlDocument("a.docx", DocxSessionSpanRevisionTests.Build(
             new XElement(W.r, new XElement(W.t, "Line1"), new XElement(W.br), new XElement(W.t, "Line2"))));
         var result = AnnotationManager.AddAnnotation(doc, new DocumentAnnotation("br-1", "L", "Label", "#FFEB3B"),
-            AnnotationRange.FromSearch("e1Li"));
-        Assert.Equal("e1Li", Assert.Single(AnnotationManager.GetAnnotations(result)).AnnotatedText);
+            AnnotationRange.FromSearch("e1\nLi"));
+        Assert.Equal("e1\nLi", Assert.Single(AnnotationManager.GetAnnotations(result)).AnnotatedText);
         Assert.Single(Body(result.DocumentByteArray).Descendants(W.br));
         Assert.Equal("Line1Line2", string.Concat(Body(result.DocumentByteArray).Descendants(W.t).Select(t => t.Value)));
     }

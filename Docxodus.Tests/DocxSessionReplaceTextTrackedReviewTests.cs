@@ -235,16 +235,18 @@ public class DocxSessionReplaceTextTrackedReviewTests
     }
 
     [Fact]
-    public void Projection_KeepsTextBoxRunsInsideARevisionEnvelope()
+    public void Projection_AddressesAnEnclosedTextBoxSeparatelyFromItsHost()
     {
-        // The flat text span operations address counts a text box's runs when the box rides
-        // inside an envelope; the projection must show the same characters.
+        // An anchored textbox has its own paragraph coordinates, even inside an insertion.
         var bytes = Build(E("p", Run("Intro"), Ins("A", TextBox(Run("Box text")))));
 
         using var accepted = new DocxSession(bytes);
-        Assert.Contains("IntroBox text", accepted.Project().Markdown);
+        Assert.DoesNotContain("IntroBox text", accepted.Project().Markdown);
+        Assert.Single(accepted.Grep("^Intro$"));
+        Assert.Single(accepted.Grep("^Box text$"));
         using var inline = new DocxSession(bytes, InlineProjection());
-        Assert.Contains("Intro{+Box text+}", inline.Project().Markdown);
+        Assert.DoesNotContain("Intro{+Box text+}", inline.Project().Markdown);
+        Assert.Single(inline.Project().AnchorIndex.Values, a => a.TextPreview == "Box text");
     }
 
     [Fact]

@@ -588,7 +588,7 @@ public static class WmlToMarkdownConverter
         if (settings.EmptyParagraphs == EmptyParagraphMode.Suppress
             && el.Name == W.p
             && kind is "p" or "h" or "li"
-            && !el.Descendants(W.t).Any(t => !string.IsNullOrEmpty((string)t)))
+            && !el.Descendants().Any(t => DocxSession.TextOf(t).Length > 0))
             return null;
         return $"{kind}:{scopeName}:{unid}";
     }
@@ -792,9 +792,10 @@ public static class WmlToMarkdownConverter
     /// </summary>
     private static bool ScopeHasContent(ScopeInfo scope)
     {
-        foreach (var t in scope.Root.Descendants(W.t))
+        foreach (var t in scope.Root.Descendants())
         {
-            if (!string.IsNullOrWhiteSpace(t.Value)) return true;
+            var text = DocxSession.TextOf(t);
+            if (!string.IsNullOrWhiteSpace(text) || text.Contains('\t') || text.Contains('\n')) return true;
         }
         return false;
     }
@@ -1099,7 +1100,7 @@ public static class WmlToMarkdownConverter
         {
             foreach (var r in runs)
             {
-                if (r.Descendants(W.t).Any(t => !string.IsNullOrEmpty((string)t))) return true;
+                if (r.Elements().Any(t => DocxSession.TextOf(t).Length > 0)) return true;
             }
         }
         return false;
@@ -1255,8 +1256,7 @@ public static class WmlToMarkdownConverter
         // link and revision state down instead of reading one level. Content deleted inside
         // an insertion is deleted: gone from the accepted view and struck through inline. A
         // move reads as its two halves: the source is deleted text, the destination inserted.
-        // Inside an envelope a run's own descendants — a text box anchored in it — contribute
-        // their runs too, as the flat text that span operations address counts them.
+        // A run's nested textbox paragraphs have their own anchors and never join the host text.
         // A simple field's cached-result runs are what a reader sees — the HTML converter
         // renders them and the flat text the span machinery addresses includes them, so
         // dropping them left a hole in the projection an agent reads (issue #559: a
@@ -1265,14 +1265,13 @@ public static class WmlToMarkdownConverter
         // exactly like a hyperlink wrapper. An inline content control (w:sdt) or smart tag is
         // transparent: its content is what Word shows and the flat text holds, so it is walked
         // in place at the caller's nesting level (issue #1386).
-        void Walk(XElement container, string? url, Revision revision, bool nested)
+        void Walk(XElement container, string? url, Revision revision)
         {
             foreach (var child in container.Elements())
             {
                 if (child.Name == W.r)
                 {
                     Add(child, ReadRunFormatting(child, url, revision));
-                    if (nested && child.HasElements) Walk(child, url, revision, nested: true);
                 }
                 else if (child.Name == W.hyperlink)
                     Enclosed(child, ResolveHyperlinkUrl(child) ?? url, revision);
@@ -1283,21 +1282,19 @@ public static class WmlToMarkdownConverter
                 else if (child.Name == W.fldSimple)
                     Enclosed(child, url, revision);
                 else if ((child.Name == W.sdt ? child.Element(W.sdtContent)
-                         : child.Name == W.smartTag ? child : null) is { } content)
-                    Walk(content, url, revision, nested);
-                else if (nested && child.HasElements)
-                    Walk(child, url, revision, nested: true);
+                         : child.Name == W.smartTag || child.Name == W.customXml ? child : null) is { } content)
+                    Walk(content, url, revision);
             }
         }
 
         void Enclosed(XElement container, string? url, Revision revision)
         {
             Flush();
-            Walk(container, url, revision, nested: true);
+            Walk(container, url, revision);
             Flush();
         }
 
-        Walk(p, url: null, Revision.None, nested: false);
+        Walk(p, url: null, Revision.None);
         Flush();
         return groups;
     }
@@ -1396,14 +1393,16 @@ public static class WmlToMarkdownConverter
                 ctx.Sb.Append(EscapeMarkdown((string)node));
             else if (node.Name == W.delText)
                 ctx.Sb.Append(EscapeMarkdown((string)node));
-            else if (node.Name == W.br)
+            else if (node.Name == W.br || node.Name == W.cr)
                 ctx.Sb.Append("  \n"); // hard line break in markdown
-            else if (node.Name == W.tab)
+            else if (node.Name == W.tab || node.Name == W.ptab)
                 ctx.Sb.Append('\t'); // the character the session's text holds for it (issue #1387)
             else if (node.Name == W.footnoteReference)
                 AppendNoteRefMarker(node, ctx, "fn", W.footnote, ctx.Document.MainDocumentPart?.FootnotesPart);
             else if (node.Name == W.endnoteReference)
                 AppendNoteRefMarker(node, ctx, "en", W.endnote, ctx.Document.MainDocumentPart?.EndnotesPart);
+            else
+                ctx.Sb.Append(EscapeMarkdown(DocxSession.TextOf(node)));
         }
     }
 

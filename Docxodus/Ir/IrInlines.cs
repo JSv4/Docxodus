@@ -42,7 +42,13 @@ internal sealed record IrTextRun(string Text, IrRunFormat Format) : IrInline
 internal sealed record IrTab(IrRunFormat Format) : IrInline;
 
 /// <summary>A break (`w:br`) of the given <paramref name="Kind"/> (line, page, or column).</summary>
-internal sealed record IrBreak(IrBreakKind Kind) : IrInline;
+internal sealed record IrBreak(IrBreakKind Kind) : IrInline
+{
+    public IrRunFormat? ProjectionFormat { get; init; }
+
+    public bool Equals(IrBreak? other) => other is not null && Kind == other.Kind;
+    public override int GetHashCode() => Kind.GetHashCode();
+}
 
 /// <summary>
 /// A hyperlink (`w:hyperlink`). Exactly one of <paramref name="Target"/> (external URI) or
@@ -173,4 +179,13 @@ internal sealed record IrTextbox(IrNodeList<IrBlock> Blocks) : IrInline;
 /// An unmodeled inline element preserved opaquely: its element name plus the canonical hash of
 /// its source XML, so it is still diffable (same/different bytes) without being understood.
 /// </summary>
-internal sealed record IrOpaqueInline(XName ElementName, IrHash CanonicalHash) : IrInline;
+internal sealed record IrOpaqueInline(XName ElementName, IrHash CanonicalHash) : IrInline
+{
+    // Derived display facts are equality-neutral: the complete carrier remains opaque to comparison.
+    public IrNodeList<IrInline>? ProjectedInlines { get; init; }
+
+    public bool Equals(IrOpaqueInline? other) =>
+        other is not null && ElementName == other.ElementName && CanonicalHash == other.CanonicalHash;
+
+    public override int GetHashCode() => HashCode.Combine(ElementName, CanonicalHash);
+}
