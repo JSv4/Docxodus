@@ -920,7 +920,7 @@ public sealed partial class DocxSession
     /// be reduced to without losing anything.</summary>
     private static bool IsEmptyBlock(XElement e) =>
         e.Name == W.p
-        && !e.Descendants(W.t).Any(t => ((string)t).Length > 0)
+        && !e.Descendants().Any(t => HoldsText(t) && TextOf(t).Length > 0)
         && !e.Descendants().Any(d => d.Name == W.drawing || d.Name == W.pict || d.Name == W.br);
 
     private static List<XElement> CellBlocks(XElement tc) =>

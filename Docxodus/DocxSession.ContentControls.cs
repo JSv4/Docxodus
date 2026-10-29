@@ -380,7 +380,7 @@ public sealed partial class DocxSession
             var created = new Anchor($"sdt:{section.Owner.Scope}:{createdUnid}", "sdt",
                 section.Owner.Scope, createdUnid);
             return new EditResult { Success = true, Created = new[] { created },
-                Modified = new[] { AnchorFromCandidate(section) } };
+                Modified = new[] { AnchorFromCandidate(section) }, Patch = PatchFor(section) };
         }
         catch (Exception ex)
         {
@@ -409,13 +409,13 @@ public sealed partial class DocxSession
                 MarkStructuredBlockAsTrackedDeleted(item.Element, NewRevisionStamp());
                 InvalidateProjectionCache();
                 return new EditResult { Success = true,
-                    Modified = new[] { itemAnchor, AnchorFromCandidate(parentCandidate) } };
+                    Modified = new[] { itemAnchor, AnchorFromCandidate(parentCandidate) }, Patch = PatchFor(parentCandidate) };
             }
             item.Element.Remove();
             SweepOrphanedStoryRelationships(item.Owner.Part);
             InvalidateProjectionCache();
             return new EditResult { Success = true, Removed = new[] { itemAnchor },
-                Modified = new[] { AnchorFromCandidate(parentCandidate) } };
+                Modified = new[] { AnchorFromCandidate(parentCandidate) }, Patch = PatchFor(parentCandidate) };
         }
         catch (Exception ex)
         {
@@ -1059,7 +1059,7 @@ public sealed partial class DocxSession
             if (alsoModified is not null) modified.AddRange(alsoModified);
             return new EditResult { Success = true,
                 Removed = removed ?? Array.Empty<Anchor>(),
-                Modified = modified };
+                Modified = modified, Patch = PatchFor(candidate) };
         }
         catch (Exception ex)
         {
@@ -1611,4 +1611,11 @@ public sealed partial class DocxSession
 
     private static Anchor AnchorFromCandidate(ContentControlCandidate candidate) =>
         new(candidate.Info.AnchorId, "sdt", candidate.Info.Scope, candidate.Identity.Unid);
+
+    private MarkdownPatch? PatchFor(ContentControlCandidate candidate) => PatchFor(new AnchorTarget
+    {
+        Anchor = AnchorFromCandidate(candidate),
+        PartUri = candidate.Owner.Part.Uri.ToString(),
+        Unid = candidate.Identity.Unid,
+    });
 }

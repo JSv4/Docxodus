@@ -527,6 +527,12 @@ internal static class IrMarkdownEmitter
                 case IrTab:
                     sb.Append('\t'); // a run's w:tab is one character of the text (issue #1387)
                     break;
+                case IrBreak:
+                    sb.Append('\n');
+                    break;
+                case IrOpaqueInline { ProjectedText: { } projected }:
+                    sb.Append(projected.Text);
+                    break;
                 case IrHyperlink h:
                     AppendInlineText(h.Inlines, sb);
                     break;
@@ -567,6 +573,8 @@ internal static class IrMarkdownEmitter
         IrTextRun tr => tr.Text.Length > 0,
         IrHyperlink h => h.Inlines.Any(RunHasText),
         IrFieldRun f => f.CachedResult.Any(RunHasText),
+        IrTab or IrBreak => true,
+        IrOpaqueInline { ProjectedText: { } projected } => projected.Text.Length > 0,
         _ => false,
     };
 
@@ -582,9 +590,7 @@ internal static class IrMarkdownEmitter
     {
         var sb = new StringBuilder();
         AppendInlineText(p.Inlines, sb); // mirrors Descendants(w:t): includes textbox + SDT + field text
-        for (int i = 0; i < sb.Length; i++)
-            if (sb[i] != '\t') return true; // a tab is text, but not w:t text
-        return false;
+        return sb.Length > 0;
     }
 
     // ------------------------------------------------------------------
@@ -675,7 +681,7 @@ internal static class IrMarkdownEmitter
         var sb = new StringBuilder();
         foreach (var b in hf.Scope.Blocks) AppendFlatText(b, sb);
         for (int i = 0; i < sb.Length; i++)
-            if (!char.IsWhiteSpace(sb[i])) return true;
+            if (sb[i] is '\t' or '\n' || !char.IsWhiteSpace(sb[i])) return true;
         return false;
     }
 
@@ -1002,7 +1008,7 @@ internal static class IrMarkdownEmitter
             primed = true;
         }
 
-        foreach (var inline in inlines)
+        void AddInline(IrInline inline)
         {
             switch (inline)
             {
@@ -1022,7 +1028,7 @@ internal static class IrMarkdownEmitter
                     // paragraph runs and can merge with equally formatted neighbours.
                     if (f.IsSimpleField) Flush();
                     foreach (var rr in f.CachedResult)
-                        if (rr is IrTextRun ftr) Add(ftr, ReadRunFmt(ftr.Format));
+                        AddInline(rr);
                     if (f.IsSimpleField) Flush();
                     break;
                 case IrTab tab:
@@ -1030,6 +1036,9 @@ internal static class IrMarkdownEmitter
                     // (e.g. an italic run's tab lands inside the *…* span). The IR carries the run's
                     // format on the tab, so group by it — matching the oracle's per-run grouping.
                     Add(tab, ReadRunFmt(tab.Format));
+                    break;
+                case IrOpaqueInline { ProjectedText: { } projected }:
+                    AddInline(projected);
                     break;
                 case IrBreak:
                 case IrNoteRef:
@@ -1047,6 +1056,7 @@ internal static class IrMarkdownEmitter
                 // IrInlineImage / IrOpaqueInline: TODO(M1.4-T2). Skipped here.
             }
         }
+        foreach (var inline in inlines) AddInline(inline);
         Flush();
         return groups;
     }
@@ -1097,6 +1107,9 @@ internal static class IrMarkdownEmitter
         {
             case IrTextRun tr:
                 sb.Append(EscapeMarkdown(tr.Text));
+                break;
+            case IrOpaqueInline { ProjectedText: { } projected }:
+                AppendRunText(projected, sb, ctx);
                 break;
             case IrHyperlink h:
                 foreach (var inner in h.Inlines)
