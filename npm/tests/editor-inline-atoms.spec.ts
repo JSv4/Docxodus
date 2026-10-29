@@ -132,3 +132,14 @@ for (const count of [1, 2]) {
     expect(out.failures).toEqual([]);
   });
 }
+
+test('Shift+Enter replaces a selected suffix and typing continues after the break', async ({ page }) => {
+  await open(page, '');
+  await selectB(page, 1, 2);
+  await page.keyboard.press('Shift+Enter');
+  await page.keyboard.type('CCC');
+  const out = await saved(page);
+  expect(out.text).toEqual(['AAAB\nCCC']);
+  expect(out.xml[0].match(/<w:br\b/g)).toHaveLength(1);
+  expect(out.failures).toEqual([]);
+});

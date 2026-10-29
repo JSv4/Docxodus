@@ -3140,7 +3140,7 @@ export class DocxEditor {
     // (a line break changes no table structure).
     if (ev.key === "Enter" && ev.shiftKey && !ev.isComposing) {
       ev.preventDefault();
-      this.insertLineBreakAtCaret();
+      this.insertLineBreakAtCaret(el);
       return;
     }
     if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
@@ -3223,9 +3223,25 @@ export class DocxEditor {
    *  after it correctly (handling the browser's bogus trailing-<br> rule) so typing
    *  continues on the new line. Commits (on blur) as a w:br via the "  \n" hard break
    *  the serializer emits for a <br>. */
-  private insertLineBreakAtCaret(): void {
+  private insertLineBreakAtCaret(block: HTMLElement): void {
     if (typeof document !== "undefined" && typeof document.execCommand === "function") {
+      const selection = block.ownerDocument.defaultView?.getSelection();
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      const before = blockContentText(block).length;
+      const start = range ? contentOffsetOf(block, range.startContainer, range.startOffset) : 0;
+      const end = range ? contentOffsetOf(block, range.endContainer, range.endOffset) : 0;
       document.execCommand("insertLineBreak");
+      // With pre-wrap, Chromium can append TWO literal LF text nodes instead of BRs:
+      // one break and one caret placeholder. Normalize only that extra terminal character
+      // to the same empty BR placeholder the shared text/offset helpers already skip.
+      if (end !== before || blockContentText(block).length !== before - (end - start) + 2) return;
+      const walker = block.ownerDocument.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      let last: Text | null = null;
+      for (let node = walker.nextNode(); node; node = walker.nextNode())
+        if (!isInMarker(node) && node.textContent) last = node as Text;
+      if (!last?.data.endsWith("\n")) return;
+      last.splitText(last.length - 1).replaceWith(block.ownerDocument.createElement("br"));
+      placeCaretAtOffset(block, start + 1);
     }
   }
 
