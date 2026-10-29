@@ -4,18 +4,6 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [14.3.0] - 2026-10-29
-
-### Added
-
-- The All Markup balloon layout can print the full text of comments whose balloons were cut short
-  to fit beside their page, as Word's Print to PDF does: `balloonOverflow: "appendix"` on the export
-  (`--balloon-overflow appendix` in the CLI) and on `PaginationOptions`. Each cut balloon's box is
-  numbered, and pages added after the last list every cut comment under a bar naming its page, number,
-  label, author and the date as its author wrote it, running on from page to page with Word's widow and
-  orphan control. The added pages join the PageMap. The default, `"truncate"`, prints as before, as
-  Word's Save as PDF does. The report and layout digest name the option only when it is `"appendix"`.
-
 ### Changed
 
 - **Breaking: a tab is now one character in every session offset (#1387).** A `w:tab` in a run is
@@ -44,6 +32,34 @@ All notable changes to this project will be documented in this file.
   as before. Annotations store a bookmark pair, not offsets, so saved annotations do not move.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
+### Fixed
+
+- `Grep` finds a tab (#1387): `\t` matches it, and a phrase copied from the projection across a tab,
+  such as manual numbering `1.2<tab>Title`, matches. Splitting a run for an edit no longer moves a tab
+  or line break that came after the split point to before the run's text.
+- Markdown heading/list payloads and table-cell projections keep leading and trailing tabs while
+  trimming ordinary padding (#1387).
+- `AnnotationManager.AddAnnotation` with a text search (`AnnotationRange.FromSearch`,
+  `AnnotationTarget.Search`/`SearchInElement`) no longer deletes the rest of a run it bookmarks inside
+  (#1387). It rebuilt the run from the matched text node alone, so annotating `Alpha` in a run holding
+  `1.2<tab>Alpha` left only `Alpha`, and a match crossing a `w:br` inside one run threw "The parent
+  is missing". The run is now cut in place, keeping every tab, break and text node, and a break or
+  symbol just before the match stays outside the annotation. The search also reads the session's text, so it matches across a tab and skips deleted text.
+
+## [14.3.0] - 2026-10-29
+
+### Added
+
+- The All Markup balloon layout can print the full text of comments whose balloons were cut short
+  to fit beside their page, as Word's Print to PDF does: `balloonOverflow: "appendix"` on the export
+  (`--balloon-overflow appendix` in the CLI) and on `PaginationOptions`. Each cut balloon's box is
+  numbered, and pages added after the last list every cut comment under a bar naming its page, number,
+  label, author and the date as its author wrote it, running on from page to page with Word's widow and
+  orphan control. The added pages join the PageMap. The default, `"truncate"`, prints as before, as
+  Word's Save as PDF does. The report and layout digest name the option only when it is `"appendix"`.
+
+### Changed
+
 - Accepting or rejecting every revision no longer refuses a document over revision metadata (#1385).
   A revision with no author or an invalid date or `w16du:dateUtc` is listed as `Supported` with an
   advisory diagnostic (`missing_revision_author`, `invalid_revision_date`, `invalid_revision_date_utc`)
@@ -64,18 +80,6 @@ All notable changes to this project will be documented in this file.
 
 - Package manifests no longer require internal hyperlink targets to exist in the ZIP (#1407), so
   session semantic comparison and deliverable verification accept relative links to sibling files.
-
-- `Grep` finds a tab (#1387): `\t` matches it, and a phrase copied from the projection across a tab,
-  such as manual numbering `1.2<tab>Title`, matches. Splitting a run for an edit no longer moves a tab
-  or line break that came after the split point to before the run's text.
-- Markdown heading/list payloads and table-cell projections keep leading and trailing tabs while
-  trimming ordinary padding (#1387).
-- `AnnotationManager.AddAnnotation` with a text search (`AnnotationRange.FromSearch`,
-  `AnnotationTarget.Search`/`SearchInElement`) no longer deletes the rest of a run it bookmarks inside
-  (#1387). It rebuilt the run from the matched text node alone, so annotating `Alpha` in a run holding
-  `1.2<tab>Alpha` left only `Alpha`, and a match crossing a `w:br` inside one run threw "The parent
-  is missing". The run is now cut in place, keeping every tab, break and text node, and a break or
-  symbol just before the match stays outside the annotation. The search also reads the session's text, so it matches across a tab and skips deleted text.
 
 - Three more shapes from real documents no longer refuse accept-all and reject-all (#1385): a
   paragraph or run property change with no stored property shell (read as an empty baseline, as
