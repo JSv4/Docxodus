@@ -34,6 +34,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Package manifests no longer require internal hyperlink targets to exist in the ZIP (#1407), so
+  session semantic comparison and deliverable verification accept relative links to sibling files.
+
 - Three more shapes from real documents no longer refuse accept-all and reject-all (#1385): a
   paragraph or run property change with no stored property shell (read as an empty baseline, as
   LibreOffice reads it; table and section changes still need theirs); a `w:customXml…Range` start/end pair enclosing nothing (now an entry,

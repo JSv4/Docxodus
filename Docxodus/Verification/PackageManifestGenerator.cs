@@ -775,7 +775,10 @@ public static class PackageManifestGenerator
 
                 string? resolved = null;
                 bool? targetPresent = null;
-                if (validTargetMode && !external)
+                // Hyperlinks are references even in Internal mode; the SDK does not load them
+                // as package parts. Relative file links need not name an entry in this ZIP.
+                if (validTargetMode && !external
+                    && !OpenXmlRelationshipVocabulary.IsOfficeType(type, "hyperlink"))
                 {
                     resolved = ResolveRelationshipTarget(
                         owner, target, options.MaxUriLength, out var invalidTarget);

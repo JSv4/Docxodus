@@ -190,10 +190,10 @@ public sealed record PackageRelationship
     /// <summary><c>Internal</c> or <c>External</c>.</summary>
     required public string TargetMode { get; init; }
 
-    /// <summary>Canonical internal target part URI, otherwise null.</summary>
+    /// <summary>Canonical internal target part URI; null for external targets and hyperlinks.</summary>
     public string? ResolvedTargetUri { get; init; }
 
-    /// <summary>For internal targets, whether a matching ZIP entry exists; null for external targets.</summary>
+    /// <summary>For internal part targets, whether a matching ZIP entry exists; null for references.</summary>
     public bool? IsTargetPresent { get; init; }
 }
 
