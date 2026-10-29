@@ -40,6 +40,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- HTML rendering coalesces deeply nested inline containers once, avoiding exponential work
+  on nested hyperlinks, simple fields and content-control/custom-XML wrappers (#1410).
 - Untracked `ReplaceText` preserves unchanged inline content controls, including bindings,
   citation fields and nested markup, when echoing a projected line or editing surrounding text
   (#1406). Ambiguous alignment returns `UnsupportedInlineBoundary` before mutation; use span

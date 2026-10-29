@@ -1078,6 +1078,19 @@ namespace Docxodus
 
         public static XElement CoalesceAdjacentRunsWithIdenticalFormatting(XElement runContainer)
         {
+            var result = new XElement(runContainer);
+            // Visit each nested container once, children first. Recursing over every descendant
+            // revisits the same subtree at each ancestor and makes deep inline wrappers exponential.
+            foreach (var container in result.Descendants()
+                .Where(e => AdditionalRunContainerNames.Contains(e.Name)
+                    || e.Name == W.p && e.Ancestors(W.txbxContent).Any())
+                .Reverse().Append(result))
+                CoalesceContainerRuns(container);
+            return result;
+        }
+
+        private static void CoalesceContainerRuns(XElement runContainer)
+        {
             // Adjacent children that may merge, grouped by the predicate above. An element that
             // cannot merge with its predecessor starts a new group, so a group of one is normal
             // and is still rebuilt exactly as it was before this grouping was hand-rolled.
@@ -1091,9 +1104,9 @@ namespace Docxodus
                 else groupedAdjacentRunsWithIdenticalFormatting.Add(new List<XElement> { ce });
             }
 
-            var runContainerWithConsolidatedRuns = new XElement(runContainer.Name,
-                runContainer.Attributes(),
-                groupedAdjacentRunsWithIdenticalFormatting.Select(g =>
+            // Detach children so unmerged subtrees move into place without being copied again.
+            runContainer.RemoveNodes();
+            runContainer.Add(groupedAdjacentRunsWithIdenticalFormatting.Select(g =>
                 {
                     if (CoalesceKind(g[0]) == 0)
                         return (object) g;
@@ -1149,27 +1162,6 @@ namespace Docxodus
                     }
                     return g;
                 }));
-
-            // Process w:txbxContent//w:p
-            foreach (XElement txbx in runContainerWithConsolidatedRuns.Descendants(W.txbxContent))
-                foreach (XElement txbxPara in txbx.DescendantsTrimmed(W.txbxContent).Where(d => d.Name == W.p))
-                {
-                    XElement newPara = CoalesceAdjacentRunsWithIdenticalFormatting(txbxPara);
-                    txbxPara.ReplaceWith(newPara);
-                }
-
-            // Process additional run containers.
-            List<XElement> runContainers = runContainerWithConsolidatedRuns
-                .Descendants()
-                .Where(d => AdditionalRunContainerNames.Contains(d.Name))
-                .ToList();
-            foreach (XElement container in runContainers)
-            {
-                XElement newContainer = CoalesceAdjacentRunsWithIdenticalFormatting(container);
-                container.ReplaceWith(newContainer);
-            }
-
-            return runContainerWithConsolidatedRuns;
         }
 
         private static Dictionary<XName, int> Order_settings = new Dictionary<XName, int>

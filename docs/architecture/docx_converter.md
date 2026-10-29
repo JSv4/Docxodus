@@ -88,6 +88,9 @@ The conversion happens in the following stages:
 
 ### 1. Preprocessing
 
+Run coalescing visits nested containers from the leaves upward on one copy of the input tree.
+Each container, including textbox paragraphs, is consolidated once (#1410).
+
 ```
 WordprocessingDocument
     │
