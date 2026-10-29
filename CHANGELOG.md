@@ -40,6 +40,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Untracked `ReplaceText` preserves unchanged inline content controls, including bindings,
+  citation fields and nested markup, when echoing a projected line or editing surrounding text
+  (#1406). Ambiguous alignment returns `UnsupportedInlineBoundary` before mutation; use span
+  edits or the typed control APIs for those paragraphs. Hard-break markers inside code, strike
+  and link spans no longer become extra spaces in the saved text.
 - Inline custom XML projects and participates in paragraph searches and edits. Textbox paragraphs
   keep their own text coordinates inside hyperlinks, fields and revision envelopes. Atom-only
   paragraphs/scopes survive empty-content suppression, and tab-only cells count as nonempty when

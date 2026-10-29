@@ -639,6 +639,15 @@ Two conventions worth pinning down because they affect agent reasoning:
 
 **Tracked-change mode shifts the semantics for `ReplaceText` and block deletion (`DeleteBlock`, `DeleteRange`, and `DeleteSection`).** When `Settings.TrackedChanges = RenderInline`, supported deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. `ReplaceText` deletes each live run where it sits — inside hyperlinks, fields, inline controls and other authors' insertions (`w:ins > w:del`, so the deletion rejects on its own) — un-inserts the session author's own pending runs, keeps zero-width markers (bookmark/comment ranges, note and comment reference runs) in place, and inserts the replacement after the last superseded run, ahead of any trailing markers. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged. The mode is switchable mid-session — see "Switching tracked-changes mode mid-session" below.
 
+**An untracked `ReplaceText` keeps unchanged inline controls (#1406).** Echoing a projected line
+or editing surrounding text retains the native control, its binding, fields and nested markup.
+Matching uses displayed characters and the formatting/link targets the projector can express;
+formatting hidden by the projection remains intact. Changing a control's displayed value or
+expressible formatting still uses the general paragraph rewrite; use the typed control APIs to
+change its value while keeping its metadata. If bounded alignment cannot safely place unchanged
+controls, the operation returns `UnsupportedInlineBoundary` before mutation or history changes;
+use span edits or the typed control APIs instead.
+
 **An untracked `ReplaceText` replaces the paragraph's text, not its pending removals.** A tracked deletion or move source (with the move's range markers), directly in the paragraph or inside a container with no live text, takes no room in the paragraph's text and is someone's pending change, so the replacement keeps it rather than silently resolving it or orphaning the move's destination (issue #1292). Removed text that led the paragraph stays first; any other follows the new text, since its old position means nothing there and keeping it would cut a word in two. Markers nested inside a preserved removal stay inside it. If a bookmark, comment or permission range starts there and ends outside, its end follows the preserved removal rather than preceding its start. The browser editor relies on this when, with revisions hidden, it rewrites a paragraph that looked empty because its only text was deleted.
 
 Structural tracking is deliberately capability-gated. Row insertion/deletion and column

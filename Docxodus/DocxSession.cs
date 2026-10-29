@@ -1917,16 +1917,18 @@ public sealed partial class DocxSession : IDisposable
         IsRemovedText(e) || e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd
         || (IsZeroWidthMarker(e) && e.Descendants().Any(IsRemovedText));
 
-    private sealed record PreservedMarkerPosition(XElement Element, int Offset, int Order);
+    private sealed record PreservedMarkerPosition(
+        XElement Element, int Offset, int Order, XElement? Boundary = null, bool After = false);
 
     /// <summary>
     /// Capture zero-width markers before a whole-paragraph replacement. Bookmark endpoints retain
-    /// their old character coordinate when the replacement is long enough and clamp to its end
-    /// otherwise. This is deterministic and, unlike the old leading-marker fallback, cannot invert
-    /// or collapse a range merely because its end marker originally sat between two runs.
+    /// their old character coordinate, clamped between retained controls and to the new text end.
+    /// A control boundary also retains marker order when the control has no displayed characters.
     /// </summary>
-    private static List<PreservedMarkerPosition> CapturePreservedMarkerPositions(XElement paragraph)
+    private static List<PreservedMarkerPosition> CapturePreservedMarkerPositions(
+        XElement paragraph, IReadOnlyList<RetainedControl> controls)
     {
+        var retainedControls = controls.Select(c => c.Element).ToHashSet();
         // Pending removed text (a deletion or move source, with its move range) takes no room in
         // the paragraph's text either, and is not the text being replaced: dropping it would
         // silently resolve another reviewer's change, or orphan a move's destination (#1292).
@@ -1949,6 +1951,7 @@ public sealed partial class DocxSession : IDisposable
             // A preserved removal carries its own nested markers; extracting them would move
             // their range off the removed text and onto the replacement.
             .Where(e => !e.Ancestors().Any(a => ReferenceEquals(a.Parent, paragraph) && IsPendingRemoval(a)))
+            .Where(e => !e.AncestorsAndSelf().Any(retainedControls.Contains))
             .Distinct()
             .OrderBy(e => e, Comparer<XElement>.Create(XNode.DocumentOrderComparer.Compare))
             .ToList();
@@ -1957,8 +1960,16 @@ public sealed partial class DocxSession : IDisposable
             int offset = MarkerOffset(paragraph, element);
             bool followsRemoval = element.DescendantsAndSelf()
                 .Any(e => trailingRangeEnds.Contains((e.Name, (string?)e.Attribute(W.id))));
-            return new PreservedMarkerPosition(element,
-                (IsPendingRemoval(element) && offset > 0) || followsRemoval ? int.MaxValue : offset, order);
+            if ((IsPendingRemoval(element) && offset > 0) || followsRemoval)
+                return new PreservedMarkerPosition(element, int.MaxValue, order);
+            // An endpoint outside a moving control must stay on its original side of it.
+            var next = controls.FirstOrDefault(c => XNode.CompareDocumentOrder(element, c.Element) < 0);
+            var previous = controls.LastOrDefault(c => XNode.CompareDocumentOrder(c.Element, element) < 0);
+            if (next is not null && offset >= next.Start)
+                return new PreservedMarkerPosition(element, next.Start, order, next.Element);
+            if (previous is not null && offset <= previous.Start + previous.Length)
+                return new PreservedMarkerPosition(element, previous.Start + previous.Length, order, previous.Element, true);
+            return new PreservedMarkerPosition(element, offset, order);
         }).ToList();
         foreach (var marker in candidates) marker.Remove();
         return result;
@@ -1968,7 +1979,14 @@ public sealed partial class DocxSession : IDisposable
         XElement paragraph, IReadOnlyList<PreservedMarkerPosition> markers)
     {
         int length = ParagraphText(paragraph).Length;
-        foreach (var group in markers.GroupBy(m => Math.Clamp(m.Offset, 0, length)).OrderBy(g => g.Key))
+        foreach (var group in markers.Where(m => m.Boundary is not null).GroupBy(m => (m.Boundary, m.After)))
+        {
+            var elements = group.OrderBy(m => m.Order).Select(m => m.Element).ToList();
+            if (group.Key.After) group.Key.Boundary!.AddAfterSelf(elements);
+            else group.Key.Boundary!.AddBeforeSelf(elements);
+        }
+        foreach (var group in markers.Where(m => m.Boundary is null)
+            .GroupBy(m => Math.Clamp(m.Offset, 0, length)).OrderBy(g => g.Key))
             InsertMarkersAtOffset(paragraph, group.Key,
                 group.OrderBy(m => m.Order).Select(m => m.Element).ToList());
     }
@@ -1995,15 +2013,18 @@ public sealed partial class DocxSession : IDisposable
         return after;
     }
 
-    private void ApplyReplaceTextAccept(XElement paragraph, IReadOnlyList<Internal.ParsedBlock> blocks)
+    private void ApplyReplaceTextAccept(XElement paragraph, XElement replacement, List<RetainedControl> controls)
     {
         var pPr = paragraph.Element(W.pPr);
-        var markers = CapturePreservedMarkerPositions(paragraph);
+        var markers = CapturePreservedMarkerPositions(paragraph, controls);
+        foreach (var control in controls.AsEnumerable().Reverse()) RestoreInlineControl(replacement, control);
         paragraph.RemoveNodes();
         if (pPr is not null) paragraph.Add(pPr);
-        if (blocks.Count > 0)
-            foreach (var run in blocks[0].RunElements)
-                paragraph.Add(new XElement(run));
+        foreach (var child in replacement.Elements().ToList())
+        {
+            child.Remove();
+            paragraph.Add(child);
+        }
         RestorePreservedMarkerPositions(paragraph, markers);
     }
 

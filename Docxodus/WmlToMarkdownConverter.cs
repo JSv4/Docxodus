@@ -1311,7 +1311,7 @@ public static class WmlToMarkdownConverter
             Revision: revision);
     }
 
-    private static bool HasToggle(XElement? rPr, XName name)
+    internal static bool HasToggle(XElement? rPr, XName name)
     {
         if (rPr == null) return false;
         var el = rPr.Element(name);
@@ -1322,7 +1322,7 @@ public static class WmlToMarkdownConverter
         return val == null || (val != "0" && !val.Equals("false", StringComparison.OrdinalIgnoreCase));
     }
 
-    private static bool IsCodeRun(XElement? rPr)
+    internal static bool IsCodeRun(XElement? rPr)
     {
         if (rPr == null) return false;
         var styleId = (string?)rPr.Element(W.rStyle)?.Attribute(W.val);

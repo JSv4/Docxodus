@@ -219,6 +219,8 @@ internal static class MarkdownPayloadParser
 
     private static IReadOnlyList<XElement> ParseInline(string text)
     {
+        // The projector's hard-break marker also occurs inside code, strike and link spans.
+        text = text.Replace("  \n", "\n", StringComparison.Ordinal);
         var list = new List<XElement>();
         var sb = new StringBuilder();
         bool bold = false, italic = false;
