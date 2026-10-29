@@ -312,3 +312,46 @@ test.describe('ribbon Markup control — display only (#1279)', () => {
     expect(await review(page)).toEqual({ trackedChanges: 0, checkbox: false, markup: 'none', marks: 0 });
   });
 });
+
+const INERT_RANGES = `<w:moveFromRangeStart w:id="8" w:name="leftover" ${REVISION}/><w:moveFromRangeEnd w:id="8"/>`
+  + `<w:customXmlInsRangeStart w:id="9" ${REVISION}/><w:customXmlInsRangeEnd w:id="9"/>`;
+
+test.describe('review ignores markers with no extent (#1408)', () => {
+  for (const realChange of [false, true]) {
+    test(`ribbon counts content changes, with real change=${realChange}`, async ({ page }) => {
+      await openRibbon(page);
+      const body = `<w:p>${INERT_RANGES}<w:r><w:t>Body text</w:t></w:r></w:p>`
+        + (realChange ? DELETED_ONLY_PARAGRAPH : '');
+      await page.evaluate(bytes => (window as any).__ribbon.open(new Uint8Array(bytes), 'ranges.docx'), revisionFixture(body));
+      const entries = await page.evaluate(() => (window as any).__ribbon.editor.listRevisions());
+      expect(entries.filter((r: any) => ['inert_move_range', 'empty_wrapper_range'].includes(r.diagnostic?.code))).toHaveLength(2);
+      await expect(page.locator('[data-dxr="revcount"]')).toHaveText(realChange ? '1 change' : 'No tracked changes');
+    });
+
+    test(`unanchored revision lookup skips empty markers, with real change=${realChange}`, async ({ page }) => {
+      const body = `<w:p>${INERT_RANGES}<w:r><w:t>Body text</w:t></w:r></w:p>`
+        + (realChange ? DELETED_ONLY_PARAGRAPH : '');
+      await openEditor(page, { showRevisions: true }, revisionFixture(body));
+      const result = await page.evaluate(() => {
+        const editor = (window as any).editor;
+        const mark = document.createElement('del');
+        mark.textContent = 'Gone clause';
+        return editor.revisionAt(mark)?.text ?? null;
+      });
+      expect(result).toBe(realChange ? 'Gone clause' : null);
+    });
+  }
+});
+
+for (const malformed of [false, true]) {
+  test(`review retains zero-text property changes, malformed=${malformed}`, async ({ page }) => {
+    await openRibbon(page);
+    const oldProperties = malformed ? '<w:pPr/><w:pPr/>' : '<w:pPr><w:jc w:val="right"/></w:pPr>';
+    const body = `<w:p><w:pPr><w:jc w:val="center"/><w:pPrChange w:id="42" ${REVISION}>${oldProperties}</w:pPrChange></w:pPr></w:p>`;
+    await page.evaluate(bytes => (window as any).__ribbon.open(new Uint8Array(bytes), 'properties.docx'), revisionFixture(body));
+    await expect(page.locator('[data-dxr="revcount"]')).toHaveText('1 change');
+    const entry = await page.evaluate(() => (window as any).__ribbon.editor.listRevisions()[0]);
+    expect(entry.resolutionStatus).toBe(malformed ? 'malformed' : 'supported');
+    expect(entry.text).toBe('');
+  });
+}

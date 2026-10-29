@@ -7,8 +7,8 @@ import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
 // it, and the editor, which renders it as an empty box, must count it as one too or every offset
 // after a tab lands one short.
 
-function tabFixture(): Uint8Array {
-  const body = [
+function tabFixture(bodyOverride?: string): Uint8Array {
+  const body = bodyOverride ?? [
     '<w:p><w:r><w:t>1.2</w:t><w:tab/><w:t>Alpha</w:t></w:r></w:p>',
     '<w:p><w:r><w:tab/><w:t>Lead</w:t></w:r></w:p>',
     '<w:p><w:r><w:t>Name:</w:t><w:tab/><w:t>[_____]</w:t><w:tab/><w:t>Date</w:t></w:r></w:p>',
@@ -75,20 +75,21 @@ test.describe('a tab is one character of the session text (#1387)', () => {
     expect(out.shapes).toEqual(['1.2|Beta', '|Lead', 'Name:||Date', 'Plain control text']);
   });
 
-  async function openEditor(page: Page, tracked = false) {
+  async function openEditor(page: Page, tracked = false, body?: string, options: Record<string, unknown> = {}) {
     await ready(page);
-    await page.evaluate(({ bytes, tracked }) => {
+    await page.evaluate(({ bytes, tracked, options }) => {
       const w = window as any;
       const container = document.createElement('div');
       document.body.appendChild(container);
       w.failures = [] as unknown[];
       w.editor = w.Docxodus.DocxEditor.open(container, new Uint8Array(bytes), w.Docxodus, {
+        ...options,
         ...(tracked ? { trackedChanges: 1 } : {}), // TrackedChangeMode.RenderInline
         onEditFailed: (info: unknown) => w.failures.push(info),
       });
       w.block = (text: string) => Array.from(container.querySelectorAll<HTMLElement>('p[data-anchor]'))
-        .find((p) => (p.textContent ?? '').includes(text));
-    }, { bytes: Array.from(tabFixture()), tracked });
+        .find((p) => !p.closest('#pagination-staging') && (p.textContent ?? '').includes(text));
+    }, { bytes: Array.from(tabFixture(body)), tracked, options });
   }
 
   /** Put the caret in the block holding `text`, `at` characters into its text node holding `node`. */
@@ -98,9 +99,10 @@ test.describe('a tab is one character of the session text (#1387)', () => {
       block.focus();
       const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
       for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-        if ((n.textContent ?? '') !== node) continue;
+        const start = (n.textContent ?? '').indexOf(node);
+        if (start < 0) continue;
         const range = document.createRange();
-        range.setStart(n, at);
+        range.setStart(n, start + at);
         range.collapse(true);
         window.getSelection()!.removeAllRanges();
         window.getSelection()!.addRange(range);
@@ -114,6 +116,225 @@ test.describe('a tab is one character of the session text (#1387)', () => {
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     return page.evaluate((shapes) => (eval(shapes) as (b: Uint8Array) => string[])(
       (window as any).editor.save()), SHAPES);
+  }
+
+  for (const [key, node, at, expected] of [
+    ['ArrowRight', '1.2', 3, '1.2|XAlpha'],
+    ['ArrowLeft', 'Alpha', 0, '1.2X|Alpha'],
+  ] as const) {
+    test(`${key} crosses a tab in one step`, async ({ page }) => {
+      await openEditor(page);
+      await caretIn(page, 'Alpha', node, at);
+      await page.keyboard.press(key);
+      await page.keyboard.type('X');
+      expect((await saved(page))[0]).toBe(expected);
+    });
+  }
+
+  for (const [name, body, node, at, key, expected] of [
+    ['adjacent tabs', '<w:p><w:r><w:t>A</w:t><w:tab/><w:tab/><w:t>Beta</w:t></w:r></w:p>', 'A', 1, 'ArrowRight', 'A|X|Beta'],
+    ['decorated tab', '<w:p><w:r><w:rPr><w:u w:val="single"/><w:strike/></w:rPr><w:t>A</w:t><w:tab/><w:t>Beta</w:t></w:r></w:p>', 'A', 1, 'ArrowRight', 'A|XBeta'],
+    ['trailing tab', '<w:p><w:r><w:t>Tail</w:t><w:tab/></w:r></w:p>', 'Tail', 4, 'ArrowRight', 'Tail|X'],
+    ['emoji after tab', '<w:p><w:r><w:t>A</w:t><w:tab/><w:t>😀Beta</w:t></w:r></w:p>', '😀Beta', 0, 'ArrowRight', 'A|😀XBeta'],
+    ['combining character before tab', '<w:p><w:r><w:t>é</w:t><w:tab/><w:t>Beta</w:t></w:r></w:p>', 'é', 2, 'ArrowLeft', 'Xé|Beta'],
+    ['RTL tab', '<w:p><w:pPr><w:bidi/></w:pPr><w:r><w:rPr><w:rtl/></w:rPr><w:t>אב</w:t><w:tab/><w:t>גד</w:t></w:r></w:p>', 'אב', 2, 'ArrowLeft', 'אב|Xגד'],
+  ] as const) {
+    test(`one arrow preserves native character movement: ${name}`, async ({ page }) => {
+      await openEditor(page, false, body);
+      await caretIn(page, node, node, at);
+      await page.keyboard.press(key);
+      await page.keyboard.type('X');
+      expect((await saved(page))[0]).toBe(expected);
+    });
+  }
+
+  test('ArrowRight crosses a tab-only paragraph without losing typed text', async ({ page }) => {
+    await openEditor(page, false, '<w:p><w:r><w:tab/></w:r></w:p>');
+    await page.evaluate(() => {
+      const tab = document.querySelector('[data-anchor][contenteditable="true"] [data-docx-tab]')!;
+      tab.closest<HTMLElement>('[contenteditable="true"]')!.focus();
+      window.getSelection()!.collapse(tab.parentNode, Array.prototype.indexOf.call(tab.parentNode!.childNodes, tab));
+    });
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.type('X');
+    expect((await saved(page))[0]).toBe('|X');
+  });
+
+  test('Shift+ArrowRight selects the tab in one step', async ({ page }) => {
+    await openEditor(page);
+    await caretIn(page, 'Alpha', '1.2', 3);
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.keyboard.type('X');
+    expect((await saved(page))[0]).toBe('1.2XAlpha');
+  });
+
+  for (const paginated of [false, true]) test(`native copy includes a selected tab, paginated=${paginated}`, async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await openEditor(page);
+    await page.evaluate(paginated => (window as any).editor.setPaginated(paginated), paginated);
+    await page.evaluate(() => {
+      const block = (window as any).block('Alpha') as HTMLElement;
+      block.focus();
+      const range = document.createRange();
+      range.selectNodeContents(block);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    });
+    await page.keyboard.press('Control+c');
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('1.2\tAlpha');
+  });
+
+  for (const text of ['Tail', '']) test(`repeated arrows beyond a trailing tab add no break: ${text}`, async ({ page }) => {
+    await openEditor(page, false, `<w:p><w:r><w:t>${text}</w:t><w:tab/></w:r></w:p>`);
+    await page.evaluate(() => {
+      const block = document.querySelector<HTMLElement>('p[data-anchor][contenteditable="true"]')!;
+      const tab = block.querySelector('[data-docx-tab]')!;
+      block.focus();
+      window.getSelection()!.collapse(tab.parentNode, Array.prototype.indexOf.call(tab.parentNode!.childNodes, tab));
+    });
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.type('X');
+    expect((await saved(page))[0]).toBe(`${text}|X`);
+  });
+
+  test('copy after crossing a terminal tab excludes the caret placeholder', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await openEditor(page, false, '<w:p><w:r><w:t>Tail</w:t><w:tab/></w:r></w:p>');
+    await caretIn(page, 'Tail', 'Tail', 4);
+    await page.keyboard.press('ArrowRight');
+    await page.evaluate(() => {
+      const range = document.createRange();
+      range.selectNodeContents((window as any).block('Tail'));
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    });
+    await page.keyboard.press('Control+c');
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('Tail\t');
+  });
+
+  test('class-styled hidden runs remain hidden in copied HTML', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await openEditor(page, false, '<w:p><w:r><w:t>1.2</w:t><w:tab/></w:r>'
+      + '<w:r><w:rPr><w:vanish/></w:rPr><w:t>Hidden</w:t></w:r><w:r><w:t>Cedar</w:t></w:r></w:p>',
+      { fabricateClasses: true });
+    await page.evaluate(() => {
+      const block = (window as any).block('Cedar') as HTMLElement;
+      block.focus();
+      const range = document.createRange();
+      range.selectNodeContents(block);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    });
+    await page.keyboard.press('Control+c');
+    const copied = await page.evaluate(async () => {
+      const items = await navigator.clipboard.read();
+      const html = await (await items[0].getType('text/html')).text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const hidden = Array.from(doc.querySelectorAll<HTMLElement>('*')).find(el => el.textContent === 'Hidden');
+      return { text: await navigator.clipboard.readText(), hidden: !!hidden?.closest('[style*="display: none"]') };
+    });
+    expect(copied).toEqual({ text: '1.2\tCedar', hidden: true });
+  });
+
+  for (const linked of [false, true]) test(`rich copy retains omitted ancestor context, linked=${linked}`, async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    const runs = '<w:r><w:t>אב</w:t><w:tab/><w:t>12-CD</w:t></w:r>';
+    await openEditor(page, false, '<w:p><w:pPr><w:bidi/></w:pPr>'
+      + (linked ? `<w:hyperlink w:anchor="CedarTarget">${runs}</w:hyperlink>` : runs) + '</w:p>');
+    await page.evaluate(linked => {
+      const block = document.querySelector<HTMLElement>('p[data-anchor][contenteditable="true"]')!;
+      block.focus();
+      const range = document.createRange();
+      range.selectNodeContents(linked ? block.querySelector('a[href]')! : block);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    }, linked);
+    await page.keyboard.press('Control+c');
+    const copied = await page.evaluate(async () => {
+      const items = await navigator.clipboard.read();
+      const html = await (await items[0].getType('text/html')).text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      return { direction: doc.querySelector('div')?.style.direction, href: doc.querySelector('a[href]')?.getAttribute('href') };
+    });
+    expect(copied.direction).toBe('rtl');
+    // Clipboard HTML may absolutize a fragment target against its own document base.
+    if (linked) expect(copied.href?.split('#').at(-1)).toBe('CedarTarget');
+    else expect(copied.href).toBeUndefined();
+  });
+
+  test('copying a partial span includes exactly its tab and text', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await openEditor(page);
+    await page.evaluate(() => {
+      const block = (window as any).block('Alpha') as HTMLElement;
+      block.focus();
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      const nodes: Text[] = [];
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
+      const range = document.createRange();
+      range.setStart(nodes.find(n => n.data === '1.2')!, 2);
+      range.setEnd(nodes.find(n => n.data === 'Alpha')!, 2);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    });
+    await page.keyboard.press('Control+c');
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('2\tAl');
+  });
+
+  for (const [name, body, expected] of [
+    ['tab only', '<w:p><w:r><w:tab/></w:r></w:p>', '\t'],
+    ['class-styled text', '<w:p><w:r><w:rPr><w:b/><w:i/><w:spacing w:val="40"/></w:rPr><w:t>Bold</w:t><w:tab/><w:t>Italic</w:t></w:r></w:p>', 'Bold\tItalic'],
+    ['rich text', '<w:p><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>Bold</w:t><w:tab/><w:t>Italic</w:t></w:r></w:p>', 'Bold\tItalic'],
+    ['plain paragraph control', '<w:p><w:r><w:t>One Two</w:t></w:r></w:p><w:p><w:r><w:t>Three</w:t></w:r></w:p>', 'One Two\n\nThree'],
+    ['two paragraphs', '<w:p><w:r><w:t>One</w:t><w:tab/><w:t>Two</w:t></w:r></w:p><w:p><w:r><w:t>Three</w:t></w:r></w:p>', 'One\tTwo\n\nThree'],
+  ] as const) {
+    test(`copy retains plain and rich content: ${name}`, async ({ page, context }) => {
+      await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+      await openEditor(page, false, body, { fabricateClasses: name === 'class-styled text' });
+      const before = await page.evaluate(() => {
+        const root = (window as any).editor.root as HTMLElement;
+        const blocks = root.querySelectorAll('p[data-anchor][contenteditable="true"]');
+        (blocks[0] as HTMLElement).focus();
+        const range = document.createRange();
+        range.setStart(blocks[0], 0);
+        range.setEnd(blocks[blocks.length - 1], blocks[blocks.length - 1].childNodes.length);
+        window.getSelection()!.removeAllRanges();
+        window.getSelection()!.addRange(range);
+        return root.innerHTML;
+      });
+      await page.keyboard.press('Control+c');
+      const copied = await page.evaluate(async () => {
+        const items = await navigator.clipboard.read();
+        const html = await (await items[0].getType('text/html')).text();
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        return { text: await navigator.clipboard.readText(), tab: doc.querySelector('[data-docx-tab]')?.textContent,
+          bold: !!doc.querySelector('[style*="font-weight: bold"], [style*="font-weight: 700"]'), italic: !!doc.querySelector('[style*="font-style: italic"]'),
+          spacing: Math.max(0, ...Array.from(doc.querySelectorAll<HTMLElement>('*')).map(el => parseFloat(el.style.letterSpacing) || 0)),
+          source: ((window as any).editor.root as HTMLElement).innerHTML };
+      });
+      expect(copied.text).toBe(expected);
+      expect(copied.tab).toBe(name === 'plain paragraph control' ? undefined : '\t');
+      expect(copied.source).toBe(before);
+      if (name === 'rich text' || name === 'class-styled text') expect([copied.bold, copied.italic]).toEqual([true, true]);
+      if (name === 'class-styled text') expect(copied.spacing).toBeCloseTo(8 / 3, 4);
+    });
+  }
+
+  for (const key of ['Backspace', 'Delete']) {
+    test(`${key} stays conservative across a deletion beside a tab`, async ({ page }) => {
+      const deletion = '<w:del w:id="1" w:author="Counsel" w:date="2026-05-01T09:00:00Z"><w:r><w:delText>gone</w:delText></w:r></w:del>';
+      const left = '<w:r><w:t>A</w:t>' + (key === 'Backspace' ? '<w:tab/>' : '') + '</w:r>';
+      const right = '<w:r>' + (key === 'Delete' ? '<w:tab/>' : '') + '<w:t>Beta</w:t></w:r>';
+      await openEditor(page, true, `<w:p>${left}${deletion}${right}</w:p>`);
+      await caretIn(page, 'Beta', key === 'Backspace' ? 'Beta' : 'A', key === 'Backspace' ? 0 : 1);
+      const before = await saved(page);
+      await caretIn(page, 'Beta', key === 'Backspace' ? 'Beta' : 'A', key === 'Backspace' ? 0 : 1);
+      await page.keyboard.press(key);
+      expect(await saved(page)).toEqual(before);
+      expect(await page.evaluate(() => (window as any).editor.listRevisions().map((r: any) => r.text))).toEqual(['gone']);
+    });
   }
 
   test('the committed baseline holds the tab', async ({ page }) => {

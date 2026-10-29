@@ -14,7 +14,8 @@ const budgetsKiB = {
   // 135.0/135.1/114.5/33.4 KiB with it; each budget rose by 2 KiB.
   'embed.bundle.js': 137,
   'embed.iife.js': 137,
-  'editor.bundle.js': 115,
+  // Tab caret/clipboard handling adds ~1 KiB; leave ~1 KiB of headroom above its 116 KiB size.
+  'editor.bundle.js': 117,
   'pagination.bundle.js': 34,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,

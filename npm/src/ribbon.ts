@@ -1216,7 +1216,8 @@ class RibbonSurface implements RibbonEditor {
     this.require<HTMLInputElement>("trackchanges").checked =
       this.live.trackedChanges === TrackedChangeMode.RenderInline;
     this.require<HTMLSelectElement>("markup").value = this.live.revisionsVisible ? "all" : "none";
-    const revs = this.live.listRevisions();
+    const revs = this.live.listRevisions().filter(r =>
+      r.diagnostic?.code !== "inert_move_range" && r.diagnostic?.code !== "empty_wrapper_range");
     const count = this.control("revcount");
     if (count) count.textContent = revs.length === 0 ? "No tracked changes" : `${revs.length} change${revs.length === 1 ? "" : "s"}`;
     this.require<HTMLInputElement>("showcomments").checked = this.live.commentsVisible || this.options.comments === false;

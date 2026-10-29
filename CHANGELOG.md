@@ -42,6 +42,10 @@ All notable changes to this project will be documented in this file.
 
 - HTML rendering coalesces deeply nested inline containers once, avoiding exponential work
   on nested hyperlinks, simple fields and content-control/custom-XML wrappers (#1410).
+- **Editor review and tab interactions (#1408).** Empty move/wrapper markers no longer count
+  as reviewable changes or capture revision lookup. Plain arrow movement crosses rendered tabs
+  in one step, including trailing tabs, and copying preserves tabs and rich inline content.
+
 - Untracked `ReplaceText` preserves unchanged inline content controls, including bindings,
   citation fields and nested markup, when echoing a projected line or editing surrounding text
   (#1406). Ambiguous alignment returns `UnsupportedInlineBoundary` before mutation; use span

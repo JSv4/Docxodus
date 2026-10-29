@@ -214,6 +214,11 @@ prompt.
 
 ## 4b. Review — tracked changes
 
+Review counts omit the registry's `inert_move_range` and `empty_wrapper_range` cleanup entries;
+`listRevisions()` still exposes them for explicit resolution. Tab navigation uses native visual
+character movement, then places the caret outside empty layout wrappers. Copy normalizes a
+clipboard clone, preserving literal tabs, links, direction and inline formatting without mutating the document.
+
 | Control | `DocxEditor` command | Session op |
 |---------|---------------------|-----------|
 | Track changes | `setTrackedChanges(mode)` | `SetTrackedChanges` — edits land as `w:ins`/`w:del` under `RenderInline` |
