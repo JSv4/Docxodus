@@ -78,6 +78,8 @@ __all__ = [
     "MarkdownPatchBlock",
     "AnchorTarget",
     "AnchorInfo",
+    "AnchorLocation",
+    "AnchorLocationsResult",
     "PreconditionTarget",
     "PreconditionFailure",
     "TextRangePrecondition",
