@@ -9,6 +9,14 @@ for (const citation of [false, true]) for (const outsideEdit of [false, true]) {
       const D = (window as any).Docxodus;
       let session: DocxSession = D.openTypedSession(D.DocxSessionBridge.CreateBlankDocx());
       try {
+        const nativeXml = (anchor: string) => {
+          const xml = new DOMParser().parseFromString(session.raw.getXml(anchor)!, 'application/xml');
+          if (xml.querySelector('parsererror')) throw new Error('Invalid control XML');
+          for (const e of Array.from(xml.getElementsByTagName('*')))
+            for (const a of Array.from(e.attributes))
+              if (a.namespaceURI === 'http://powertools.codeplex.com/2011') e.removeAttributeNode(a);
+          return new XMLSerializer().serializeToString(xml);
+        };
         const anchor = Object.keys(session.project().anchorIndex).find(id => id.startsWith('p:'))!;
         const start = session.raw.getXml(anchor)!.match(/^<w:p\b[^>]*>/)![0].replace(/\/>$/, '>');
         const fieldStart = '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> CITATION Willow </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>';
@@ -22,13 +30,13 @@ for (const citation of [false, true]) for (const outsideEdit of [false, true]) {
         const source = session.save(); session.close(); session = D.openTypedSession(source);
         const target = Object.keys(session.project().anchorIndex).find(id => id.startsWith('p:'))!;
         const original = session.listContentControls()[0];
-        const before = session.raw.getXml(original.anchorId);
+        const before = nativeXml(original.anchorId);
         const payload = outsideEdit ? 'Updated version 3.1 approved today.' : 'Version 3.1 approved.';
         const edit = session.replaceText(target, payload);
         const saved = session.save(); session.close(); session = D.openTypedSession(saved);
         const controls = session.listContentControls();
         return { edit, count: controls.length, before,
-          after: controls.length === 1 ? session.raw.getXml(controls[0].anchorId) : null,
+          after: controls.length === 1 ? nativeXml(controls[0].anchorId) : null,
           markdown: session.project().markdown, payload };
       } finally { session.close(); }
     }, { citation, outsideEdit });
