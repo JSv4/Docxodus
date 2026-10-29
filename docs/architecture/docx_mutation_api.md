@@ -2434,6 +2434,7 @@ smaller per tab before it; an offset saved from an older version is that much sh
 markers keep taking no room: `w:br` (the projection prints a hard break), and `w:cr`, `w:ptab`,
 `w:noBreakHyphen`, `w:softHyphen` and `w:sym` (the projection prints nothing for them).
 `CoalesceWhitespaceAroundEmptyFill` treats a tab as layout, not word spacing, and never absorbs one.
+Markdown padding trims preserve edge tabs too, including heading/list payloads and GFM table cells.
 
 The fragment breakdown is the whole point: Word splits paragraph text into many `<w:r>` elements at every formatting boundary, so a placeholder like `[_______________]` routinely spans 2–3 runs. Without the fragment list, an agent doing search/replace has to either flatten runs (losing per-fragment formatting) or skip split matches (missing real text). `Grep` does the walk once and hands back the breakdown so callers can preserve each fragment's formatting when rewriting.
 

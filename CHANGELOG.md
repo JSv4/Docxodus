@@ -68,6 +68,8 @@ All notable changes to this project will be documented in this file.
 - `Grep` finds a tab (#1387): `\t` matches it, and a phrase copied from the projection across a tab,
   such as manual numbering `1.2<tab>Title`, matches. Splitting a run for an edit no longer moves a tab
   or line break that came after the split point to before the run's text.
+- Markdown heading/list payloads and table-cell projections keep leading and trailing tabs while
+  trimming ordinary padding (#1387).
 - `AnnotationManager.AddAnnotation` with a text search (`AnnotationRange.FromSearch`,
   `AnnotationTarget.Search`/`SearchInElement`) no longer deletes the rest of a run it bookmarks inside
   (#1387). It rebuilt the run from the matched text node alone, so annotating `Alpha` in a run holding
