@@ -1638,6 +1638,8 @@ public sealed class DocxSessionContentControlTests
     [InlineData("Version 3.1 approved.")]
     [InlineData("Revised version 3.1 approved.")]
     [InlineData("Version 3.1 approved today.")]
+    [InlineData("Revised version 3.1 approved today.")]
+    [InlineData("**Version** 3.1 approved.")]
     public void CC037_ReplaceText_PreservesAnUnchangedInlineControl(string payload)
     {
         var runs = XElement.Parse($"<root xmlns:w=\"{W}\">" +
@@ -1657,6 +1659,66 @@ public sealed class DocxSessionContentControlTests
         {
             using var package = WordprocessingDocument.Open(new MemoryStream(bytes), false);
             return new XElement(Assert.Single(package.MainDocumentPart!.GetXDocument().Descendants(W + "sdt")));
+        }
+    }
+
+    [Theory]
+    [InlineData("citation")]
+    [InlineData("nested")]
+    [InlineData("bookmark")]
+    [InlineData("duplicate")]
+    public void CC038_OutsideEdits_PreserveControlsAndTheirOwnedMarkup(string shape)
+    {
+        var control = XElement.Parse(Bound.Replace("<w:sdt>", $"<w:sdt xmlns:w=\"{W}\">", StringComparison.Ordinal));
+        var content = control.Element(W + "sdtContent")!;
+        if (shape == "citation")
+        {
+            control.Element(W + "sdtPr")!.Element(W + "text")!.Name = W + "citation";
+            content.AddFirst(new XElement(W + "r", new XElement(W + "fldChar", new XAttribute(W + "fldCharType", "begin"))),
+                new XElement(W + "r", new XElement(W + "instrText", " CITATION Willow ")),
+                new XElement(W + "r", new XElement(W + "fldChar", new XAttribute(W + "fldCharType", "separate"))));
+            content.Add(new XElement(W + "r", new XElement(W + "fldChar", new XAttribute(W + "fldCharType", "end"))));
+        }
+        else if (shape == "nested")
+        {
+            control = new XElement(W + "sdt", new XElement(W + "sdtPr",
+                new XElement(W + "id", new XAttribute(W + "val", "42"))), new XElement(W + "sdtContent", control));
+        }
+        else if (shape == "bookmark")
+        {
+            content.AddFirst(new XElement(W + "bookmarkStart", new XAttribute(W + "id", "2"), new XAttribute(W + "name", "Value")));
+            content.Add(new XElement(W + "bookmarkEnd", new XAttribute(W + "id", "2")));
+        }
+        var controls = new List<XElement> { control };
+        if (shape == "duplicate")
+        {
+            var duplicate = new XElement(control);
+            duplicate.Element(W + "sdtPr")!.Element(W + "id")!.SetAttributeValue(W + "val", "8");
+            controls.Add(duplicate);
+        }
+        using var session = new DocxSession(DocxSessionSpanRevisionTests.Build(
+            new[] { new XElement(W + "r", new XElement(W + "t", "Before ")) }
+                .Concat(controls).Append(new XElement(W + "r", new XElement(W + "t", " after."))).ToArray()));
+        var projection = session.Project();
+        var anchor = Assert.Single(projection.AnchorIndex.Values, a => a.Anchor.Kind == "p").Anchor.Id;
+        var before = SavedControls();
+
+        var edit = session.ReplaceText(anchor, "Updated " + (shape == "duplicate" ? "3.13.1" : "3.1") + " ending.");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        var after = SavedControls();
+        Assert.Equal(before.Count, after.Count);
+        Assert.All(before.Zip(after), pair => Assert.True(XNode.DeepEquals(pair.First, pair.Second)));
+        if (shape == "bookmark") Assert.Equal("3.1", Assert.Single(session.ListBookmarks()).Text);
+        Assert.True(session.Undo());
+        Assert.Contains("Before ", session.Project().Markdown);
+        Assert.True(session.Redo());
+        Assert.Contains("Updated ", session.Project().Markdown);
+
+        List<XElement> SavedControls()
+        {
+            using var package = WordprocessingDocument.Open(new MemoryStream(session.Save()), false);
+            return package.MainDocumentPart!.GetXDocument().Descendants(W + "sdt").Select(e => new XElement(e)).ToList();
         }
     }
 
