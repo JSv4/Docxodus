@@ -588,7 +588,7 @@ public static class WmlToMarkdownConverter
         if (settings.EmptyParagraphs == EmptyParagraphMode.Suppress
             && el.Name == W.p
             && kind is "p" or "h" or "li"
-            && !el.Descendants(W.t).Any(t => !string.IsNullOrEmpty((string)t)))
+            && !el.Descendants().Any(t => DocxSession.TextOf(t).Length > 0))
             return null;
         return $"{kind}:{scopeName}:{unid}";
     }
@@ -792,9 +792,10 @@ public static class WmlToMarkdownConverter
     /// </summary>
     private static bool ScopeHasContent(ScopeInfo scope)
     {
-        foreach (var t in scope.Root.Descendants(W.t))
+        foreach (var t in scope.Root.Descendants())
         {
-            if (!string.IsNullOrWhiteSpace(t.Value)) return true;
+            var text = DocxSession.TextOf(t);
+            if (!string.IsNullOrWhiteSpace(text) || text.Contains('\t') || text.Contains('\n')) return true;
         }
         return false;
     }
@@ -1099,7 +1100,7 @@ public static class WmlToMarkdownConverter
         {
             foreach (var r in runs)
             {
-                if (r.Descendants(W.t).Any(t => !string.IsNullOrEmpty((string)t))) return true;
+                if (r.Elements().Any(t => DocxSession.TextOf(t).Length > 0)) return true;
             }
         }
         return false;
@@ -1283,7 +1284,7 @@ public static class WmlToMarkdownConverter
                 else if (child.Name == W.fldSimple)
                     Enclosed(child, url, revision);
                 else if ((child.Name == W.sdt ? child.Element(W.sdtContent)
-                         : child.Name == W.smartTag ? child : null) is { } content)
+                         : child.Name == W.smartTag || child.Name == W.customXml ? child : null) is { } content)
                     Walk(content, url, revision, nested);
                 else if (nested && child.HasElements)
                     Walk(child, url, revision, nested: true);
@@ -1396,14 +1397,16 @@ public static class WmlToMarkdownConverter
                 ctx.Sb.Append(EscapeMarkdown((string)node));
             else if (node.Name == W.delText)
                 ctx.Sb.Append(EscapeMarkdown((string)node));
-            else if (node.Name == W.br)
+            else if (node.Name == W.br || node.Name == W.cr)
                 ctx.Sb.Append("  \n"); // hard line break in markdown
-            else if (node.Name == W.tab)
+            else if (node.Name == W.tab || node.Name == W.ptab)
                 ctx.Sb.Append('\t'); // the character the session's text holds for it (issue #1387)
             else if (node.Name == W.footnoteReference)
                 AppendNoteRefMarker(node, ctx, "fn", W.footnote, ctx.Document.MainDocumentPart?.FootnotesPart);
             else if (node.Name == W.endnoteReference)
                 AppendNoteRefMarker(node, ctx, "en", W.endnote, ctx.Document.MainDocumentPart?.EndnotesPart);
+            else
+                ctx.Sb.Append(EscapeMarkdown(DocxSession.TextOf(node)));
         }
     }
 

@@ -2742,12 +2742,14 @@ public sealed partial class DocxSession : IDisposable
     /// </summary>
     internal static IEnumerable<XElement> InlineRuns(XElement paragraph)
     {
+        var enclosingParagraph = paragraph.AncestorsAndSelf(W.p).FirstOrDefault();
         foreach (var child in paragraph.Elements())
         {
             if (child.Name == W.r) yield return child;
             else if (InlineContainerNames.Contains(child.Name))
                 foreach (var run in child.Descendants(W.r))
-                    if (!IsInsideNestedRemoval(run, child))
+                    if (!IsInsideNestedRemoval(run, child)
+                        && ReferenceEquals(run.Ancestors(W.p).FirstOrDefault(), enclosingParagraph))
                         yield return run;
         }
     }
@@ -2780,16 +2782,21 @@ public sealed partial class DocxSession : IDisposable
 
     internal static string RunText(XElement run) => string.Concat(run.Elements().Select(TextOf));
 
-    /// <summary>Whether <paramref name="node"/> holds text in the text every offset counts: a
-    /// <c>w:t</c>, or a <c>w:tab</c> in a run, which is one <c>'\t'</c> (issue #1387). A tab-stop
-    /// definition in <c>w:tabs</c> has the same name and holds none; nor does any other run content
-    /// (a break, a reference, a drawing).</summary>
+    /// <summary>Text and visible run atoms occupy the same coordinates in every session operation.</summary>
     internal static bool HoldsText(XElement node) =>
-        node.Name == W.t || (node.Name == W.tab && node.Parent?.Name == W.r);
+        node.Name == W.t || TextOf(node).Length > 0;
 
     /// <summary>The text <paramref name="node"/> holds (see <see cref="HoldsText"/>), else empty.</summary>
-    internal static string TextOf(XElement node) =>
-        node.Name == W.t ? node.Value : HoldsText(node) ? "\t" : string.Empty;
+    internal static string TextOf(XElement node)
+    {
+        if (node.Name == W.t) return node.Value;
+        if (node.Parent?.Name != W.r) return string.Empty;
+        if (node.Name == W.tab || node.Name == W.ptab) return "\t";
+        if (node.Name == W.br || node.Name == W.cr) return "\n";
+        if (node.Name == W.noBreakHyphen) return "\u2011";
+        if (node.Name == W.softHyphen) return "\u00ad";
+        return node.Name == W.sym ? XmlText.SymbolText(node) : string.Empty;
+    }
 
     /// <summary>The run content that writes <paramref name="text"/> as Word does: each <c>'\t'</c> a
     /// <c>w:tab</c>, never a literal tab character, and the text between in <paramref name="textName"/>
@@ -2799,14 +2806,14 @@ public sealed partial class DocxSession : IDisposable
     {
         var content = new List<XElement>();
         int from = 0;
-        for (int tab = text.IndexOf('\t'); ; tab = text.IndexOf('\t', from))
+        for (int atom = text.AsSpan(from).IndexOfAny('\t', '\n'); ; atom = text.AsSpan(from).IndexOfAny('\t', '\n'))
         {
-            int end = tab < 0 ? text.Length : tab;
-            if (end > from || (tab < 0 && content.Count == 0))
+            int end = atom < 0 ? text.Length : from + atom;
+            if (end > from || (atom < 0 && content.Count == 0))
                 content.Add(new XElement(textName, new XAttribute(XNamespace.Xml + "space", "preserve"), text[from..end]));
-            if (tab < 0) return content;
-            content.Add(new XElement(W.tab));
-            from = tab + 1;
+            if (atom < 0) return content;
+            content.Add(new XElement(text[end] == '\t' ? W.tab : W.br));
+            from = end + 1;
         }
     }
 
@@ -2815,7 +2822,7 @@ public sealed partial class DocxSession : IDisposable
     internal static void SetText(XElement t, string value)
     {
         if (value.Length == 0) t.Remove();
-        else if (value.Contains('\t')) t.ReplaceWith(TextContent(value, t.Name));
+        else if (value.Contains('\t') || value.Contains('\n')) t.ReplaceWith(TextContent(value, t.Name));
         else
         {
             t.Value = value;
@@ -2856,8 +2863,12 @@ public sealed partial class DocxSession : IDisposable
         }
     }
 
-    private static int InlineChildTextLength(XElement child) =>
-        child.DescendantsAndSelf().Where(e => IsVisibleText(e, child)).Sum(e => TextOf(e).Length);
+    private static int InlineChildTextLength(XElement child)
+    {
+        var paragraph = child.AncestorsAndSelf(W.p).FirstOrDefault();
+        return child.DescendantsAndSelf().Where(e => IsVisibleText(e, child)
+            && ReferenceEquals(e.Ancestors(W.p).FirstOrDefault(), paragraph)).Sum(e => TextOf(e).Length);
+    }
 
     /// <summary>The top-level inline containers <see cref="SplitInlineContainersAtOffset"/> can cut
     /// in two around their direct runs: a hyperlink, whose halves link to the same target, and

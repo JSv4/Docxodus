@@ -173,4 +173,8 @@ internal sealed record IrTextbox(IrNodeList<IrBlock> Blocks) : IrInline;
 /// An unmodeled inline element preserved opaquely: its element name plus the canonical hash of
 /// its source XML, so it is still diffable (same/different bytes) without being understood.
 /// </summary>
-internal sealed record IrOpaqueInline(XName ElementName, IrHash CanonicalHash) : IrInline;
+internal sealed record IrOpaqueInline(XName ElementName, IrHash CanonicalHash) : IrInline
+{
+    // A known display spelling does not make this carrier safe to compare as ordinary text.
+    public IrTextRun? ProjectedText { get; init; }
+}
