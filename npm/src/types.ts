@@ -3514,7 +3514,8 @@ export interface FillOptions {
    *  Rules: whitespace on both sides collapses to one space; whitespace before
    *  and clause-terminating punctuation (`. , ; : ! ?`) after drops the leading
    *  space; matched open/close brackets (`()` `[]` `{}`) on either side drop
-   *  both. NBSP / narrow NBSP / thin space are treated as whitespace.
+   *  both. NBSP / narrow NBSP / thin space are treated as whitespace; a tab
+   *  (`"\t"` in the text, one character per `w:tab`) is layout and is never absorbed.
    *
    *  Caveat: `$`-prefix preservation runs first, so a picker returning `""` for
    *  `$[xxx]` with `preserveDollarPrefix: true` (default) ends up replacing with

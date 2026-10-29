@@ -162,7 +162,7 @@ internal static class MarkdownPayloadParser
             while (level < raw.Length && raw[level] == '#') level++;
             if (level >= 1 && level <= 6 && level < raw.Length && raw[level] == ' ')
             {
-                var headingText = raw.Substring(level + 1).TrimEnd();
+                var headingText = XmlText.TrimWhitespaceExceptTabs(raw.Substring(level + 1), trimStart: false);
                 return new ParsedBlock(
                     (ParserBlockKind)((int)ParserBlockKind.Heading1 + level - 1),
                     0,
@@ -196,7 +196,7 @@ internal static class MarkdownPayloadParser
                 while (markerEnd < raw.Length && char.IsDigit(raw[markerEnd])) markerEnd++;
                 markerEnd += 2;
             }
-            var itemText = raw.Substring(markerEnd).TrimEnd();
+            var itemText = XmlText.TrimWhitespaceExceptTabs(raw.Substring(markerEnd), trimStart: false);
             // CommonMark caps an ordered marker at nine digits; a longer run of digits is
             // not a list marker, and a marker of zero starts the list at zero like Word can.
             var digits = bullet ? "" : raw.Substring(indent, markerEnd - 2 - indent);
@@ -383,9 +383,7 @@ internal static class MarkdownPayloadParser
 
         var run = new XElement(W.r);
         if (rPr.HasElements) run.Add(rPr);
-        run.Add(new XElement(W.t,
-            new XAttribute(XNamespace.Xml + "space", "preserve"),
-            text));
+        run.Add(DocxSession.TextContent(text, W.t));
         return run;
     }
 

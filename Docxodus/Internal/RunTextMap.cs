@@ -4,14 +4,15 @@
 #nullable enable
 
 using System.Collections.Generic;
-using System.Linq;
+using System.Text;
 using System.Xml.Linq;
 
 namespace Docxodus.Internal;
 
 /// <summary>
 /// Flat-text view of a paragraph (or other block element) with an offset map
-/// back to the originating <c>&lt;w:r&gt;</c> runs. Lets callers run regex/text
+/// back to the originating <c>&lt;w:r&gt;</c> runs. A run's text is its <c>w:t</c> text with one
+/// <c>'\t'</c> for each <c>w:tab</c> (see <see cref="DocxSession.TextOf"/>). Lets callers run regex/text
 /// searches across run boundaries and resolve each match to the runs it spans.
 ///
 /// Mirrors the text-map+offset-map pattern in <see cref="ExternalAnnotationProjector"/>
@@ -39,18 +40,16 @@ internal static class RunTextMap
     public static Map Build(XElement blockElement)
     {
         var segments = new List<RunSegment>();
-        var offset = 0;
+        var flat = new StringBuilder();
 
         foreach (var run in DocxSession.InlineRuns(blockElement))
         {
-            var runText = DocxSession.RunText(run);
-            if (runText.Length == 0) continue;
-            segments.Add(new RunSegment(run, offset, runText.Length));
-            offset += runText.Length;
+            int start = flat.Length;
+            foreach (var child in run.Elements()) flat.Append(DocxSession.TextOf(child));
+            if (flat.Length > start) segments.Add(new RunSegment(run, start, flat.Length - start));
         }
 
-        var flat = string.Concat(segments.Select(s => DocxSession.RunText(s.Run)));
-        return new Map(flat, segments);
+        return new Map(flat.ToString(), segments);
     }
 
     /// <summary>

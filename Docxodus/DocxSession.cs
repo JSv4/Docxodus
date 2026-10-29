@@ -2764,18 +2764,100 @@ public sealed partial class DocxSession : IDisposable
     internal static string ParagraphText(XElement paragraph) =>
         string.Concat(InlineRuns(paragraph).Select(RunText));
 
-    /// <summary>The text of every <c>w:t</c> under <paramref name="element"/> that is not removed
-    /// text (inside a <c>w:del</c> or <c>w:moveFrom</c> below it), whatever the element is: a
+    /// <summary>The text of every <c>w:t</c> and run tab under <paramref name="element"/> that is not
+    /// removed text (inside a <c>w:del</c> or <c>w:moveFrom</c> below it), whatever the element is: a
     /// paragraph, a table, a content control. The preview, precondition and control texts read
     /// this, so they agree with the offsets <see cref="InlineRuns"/> gives (issue #1282).</summary>
     internal static string VisibleText(XElement element) =>
-        string.Concat(element.Descendants(W.t).Where(t => !IsInsideNestedRemoval(t, element)).Select(t => (string)t));
+        string.Concat(element.Descendants().Where(e => IsVisibleText(e, element)).Select(TextOf));
 
-    internal static string RunText(XElement run) =>
-        string.Concat(run.Elements(W.t).Select(t => (string)t));
+    /// <summary>Whether <paramref name="node"/> is text a reader sees in <paramref name="element"/>:
+    /// it holds text (<see cref="HoldsText"/>) and is not removed text below the element. The one
+    /// rule every reader of visible text applies, so a tracked-deleted tab stays out as deleted
+    /// text does.</summary>
+    internal static bool IsVisibleText(XElement node, XElement element) =>
+        HoldsText(node) && !IsInsideNestedRemoval(node, element);
+
+    internal static string RunText(XElement run) => string.Concat(run.Elements().Select(TextOf));
+
+    /// <summary>Whether <paramref name="node"/> holds text in the text every offset counts: a
+    /// <c>w:t</c>, or a <c>w:tab</c> in a run, which is one <c>'\t'</c> (issue #1387). A tab-stop
+    /// definition in <c>w:tabs</c> has the same name and holds none; nor does any other run content
+    /// (a break, a reference, a drawing).</summary>
+    internal static bool HoldsText(XElement node) =>
+        node.Name == W.t || (node.Name == W.tab && node.Parent?.Name == W.r);
+
+    /// <summary>The text <paramref name="node"/> holds (see <see cref="HoldsText"/>), else empty.</summary>
+    internal static string TextOf(XElement node) =>
+        node.Name == W.t ? node.Value : HoldsText(node) ? "\t" : string.Empty;
+
+    /// <summary>The run content that writes <paramref name="text"/> as Word does: each <c>'\t'</c> a
+    /// <c>w:tab</c>, never a literal tab character, and the text between in <paramref name="textName"/>
+    /// (<c>w:t</c>, or <c>w:delText</c> for deleted text) with spaces preserved. Text without a tab is
+    /// one text node, as before, even when empty.</summary>
+    internal static List<XElement> TextContent(string text, XName textName)
+    {
+        var content = new List<XElement>();
+        int from = 0;
+        for (int tab = text.IndexOf('\t'); ; tab = text.IndexOf('\t', from))
+        {
+            int end = tab < 0 ? text.Length : tab;
+            if (end > from || (tab < 0 && content.Count == 0))
+                content.Add(new XElement(textName, new XAttribute(XNamespace.Xml + "space", "preserve"), text[from..end]));
+            if (tab < 0) return content;
+            content.Add(new XElement(W.tab));
+            from = tab + 1;
+        }
+    }
+
+    /// <summary>Give the text node <paramref name="t"/> the text <paramref name="value"/>, written as
+    /// <see cref="TextContent"/> writes it; an empty value removes it.</summary>
+    internal static void SetText(XElement t, string value)
+    {
+        if (value.Length == 0) t.Remove();
+        else if (value.Contains('\t')) t.ReplaceWith(TextContent(value, t.Name));
+        else
+        {
+            t.Value = value;
+            t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+        }
+    }
+
+    /// <summary>Move <paramref name="run"/>'s content from text offset <paramref name="offset"/> on,
+    /// in order, to the end of <paramref name="tail"/>. The text node holding the offset is cut in
+    /// two; a tab is one character and is never cut; content that takes no room right at the cut
+    /// goes with what follows it.</summary>
+    internal static void MoveRunContentFrom(XElement run, int offset, XElement tail)
+    {
+        int consumed = 0;
+        bool moving = false;
+        foreach (var child in run.Elements().Where(e => e.Name != W.rPr).ToList())
+        {
+            if (!moving && HoldsText(child))
+            {
+                int length = TextOf(child).Length;
+                if (offset > consumed && offset < consumed + length)
+                {
+                    int local = offset - consumed;
+                    tail.Add(new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), child.Value[local..]));
+                    child.Value = child.Value[..local];
+                    child.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+                    moving = true;
+                    continue;
+                }
+                if (offset <= consumed) moving = true;
+                else
+                {
+                    consumed += length;
+                    if (consumed == offset) { moving = true; continue; }
+                }
+            }
+            if (moving) { child.Remove(); tail.Add(child); }
+        }
+    }
 
     private static int InlineChildTextLength(XElement child) =>
-        child.DescendantsAndSelf(W.t).Where(t => !IsInsideNestedRemoval(t, child)).Sum(t => ((string)t).Length);
+        child.DescendantsAndSelf().Where(e => IsVisibleText(e, child)).Sum(e => TextOf(e).Length);
 
     /// <summary>The top-level inline containers <see cref="SplitInlineContainersAtOffset"/> can cut
     /// in two around their direct runs: a hyperlink, whose halves link to the same target, and
@@ -2825,13 +2907,6 @@ public sealed partial class DocxSession : IDisposable
             int splitAt = offset - consumed;
             if (splitAt <= 0) return;
 
-            var keep = runText.Substring(0, splitAt);
-            var move = runText.Substring(splitAt);
-
-            foreach (var t in run.Elements(W.t).ToList()) t.Remove();
-            run.Add(new XElement(W.t,
-                new XAttribute(XNamespace.Xml + "space", "preserve"), keep));
-
             var rPr = run.Element(W.rPr);
             var newRun = new XElement(W.r);
             if (rPr is not null)
@@ -2841,8 +2916,10 @@ public sealed partial class DocxSession : IDisposable
                 newRun.Add(new XElement(rPr));
                 Internal.RevisionOps.RenumberCopiedRevisions(rPr, nextRevisionId);
             }
-            newRun.Add(new XElement(W.t,
-                new XAttribute(XNamespace.Xml + "space", "preserve"), move));
+            // In order, so a tab or break keeps its side of the cut.
+            MoveRunContentFrom(run, splitAt, newRun);
+            foreach (var t in run.Elements(W.t).Concat(newRun.Elements(W.t)))
+                t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
             run.AddAfterSelf(newRun);
             return;
         }
@@ -3050,8 +3127,8 @@ public sealed partial class DocxSession : IDisposable
         int at = 0;
         foreach (var element in paragraph.Descendants())
         {
-            if (element.Name == W.t && element.Parent is { } run && textRuns.Contains(run))
-                at += element.Value.Length;
+            if (HoldsText(element) && textRuns.Contains(element.Parent!))
+                at += TextOf(element).Length;
             if (element.Name != W.fldChar || !ReferenceEquals(element.Ancestors(W.p).FirstOrDefault(), paragraph))
                 continue;
             switch ((string?)element.Attribute(W.fldCharType))

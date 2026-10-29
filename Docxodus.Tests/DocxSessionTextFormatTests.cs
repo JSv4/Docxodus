@@ -152,13 +152,14 @@ public class DocxSessionTextFormatTests
         var anchor = session.FindByText("doc😀ument")!.Anchor.Id;
         var before = session.GetPackageContentHash();
 
-        var edit = session.ReplaceTextAtSpanWithFormat(anchor, 6, 0, " inserted ",
+        // Each leading tab is one character of the text before the caret (issue #1387).
+        var edit = session.ReplaceTextAtSpanWithFormat(anchor, 6 + leadingTabs, 0, " inserted ",
             new FormatOp { Bold = true, Italic = false });
 
         Assert.True(edit.Success, edit.Error?.Message);
         Assert.Equal(1, session.Version);
         Assert.Equal(1, session.UndoCount);
-        Assert.Equal(new[] { ("doc😀u", false, true), (" inserted ", true, false), ("ment", false, true) },
+        Assert.Equal(new[] { (new string('\t', leadingTabs) + "doc😀u", false, true), (" inserted ", true, false), ("ment", false, true) },
             session.GetFormatting(anchor)!.Runs.Select(r => (r.Text, r.Effective.Bold is true, r.Effective.Italic is true)));
         var xml = XElement.Parse(session.Raw.GetXml(anchor));
         Assert.Equal(leadingTabs, xml.Descendants(W.tab).Count());
@@ -183,8 +184,6 @@ public class DocxSessionTextFormatTests
     [InlineData("deleted field end")]
     [InlineData("moved field end")]
     [InlineData("simple field")]
-    [InlineData("mixed run")]
-    [InlineData("trailing tab")]
     [InlineData("leading break")]
     [InlineData("tab/text field")]
     [InlineData("tab/text hyperlink")]
@@ -207,8 +206,6 @@ public class DocxSessionTextFormatTests
                 new XElement(W.p, FieldRun("end")),
             },
             "simple field" => new[] { new XElement(W.fldSimple, new XAttribute(W.instr, " DOCPROPERTY Title "), run) },
-            "mixed run" => new[] { new XElement(W.r, new XElement(W.t, "docu"), new XElement(W.tab), new XElement(W.t, "ment")) },
-            "trailing tab" => new[] { new XElement(W.r, new XElement(W.t, "document"), new XElement(W.tab)) },
             "leading break" => new[] { new XElement(W.r, new XElement(W.br), new XElement(W.t, "document")) },
             "tab/text field" => ComplexField(new XElement(W.r, new XElement(W.tab), new XElement(W.t, "document"))),
             "tab/text hyperlink" => new[] { new XElement(W.hyperlink, new XAttribute(W.anchor, "top"),
@@ -221,7 +218,9 @@ public class DocxSessionTextFormatTests
         var anchor = session.FindByText("doc")!.Anchor.Id;
         var before = session.GetPackageContentHash();
 
-        var edit = session.ReplaceTextAtSpanWithFormat(anchor, 4, 0, " inserted ", new FormatOp { Bold = true });
+        // Four characters into "document"; a leading tab is one character before it (issue #1387).
+        var edit = session.ReplaceTextAtSpanWithFormat(anchor, context.StartsWith("tab/", StringComparison.Ordinal) ? 5 : 4, 0,
+            " inserted ", new FormatOp { Bold = true });
 
         Assert.False(edit.Success);
         Assert.Equal(EditErrorCode.OffsetOutOfRange, edit.Error!.Code);
@@ -236,18 +235,19 @@ public class DocxSessionTextFormatTests
         using var session = new DocxSession(File.ReadAllBytes("../../../../TestFiles/NVCA-Model-COI.docx"),
             new DocxSessionSettings { PersistAnchorIds = true, EmitMarkdownPatch = false });
         var anchor = session.Project().AnchorIndex.Values.Single(a => a.Anchor.Kind == "p" && a.Anchor.Scope == "fn"
-            && a.TextPreview.StartsWith("Consider adding other exceptions", StringComparison.Ordinal)).Anchor.Id;
+            && a.TextPreview.StartsWith("\tConsider adding other exceptions", StringComparison.Ordinal)).Anchor.Id;
         var before = string.Concat(session.GetFormatting(anchor)!.Runs.Select(r => r.Text));
         var original = XElement.Parse(session.Raw.GetXml(anchor));
         var reference = Assert.Single(original.Descendants(W.footnoteRef)).Parent;
         Assert.Single(original.Descendants(W.tab));
 
-        var edit = session.ReplaceTextAtSpanWithFormat(anchor, 24, 0, " inserted ", new FormatOp { Bold = true });
+        // The note's text opens with a tab, one character before "Consider adding other ex" (issue #1387).
+        var edit = session.ReplaceTextAtSpanWithFormat(anchor, 25, 0, " inserted ", new FormatOp { Bold = true });
 
         Assert.True(edit.Success, edit.Error?.Message);
         var after = session.GetFormatting(anchor);
         Assert.NotNull(after);
-        Assert.Equal(before.Insert(24, " inserted "), string.Concat(after.Runs.Select(r => r.Text)));
+        Assert.Equal(before.Insert(25, " inserted "), string.Concat(after.Runs.Select(r => r.Text)));
         var xml = XElement.Parse(session.Raw.GetXml(anchor));
         Assert.True(XNode.DeepEquals(reference, Assert.Single(xml.Descendants(W.footnoteRef)).Parent));
         Assert.Equal("Consider adding other ex", Assert.Single(xml.Descendants(W.tab)).ElementsAfterSelf(W.t).Single().Value);

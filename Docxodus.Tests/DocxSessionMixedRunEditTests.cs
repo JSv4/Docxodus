@@ -22,8 +22,13 @@ public class DocxSessionMixedRunEditTests
     [InlineData("match", true, "br")]
     public void Replacement_PreservesAnInlineMarkerBetweenTextNodes(string operation, bool tracked, string marker)
     {
-        foreach (var (start, length, expected) in new[] { (1, 1, "aX|cd"), (2, 1, "ab|Xd"), (1, 2, "aX|d") })
-            Check(operation, tracked, marker, start, length, expected);
+        // A tab is one character of the text (issue #1387), so a range across it takes it, and
+        // keeps it only when the replacement writes it back; a break takes no room.
+        int c = TextOf(marker).IndexOf('c');
+        var across = marker == "tab" ? "X\t" : "X";
+        foreach (var (start, length, expected, replacement) in new[]
+            { (1, 1, "aX|cd", "X"), (c, 1, "ab|Xd", "X"), (1, c, "aX|d", across) })
+            Check(operation, tracked, marker, start, length, expected, replacement);
     }
 
     [Theory]
@@ -36,7 +41,7 @@ public class DocxSessionMixedRunEditTests
     [InlineData(false)]
     [InlineData(true)]
     public void RemovingAllText_PreservesTheInlineMarker(bool tracked) =>
-        Check("span", tracked, "tab", 0, 4, "|", "");
+        Check("span", tracked, "br", 0, 4, "|", "");
 
     [Theory]
     [InlineData(false)]
@@ -73,8 +78,8 @@ public class DocxSessionMixedRunEditTests
         var anchor = session.Project().AnchorIndex.Values.Single(a => a.Anchor.Kind == "p").Anchor.Id;
         var edit = operation switch
         {
-            "range" => Assert.Single(session.ReplaceTextRange(anchor, "abcd".Substring(start, length), replacement)),
-            "match" => session.ReplaceMatch(Assert.Single(session.Grep("abcd".Substring(start, length))), replacement),
+            "range" => Assert.Single(session.ReplaceTextRange(anchor, TextOf(marker).Substring(start, length), replacement)),
+            "match" => session.ReplaceMatch(Assert.Single(session.Grep(TextOf(marker).Substring(start, length))), replacement),
             _ => session.ReplaceTextAtSpan(anchor, start, length, replacement),
         };
         Assert.True(edit.Success, edit.Error?.Message);
@@ -92,6 +97,9 @@ public class DocxSessionMixedRunEditTests
         Assert.True(session.Undo());
         Assert.Equal(marker is null ? "abcd" : "ab|cd", Text(session.Save()));
     }
+
+    /// <summary>The paragraph's text as the session counts it: a tab is <c>'\t'</c>, a break nothing.</summary>
+    private static string TextOf(string? marker) => marker == "tab" ? "ab\tcd" : "abcd";
 
     private static string Text(byte[] bytes)
     {

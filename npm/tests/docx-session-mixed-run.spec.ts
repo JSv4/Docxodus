@@ -27,7 +27,12 @@ for (const marker of ['tab', 'br'] as const) for (const tracked of [false, true]
   test(`mixed run ${marker}, tracking ${tracked}: surgical edits retain marker order`, async ({ page }) => {
     await page.goto('/test-harness.html');
     await page.waitForFunction(() => (window as any).DocxodusReady === true);
-    const results = await page.evaluate(({ bytes, tracked }) => {
+    // A tab is one character, "\t", of the text (issue #1387): a range across it takes it, so the
+    // replacement writes it back; a break takes no room.
+    const text = marker === 'tab' ? 'ab\tcd' : 'abcd';
+    const c = text.indexOf('c');
+    const cases = [[1, 1, 'X'], [c, 1, 'X'], [1, c, marker === 'tab' ? 'X\t' : 'X']] as const;
+    const results = await page.evaluate(({ bytes, tracked, text, cases }) => {
       const open = (input: Uint8Array, record = false) => (window as any).Docxodus.openTypedSession(input,
         JSON.stringify({ trackedChanges: record ? 'render_inline' : 'accept', revisionAuthor: 'Editor' })) as DocxSession;
       const read = (session: DocxSession) => {
@@ -37,11 +42,11 @@ for (const marker of ['tab', 'br'] as const) for (const tracked of [false, true]
           .flatMap(run => Array.from(run.children))
           .map(child => child.localName === 't' ? child.textContent : ['tab', 'br'].includes(child.localName) ? '|' : '').join('');
       };
-      return [[1, 1], [2, 1], [1, 2]].map(([start, length]) => {
+      return cases.map(([start, length, replacement]) => {
         const session = open(new Uint8Array(bytes), tracked);
         try {
-          const match = session.grep('abcd'.slice(start, start + length))[0];
-          const edited = session.replaceMatch(match, 'X');
+          const match = session.grep(text.slice(start, start + length))[0];
+          const edited = session.replaceMatch(match, replacement);
           const saved = session.save();
           const accepted = open(saved), rejected = open(saved);
           try {
@@ -52,7 +57,7 @@ for (const marker of ['tab', 'br'] as const) for (const tracked of [false, true]
           } finally { accepted.close(); rejected.close(); }
         } finally { session.close(); }
       });
-    }, { bytes: Array.from(mixedRunDocx(marker)), tracked });
+    }, { bytes: Array.from(mixedRunDocx(marker)), tracked, text, cases });
     for (const [index, result] of results.entries()) {
       const expected = ['aX|cd', 'ab|Xd', 'aX|d'][index];
       expect(result.edited).toBe(true);

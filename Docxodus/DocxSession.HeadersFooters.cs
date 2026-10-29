@@ -595,7 +595,7 @@ public sealed partial class DocxSession
     /// separate, the cached <paramref name="result"/> text, end — the form Word writes for a field
     /// it inserts, and the only one a tracked insertion can hold (<c>w:ins</c> takes runs, not a
     /// <c>w:fldSimple</c>).</summary>
-    private static XElement[] ComplexFieldRuns(string instruction, XElement result) => new[]
+    private static XElement[] ComplexFieldRuns(string instruction, object result) => new[]
     {
         new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"))),
         new XElement(W.r, new XElement(W.instrText, new XAttribute(XNamespace.Xml + "space", "preserve"), instruction)),

@@ -481,10 +481,10 @@ internal static class IrMarkdownEmitter
             : text;
     }
 
-    /// <summary>Concatenate the flat text of a node exactly as the oracle's
-    /// <c>string.Concat(element.Descendants(W.t))</c> would — i.e. only <c>w:t</c> text, which in the
-    /// IR is the text carried by <see cref="IrTextRun"/> (including field cached-result runs and
-    /// hyperlink interiors). Tabs/breaks/notes/images contribute nothing, matching <c>w:t</c>-only.</summary>
+    /// <summary>Concatenate the flat text of a node as the oracle's <see cref="DocxSession.TextOf"/>
+    /// walk would: <c>w:t</c> text, which in the IR is the text carried by <see cref="IrTextRun"/>
+    /// (including field cached-result runs and hyperlink interiors), and <c>'\t'</c> for a tab (issue
+    /// #1387). Breaks/notes/images contribute nothing.</summary>
     private static void AppendFlatText(object node, StringBuilder sb)
     {
         switch (node)
@@ -524,6 +524,9 @@ internal static class IrMarkdownEmitter
                 case IrTextRun tr:
                     sb.Append(tr.Text);
                     break;
+                case IrTab:
+                    sb.Append('\t'); // a run's w:tab is one character of the text (issue #1387)
+                    break;
                 case IrHyperlink h:
                     AppendInlineText(h.Inlines, sb);
                     break;
@@ -539,7 +542,7 @@ internal static class IrMarkdownEmitter
                     foreach (var b in tb.Blocks)
                         AppendFlatText(b, sb);
                     break;
-                // tab/break/note-ref/image/opaque: no w:t text.
+                // break/note-ref/image/opaque: no text.
             }
         }
     }
@@ -579,7 +582,9 @@ internal static class IrMarkdownEmitter
     {
         var sb = new StringBuilder();
         AppendInlineText(p.Inlines, sb); // mirrors Descendants(w:t): includes textbox + SDT + field text
-        return sb.Length > 0;
+        for (int i = 0; i < sb.Length; i++)
+            if (sb[i] != '\t') return true; // a tab is text, but not w:t text
+        return false;
     }
 
     // ------------------------------------------------------------------
@@ -1084,7 +1089,7 @@ internal static class IrMarkdownEmitter
     }
 
     /// <summary>Append a single inline's text, escaped, mirroring the oracle's <c>AppendRunText</c>:
-    /// text/delText escaped, <c>w:br</c> → hard break, <c>w:tab</c> → 4 spaces, note refs →
+    /// text/delText escaped, <c>w:br</c> → hard break, <c>w:tab</c> → <c>'\t'</c>, note refs →
     /// <c>[^fn-…]</c>/<c>[^en-…]</c>. Hyperlink interiors recurse to their text runs.</summary>
     private static void AppendRunText(IrInline inline, StringBuilder sb, EmitCtx ctx)
     {
@@ -1110,7 +1115,7 @@ internal static class IrMarkdownEmitter
                 sb.Append("  \n");
                 break;
             case IrTab:
-                sb.Append("    ");
+                sb.Append('\t');
                 break;
             case IrNoteRef nr:
                 // Port of the oracle's AppendNoteRefMarker: resolve w:id → the note element's pt:Unid
@@ -1277,7 +1282,8 @@ internal static class IrMarkdownEmitter
     /// trim, and substitute a single space for an empty cell so the pipe layout stays well-formed.</summary>
     private static string CellTextForGfm(IrCell cell)
     {
-        var raw = CellTextRaw(cell).Replace('\n', ' ').Replace('\r', ' ').Replace("|", @"\|").Trim();
+        var raw = Internal.XmlText.TrimWhitespaceExceptTabs(
+            CellTextRaw(cell).Replace('\n', ' ').Replace('\r', ' ').Replace("|", @"\|"));
         return raw.Length == 0 ? " " : raw;
     }
 }

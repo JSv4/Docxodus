@@ -1399,7 +1399,7 @@ public static class WmlToMarkdownConverter
             else if (node.Name == W.br)
                 ctx.Sb.Append("  \n"); // hard line break in markdown
             else if (node.Name == W.tab)
-                ctx.Sb.Append("    ");
+                ctx.Sb.Append('\t'); // the character the session's text holds for it (issue #1387)
             else if (node.Name == W.footnoteReference)
                 AppendNoteRefMarker(node, ctx, "fn", W.footnote, ctx.Document.MainDocumentPart?.FootnotesPart);
             else if (node.Name == W.endnoteReference)
@@ -1533,13 +1533,14 @@ public static class WmlToMarkdownConverter
     }
 
     private static string CellTextRaw(XElement tc)
-        => string.Concat(tc.Descendants(W.t).Select(t => (string)t));
+        => DocxSession.VisibleText(tc); // the cell's visible text: a tab is '\t' (issue #1387)
 
     private static string CellTextForGfm(XElement tc)
     {
         // GFM pipe tables: every "|" must be escaped, every newline collapsed. Strip the
         // anchor markers — they live in the AnchorIndex but would corrupt the pipe layout.
-        var raw = CellTextRaw(tc).Replace('\n', ' ').Replace('\r', ' ').Replace("|", @"\|").Trim();
+        var raw = Internal.XmlText.TrimWhitespaceExceptTabs(
+            CellTextRaw(tc).Replace('\n', ' ').Replace('\r', ' ').Replace("|", @"\|"));
         return raw.Length == 0 ? " " : raw;
     }
 }

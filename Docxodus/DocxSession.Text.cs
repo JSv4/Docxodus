@@ -368,7 +368,7 @@ public sealed partial class DocxSession
     /// where Word's next field update would discard them. The new run copies the formatting of
     /// the run it follows (or precedes, at offset 0), minus any revision marker, and lands
     /// OUTSIDE any field whose chrome surrounds the boundary — after the field's <c>end</c> run,
-    /// or before its <c>begin</c>. Interior insertion accepts text runs with optional leading tabs,
+    /// or before its <c>begin</c>. Interior insertion accepts runs of text and tabs,
     /// outside fields, directly in the paragraph or inside a tracked insertion the text is not to
     /// join (which is then cut around it), and must not split a UTF-16 surrogate pair. Inside a
     /// move destination it is refused.
@@ -409,7 +409,7 @@ public sealed partial class DocxSession
                     || IsInsideComplexField(seg.Run)
                     || !XmlText.IsCharacterBoundary(map.FlatText, offset))
                     return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
-                        "interior insertion requires an ordinary character boundary in a text run with only optional leading tabs, outside fields and inline containers", anchorId);
+                        "interior insertion requires an ordinary character boundary in a run of text and tabs only, outside fields and inline containers", anchorId);
                 after = seg.Run;
                 splitRun = true;
                 splitAt = offset - seg.StartOffsetInBlock;
@@ -504,8 +504,7 @@ public sealed partial class DocxSession
                     var text = appendAtEnd
                         ? mergeInto.Elements(W.t).Last()
                         : mergeInto.Elements(W.t).First();
-                    text.SetAttributeValue(XNamespace.Xml + "space", "preserve");
-                    text.Value = appendAtEnd ? text.Value + replace : replace + text.Value;
+                    SetText(text, appendAtEnd ? text.Value + replace : replace + text.Value);
                     InvalidateProjectionCache();
                     return new EditResult
                     {
@@ -535,8 +534,7 @@ public sealed partial class DocxSession
                 && NeedsToLeaveInsertion(element, placeAt, mayJoin) == true
                 && OutsideForeignInsertion(element, placeAt, after is not null, mayJoin) is { } placed)
                 (after, before) = placed.After ? (placed.Anchor, (XElement?)null) : (null, placed.Anchor);
-            var run = new XElement(W.r, rPr,
-                new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), replace));
+            var run = new XElement(W.r, rPr, TextContent(replace, W.t));
             XElement node = run;
             if (_trackedChanges == TrackedChangeMode.RenderInline)
             {
@@ -628,12 +626,9 @@ public sealed partial class DocxSession
         && run.Elements().All(e => e.Name == W.rPr || e.Name == W.t)
         && run.Elements(W.t).Any();
 
-    // SplitRunsAtOffset keeps non-text children on the prefix, ahead of its text.
-    // Leading tabs are safe there; a tab after text or other run content could move.
+    // A run of text and tabs only: SplitRunsAtOffset cuts it in order, and a tab is a character.
     private static bool CanSplitTextRun(XElement run) =>
-        run.Name == W.r && run.Elements(W.t).Any()
-        && run.Elements().Where(e => e.Name != W.rPr)
-            .SkipWhile(e => e.Name == W.tab).All(e => e.Name == W.t);
+        run.Name == W.r && run.Elements().Where(e => e.Name != W.rPr).All(HoldsText);
 
     // Complex fields can cross paragraphs. Text boxes, notes and comments have separate stories.
     private static bool IsInsideComplexField(XElement run)
@@ -977,7 +972,8 @@ public sealed partial class DocxSession
         char? l = Fold(leftChar);
         char? r = Fold(rightChar);
 
-        static bool IsAsciiSpace(char? c) => c is ' ' or '\t';
+        // A tab is layout, not word spacing: it is never absorbed (issue #1387).
+        static bool IsAsciiSpace(char? c) => c is ' ';
         static bool IsClauseTerminator(char? c) => c is '.' or ',' or ';' or ':' or '!' or '?';
         static bool IsOpenBracket(char? c) => c is '(' or '[' or '{';
         static bool IsCloseBracket(char? c) => c is ')' or ']' or '}';
@@ -1067,14 +1063,14 @@ public sealed partial class DocxSession
             // the run's formatting minus the change.
             static bool Absorbs(XElement? run) => run is not null && run.Element(W.rPr)?.Element(W.rPrChange) is null;
             if (split is not null && Absorbs(split)) ReplaceRunTextRange(split, splitAt, 0, replace);
-            else if (split is null && IsPlainTextRun(after) && Absorbs(after)) after!.Elements(W.t).Last().Value += replace;
+            else if (split is null && IsPlainTextRun(after) && Absorbs(after))
+                SetText(after!.Elements(W.t).Last(), after.Elements(W.t).Last().Value + replace);
             else if (split is null && after is null && IsPlainTextRun(before) && Absorbs(before))
-                before!.Elements(W.t).First().Value = replace + before.Elements(W.t).First().Value;
+                SetText(before!.Elements(W.t).First(), replace + before.Elements(W.t).First().Value);
             else
             {
                 if (split is not null) SplitRunAtText(split, splitAt);
-                var run = new XElement(W.r, rPr,
-                    new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), replace));
+                var run = new XElement(W.r, rPr, TextContent(replace, W.t));
                 UnidHelper.AssignToSelfAndDescendants(run);
                 if (after is not null) after.AddAfterSelf(run);
                 else before!.AddBeforeSelf(run);
@@ -1134,7 +1130,7 @@ public sealed partial class DocxSession
     {
         var slice = SplitRunAtText(run, start);
         var tail = SplitRunAtText(slice, length);
-        foreach (var t in slice.Elements(W.t).ToList()) t.Remove();
+        slice.Elements().Where(HoldsText).Remove();
         // The pieces left with no content go, with any envelope that leaves empty (an insertion
         // left holding only range markers is unwrapped). The emptied slice stays for now: it marks
         // where the replacement goes.
@@ -1143,8 +1139,7 @@ public sealed partial class DocxSession
 
         var rPr = run.Element(W.rPr) is { } source ? new XElement(source) : null;
         rPr?.Elements(W.rPrChange).Remove();
-        var inserted = new XElement(W.r, rPr is { HasElements: true } ? rPr : null,
-            new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), replace));
+        var inserted = new XElement(W.r, rPr is { HasElements: true } ? rPr : null, TextContent(replace, W.t));
         UnidHelper.AssignToSelfAndDescendants(inserted);
         var placed = NeedsToLeaveInsertion(paragraph, slice, _ => false) == true
             ? OutsideForeignInsertion(paragraph, slice, true, _ => false)!.Value
@@ -1169,31 +1164,7 @@ public sealed partial class DocxSession
     {
         var tail = new XElement(W.r, run.Attributes().Where(a => a.Name != PtOpenXml.Unid),
             run.Element(W.rPr) is { } rPr ? new XElement(rPr) : null);
-        int consumed = 0;
-        bool moving = false;
-        foreach (var child in run.Elements().Where(e => e.Name != W.rPr).ToList())
-        {
-            if (!moving && child.Name == W.t)
-            {
-                int length = child.Value.Length;
-                if (offset > consumed && offset < consumed + length)
-                {
-                    int local = offset - consumed;
-                    tail.Add(new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), child.Value[local..]));
-                    child.Value = child.Value[..local];
-                    child.SetAttributeValue(XNamespace.Xml + "space", "preserve");
-                    moving = true;
-                    continue;
-                }
-                if (offset <= consumed) moving = true;
-                else
-                {
-                    consumed += length;
-                    if (consumed == offset) { moving = true; continue; }
-                }
-            }
-            if (moving) { child.Remove(); tail.Add(child); }
-        }
+        MoveRunContentFrom(run, offset, tail);
         UnidHelper.AssignToSelfAndDescendants(tail);
         Internal.RevisionOps.RenumberCopiedRevisions(tail, NextRevisionId);
         run.AddAfterSelf(tail);
@@ -1274,12 +1245,12 @@ public sealed partial class DocxSession
             int consumed = 0;
             foreach (var child in run.Elements().Where(e => e.Name != W.rPr))
             {
-                if (child.Name != W.t)
+                if (!HoldsText(child))
                 {
                     untouched.Add(new XElement(child));
                     continue;
                 }
-                var value = child.Value;
+                var value = TextOf(child);
                 int cutFrom = Math.Clamp(start - consumed, 0, value.Length);
                 int cutTo = Math.Clamp(start + len - consumed, 0, value.Length);
                 consumed += value.Length;
@@ -1288,13 +1259,12 @@ public sealed partial class DocxSession
                     untouched.Add(new XElement(child));
                     continue;
                 }
-                XElement Text(string text) => new(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), text);
-                if (cutFrom > 0) untouched.Add(Text(value[..cutFrom]));
+                if (cutFrom > 0) untouched.AddRange(TextContent(value[..cutFrom], W.t));
                 FlushUntouched();
                 var deletedSlice = CloneRunWithRevisionText(run, W.delText, value[cutFrom..cutTo]);
                 replacementNodes.Add(deletedSlice);
                 deletedRuns.Add(deletedSlice);
-                if (cutTo < value.Length) untouched.Add(Text(value[cutTo..]));
+                if (cutTo < value.Length) untouched.AddRange(TextContent(value[cutTo..], W.t));
             }
             FlushUntouched();
             // Range replacement visits matches right to left. Its earlier matches still name
@@ -1459,8 +1429,7 @@ public sealed partial class DocxSession
     /// attributes but gets its own internal Unid and revision ids. <paramref name="textName"/> is
     /// <c>w:t</c> for ordinary/inserted text and <c>w:delText</c> for deletions.</summary>
     private XElement CloneRunWithRevisionText(XElement source, XName textName, string text) =>
-        CloneRunWithContent(source, new[] { new XElement(textName,
-            new XAttribute(XNamespace.Xml + "space", "preserve"), text) });
+        CloneRunWithContent(source, TextContent(text, textName));
 
     private XElement CloneRunWithContent(XElement source, IEnumerable<XElement> content)
     {
@@ -1476,34 +1445,33 @@ public sealed partial class DocxSession
     }
 
     /// <summary>Replace <paramref name="length"/> characters at <paramref name="start"/> of
-    /// <paramref name="run"/>'s <c>w:t</c> text with <paramref name="replacement"/>, editing only
-    /// the text nodes the range overlaps; the replacement goes into the one holding
-    /// <paramref name="start"/>. A tab, break or reference between two text nodes keeps its
-    /// place, and a text node left empty is removed.</summary>
+    /// <paramref name="run"/>'s text with <paramref name="replacement"/>, editing only the text
+    /// nodes and tabs the range overlaps; the replacement goes where the one holding
+    /// <paramref name="start"/> is. A tab the range covers goes, a tab in the replacement is written
+    /// as one, a break or reference between two text nodes keeps its place, and a text node left
+    /// empty is removed.</summary>
     private static void ReplaceRunTextRange(XElement run, int start, int length, string replacement)
     {
         int consumed = 0;
-        foreach (var t in run.Elements(W.t).ToList())
+        foreach (var node in run.Elements().Where(HoldsText).ToList())
         {
-            var value = t.Value;
+            var value = TextOf(node);
             int from = consumed;
             consumed += value.Length;
             int cutFrom = Math.Clamp(start - from, 0, value.Length);
             int cutTo = Math.Clamp(start + length - from, 0, value.Length);
             bool holdsStart = start >= from && start < from + value.Length;
-            if (cutFrom == cutTo && !holdsStart) continue;
-            var edited = value[..cutFrom] + (holdsStart ? replacement : string.Empty) + value[cutTo..];
-            if (edited.Length == 0) t.Remove();
-            else
-            {
-                t.Value = edited;
-                t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
-            }
+            if (cutFrom == cutTo && (!holdsStart || replacement.Length == 0)) continue;
+            var inserted = holdsStart ? replacement : string.Empty;
+            if (node.Name == W.t) SetText(node, value[..cutFrom] + inserted + value[cutTo..]);
+            else if (cutFrom == cutTo) node.AddBeforeSelf(TextContent(inserted, W.t));
+            else if (inserted.Length == 0) node.Remove();
+            else node.ReplaceWith(TextContent(inserted, W.t));
         }
     }
 
     private static bool HasNonTextRunContent(XElement run) =>
-        run.Elements().Any(e => e.Name != W.rPr && e.Name != W.t);
+        run.Elements().Any(e => e.Name != W.rPr && !HoldsText(e));
 
     /// <summary>
     /// When <see cref="DocxSessionSettings.SmartQuotes"/> is on, replace ASCII <c>"</c>

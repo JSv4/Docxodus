@@ -952,7 +952,8 @@ public sealed record FillOptions
     ///   (<c>) ] }</c>) after → drop both, so an outer wrapper around a now-empty
     ///   inner (<c>"[[opt]]"</c>) doesn't leave bare brackets.</item>
     /// </list>
-    /// Default <c>false</c> (preserve the legacy literal-delete behavior).
+    /// Whitespace here is a space or NBSP-like space; a tab is layout and is never absorbed
+    /// (issue #1387). Default <c>false</c> (preserve the legacy literal-delete behavior).
     /// $-prefix preservation (<see cref="PreserveDollarPrefix"/>) runs first,
     /// so a picker returning <c>""</c> for <c>$[xxx]</c> with the default
     /// <see cref="PreserveDollarPrefix"/> = <c>true</c> ends up replacing with

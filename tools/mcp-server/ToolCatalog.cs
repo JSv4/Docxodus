@@ -260,7 +260,7 @@ internal static class ToolCatalog
               "properties": {
                 "sessionId": { "type": "string" },
                 "mode": { "type": "string", "enum": ["text", "regex", "kind", "annotation", "bookmark"], "description": "text: literal substring search (Grep). regex: .NET regex search. kind: all blocks of a structural kind (p, h, li, tbl, tc, ...). annotation: blocks touched by a given annotation id. bookmark: blocks anchored by a given Word bookmark name." },
-                "query": { "type": "string", "description": "The needle: literal text, regex pattern, block kind, annotation id, or bookmark name depending on mode." },
+                "query": { "type": "string", "description": "The needle: literal text, regex pattern, block kind, annotation id, or bookmark name depending on mode. In the searched text a tab is one character, \\t, as the projection prints it." },
                 "caseSensitive": { "type": "boolean", "description": "Default false (case-insensitive)." },
                 "contextChars": { "type": "integer", "description": "Characters of context captured on each side of a text/regex match. Default 80." },
                 "scope": { "type": "string", "enum": ["body", "headers", "footers", "header_footer", "all"], "description": "text/regex only: package stories to search. Default body preserves existing behavior; headers/footers cover every hdr*/ftr* part, header_footer combines them, and all includes body, running stories, notes, and comments." },
@@ -292,7 +292,7 @@ internal static class ToolCatalog
                 "markdown": { "type": "string", "description": "insert_paragraph/replace_text payload, in the supported markdown subset (headings, bullet/ordered lists, bold/italic/code/strike, links, hard breaks)." },
                 "find": { "type": "string", "description": "replace_text_range: literal text to find within the block. A find that matches nothing fails with text_not_found (both directly and as a batch step); pass preconditions.expectedMatchCount 0 to assert absence as a successful no-op instead." },
                 "replace": { "type": "string", "description": "replace_text_range / replace_text_at_span_with_format: replacement text." },
-                "spanStart": { "type": "integer", "description": "replace_text_at_span_with_format: start offset in paragraph text." },
+                "spanStart": { "type": "integer", "description": "replace_text_at_span_with_format: start offset in paragraph text, where a tab is one character (\\t). A \\t in replace is written as a tab." },
                 "spanLength": { "type": "integer", "description": "replace_text_at_span_with_format: length to replace; zero inserts at a run boundary." },
                 "deletedTextSide": { "type": "string", "enum": ["before", "after"], "description": "replace_text_at_span_with_format: for a zero-length insertion next to tracked deleted text (which takes no room in the offsets), put it immediately before or after that text. Omit for the default placement." },
                 "format": { "type": "object", "description": "replace_text_at_span_with_format: FormatOp (same fields as docxodus_format, e.g. bold/italic). Applied only to the replacement as one atomic undo/version unit; empty replacement only deletes." },
