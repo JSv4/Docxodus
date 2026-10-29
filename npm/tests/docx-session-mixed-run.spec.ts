@@ -28,10 +28,10 @@ for (const marker of ['tab', 'br'] as const) for (const tracked of [false, true]
     await page.goto('/test-harness.html');
     await page.waitForFunction(() => (window as any).DocxodusReady === true);
     // A tab is one character, "\t", of the text (issue #1387): a range across it takes it, so the
-    // replacement writes it back; a break takes no room.
-    const text = marker === 'tab' ? 'ab\tcd' : 'abcd';
+    // replacement writes it back. A break likewise occupies one newline (#1409).
+    const text = marker === 'tab' ? 'ab\tcd' : 'ab\ncd';
     const c = text.indexOf('c');
-    const cases = [[1, 1, 'X'], [c, 1, 'X'], [1, c, marker === 'tab' ? 'X\t' : 'X']] as const;
+    const cases = [[1, 1, 'X'], [c, 1, 'X'], [1, c, marker === 'tab' ? 'X\t' : 'X\n']] as const;
     const results = await page.evaluate(({ bytes, tracked, text, cases }) => {
       const open = (input: Uint8Array, record = false) => (window as any).Docxodus.openTypedSession(input,
         JSON.stringify({ trackedChanges: record ? 'render_inline' : 'accept', revisionAuthor: 'Editor' })) as DocxSession;
