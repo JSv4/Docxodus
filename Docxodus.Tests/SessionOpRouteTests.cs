@@ -84,6 +84,7 @@ public sealed class SessionOpRouteTests : IDisposable
 
     [Theory]
     [InlineData("queries", "getVersion", "format", "version")]
+    [InlineData("queries", "getAnchorLocations", "format", "anchor_locations")]
     [InlineData("diff", "getSemanticChanges", "format", "semantic_changes")]
     public void TheOneToOneSelectorRoutesAreRecorded(string family, string op, string selector, string value)
     {
@@ -121,7 +122,12 @@ public sealed class SessionOpRouteTests : IDisposable
     public void CallingTheRouteReturnsTheFacadesResult(string family, string op)
     {
         var route = Routed(family, op);
-        Assert.True(route.ArgCount == 0, $"{family}/{op}: only argument-free routes are checked by call so far");
+        var facade = typeof(DocxSessionOps).GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Single(method => method.Name == route.Facade);
+        var parameters = facade.GetParameters();
+        Assert.Equal(route.ArgCount, parameters.Length - 1);
+        Assert.All(parameters.Skip(1), parameter => Assert.True(parameter.IsOptional,
+            $"{family}/{op}: required arguments need an explicit route test"));
 
         var path = Path.Combine(_root, $"{Guid.NewGuid():N}.docx");
         File.WriteAllBytes(path, DocxSession.CreateBlankDocxBytes());
@@ -137,8 +143,8 @@ public sealed class SessionOpRouteTests : IDisposable
         args["sessionId"] = sessionId;
         var viaMcp = J(Dispatcher.Call(_store, route.Tool, J(args)));
 
-        var facade = typeof(DocxSessionOps).GetMethod(route.Facade, BindingFlags.Public | BindingFlags.Static, new[] { typeof(int) })!;
-        var direct = J((string)facade.Invoke(null, new object[] { handle })!);
+        var direct = J((string)facade.Invoke(null,
+            new object?[] { handle }.Concat(parameters.Skip(1).Select(parameter => parameter.DefaultValue)).ToArray())!);
 
         Assert.True(JsonElement.DeepEquals(direct, viaMcp), $"{route.Tool} {string.Join(",", route.Selector)} returned {viaMcp}, the facade {direct}");
     }

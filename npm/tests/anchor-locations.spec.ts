@@ -8,7 +8,7 @@ test('typed and raw bridge queries preserve all/subset/empty semantics without a
   await page.waitForFunction(() => (window as any).DocxodusReady === true);
   const result = await page.evaluate(() => {
     const D = (window as any).Docxodus;
-    const session = D.openTypedSession(D.DocxSessionBridge.CreateBlankDocx(), { captureInitialProjection: false }) as DocxSession;
+    const session = D.openTypedSession(D.DocxSessionBridge.CreateBlankDocx(), JSON.stringify({ captureInitialProjection: false })) as DocxSession;
     try {
       const all = session.getAnchorLocations();
       const key = Object.keys(all.locations).find(k => k.startsWith('p:'))!;
