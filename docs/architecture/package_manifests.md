@@ -107,6 +107,13 @@ an internal target cannot carry an RFC 3986 scheme. A target is external only wh
 spellings are reported, retained in the relationship inventory with the closed `Internal`
 fallback, and deliberately left unresolved.
 
+Hyperlinks in either Office relationship vocabulary are references even with an `Internal` target
+mode, as in the SDK's `AddHyperlinkRelationship(uri, false)`. Their targets are retained verbatim
+but are not resolved as package parts: `resolvedTargetUri` and `isTargetPresent` are null, and a
+relative link to a neighbouring file does not produce `missing_target`. Other internal relationship
+kinds, including embedded OLE objects and attached templates, still require a package part;
+links to resources outside the package use `External` mode.
+
 The generator distinguishes:
 
 - `missing_target`: a declared internal Relationship resolves to a package part that is absent;
