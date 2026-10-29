@@ -60,7 +60,7 @@ public sealed partial class DocxSession
             if (control.Ancestors().Any(a => kept.Any(k => ReferenceEquals(k.Element, a)))) continue;
             int start = range.Start, length = range.Length;
             int at = length > 0 ? positions[start]
-                : start == positions.Length ? rightKeys.Length
+                : start > 0 && start == positions.Length ? rightKeys.Length
                 : start > 0 && positions[start - 1] >= 0 ? positions[start - 1] + 1
                 : positions.Length > 0 && positions[start] >= 0 ? positions[start] : start == 0 ? 0 : -1;
             if (at < 0 || Enumerable.Range(0, length).Any(i => positions[start + i] != at + i))
