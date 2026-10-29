@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using Docxodus.Tests.Ir;
 using Xunit;
 
@@ -17,6 +18,7 @@ public class NestedInlineRenderingTests
     {
         var paragraph = Paragraph(shape, 64);
         var document = IrTestDocuments.FromBodyXml(paragraph.ToString(SaveOptions.DisableFormatting));
+        PackageValidation.AssertValid(document, FileFormatVersions.Office2013);
 
         // The old coalescer revisits every nested descendant recursively. At this depth it
         // cannot finish; a single traversal leaves ample room for slow CI hosts and font startup.
@@ -48,6 +50,16 @@ public class NestedInlineRenderingTests
             .Select(e => e.Name + ":" + string.Join(";", e.Attributes().Select(a => a.ToString()))).ToArray();
     }
 
+    [Fact]
+    public void AnOuterBodyDoesNotBroadenParagraphCoalescingBeyondTextboxes()
+    {
+        var body = new XElement(W.body, new XElement(W.p,
+            new XElement(W.r, new XElement(W.t, "Willow ")),
+            new XElement(W.r, new XElement(W.t, "path."))));
+
+        Assert.True(XNode.DeepEquals(body, WordprocessingMLUtil.CoalesceAdjacentRunsWithIdenticalFormatting(body)));
+    }
+
     private static XElement Paragraph(string shape, int depth)
     {
         XElement Run(string text) => new(W.r, new XElement(W.rPr, new XElement(W.b)),
@@ -55,13 +67,12 @@ public class NestedInlineRenderingTests
         XElement content = new(W.hyperlink, new XAttribute(W.anchor, "Leaf"), Run("Willow "), Run("path."));
         for (int i = 0; i < depth; i++)
         {
-            var kind = shape == "mixed" ? new[] { "hyperlink", "smartTag", "sdt" }[i % 3] : shape;
+            var kind = shape == "mixed" ? new[] { "hyperlink", "customXml", "sdt" }[i % 3] : shape;
             content = kind switch
             {
                 "hyperlink" => new XElement(W.hyperlink, new XAttribute(W.anchor, "Target"), content),
                 "field" => new XElement(W.fldSimple, new XAttribute(W.instr, " DOCPROPERTY Title "), content),
-                "smartTag" => new XElement(W.smartTag, new XAttribute(W.uri, "urn:willow"),
-                    new XAttribute(W.element, "clause"), content),
+                "customXml" => new XElement(W.customXml, new XAttribute(W.element, "clause"), content),
                 _ => new XElement(W.sdt, new XElement(W.sdtPr, new XElement(W.id, new XAttribute(W.val, i + 1))),
                     new XElement(W.sdtContent, content)),
             };
