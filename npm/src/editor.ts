@@ -2131,8 +2131,10 @@ export class DocxEditor {
     this.gutter?.dispose();
     this.gutter = null;
     const previous = this.container;
+    previous.removeEventListener("copy", this.onCopy);
     container.replaceChildren(...Array.from(previous.childNodes));
     this.container = container;
+    container.addEventListener("copy", this.onCopy);
     this.viewport.adoptHost(container);
     this.setupBlockDrag();
     if (this.options.comments) this.createGutter();

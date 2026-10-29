@@ -87,7 +87,7 @@ test.describe('a tab is one character of the session text (#1387)', () => {
         ...(tracked ? { trackedChanges: 1 } : {}), // TrackedChangeMode.RenderInline
         onEditFailed: (info: unknown) => w.failures.push(info),
       });
-      w.block = (text: string) => Array.from(container.querySelectorAll<HTMLElement>('p[data-anchor]'))
+      w.block = (text: string) => Array.from(w.editor.root.querySelectorAll('p[data-anchor]') as NodeListOf<HTMLElement>)
         .find((p) => !p.closest('#pagination-staging') && (p.textContent ?? '').includes(text));
     }, { bytes: Array.from(tabFixture(body)), tracked, options });
   }
@@ -168,10 +168,18 @@ test.describe('a tab is one character of the session text (#1387)', () => {
     expect((await saved(page))[0]).toBe('1.2XAlpha');
   });
 
-  for (const paginated of [false, true]) test(`native copy includes a selected tab, paginated=${paginated}`, async ({ page, context }) => {
+  for (const mode of ['flow', 'paginated', 'adopted']) test(`native copy includes a selected tab, mode=${mode}`, async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await openEditor(page);
-    await page.evaluate(paginated => (window as any).editor.setPaginated(paginated), paginated);
+    await page.evaluate(mode => {
+      const editor = (window as any).editor;
+      editor.setPaginated(mode === 'paginated');
+      if (mode === 'adopted') {
+        const host = document.createElement('div');
+        document.body.append(host);
+        editor.adoptContainer(host);
+      }
+    }, mode);
     await page.evaluate(() => {
       const block = (window as any).block('Alpha') as HTMLElement;
       block.focus();
