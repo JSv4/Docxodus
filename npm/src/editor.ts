@@ -540,8 +540,9 @@ function collectInlineSegments(node: Node, out: InlineSeg[]): void {
       if (text) out.push({ text, bold: false, italic: false, href: null });
       return;
     }
-    if (isTab(child)) {
-      out.push(styledSegment("\t", child.parentElement));
+    const atom = atomText(child);
+    if (atom !== null) {
+      if (atom) out.push(styledSegment(atom, child.parentElement));
       return;
     }
     if (child.nodeType === 3 /* TEXT_NODE */) {
@@ -550,10 +551,6 @@ function collectInlineSegments(node: Node, out: InlineSeg[]): void {
       out.push(styledSegment(text, child.parentElement));
     } else if (child.nodeType === 1 /* ELEMENT_NODE */) {
       const el = child as HTMLElement;
-      if (el.tagName === "BR") {
-        out.push({ text: "\n", bold: false, italic: false, href: null });
-        return;
-      }
       collectInlineSegments(el, out);
     }
   });
@@ -575,12 +572,10 @@ function styledSegment(text: string, parent: HTMLElement | null): InlineSeg {
 }
 
 /**
- * `s` without leading and trailing whitespace OTHER than tabs. A rendered empty paragraph's
- * placeholder space is not content, but a tab is: it is one character, `"\t"`, of the session's
- * text (issue #1387), so the offset and commit trims keep it.
+ * Trim placeholder padding, retaining native tabs and line breaks in the session's text.
  */
-const LEADING_SPACES = /^[^\S\t]+/;
-const TRAILING_SPACES = /[^\S\t]+$/;
+const LEADING_SPACES = /^[^\S\t\n]+/;
+const TRAILING_SPACES = /[^\S\t\n]+$/;
 function trimSpaces(s: string): string {
   return s.replace(LEADING_SPACES, "").replace(TRAILING_SPACES, "");
 }
@@ -633,7 +628,8 @@ export function serializeInlineMarkdown(block: HTMLElement): string {
   // types before a page-number field goes in: "Page " + PAGE must not commit as "Page". The
   // engine writes it with xml:space="preserve"; `trimBounds` counts it the same way.
   const md = trimSpaces(merged.map(segToMarkdown).join(""));
-  return escapeLeadingBlockMarkers(md + (keepsTrailingSpace(block) ? " " : ""));
+  const content = md.startsWith("\n") ? "  " + md : md;
+  return escapeLeadingBlockMarkers(content + (keepsTrailingSpace(block) ? " " : ""));
 }
 
 /**
@@ -862,15 +858,16 @@ function deleteLiveCharacterBeyond(block: HTMLElement, inputType: string): void 
 }
 
 /**
- * Backspace just after, or Delete just before, a rendered tab removes that tab, and so does a word
+ * Backspace just after, or Delete just before, a rendered tab/break removes that atom, and so does a word
  * deletion (Ctrl+Backspace, Ctrl+Delete) that starts there: a tab is the whitespace between words.
  * The browser does not: the tab is an empty box inside the converter's tab-layout wrapper, and
  * Chromium moves the text after it into the wrapper instead, or, for Ctrl+Delete, deletes the word
  * BEFORE the caret, so the commit would move the tab or remove the wrong text. The tab is one
  * character of the session's text (issue #1387), so removing its box is exactly the edit the commit
- * then sends.
+ * then sends. Breaks need the same treatment: the converter's bidi mark after a BR can otherwise
+ * consume Backspace while leaving the break in the document.
  */
-function deleteAdjacentTab(block: HTMLElement, ev: InputEvent): void {
+function deleteAdjacentWhitespaceAtom(block: HTMLElement, ev: InputEvent): void {
   const backward = ev.inputType === "deleteContentBackward" || ev.inputType === "deleteWordBackward";
   const forward = ev.inputType === "deleteContentForward" || ev.inputType === "deleteWordForward";
   if (ev.defaultPrevented || (!backward && !forward)) return;
@@ -878,13 +875,15 @@ function deleteAdjacentTab(block: HTMLElement, ev: InputEvent): void {
   const caret = caretOffsetIn(block);
   if (caret === null) return;
   const at = backward ? caret - 1 : caret;
-  if (blockContentText(block)[at] !== "\t") return;
-  const tab = Array.from(block.querySelectorAll<HTMLElement>("[data-docx-tab]")).find((box) =>
-    !isInMarker(box) && box.parentNode
+  const text = blockContentText(block)[at];
+  if (text !== "\t" && text !== "\n") return;
+  const atom = Array.from(block.querySelectorAll<HTMLElement>(
+    "[data-docx-tab], br, [data-page-break], [data-column-break]",
+  )).find((box) => !isInMarker(box) && box.parentNode && atomText(box) === text
     && contentOffsetOf(block, box.parentNode, Array.prototype.indexOf.call(box.parentNode.childNodes, box)) === at);
-  if (!tab) return;
+  if (!atom) return;
   ev.preventDefault();
-  tab.remove();
+  atom.remove();
   placeCaretAtOffset(block, at);
   block.dispatchEvent(new InputEvent("input", { inputType: ev.inputType, bubbles: true, composed: true }));
 }
@@ -913,9 +912,28 @@ function isTab(node: Node): node is HTMLElement {
   return node.nodeType === 1 && (node as HTMLElement).hasAttribute("data-docx-tab");
 }
 
-/** The content text of an atomic node (a field's cached result, a tab's `"\t"`), else null. */
+/** Chromium's final, unstamped BR holds the caret on an empty line; it is not another break. */
+function isPlaceholderBreak(node: HTMLElement): boolean {
+  if (node.tagName !== "BR" || node.hasAttribute("data-docx-break")) return false;
+  let current: Node = node;
+  while (current.parentElement) {
+    if (current.nextSibling) return false;
+    if (current.parentElement.getAttribute("contenteditable") === "true") return true;
+    current = current.parentElement;
+  }
+  return false;
+}
+
+/** Native text of an atomic node, else null. Every offset and commit helper reads this rule. */
 function atomText(node: Node): string | null {
-  return isField(node) ? fieldText(node) : isTab(node) ? "\t" : null;
+  if (isField(node)) return fieldText(node);
+  if (isTab(node)) return "\t";
+  if (node.nodeType === 1) {
+    const el = node as HTMLElement;
+    if (el.tagName === "BR") return isPlaceholderBreak(el) ? "" : "\n";
+    if (el.hasAttribute("data-page-break") || el.hasAttribute("data-column-break")) return "\n";
+  }
+  return null;
 }
 
 /** The text a field counts for: the cached result the session holds, else what it shows. */
@@ -2987,7 +3005,7 @@ export class DocxEditor {
     el.addEventListener("input", (ev) => noteTypedSpace(el, ev));
     el.addEventListener("beforeinput", (ev) => {
       guardChromeDeletion(el, ev as InputEvent);
-      deleteAdjacentTab(el, ev as InputEvent);
+      deleteAdjacentWhitespaceAtom(el, ev as InputEvent);
     });
     el.addEventListener("keydown", (ev) => this.onKeydown(el, ev as KeyboardEvent));
     // A band block re-rendered by an incremental swap is a fresh DOM node; re-adopt it (with the

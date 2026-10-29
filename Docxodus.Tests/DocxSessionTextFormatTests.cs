@@ -184,7 +184,6 @@ public class DocxSessionTextFormatTests
     [InlineData("deleted field end")]
     [InlineData("moved field end")]
     [InlineData("simple field")]
-    [InlineData("leading break")]
     [InlineData("tab/text field")]
     [InlineData("tab/text hyperlink")]
     [InlineData("tab/text surrogate pair")]
@@ -206,7 +205,6 @@ public class DocxSessionTextFormatTests
                 new XElement(W.p, FieldRun("end")),
             },
             "simple field" => new[] { new XElement(W.fldSimple, new XAttribute(W.instr, " DOCPROPERTY Title "), run) },
-            "leading break" => new[] { new XElement(W.r, new XElement(W.br), new XElement(W.t, "document")) },
             "tab/text field" => ComplexField(new XElement(W.r, new XElement(W.tab), new XElement(W.t, "document"))),
             "tab/text hyperlink" => new[] { new XElement(W.hyperlink, new XAttribute(W.anchor, "top"),
                 new XElement(W.r, new XElement(W.tab), new XElement(W.t, "document"))) },
@@ -218,8 +216,9 @@ public class DocxSessionTextFormatTests
         var anchor = session.FindByText("doc")!.Anchor.Id;
         var before = session.GetPackageContentHash();
 
-        // Four characters into "document"; a leading tab is one character before it (issue #1387).
-        var edit = session.ReplaceTextAtSpanWithFormat(anchor, context.StartsWith("tab/", StringComparison.Ordinal) ? 5 : 4, 0,
+        // Four characters into "document"; a leading tab is one character before it.
+        var edit = session.ReplaceTextAtSpanWithFormat(anchor,
+            context.StartsWith("tab/", StringComparison.Ordinal) ? 5 : 4, 0,
             " inserted ", new FormatOp { Bold = true });
 
         Assert.False(edit.Success);

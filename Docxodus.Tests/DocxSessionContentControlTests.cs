@@ -1002,11 +1002,13 @@ public sealed class DocxSessionContentControlTests
         var plain = controls.Single(control => control.NativeId == "101");
         var section = controls.Single(control => control.NativeId == "108");
 
+        session.Project();
         var fill = session.FillContentControlText(plain.AnchorId, "receipt value");
         Assert.True(fill.Success, fill.Error?.Message);
         Assert.Empty(fill.Created);
         Assert.Empty(fill.Removed);
         Assert.Equal(plain.AnchorId, Assert.Single(fill.Modified).Id);
+        Assert.Equal(session.Project().Markdown, Assert.IsType<MarkdownPatch>(fill.Patch).Markdown);
 
         var add = session.AddRepeatingSectionItem(section.AnchorId);
         Assert.True(add.Success, add.Error?.Message);
@@ -1014,12 +1016,14 @@ public sealed class DocxSessionContentControlTests
         Assert.Equal("sdt", created.Kind);
         Assert.Equal(section.AnchorId, Assert.Single(add.Modified).Id);
         Assert.NotNull(session.GetContentControl(created.Id));
+        Assert.Equal(session.Project().Markdown, Assert.IsType<MarkdownPatch>(add.Patch).Markdown);
 
         var remove = session.RemoveRepeatingSectionItem(created.Id);
         Assert.True(remove.Success, remove.Error?.Message);
         Assert.Equal(created.Id, Assert.Single(remove.Removed).Id);
         Assert.Equal(section.AnchorId, Assert.Single(remove.Modified).Id);
         Assert.Null(session.GetContentControl(created.Id));
+        Assert.Equal(session.Project().Markdown, Assert.IsType<MarkdownPatch>(remove.Patch).Markdown);
     }
 
     [Fact]

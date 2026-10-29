@@ -39,6 +39,10 @@ internal sealed record IrParagraph : IrBlock
     public IrListInfo? List { get; init; }
     public required IrNodeList<IrInline> Inlines { get; init; }
 
+    /// <summary>Display inlines when custom XML remains opaque in <see cref="Inlines"/> for comparison.
+    /// Read as one paragraph so fields can cross wrapper boundaries; excluded from content/format hashes.</summary>
+    public IrNodeList<IrInline>? ProjectedInlines { get; init; }
+
     /// <summary>
     /// The auto-number marker Word would render for this paragraph, resolved by the reader via
     /// <c>ListItemRetriever.RetrieveListItem</c> against the live package — the exact string the

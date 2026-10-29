@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Breaking: visible run atoms share the session's text coordinates (#1409).** `w:br` and
+  `w:cr` occupy one `\n`, positional tabs (`w:ptab`) one `\t`, special hyphens their Unicode
+  characters, and valid `w:sym` codes their displayed character. These previously omitted atoms
+  now appear in search, previews, annotation text and span offsets. Recompute stored offsets;
+  there is no setting for the old counting. Markdown still spells a break as two spaces plus
+  a newline, while its session span is one character. Native tracked edits retain the original
+  atom and attributes so rejecting them restores the exact carrier.
 - **Breaking: a tab is now one character in every session offset (#1387).** A `w:tab` in a run is
   `'\t'` in the text spans count, `Grep`/`GrepCrossBlock` search, `AnchorInfo.VisibleText` and
   `ExpectedTextRange` read, and the projection prints (it printed four spaces before). Before, a tab
@@ -28,12 +35,19 @@ All notable changes to this project will be documented in this file.
   `w:tab`, a `'\t'` in replacement or inserted text (span and match replacement, `ReplaceText`
   markdown, a content control's plain-text fill) is written as a `w:tab` element rather than a literal
   tab character, and the editor counts a rendered tab as one character. A tab-stop definition and a tab
-  in deleted text take no room; line breaks, positional tabs, special hyphens and symbols are counted
-  as before. Annotations store a bookmark pair, not offsets, so saved annotations do not move.
+  in deleted text take no room. Annotations store a bookmark pair, not offsets, so saved annotations do not move.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
 
+- Inline custom XML projects and participates in paragraph searches and edits. Textbox paragraphs
+  keep their own text coordinates inside hyperlinks, fields and revision envelopes. Atom-only
+  paragraphs/scopes survive empty-content suppression, and tab-only cells count as nonempty when
+  merging. Content-control fill and repeating-item mutations emit current markdown patches (#1409).
+- The editor counts loaded line breaks, positional tabs, special hyphens and symbols consistently
+  with native text. Typing, formatting, deletion and splitting after them use the displayed
+  coordinates; leading/trailing breaks survive commits. HTML retains soft/nonbreaking hyphens and
+  a positional tab's text advance. Positional-tab geometry is still an approximation (#1409).
 - `Grep` finds a tab (#1387): `\t` matches it, and a phrase copied from the projection across a tab,
   such as manual numbering `1.2<tab>Title`, matches. Splitting a run for an edit no longer moves a tab
   or line break that came after the split point to before the run's text.
