@@ -1856,14 +1856,18 @@ public sealed class DocxSessionContentControlTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void CC045_AnEchoKeepsAnEmptyControlInsideItsHyperlink(bool linkedText)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void CC045_AnEchoKeepsAnEmptyControlInsideItsHyperlink(bool linkedText, bool secondControl)
     {
         var control = XElement.Parse(Bound.Replace("<w:sdt>", $"<w:sdt xmlns:w=\"{W}\">", StringComparison.Ordinal));
         control.Element(W + "sdtContent")!.RemoveNodes();
+        var second = new XElement(control);
+        second.Element(W + "sdtPr")!.Element(W + "id")!.SetAttributeValue(W + "val", "8");
         var link = new XElement(W + "hyperlink", new XAttribute(R + "id", "link"),
-            linkedText ? new XElement(W + "r", new XElement(W + "t", "X")) : null, control,
+            linkedText ? new XElement(W + "r", new XElement(W + "t", "X")) : null, control, secondControl ? second : null,
             linkedText ? new XElement(W + "r", new XElement(W + "t", "Y")) : null);
         var paragraph = new XElement(W + "p", new XElement(W + "r", new XElement(W + "t", "A")),
             link, new XElement(W + "r", new XElement(W + "t", "B")));
@@ -1874,11 +1878,16 @@ public sealed class DocxSessionContentControlTests
         var anchor = Assert.Single(projection.AnchorIndex.Values, a => a.Anchor.Kind == "p").Anchor.Id;
         var line = projection.Markdown.Split('\n').Single(l => l.StartsWith("{#p:", StringComparison.Ordinal));
 
+        session.ListHyperlinks(); // Assign the native link identity before the rewrite.
         Assert.True(session.ReplaceText(anchor, line[(line.IndexOf('}') + 2)..]).Success);
 
         Assert.Equal(projection.Markdown, session.Project().Markdown);
+        var links = session.ListHyperlinks();
+        Assert.Equal(linkedText ? 2 : 1, links.Count);
+        Assert.Equal(links.Count, links.Select(l => l.Id).Distinct().Count());
         using var package = WordprocessingDocument.Open(new MemoryStream(session.Save()), false);
-        var kept = Assert.Single(package.MainDocumentPart!.GetXDocument().Descendants(W + "sdt"));
+        var kept = package.MainDocumentPart!.GetXDocument().Descendants(W + "sdt").Single(c =>
+            (string?)c.Element(W + "sdtPr")?.Element(W + "id")?.Attribute(W + "val") == "7");
         Assert.Equal(W + "hyperlink", kept.Parent!.Name);
         var id = (string)kept.Parent.Attribute(R + "id")!;
         Assert.Equal("https://example.com/document", package.MainDocumentPart.HyperlinkRelationships.Single(r => r.Id == id).Uri.OriginalString);

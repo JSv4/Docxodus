@@ -18,7 +18,9 @@ public sealed partial class DocxSession
     {
         var candidates = paragraph.Descendants(W.sdt)
             .Where(e => ReferenceEquals(e.Ancestors(W.p).FirstOrDefault(), paragraph)
-                && !IsInsideNestedRemoval(e, paragraph)).ToList();
+                && !IsInsideNestedRemoval(e, paragraph))
+            .Select(e => e.Ancestors(W.hyperlink).LastOrDefault(link => InlineChildTextLength(link) == 0) ?? e)
+            .Distinct().ToList();
         if (candidates.Count == 0) return new();
         var owner = OwnedPartRelationships.FindOwner(_doc!, paragraph)?.Part;
         var left = RunTextMap.Build(paragraph);
@@ -106,11 +108,7 @@ public sealed partial class DocxSession
             var run = segment.Run;
             var props = run.Element(W.rPr);
             var link = run.Ancestors(W.hyperlink).FirstOrDefault();
-            var relationship = link?.Attribute(R.id) is { } id
-                ? owner?.HyperlinkRelationships.FirstOrDefault(r => r.Id == id.Value) : null;
-            var href = (string?)link?.Attribute(MarkdownPayloadParser.HrefAttr)
-                ?? (relationship is null ? null : PackageOpenRepair.TargetText(relationship.Uri))
-                ?? (link?.Attribute(W.anchor) is { } anchor ? "#" + anchor.Value : null);
+            var href = RewriteHref(link, owner);
             var format = href is not null ? ":" + href : WmlToMarkdownConverter.IsCodeRun(props) ? "c:"
                 : string.Concat(WmlToMarkdownConverter.HasToggle(props, W.b) ? "b" : "",
                 WmlToMarkdownConverter.HasToggle(props, W.i) ? "i" : "",
@@ -121,15 +119,30 @@ public sealed partial class DocxSession
         return keys;
     }
 
+    private static string? RewriteHref(XElement? link, OpenXmlPart? owner)
+    {
+        var relationship = link?.Attribute(R.id) is { } id
+            ? owner?.HyperlinkRelationships.FirstOrDefault(r => r.Id == id.Value) : null;
+        return (string?)link?.Attribute(MarkdownPayloadParser.HrefAttr)
+            ?? (relationship is null ? null : PackageOpenRepair.TargetText(relationship.Uri))
+            ?? (link?.Attribute(W.anchor) is { } anchor ? "#" + anchor.Value : null);
+    }
+
     private void RestoreInlineControl(XElement replacement, RetainedControl control)
     {
         SplitRunsAtOffset(replacement, control.Start, NextRevisionId);
         SplitRunsAtOffset(replacement, control.Start + control.Length, NextRevisionId);
-        var pieces = RunTextMap.ResolveRange(RunTextMap.Build(replacement), control.Start, control.Length);
+        var map = RunTextMap.Build(replacement);
+        var pieces = RunTextMap.ResolveRange(map, control.Start, control.Length);
         // Keep an enclosing link outside the SDT; a link owned by the SDT stays inside it.
-        var parent = control.Element.Ancestors(W.hyperlink).Any() && pieces.Count > 0
+        var originalLink = control.Element.Ancestors(W.hyperlink).FirstOrDefault();
+        var href = RewriteHref(originalLink, OwnedPartRelationships.FindOwner(_doc!, control.Element)?.Part);
+        var parent = originalLink is null ? replacement : pieces.Count > 0
             ? pieces[0].Item1.Run.Ancestors(W.hyperlink).FirstOrDefault(link =>
-                pieces[^1].Item1.Run.Ancestors().Contains(link)) ?? replacement : replacement;
+                pieces[^1].Item1.Run.Ancestors().Contains(link)) ?? replacement
+            : map.Segments.Where(s => s.StartOffsetInBlock == control.Start || s.EndOffsetInBlock == control.Start)
+                .Select(s => s.Run.Ancestors(W.hyperlink).FirstOrDefault())
+                .FirstOrDefault(link => link is not null && RewriteHref(link, null) == href) ?? replacement;
         int origin = ReferenceEquals(parent, replacement) ? 0 : RunTextMap.Build(replacement).Segments
             .First(s => s.Run.Ancestors().Contains(parent)).StartOffsetInBlock;
         int start = control.Start - origin, end = start + control.Length;
@@ -146,10 +159,12 @@ public sealed partial class DocxSession
             consumed += length;
         }
         var restored = control.Element;
-        var emptyLinks = control.Length == 0 ? restored.Ancestors(W.hyperlink).ToArray() : Array.Empty<XElement>();
+        var emptyLinks = control.Length == 0 && ReferenceEquals(parent, replacement)
+            ? restored.Ancestors(W.hyperlink).ToArray() : Array.Empty<XElement>();
         restored.Remove();
         // Empty links have no markdown spelling or replacement run to receive their control.
-        foreach (var link in emptyLinks) restored = new XElement(W.hyperlink, link.Attributes(), restored);
+        foreach (var link in emptyLinks)
+            restored = new XElement(W.hyperlink, link.Attributes().Where(a => a.Name != PtOpenXml.Unid), restored);
         if (before is null) parent.Add(restored);
         else before.AddBeforeSelf(restored);
         foreach (var child in removed) child.Remove();
