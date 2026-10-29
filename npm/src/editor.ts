@@ -3235,12 +3235,9 @@ export class DocxEditor {
       // one break and one caret placeholder. Normalize only that extra terminal character
       // to the same empty BR placeholder the shared text/offset helpers already skip.
       if (end !== before || blockContentText(block).length !== before - (end - start) + 2) return;
-      const walker = block.ownerDocument.createTreeWalker(block, NodeFilter.SHOW_TEXT);
-      let last: Text | null = null;
-      for (let node = walker.nextNode(); node; node = walker.nextNode())
-        if (!isInMarker(node) && node.textContent) last = node as Text;
-      if (!last?.data.endsWith("\n")) return;
-      last.splitText(last.length - 1).replaceWith(block.ownerDocument.createElement("br"));
+      const { node, offset } = contentPositionIn(block, start + 2);
+      if (node.nodeType !== 3 || node.textContent?.[offset - 1] !== "\n") return;
+      (node as Text).splitText(offset - 1).replaceWith(block.ownerDocument.createElement("br"));
       placeCaretAtOffset(block, start + 1);
     }
   }
