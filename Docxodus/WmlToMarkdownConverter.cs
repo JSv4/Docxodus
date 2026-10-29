@@ -1256,9 +1256,9 @@ public static class WmlToMarkdownConverter
         // dropping them left a hole in the projection an agent reads (issue #559: a
         // Word-authored REF/STYLEREF/SEQ field contributed nothing to the markdown). They
         // project as ordinary text; the field itself stays atomic for mutation addressing,
-        // exactly like a hyperlink wrapper. Inline w:sdt/w:smartTag carriers deliberately
-        // stay projected-out at paragraph level — their runs remain in the flat text but not
-        // the rendered markdown — while a carrier inside an envelope keeps contributing.
+        // exactly like a hyperlink wrapper. An inline content control (w:sdt) or smart tag is
+        // transparent: its content is what Word shows and the flat text holds, so it is walked
+        // in place at the caller's nesting level (issue #1386).
         void Walk(XElement container, string? url, Revision revision, bool nested)
         {
             foreach (var child in container.Elements())
@@ -1276,6 +1276,9 @@ public static class WmlToMarkdownConverter
                     Enclosed(child, url, Revision.Deleted);
                 else if (child.Name == W.fldSimple)
                     Enclosed(child, url, revision);
+                else if ((child.Name == W.sdt ? child.Element(W.sdtContent)
+                         : child.Name == W.smartTag ? child : null) is { } content)
+                    Walk(content, url, revision, nested);
                 else if (nested && child.HasElements)
                     Walk(child, url, revision, nested: true);
             }

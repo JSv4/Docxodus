@@ -29,10 +29,10 @@ is cloneable only when every nested SDT satisfies the same invariant.
 
 `sdt` is an AnchorIndex kind in both the WML projector and the immutable IR emitter.
 The IR captures projector-order anchor facts while its private package is open, so
-index parity also holds with `RetainSources=false`. The current Markdown oracle indexes
-the outer SDT but omits content delivered through an inline or block SDT, so adding the
-anchor does not change historical Markdown bytes. HTML and `ListBlocks` remain wrapper-
-transparent and flatten/render the contained blocks.
+index parity also holds with `RetainSources=false`. The Markdown oracle indexes the outer
+SDT. It prints an inline SDT's content in place, as `Grep` and the HTML render read it,
+placeholder text included (issue #1386); it still omits a block-level SDT's content. HTML
+and `ListBlocks` remain wrapper-transparent and flatten/render the contained blocks.
 `ListInlineSpans` additionally returns outer-to-inner `contentControlAnchorIds` for each
 run.
 

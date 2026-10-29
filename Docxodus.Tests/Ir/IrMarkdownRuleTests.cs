@@ -408,14 +408,34 @@ public class IrMarkdownRuleTests
             "<w:fldSimple w:instr=\" DATE \"><w:r><w:t>4/24/2016</w:t></w:r></w:fldSimple></w:p>"));
     }
 
-    /// <summary>An inline <c>w:sdt</c> content control's runs are DROPPED from the markdown (the oracle
-    /// only walks w:r/w:hyperlink/w:ins/w:del), so only the surrounding plain text projects.</summary>
-    [Fact]
-    public void Rule_InlineSdt_DroppedFromMarkdown()
+    /// <summary>An inline <c>w:sdt</c> content control's runs project in place, as do a smart tag's,
+    /// whatever the control shows — placeholder text included (issue #1386).</summary>
+    [Theory]
+    [InlineData("<w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>ABC</w:t></w:r></w:sdtContent></w:sdt>", "Text: ABC")]
+    [InlineData("<w:smartTag w:element=\"place\"><w:r><w:t>ABC</w:t></w:r></w:smartTag>", "Text: ABC")]
+    [InlineData("<w:sdt><w:sdtPr><w:showingPlcHdr/></w:sdtPr><w:sdtContent><w:r><w:t>ABC</w:t></w:r></w:sdtContent></w:sdt>", "Text: ABC")]
+    public void Rule_InlineSdt_ProjectsItsText(string carrier, string line)
     {
-        AssertEquivalent(IrTestDocuments.FromBodyXml(
-            "<w:p><w:r><w:t xml:space=\"preserve\">Text: </w:t></w:r>" +
-            "<w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>ABC</w:t></w:r></w:sdtContent></w:sdt></w:p>"));
+        var doc = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t xml:space=\"preserve\">Text: </w:t></w:r>" + carrier + "</w:p>");
+        AssertEquivalent(doc);
+        var markdown = WmlToMarkdownConverter.Convert(new WmlDocument(doc), new WmlToMarkdownConverterSettings()).Markdown;
+        Assert.EndsWith(" " + line, markdown.Split('\n').Single(l => l.Contains("Text:")).TrimEnd());
+    }
+
+    /// <summary>A control's runs merge with same-formatted neighbours into one delimiter span, as runs
+    /// outside a control do (issue #1386).</summary>
+    [Fact]
+    public void Rule_InlineSdt_RunsMergeWithTheirNeighbours()
+    {
+        const string bold = "<w:rPr><w:b/></w:rPr>";
+        var doc = IrTestDocuments.FromBodyXml(
+            $"<w:p><w:r>{bold}<w:t xml:space=\"preserve\">A </w:t></w:r>" +
+            $"<w:sdt><w:sdtPr/><w:sdtContent><w:r>{bold}<w:t>MID</w:t></w:r></w:sdtContent></w:sdt>" +
+            $"<w:r>{bold}<w:t xml:space=\"preserve\"> Z</w:t></w:r></w:p>");
+        AssertEquivalent(doc);
+        Assert.Contains("**A MID Z**",
+            WmlToMarkdownConverter.Convert(new WmlDocument(doc), new WmlToMarkdownConverterSettings()).Markdown);
     }
 
     /// <summary>A block-level <c>w:sdt</c> wrapping a paragraph is SKIPPED by the oracle's EmitBlocks

@@ -5090,3 +5090,49 @@ receipt lists no package change. `DeliverableVerifier` inspects a baseline both 
 read step reads it: the Word-level analysis and semantic comparison use the read form, and a finding
 either form shows is pre-existing, so an edit to a repaired input is not charged with the input's
 own defects. The baseline's reported identity stays the caller's bytes.
+
+## Inline content controls: cached content vs. data-bound values (#1386)
+
+The markdown projection, `Grep` and the HTML render all read an inline content control's cached
+`w:sdtContent` runs; since #1386 the projection prints them in place, placeholder text included
+(before, it left every inline `w:sdt` out). ECMA-376 makes `w:sdtContent` the control's current content and `w:showingPlcHdr` the
+only marker that it is placeholder text. For a **data-bound** control (`w:dataBinding` naming a
+custom XML part by `w:storeItemID`), LibreOffice does not show the cached runs: on import it
+replaces them with the value from the custom XML part.
+
+Reproducer (authored for this entry, LibreOffice 25.8.7.3, `soffice --headless --convert-to txt`):
+
+```xml
+<!-- word/document.xml; customXml/item1.xml holds
+     <record><name>stored name</name><due>2025-06-07</due><box>true</box></record>
+     and its itemProps1.xml declares ds:itemID="{00000000-0000-0000-0000-000000000001}" -->
+<w:p><w:r><w:t xml:space="preserve">Text: </w:t></w:r>
+  <w:sdt><w:sdtPr><w:id w:val="101"/>
+      <w:dataBinding w:xpath="/record[1]/name[1]" w:storeItemID="{00000000-0000-0000-0000-000000000001}"/>
+      <w:text/></w:sdtPr>
+    <w:sdtContent><w:r><w:t>cached name</w:t></w:r></w:sdtContent></w:sdt></w:p>
+<!-- likewise: a w:date control (w:dateFormat d/MM/yyyy) bound to /record[1]/due[1] caching
+     "cached date", a w14:checkbox control bound to /record[1]/box[1] caching "cached box", and an
+     unbound w:showingPlcHdr text control caching "cached prompt" -->
+```
+
+| Control | Word | LibreOffice | Docxodus (projection / HTML) |
+|---|---|---|---|
+| bound text | unverified | `stored name` | `cached name` / `cached name` |
+| bound date | unverified | `7/06/2025` (store value, reformatted) | `cached date` / `cached date` |
+| bound checkbox | unverified | `true` (store value as text) | `cached box` / `cached box` |
+| placeholder text | unverified | `cached prompt` | `cached prompt` / `cached prompt` |
+| same bound controls, no custom XML part | unverified | cached text | cached text |
+
+Analysis: LibreOffice resolves the binding against the store when the part exists and falls back
+to the cached runs when it does not. Word may likewise refresh a bound control from its custom XML
+part when it opens the document; that was not verified here. Docxodus does
+not evaluate data bindings anywhere: the projection, `Grep` and the HTML render all read the cached
+content, so they show the same value, though a bound control whose store disagrees with its cache can
+render differently in LibreOffice. (They are not identical strings in every shape: `Grep`'s flat text
+also counts a text box anchored inside a control's run, which the projection keeps out of the
+host line, as it does for a text box in a run outside any control.)
+
+Code: `WmlToMarkdownConverter.GroupInlineRuns` (inline `w:sdt`/`w:smartTag` walk), and the HTML
+render's control removal `MarkupSimplifier.RemoveCustomXmlAndContentControlsTransform`. Fix: none needed for #1386;
+evaluating bindings would be a separate feature.

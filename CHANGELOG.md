@@ -108,6 +108,13 @@ All notable changes to this project will be documented in this file.
   whose `TargetMode` is anything but absent or `Internal`, is never dropped. A package that needs no
   repair is read unchanged.
 
+- The markdown projection now prints the content of an inline content control (a data-bound field,
+  a citation) and of a smart tag in place, as the HTML render and `Grep` already read it: the
+  control's cached content, placeholder text included. Before, the projection left that text out,
+  so it lost bound values such as a document number, and a phrase copied from it across a control
+  did not match. Docxodus does not evaluate data bindings; LibreOffice shows a bound control's
+  stored custom-XML value instead of its cache when that part is present (#1386).
+
 ## [14.2.0] - 2026-10-26
 
 ### Added
