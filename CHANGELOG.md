@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [14.3.0] - 2026-10-29
+
 ### Added
 
 - The All Markup balloon layout can print the full text of comments whose balloons were cut short
