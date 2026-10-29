@@ -77,8 +77,25 @@ public sealed partial class DocxSession
 
     private static int UniqueRewriteMatch(string[] keys, ReadOnlySpan<string> pattern)
     {
-        int first = keys.AsSpan().IndexOf(pattern);
-        return first < 0 ? -1 : keys.AsSpan(first + 1).IndexOf(pattern) >= 0 ? -2 : first;
+        // Prefix matching keeps near-matches in long repetitive controls linear too.
+        var prefix = new int[pattern.Length];
+        for (int i = 1, j = 0; i < pattern.Length; i++)
+        {
+            while (j > 0 && pattern[i] != pattern[j]) j = prefix[j - 1];
+            if (pattern[i] == pattern[j]) j++;
+            prefix[i] = j;
+        }
+        int found = -1;
+        for (int i = 0, j = 0; i < keys.Length; i++)
+        {
+            while (j > 0 && keys[i] != pattern[j]) j = prefix[j - 1];
+            if (keys[i] == pattern[j]) j++;
+            if (j != pattern.Length) continue;
+            if (found >= 0) return -2;
+            found = i - j + 1;
+            j = prefix[j - 1];
+        }
+        return found;
     }
 
     private static string[] RewriteKeys(RunTextMap.Map map, OpenXmlPart? owner)
@@ -99,7 +116,7 @@ public sealed partial class DocxSession
                 WmlToMarkdownConverter.HasToggle(props, W.i) ? "i" : "",
                 WmlToMarkdownConverter.HasToggle(props, W.strike) ? "s" : "", ":");
             for (int i = segment.StartOffsetInBlock; i < segment.EndOffsetInBlock; i++)
-                keys[i] = map.FlatText[i] + "\u0001" + format;
+                keys[i] = map.FlatText[i] + "\u0001" + (map.FlatText[i] == '\n' ? ":" : format);
         }
         return keys;
     }
@@ -128,9 +145,13 @@ public sealed partial class DocxSession
             if (length > 0 && consumed >= start && consumed + length <= end) removed.Add(child);
             consumed += length;
         }
-        control.Element.Remove();
-        if (before is null) parent.Add(control.Element);
-        else before.AddBeforeSelf(control.Element);
+        var restored = control.Element;
+        var emptyLinks = control.Length == 0 ? restored.Ancestors(W.hyperlink).ToArray() : Array.Empty<XElement>();
+        restored.Remove();
+        // Empty links have no markdown spelling or replacement run to receive their control.
+        foreach (var link in emptyLinks) restored = new XElement(W.hyperlink, link.Attributes(), restored);
+        if (before is null) parent.Add(restored);
+        else before.AddBeforeSelf(restored);
         foreach (var child in removed) child.Remove();
     }
 }

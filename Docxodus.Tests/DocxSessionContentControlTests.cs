@@ -1855,6 +1855,97 @@ public sealed class DocxSessionContentControlTests
         Assert.True(XNode.DeepEquals(before, kept));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CC045_AnEchoKeepsAnEmptyControlInsideItsHyperlink(bool linkedText)
+    {
+        var control = XElement.Parse(Bound.Replace("<w:sdt>", $"<w:sdt xmlns:w=\"{W}\">", StringComparison.Ordinal));
+        control.Element(W + "sdtContent")!.RemoveNodes();
+        var link = new XElement(W + "hyperlink", new XAttribute(R + "id", "link"),
+            linkedText ? new XElement(W + "r", new XElement(W + "t", "X")) : null, control,
+            linkedText ? new XElement(W + "r", new XElement(W + "t", "Y")) : null);
+        var paragraph = new XElement(W + "p", new XElement(W + "r", new XElement(W + "t", "A")),
+            link, new XElement(W + "r", new XElement(W + "t", "B")));
+        var document = Docxodus.Tests.Ir.IrTestDocuments.FromBodyXmlWithHyperlinks(
+            paragraph.ToString(SaveOptions.DisableFormatting), ("link", "https://example.com/document"));
+        using var session = new DocxSession(document.DocumentByteArray);
+        var projection = session.Project();
+        var anchor = Assert.Single(projection.AnchorIndex.Values, a => a.Anchor.Kind == "p").Anchor.Id;
+        var line = projection.Markdown.Split('\n').Single(l => l.StartsWith("{#p:", StringComparison.Ordinal));
+
+        Assert.True(session.ReplaceText(anchor, line[(line.IndexOf('}') + 2)..]).Success);
+
+        Assert.Equal(projection.Markdown, session.Project().Markdown);
+        using var package = WordprocessingDocument.Open(new MemoryStream(session.Save()), false);
+        var kept = Assert.Single(package.MainDocumentPart!.GetXDocument().Descendants(W + "sdt"));
+        Assert.Equal(W + "hyperlink", kept.Parent!.Name);
+        var id = (string)kept.Parent.Attribute(R + "id")!;
+        Assert.Equal("https://example.com/document", package.MainDocumentPart.HyperlinkRelationships.Single(r => r.Id == id).Uri.OriginalString);
+    }
+
+    [Theory]
+    [InlineData("b")]
+    [InlineData("i")]
+    [InlineData("strike")]
+    [InlineData("code")]
+    [InlineData("link")]
+    public void CC046_AnEchoKeepsAFormattedControlContainingABreak(string format)
+    {
+        var control = XElement.Parse(Bound.Replace("<w:sdt>", $"<w:sdt xmlns:w=\"{W}\">", StringComparison.Ordinal));
+        control.Element(W + "sdtContent")!.ReplaceNodes(new XElement(W + "r",
+            format == "link" ? null : new XElement(W + "rPr", format == "code"
+                ? new XElement(W + "rStyle", new XAttribute(W + "val", "Code")) : new XElement(W + format)),
+            new XElement(W + "t", "A"), new XElement(W + "br"), new XElement(W + "t", "B")));
+        using var session = new DocxSession(DocxSessionSpanRevisionTests.Build(
+            new XElement(W + "r", new XElement(W + "t", "Version ")),
+            format == "link" ? new XElement(W + "hyperlink", new XAttribute(W + "anchor", "Section"), control) : control,
+            new XElement(W + "r", new XElement(W + "t", " approved.")),
+            new XElement(W + "bookmarkStart", new XAttribute(W + "id", "2"), new XAttribute(W + "name", "Section")),
+            new XElement(W + "bookmarkEnd", new XAttribute(W + "id", "2"))));
+        var projection = session.Project();
+        var anchor = Assert.Single(projection.AnchorIndex.Values, a => a.Anchor.Kind == "p").Anchor.Id;
+        var payload = projection.Markdown[(projection.Markdown.IndexOf('}') + 2)..].TrimEnd('\n');
+        var before = Assert.Single(ReadControls(session.Save()));
+
+        var edit = session.ReplaceText(anchor, payload);
+        Assert.True(edit.Success, edit.Error?.Message);
+
+        Assert.Equal(projection.Markdown, session.Project().Markdown);
+        Assert.True(XNode.DeepEquals(before, Assert.Single(ReadControls(session.Save()))));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void CC047_OutsideEditsKeepCrossingBookmarkEndpointsInOrder(bool startInside, bool empty)
+    {
+        var control = XElement.Parse(Bound.Replace("<w:sdt>", $"<w:sdt xmlns:w=\"{W}\">", StringComparison.Ordinal));
+        if (empty) control.Element(W + "sdtContent")!.RemoveNodes();
+        var start = new XElement(W + "bookmarkStart", new XAttribute(W + "id", "12"), new XAttribute(W + "name", "Value"));
+        var end = new XElement(W + "bookmarkEnd", new XAttribute(W + "id", "12"));
+        if (startInside) control.Element(W + "sdtContent")!.AddFirst(start);
+        else control.Element(W + "sdtContent")!.Add(end);
+        var value = empty ? "" : "3.1";
+        using var session = new DocxSession(DocxSessionSpanRevisionTests.Build(
+            new XElement(W + "r", new XElement(W + "t", startInside ? "A" : "Long prefix ")),
+            startInside ? control : start, startInside ? end : control,
+            new XElement(W + "r", new XElement(W + "t", "Tail"))));
+        var anchor = Assert.Single(session.Project().AnchorIndex.Values, a => a.Anchor.Kind == "p").Anchor.Id;
+        var before = Assert.Single(ReadControls(session.Save()));
+
+        var edit = session.ReplaceText(anchor, (startInside ? "Much longer prefix " : "") + value + "Tail");
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal(value, Assert.Single(session.ListBookmarks()).Text);
+        Assert.True(XNode.DeepEquals(before, Assert.Single(ReadControls(session.Save()))));
+        using var package = WordprocessingDocument.Open(new MemoryStream(session.Save()), false);
+        Assert.Equal(new[] { "bookmarkStart", "bookmarkEnd" }, package.MainDocumentPart!.GetXDocument()
+            .Descendants().Where(e => e.Name == W + "bookmarkStart" || e.Name == W + "bookmarkEnd").Select(e => e.Name.LocalName));
+    }
+
     private static List<XElement> ReadControls(byte[] bytes)
     {
         using var package = WordprocessingDocument.Open(new MemoryStream(bytes), false);
