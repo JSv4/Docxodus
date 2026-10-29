@@ -119,6 +119,8 @@ from .session import (
 from .types import (
     Anchor,
     AnchorInfo,
+    AnchorLocation,
+    AnchorLocationsResult,
     AnchorTarget,
     AnnotationUpdate,
     AuthorityCategory,
@@ -331,6 +333,8 @@ __all__ = [
     # value types
     "Anchor",
     "AnchorInfo",
+    "AnchorLocation",
+    "AnchorLocationsResult",
     "AnchorTarget",
     "BlockMetadata",
     "BlockSlice",

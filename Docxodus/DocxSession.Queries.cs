@@ -129,6 +129,26 @@ public sealed partial class DocxSession
         return result;
     }
 
+    /// <summary>
+    /// Locate all projected anchor keys, or only <paramref name="anchorIds"/>, without saving,
+    /// stamping the live XML, or changing history. Paths address element-child positions rather
+    /// than namespace prefixes, so reading repairs and Strict namespace conversion do not move them.
+    /// After edits, paths describe the returned <see cref="AnchorLocationsResult.Version"/>.
+    /// An empty request returns no locations; null requests all keys, including rendering aliases.
+    /// </summary>
+    public AnchorLocationsResult GetAnchorLocations(IEnumerable<string>? anchorIds = null)
+    {
+        ThrowIfDisposed();
+        var all = WmlToMarkdownConverter.BuildReadOnlyAnchorLocations(_doc!, _settings.ProjectionSettings);
+        var locations = new Dictionary<string, AnchorLocation?>(StringComparer.Ordinal);
+        foreach (var id in anchorIds ?? all.Keys)
+        {
+            if (id is null || locations.ContainsKey(id)) continue;
+            locations[id] = all.TryGetValue(id, out var location) ? location : null;
+        }
+        return new AnchorLocationsResult(_version, locations);
+    }
+
     private static string FlatElementText(XElement element) => VisibleText(element);
 
     private string ExactVisibleText(AnchorTarget target, XElement element)

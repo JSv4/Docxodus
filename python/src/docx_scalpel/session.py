@@ -50,6 +50,7 @@ from .enums import (
 from .types import (
     AuthorityCategory,
     AnchorInfo,
+    AnchorLocationsResult,
     AnchorTarget,
     AnnotationUpdate,
     BlockMetadata,
@@ -1527,6 +1528,13 @@ class DocxSession:
             aid: AnchorInfo._from_wire(info) if info else None
             for aid, info in result.items()
         }
+
+    def get_anchor_locations(self, anchor_ids: Iterable[str] | None = None) -> AnchorLocationsResult:
+        """Locate projected XML elements without saving. None selects all keys, [] selects none."""
+        result = self._call("get_anchor_locations", {
+            "anchorIds": list(anchor_ids) if anchor_ids is not None else None,
+        })
+        return AnchorLocationsResult._from_wire(result)
 
     def get_block_metadata(self, anchor_id: str) -> BlockMetadata | None:
         """Resolve block-level metadata (style id+name, outline level, list

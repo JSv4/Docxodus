@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Read-only anchor locations expose a canonical anchor id, package part URI and element XPath
+  without saving or stamping live XML (#1396). All/subset queries include the document version
+  and work across .NET, WASM, npm/worker, Python/stdio and MCP. Version-zero paths address the
+  caller's original XML; paths should be refreshed after edits.
+
 ### Changed
 
 - **Breaking: visible run atoms share the session's text coordinates (#1409).** `w:br` and

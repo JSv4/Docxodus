@@ -2863,6 +2863,39 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
+    public static string[]? ParseAnchorLocationIds(JsonElement? value)
+    {
+        if (value is null || value.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return null;
+        if (value.Value.ValueKind != JsonValueKind.Array)
+            throw new System.FormatException("anchorIds must be an array of strings or null");
+        var ids = new List<string>();
+        foreach (var id in value.Value.EnumerateArray())
+        {
+            if (id.ValueKind != JsonValueKind.String)
+                throw new System.FormatException("anchorIds entries must be strings");
+            ids.Add(id.GetString()!);
+        }
+        return ids.ToArray();
+    }
+
+    public static string SerializeAnchorLocations(AnchorLocationsResult result)
+    {
+        var sb = new StringBuilder();
+        sb.Append("{\"version\":").Append(result.Version).Append(",\"locations\":{");
+        bool first = true;
+        foreach (var (id, location) in result.Locations)
+        {
+            if (!first) sb.Append(',');
+            first = false;
+            sb.Append(JsonString(id)).Append(':');
+            if (location is null) { sb.Append("null"); continue; }
+            sb.Append("{\"anchorId\":").Append(JsonString(location.AnchorId))
+                .Append(",\"partUri\":").Append(JsonString(location.PartUri))
+                .Append(",\"elementPath\":").Append(JsonString(location.ElementPath)).Append('}');
+        }
+        return sb.Append("}}").ToString();
+    }
+
     public static string SerializeAnchorInfoMap(IReadOnlyDictionary<string, AnchorInfo?> map)
     {
         var sb = new StringBuilder(map.Count * 100 + 2);

@@ -1809,6 +1809,34 @@ class AnchorTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class AnchorLocation:
+    """A namespace-independent element-child XPath in an owning OPC part."""
+
+    anchor_id: str
+    part_uri: str
+    element_path: str
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "AnchorLocation":
+        return cls(anchor_id=d["anchorId"], part_uri=d["partUri"], element_path=d["elementPath"])
+
+
+@dataclass(frozen=True, slots=True)
+class AnchorLocationsResult:
+    """Read-only locations in one session version; unknown requested ids map to None."""
+
+    version: int
+    locations: Mapping[str, AnchorLocation | None]
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "AnchorLocationsResult":
+        return cls(version=d["version"], locations={
+            key: AnchorLocation._from_wire(value) if value is not None else None
+            for key, value in d["locations"].items()
+        })
+
+
+@dataclass(frozen=True, slots=True)
 class AnchorInfo:
     """Minimal anchor metadata returned by ``get_anchor_info`` / ``get_anchor_infos``."""
 

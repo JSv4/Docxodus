@@ -221,6 +221,13 @@ Tests share the Docxodus monorepo's `TestFiles/` corpus so divergence between Py
 
 The `DocxSession` class exposes every op in `Docxodus.Internal.DocxSessionOps` as a snake-case method:
 
+`session.get_anchor_locations()` maps current projected anchors to their package part and a
+namespace-independent element XPath, without saving or changing the session. Pass a list of ids
+for a subset (`[]` returns none); unknown ids map to `None`. The result includes the live version,
+and each location includes its canonical `anchor_id`, `part_uri` and `element_path`. Version-zero
+paths work against the caller's original ZIP XML, including repaired packages. Re-query after edits;
+see the [path contract](../docs/architecture/docx_mutation_api.md#read-only-package-locations--getanchorlocations-1396).
+
 Package verification is available statelessly as `generate_package_manifest(docx_bytes)` and for
 the current logical checkpoint as `session.get_package_manifest()`. Both return frozen typed
 dataclasses for the schema documented in

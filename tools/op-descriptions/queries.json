@@ -119,6 +119,21 @@
       }
     },
     {
+      "op": "getAnchorLocations",
+      "facade": "GetAnchorLocations",
+      "result": "AnchorLocationsResult",
+      "args": [
+        { "name": "anchorIds", "type": "array", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "GetAnchorLocations" },
+        "npm": { "method": "getAnchorLocations" },
+        "python": { "method": "get_anchor_locations" },
+        "stdio": { "op": "get_anchor_locations" },
+        "mcp": { "absent": "reached by format, not action: docxodus_get_content format=anchor_locations, recorded as its route", "route": { "tool": "docxodus_get_content", "selector": { "format": "anchor_locations" } } }
+      }
+    },
+    {
       "op": "getBlockMetadata",
       "facade": "GetBlockMetadata",
       "result": "BlockMetadata?",

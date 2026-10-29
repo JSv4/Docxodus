@@ -131,6 +131,7 @@ Every Python value type is `@dataclass(frozen=True, slots=True)`. Wire keys rema
 | C# | Python | Wire shape |
 |---|---|---|
 | `Anchor` record | `Anchor(id, kind, scope, unid)` | `{id, kind, scope, unid}` |
+| `AnchorLocation` / `AnchorLocationsResult` | `AnchorLocation(anchor_id, part_uri, element_path)`; `AnchorLocationsResult(version, locations)` | `{version, locations: {requestedId: {anchorId, partUri, elementPath} \| null}}`; `get_anchor_locations(None)` selects all, `[]` none; [path contract](docx_mutation_api.md#read-only-package-locations--getanchorlocations-1396) |
 | `CharSpan` | `CharSpan(start, length)` | `{start, length}` |
 | `Position` enum | `Position(Enum)`: `BEFORE="before"`, `AFTER="after"` | `"before"`/`"after"` |
 | `FormatOp` record | `FormatOp(bold=None, italic=None, underline=None, strike=None, code=None, color=None, run_style=None, vert_align=None, font_size_pts=None, font_family=None, highlight=None, caps=None, small_caps=None)` | nullable fields omitted when None; `small_caps` crosses as `smallCaps` |

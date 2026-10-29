@@ -1069,6 +1069,14 @@ public sealed record TemplatePlaceholder
     public IReadOnlyList<PlaceholderKind> AlternativeKinds { get; init; } = Array.Empty<PlaceholderKind>();
 }
 
+/// <summary>A projected anchor's position in its owning XML part. <see cref="AnchorLocation.ElementPath"/> is
+/// a namespace-independent XPath of one-based element-child positions, e.g. <c>/*[1]/*[1]/*[2]</c>.</summary>
+public sealed record AnchorLocation(string AnchorId, string PartUri, string ElementPath);
+
+/// <summary>Read-only locations in one session version. Unknown requested ids map to null.
+/// At version zero paths also address the caller's opening XML, including Strict packages.</summary>
+public sealed record AnchorLocationsResult(long Version, IReadOnlyDictionary<string, AnchorLocation?> Locations);
+
 public sealed record AnchorInfo(string Id, string Kind, string Scope, string TextPreview)
 {
     /// <summary>
