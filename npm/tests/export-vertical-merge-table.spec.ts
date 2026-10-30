@@ -80,9 +80,18 @@ for (const { name, options, pages } of cases) {
   });
 }
 
-test('a merge group taller than a page still fails the clipping guard', async ({ browser }) => {
+test('a merge group taller than a page continues without losing its source text', async ({ browser }) => {
   test.setTimeout(120_000);
-  await expect(renderDocxArtifacts(generateVerticalMergeDocx({ mergeSpan: 18 }), {
+  const result = await renderDocxArtifacts(generateVerticalMergeDocx({ mergeSpan: 18 }), {
     browser, outputs: ['pdf'], reviewProfile: 'markup', commentProfile: 'margin', timeoutMs: 120_000,
-  })).rejects.toMatchObject({ code: 'pagination_failure', phase: 'running_story_placement' });
+  });
+  const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
+  try {
+    const pdf = await task.promise, text: string[] = [];
+    expect(pdf.numPages).toBeGreaterThan(1);
+    for (let index = 1; index <= pdf.numPages; index++)
+      text.push((await (await pdf.getPage(index)).getTextContent()).items.filter(item => 'str' in item).map(item => item.str).join(' '));
+    expect(text.join(' ').match(/Right\d+/g)).toEqual(Array.from({ length: 18 }, (_, index) => `Right${String(index + 1).padStart(2, '0')}`));
+    expect(text.join(' ').match(/Left\d+/g)).toEqual(['Left01']);
+  } finally { await task.destroy(); }
 });

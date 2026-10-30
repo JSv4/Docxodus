@@ -2480,6 +2480,11 @@ export class PaginationEngine {
     }
 
     if (this.fragmentParagraphs) {
+      const recovered = this.recoverOversizedMergedGroups(wrapper, table, body, rows,
+        dims, sectionIndex, maximumFragmentHeight);
+      if (recovered) return this.trySplitSimpleOversizedTable({ ...block, element: recovered },
+        dims, sectionIndex, repeatHeaderRows);
+
       // Body cells and note cells have the same block structure. Continue their paragraphs and
       // nested tables through the shared fragmenter before treating a whole cell as indivisible.
       // A carried table is detached, so restore its styled measurement context for the layout gate.
@@ -2637,6 +2642,67 @@ export class PaginationEngine {
     }
 
     return fragments;
+  }
+
+  /**
+   * A vertical merge taller than a fresh page has no legal whole-group boundary. Materialize
+   * its occupied grid slots as rows: source content stays once at its starting row and empty
+   * presentation cells carry the remaining span. The ordinary row/cell fragmenter then owns
+   * continuation. Fitting merges, repeated-header groups and authored exact-height rows stay intact.
+   */
+  private recoverOversizedMergedGroups(
+    wrapper: HTMLElement,
+    table: HTMLTableElement,
+    body: HTMLTableSectionElement,
+    rows: HTMLTableRowElement[],
+    dims: PageDimensions,
+    sectionIndex: number,
+    maximumHeight: number,
+  ): HTMLElement | null {
+    let recovered: HTMLElement | null = null;
+    let start = 0;
+    for (const end of this.tableRowGroupEnds(rows)) {
+      this.checkpoint();
+      const group = rows.slice(start, end);
+      const first = start;
+      start = end;
+      if (group.length < 2 || group.some(row => row.dataset.docxHeaderRow === "true"
+        || row.dataset.docxRowHeightRule === "exact" || row.querySelector(EXACT_ROW_CELL))) continue;
+      const sample = this.createSimpleTableFragment(wrapper, table, body, group, true);
+      if (this.measureElement(sample, dims, sectionIndex).heightPt <= maximumHeight) continue;
+      recovered ??= wrapper.cloneNode(true) as HTMLElement;
+      const target = this.blockTable(recovered)!.tBodies[0];
+      const slots: Array<{ cell: HTMLTableCellElement; column: number; from: number; to: number }> = [];
+      for (let index = 0; index < group.length; index++) {
+        this.checkpoint();
+        const row = group[index];
+        let column = 0;
+        for (const cell of Array.from(row.cells)) {
+          let occupying;
+          while ((occupying = slots.find(slot => slot.from < index && slot.to > index
+            && column >= slot.column && column < slot.column + slot.cell.colSpan))) {
+            column = occupying.column + occupying.cell.colSpan;
+          }
+          slots.push({ cell, column, from: index,
+            to: cell.rowSpan === 0 ? group.length : Math.min(group.length, index + cell.rowSpan) });
+          column += cell.colSpan;
+        }
+        const clone = row.cloneNode(false) as HTMLTableRowElement;
+        for (const slot of slots.filter(slot => slot.from <= index && slot.to > index)
+          .sort((a, b) => a.column - b.column)) {
+          const cell = slot.cell.cloneNode(slot.from === index) as HTMLTableCellElement;
+          cell.removeAttribute("rowspan");
+          if (slot.from !== index) {
+            this.makePresentationCopyInert(cell, false);
+            cell.style.setProperty("border-top", "0", "important");
+          }
+          if (slot.to > index + 1) cell.style.setProperty("border-bottom", "0", "important");
+          clone.appendChild(cell);
+        }
+        target.rows[first + index].replaceWith(clone);
+      }
+    }
+    return recovered;
   }
 
   /**

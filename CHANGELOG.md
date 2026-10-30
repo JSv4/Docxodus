@@ -84,6 +84,8 @@ All notable changes to this project will be documented in this file.
 
 - Header and footer tables can extend into the page side margins without losing cells or failing
   PDF export; running stories retain vertical clipping and the paper edge remains the horizontal boundary.
+- Recover read-only tables whose vertical merge groups exceed a fresh page by continuing their row grid while retaining each source cell’s content once. Fitting merges and authored exact-height/header groups remain unchanged.
+
 - Paginate tables carrying leading bookmark targets while preserving each target on the first table fragment.
 
 - Continue long read-only paragraphs containing empty inline tab advances, preserving their widths and leaders across pages.
