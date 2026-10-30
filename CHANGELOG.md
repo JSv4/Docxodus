@@ -96,7 +96,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Keep paginated text from overlapping in Firefox by measuring natural line heights below its rendered-font size limit (#1424).
-- **Textbox geometry survives comparison rejection** (#1425): include the outer textbox carrier's geometry and relationships in comparison identity while keeping textbox bodies independently diffable. Reject All restores the original shape dimensions; unchanged carriers retain native paragraph split/merge behavior.
+- **Textbox geometry survives comparison rejection** (#1425, #1428): include the outer textbox carrier's geometry and relationships in comparison identity while keeping textbox bodies independently diffable. Reject All restores the original shape dimensions and bookmark gaps between regrouped textboxes; unchanged carriers retain native paragraph split/merge behavior.
 
 - Markdown projection includes textbox and group-shape text once from the supported compatibility
   branch, with anchored blocks after their host. Tables include rows and cells wrapped in content

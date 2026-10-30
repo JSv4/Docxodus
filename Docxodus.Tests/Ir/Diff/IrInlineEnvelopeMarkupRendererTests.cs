@@ -115,16 +115,21 @@ public class IrInlineEnvelopeMarkupRendererTests
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public void PureTextboxCarrier_SafeParagraphSplitAndMergeRemainNative(bool merge, bool geometry)
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void PureTextboxCarrier_SafeParagraphSplitAndMergeRemainNative(bool merge, bool geometry, bool marker)
     {
         const string box = "<w:r><w:pict><v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\" "
             + "id=\"stable\" style=\"width:60pt;height:40pt\"><v:textbox><w:txbxContent>"
             + "<w:p><w:r><w:t>Stable box.</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>";
-        const string first = "<w:r><w:t xml:space=\"preserve\">Alder birch cedar dogwood. </w:t></w:r>";
+        string first = "<w:r><w:t xml:space=\"preserve\">Alder birch cedar dogwood. </w:t></w:r>"
+            + (marker ? "<w:bookmarkStart w:id=\"8\" w:name=\"outside\"/><w:bookmarkEnd w:id=\"8\"/>" : "");
         const string last = "<w:r><w:t>Elm fir gingko hemlock.</w:t></w:r>";
         var joined = Doc("<w:p>" + first + box + last + "</w:p>" + Plain("Anchor remains stable across both views."));
         var split = Doc("<w:p>" + first + (geometry ? box.Replace("width:60pt", "width:100pt") : box) + "</w:p><w:p>" + last + "</w:p>" + Plain("Anchor remains stable across both views."));
@@ -152,9 +157,80 @@ public class IrInlineEnvelopeMarkupRendererTests
             Assert.Equal(MainXml(expected).Root!.Value, actual.Root!.Value);
             Assert.Single(actual.Descendants(W + "pict"));
             AssertTextboxGeometry(expected, resolved);
+            Assert.Equal(TextboxMarkerOrder(expected), TextboxMarkerOrder(resolved));
             Assert.Equal(MainXml(expected).Root!.Element(W + "body")!.Elements(W + "p").Count(),
                 actual.Root!.Element(W + "body")!.Elements(W + "p").Count());
         }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public void TextboxCarrier_RegroupedMarkerGapRestoresSourceOrder(bool regroup, bool reverse, bool facade)
+    {
+        const string start = "<w:bookmarkStart w:id=\"5\" w:name=\"point\"/>";
+        const string end = "<w:bookmarkEnd w:id=\"5\"/>";
+        string Shape(string text) => "<v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\" id=\"" + text
+            + "\" style=\"width:60pt;height:40pt\"><v:textbox><w:txbxContent>" + Plain(text)
+            + "</w:txbxContent></v:textbox></v:shape>";
+        string Pict(string shapes) => "<w:r><w:pict>" + shapes + "</w:pict></w:r>";
+        var separated = Doc("<w:p>" + Pict(Shape("first")) + start + end + Pict(Shape("second"))
+            + "<w:r><w:t xml:space=\"preserve\"> old tail</w:t></w:r></w:p>");
+        var changed = Doc("<w:p>" + (regroup ? Pict(Shape("first") + Shape("second"))
+            : Pict(Shape("first")) + Pict(Shape("second")))
+            + "<w:r><w:t xml:space=\"preserve\"> new tail</w:t></w:r></w:p>");
+        var original = reverse ? changed : separated;
+        var revised = reverse ? separated : changed;
+        AssertSchemaValid(original);
+        AssertSchemaValid(revised);
+        foreach (var document in new[] { original, revised })
+        {
+            var retained = Assert.IsType<IrParagraph>(Assert.Single(IrReader.Read(document,
+                new IrReaderOptions { RetainSources = true }).Body.Blocks));
+            var elided = Assert.IsType<IrParagraph>(Assert.Single(IrReader.Read(document,
+                new IrReaderOptions { RetainSources = false }).Body.Blocks));
+            Assert.Equal(retained.Source.SharedCarriers, elided.Source.SharedCarriers);
+            Assert.Equal(retained.Inlines.OfType<IrTextbox>().Select(box => box.CarrierDigest),
+                elided.Inlines.OfType<IrTextbox>().Select(box => box.CarrierDigest));
+        }
+        foreach (bool sources in new[] { false, true })
+        {
+            var options = new IrReaderOptions { RetainSources = sources };
+            var script = IrEditScriptBuilder.Build(IrReader.Read(original, options), IrReader.Read(revised, options), new IrDiffSettings());
+            Assert.Equal(regroup, Assert.Single(script.Operations).RequiresWholeParagraphReplace);
+        }
+        var redline = facade ? DocxCompare.Compare(original, revised) : DocxDiff.Compare(original, revised);
+        AssertSchemaValid(redline);
+        foreach (var (resolved, expected) in new[]
+        {
+            (RevisionProcessor.AcceptRevisions(redline), revised),
+            (RevisionProcessor.RejectRevisions(redline), original),
+        })
+        {
+            AssertSchemaValid(resolved);
+            AssertNoRevisionMarkup(resolved);
+            Assert.Equal(TextboxMarkerOrder(expected), TextboxMarkerOrder(resolved));
+            Assert.Equal(MainXml(expected).Root!.Value, MainXml(resolved).Root!.Value);
+            Assert.Equal(MainXml(expected).Descendants(W + "pict").Count(), MainXml(resolved).Descendants(W + "pict").Count());
+        }
+    }
+
+    private static string TextboxMarkerOrder(WmlDocument document)
+    {
+        var xml = MainXml(document);
+        var names = xml.Descendants(W + "bookmarkStart").ToDictionary(e => (string)e.Attribute(W + "id")!,
+            e => (string?)e.Attribute(W + "name"));
+        return string.Concat(xml.Descendants().Where(e => !e.Ancestors(W + "txbxContent").Any())
+            .Select(e => e.Name == W + "t" ? e.Value : e.Name == W + "p" ? "{p}"
+                : e.Name == W + "txbxContent" ? "{textbox:" + e.Value + "}"
+                : e.Name == W + "bookmarkStart" ? "{start:" + (string?)e.Attribute(W + "name") + "}"
+                : e.Name == W + "bookmarkEnd" ? "{end:" + names.GetValueOrDefault((string)e.Attribute(W + "id")!, "orphan") + "}" : ""));
     }
 
     private static string TextboxCarrier(int width, string body, string kind = "vml")
