@@ -6,10 +6,10 @@ import { oversizedInlineImageDocx, fittingTilePng } from './docx-page-fitting-fi
 test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}) } });
 
-for (const height of [640, 870]) {
-test(`an inline image ${height}pt tall preserves its bitmap and fits proportionally when needed`, async ({ browser, page }) => {
+for (const [height, count] of [[640, 1], [870, 1], [640, 2]]) {
+test(`a paragraph with ${count} pictures ${height}pt tall preserves its bitmap and fits proportionally when needed`, async ({ browser, page }) => {
   test.setTimeout(120_000);
-  const result = await renderDocxArtifacts(oversizedInlineImageDocx(height), { browser, outputs: ['html', 'pdf'],
+  const result = await renderDocxArtifacts(oversizedInlineImageDocx(height, count), { browser, outputs: ['html', 'pdf'],
     reviewProfile: 'markup', markupPresentation: 'word', commentProfile: 'margin',
     commentColumnPlacement: 'balloons', timeoutMs: 120_000 });
   const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
@@ -22,20 +22,23 @@ test(`an inline image ${height}pt tall preserves its bitmap and fits proportiona
       text += content.items.filter(item => 'str' in item).map(item => item.str).join(' ');
       images += (await pdfPage.getOperatorList()).fnArray.filter(op => op === OPS.paintImageXObject || op === OPS.paintInlineImageXObject).length;
     }
-    expect(images).toBe(1);
+    expect(images).toBe(count);
     expect(text.match(/Before the tall tile\./g)).toHaveLength(1);
     expect(text.match(/After the tall tile\./g)).toHaveLength(1);
   } finally { await task.destroy(); }
   await page.setContent(result.html!);
-  const image = await page.locator('.page-content img').evaluate(image => {
+  const images = await page.locator('.page-content img').evaluateAll(images => images.map(image => {
     const rect = image.getBoundingClientRect(), body = image.closest('.page-content')!.getBoundingClientRect();
     return { source: (image as HTMLImageElement).src, width: rect.width, height: rect.height,
       fits: rect.top >= body.top - 1 && rect.bottom <= body.bottom + 1 && rect.left >= body.left - 1 && rect.right <= body.right + 1 };
-  });
+  }));
+  expect(images).toHaveLength(count);
+  for (const image of images) {
   expect(image.source).toBe(`data:image/png;base64,${fittingTilePng().toString('base64')}`);
   expect(image.fits).toBe(true);
   expect(image.height * 0.75).toBeLessThan(648);
   expect(image.width / image.height).toBeCloseTo(320 / height, 3);
   if (height === 640) expect(image.height * 0.75).toBeCloseTo(height, 1);
+  }
 });
 }
