@@ -630,3 +630,11 @@ interval and a description of its name, covered text and endpoints in `ResultTex
 conflicts do not create token revisions. Body, cell and marker-only same-shell wrapper placement use
 the same choice; unrelated text edits keep their own revisions. Selected bookmarks cloned from an edited
 paragraph receive their own insertion revision, so rejection cannot leave a bare marker behind.
+
+
+Composed paragraphs retain each contributing reviewer's pairwise token alignment and author with its
+source anchor. Inline marker changes on retained content are mapped into base rendering coordinates
+(which count tabs and equations), then merged with other endpoints at the same gap using the shared
+source-boundary merger. Gaps inside retained words split the source slice; other gaps follow every
+preceding insertion and deletion, including a replaced final word. Copies in other reviewer sources
+are withheld, so a removed range cannot reappear bare and an added range is emitted once (#1426).
