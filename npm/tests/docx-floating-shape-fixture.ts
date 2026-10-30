@@ -20,9 +20,10 @@ export interface FloatingShapeOptions {
   heading?: boolean;
   outline?: boolean;
   story?: 'header' | 'footer';
+  height?: number;
   before?: string[];
   after?: string;
-  layers?: { order: number; fill: string; behind?: boolean }[];
+  layers?: { order: number; fill: string; behind?: boolean; height?: number }[];
 }
 const W='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const A='http://schemas.openxmlformats.org/drawingml/2006/main';
@@ -44,13 +45,13 @@ export function vmlShapeDocx(withExtent = true): Uint8Array {
 }
 
 export function floatingShapeDocx(options: FloatingShapeOptions = {}): Uint8Array {
-  const source = (id:number, order:number, fill:string, behind:boolean) => {
-    const shape='<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/></a:xfrm>'
+  const source = (id:number, order:number, fill:string, behind:boolean, height = emu(options.height ?? 72)) => {
+    const shape=`<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1828800" cy="${height}"/></a:xfrm>`
       + `<a:prstGeom prst="${options.geometry??'rect'}"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="${fill}"/></a:solidFill>`
       + (options.outline?'<a:ln w="19050"><a:solidFill><a:srgbClr val="FF9900"/></a:solidFill></a:ln>':'')
       + '</wps:spPr><wps:bodyPr/></wps:wsp>';
     const content = options.grouped ? '<wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/>'
-      + '<a:ext cx="1828800" cy="914400"/><a:chOff x="0" y="0"/><a:chExt cx="1828800" cy="914400"/></a:xfrm></wpg:grpSpPr>'
+      + `<a:ext cx="1828800" cy="${height}"/><a:chOff x="0" y="0"/><a:chExt cx="1828800" cy="${height}"/></a:xfrm></wpg:grpSpPr>`
       + shape+'</wpg:wgp>' : shape;
     const kind=options.wrap??'topAndBottom';
     const polygon='<wp:wrapPolygon edited="0"><wp:start x="0" y="0"/><wp:lineTo x="21600" y="10800"/>'
@@ -65,11 +66,11 @@ export function floatingShapeDocx(options: FloatingShapeOptions = {}): Uint8Arra
       + '<wp:simplePos x="0" y="0"/>'
       + `<wp:positionH relativeFrom="${options.horizontal??'column'}"><wp:posOffset>${emu(options.x??0)}</wp:posOffset></wp:positionH>`
       + `<wp:positionV relativeFrom="${options.vertical??'paragraph'}"><wp:posOffset>${emu(options.y??0)}</wp:posOffset></wp:positionV>`
-      + `<wp:extent cx="1828800" cy="914400"/>${wrap}<wp:docPr id="${id}" name="Harbor panel ${id}"/>`
+      + `<wp:extent cx="1828800" cy="${height}"/>${wrap}<wp:docPr id="${id}" name="Harbor panel ${id}"/>`
       + `<a:graphic><a:graphicData uri="${options.grouped?WPG:WPS}">${content}</a:graphicData></a:graphic>${relative}</wp:anchor></w:drawing></w:r>`;
   };
   const layers=options.layers??[{order:options.order??10,fill:'19647E',behind:options.behind??false}];
-  const drawings=layers.map((l,i)=>source(7+i,l.order,l.fill,l.behind??false)).join('');
+  const drawings=layers.map((l,i)=>source(7+i,l.order,l.fill,l.behind??false,l.height === undefined ? undefined : emu(l.height))).join('');
   const headingStyle='<w:style w:type="paragraph" w:styleId="DrawingHeading"><w:name w:val="Drawing heading"/><w:pPr><w:outlineLvl w:val="0"/></w:pPr></w:style>';
   const fixtureParts=options.heading?parts.map(p=>p.name==='styles.xml'?{...p,body:p.body.replace('</w:styles>',headingStyle+'</w:styles>')}:p):[...parts];
   if(options.story) fixtureParts.push({id:'rDrawingStory',type:R+'/'+options.story,name:options.story+'1.xml',

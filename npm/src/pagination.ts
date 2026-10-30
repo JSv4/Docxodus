@@ -6046,6 +6046,7 @@ export class PaginationEngine {
     const context = {staticLeft: 0, staticTop: 0, lineHeight: 0, paragraphLeft: 0,
       paragraphTop: 0, paragraphWidth: dims.contentWidth, paragraphHeight: 0};
     const bottoms = new Map<HTMLElement, number>();
+    const relaxed = new Set<HTMLElement>();
     for (const anchor of Array.from(section.querySelectorAll<HTMLElement>('[data-docx-shape-anchor="true"]'))) {
       // Page/margin percentages are independent of the eventual page number. Page-dependent
       // margin variants retain unsupported metadata from conversion until they can be laid out.
@@ -6058,12 +6059,20 @@ export class PaginationEngine {
       const paragraph = anchor.closest<HTMLElement>('p,h1,h2,h3,h4,h5,h6');
       if (!paragraph) continue;
       const offset = anchor.dataset.docxAnchorVRelative === 'paragraph' ? this.anchorNumber(anchor, 'v-offset') ?? 0 : 0;
-      bottoms.set(paragraph, Math.max(bottoms.get(paragraph) ?? 0,
-        height + offset + (this.anchorNumber(anchor, 'wrap-bottom') ?? 0)));
+      const bottom = height + offset + (this.anchorNumber(anchor, 'wrap-bottom') ?? 0);
+      // A top/bottom exclusion as tall as the entire body leaves nowhere for its own
+      // anchor line on any page. Retain the drawing and relax only that impossible
+      // clearance; fixed text boxes keep their separate authored clipping contract.
+      const impossible = dims.contentHeight > 0 && bottom >= dims.contentHeight
+        && !paragraph.closest('[data-docx-textbox]');
+      if (impossible) relaxed.add(paragraph);
+      bottoms.set(paragraph, Math.max(bottoms.get(paragraph) ?? 0, impossible ? 0 : bottom));
     }
     for (const [paragraph, height] of bottoms) {
       const spacer = Array.from(paragraph.children).find(e => e.hasAttribute('data-docx-shape-clearance')) as HTMLElement | undefined;
-      if (spacer) spacer.style.height = `${Math.max(0, height)}pt`;
+      if (!spacer) continue;
+      spacer.toggleAttribute('data-docx-relaxed-clearance', relaxed.has(paragraph));
+      spacer.style.height = `${Math.max(0, height)}pt`;
     }
   }
 
