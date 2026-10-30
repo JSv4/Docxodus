@@ -47,7 +47,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Retain linked DrawingML text-box continuation frames and story membership, excluding linked stories from fixed-box clipping exemptions.
+- Flow linked DrawingML text-box stories through their declared continuation frames, preserving text, inline images, typography and source fragments across different frame widths or pages. Exhausted or malformed chains report an error instead of silently clipping their remaining text.
 - Preserve oversized floating drawings and report relaxed top/bottom clearance when no page can contain their exclusion and anchor text.
 - Position supported floating VML shape placeholders through the existing anchor adapter instead of consuming body space.
 

@@ -9,16 +9,18 @@ import { gzipSync } from 'node:zlib';
 // in the same change that needs it. export-browser.bundle.js is absent on purpose: it runs inside
 // @docxodus/export's pinned Chromium, where download size does not matter.
 const budgetsKiB = {
+  // Linked story flow adds 0.85–0.91 KiB: embed/iife/editor/pagination move from
+  // 139.196/139.234/118.567/36.038 to 140.103/140.134/119.419/36.938 KiB.
   // Whole inline-image atoms add ~0.25 KiB to the shared paginator: embed/iife/editor/
   // pagination measured 136.950/136.991/116.339/33.813 KiB before and
   // 137.195/137.229/116.591/34.065 KiB after. Raise only the exhausted budgets by 1 KiB.
   // Bookmark-aware table wrappers add 0.044 KiB (137.986 -> 138.030); restore 1 KiB headroom.
   // Combined continuation and frame fixes measure 139.140/139.183/118.505 KiB.
-  'embed.bundle.js': 140,
+  'embed.bundle.js': 141,
   // Empty tab continuation adds 0.037 KiB here (137.979 -> 138.016); restore 1 KiB headroom.
-  'embed.iife.js': 140,
+  'embed.iife.js': 141,
   // Including floated-picture geometry adds 0.158 KiB here (116.941 -> 117.099).
-  'editor.bundle.js': 119,
+  'editor.bundle.js': 120,
   // Oversized merged-grid recovery adds 0.389 KiB (34.870 -> 35.259); retain a tight 36 KiB gate.
   // Shared presentation preservation measures 36.036 KiB gzip in the combined renderer.
   'pagination.bundle.js': 37,
