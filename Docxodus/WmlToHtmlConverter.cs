@@ -6064,6 +6064,7 @@ namespace Docxodus
 
             ApplyParagraphRevisionMarkup(settings, element, paragraph);
             var joinedElement = element;
+            var hasOnlyHiddenParagraphs = IsUnpaintedHiddenParagraph(element);
             while (HasHiddenParagraphMark(joinedElement))
             {
                 var nextElement = joinedElement.ElementsAfterSelf().FirstOrDefault(e => !IsBlockBoundaryMarker(e));
@@ -6074,12 +6075,23 @@ namespace Docxodus
                 isBidi = IsBidi(joinedElement);
                 var span = (XElement)ConvertParagraph(wordDoc, settings, joinedElement, elementName,
                     suppressTrailingWhiteSpace, currentMarginLeft, isBidi);
+                // A hidden paragraph mark joins this source to its neighbour without a line of
+                // its own. If its runs are hidden too, it has no painted fragment to address.
+                var joinedIsHidden = IsUnpaintedHiddenParagraph(joinedElement);
+                hasOnlyHiddenParagraphs &= joinedIsHidden;
+                if (joinedIsHidden)
+                    span.SetAttributeValue("data-page-map-exclude", "true");
                 var v = span.Value;
                 if (v.Length > 0 && (char.IsWhiteSpace(v[0]) || char.IsWhiteSpace(v[v.Length - 1])) && span.Attribute(XNamespace.Xml + "space") == null)
                     span.Add(new XAttribute(XNamespace.Xml + "space", "preserve"));
                 ApplyParagraphRevisionMarkup(settings, joinedElement, span);
                 paragraph.Add(span);
             }
+
+            // A standalone hidden mark can leave only a hidden placeholder, including after a
+            // table. Do not exclude a hidden first paragraph that also hosts joined visible text.
+            if (hasOnlyHiddenParagraphs)
+                paragraph.SetAttributeValue("data-page-map-exclude", "true");
 
             if (settings.RenderTrackedChanges && settings.RevisionPresentation == RevisionPresentation.Word)
                 MarkChangedLine(settings, paragraph);
@@ -6474,6 +6486,10 @@ namespace Docxodus
                 SourceAnchorIdentityAttribute(settings, element),
                 CreateColGroup(element),
                 element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
+            // Some producers retain a table after removing its last row. Keep its source identity,
+            // but an empty table has no painted row and cannot supply a PageMap rectangle.
+            if (!table.Descendants(Xhtml.tr).Any())
+                table.SetAttributeValue("data-page-map-exclude", "true");
             table.AddAnnotation(style);
 
             // Tracked table-property / grid revisions (issue #539).
@@ -7021,6 +7037,16 @@ namespace Docxodus
                 element.Elements(W.pPr).Elements(W.rPr).Any(e =>
                     GetBoolProp(e, W.specVanish) || GetBoolProp(e, W.vanish));
         }
+
+        private static bool IsUnpaintedHiddenParagraph(XElement element) =>
+            (bool?)element.Attribute(PtOpenXml.EmptyParagraph) == true &&
+            element.Elements(W.pPr).Elements(W.rPr).Any(properties =>
+                GetBoolProp(properties, W.vanish) && !GetBoolProp(properties, W.specVanish)) &&
+            element.Descendants(W.r).All(run =>
+                (run.Element(W.rPr) is XElement properties &&
+                    GetBoolProp(properties, W.vanish) && !GetBoolProp(properties, W.specVanish)) ||
+                run.Elements().All(child => child.Name == W.rPr ||
+                    (child.Name == W.t && child.Value.Length == 0)));
 
         // Range markers carry no block content and may surround a paragraph boundary.
         private static bool IsBlockBoundaryMarker(XElement element) =>
