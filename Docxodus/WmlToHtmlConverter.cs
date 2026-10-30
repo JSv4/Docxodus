@@ -7718,10 +7718,11 @@ namespace Docxodus
             }
         }
 
-        /// <summary>An image, an inline SVG, or an absolutely positioned element (a floating drawing).</summary>
+        /// <summary>An image, inline SVG/text box, or an absolutely positioned element (a floating drawing).</summary>
         private static bool PinsOrPlacesMedia(XElement element)
         {
-            if (element.Name == Xhtml.img || element.Name.LocalName == "svg")
+            if (element.Name == Xhtml.img || element.Name.LocalName == "svg" ||
+                element.Attribute("data-docx-textbox") != null)
                 return true;
             var style = element.Annotation<Dictionary<string, string>>();
             return style != null && style.TryGetValue("position", out var position) &&
@@ -11790,13 +11791,16 @@ namespace Docxodus
             if (textBoxContent == null)
                 return null;
 
-            var wrapper = new XElement(Xhtml.span);
+            var wrapper = new XElement(Xhtml.span, new XAttribute("data-docx-textbox", "true"));
             var style = new Dictionary<string, string>
             {
                 { "display", "inline-block" },
                 { "box-sizing", "border-box" },
                 { "vertical-align", "top" },
                 { "overflow", "hidden" },
+                // A text box is a separate text story. Its paragraphs must not inherit the
+                // containing run's computed line height; explicit inner spacing still wins.
+                { "line-height", "normal" },
             };
 
             var drawingContainer = element.Elements()

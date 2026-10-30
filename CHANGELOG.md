@@ -135,6 +135,9 @@ All notable changes to this project will be documented in this file.
 - DrawingML and VML text boxes now apply contextual paragraph spacing consistently with body
   text, including implicit default styles, keeping later lines inside their authored fixed bounds.
 
+- Text boxes keep their own line heights and inline placement when the containing paragraph
+  uses automatic line spacing, preserving text within fixed DrawingML and VML boxes.
+
 - Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
   distinct rendering positions, so an equation edit after a tab is tracked and rejecting it restores
   the original (#1421). Source positions follow the reader's retained text and atoms through fields,
