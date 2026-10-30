@@ -32,6 +32,9 @@ const EXECUTABLE_BYTES_MAX = 1024 * 1024 * 1024;
 const FILE_READ_CHUNK_BYTES = 64 * 1024;
 const PDF_STREAM_CHUNK_BYTES = 64 * 1024;
 const CLEANUP_TIMEOUT_MS = 10_000;
+// Pinned Playwright waits 30 seconds before force-killing its owned browser process group.
+// Let that complete, with the ordinary cleanup allowance for process exit and file removal.
+const OWNED_BROWSER_CLEANUP_TIMEOUT_MS = 30_000 + CLEANUP_TIMEOUT_MS;
 const DENIED_REQUEST_DETAILS_MAX = 64;
 const LAUNCH_FLAGS = Object.freeze([
   "--disable-background-networking",
@@ -493,15 +496,19 @@ async function launchBrowser(
   }
 }
 
-async function cleanupStep(label: string, operation: () => Promise<void>): Promise<unknown | undefined> {
+async function cleanupStep(
+  label: string,
+  operation: () => Promise<void>,
+  timeoutMs = CLEANUP_TIMEOUT_MS,
+): Promise<unknown | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
       operation(),
       new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`${label} exceeded the ${CLEANUP_TIMEOUT_MS}ms cleanup limit.`)),
-          CLEANUP_TIMEOUT_MS,
+          () => reject(new Error(`${label} exceeded the ${timeoutMs}ms cleanup limit.`)),
+          timeoutMs,
         );
       }),
     ]);
@@ -540,7 +547,8 @@ export async function openOwnedExportBrowserSession(
       closed = true;
       HOST_OWNED_BROWSERS.delete(launch.browser);
       const failures: unknown[] = [];
-      const browserFailure = await cleanupStep("Owned Chromium shutdown", () => launch.browser.close());
+      const browserFailure = await cleanupStep("Owned Chromium shutdown", () => launch.browser.close(),
+        OWNED_BROWSER_CLEANUP_TIMEOUT_MS);
       if (browserFailure !== undefined) failures.push(browserFailure);
       const directoryFailure = await cleanupStep("Chromium temporary-directory removal", () =>
         removeOwnedTemporaryDirectory(launch.temporaryDirectory!, launch.temporaryIdentity!));
@@ -1276,7 +1284,8 @@ export async function renderInBrowser(
       if (failure !== undefined) cleanupFailures.push(failure);
     }
     if (launch?.owned) {
-      const failure = await cleanupStep("Owned Chromium shutdown", () => launch!.browser.close());
+      const failure = await cleanupStep("Owned Chromium shutdown", () => launch!.browser.close(),
+        OWNED_BROWSER_CLEANUP_TIMEOUT_MS);
       if (failure !== undefined) cleanupFailures.push(failure);
     }
     if (launch?.temporaryDirectory && launch.temporaryIdentity) {
