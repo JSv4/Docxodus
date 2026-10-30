@@ -47,6 +47,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Read-only pagination continues long paragraphs and nested tables inside ordinary body table
+  cells across pages, reusing the measured note-table fragmenter and preserving each cell
+  content once instead of leaving the whole cell clipped below the page.
+
 - Header and footer measurement now uses the same column layout as the printed story, so spacing
   between paragraphs is fully reserved. Widely spaced running-story paragraphs no longer disappear
   behind the story's clipping edge or fail PDF export with a missing PageMap fragment.
