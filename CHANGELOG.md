@@ -126,6 +126,9 @@ All notable changes to this project will be documented in this file.
   keeps their original geometry and stacking while clipping print overflow to the paper, including
   partially visible drawings and repeated header/footer objects.
 
+- DrawingML and VML text boxes now apply contextual paragraph spacing consistently with body
+  text, including implicit default styles, keeping later lines inside their authored fixed bounds.
+
 - Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
   distinct rendering positions, so an equation edit after a tab is tracked and rejecting it restores
   the original (#1421). Source positions follow the reader's retained text and atoms through fields,
