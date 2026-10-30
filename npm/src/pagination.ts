@@ -4523,6 +4523,10 @@ export class PaginationEngine {
     measureContainer.style.visibility = "hidden";
     measureContainer.style.width = `${contentWidth}pt`;
     measureContainer.style.left = "-9999px";
+    // Final running-story bands are flex columns: adjoining paragraph margins add rather than
+    // collapse. Measure in that same formatting context or later paragraphs can be clipped away.
+    measureContainer.style.display = "flex";
+    measureContainer.style.flexDirection = "column";
 
     // Clone and add the header/footer content
     for (const child of Array.from(source.childNodes)) {
