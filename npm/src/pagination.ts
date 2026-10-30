@@ -3123,8 +3123,8 @@ export class PaginationEngine {
         && descendant.children.length === 0;
       // Converter tab advances are empty, heightless boxes. Range endpoints never enter
       // them, so their width and leader stay whole with the adjoining source run.
-      const tab = descendant.hasAttribute("data-docx-tab") && descendant.children.length === 0
-        && !this.hasVisibleText(descendant.textContent ?? "") && style.height === "0px";
+      const tab = descendant.hasAttribute("data-docx-tab") && descendant.childNodes.length === 0
+        && style.height === "0px";
       if (
         (style.display !== "inline" && !(wordLine && style.display === "block")
           && !(tab && style.display === "inline-block")) ||
