@@ -146,6 +146,9 @@ All notable changes to this project will be documented in this file.
 - Standalone export tolerates malformed unused XML or package-level custom properties and
   missing preview thumbnails under the default warning policy. Diagnostics and source bytes are preserved;
   strict exports and defects in required document parts still fail preflight.
+- Text boxes keep their own line heights and inline placement when the containing paragraph
+  uses automatic line spacing, preserving text within fixed DrawingML and VML boxes.
+
 - Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
   distinct rendering positions, so an equation edit after a tab is tracked and rejecting it restores
   the original (#1421). Source positions follow the reader's retained text and atoms through fields,
