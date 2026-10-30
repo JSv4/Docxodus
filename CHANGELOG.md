@@ -47,6 +47,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Rowless tables and paragraphs whose text and paragraph marks are hidden retain their source
+  identities without requiring painted PageMap fragments, including joined and section-ending paragraphs.
+
 - Read-only pagination can continue a paragraph containing inline images across pages. Each
   image remains whole at its original dimensions, including baseline-adjusted image runs,
   while text, image order and fragment identities are preserved.
