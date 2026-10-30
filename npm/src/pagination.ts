@@ -1291,7 +1291,7 @@ export class PaginationEngine {
       throw new Error("cannot publish an available PageMap without canonical source inventory");
     }
     const measuredAnchorIds = new Set<string>();
-    const clippedAnchorIds = new Set<string>();
+    const unpaintedAnchorIds = new Set<string>();
     const emittedFragmentCounts = new Map<string, number>();
     for (const page of this.lastPages) {
       this.checkpoint();
@@ -1326,8 +1326,11 @@ export class PaginationEngine {
         if (rect.width <= 0 || rect.height <= 0 || right <= left || bottom <= top) {
           // A continued note/story clone can contain children clipped off this page which become
           // measurable on its next clone. Enforce completeness once every page has been inspected.
-          if (clippedAwayByExactRow(element, rect) || blankLineClippedByTextBox(this.view, element, rect))
-            clippedAnchorIds.add(anchorId);
+          // A source-sized zero-font blank line has no painted substrate. A visible run or a
+          // line with authored height still has geometry and must remain in the map.
+          const collapsedBlankLine = rect.height === 0 && style.fontSize === "0px" && rendersOnlyItsLine(element);
+          if (collapsedBlankLine || clippedAwayByExactRow(element, rect) || blankLineClippedByTextBox(this.view, element, rect))
+            unpaintedAnchorIds.add(anchorId);
           continue;
         }
 
@@ -1363,7 +1366,7 @@ export class PaginationEngine {
     }
 
     const missingAnchor = Array.from(requiredAnchorIds)
-      .find((id) => !measuredAnchorIds.has(id) && !clippedAnchorIds.has(id));
+      .find((id) => !measuredAnchorIds.has(id) && !unpaintedAnchorIds.has(id));
     if (missingAnchor) {
       throw new Error(`source anchor ${missingAnchor} has no measurable fragment in the paginated layout`);
     }
