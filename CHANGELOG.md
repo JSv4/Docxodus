@@ -47,6 +47,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Header and footer measurement now uses the same column layout as the printed story, so spacing
+  between paragraphs is fully reserved. Widely spaced running-story paragraphs no longer disappear
+  behind the story's clipping edge or fail PDF export with a missing PageMap fragment.
+
 - PDF and HTML exports wait for the owned browser's built-in forced shutdown before reporting a
   cleanup failure. Slow Chromium exits no longer discard a verified artifact after 10 seconds;
   browser shutdown remains bounded, and context and temporary-directory cleanup keep their limits.
