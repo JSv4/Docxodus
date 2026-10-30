@@ -47,6 +47,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Page fitting includes a wrapped floating picture’s visible height even when its paragraph
+  is shorter. Each floating-picture block is measured independently so a preceding float
+  cannot distort its size on a fresh page.
+
 - Inline pictures that cannot fit on a fresh page are proportionally reduced into the body
   band before pagination. The bitmap and aspect ratio are retained, and pictures that already
   fit keep their original size.
