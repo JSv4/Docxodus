@@ -46,6 +46,9 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Oversized body tables with footnote citations split at complete row groups while reserving
+  room for each cited note, keeping the note with its citation instead of clipping the table.
+
 - Header and footer measurement now uses the same column layout as the printed story, so spacing
   between paragraphs is fully reserved. Widely spaced running-story paragraphs no longer disappear
   behind the story's clipping edge or fail PDF export with a missing PageMap fragment.
