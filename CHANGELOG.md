@@ -46,6 +46,9 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Fixed-height text boxes can contain a wholly clipped blank trailing paragraph without failing
+  PageMap completeness; visible text hidden by the same clip remains an export error.
+
 - Rowless tables and paragraphs whose text and paragraph marks are hidden retain their source
   identities without requiring painted PageMap fragments, including joined and section-ending paragraphs.
 
