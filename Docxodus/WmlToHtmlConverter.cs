@@ -4116,7 +4116,7 @@ namespace Docxodus
                     del.Add(new XAttribute("data-move-id", moveId));
             }
 
-            // Process children - move source contains delText like w:del
+            // Process either ordinary text or legacy deleted text inside the move source.
             var content = ConvertRevisionContent(wordDoc, settings, element, currentMarginLeft);
 
             del.Add(content);

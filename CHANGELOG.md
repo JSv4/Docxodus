@@ -47,6 +47,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Comparison, consolidation and tracked block moves write moved-from text and field instructions as ordinary text,
+  matching Word's move markup instead of using deletion-only elements that Word can reject (#1420).
 - HTML rendering coalesces deeply nested inline containers once, avoiding exponential work
   on nested hyperlinks, simple fields and content-control/custom-XML wrappers (#1410).
 - **Editor review and tab interactions (#1408).** Empty move/wrapper markers no longer count
