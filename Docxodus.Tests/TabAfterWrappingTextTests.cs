@@ -98,6 +98,56 @@ public class TabAfterWrappingTextTests
         Assert.Equal("36pt", Style(segment)["width"]);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TextBox_LongPrefixWrapsInsideItsOwnWidth(bool drawing)
+    {
+        const string prefix = "Cedar trainees catalog amber pebbles while quiet swallows circle the orchard and return beside the fountain";
+        var html = Html(TextBox(TabParagraph(prefix), drawing));
+        var box = Assert.Single(html.Descendants(), e => e.Attribute("data-docx-textbox") != null);
+        Assert.Contains(prefix, box.Value);
+        Assert.Contains("12.50", box.Value);
+        Assert.DoesNotContain(box.Descendants(), e => Style(e).GetValueOrDefault("display") == "inline-flex");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TextBox_FittingPrefixKeepsItsAlignedTab(bool drawing)
+    {
+        var html = Html(TextBox(TabParagraph("Cedar"), drawing));
+        var box = Assert.Single(html.Descendants(), e => e.Attribute("data-docx-textbox") != null);
+        Assert.Contains(box.Descendants(), e => Style(e).GetValueOrDefault("display") == "inline-flex");
+    }
+
+    [Fact]
+    public void DrawingTextBox_WrapMeasurementExcludesTheSourceInsets()
+    {
+        const string prefix = "Cedar trainees catalog amber pebbles while quiet swallows circle the orchard";
+        static string? TabWidth(XElement html) => (string?)html.Descendants()
+            .Single(e => e.Attribute("data-docx-tab") != null).Attribute("data-docx-tab-width");
+        var inset = Html(TextBox(TabParagraph(prefix), true, 192, 24));
+        var narrow = Html(TextBox(TabParagraph(prefix), true, 144, 0));
+        var wide = Html(TextBox(TabParagraph(prefix), true, 192, 0));
+        Assert.Equal(TabWidth(narrow), TabWidth(inset));
+        Assert.NotEqual(TabWidth(wide), TabWidth(inset));
+    }
+
+    private static string TextBox(string paragraph, bool drawing, int width = 144, int inset = 0) => drawing
+        ? $"""
+          <w:p><w:r><w:drawing><wp:inline><wp:extent cx="{width * 12700}" cy="4572000"/>
+          <wp:docPr id="19" name="Cedar tab frame"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+          <wps:wsp><wps:txbx><w:txbxContent>{paragraph}</w:txbxContent></wps:txbx>
+          <wps:bodyPr lIns="{inset * 12700}" rIns="{inset * 12700}" tIns="0" bIns="0"/></wps:wsp>
+          </a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>
+          """
+        : $"""
+          <w:p><w:r><w:pict><v:shape id="CedarFrame" style="width:{width}pt;height:360pt">
+          <v:textbox inset="0,0,0,0"><w:txbxContent>{paragraph}</w:txbxContent></v:textbox>
+          </v:shape></w:pict></w:r></w:p>
+          """;
+
     private static void AssertNoBoxWiderThan(XElement html, decimal inches)
     {
         foreach (var element in html.Descendants())
@@ -143,7 +193,9 @@ public class TabAfterWrappingTextTests
         {
             var main = package.AddMainDocumentPart();
             using var writer = new StreamWriter(main.GetStream(FileMode.Create));
-            writer.Write($"<w:document xmlns:w='{WNs}'><w:body><w:p><w:r><w:t>Before.</w:t></w:r></w:p>{bodyXml}" +
+            writer.Write($"<w:document xmlns:w='{WNs}' xmlns:wp='http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing' " +
+                         "xmlns:a='http://schemas.openxmlformats.org/drawingml/2006/main' xmlns:wps='http://schemas.microsoft.com/office/word/2010/wordprocessingShape' " +
+                         $"xmlns:v='urn:schemas-microsoft-com:vml'><w:body><w:p><w:r><w:t>Before.</w:t></w:r></w:p>{bodyXml}" +
                          "<w:sectPr><w:pgSz w:w='12240' w:h='15840'/>" +
                          "<w:pgMar w:top='1440' w:right='1440' w:bottom='1440' w:left='1440' w:header='720' w:footer='720' w:gutter='0'/>" +
                          extraSectionProperties + "</w:sectPr></w:body></w:document>");

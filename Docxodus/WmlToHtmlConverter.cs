@@ -9735,7 +9735,7 @@ namespace Docxodus
             if (element.Name == W.tc)
                 lineWidthTwips = CellTextWidthTwips(element) ?? lineWidthTwips;
             else if (element.Name == W.txbxContent)
-                lineWidthTwips = null;
+                lineWidthTwips = TextBoxTextWidthTwips(element);
 
             // if it is not a paragraph or if there are no tabs in the paragraph,
             // then no need to continue processing.
@@ -10242,6 +10242,34 @@ namespace Docxodus
                 && tc.Ancestors(W.tbl).FirstOrDefault() is { } table && IsFixedLayoutTable(table)
                 && SpannedGridColumns(tc) is { Count: > 0 } columns
                 && columns.All(c => WordprocessingMLUtil.AttributeToTwips(c.Attribute(W._w)) == 0);
+        }
+
+        // A text-box story wraps at its own rendered content width, independently of the
+        // surrounding paragraph or table. Unknown dimensions retain the existing unknown-width path.
+        private static int? TextBoxTextWidthTwips(XElement content)
+        {
+            decimal width;
+            var owner = content.Ancestors().FirstOrDefault(e => e.Name == W.drawing || e.Name == W.pict || e.Name == W._object);
+            var drawing = owner?.Name == W.drawing ? owner : null;
+            var container = drawing?.Elements().FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
+            if ((long?)container?.Element(WP.extent)?.Attribute(NoNamespace.cx) is { } extent)
+            {
+                var body = drawing!.Descendants(WPS.bodyPr).FirstOrDefault();
+                width = ((decimal)extent - ((long?)body?.Attribute("lIns") ?? 0)
+                    - ((long?)body?.Attribute("rIns") ?? 0)) / 635m;
+                var line = drawing.Descendants(WPS.spPr).Elements(A.ln).FirstOrDefault();
+                if (IsHexColor((string?)line?.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val")))
+                    width -= 2m * ((long?)line!.Attribute("w") ?? 12700) / 635m;
+            }
+            else if (content.Ancestors(VML.shape).FirstOrDefault() is { } shape
+                && WidthInPoints(((string?)shape.Attribute("style") ?? "").Split(';')) is { } points
+                && float.IsFinite(points))
+            {
+                width = (decimal)Math.Clamp(points, -int.MaxValue, int.MaxValue) * 20m;
+                if (NormalizeVmlCssColor((string?)shape.Attribute("strokecolor")) != null) width -= 40m;
+            }
+            else return null;
+            return (int)Math.Clamp(decimal.Round(width), 1m, int.MaxValue);
         }
 
         /// <summary>

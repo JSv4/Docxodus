@@ -1,10 +1,10 @@
 import { fittingImageRun, pageFittingDocx } from './docx-page-fitting-fixture.js';
 
-export function linkedTextBoxDocx(mode: 'flow' | 'fitting' | 'unlinked' | 'image' | 'cross-page'): Uint8Array {
+export function linkedTextBoxDocx(mode: 'flow' | 'fitting' | 'unlinked' | 'image' | 'cross-page' | 'tab'): Uint8Array {
   const words = Array.from({ length: 70 }, (_, i) => `Alder${String(i).padStart(3, '0')}`).join(' ');
   const runs = mode === 'image'
     ? `<w:r><w:t xml:space="preserve">${words.split(' ').slice(0, 35).join(' ')} </w:t></w:r>${fittingImageRun(3, 20, 10)}<w:r><w:t xml:space="preserve"> ${words.split(' ').slice(35).join(' ')}</w:t></w:r>`
-    : `<w:r><w:t>${words}</w:t></w:r>`;
+    : `<w:r><w:t>${words}</w:t></w:r>${mode === 'tab' ? '<w:r><w:tab/><w:t>CedarClosing</w:t></w:r>' : ''}`;
   const paragraphs = `<w:p><w:pPr><w:keepLines w:val="0"/><w:widowControl w:val="0"/><w:spacing w:after="0" w:line="240" w:lineRule="exact"/></w:pPr>${runs}</w:p>`;
   const box = (continuation: boolean) => {
     const width = continuation ? 216 : 144, height = continuation ? 216 : mode === 'fitting' || mode === 'unlinked' ? 360 : 60;

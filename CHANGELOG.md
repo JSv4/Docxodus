@@ -46,6 +46,8 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Measure tabs in DrawingML and VML text boxes against the box's own content width, so long prefixes wrap before their tab instead of forming an over-wide unbroken segment.
+
 
 - Flow linked DrawingML text-box stories through their declared continuation frames, preserving text, inline images, typography and source fragments across different frame widths or pages. Exhausted or malformed chains report an error instead of silently clipping their remaining text.
 - Preserve oversized floating drawings and report relaxed top/bottom clearance when no page can contain their exclusion and anchor text.
