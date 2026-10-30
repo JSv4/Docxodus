@@ -81,6 +81,7 @@ All notable changes to this project will be documented in this file.
 
 - Header and footer tables can extend into the page side margins without losing cells or failing
   PDF export; running stories retain vertical clipping and the paper edge remains the horizontal boundary.
+- Paginate tables carrying leading bookmark targets while preserving each target on the first table fragment.
 
 - Continue long read-only paragraphs containing empty inline tab advances, preserving their widths and leaders across pages.
 
