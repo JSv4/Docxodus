@@ -285,6 +285,9 @@ namespace Docxodus
             // Keeping an undrawn oval or line's extent must not invent a filled rectangle.
             AddVmlDimensions(style, shape);
             placeholder.AddAnnotation(style);
+            if (settings?.RenderPagination == PaginationMode.Paginated && shapes.Count == 1 && shape.Parent == element &&
+                CreateVmlDrawingAnchor(shape) is XElement anchor)
+                return PlaceDrawingShape(placeholder, anchor, settings);
             return placeholder;
         }
 
