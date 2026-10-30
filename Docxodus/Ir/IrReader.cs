@@ -754,7 +754,7 @@ internal static class IrReader
     /// Textboxes can legally nest (a shape inside a textbox can itself carry a textbox); the cap
     /// bounds recursion against adversarial/corrupt input, mirroring <see cref="MaxSdtDepth"/>.
     /// </summary>
-    private const int MaxTextboxDepth = 16;
+    internal const int MaxTextboxDepth = 16;
 
     private static IrBlock BuildBlock(XElement el, ReadContext ctx)
     {
@@ -1847,7 +1847,8 @@ internal static class IrReader
             var blocks = new List<IrBlock>();
             foreach (var child in txbx.Elements())
                 AppendBlocks(child, innerCtx, blocks);
-            sink.Add(new IrTextbox(IrNodeList.From(blocks)));
+            sink.Add(new IrTextbox(IrNodeList.From(blocks))
+            { IsSelectedForProjection = WmlToMarkdownConverter.IsSelectedMarkup(txbx) });
         }
     }
 
@@ -2844,7 +2845,7 @@ internal static class IrReader
         // those rows, but its anchor index (Descendants) keeps them — and the IR must not lose the
         // row's content. Unwrap table-level SDTs to their w:tr children, flag the delivered rows
         // FromTableSdt, and let the emitter narrow back to the oracle's direct-row view for parity.
-        foreach (var (tr, fromSdt) in EnumerateTableRows(tbl))
+        foreach (var (tr, fromSdt) in TableChildren(tbl, W + "tr"))
         {
             var (row, cellFingerprintsForRow) = BuildRow(tr, ctx);
             if (fromSdt)
@@ -2906,7 +2907,7 @@ internal static class IrReader
         // the ContentHash), so we unwrap row-level SDTs to their w:tc children here, reusing the
         // established SDT-unwrap discipline + depth cap. Each SDT-delivered cell is flagged
         // FromRowSdt so the markdown emitter can mirror the oracle's narrower view for byte parity.
-        foreach (var (tc, fromSdt) in EnumerateRowCells(tr))
+        foreach (var (tc, fromSdt) in TableChildren(tr, W + "tc"))
         {
             var (cell, fingerprints) = BuildCell(tc, ctx);
             if (fromSdt)
@@ -2946,43 +2947,17 @@ internal static class IrReader
         return (row, cellFingerprints);
     }
 
-    /// <summary>
-    /// Yield the rows of a table in document order, unwrapping any table-level <c>w:sdt</c> to its
-    /// <c>w:sdtContent</c>'s <c>w:tr</c> children (recursively, depth-capped). A direct <c>w:tr</c>
-    /// yields <c>fromSdt=false</c>; an SDT-delivered row yields <c>fromSdt=true</c>. Non-tr, non-sdt
-    /// table children (<c>w:tblPr</c>/<c>w:tblGrid</c>) are skipped here (folded into the unmodeled
-    /// digest by <see cref="BuildTable"/>).
-    /// </summary>
-    private static IEnumerable<(XElement Tr, bool FromSdt)> EnumerateTableRows(XElement tbl)
+    /// <summary>Rows or cells in source order, including those carried by bounded SDT wrappers.
+    /// Shared by the IR and Markdown projection so their table geometry agrees.</summary>
+    internal static IEnumerable<(XElement Element, bool FromSdt)> TableChildren(XElement parent, XName name)
     {
-        foreach (var child in tbl.Elements())
+        foreach (var child in parent.Elements())
         {
-            if (child.Name == W + "tr")
+            if (child.Name == name)
                 yield return (child, false);
             else if (child.Name == W + "sdt")
-                foreach (var tr in UnwrapSdtChildren(child, W + "tr", depth: 0))
-                    yield return (tr, true);
-        }
-    }
-
-    /// <summary>
-    /// Yield the cells of a row in document order, unwrapping any row-level <c>w:sdt</c> to its
-    /// <c>w:sdtContent</c>'s <c>w:tc</c> children (recursively, depth-capped by <see cref="MaxSdtDepth"/>).
-    /// A direct <c>w:tc</c> yields <c>fromSdt=false</c>; a cell delivered by an SDT yields
-    /// <c>fromSdt=true</c>. Non-tc, non-sdt row children (e.g. <c>w:trPr</c>) are skipped — they are
-    /// folded into the table's unmodeled-props digest by <see cref="BuildTable"/>. A pathologically
-    /// deep SDT nest stops unwrapping at the cap (any deeper <c>w:tc</c> is simply not surfaced — the
-    /// same bound the block walker uses), preserving totality.
-    /// </summary>
-    private static IEnumerable<(XElement Tc, bool FromSdt)> EnumerateRowCells(XElement tr)
-    {
-        foreach (var child in tr.Elements())
-        {
-            if (child.Name == W + "tc")
-                yield return (child, false);
-            else if (child.Name == W + "sdt")
-                foreach (var tc in UnwrapSdtChildren(child, W + "tc", depth: 0))
-                    yield return (tc, true);
+                foreach (var nested in UnwrapSdtChildren(child, name, depth: 0))
+                    yield return (nested, true);
         }
     }
 

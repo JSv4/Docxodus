@@ -11768,7 +11768,7 @@ namespace Docxodus
         }
 
         /// <summary>The branch of an <c>mc:AlternateContent</c> this converter renders, if any.</summary>
-        private static XElement? SelectedMarkupBranch(XElement alternateContent) =>
+        internal static XElement? SelectedMarkupBranch(XElement alternateContent) =>
             alternateContent.Elements(MC.Choice).FirstOrDefault(IsSupportedMarkupChoice)
                 ?? alternateContent.Element(MC.Fallback);
 

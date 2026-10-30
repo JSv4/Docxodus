@@ -94,6 +94,10 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+
+- Markdown projection includes textbox and group-shape text once from the supported compatibility
+  branch, with anchored blocks after their host. Tables include rows and cells wrapped in content
+  controls, and textbox edits return complete projection patches (#1445).
 - Preserve raised inline text boxes above the body margin without changing their flow space, typography, internal clipping, or paper boundary.
 - Position supported floating VML shape placeholders through the existing anchor adapter instead of consuming body space.
 - Preserve oversized floating drawings and report relaxed top/bottom clearance when no page can contain their exclusion and anchor text.
