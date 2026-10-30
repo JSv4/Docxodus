@@ -67,4 +67,34 @@ public class HtmlLinkedTextBoxTests
             Assert.Equal("true", (string?)boxes[0].Attribute("data-docx-textbox-clip"));
         }
     }
+    [Fact]
+    public void RepeatedConversionRecomputesLinkedMembershipAfterSourceMutation()
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Document(false));
+        using var package = WordprocessingDocument.Open(stream, true);
+        XElement[] Render() => WmlToHtmlConverter.ConvertToHtml(package,
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, RenderPagination = PaginationMode.Paginated })
+            .Descendants().Where(e => (string?)e.Attribute("data-docx-textbox") == "true").ToArray();
+        Assert.Null(Assert.Single(Render()).Attribute("data-docx-textbox-linked"));
+
+        using var linkedStream = new MemoryStream(Document(true));
+        using var linkedPackage = WordprocessingDocument.Open(linkedStream, false);
+        var continuation = new XElement(linkedPackage.MainDocumentPart!.GetXDocument().Descendants(W.drawing).Last());
+        var source = package.MainDocumentPart!.GetXDocument();
+        source.Descendants(W.r).First().Add(continuation);
+        package.MainDocumentPart.PutXDocument();
+        var boxes = Render();
+        Assert.Equal(2, boxes.Length);
+        Assert.All(boxes, box => Assert.Equal("true", (string?)box.Attribute("data-docx-textbox-linked")));
+        Assert.All(boxes, box => Assert.Null(box.Attribute("data-docx-textbox-clip")));
+
+        source = package.MainDocumentPart.GetXDocument();
+        source.Descendants(WPS.wps + "linkedTxbx").Single().Ancestors(W.drawing).First().Remove();
+        package.MainDocumentPart.PutXDocument();
+        var remaining = Assert.Single(Render());
+        Assert.Null(remaining.Attribute("data-docx-textbox-linked"));
+        Assert.Equal("true", (string?)remaining.Attribute("data-docx-textbox-clip"));
+    }
+
 }
