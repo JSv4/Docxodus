@@ -61,12 +61,30 @@ public class TableRowHeightUnitTests
     [InlineData("502", "height: 25.1pt")]
     [InlineData("1100", "height: 55pt")]
     [InlineData("720", "height: 36pt")]
+    [InlineData("687.25", "height: 34.3625pt")]
     public void RowHeightsKeepTwipPrecision(string value, string expected) =>
         Assert.Contains(expected, (string?)Render(value).Descendants(Xhtml.tr).Single().Attribute("style"));
 
     [Theory]
-    [InlineData("501.5")]
+    [InlineData("atLeast")]
+    [InlineData("exact")]
+    [InlineData("auto")]
+    public void FractionalTwipsKeepTheHeightRule(string rule)
+    {
+        var actual = Render("687.25", rule);
+        var expected = Render("34.3625pt", rule);
+        Assert.Equal(expected.Value, actual.Value);
+        Assert.Equal(expected.Descendants().Attributes("style").Select(attribute => attribute.Value),
+            actual.Descendants().Attributes("style").Select(attribute => attribute.Value));
+    }
+
+    [Theory]
+    [InlineData("687,25")]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("2147483647.25")]
     [InlineData("-1")]
+    [InlineData("-1.25")]
     [InlineData("-1pt")]
     [InlineData("12px")]
     [InlineData("12PT")]
@@ -81,7 +99,7 @@ public class TableRowHeightUnitTests
     {
         var error = Assert.Throws<FormatException>(() => Render(value));
         Assert.Contains("w:trHeight/@w:val", error.Message);
-        Assert.Contains("non-negative whole twips", error.Message);
+        Assert.Contains("non-negative", error.Message);
     }
 
     [Fact]
@@ -104,6 +122,8 @@ public class TableRowHeightUnitTests
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
             Assert.Equal((string?)Render("720").Descendants(Xhtml.tr).Single().Attribute("style"),
                 (string?)Render("12.7mm").Descendants(Xhtml.tr).Single().Attribute("style"));
+            Assert.Equal((string?)Render("34.3625pt").Descendants(Xhtml.tr).Single().Attribute("style"),
+                (string?)Render("687.25").Descendants(Xhtml.tr).Single().Attribute("style"));
         }
         finally { CultureInfo.CurrentCulture = original; }
     }

@@ -910,16 +910,8 @@ namespace Docxodus
             return false;
         }
 
-        public static int StringToTwips(string twipsOrPoints)
-        {
-            // if the pos value is in points, not twips
-            if (twipsOrPoints.EndsWith("pt"))
-            {
-                decimal decimalValue = decimal.Parse(twipsOrPoints.Substring(0, twipsOrPoints.Length - 2));
-                return (int)(decimalValue * 20);
-            }
-            return int.Parse(twipsOrPoints);
-        }
+        public static int StringToTwips(string twipsOrPoints) =>
+            (int)StringToDecimalTwips(twipsOrPoints);
 
         /// <summary>
         /// The leading edge of a <c>w:ind</c>. The strict schema spells it <c>w:start</c>; the
@@ -949,7 +941,11 @@ namespace Docxodus
         internal static decimal? AttributeToDecimalTwips(XAttribute? attribute)
         {
             if (attribute == null) return null;
-            var value = attribute.Value;
+            return StringToDecimalTwips(attribute.Value);
+        }
+
+        private static decimal StringToDecimalTwips(string value)
+        {
             var unit = value.Length >= 2 ? value.Substring(value.Length - 2) : string.Empty;
             var hasUnit = unit is "cm" or "mm" or "in" or "pt" or "pc" or "pi";
             var number = decimal.Parse(hasUnit ? value.Substring(0, value.Length - 2) : value,

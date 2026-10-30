@@ -6886,11 +6886,12 @@ namespace Docxodus
         {
             if (attribute == null) return null;
             const string diagnostic = "Invalid or unsupported table row height (w:trHeight/@w:val); " +
-                "expected non-negative whole twips or a number with a supported unit (cm, mm, in, pt, pc, pi).";
+                "expected non-negative twips or a number with a supported unit (cm, mm, in, pt, pc, pi).";
             var value = attribute.Value;
-            // ST_TwipsMeasure permits whole unsigned twips or ST_PositiveUniversalMeasure.
-            // Keep the existing Int32 range for bare twips and reject bare fractions.
-            if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var twips) && twips >= 0)
+            // Accept fractional bare twips like other imported dimensions, retaining the existing
+            // non-negative Int32 range and the stricter ST_PositiveUniversalMeasure unit syntax.
+            if (decimal.TryParse(value, NumberStyles.Integer | NumberStyles.AllowDecimalPoint,
+                CultureInfo.InvariantCulture, out var twips) && twips >= 0m && twips <= int.MaxValue)
                 return twips;
             if (Regex.IsMatch(value, @"\A[0-9]+(\.[0-9]+)?(cm|mm|in|pt|pc|pi)\z", RegexOptions.CultureInvariant))
             {

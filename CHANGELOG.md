@@ -47,6 +47,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- HTML and PDF conversion accept fractional twips in style tab stops and table row heights.
+  Tab measures use the shared invariant unit parser and retain integer truncation; row heights
+  retain fractional precision, their range checks, and property-specific malformed-value errors.
+
 - Oversized body tables with footnote citations split at complete row groups while reserving
   room for each cited note, keeping the note with its citation instead of clipping the table.
 
