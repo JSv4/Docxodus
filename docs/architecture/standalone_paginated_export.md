@@ -110,6 +110,15 @@ layout/materialization options even though it does not affect page geometry, bec
 exact standalone HTML bytes. `strictFonts` defaults to false and `timeoutMs` to 120,000. Resource
 limits use the shared defaults below and may only be lowered.
 
+Under `warn`, malformed unreferenced XML parts, package-level custom properties, and missing
+package preview thumbnails retain their manifest warnings but do not prevent rendering: none
+is read by the renderer. Content-type declarations and relationship files remain required.
+This requires every relationship to the affected part to identify that same optional metadata;
+a shared style or image target still fails. `strict` rejects these package defects. The package
+manifest remains invalid, all resource ceilings still apply, and export never repairs or rewrites
+the caller's source bytes to remove a finding. Cached document-property field text is rendered
+as supplied in the document body.
+
 `reviewProfileAlreadyApplied` defaults to false. It may be true only for `final` or `original` when
 the caller deliberately supplies the exact policy-derived bytes. Preflight then proves that no
 native tracked revision remains, records the flag in the report, and does not populate

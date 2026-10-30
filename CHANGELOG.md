@@ -47,6 +47,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Standalone export tolerates malformed unused XML or package-level custom properties and
+  missing preview thumbnails under the default warning policy. Diagnostics and source bytes are preserved;
+  strict exports and defects in required document parts still fail preflight.
+
 - Read-only pagination continues long paragraphs and nested tables inside ordinary body table
   cells across pages, reusing the measured note-table fragmenter and preserving each cell
   content once instead of leaving the whole cell clipped below the page.
