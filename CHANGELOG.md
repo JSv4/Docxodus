@@ -106,6 +106,9 @@ All notable changes to this project will be documented in this file.
   behind the story's clipping edge or fail PDF export with a missing PageMap fragment.
 
 
+- Keep floating paragraph frames and drawings linked to their original source cells and tables
+  after placement, so visible labels remain measurable in exported HTML and PDF.
+
 - PDF and HTML exports wait for the owned browser's built-in forced shutdown before reporting a
   cleanup failure. Slow Chromium exits no longer discard a verified artifact after 10 seconds;
   browser shutdown remains bounded, and context and temporary-directory cleanup keep their limits.

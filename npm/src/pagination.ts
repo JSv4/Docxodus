@@ -563,8 +563,8 @@ export interface VisibleBox {
 }
 
 /**
- * Set by the paginator on a floating drawing it promotes out of its paragraph into the page box;
- * the value is the `data-source-anchor-id` of the element that hosted it. It survives into the
+ * Set by the paginator on floating content it promotes into the page box; the value lists its
+ * original source ancestors' `data-source-anchor-id` values, separated by spaces. It survives into the
  * standalone export, whose offline re-verification measures through the same function.
  */
 export const DRAWING_HOST_ATTRIBUTE = "data-docx-anchor-host";
@@ -735,7 +735,7 @@ function createRenderedSourceMeasurer(
     const hostAnchorId = element.dataset.sourceAnchorId;
     const promoted = hostAnchorId
       ? Array.from(page.querySelectorAll<HTMLElement>(`[${drawingHostAttribute}]`))
-        .filter((drawing) => drawing.getAttribute(drawingHostAttribute) === hostAnchorId)
+        .filter((drawing) => drawing.getAttribute(drawingHostAttribute)?.split(" ").includes(hostAnchorId))
       : [];
     if (ownMeasurable && promoted.length === 0) return ownResult();
     const rendered = [
@@ -5782,14 +5782,25 @@ export class PaginationEngine {
     this.commentReturnLinks.length = 0;
   }
 
-  /**
-   * Resolves floating DrawingML objects after their anchor paragraphs have landed on a page.
-   *
-   * The converter deliberately carries the OOXML bases and offsets as data instead of flattening
-   * them into CSS: page/margin/column bases belong to the page, while paragraph/line/character
-   * bases belong to the laid-out anchor. Once both coordinate systems exist, promote the object
-   * from the clipped text column into the page box and position it in one shared point space.
-   */
+  /** Keep the visible content of emptied paragraphs, cells and tables linked to its source. */
+  private promoteSourceContent(content: HTMLElement, pageBox: HTMLElement): void {
+    const hosts: HTMLElement[] = [];
+    const ownerIds = new Set<string>();
+    for (let host = content.parentElement; host && host !== pageBox; host = host.parentElement) {
+      if (host.dataset.sourceAnchorId) { hosts.push(host); ownerIds.add(host.dataset.sourceAnchorId); }
+      // A drawing inside an already-promoted frame keeps that frame's original owners too.
+      for (const id of host.getAttribute(DRAWING_HOST_ATTRIBUTE)?.split(" ") ?? []) ownerIds.add(id);
+    }
+    if (ownerIds.size > 0) content.setAttribute(DRAWING_HOST_ATTRIBUTE, [...ownerIds].join(" "));
+    if (content.closest('td,th,[data-docx-frame-in-table-cell="true"]')) content.dataset.docxFrameInTableCell = "true";
+    pageBox.appendChild(content);
+    // A host that retains text keeps its own box; an emptied host renders through the content
+    // promoted out of it, together with any remaining paragraph-mark line (issues #849, #880).
+    for (const host of hosts) {
+      if (rendersOnlyItsLine(host)) host.setAttribute(HOSTS_PROMOTED_DRAWING_ATTRIBUTE, "true");
+    }
+  }
+
   /** Resolve legacy paragraph frames after their ordinary anchor paragraphs have flowed. */
   private positionTextFrames(pageBox: HTMLElement, dims: PageDimensions, pageNumber: number): HTMLElement[] {
     const frames = Array.from(pageBox.querySelectorAll<HTMLElement>('[data-docx-text-frame="true"]'));
@@ -5837,8 +5848,7 @@ export class PaginationEngine {
         'color', 'direction', 'text-align', 'letter-spacing', 'word-spacing', 'white-space']) {
         frame.style.setProperty(property, computed.getPropertyValue(property));
       }
-      if (frame.closest('td,th')) frame.dataset.docxFrameInTableCell = 'true';
-      pageBox.appendChild(frame);
+      this.promoteSourceContent(frame, pageBox);
       frame.style.left = `${left}pt`;
       frame.style.top = `${top}pt`;
       frame.style.margin = '0';
@@ -5899,6 +5909,14 @@ export class PaginationEngine {
     }
   }
 
+  /**
+   * Resolves floating DrawingML objects after their anchor paragraphs have landed on a page.
+   *
+   * The converter deliberately carries the OOXML bases and offsets as data instead of flattening
+   * them into CSS: page/margin/column bases belong to the page, while paragraph/line/character
+   * bases belong to the laid-out anchor. Once both coordinate systems exist, promote the object
+   * from the clipped text column into the page box and position it in one shared point space.
+   */
   private positionDrawingAnchors(
     pageBox: HTMLElement,
     contentArea: HTMLElement,
@@ -5967,16 +5985,7 @@ export class PaginationEngine {
         pageNumber,
       );
 
-      // Leaving the paragraph must not orphan it: a paragraph whose only content was this drawing
-      // renders as the drawing, and measureRenderedSource finds it through this link (issue #849).
-      const hostElement = anchor.parentElement?.closest<HTMLElement>('[data-source-anchor-id]');
-      const hostAnchorId = hostElement?.dataset.sourceAnchorId;
-      if (hostAnchorId) anchor.setAttribute(DRAWING_HOST_ATTRIBUTE, hostAnchorId);
-      pageBox.appendChild(anchor);
-      // A host left with nothing but its paragraph-mark line (issue #880) renders as that line plus
-      // the drawing; one with text of its own keeps measuring as its own box.
-      if (hostElement && rendersOnlyItsLine(hostElement))
-        hostElement.setAttribute(HOSTS_PROMOTED_DRAWING_ATTRIBUTE, 'true');
+      this.promoteSourceContent(anchor, pageBox);
       anchor.style.position = 'absolute';
       anchor.style.left = `${left}pt`;
       anchor.style.top = `${top}pt`;
