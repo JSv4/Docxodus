@@ -119,4 +119,21 @@ public class HtmlDrawingWrapDistanceTests
         Assert.Contains("margin-left: 0pt", exclusion.Attribute("style")!.Value);
     }
 
+    [Theory]
+    [InlineData(2147483647L, 2147483647L)]
+    [InlineData(2147483648L, -2147483648L)]
+    [InlineData(4294967295L, -1L)]
+    [InlineData(4294967296L, 4294967296L)]
+    public void OnlyTheUnsigned32BitNegativeRangeIsDecoded(long stored, long signed)
+    {
+        var html = XElement.Parse(HtmlConversionOps.ConvertToHtml(Drawing(stored, 0m, false),
+            new HtmlConversionOptions { FabricateCssClasses = false, PaginationMode = (int)PaginationMode.Paginated }));
+        var anchor = html.Descendants().Single(e => (string?)e.Attribute("data-docx-shape-anchor") == "true");
+        var expected = (signed / 12700m).ToString("0.####", CultureInfo.InvariantCulture);
+        Assert.Equal(expected, anchor.Attribute("data-docx-anchor-wrap-top")!.Value);
+        Assert.Equal(expected, anchor.Attribute("data-docx-anchor-wrap-bottom")!.Value);
+        Assert.Equal("2", anchor.Attribute("data-docx-anchor-h-offset")!.Value);
+        Assert.Equal("72", anchor.Attribute("data-docx-anchor-extent-width")!.Value);
+    }
+
 }

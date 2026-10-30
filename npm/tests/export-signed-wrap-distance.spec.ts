@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { pageFittingDocx } from './docx-page-fitting-fixture.js';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 test.use({ launchOptions: { chromiumSandbox: true, ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}) } });
@@ -22,7 +22,10 @@ for (const distance of [4294964756, -2540, 25400]) {
     try {
       const pdf = await task.promise;
       expect(pdf.numPages).toBe(1);
-      const text = (await (await pdf.getPage(1)).getTextContent()).items.filter(item => 'str' in item).map(item => item.str).join(' ');
+      const pdfPage = await pdf.getPage(1);
+      const operations = await pdfPage.getOperatorList();
+      expect(operations.fnArray.filter(op => op === OPS.constructPath).length).toBeGreaterThan(0);
+      const text = (await pdfPage.getTextContent()).items.filter(item => 'str' in item).map(item => item.str).join(' ');
       expect(text).toContain('Juniper signed-clearance inventory.');
       expect(text).toContain('Juniper signed-clearance complete.');
     } finally { await task.destroy(); }
