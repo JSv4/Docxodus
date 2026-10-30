@@ -3,7 +3,7 @@ import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 import { linkedTextBoxDocx } from './docx-linked-textbox-fixture.js';
 test.use({ launchOptions: { chromiumSandbox: true, ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}) } });
-for (const mode of ['flow', 'fitting', 'unlinked', 'image', 'cross-page'] as const) {
+for (const mode of ['flow', 'fitting', 'unlinked', 'image', 'cross-page', 'tab'] as const) {
   test(`linked textbox ${mode} preserves all source text and fragment geometry`, async ({ browser, page }) => {
     test.setTimeout(120_000);
     const result = await renderDocxArtifacts(linkedTextBoxDocx(mode), { browser, outputs: ['html', 'pdf'], reviewProfile: 'markup', commentProfile: 'hidden', timeoutMs: 120_000 });
@@ -18,6 +18,7 @@ for (const mode of ['flow', 'fitting', 'unlinked', 'image', 'cross-page'] as con
         images += (await pdfPage.getOperatorList()).fnArray.filter(op => op === OPS.paintImageXObject || op === OPS.paintInlineImageXObject).length;
       }
       expect(images).toBe(mode === 'image' ? 1 : 0);
+      if (mode === 'tab') expect(text.match(/CedarClosing/g)).toHaveLength(1);
       expect(text.match(/Alder\d+/g)).toEqual(Array.from({ length: 70 }, (_, i) => `Alder${String(i).padStart(3, '0')}`));
     } finally { await task.destroy(); }
     expect(result.pageMap.pages).toHaveLength(mode === 'cross-page' ? 2 : 1);
@@ -28,7 +29,7 @@ for (const mode of ['flow', 'fitting', 'unlinked', 'image', 'cross-page'] as con
       overflow: box.scrollHeight - box.clientHeight, ids: Array.from(box.querySelectorAll<HTMLElement>('[data-source-anchor-id]'), p => p.dataset.sourceAnchorId) })));
     expect(values[0].width).toBeCloseTo(144, 1);
     expect(values.every(box => box.overflow <= 1)).toBe(true);
-    if (mode === 'flow' || mode === 'image' || mode === 'cross-page') {
+    if (mode === 'flow' || mode === 'image' || mode === 'cross-page' || mode === 'tab') {
       expect(values[1].width).toBeCloseTo(216, 1);
       expect(values[0].text).toContain('Alder000'); expect(values[1].text).toContain('Alder069');
       expect(values[0].ids).toHaveLength(1); expect(values[1].ids).toEqual(values[0].ids);
