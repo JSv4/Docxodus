@@ -46,6 +46,7 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Position supported floating VML shape placeholders through the existing anchor adapter instead of consuming body space.
 - Preserve oversized floating drawings and report relaxed top/bottom clearance when no page can contain their exclusion and anchor text.
 - Blank lines inside fixed floating text boxes placed outside the paper no longer fail
   source coverage. Visible text and ordinary flow clipping retain the completeness guard.
