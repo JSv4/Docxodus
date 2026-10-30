@@ -47,6 +47,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Keep paragraph-border spacing consistent when standalone HTML reopens and prints. Prepared
+  border styles use their serialized values before pagination, preventing accumulated subpixel
+  shifts from invalidating the PageMap.
+
 - Fixed-height text boxes can contain a wholly clipped blank trailing paragraph without failing
   PageMap completeness; visible text hidden by the same clip remains an export error.
 
