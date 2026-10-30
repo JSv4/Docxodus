@@ -134,6 +134,34 @@ public class TabAfterWrappingTextTests
         Assert.NotEqual(TabWidth(wide), TabWidth(inset));
     }
 
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(50000, true)]
+    public void DrawingTextBox_ActiveRelativeWidthRetainsUnknownWrapWidth(int percentage, bool unknown)
+    {
+        const string prefix = "Cedar trainees catalog amber pebbles while quiet swallows circle the orchard";
+        var source = TextBox(TabParagraph(prefix), true)
+            .Replace("<wp:inline>", "<wp:anchor>")
+            .Replace("</wp:inline>", $"<wp14:sizeRelH relativeFrom=\"margin\"><wp14:pctWidth>{percentage}</wp14:pctWidth></wp14:sizeRelH></wp:anchor>");
+        var html = Html(source);
+        Assert.Equal(unknown, html.Descendants().Any(e => Style(e).GetValueOrDefault("display") == "inline-flex"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DrawingTextBox_NegativeCssInsetsDoNotEnlargeTheWrapWidth(bool border)
+    {
+        const string prefix = "Cedar trainees catalog amber pebbles while quiet swallows circle the orchard";
+        var ordinary = TextBox(TabParagraph(prefix), true);
+        var negative = border
+            ? ordinary.Replace("<wps:txbx>", "<wps:spPr><a:ln w=\"-304800\"><a:solidFill><a:srgbClr val=\"225566\"/></a:solidFill></a:ln></wps:spPr><wps:txbx>")
+            : TextBox(TabParagraph(prefix), true, 144, -24);
+        static string? TabWidth(XElement html) => (string?)html.Descendants()
+            .Single(e => e.Attribute("data-docx-tab") != null).Attribute("data-docx-tab-width");
+        Assert.Equal(TabWidth(Html(ordinary)), TabWidth(Html(negative)));
+    }
+
     private static string TextBox(string paragraph, bool drawing, int width = 144, int inset = 0) => drawing
         ? $"""
           <w:p><w:r><w:drawing><wp:inline><wp:extent cx="{width * 12700}" cy="4572000"/>
@@ -195,7 +223,7 @@ public class TabAfterWrappingTextTests
             using var writer = new StreamWriter(main.GetStream(FileMode.Create));
             writer.Write($"<w:document xmlns:w='{WNs}' xmlns:wp='http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing' " +
                          "xmlns:a='http://schemas.openxmlformats.org/drawingml/2006/main' xmlns:wps='http://schemas.microsoft.com/office/word/2010/wordprocessingShape' " +
-                         $"xmlns:v='urn:schemas-microsoft-com:vml'><w:body><w:p><w:r><w:t>Before.</w:t></w:r></w:p>{bodyXml}" +
+                         $"xmlns:v='urn:schemas-microsoft-com:vml' xmlns:wp14='http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing'><w:body><w:p><w:r><w:t>Before.</w:t></w:r></w:p>{bodyXml}" +
                          "<w:sectPr><w:pgSz w:w='12240' w:h='15840'/>" +
                          "<w:pgMar w:top='1440' w:right='1440' w:bottom='1440' w:left='1440' w:header='720' w:footer='720' w:gutter='0'/>" +
                          extraSectionProperties + "</w:sectPr></w:body></w:document>");

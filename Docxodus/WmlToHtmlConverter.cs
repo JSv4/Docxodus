@@ -10252,14 +10252,18 @@ namespace Docxodus
             var owner = content.Ancestors().FirstOrDefault(e => e.Name == W.drawing || e.Name == W.pict || e.Name == W._object);
             var drawing = owner?.Name == W.drawing ? owner : null;
             var container = drawing?.Elements().FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
+            if (container?.Name == WP.anchor
+                && DrawingRelativeSize(container.Element(WP14.sizeRelH), WP14.pctWidth)?.Percentage > 0)
+                return null; // Pagination resolves the final width from the page/margin reference.
             if ((long?)container?.Element(WP.extent)?.Attribute(NoNamespace.cx) is { } extent)
             {
                 var body = drawing!.Descendants(WPS.bodyPr).FirstOrDefault();
-                width = ((decimal)extent - ((long?)body?.Attribute("lIns") ?? 0)
-                    - ((long?)body?.Attribute("rIns") ?? 0)) / 635m;
+                // Negative padding and border widths are rejected by CSS, so they consume no width.
+                width = ((decimal)extent - Math.Max(0L, (long?)body?.Attribute("lIns") ?? 0)
+                    - Math.Max(0L, (long?)body?.Attribute("rIns") ?? 0)) / 635m;
                 var line = drawing.Descendants(WPS.spPr).Elements(A.ln).FirstOrDefault();
                 if (IsHexColor((string?)line?.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val")))
-                    width -= 2m * ((long?)line!.Attribute("w") ?? 12700) / 635m;
+                    width -= 2m * Math.Max(0L, (long?)line!.Attribute("w") ?? 12700) / 635m;
             }
             else if (content.Ancestors(VML.shape).FirstOrDefault() is { } shape
                 && WidthInPoints(((string?)shape.Attribute("style") ?? "").Split(';')) is { } points
@@ -12305,21 +12309,24 @@ namespace Docxodus
                 (long?)position.Element(WP.posOffset));
         }
 
-        private static void AddRelativeSizeMetadata(XElement wrapper, XElement? relativeSize,
-            XName percentageName, string dimension)
+        private static (string RelativeFrom, decimal Percentage)? DrawingRelativeSize(XElement? relativeSize,
+            XName percentageName)
         {
             if (relativeSize == null ||
                 !decimal.TryParse(relativeSize.Element(percentageName)?.Value,
                     NumberStyles.Integer, NumberFormatInfo.InvariantInfo, out var rawPercentage))
-                return;
-
+                return null;
             var relativeFrom = (string?)relativeSize.Attribute(NoNamespace.relativeFrom);
-            if (string.IsNullOrWhiteSpace(relativeFrom))
-                return;
+            return string.IsNullOrWhiteSpace(relativeFrom) ? null : (relativeFrom, rawPercentage / 1000m);
+        }
 
-            wrapper.Add(new XAttribute($"data-docx-anchor-{dimension}-relative", relativeFrom));
+        private static void AddRelativeSizeMetadata(XElement wrapper, XElement? relativeSize,
+            XName percentageName, string dimension)
+        {
+            if (DrawingRelativeSize(relativeSize, percentageName) is not { } size) return;
+            wrapper.Add(new XAttribute($"data-docx-anchor-{dimension}-relative", size.RelativeFrom));
             wrapper.Add(new XAttribute($"data-docx-anchor-{dimension}-percent",
-                (rawPercentage / 1000m).ToString("0.###", NumberFormatInfo.InvariantInfo)));
+                size.Percentage.ToString("0.###", NumberFormatInfo.InvariantInfo)));
         }
 
         private static void AddEmuDataAttribute(XElement element, string name, long? emu)
