@@ -20,7 +20,8 @@ const budgetsKiB = {
   // Individually fitted inline pictures bring the current editor to 117.2 KiB gzip.
   'editor.bundle.js': 118,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
-  'pagination.bundle.js': 35,
+  // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
+  'pagination.bundle.js': 36,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,
