@@ -14,18 +14,16 @@ for (const visible of [false, true]) {
       browser, outputs: ['html', 'pdf'], reviewProfile: 'markup', markupPresentation: 'word',
       commentProfile: 'margin', commentColumnPlacement: 'balloons', timeoutMs: 120_000,
     });
-    if (visible) {
-      await expect(pending).rejects.toThrow(/has no measurable fragment/);
-      return;
-    }
     const result = await pending;
     expect(result.pageCount).toBe(1);
+    expect(result.renderReport.warnings.filter(warning => warning.code === 'source_text_clipped')).toHaveLength(visible ? 1 : 0);
     const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
     try {
       const pdf = await task.promise;
       const content = await (await pdf.getPage(1)).getTextContent();
       const text = content.items.filter(item => 'str' in item).map(item => item.str).join(' ');
       for (const label of ['Sighting logged.', 'Orbit verified.']) expect(text.split(label)).toHaveLength(2);
+      expect(text).not.toContain('Off-box signal.');
     } finally { await task.destroy(); }
   });
 }
