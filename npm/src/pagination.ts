@@ -5816,8 +5816,18 @@ export class PaginationEngine {
     this.commentReturnLinks.length = 0;
   }
 
+  /** Freeze inherited presentation before moving content out of its source ancestors. */
+  private preserveInheritedPresentation(content: HTMLElement,
+    computed = this.view.getComputedStyle(content)): void {
+    for (const property of ['font-family', 'font-size', 'font-style', 'font-weight', 'line-height',
+      'color', 'direction', 'text-align', 'letter-spacing', 'word-spacing', 'white-space']) {
+      content.style.setProperty(property, computed.getPropertyValue(property));
+    }
+  }
+
   /** Keep the visible content of emptied paragraphs, cells and tables linked to its source. */
   private promoteSourceContent(content: HTMLElement, pageBox: HTMLElement): void {
+    this.preserveInheritedPresentation(content);
     const hosts: HTMLElement[] = [];
     const ownerIds = new Set<string>();
     for (let host = content.parentElement; host && host !== pageBox; host = host.parentElement) {
@@ -5877,11 +5887,6 @@ export class PaginationEngine {
         xAlign ? undefined : pxToPt(parseFloat(computed.left) || 0), pageNumber);
       const top = this.resolveAnchorAxis(vertical, rect.height / pixelsPerPoint, yAlign,
         yAlign ? undefined : pxToPt(parseFloat(computed.top) || 0), pageNumber);
-      // Escape body/story clipping while keeping inherited presentation and canonical source ids.
-      for (const property of ['font-family', 'font-size', 'font-style', 'font-weight', 'line-height',
-        'color', 'direction', 'text-align', 'letter-spacing', 'word-spacing', 'white-space']) {
-        frame.style.setProperty(property, computed.getPropertyValue(property));
-      }
       this.promoteSourceContent(frame, pageBox);
       frame.style.left = `${left}pt`;
       frame.style.top = `${top}pt`;
