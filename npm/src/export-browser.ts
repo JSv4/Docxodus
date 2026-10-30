@@ -552,6 +552,7 @@ interface ExecutionState {
   fonts: FontResolution[];
   fontIdentity?: FontConfigurationIdentity;
   resources: ResourceOutcome[];
+  omittedVisualResourceIds: string[];
   unsupportedContent: UnsupportedContentOutcome[];
   limits: ExportResourceLimits;
   signal?: AbortSignal;
@@ -569,6 +570,7 @@ interface AttemptStateCheckpoint {
   warnings: number;
   fonts: number;
   resources: number;
+  omittedVisualResourceIds: number;
   unsupportedContent: number;
 }
 
@@ -2618,7 +2620,7 @@ function rethrowBrowserFontError(error: unknown): never {
 }
 
 // A src can be a multi-megabyte data URL, so it is never the label. Anchors and alt text
-// are bounded, stable across renders, and enough to find the element in the source.
+// are bounded diagnostic labels; the separate identity survives pagination and cloning.
 function visualResourceLabel(element: Element, kind: string, index: number): string {
   const anchor = element.closest("[data-source-anchor-id]")?.getAttribute("data-source-anchor-id");
   if (anchor) return `${kind}:${boundedText(anchor)}`;
@@ -2633,6 +2635,7 @@ function boundedText(value: string, maximum = 80): string {
 }
 
 interface VisualResourceFailure {
+  identity: string | null;
   resource: string;
   anchorId?: string;
 }
@@ -2640,7 +2643,15 @@ interface VisualResourceFailure {
 function visualResourceFailure(element: Element, kind: string, index: number): VisualResourceFailure {
   const anchorId = element.closest("[data-source-anchor-id]")
     ?.getAttribute("data-source-anchor-id") ?? undefined;
-  return { resource: visualResourceLabel(element, kind, index), ...(anchorId ? { anchorId } : {}) };
+  return { identity: element.getAttribute("data-docx-visual-resource-id"),
+    resource: visualResourceLabel(element, kind, index), ...(anchorId ? { anchorId } : {}) };
+}
+
+// Pagination promotes drawings and clones running stories. Their human-readable labels can
+// change or coincide, so give each source resource its own identity before either operation.
+function identifyVisualResources(document: Document): void {
+  document.querySelectorAll("img, svg").forEach((element, index) =>
+    element.setAttribute("data-docx-visual-resource-id", String(index + 1)));
 }
 
 // Probes report; they do not decide. Materialization routes their findings through the
@@ -2679,8 +2690,10 @@ function admitVisualResourceFailures(
   warning: { code: string; phase: ExportPhase; message: string; remediation: string },
 ): void {
   for (const failure of failures) {
+    const { identity, ...diagnostic } = failure;
+    if (identity !== null) state.omittedVisualResourceIds.push(identity);
     addResource(state, { kind, status: "omitted", resource: failure.resource });
-    policyWarning(state, options, { ...warning, ...failure });
+    policyWarning(state, options, { ...warning, ...diagnostic });
   }
 }
 
@@ -2698,18 +2711,12 @@ function assertVisualResourcesIntact(
   alreadyOmitted: ReadonlySet<string>,
   what: string,
 ): void {
-  const regressions = failures.filter((failure) => !alreadyOmitted.has(failure.resource));
+  const regressions = failures.filter((failure) => failure.identity === null || !alreadyOmitted.has(failure.identity));
   if (regressions.length === 0) return;
   throw new Error(
     `${regressions.length} ${what} that materialized successfully did not survive serialization: `
     + `${regressions.slice(0, 8).map((failure) => failure.resource).join(", ")}`,
   );
-}
-
-function omittedVisualResources(state: ExecutionState, kind: "image" | "svg"): ReadonlySet<string> {
-  return new Set(state.resources
-    .filter((resource) => resource.kind === kind && resource.status === "omitted" && resource.resource)
-    .map((resource) => resource.resource!));
 }
 
 function normalizeFragmentTargets(
@@ -3065,6 +3072,7 @@ function checkpointAttemptState(state: ExecutionState): AttemptStateCheckpoint {
     warnings: state.warnings.length,
     fonts: state.fonts.length,
     resources: state.resources.length,
+    omittedVisualResourceIds: state.omittedVisualResourceIds.length,
     unsupportedContent: state.unsupportedContent.length,
   };
 }
@@ -3074,6 +3082,7 @@ function restoreAttemptState(state: ExecutionState, checkpoint: AttemptStateChec
   state.warnings.length = checkpoint.warnings;
   state.fonts.length = checkpoint.fonts;
   state.resources.length = checkpoint.resources;
+  state.omittedVisualResourceIds.length = checkpoint.omittedVisualResourceIds;
   state.unsupportedContent.length = checkpoint.unsupportedContent;
 }
 
@@ -3320,10 +3329,11 @@ async function verifyOfflineReopen(
     const reopened = frame.contentDocument!;
     const pages = Array.from(reopened.querySelectorAll<HTMLElement>(".page-box"));
     await awaitFonts(reopened);
+    const omitted = new Set(state.omittedVisualResourceIds);
     assertVisualResourcesIntact(
-      await decodeImages(reopened), omittedVisualResources(state, "image"), "embedded images");
+      await decodeImages(reopened), omitted, "embedded images");
     assertVisualResourcesIntact(
-      validateInlineSvg(reopened), omittedVisualResources(state, "svg"), "inline SVG elements");
+      validateInlineSvg(reopened), omitted, "inline SVG elements");
     await awaitStableTree(reopened, pages);
     countDomNodes(reopened, state.limits.domNodes, "output_verification");
     const resources = automaticResourceCount(reopened);
@@ -3599,6 +3609,7 @@ export async function convertDocxToPaginatedHtml(
     warnings: [],
     fonts: [],
     resources: [],
+    omittedVisualResourceIds: [],
     unsupportedContent: [],
     limits: options.limits,
     signal: options.signal,
@@ -3771,6 +3782,7 @@ export async function convertDocxToPaginatedHtml(
           restoreStaging();
         }
         await runPhase(state, "image_decoding", ["embedded images"], async () => {
+          identifyVisualResources(renderDocument);
           admitVisualResourceFailures(
             state, options, await decodeImages(renderDocument), "image", {
               code: "image_decode_failed",

@@ -21,7 +21,7 @@ function backgroundPng(): Buffer {
     chunk('IEND', Buffer.alloc(0))]);
 }
 
-export function backgroundPictureDocx(origin: 'page' | 'paragraph', small = false, relative = false): Uint8Array {
+export function backgroundPictureDocx(origin: 'page' | 'paragraph', small = false, relative = false, broken = false): Uint8Array {
   const width = small || relative ? 18 : 432, height = small || relative ? 18 : 576;
   const cx = width * 12700, cy = height * 12700;
   const paragraph = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
@@ -64,5 +64,5 @@ export function backgroundPictureDocx(origin: 'page' | 'paragraph', small = fals
       </wp:anchor></w:drawing></w:r></w:p>${paragraph('Copper archive')}</w:hdr>`,
   };
   return storedZip([...Object.entries(parts).map(([name, content]) => ({ name, data: xml(content) })),
-    { name: 'word/media/background.png', data: backgroundPng() }]);
+    { name: 'word/media/background.png', data: broken ? Buffer.from('Deliberately undecodable background tile') : backgroundPng() }]);
 }

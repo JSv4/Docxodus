@@ -135,6 +135,8 @@ All notable changes to this project will be documented in this file.
   alignments and point offsets use the shared drawing-anchor layout, keeping backgrounds out of
   header/body flow while retaining their size, stacking order, and inline/continuous fallbacks.
 
+- Preserve embedded image and SVG identities when pagination promotes or repeats drawings, so an already-reported decoding failure does not become a false serialization error. Newly damaged resources still fail verification.
+
 - Paginated DrawingML pictures behind text or without wrapping use the shared drawing-anchor
   placement, including page-relative sizing. Full-page header backgrounds no longer consume the
   body area; linked images retain their contents and ordinary wrapping pictures keep their flow.
