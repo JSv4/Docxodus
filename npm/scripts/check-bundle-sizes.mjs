@@ -17,8 +17,8 @@ const budgetsKiB = {
   'embed.bundle.js': 139,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   'embed.iife.js': 139,
-  // Individually fitted inline pictures bring the current editor to 117.2 KiB gzip.
-  'editor.bundle.js': 118,
+  // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
+  'editor.bundle.js': 119,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
   'pagination.bundle.js': 36,
