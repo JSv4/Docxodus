@@ -164,16 +164,18 @@ internal sealed record IrInlineImage(Uri PartUri, IrHash ImageBytesHash, long Wi
 /// <c>w:txbxContent</c> in document order and emits one <see cref="IrTextbox"/> per occurrence, so
 /// the IR's flat text and anchor set mirror the ORACLE's <c>Descendants(w:t)</c>/
 /// <c>DescendantsAndSelf</c> walks, which likewise traverse both the Choice and the Fallback.</para>
-/// <para><b>Markdown-invisible, index/preview-visible.</b> The oracle's <c>GroupInlineRuns</c> walks
-/// only <c>w:r</c>/<c>w:hyperlink</c>/<c>w:ins</c>/<c>w:del</c>, so textbox content is DROPPED from the
-/// rendered markdown — but its <c>w:t</c> text still flows into <c>ComputeTextPreview</c>/
-/// <c>ScopeHasContent</c> (both <c>Descendants(w:t)</c>) and its inner paragraphs are indexed via
-/// <c>DescendantsAndSelf</c>. The emitter mirrors all three: it skips this node in run grouping,
-/// includes its inner text in flat-text/preview, and descends into <see cref="Blocks"/> for the index.</para>
+/// <para><b>Markdown projection.</b> The selected compatibility branch renders after its host block.
+/// Both branches remain modeled for comparison and indexed for source addressing. The reader captures
+/// branch selection before discarding sources; this display fact does not participate in equality.</para>
 /// <para><b>Equality.</b> Inner blocks compose by value (<see cref="IrNodeList{T}"/>), so two textboxes
 /// with the same modeled inner blocks are equal regardless of source representation (Choice vs Fallback).</para>
 /// </remarks>
-internal sealed record IrTextbox(IrNodeList<IrBlock> Blocks) : IrInline;
+internal sealed record IrTextbox(IrNodeList<IrBlock> Blocks) : IrInline
+{
+    public bool IsSelectedForProjection { get; init; } = true;
+    public bool Equals(IrTextbox? other) => other is not null && Blocks.Equals(other.Blocks);
+    public override int GetHashCode() => Blocks.GetHashCode();
+}
 
 /// <summary>
 /// An unmodeled inline element preserved opaquely: its element name plus the canonical hash of
