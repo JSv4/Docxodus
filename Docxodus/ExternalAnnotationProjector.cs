@@ -649,18 +649,19 @@ public static class ExternalAnnotationProjector
                 xmlSafe = xmlSafe.Replace(entity, numeric);
         }
 
-        // Try parsing as-is first (single root element)
+        // Try parsing as-is first (single root element). Both parses refuse markup nested past the depth
+        // limit, which the projection's walks could not survive (issue #1389).
         try
         {
-            var result = XElement.Parse(xmlSafe);
+            var result = Internal.DepthLimitedXmlReader.ParseElement(xmlSafe);
             wasWrapped = false;
             return result;
         }
-        catch (System.Xml.XmlException)
+        catch (System.Xml.XmlException e) when (e is not Verification.XmlDepthLimitException)
         {
             // Multiple roots or other XML issue - wrap in synthetic root
             wasWrapped = true;
-            return XElement.Parse($"<{FragmentWrapper}>{xmlSafe}</{FragmentWrapper}>");
+            return Internal.DepthLimitedXmlReader.ParseElement($"<{FragmentWrapper}>{xmlSafe}</{FragmentWrapper}>");
         }
     }
 

@@ -190,7 +190,9 @@ internal static class MarkupCompatibilityNormalizer
         XDocument doc;
         try
         {
-            doc = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
+            // Depth-limited: the repairs below rewrite the tree recursively, and the candidates are every
+            // .xml entry, including ones no relationship reaches and the read step never measured (#1389).
+            doc = Internal.DepthLimitedXmlReader.Parse(xml, LoadOptions.PreserveWhitespace);
         }
         catch (System.Xml.XmlException)
         {

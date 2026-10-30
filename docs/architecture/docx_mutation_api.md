@@ -2497,7 +2497,7 @@ Find a multi-paragraph clause or pattern that straddles a paragraph break → Gr
 
 ### Performance
 
-~400 ms for a full-document grep over the 150 KB NVCA Model COI (~500 anchors, ~31 underscore-placeholder matches). Scales linearly with document size + match count.
+~400 ms for a full-document grep over the 150 KB NVCA Model COI (~500 anchors, ~31 underscore-placeholder matches). Scales linearly with document size + match count: each part is read once per search to find its anchored blocks (`AnchorTarget.ResolveAll`), where resolving every anchor separately walked the whole part each time and made a 16,000-paragraph grep take over two minutes (issue #1389).
 
 ### Known limits
 
@@ -2733,6 +2733,7 @@ Errors are grouped by what the agent should do in response, not by where in the 
 | Re-query `ListStyles()` for a current style id, or `GetListMembership()` for the valid numbering level | `UnknownStyle`, `InvalidListLevel` |
 | Fix the op's field values (the message names the constraint OOXML can't express) | `InvalidPageNumbering`, `InvalidPageSetup`, `InvalidParagraphFormat`, `InvalidListStartValue`, `InvalidTableStyling`, `InvalidTableMerge` |
 | Use `Raw.GetXml(anchor)` as a template, mutate, resubmit | `MalformedXml`, `DisallowedNamespace`, `IncompatibleElementType`, `ValidationFailed` |
+| Edit somewhere shallower: the edit would nest its part past the depth limit (message starts `xml_depth_limit_exceeded:`; any op, rolled back) | `ValidationFailed` |
 | Stop, reopen, or accept "no more history" | `SessionDisposed`, `NothingToUndo`, `NothingToRedo` |
 | Should not happen; treat as a bug. Op is rolled back, safe to retry once or report. Full exception is on `session.LastInternalError` | `InternalError` |
 | Close the session and reopen it from the last known-good bytes. A failed op's rollback also failed, so the document may be half-changed (`session.IsCorrupted`, cause on `session.LastRollbackError`). The failing call and every later mutation report it; reads are not refused | `SessionCorrupted` |

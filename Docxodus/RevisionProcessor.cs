@@ -20,7 +20,7 @@ namespace Docxodus
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(document))
             {
-                using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument doc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     RejectRevisions(doc);
                 }
@@ -30,6 +30,7 @@ namespace Docxodus
 
         public static void RejectRevisions(WordprocessingDocument doc)
         {
+            using var depthScope = Internal.PartDepthGuard.Enter(doc);
             // Word's note-lifecycle rule, reject side (issues #614, #636): a definition this
             // reject both orphaned and emptied goes with its citation. Rationale, the emptied
             // guard, and its interlocks live with the rule's owner:
@@ -1307,7 +1308,7 @@ namespace Docxodus
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(document))
             {
-                using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument doc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     AcceptRevisions(doc);
                 }
@@ -1317,6 +1318,7 @@ namespace Docxodus
 
         public static void AcceptRevisions(WordprocessingDocument doc)
         {
+            using var depthScope = Internal.PartDepthGuard.Enter(doc);
             // Word's note-lifecycle rule, accept side (issue #631): a definition this accept both
             // orphaned and stripped of its blocks is a note the redline wholly deleted, and it goes
             // with its citation. Why the blockless guard makes this safe for the other husk shape
@@ -3392,7 +3394,7 @@ namespace Docxodus
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(document))
             {
-                using (WordprocessingDocument wdoc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument wdoc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     return RevisionAccepter.HasTrackedRevisions(wdoc);
                 }

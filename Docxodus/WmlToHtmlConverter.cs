@@ -1041,7 +1041,7 @@ namespace Docxodus
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
             {
-                using (WordprocessingDocument document = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument document = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     return ConvertToHtml(document, htmlConverterSettings);
                 }
@@ -1120,6 +1120,7 @@ namespace Docxodus
 
         public static XElement ConvertToHtml(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings htmlConverterSettings)
         {
+            using var depthScope = Internal.PartDepthGuard.Enter(wordDoc);
             // Some older Word producers store a DrawingML textbox's body in a related XML part
             // instead of the inline w:txbxContent normally expected by wps:txbx. Bring that
             // body into its owning content part before the normal simplification and formatting
@@ -1365,7 +1366,7 @@ namespace Docxodus
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
             {
-                using (WordprocessingDocument document = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument document = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     return GetDocumentMetadata(document);
                 }
@@ -1385,6 +1386,8 @@ namespace Docxodus
             var mainDocPart = wordDoc.MainDocumentPart!;
             if (mainDocPart == null)
                 return metadata;
+            // Only the main story is walked recursively (nested tables); the other parts are read flat.
+            Internal.PartDepthGuard.EnsurePart(mainDocPart);
 
             var xDoc = mainDocPart.GetXDocument();
             var body = xDoc.Root?.Element(W.body);

@@ -49,7 +49,7 @@ namespace Docxodus
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(document))
             {
-                using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument doc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     AssembleFormatting(doc, settings);
                 }
@@ -59,6 +59,7 @@ namespace Docxodus
 
         public static void AssembleFormatting(WordprocessingDocument wDoc, FormattingAssemblerSettings settings)
         {
+            using var depthScope = Internal.PartDepthGuard.Enter(wDoc);
             // word/styles.xml is optional in OOXML, but the assembler reads StyleDefinitionsPart
             // throughout (and ClearStyles writes it), so ensure it exists up front — a styles-less
             // package then resolves everything to built-in defaults instead of throwing. The

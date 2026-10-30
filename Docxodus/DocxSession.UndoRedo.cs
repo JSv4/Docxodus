@@ -44,7 +44,10 @@ public sealed partial class DocxSession
             ? new EditError(EditErrorCode.SessionCorrupted,
                 $"{ex.Message} (and rolling the edit back failed too, so the document may be half-changed; "
                 + "reopen the session from known-good bytes)", anchorId)
-            : new EditError(EditErrorCode.InternalError, ex.Message, anchorId);
+            // An edit that would nest its part past the depth limit is refused as a failed check of
+            // the result, as a raw edit's validation is (issue #1389).
+            : new EditError(ex is Verification.XmlDepthLimitException ? EditErrorCode.ValidationFailed : EditErrorCode.InternalError,
+                ex.Message, anchorId);
     }
 
     /// <summary>

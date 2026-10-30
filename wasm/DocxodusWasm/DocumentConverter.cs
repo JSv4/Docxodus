@@ -1893,6 +1893,9 @@ public partial class DocumentConverter
         {
             var sw = Stopwatch.StartNew();
 
+            // The shared read step (strict conversion, repair, the XML depth door of issue #1389).
+            docxBytes = StrictOoxmlNormalizer.NormalizeForReading(docxBytes);
+
             // Phase 1: Create MemoryStream and open document
             using var memoryStream = new MemoryStream();
             memoryStream.Write(docxBytes, 0, docxBytes.Length);
@@ -1901,6 +1904,8 @@ public partial class DocumentConverter
             sw.Restart();
 
             using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
+            // Opened from bytes the read step's depth door measured (issue #1389).
+            Docxodus.Internal.PartDepthGuard.MarkMeasured(wordDoc);
             timings["2_OpenXml_Open"] = sw.Elapsed.TotalMilliseconds;
             sw.Restart();
 
@@ -1980,6 +1985,8 @@ public partial class DocumentConverter
             freshStream.Write(docxBytes, 0, docxBytes.Length);
             freshStream.Position = 0;
             using var freshDoc = WordprocessingDocument.Open(freshStream, true);
+            // Opened from bytes the read step's depth door measured (issue #1389).
+            Docxodus.Internal.PartDepthGuard.MarkMeasured(freshDoc);
 
             sw.Restart();
             var htmlElement = WmlToHtmlConverter.ConvertToHtml(freshDoc, settings);
@@ -2028,6 +2035,9 @@ public partial class DocumentConverter
             // PHASE 1: DOCUMENT LOADING
             // ═══════════════════════════════════════════════════════════════════
 
+            // The shared read step (strict conversion, repair, the XML depth door of issue #1389).
+            docxBytes = StrictOoxmlNormalizer.NormalizeForReading(docxBytes);
+
             // 1a: Create MemoryStream
             using var memoryStream = new MemoryStream();
             memoryStream.Write(docxBytes, 0, docxBytes.Length);
@@ -2037,6 +2047,8 @@ public partial class DocumentConverter
 
             // 1b: Open as WordprocessingDocument (this decompresses the ZIP)
             using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
+            // Opened from bytes the read step's depth door measured (issue #1389).
+            Docxodus.Internal.PartDepthGuard.MarkMeasured(wordDoc);
             timings["Load_2_OpenXml_Open"] = sw.Elapsed.TotalMilliseconds;
             sw.Restart();
 
@@ -2136,6 +2148,8 @@ public partial class DocumentConverter
             freshStream.Write(docxBytes, 0, docxBytes.Length);
             freshStream.Position = 0;
             using var freshDoc = WordprocessingDocument.Open(freshStream, true);
+            // Opened from bytes the read step's depth door measured (issue #1389).
+            Docxodus.Internal.PartDepthGuard.MarkMeasured(freshDoc);
 
             sw.Restart();
             var htmlElement = WmlToHtmlConverter.ConvertToHtml(freshDoc, settings);

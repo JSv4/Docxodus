@@ -190,7 +190,7 @@ A null lower-level digest means the comparison is unavailable, not unequal.
 
 Schema v1 parses with DTD processing prohibited, no external resolver, preserved comments,
 processing instructions, and whitespace, a configured character ceiling, and a fixed maximum
-element depth of 256. The depth ceiling applies again at digest entry points so a caller-supplied
+element depth of 256. It also reports what the shared read step's depth door (`Internal/PartDepthGuard.cs`, issue #1389) refuses: a part reached by a story relationship or declared a story content type nested past 128, or a reachable part past 256, measured as the packaging layer assembles it (interleaved pieces joined). The depth ceiling applies again at digest entry points so a caller-supplied
 tree cannot reach recursive normalization with adversarial nesting. Its digest token stream applies
 these rules:
 

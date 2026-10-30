@@ -453,7 +453,7 @@ internal static partial class PackageOpenRepair
         {
             foreach (var entry in source.Entries)
             {
-                if (PartName("/" + InterleavedPiece().Replace(entry.FullName, "")) is { } part)
+                if (PartName("/" + WithoutPieceSuffix(entry.FullName)) is { } part)
                 {
                     if (!_parts.TryAdd(part, part))
                         _ambiguous.Add(part);
@@ -653,6 +653,11 @@ internal static partial class PackageOpenRepair
     // escaped ASCII character with it.
     [GeneratedRegex("%[89a-f][0-9a-f]", RegexOptions.IgnoreCase)]
     private static partial Regex EscapeHex();
+
+    /// <summary>The name of the part an interleaved piece entry (<c>name/[n].piece</c>,
+    /// <c>name/[n].last.piece</c>) belongs to, as System.IO.Packaging assembles it; any other entry
+    /// name unchanged.</summary>
+    internal static string WithoutPieceSuffix(string entryName) => InterleavedPiece().Replace(entryName, "");
 
     [GeneratedRegex("/\\[\\d+\\](\\.last)?\\.piece$", RegexOptions.IgnoreCase)]
     private static partial Regex InterleavedPiece();

@@ -122,6 +122,8 @@ internal static class HtmlConversionOps
         memoryStream.Write(docxBytes, 0, docxBytes.Length);
         memoryStream.Position = 0;
         using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
+        // Opened from bytes the read step's depth door measured (issue #1389).
+        PartDepthGuard.MarkMeasured(wordDoc);
 
         var renderComments = options.CommentRenderMode >= 0;
         bool renderPagination = options.PaginationMode == (int)PaginationMode.Paginated;
@@ -611,6 +613,8 @@ internal static class HtmlConversionOps
             shellStream.Position = 0;
             session.RenderShellStream = shellStream;
             session.RenderShellDoc = WordprocessingDocument.Open(shellStream, true);
+            // Built from the session's own package, which the door and the edit watch bound (issue #1389).
+            PartDepthGuard.MarkMeasured(session.RenderShellDoc);
             session.RenderShellSignature = sig;
         }
 
@@ -1181,6 +1185,8 @@ internal static class HtmlConversionOps
         }
         blockStream.Position = 0;
         using var renderDoc = WordprocessingDocument.Open(blockStream, true);
+        // Built from a block of bytes the read step's depth door measured (issue #1389).
+        PartDepthGuard.MarkMeasured(renderDoc);
         var blockSettings = BuildBlockConverterSettings(options);
         if (identity is not null) blockSettings.SourceAnchorIdentityProvider = identity.Resolve;
         else if (options.CommentRenderMode >= 0) blockSettings.SourceAnchorIdentityProvider = CommentStoryIdentity;
