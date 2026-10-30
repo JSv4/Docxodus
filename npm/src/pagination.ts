@@ -2780,6 +2780,16 @@ export class PaginationEngine {
     const textNodes: Text[] = [];
     const textStarts = new Map<Text, number>();
     const lastTextByAtomic = new Map<HTMLElement, Text>();
+    const layoutAtoms = this.rangeAtomicInlineBoxes(paragraph);
+    const atomicAncestor = (element: Element | null): HTMLElement | null => {
+      let outer: HTMLElement | null = null;
+      for (let current = element; current && current !== paragraph; current = current.parentElement) {
+        if (layoutAtoms.has(current as HTMLElement) || current.matches("[data-field], [data-docx-word-line=true]")) {
+          outer = current as HTMLElement;
+        }
+      }
+      return outer;
+    };
     const breaks: Array<{ element: HTMLElement; textOffset: number }> = [];
     const images: Array<{ element: HTMLElement; textOffset: number }> = [];
     const walker = this.document.createTreeWalker(paragraph,
@@ -2807,11 +2817,8 @@ export class PaginationEngine {
       textNodes.push(textNode);
       flattenedChunks.push(textNode.data);
       flattenedLength += textNode.data.length;
-      let field = textNode.parentElement?.closest<HTMLElement>("[data-field], [data-docx-word-line=true]") ?? null;
-      while (field?.parentElement?.closest<HTMLElement>("[data-field]")) {
-        field = field.parentElement.closest<HTMLElement>("[data-field]");
-      }
-      if (field && paragraph.contains(field)) lastTextByAtomic.set(field, textNode);
+      const field = atomicAncestor(textNode.parentElement);
+      if (field) lastTextByAtomic.set(field, textNode);
     }
     const flattenedText = flattenedChunks.join("");
     if (!this.hasVisibleText(flattenedText)) return [];
@@ -2846,7 +2853,7 @@ export class PaginationEngine {
 
     for (const { element, textOffset } of images) {
       this.checkpoint();
-      if (element.closest("[data-field], [data-list-marker], a[data-comment-id]")) continue;
+      if (atomicAncestor(element) || element.closest("[data-list-marker], a[data-comment-id]")) continue;
       const parent = element.parentNode;
       if (!parent) continue;
       const offset = Array.prototype.indexOf.call(parent.childNodes, element);
@@ -2859,7 +2866,7 @@ export class PaginationEngine {
       // Fields and marker wrappers remain atomic. Do not cut after an empty
       // line: a trailing BR alone does not create its final blank line in HTML.
       // Keeping a consecutive break sequence on the tail preserves those lines.
-      if (element.closest("[data-field], [data-list-marker], a[data-comment-id]")
+      if (atomicAncestor(element) || element.closest("[data-list-marker], a[data-comment-id]")
           || flattenedText[textOffset - 1] === "\n") continue;
       const parent = element.parentNode;
       if (!parent) continue;
@@ -2876,7 +2883,7 @@ export class PaginationEngine {
       const atomic = node.parentElement?.closest<HTMLElement>(
         "[data-field], [data-list-marker], a[data-comment-id], [data-docx-word-line=true]",
       );
-      if (atomic && paragraph.contains(atomic)) continue;
+      if (atomicAncestor(node.parentElement) || (atomic && paragraph.contains(atomic))) continue;
 
       // Only CSS-collapsible ASCII whitespace is a wrapping opportunity. JS's
       // broader `\s` class includes NBSP and other explicitly non-breaking text.
@@ -2907,13 +2914,11 @@ export class PaginationEngine {
       }
     }
 
-    // Fields and fitted Word lines split only after their complete outer wrapper.
+    // Fields, fitted Word lines and known layout boxes split only after their complete outer wrapper.
     // Starting the tail at the parent's child boundary prevents Range from
     // cloning an empty `[data-field]` shell that substitution could repopulate.
-    for (const field of Array.from(paragraph.querySelectorAll<HTMLElement>("[data-field], [data-docx-word-line=true]"))) {
+    for (const [field, last] of lastTextByAtomic) {
       this.checkpoint();
-      if (field.parentElement?.closest("[data-field]")) continue;
-      const last = lastTextByAtomic.get(field);
       const parent = field.parentNode;
       if (!last || !parent) continue;
       const childIndex = Array.prototype.indexOf.call(parent.childNodes, field);
@@ -3159,6 +3164,33 @@ export class PaginationEngine {
       && (style.right === "auto" || parseFloat(style.right) === 0));
   }
 
+  /** Converter shape placeholders and tab segments can move as complete inline boxes. */
+  private rangeAtomicInlineBoxes(paragraph: HTMLElement): Set<HTMLElement> {
+    const boxes = new Set<HTMLElement>();
+    for (const marker of Array.from(paragraph.querySelectorAll<HTMLElement>(
+      '[data-docx-shape="unrendered"], [data-docx-tab]',
+    ))) {
+      let box: HTMLElement | null = marker;
+      if (marker.hasAttribute("data-docx-tab")) {
+        if (marker.childNodes.length || this.view.getComputedStyle(marker).height !== "0px") continue;
+        for (box = marker.parentElement; box && box !== paragraph; box = box.parentElement) {
+          if (this.view.getComputedStyle(box).display === "inline-flex") break;
+        }
+        if (!box || box === paragraph) continue;
+      } else if (marker.children.length || this.view.getComputedStyle(marker).display !== "inline-block") {
+        continue;
+      }
+      if (box.localName !== "span" || box.querySelector("br, img")) continue;
+      if ([box, ...Array.from(box.querySelectorAll<HTMLElement>("*"))].some((element) => {
+        const style = this.view.getComputedStyle(element);
+        return !this.hasRangeFragmentSafePosition(element, style)
+          || style.float !== "none" || style.transform !== "none";
+      })) continue;
+      boxes.add(box);
+    }
+    return boxes;
+  }
+
   /**
    * A range clone preserves nested inline formatting exactly. Anything that establishes its own
    * box/layout context is deferred until a future fragmenter can model it accurately. Callers
@@ -3186,12 +3218,13 @@ export class PaginationEngine {
       return false;
     }
 
-    // A list item's number and the tab after a number render as aligned boxes ahead of the
-    // text. No fragment endpoint falls inside them, so they always stay whole with the first
-    // fragment and their inner layout is never cut.
-    const leading = this.leadingAtomicBoxes(paragraph);
+    // List markers stay with the first fragment. Known converter layout boxes also have
+    // no internal endpoints, so moving a complete box preserves its inner layout.
+    const leading = new Set([...this.leadingAtomicBoxes(paragraph), ...this.rangeAtomicInlineBoxes(paragraph)]);
     for (const descendant of Array.from(paragraph.querySelectorAll<HTMLElement>("*"))) {
-      if (leading.some((box) => box.contains(descendant))) continue;
+      let carrier: HTMLElement | null = descendant;
+      while (carrier && carrier !== paragraph && !leading.has(carrier)) carrier = carrier.parentElement;
+      if (carrier && leading.has(carrier)) continue;
       const style = this.view.getComputedStyle(descendant);
       const wordLine = descendant.dataset.docxWordLine === "true"
         && Number(descendant.parentElement!.dataset.docxWordFit) > 0

@@ -49,6 +49,7 @@ All notable changes to this project will be documented in this file.
 - Blank lines inside fixed floating text boxes placed outside the paper no longer fail
   source coverage. Visible text and ordinary flow clipping retain the completeness guard.
 
+- Continue long paragraphs around complete converter tab segments and unsupported-shape placeholders, retaining every inline box and its content.
 
 - Preserve inherited typography when floating drawings move onto the page, including the visible fallback text of images that cannot decode.
 - Preserve embedded image and SVG identities when pagination promotes or repeats drawings, so an already-reported decoding failure does not become a false serialization error. Newly damaged resources still fail verification.
