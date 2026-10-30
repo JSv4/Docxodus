@@ -5968,6 +5968,52 @@ export class PaginationEngine {
     }
   }
 
+  /** Keep a raised inline text box's paint above the body band without moving its flow slot. */
+  private positionRaisedInlineTextBoxes(pageBox: HTMLElement, contentArea: HTMLElement, dims: PageDimensions): void {
+    const paper = pageBox.getBoundingClientRect();
+    const body = contentArea.getBoundingClientRect();
+    const pixelsPerPoint = paper.width / dims.pageWidth;
+    if (!(pixelsPerPoint > 0)) return;
+    for (const box of Array.from(contentArea.querySelectorAll<HTMLElement>('[data-docx-textbox="true"]'))) {
+      const rect = box.getBoundingClientRect();
+      const style = this.view.getComputedStyle(box);
+      if (box.dataset.docxDrawingAnchor || style.position !== 'static' || style.display !== 'inline-block' || style.transform !== 'none'
+        || !(rect.width > 0 && rect.height > 0) || rect.top >= body.top - 0.5 || rect.bottom > body.bottom + 0.5) continue;
+      // A cell, nested text box, or other authored clip remains authoritative. Moving through
+      // an ancestor's compositing effects would also change the object's visible presentation.
+      let eligible = true;
+      for (let ancestor = box.parentElement; ancestor && ancestor !== contentArea; ancestor = ancestor.parentElement) {
+        const inherited = this.view.getComputedStyle(ancestor);
+        if (inherited.overflowX !== 'visible' || inherited.overflowY !== 'visible'
+          || inherited.clipPath !== 'none' || inherited.transform !== 'none'
+          || inherited.filter !== 'none' || inherited.opacity !== '1' || inherited.visibility !== 'visible') {
+          eligible = false;
+          break;
+        }
+      }
+      if (!eligible) continue;
+      const placeholder = box.cloneNode(false) as HTMLElement;
+      for (const attribute of Array.from(placeholder.attributes)) {
+        if (attribute.name !== 'class' && attribute.name !== 'style') placeholder.removeAttribute(attribute.name);
+      }
+      placeholder.setAttribute('aria-hidden', 'true');
+      placeholder.style.visibility = 'hidden';
+      placeholder.style.width = `${rect.width / pixelsPerPoint}pt`;
+      placeholder.style.height = `${rect.height / pixelsPerPoint}pt`;
+      placeholder.style.boxSizing = 'border-box';
+      box.before(placeholder);
+      this.promoteSourceContent(box, pageBox);
+      box.dataset.docxRaisedInlineTextbox = 'true';
+      box.style.position = 'absolute';
+      box.style.left = `${(rect.left - paper.left) / pixelsPerPoint}pt`;
+      box.style.top = `${(rect.top - paper.top) / pixelsPerPoint}pt`;
+      box.style.width = `${rect.width / pixelsPerPoint}pt`;
+      box.style.height = `${rect.height / pixelsPerPoint}pt`;
+      box.style.boxSizing = 'border-box';
+      box.style.margin = '0';
+    }
+  }
+
   /** Resolve legacy paragraph frames after their ordinary anchor paragraphs have flowed. */
   private positionTextFrames(pageBox: HTMLElement, dims: PageDimensions, pageNumber: number): HTMLElement[] {
     const frames = Array.from(pageBox.querySelectorAll<HTMLElement>('[data-docx-text-frame="true"]'));
@@ -6709,6 +6755,8 @@ export class PaginationEngine {
       Math.max(paper.top, header?.getBoundingClientRect().bottom ?? paper.top),
       Math.min(paper.bottom, footer?.getBoundingClientRect().top ?? paper.bottom,
         notesEl?.getBoundingClientRect().top ?? paper.bottom), paper);
+
+    this.positionRaisedInlineTextBoxes(pageBox, contentArea, dims);
 
     return {
       pageNumber,
