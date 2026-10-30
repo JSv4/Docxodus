@@ -1835,6 +1835,7 @@ internal static class IrReader
     /// </summary>
     private static void AppendTextboxes(XElement carrier, ReadContext ctx, List<IrInline> sink)
     {
+        IrHash? carrierDigest = null;
         foreach (var txbx in OutermostTextboxBodies(carrier))
         {
             if (ctx.TextboxDepth >= MaxTextboxDepth)
@@ -1843,12 +1844,21 @@ internal static class IrReader
                 continue;
             }
 
+            if (carrierDigest is null)
+            {
+                var shell = new XElement(carrier);
+                foreach (var body in shell.DescendantsAndSelf(WTxbxContent)) body.RemoveNodes();
+                carrierDigest = ctx.DrawingGraphHasher.Hash(shell);
+            }
             var innerCtx = ctx.IntoTextbox();
             var blocks = new List<IrBlock>();
             foreach (var child in txbx.Elements())
                 AppendBlocks(child, innerCtx, blocks);
             sink.Add(new IrTextbox(IrNodeList.From(blocks))
-            { IsSelectedForProjection = WmlToMarkdownConverter.IsSelectedMarkup(txbx) });
+            {
+                IsSelectedForProjection = WmlToMarkdownConverter.IsSelectedMarkup(txbx),
+                CarrierDigest = carrierDigest.Value,
+            });
         }
     }
 

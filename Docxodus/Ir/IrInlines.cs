@@ -173,6 +173,9 @@ internal sealed record IrInlineImage(Uri PartUri, IrHash ImageBytesHash, long Wi
 internal sealed record IrTextbox(IrNodeList<IrBlock> Blocks) : IrInline
 {
     public bool IsSelectedForProjection { get; init; } = true;
+    // Complete outer carrier with textbox bodies removed: geometry/relationships remain independent
+    // of nested body edits, and travel with this atom through safe paragraph splits and merges.
+    public IrHash CarrierDigest { get; init; }
     public bool Equals(IrTextbox? other) => other is not null && Blocks.Equals(other.Blocks);
     public override int GetHashCode() => Blocks.GetHashCode();
 }
