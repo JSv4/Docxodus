@@ -72,3 +72,12 @@ export function wideBodyTableDocx(): Uint8Array {
     </w:tblPr><w:tblGrid>${widths.map(width => `<w:gridCol w:w="${width}"/>`).join('')}</w:tblGrid>${rows}</w:tbl>
     <w:p><w:r><w:t>Batch complete.</w:t></w:r></w:p>`);
 }
+
+export function inlineImageParagraphDocx(labels: boolean): Uint8Array {
+  const sizes = [[410, 250], [360, 280], [425, 260], [390, 300]];
+  const images = sizes.map(([width, height], index) => fittingImageRun(index + 1, width, height)
+    + (labels ? `<w:r><w:t xml:space="preserve"> Maple${index + 1} recorded. </w:t></w:r>` : '')).join('');
+  return pageFittingDocx(`<w:p><w:pPr><w:keepLines w:val="0"/><w:widowControl w:val="0"/>
+    <w:spacing w:after="0"/></w:pPr>${images}</w:p>
+    <w:p><w:r><w:t>Image inventory complete.</w:t></w:r></w:p>`);
+}
