@@ -1065,7 +1065,7 @@ public static class WmlToMarkdownConverter
     // emit the shape's blocks before the next source block, with their own addressable anchors.
     private static void EmitTextboxes(XElement host, EmitContext ctx)
     {
-        if (ctx.TextboxDepth >= Ir.IrReader.MaxTextboxDepth) return;
+        if (ctx.TextboxDepth >= Ir.IrReader.MaxTextboxDepth || !host.Descendants(W.txbxContent).Any()) return;
         foreach (var body in TextboxBodies(host))
         {
             var revision = ctx.InheritedRevision == Revision.Deleted || body.Ancestors().TakeWhile(a => a != host)
