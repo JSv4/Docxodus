@@ -13,11 +13,12 @@ const budgetsKiB = {
   // pagination measured 136.950/136.991/116.339/33.813 KiB before and
   // 137.195/137.229/116.591/34.065 KiB after. Raise only the exhausted budgets by 1 KiB.
   // Bookmark-aware table wrappers add 0.044 KiB (137.986 -> 138.030); restore 1 KiB headroom.
-  'embed.bundle.js': 139,
+  // Combined continuation and frame fixes measure 139.140/139.183/118.505 KiB.
+  'embed.bundle.js': 140,
   // Empty tab continuation adds 0.037 KiB here (137.979 -> 138.016); restore 1 KiB headroom.
-  'embed.iife.js': 139,
+  'embed.iife.js': 140,
   // Including floated-picture geometry adds 0.158 KiB here (116.941 -> 117.099).
-  'editor.bundle.js': 118,
+  'editor.bundle.js': 119,
   // Oversized merged-grid recovery adds 0.389 KiB (34.870 -> 35.259); retain a tight 36 KiB gate.
   'pagination.bundle.js': 36,
   'session.bundle.js': 9,
