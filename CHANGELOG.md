@@ -46,6 +46,11 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Preserve supported nonwrapping VML image positions in paginated export. Explicit page/margin
+  alignments and point offsets use the shared drawing-anchor layout, keeping backgrounds out of
+  header/body flow while retaining their size and stacking order. Inline, continuous, and explicitly
+  wrapping images retain their established fallbacks regardless of z-order.
+
 - Paginated DrawingML pictures without wrapping use the shared drawing-anchor
   placement, including page-relative sizing. Full-page header backgrounds no longer consume the
   body area; linked images retain their contents and explicitly wrapping pictures keep their flow,
