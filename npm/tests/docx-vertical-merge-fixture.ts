@@ -7,6 +7,7 @@ export interface VerticalMergeOptions {
   rowCount?: number;
   colSpan?: 1 | 2;
   rightMerge?: { start: number; span: number };
+  rowHeightRule?: 'atLeast' | 'exact';
 }
 
 /** Original two-column register; the control differs only in vertical merge metadata. */
@@ -24,7 +25,7 @@ export function generateVerticalMergeDocx(options: VerticalMergeOptions = {}): U
       ? '<w:vMerge w:val="restart"/>' : rightContinues ? '<w:vMerge/>' : '';
     const cell = (content: string, width: number, properties = '') => `<w:tc><w:tcPr>
       <w:tcW w:w="${width}" w:type="dxa"/>${properties}</w:tcPr>${content}</w:tc>`;
-    return `<w:tr><w:trPr><w:trHeight w:val="1200" w:hRule="atLeast"/><w:cantSplit/></w:trPr>`
+    return `<w:tr><w:trPr><w:trHeight w:val="1200" w:hRule="${options.rowHeightRule ?? 'atLeast'}"/><w:cantSplit/></w:trPr>`
       + cell(continues ? '<w:p/>' : paragraph(`Left${String(row).padStart(2, '0')} Cedar tray.`), columnWidth * colSpan,
         (colSpan > 1 ? `<w:gridSpan w:val="${colSpan}"/>` : '') + merge)
       + cell(rightContinues ? '<w:p/>' : paragraph(`Right${String(row).padStart(2, '0')} Archive register.`), columnWidth, rightMerge)
