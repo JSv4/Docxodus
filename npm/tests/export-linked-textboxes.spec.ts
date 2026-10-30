@@ -23,6 +23,14 @@ for (const mode of ['flow', 'fitting', 'unlinked', 'image', 'cross-page', 'tab']
     } finally { await task.destroy(); }
     expect(result.pageMap.pages).toHaveLength(mode === 'cross-page' ? 2 : 1);
     await page.setContent(result.html!);
+    if (mode === 'image') {
+      const picture = await page.locator('.page-box [data-docx-textbox] img').evaluate(image => {
+        const rect = image.getBoundingClientRect();
+        return { width: rect.width * .75, height: rect.height * .75 };
+      });
+      expect(picture.width).toBeCloseTo(20, 1);
+      expect(picture.height).toBeCloseTo(10, 1);
+    }
     const boxes = page.locator('.page-box [data-docx-textbox]');
     await expect(boxes).toHaveCount(mode === 'unlinked' ? 1 : 2);
     const values = await boxes.evaluateAll(boxes => boxes.map(box => ({ text: box.textContent, width: box.getBoundingClientRect().width * .75,
