@@ -5136,3 +5136,23 @@ host line, as it does for a text box in a run outside any control.)
 Code: `WmlToMarkdownConverter.GroupInlineRuns` (inline `w:sdt`/`w:smartTag` walk), and the HTML
 render's control removal `MarkupSimplifier.RemoveCustomXmlAndContentControlsTransform`. Fix: none needed for #1386;
 evaluating bindings would be a separate feature.
+
+### Move-source text and Word opening (#1420)
+
+A paragraph moved by comparison can contain either carrier under its source wrapper:
+
+```xml
+<w:moveFrom w:id="1" w:author="Reviewer"><w:r><w:delText>Moved text</w:delText></w:r></w:moveFrom>
+<!-- Word's Compare uses w:t in the same position. -->
+<w:moveFrom w:id="1" w:author="Reviewer"><w:r><w:t>Moved text</w:t></w:r></w:moveFrom>
+```
+
+| Consumer | Observed behavior |
+|---|---|
+| Word for Microsoft 365 desktop | The issue reporter observed that the first form failed to open, while replacing `w:delText` with `w:t` opened and showed a move. |
+| Word Online | Both current-main and corrected comparison and consolidation outputs opened and displayed the move in the authored benchmark case; this did not reproduce the reported desktop failure. |
+| LibreOffice | The reporter observed that it opened the first form; the corrected case also opens and renders. |
+| Docxodus | Compare, Consolidate and tracked `MoveBlock` previously converted source-move text and field instructions to deletion carriers. `IrMarkupRenderer.WrapRunLevel` and `DocxSession.MarkParagraphContentAndMark` now reserve that conversion for `w:del`, retaining `w:t` and `w:instrText` in `w:moveFrom`. |
+
+The source move is still removed on accept and restored on reject. The desktop observation is
+reported in the issue; the Word Online check is not evidence that the desktop behavior was reproduced.

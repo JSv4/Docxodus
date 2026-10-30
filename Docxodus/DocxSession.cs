@@ -2739,9 +2739,8 @@ public sealed partial class DocxSession : IDisposable
     // w:ins and w:moveTo are transparent for the same reason: an insertion's text is
     // present in the document as ordinary w:t and is exactly what a reader sees, so it
     // belongs in the flat text every offset-addressed op works over. Their deleting
-    // counterparts w:del and w:moveFrom deliberately are NOT here — that content is
-    // w:delText, which RunText does not read, so deleted text stays out of the visible
-    // string and offsets keep addressing what the document actually shows. The same holds
+    // counterparts w:del and w:moveFrom deliberately are NOT here, so removed text stays
+    // out of the visible string and offsets address what the document actually shows. The same holds
     // for a w:del or w:moveFrom nested inside one of these containers, whatever its runs
     // hold: Word writes a move source's text as w:t, so it is skipped by element, not by
     // text name (issue #1282).

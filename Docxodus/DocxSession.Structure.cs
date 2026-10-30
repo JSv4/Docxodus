@@ -439,18 +439,17 @@ public sealed partial class DocxSession
     /// </summary>
     /// <remarks>
     /// Shared by whole-block deletion, text replacement, paragraph/table moves and paragraph/row insertion.
-    /// A DELETING wrapper also converts
+    /// A deletion also converts
     /// <c>w:t</c>→<c>w:delText</c> (and <c>w:instrText</c>→<c>w:delInstrText</c>), which is what
     /// Word writes, what <c>IrMarkupRenderer.ConvertTextToDelText</c> produces, and what
-    /// <see cref="RevisionProcessor"/>'s reject path swaps back. The paragraph mark belongs
+    /// <see cref="RevisionProcessor"/>'s reject path swaps back. Move sources retain ordinary text.
+    /// The paragraph mark belongs
     /// to the same operation unless the caller retains it (a replacement or a final retained paragraph).
     /// </remarks>
     private XElement? MarkParagraphContentAndMark(
         XElement paragraph, XName wrapperName, string author, string date,
         bool preserveParagraphMark = false, bool retainInlineStructure = false)
     {
-        bool deleting = wrapperName == W.del || wrapperName == W.moveFrom;
-
         // Hyperlinks/fields own their revised runs. A deletion also owns math objects (a
         // w:del > m:oMath envelope, as the comparison renderer writes) and, when the block
         // itself goes, inline SDTs: an inline control can itself be a w:del child, and deleting
@@ -477,7 +476,6 @@ public sealed partial class DocxSession
             var envelope = CreateRevisionEnvelope(wrapperName, stamp);
             element.ReplaceWith(envelope);
             envelope.Add(element);
-            if (deleting) ConvertTextToDeletedText(element);
         }
 
         return preserveParagraphMark

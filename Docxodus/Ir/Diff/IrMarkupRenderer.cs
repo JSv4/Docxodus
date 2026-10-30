@@ -2795,7 +2795,7 @@ internal static partial class IrMarkupRenderer
     /// row whose cells cannot be paired, say) can still draw one half whole. Accept and reject are unaffected:
     /// a moved-from run deletes like a deletion and a moved-to run inserts like an insertion.
     /// </summary>
-    private static void LowerUnpairedMoveRanges(List<XElement> blocks, IReadOnlySet<string> generatedNames)
+    internal static void LowerUnpairedMoveRanges(List<XElement> blocks, IReadOnlySet<string> generatedNames)
     {
         var starts = blocks.SelectMany(b => b.DescendantsAndSelf())
             .Where(e => e.Name == W.moveFromRangeStart || e.Name == W.moveToRangeStart)
@@ -2828,7 +2828,8 @@ internal static partial class IrMarkupRenderer
                     wrappers.Add(e);
             }
             foreach (var wrapper in wrappers)
-                wrapper.Name = isFrom ? W.del : W.ins;
+                if (isFrom) LowerMoveSource(wrapper);
+                else wrapper.Name = W.ins;
             start.Remove();
             end?.Remove();
         }
@@ -2836,17 +2837,28 @@ internal static partial class IrMarkupRenderer
 
     /// <summary>In-place rewrite of native move markup under one block to plain del/ins (mirrors
     /// <c>WmlComparer</c>'s <c>SimplifyMoveMarkupToDelIns</c>): <c>w:moveFrom</c> → <c>w:del</c>,
-    /// <c>w:moveTo</c> → <c>w:ins</c> (attributes + children preserved), and all four range markers removed.</summary>
+    /// <c>w:moveTo</c> → <c>w:ins</c>, and all four range markers removed.</summary>
     internal static void SimplifyMoveMarkup(XElement block)
     {
         foreach (var moveFrom in block.DescendantsAndSelf(W.moveFrom).ToList())
-            moveFrom.ReplaceWith(new XElement(W.del, moveFrom.Attributes(), moveFrom.Nodes()));
+            LowerMoveSource(moveFrom);
         foreach (var moveTo in block.DescendantsAndSelf(W.moveTo).ToList())
-            moveTo.ReplaceWith(new XElement(W.ins, moveTo.Attributes(), moveTo.Nodes()));
+            moveTo.Name = W.ins;
         block.DescendantsAndSelf()
             .Where(e => e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd ||
                         e.Name == W.moveToRangeStart || e.Name == W.moveToRangeEnd)
             .Remove();
+    }
+
+    /// <summary>Lower a move source to a deletion, preserving nested revisions and textbox text.</summary>
+    private static void LowerMoveSource(XElement moveFrom)
+    {
+        foreach (var text in moveFrom.Descendants().Where(e => e.Name == W.t || e.Name == W.instrText))
+            if (!text.Ancestors(W.txbxContent).Any() &&
+                !text.Ancestors().TakeWhile(e => !ReferenceEquals(e, moveFrom))
+                .Any(e => e.Name == W.ins || e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveTo))
+                text.Name = text.Name == W.t ? W.delText : W.delInstrText;
+        moveFrom.Name = W.del;
     }
 
     // ----------------------------------------------------------------- note-scope markup
@@ -5942,7 +5954,8 @@ internal static partial class IrMarkupRenderer
         }
 
         var clone = new XElement(runLevel);
-        if (IsDeleteGrade(kind))
+        // A move source retains ordinary text and field instructions; only a deletion uses delText.
+        if (kind == RevKind.Del)
             ConvertTextToDelText(clone);
         var rev = new XElement(RevElementName(kind), state.RevisionAttributes(), clone);
         if (insGrade)
