@@ -83,6 +83,12 @@ const serialProjects = [
     testMatch: /editor-multiblock-format\.spec\.ts/,
     use: { ...devices['Desktop Firefox'] },
   },
+  {
+    // Firefox caps oversized font probes; keep its paginated line geometry covered too.
+    name: 'firefox-pagination',
+    testMatch: /(?:pagination|editor-paginated)-line-pitch\.spec\.ts/,
+    use: { ...devices['Desktop Firefox'] },
+  },
 ];
 
 export default defineConfig({

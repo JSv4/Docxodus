@@ -16,12 +16,34 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * `hhea` table gives ascender 1901 + |descender| 483 + lineGap 0 = 2384 per 2048 units/em, so at
  * 10pt its natural line is 11.64pt; Chromium's rounding makes it 15px, 11.25pt.
  */
-const NATURAL_EM = 2384 / 2048;
 const FONT_SIZE_PT = 10;
 const fontBase64 = readFileSync(join(__dirname, '..', '..', 'docs', 'demo', 'fonts', 'docxodus-canvas-mono.woff2'))
   .toString('base64');
 
-test('paginated single-spaced lines advance by the font\'s unrounded natural height', async ({ page }) => {
+test('a hidden first measurement preserves Chromium natural-height precision after showing the document', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Chromium precision control for the capped-font fallback');
+  await page.goto('/test-harness.html');
+  const height = await page.evaluate(async () => {
+    const moduleUrl = 'http://localhost:8083/line-metrics.js';
+    const { applyUnroundedNormalLineHeights } = await import(moduleUrl);
+    const frame = document.createElement('iframe');
+    document.body.appendChild(frame);
+    const doc = frame.contentDocument!;
+    doc.body.innerHTML = '<p style="font:10pt/normal Liberation Serif">Natural height</p>';
+    const paragraph = doc.querySelector('p')!;
+    doc.body.style.display = 'none';
+    applyUnroundedNormalLineHeights(paragraph);
+    doc.body.style.display = '';
+    applyUnroundedNormalLineHeights(paragraph);
+    const measured = parseFloat(frame.contentWindow!.getComputedStyle(paragraph).lineHeight);
+    frame.remove();
+    return measured;
+  });
+  // Liberation Serif hhea: (1825 + 443 + 87) / 2048. A 1000px probe loses 0.012px here.
+  expect(height).toBeCloseTo(2355 / 2048 * 10 * 4 / 3, 3);
+});
+
+test('paginated single-spaced lines advance by the font\'s unrounded natural height', async ({ page, browserName }) => {
   const paragraphs = Array.from({ length: 60 }, (_, index) => `<p class="pitch">line ${index + 1}</p>`).join('');
   await page.setContent(`
     <style>
@@ -30,8 +52,8 @@ test('paginated single-spaced lines advance by the font\'s unrounded natural hei
     </style>
     <div id="staging">
       <div data-section-index="0"
-           data-page-width="400" data-page-height="320"
-           data-content-width="380" data-content-height="300"
+           data-page-width="400" data-page-height="325"
+           data-content-width="380" data-content-height="305"
            data-margin-top="10" data-margin-right="10"
            data-margin-bottom="10" data-margin-left="10">${paragraphs}</div>
     </div>
@@ -52,10 +74,11 @@ test('paginated single-spaced lines advance by the font\'s unrounded natural hei
     return { lines: lines.length, pitchPt: (tops[tops.length - 1] - tops[0]) / (tops.length - 1) * 0.75 };
   });
 
-  const naturalPt = NATURAL_EM * FONT_SIZE_PT;
+  // Firefox selects this font's OS/2 typo metrics (1556 + 492 + 410); Chromium selects hhea.
+  const naturalPt = (browserName === 'firefox' ? 2458 : 2384) / 2048 * FONT_SIZE_PT;
   expect(firstPage.pitchPt).toBeCloseTo(naturalPt, 1);
-  // 300pt of body holds 25 lines of 11.64pt; at the rounded 11.25pt it held 26.
-  expect(firstPage.lines).toBe(Math.floor(300 / naturalPt));
+  // Leave room away from a boundary where the two browsers' rounding could admit another line.
+  expect(firstPage.lines).toBe(Math.floor(305 / naturalPt));
 });
 
 test('the read-only paginated view puts glyphs on Word\'s baseline without moving any line', async ({ page }) => {
