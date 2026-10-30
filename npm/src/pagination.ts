@@ -6028,7 +6028,7 @@ export class PaginationEngine {
       if (!story) throw new Error("A linked text box has no source story identity");
       // Running stories repeat independently on each page; body chains may cross pages.
       const key = story + (box.dataset.docxTextboxRepeat === "true"
-        ? "@" + box.closest<HTMLElement>(".page-box")?.dataset.pageNumber : "");
+        ? "@" + box.closest<HTMLElement>(`.${this.cssPrefix}box`)?.dataset.pageNumber : "");
       const boxes = stories.get(key) ?? [];
       boxes.push(box);
       stories.set(key, boxes);
