@@ -1765,7 +1765,46 @@ public class HtmlConversionOpsTests
         return ms.ToArray();
     }
 
-    private static byte[] TextBoxDocxBytes(string runContent)
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TextBoxLinesUseTheirOwnNaturalHeight(bool legacy)
+    {
+        var box = HostSpacedTextBox(legacy);
+        Assert.Contains("line-height: normal;", (string?)box.Attribute("style"));
+        Assert.Contains("line-height: 14.0pt;", (string?)box.Elements().Single().Attribute("style"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void HostAutomaticSpacingDoesNotLiftAnInlineTextBox(bool legacy)
+    {
+        var box = HostSpacedTextBox(legacy);
+        Assert.DoesNotContain("top:", (string?)box.Parent?.Attribute("style") ?? "");
+    }
+
+    private static XElement HostSpacedTextBox(bool legacy)
+    {
+        const string content = "<w:txbxContent><w:p><w:pPr><w:spacing w:line=\"280\" w:lineRule=\"exact\"/>" +
+            "</w:pPr><w:r><w:t>Heron mint marker</w:t></w:r></w:p></w:txbxContent>";
+        var drawing = legacy
+            ? "<w:pict><v:shape style=\"width:190pt;height:68pt\"><v:textbox>" + content +
+                "</v:textbox></v:shape></w:pict>"
+            : "<w:drawing><wp:inline><wp:extent cx=\"2413000\" cy=\"863600\"/>" +
+                "<wp:docPr id=\"1\" name=\"Heron frame\"/><a:graphic><a:graphicData " +
+                "uri=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\"><wps:wsp>" +
+                "<wps:txbx>" + content + "</wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing>";
+        var bytes = TextBoxDocxBytes(drawing,
+            "<w:pPr><w:spacing w:line=\"720\" w:lineRule=\"auto\"/></w:pPr>");
+        var html = XElement.Parse(HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false }));
+        return Assert.Single(html.Descendants(), element =>
+            ((string?)element.Attribute("style"))?.Contains("display: inline-block;") == true &&
+            ((string?)element.Attribute("style"))?.Contains("overflow: hidden;") == true);
+    }
+
+    private static byte[] TextBoxDocxBytes(string runContent, string paragraphProperties = "")
     {
         using var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -1782,7 +1821,7 @@ public class HtmlConversionOpsTests
                     "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
                     "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" " +
                     "xmlns:legacywps=\"http://schemas.microsoft.com/office/word/2008/6/28/wordprocessingShape\">" +
-                    "<w:body><w:p><w:r>" + runContent + "</w:r></w:p><w:sectPr/></w:body></w:document>");
+                    "<w:body><w:p>" + paragraphProperties + "<w:r>" + runContent + "</w:r></w:p><w:sectPr/></w:body></w:document>");
             }
             main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
             main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
