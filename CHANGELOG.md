@@ -46,6 +46,8 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Keep floating paragraph frames and drawings linked to their original source cells and tables after placement, so visible labels remain measurable in exported HTML and PDF.
+
 - Empty zero-font paragraphs with no line height no longer fail PageMap completeness. Visible
   text runs and blank lines with authored height keep their measured fragments.
 
