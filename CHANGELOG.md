@@ -67,6 +67,10 @@ All notable changes to this project will be documented in this file.
 - Header and footer tables can extend into the page side margins without losing cells or failing
   PDF export; running stories retain vertical clipping and the paper edge remains the horizontal boundary.
 
+- Inline pictures that cannot fit on a fresh page are proportionally reduced into the body
+  band before pagination. The bitmap and aspect ratio are retained, and pictures that already
+  fit keep their original size.
+
 - Read-only pagination can continue a paragraph containing inline images across pages. Each
   image remains whole at its original dimensions, including baseline-adjusted image runs,
   while text, image order and fragment identities are preserved.
