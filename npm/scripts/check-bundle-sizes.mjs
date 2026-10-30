@@ -15,8 +15,8 @@ const budgetsKiB = {
   // Body-table fitting on current main measures 137.128/137.164 KiB; retain a 138 KiB gate.
   'embed.bundle.js': 138,
   'embed.iife.js': 138,
-  // Tab caret/clipboard handling adds ~1 KiB; leave ~1 KiB of headroom above its 116 KiB size.
-  'editor.bundle.js': 117,
+  // Individually fitted inline pictures bring the current editor to 117.2 KiB gzip.
+  'editor.bundle.js': 118,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   'pagination.bundle.js': 35,
   'session.bundle.js': 9,
