@@ -59,6 +59,30 @@ function paragraph(text, extraRuns = "") {
     + `<w:r><w:t xml:space="preserve">${text}</w:t></w:r>${extraRuns}</w:p>`;
 }
 
+/** A new, minimal document whose complete PDF must survive owned-browser shutdown. */
+export function generateBrowserCleanupDocx() {
+  return storedZip([
+    { name: "[Content_Types].xml", data: xml(
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+      + '<Default Extension="xml" ContentType="application/xml"/>'
+      + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      + '</Types>') },
+    { name: "_rels/.rels", data: xml(
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + `<Relationship Id="document" Type="${R_NS}/officeDocument" Target="word/document.xml"/>`
+      + '</Relationships>') },
+    { name: "word/document.xml", data: xml(
+      `<w:document xmlns:w="${W_NS}"><w:body>`
+      + paragraph("CEDAR WORKSHOP INSPECTION")
+      + paragraph("Seven tools were returned to cabinet 24.")
+      + paragraph("Inspection complete. Signed: Rowan Vale.")
+      + '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>'
+      + '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>'
+      + '</w:sectPr></w:body></w:document>') },
+  ]);
+}
+
 function pageBreak() {
   return `<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>`
     + `<w:r><w:br w:type="page"/></w:r></w:p>`;

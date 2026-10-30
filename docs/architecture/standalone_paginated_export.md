@@ -896,6 +896,12 @@ not closed. Cleanup is always attempted with a separate bounded cleanup allowanc
 render deadline cannot skip it or turn a verified timeout into success. Timeout errors name the
 active phase and bounded pending resources.
 
+Owned-browser shutdown has a 40-second allowance: the pinned Playwright release gives Chromium
+30 seconds to exit gracefully before killing its process group, followed by the ordinary
+10-second cleanup allowance. Runtime-directory removal follows the owned-browser shutdown attempt. Context
+and directory cleanup retain their separate 10-second bounds, and a real cleanup failure still
+fails the export.
+
 Warnings use stable codes, severity, phase, source/part when known, message, and remediation. The
 render report records requested and resolved fonts, substitutions, missing fonts, image/chart/SVG
 outcomes, unsupported placeholders, external links, page metadata, readiness timings, and any
