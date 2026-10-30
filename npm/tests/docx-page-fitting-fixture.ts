@@ -87,3 +87,17 @@ export function oversizedInlineImageDocx(height = 870, count = 1): Uint8Array {
     <w:p><w:pPr><w:spacing w:after="0"/></w:pPr>${Array.from({ length: count }, (_, index) => fittingImageRun(index + 1, 320, height)).join('')}</w:p>
     <w:p><w:r><w:t>After the tall tile.</w:t></w:r></w:p>`);
 }
+
+export function floatingPictureDocx(height = 300): Uint8Array {
+  const picture = fittingImageRun(1, 240, height)
+    .replace('<wp:inline>', `<wp:anchor simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
+      <wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:align>right</wp:align></wp:positionH>
+      <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>`)
+    .replace('<wp:docPr', '<wp:wrapSquare wrapText="bothSides"/><wp:docPr')
+    .replace('</wp:inline>', '</wp:anchor>');
+  const lines = Array.from({ length: 26 }, (_, index) => `<w:r><w:t>Hazel${String(index + 1).padStart(2, '0')} registered.</w:t></w:r>`).join('<w:r><w:br/></w:r>');
+  return pageFittingDocx(`<w:p><w:pPr><w:keepLines w:val="0"/><w:widowControl w:val="0"/>
+    <w:spacing w:after="0" w:line="320" w:lineRule="exact"/></w:pPr>${lines}</w:p>
+    <w:p><w:r><w:t>Hazel anchor.</w:t></w:r>${picture}</w:p>
+    <w:p><w:r><w:t>Float inventory complete.</w:t></w:r></w:p>`);
+}
