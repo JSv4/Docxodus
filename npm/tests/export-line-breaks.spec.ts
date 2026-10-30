@@ -53,10 +53,13 @@ for (const [name, options] of Object.entries<LineBreakOptions>({
 }
 
 for (const constraint of ['keepLines', 'widowControl'] as const) {
-  test(`${constraint} still keeps an oversized hard-break paragraph intact and guarded`, async ({ browser }) => {
+  test(`${constraint} continues an oversized hard-break paragraph without losing text`, async ({ browser }) => {
     test.setTimeout(120_000);
-    await expect(renderDocxArtifacts(generateLineBreakDocx({ [constraint]: true }), {
+    const result = await renderDocxArtifacts(generateLineBreakDocx({ [constraint]: true }), {
       browser, outputs: ['pdf'], reviewProfile: 'markup', commentProfile: 'margin', timeoutMs: 120_000,
-    })).rejects.toMatchObject({ code: 'pagination_failure', phase: 'running_story_placement' });
+    });
+    expect(result.pageCount).toBe(3);
+    expect((await inspect(result.pdf!)).flatMap(p => p.items).map(i => i.text).join(' ').match(/Line\d+/g))
+      .toEqual(Array.from({ length: 100 }, (_, index) => `Line${String(index + 1).padStart(3, '0')}`));
   });
 }

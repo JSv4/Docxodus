@@ -5194,8 +5194,12 @@ export class PaginationEngine {
           effectiveMarginTop,
           headNotesStart,
           currentContent,
-          block.keepLines && isFirstOnPage && block.heightPt > freshBlockPageBodyHeight
-            && allBlockFootnoteIds.some(id => this.footnoteRegistry.has(id)),
+          // A keep cannot be satisfied by a paragraph taller than a fresh page. Once it has
+          // moved there, use the same line-safe split as a kept citation, retaining two lines
+          // on either side when widow control applies. Unresolved notes still stay guarded.
+          (block.keepLines || block.element.dataset.widowControl === "true")
+            && isFirstOnPage && block.heightPt > freshBlockPageBodyHeight
+            && allBlockFootnoteIds.every(id => this.footnoteRegistry.has(id)),
         );
         if (paragraphFragments) {
           blocks.splice(i, 1, ...paragraphFragments);

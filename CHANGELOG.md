@@ -47,6 +47,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- PDF export continues text paragraphs whose keep-lines or widow-control setting cannot fit
+  on a fresh page, preserving their text and legal line boundaries instead of refusing the
+  document. Paragraphs that fit a page still retain their keep settings.
+
 - Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
   distinct rendering positions, so an equation edit after a tab is tracked and rejecting it restores
   the original (#1421). Source positions follow the reader's retained text and atoms through fields,
