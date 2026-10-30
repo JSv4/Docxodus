@@ -12828,9 +12828,9 @@ namespace Docxodus
                 || !TryVmlAnchorAxis(declarations, "vertical", out var vertical)
                 || !int.TryParse(declarations.GetValueOrDefault("z-index") ?? "0", NumberStyles.Integer,
                     CultureInfo.InvariantCulture, out var order)) return null;
-            // Foreground wrapping needs a clearance model; retain its existing fallback. Behind-text
-            // objects and nonwrapping page/margin objects share DrawingML's anchor coordinates.
-            if (order >= 0 && shape.Elements(XName.Get("wrap", "urn:schemas-microsoft-com:office:word"))
+            // Explicit wrapping needs a clearance model regardless of the object's z-order.
+            // Retain that established fallback; only nonwrapping objects use this anchor path.
+            if (shape.Elements(XName.Get("wrap", "urn:schemas-microsoft-com:office:word"))
                 .Any(wrap => (string?)wrap.Attribute("type") is not (null or "none"))) return null;
             return new XElement(WP.anchor,
                 new XAttribute("behindDoc", order < 0),

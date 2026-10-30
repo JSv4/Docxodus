@@ -149,9 +149,10 @@ All notable changes to this project will be documented in this file.
 - PDF export continues text paragraphs whose keep-lines or widow-control setting cannot fit
   on a fresh page, preserving their text and legal line boundaries instead of refusing the
   document. Paragraphs that fit a page still retain their keep settings.
-- Preserve supported floating VML image positions in paginated export. Explicit page/margin
+- Preserve supported nonwrapping VML image positions in paginated export. Explicit page/margin
   alignments and point offsets use the shared drawing-anchor layout, keeping backgrounds out of
-  header/body flow while retaining their size, stacking order, and inline/continuous fallbacks.
+  header/body flow while retaining their size and stacking order. Inline, continuous, and explicitly
+  wrapping images retain their established fallbacks regardless of z-order.
 
 - Preserve embedded image and SVG identities when pagination promotes or repeats drawings, so an already-reported decoding failure does not become a false serialization error. Newly damaged resources still fail verification.
 

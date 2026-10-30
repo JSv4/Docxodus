@@ -52,8 +52,8 @@ test('a centered VML background uses the same page placement as its DrawingML co
   expect(pixel(raster.width - 6, raster.height - 6)).toEqual([242, 232, 212]);
 });
 
-test('an ordinary inline VML image retains its flow layout', async ({ browser }) => {
-  const result = await renderDocxArtifacts(generateVmlBackgroundDocx('inline'), {
+for (const kind of ['inline', 'wrapped'] as const) test(`a ${kind} VML image retains its established flow fallback`, async ({ browser }) => {
+  const result = await renderDocxArtifacts(generateVmlBackgroundDocx(kind), {
     browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'hidden', timeoutMs: 120_000,
   });
   expect(result.pageCount).toBe(1);
