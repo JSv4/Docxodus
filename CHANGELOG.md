@@ -55,6 +55,8 @@ All notable changes to this project will be documented in this file.
   text runs and blank lines with authored height keep their measured fragments.
 
 
+- Continue oversized kept paragraphs in table cells after their fresh-page retry, preserving widow lines and fitting row keeps.
+
 - Recover read-only tables whose vertical merge groups exceed a fresh page by continuing their row grid while retaining each source cell’s content once. Fitting merges and authored exact-height/header groups remain unchanged.
 
 - Paginate tables carrying leading bookmark targets while preserving each target on the first table fragment.

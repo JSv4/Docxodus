@@ -2499,7 +2499,7 @@ export class PaginationEngine {
       }
       try {
         const split = this.splitTableContent(candidate, head =>
-          this.measureElement(head, dims, block.sectionIndex).heightPt <= maximumFragmentHeight, false);
+          this.measureElement(head, dims, block.sectionIndex).heightPt <= maximumFragmentHeight, false, true);
         if (split) {
           this.reconcileFragmentIdentities(split.head, split.tail);
           split.head.style.setProperty("margin-bottom", "0", "important");
@@ -3074,6 +3074,7 @@ export class PaginationEngine {
     allowInlineRoot: boolean = false,
     bodyParagraph: boolean = false,
     relaxKeepLines = false,
+    terminalCellParagraph = false,
   ): boolean {
     // The converter writes a Word paragraph with an outline level (a heading style) as h1-h6;
     // it breaks across pages like any other paragraph unless it keeps its lines together.
@@ -3082,7 +3083,7 @@ export class PaginationEngine {
       : paragraph.tagName === "P";
     if (
       !wordParagraph ||
-      paragraph.dataset.keepWithNext === "true" ||
+      (paragraph.dataset.keepWithNext === "true" && !terminalCellParagraph) ||
       (paragraph.dataset.keepLines === "true" && !relaxKeepLines) ||
       paragraph.dataset.pageBreakBefore === "true" ||
       (paragraph.dataset.widowControl === "true" && !relaxKeepLines) ||
@@ -4175,6 +4176,7 @@ export class PaginationEngine {
     element: HTMLElement,
     fits: (head: HTMLElement) => boolean,
     forceFirst: boolean,
+    freshBody = false,
   ): { head: HTMLElement; tail: HTMLElement } | null {
     const wholeRows = this.splitTableAtRows(element, fits, false, true);
     if (wholeRows) return wholeRows;
@@ -4191,7 +4193,7 @@ export class PaginationEngine {
     const row = rows[headers.length];
     // Keep vertical merges, declared row heights and non-top cell alignment intact. These need
     // their own layout rules; ordinary rows can partition each cell in the same measured band.
-    if (!row || !ends.includes(headers.length + 1) || row.dataset.docxCantSplit === "true"
+    if (!row || !ends.includes(headers.length + 1) || (row.dataset.docxCantSplit === "true" && !freshBody)
       || row.dataset.docxHeaderRow === "true"
       || row.dataset.docxRowHeightRule || row.style.height || row.style.minHeight
       || Array.from(row.cells).some(cell => cell.rowSpan !== 1
@@ -4244,11 +4246,17 @@ export class PaginationEngine {
         };
         let split: { head: HTMLElement; tail: HTMLElement } | null = null;
         if (end === index + 1) {
-          if (this.canRangeFragmentParagraph(child)) {
-            const paragraph = this.splitParagraphAtLargestFit(child, fitsChild);
+          // A fresh body band is the cell's final retry. Relax an impossible line/row keep,
+          // retaining widow lines, and ignore keepNext on the cell's terminal paragraph.
+          const relaxKeepLines = freshBody && current.childElementCount === 0;
+          const terminal = freshBody && end === children.length;
+          if (this.canRangeFragmentParagraph(child, false, false, relaxKeepLines, terminal)) {
+            const paragraph = this.splitParagraphAtLargestFit(child, fitsChild, {
+              preserveWidowLines: relaxKeepLines && child.dataset.widowControl !== "false",
+            });
             if (paragraph.kind === "split") split = paragraph;
           } else {
-            split = this.splitTableContent(child, fitsChild, false);
+            split = this.splitTableContent(child, fitsChild, false, relaxKeepLines);
           }
         }
         if (split) {
