@@ -55,6 +55,8 @@ All notable changes to this project will be documented in this file.
   text runs and blank lines with authored height keep their measured fragments.
 
 
+- Paginate tables carrying leading bookmark targets while preserving each target on the first table fragment.
+
 - Continue long read-only paragraphs containing empty inline tab advances, preserving their widths and leaders across pages.
 
 - Paragraphs with automatic Word line spacing can continue across pages while retaining the

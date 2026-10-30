@@ -2389,6 +2389,12 @@ export class PaginationEngine {
     }
 
     if (!wrapperClone) return tableClone;
+    // HTML foster-parents bookmarks authored inside a table ahead of it. Keep those targets
+    // once, with the first fragment, rather than making the wrapper indivisible or dropping them.
+    if (retainAnchor) for (const sibling of Array.from(wrapper!.children)) {
+      if (sibling === table) break;
+      wrapperClone.appendChild(sibling.cloneNode(true));
+    }
     wrapperClone.appendChild(tableClone);
     return wrapperClone;
   }
@@ -2442,7 +2448,6 @@ export class PaginationEngine {
     const wrapper = block.element;
     if (
       wrapper.tagName !== "DIV" ||
-      wrapper.children.length !== 1 ||
       block.keepWithNext ||
       block.keepLines ||
       block.pageBreakBefore ||
@@ -2451,11 +2456,8 @@ export class PaginationEngine {
       return null;
     }
 
-    const tableElement = wrapper.firstElementChild;
-    if (!tableElement || tableElement.localName !== "table") {
-      return null;
-    }
-    const table = tableElement as HTMLTableElement;
+    const table = this.blockTable(wrapper);
+    if (!table) return null;
 
     const body = table.tBodies.length === 1 ? table.tBodies[0] : null;
     if (
@@ -4042,11 +4044,16 @@ export class PaginationEngine {
   }
 
   private blockTable(element: HTMLElement): HTMLTableElement | null {
-    return element.localName === "table"
-      ? element as HTMLTableElement
-      : element.childElementCount === 1 && element.firstElementChild?.localName === "table"
-        ? element.firstElementChild as HTMLTableElement
-        : null;
+    if (element.localName === "table") return element as HTMLTableElement;
+    const table = element.lastElementChild;
+    if (table?.localName !== "table") return null;
+    for (const child of Array.from(element.childNodes)) {
+      if (child === table) continue;
+      if (child.nodeType === this.view.Node.TEXT_NODE && !(child.textContent ?? "").trim()) continue;
+      if (!(child instanceof this.view.HTMLAnchorElement) || !child.id || child.hasAttribute("href")
+        || child.childNodes.length !== 0) return null;
+    }
+    return table as HTMLTableElement;
   }
 
   /**
