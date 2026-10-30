@@ -10970,9 +10970,10 @@ namespace Docxodus
                     var contextualSpacing = e.Elements(W.pPr).Elements(W.contextualSpacing).FirstOrDefault();
                     if (IsOnOffPropertyEnabled(contextualSpacing))
                     {
-                        var styleName = (string?)e.Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
-                        if (styleName == null)
-                            return "";
+                        // FormattingAssembler records the resolved style even when w:pStyle
+                        // is omitted and the paragraph uses the document's default style.
+                        var styleName = (string?)e.Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault()
+                            ?? (string?)e.Attribute(PtOpenXml.StyleName);
                         return "sty:" + styleName;
                     }
                     return "";
@@ -11818,38 +11819,40 @@ namespace Docxodus
                 wrapper.SetAttributeValue("data-docx-textbox-clip", "true");
 
             var renderedBlocks = new List<object>();
-            foreach (var child in textBoxContent.Elements())
+            foreach (var group in textBoxContent.Elements().GroupAdjacent(child => child.Name == W.p))
             {
-                if (child.Name == W.p)
+                if (group.Key)
                 {
-                    var paragraph = ConvertToHtmlTransform(wordDoc, settings!, child, false, 0m) as XElement;
-                    if (paragraph == null)
-                        continue;
-
-                    // A span can safely remain inside the containing run. Preserve paragraph
-                    // styling, but turn the inner block into a block-level span so browser HTML
-                    // parsing never closes the outer paragraph around a text box.
-                    paragraph.Name = Xhtml.span;
-                    var paragraphStyle = paragraph.Annotation<Dictionary<string, string>>();
-                    if (paragraphStyle == null)
+                    // Text-box paragraphs share the same contextual-spacing rules as ordinary
+                    // paragraphs. Converting them one at a time retained inter-paragraph space
+                    // that Word suppresses, pushing visible text below a fixed box's clip.
+                    var projected = new XElement(Xhtml.span,
+                        ApplyContextualSpacing(wordDoc, settings!, group, 0m));
+                    var paragraphs = projected.Elements().ToList();
+                    projected.RemoveNodes(); // Detach without losing the style annotations.
+                    foreach (var paragraph in paragraphs)
                     {
-                        paragraphStyle = new Dictionary<string, string>();
-                        paragraph.AddAnnotation(paragraphStyle);
+                        // A block-level span keeps the enclosing run/paragraph valid HTML.
+                        paragraph.Name = Xhtml.span;
+                        var paragraphStyle = paragraph.Annotation<Dictionary<string, string>>();
+                        if (paragraphStyle == null)
+                        {
+                            paragraphStyle = new Dictionary<string, string>();
+                            paragraph.AddAnnotation(paragraphStyle);
+                        }
+                        paragraphStyle.AddIfMissing("display", "block");
+                        if (autoFit)
+                        {
+                            // An automatically fitted shape excludes the document style's
+                            // trailing paragraph spacing from its content-driven height.
+                            paragraphStyle["margin-bottom"] = "0";
+                        }
+                        renderedBlocks.Add(paragraph);
                     }
-                    paragraphStyle.AddIfMissing("display", "block");
-                    if (autoFit)
-                    {
-                        // In an automatically fitted shape, LibreOffice sizes the box to the
-                        // text line and its insets, not the document style's trailing paragraph
-                        // spacing. Keeping Normal's usual 10pt after-spacing makes the box
-                        // visibly too tall.
-                        paragraphStyle["margin-bottom"] = "0";
-                    }
-                    renderedBlocks.Add(paragraph);
                     continue;
                 }
 
-                if (child.Name == W.tbl)
+                foreach (var child in group.Where(child => child.Name == W.tbl))
                 {
                     // Tables cannot legally live inside a span. Keep their text visible rather
                     // than emitting invalid nested block markup; full table projection inside a

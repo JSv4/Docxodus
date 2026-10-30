@@ -53,6 +53,9 @@ All notable changes to this project will be documented in this file.
 - Refit header and footer grids that extend beyond the paper with the shared table column
   sizing path, retaining all repeated labels and preserving widths that already fit.
 
+- DrawingML and VML text boxes now apply contextual paragraph spacing consistently with body
+  text, including implicit default styles, keeping later lines inside their authored fixed bounds.
+
 - Preserve supported nonwrapping VML image positions in paginated export. Explicit page/margin
   alignments and point offsets use the shared drawing-anchor layout, keeping backgrounds out of
   header/body flow while retaining their size and stacking order. Inline, continuous, and explicitly
