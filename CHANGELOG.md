@@ -47,6 +47,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- PDF and HTML exports wait for the owned browser's built-in forced shutdown before reporting a
+  cleanup failure. Slow Chromium exits no longer discard a verified artifact after 10 seconds;
+  browser shutdown remains bounded, and context and temporary-directory cleanup keep their limits.
+
 - Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
   distinct rendering positions, so an equation edit after a tab is tracked and rejecting it restores
   the original (#1421). Source positions follow the reader's retained text and atoms through fields,
