@@ -1125,6 +1125,7 @@ namespace Docxodus
             // body into its owning content part before the normal simplification and formatting
             // pipeline, so it receives the same revision/style processing as inline textboxes.
             InlineExternalTextBoxBodies(wordDoc);
+            foreach (var part in wordDoc.ContentParts()) part.RemoveAnnotations<LinkedTextBoxStoryIds>();
 
             // Canonical source identity (data-source-anchor-id) is the SOURCE document's: index it
             // before revision acceptance, markup simplification and formatting assembly rewrite
@@ -11783,6 +11784,24 @@ namespace Docxodus
             return null;
         }
 
+        private sealed class LinkedTextBoxStoryIds
+        {
+            internal HashSet<string> Values { get; }
+
+            internal LinkedTextBoxStoryIds(OpenXmlPart part)
+            {
+                Values = new HashSet<string>(part.GetXDocument().Descendants(WPS.wps + "linkedTxbx")
+                    .Select(TextBoxStoryId), StringComparer.Ordinal);
+            }
+        }
+
+        private static string TextBoxStoryId(XElement box)
+        {
+            var raw = (string?)box.Attribute("id") ?? "0";
+            return ushort.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id)
+                ? id.ToString(CultureInfo.InvariantCulture) : raw;
+        }
+
         /// <summary>
         /// Projects a DrawingML or VML text box into valid inline HTML. Word commonly stores the
         /// same logical box in an <c>mc:Choice</c> and a VML fallback; callers select one branch
@@ -11794,10 +11813,28 @@ namespace Docxodus
             WmlToHtmlConverterSettings? settings)
         {
             var textBoxContent = element.Descendants(W.txbxContent).FirstOrDefault();
-            if (textBoxContent == null)
+            var continuation = element.Descendants(WPS.wps + "linkedTxbx").FirstOrDefault();
+            if (textBoxContent == null && continuation == null)
                 return null;
 
+            var owner = GetOwningPart(wordDoc, element);
+            var stories = owner.Annotation<LinkedTextBoxStoryIds>();
+            if (stories == null)
+            {
+                stories = new LinkedTextBoxStoryIds(owner);
+                owner.AddAnnotation(stories);
+            }
+            var start = textBoxContent?.Ancestors(WPS.txbx).FirstOrDefault();
+            var linked = continuation != null || (start != null && stories.Values.Contains(TextBoxStoryId(start)));
+
             var wrapper = new XElement(Xhtml.span, new XAttribute("data-docx-textbox", "true"));
+            if (linked)
+            {
+                wrapper.SetAttributeValue("data-docx-textbox-linked", "true");
+                if (owner is HeaderPart or FooterPart) wrapper.SetAttributeValue("data-docx-textbox-repeat", "true");
+                wrapper.SetAttributeValue("data-docx-textbox-story", owner.Uri + "#" + TextBoxStoryId(continuation ?? start!));
+                wrapper.SetAttributeValue("data-docx-textbox-seq", continuation == null ? "0" : (string?)continuation.Attribute("seq") ?? "");
+            }
             var style = new Dictionary<string, string>
             {
                 { "display", "inline-block" },
@@ -11811,7 +11848,7 @@ namespace Docxodus
 
             var drawingContainer = element.Elements()
                 .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
-            var vmlShape = textBoxContent.Ancestors(VML.shape).FirstOrDefault();
+            var vmlShape = textBoxContent?.Ancestors(VML.shape).FirstOrDefault();
             var autoFit = vmlShape != null ? HasVmlTextBoxAutoFit(vmlShape) : HasAutoFitTextBox(element);
             // ProcessImage's settings parameter defaults to null for callers with no pagination
             // config, but AddDrawingTextBoxStyle dereferences settings.RenderPagination once the
@@ -11829,11 +11866,11 @@ namespace Docxodus
 
             // A fixed source-authored text box intentionally clips overflow. Preserve that
             // provenance so pagination can distinguish an unpainted blank line from content loss.
-            if (!autoFit && style.ContainsKey("height"))
+            if (!linked && !autoFit && style.ContainsKey("height"))
                 wrapper.SetAttributeValue("data-docx-textbox-clip", "true");
 
             var renderedBlocks = new List<object>();
-            foreach (var group in textBoxContent.Elements().GroupAdjacent(child => child.Name == W.p))
+            foreach (var group in (textBoxContent?.Elements() ?? Enumerable.Empty<XElement>()).GroupAdjacent(child => child.Name == W.p))
             {
                 if (group.Key)
                 {
@@ -11848,6 +11885,7 @@ namespace Docxodus
                     {
                         // A block-level span keeps the enclosing run/paragraph valid HTML.
                         paragraph.Name = Xhtml.span;
+                        if (linked) paragraph.SetAttributeValue("data-docx-textbox-paragraph", "true");
                         var paragraphStyle = paragraph.Annotation<Dictionary<string, string>>();
                         if (paragraphStyle == null)
                         {
@@ -11884,7 +11922,7 @@ namespace Docxodus
                 }
             }
 
-            if (renderedBlocks.Count == 0)
+            if (renderedBlocks.Count == 0 && continuation == null)
                 return null;
 
             wrapper.Add(renderedBlocks);

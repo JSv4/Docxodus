@@ -46,6 +46,8 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+
+- Retain linked DrawingML text-box continuation frames and story membership, excluding linked stories from fixed-box clipping exemptions.
 - Preserve oversized floating drawings and report relaxed top/bottom clearance when no page can contain their exclusion and anchor text.
 - Position supported floating VML shape placeholders through the existing anchor adapter instead of consuming body space.
 
