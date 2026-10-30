@@ -35,7 +35,7 @@ for (const promoted of [false, true]) {
     expect(result.pageCount).toBe(1);
     await page.setContent(result.html!);
     expect(await page.locator('body').textContent()).toContain('Juniper sample register.');
-    if (promoted) expect(await page.locator('.page-box > [data-docx-drawing-anchor] img').count()).toBe(1);
+    if (promoted) expect(await page.locator('.page-box [data-docx-drawing-anchor] img').count()).toBe(1);
   });
 }
 
