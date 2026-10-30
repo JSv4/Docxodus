@@ -50,6 +50,8 @@ All notable changes to this project will be documented in this file.
 - Read-only pagination proportionally refits body table columns that extend outside the paper,
   preserving font sizes and all cells across continuations. Tables that only extend into a
   visible page margin retain their original widths.
+- Header and footer tables can extend into the page side margins without losing cells or failing
+  PDF export; running stories retain vertical clipping and the paper edge remains the horizontal boundary.
 
 - Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
   distinct rendering positions, so an equation edit after a tab is tracked and rejecting it restores

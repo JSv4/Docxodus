@@ -6008,7 +6008,10 @@ export class PaginationEngine {
       headerDiv.style.left = `${dims.marginLeft}pt`;
       headerDiv.style.width = `${dims.contentWidth}pt`;
       headerDiv.style.height = `${bands.headerHeight}pt`;
-      headerDiv.style.overflow = "hidden";
+      // Running-story tables can extend into the side margins, just like body tables.
+      // Keep the measured vertical band while leaving the paper edge to clip horizontally.
+      headerDiv.style.overflowX = "visible";
+      headerDiv.style.overflowY = "clip";
       headerDiv.style.boxSizing = "border-box";
       headerDiv.style.display = "flex";
       headerDiv.style.flexDirection = "column";
@@ -6125,7 +6128,8 @@ export class PaginationEngine {
       footerDiv.style.left = `${dims.marginLeft}pt`;
       footerDiv.style.width = `${dims.contentWidth}pt`;
       footerDiv.style.height = `${bands.footerHeight}pt`;
-      footerDiv.style.overflow = "hidden";
+      footerDiv.style.overflowX = "visible";
+      footerDiv.style.overflowY = "clip";
       footerDiv.style.boxSizing = "border-box";
       footerDiv.style.display = "flex";
       footerDiv.style.flexDirection = "column";
