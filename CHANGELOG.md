@@ -47,6 +47,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Inline pictures that cannot fit on a fresh page are proportionally reduced into the body
+  band before pagination. The bitmap and aspect ratio are retained, and pictures that already
+  fit keep their original size.
+
 - Keep paragraph-border spacing consistent when standalone HTML reopens and prints. Prepared
   border styles use their serialized values before pagination, preventing accumulated subpixel
   shifts from invalidating the PageMap.
