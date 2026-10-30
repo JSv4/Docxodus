@@ -11812,6 +11812,11 @@ namespace Docxodus
             else if (vmlShape != null)
                 AddVmlTextBoxStyle(style, vmlShape);
 
+            // A fixed source-authored text box intentionally clips overflow. Preserve that
+            // provenance so pagination can distinguish an unpainted blank line from content loss.
+            if (!autoFit && style.ContainsKey("height"))
+                wrapper.SetAttributeValue("data-docx-textbox-clip", "true");
+
             var renderedBlocks = new List<object>();
             foreach (var child in textBoxContent.Elements())
             {
