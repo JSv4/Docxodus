@@ -63,6 +63,10 @@ export function prepareParagraphBorders(root: HTMLElement): number {
       }
     }
     if (painted.length === 0) continue;
+    // CSSOM keeps more precision than it serializes. Reparse the values that offline HTML
+    // will contain before pagination: a near-integer padding can otherwise gain a layout
+    // unit on reopening, accumulating into different text positions across border boxes.
+    element.style.cssText = element.style.cssText;
     element.setAttribute(PAINT, JSON.stringify(painted));
     prepared++;
   }
