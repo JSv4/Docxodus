@@ -4010,6 +4010,15 @@ export async function convertDocxToPaginatedHtml(
     fontIdentity = renderer.fontIdentity;
     const pageMap = await runPhase(state, "output_verification", ["PageMap geometry"], () =>
       engine.materializePageMap(options.documentVersion, rendererFingerprint!));
+    for (const anchorId of engine.getSourceClippedTextAnchors()) {
+      policyWarning(state, options, {
+        code: "source_text_clipped",
+        phase: "output_verification",
+        anchorId,
+        message: "A source paragraph is wholly outside its authored text-box clip or paper placement and is not painted.",
+        remediation: "Enlarge or reposition the source text box, or enable auto-fit, to include this paragraph in the rendered output.",
+      });
+    }
     pageMapWasMaterialized = true;
     if (pageMap.documentVersion !== options.documentVersion
       || pageMap.rendererFingerprint !== rendererFingerprint

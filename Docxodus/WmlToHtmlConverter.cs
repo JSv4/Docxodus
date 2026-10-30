@@ -11819,11 +11819,19 @@ namespace Docxodus
         private sealed class LinkedTextBoxStoryIds
         {
             internal HashSet<string> Values { get; }
+            internal HashSet<string> VmlTargets { get; }
+            internal Dictionary<string, XElement> VmlShapeTypes { get; }
 
             internal LinkedTextBoxStoryIds(OpenXmlPart part)
             {
                 Values = new HashSet<string>(part.GetXDocument().Descendants(WPS.wps + "linkedTxbx")
                     .Select(TextBoxStoryId), StringComparer.Ordinal);
+                VmlTargets = part.GetXDocument().Descendants(VML.textbox)
+                    .Select(box => ParseVmlStyle((string?)box.Attribute("style")).GetValueOrDefault("mso-next-textbox"))
+                    .OfType<string>().Select(target => target.TrimStart('#')).ToHashSet(StringComparer.Ordinal);
+                VmlShapeTypes = new Dictionary<string, XElement>(StringComparer.Ordinal);
+                foreach (var type in part.GetXDocument().Descendants(VML.shapetype))
+                    if ((string?)type.Attribute("id") is { } id) VmlShapeTypes.TryAdd(id, type);
             }
         }
 
@@ -11900,6 +11908,24 @@ namespace Docxodus
             // provenance so pagination can distinguish an unpainted blank line from content loss.
             if (!linked && !autoFit && style.ContainsKey("height"))
                 wrapper.SetAttributeValue("data-docx-textbox-clip", "true");
+            // Internal clipping needs an explicitly fixed DrawingML box, or a legacy box with
+            // no fit/shrink/link directives. An implicit DrawingML fit mode can only establish
+            // a source placement proof: pagination must put the whole box AND all ink off paper.
+            if (!linked && !autoFit && (string?)wrapper.Attribute("data-docx-shape") != "partial"
+                && TryVmlPointEmu(style.GetValueOrDefault("width"), out var clipWidth) && clipWidth > 0
+                && TryVmlPointEmu(style.GetValueOrDefault("height"), out var clipHeight) && clipHeight > 0)
+            {
+                var bodyPr = textBoxContent?.Ancestors(WPS.wsp).FirstOrDefault()?.Element(WPS.bodyPr);
+                var fixedVml = vmlShape != null && HasFixedVmlTextBoxSizing(vmlShape, stories);
+                if (fixedVml || (vmlShape == null && bodyPr?.Element(A.noAutofit) != null
+                    && (string?)bodyPr.Attribute("vertOverflow") is null or "clip"
+                    && (string?)bodyPr.Attribute("horzOverflow") is null or "clip"))
+                    wrapper.SetAttributeValue("data-docx-textbox-source-clip", "true");
+                if ((string?)wrapper.Attribute("data-docx-drawing-anchor") == "true"
+                    && (fixedVml || (vmlShape == null && bodyPr != null
+                        && bodyPr.Element(A.spAutoFit) == null && bodyPr.Element(A.normAutofit) == null)))
+                    wrapper.SetAttributeValue("data-docx-textbox-source-position", "true");
+            }
 
             var renderedBlocks = new List<object>();
             foreach (var group in (textBoxContent?.Elements() ?? Enumerable.Empty<XElement>()).GroupAdjacent(child => child.Name == W.p))
@@ -12375,9 +12401,27 @@ namespace Docxodus
 
         private static bool HasVmlTextBoxAutoFit(XElement element) =>
             element.Descendants(VML.textbox)
-                .Select(textBox => (string?)textBox.Attribute("style"))
-                .Any(style => style?.IndexOf("mso-fit-shape-to-text:t",
-                    StringComparison.OrdinalIgnoreCase) >= 0);
+                .Select(textBox => ParseVmlStyle((string?)textBox.Attribute("style"))
+                    .GetValueOrDefault("mso-fit-shape-to-text")?.ToLowerInvariant())
+                .Any(value => value is "t" or "true");
+
+        private static bool HasFixedVmlTextBoxSizing(XElement shape, LinkedTextBoxStoryIds stories)
+        {
+            var boxes = shape.Elements(VML.textbox).ToList();
+            var typeId = ((string?)shape.Attribute("type"))?.TrimStart('#');
+            if (typeId != null && stories.VmlShapeTypes.TryGetValue(typeId, out var type))
+                boxes.AddRange(type.Elements(VML.textbox));
+            foreach (var box in boxes)
+            {
+                var style = ParseVmlStyle((string?)box.Attribute("style"));
+                if (!string.IsNullOrWhiteSpace(style.GetValueOrDefault("mso-next-textbox"))) return false;
+                foreach (var property in new[] { "mso-fit-shape-to-text", "mso-fit-text-to-shape" })
+                    if (style.GetValueOrDefault(property)?.ToLowerInvariant() is { } value && value is not ("f" or "false"))
+                        return false;
+            }
+            return !shape.Elements(VML.textbox).Append(shape).Attributes("id")
+                .Any(id => stories.VmlTargets.Contains(id.Value));
+        }
 
         private static void AddEmuDimensions(Dictionary<string, string> style, long? widthEmu, long? heightEmu)
         {
@@ -12763,14 +12807,20 @@ namespace Docxodus
             return anchor == null ? image : ApplyAnchorTextWrap(image, anchor, settings);
         }
 
-        private static XElement? CreateVmlDrawingAnchor(XElement shape)
+        private static Dictionary<string, string> ParseVmlStyle(string? style)
         {
             var declarations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var token in ((string?)shape.Attribute("style") ?? "").Split(';'))
+            foreach (var token in (style ?? "").Split(';'))
             {
                 var colon = token.IndexOf(':');
                 if (colon > 0) declarations[token[..colon].Trim()] = token[(colon + 1)..].Trim();
             }
+            return declarations;
+        }
+
+        private static XElement? CreateVmlDrawingAnchor(XElement shape)
+        {
+            var declarations = ParseVmlStyle((string?)shape.Attribute("style"));
             if (!string.Equals(declarations.GetValueOrDefault("position"), "absolute", StringComparison.OrdinalIgnoreCase)
                 || !TryVmlPointEmu(declarations.GetValueOrDefault("width"), out var width) || width <= 0
                 || !TryVmlPointEmu(declarations.GetValueOrDefault("height"), out var height) || height <= 0

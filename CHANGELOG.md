@@ -56,12 +56,14 @@ All notable changes to this project will be documented in this file.
 - Normalize mixed text and tab runs inside text boxes, preserving tab columns and visible lines regardless of run boundaries.
 
 
+- Export wholly clipped paragraphs from proven fixed, unlinked text boxes or authored off-paper placements with source warnings; strict content policy rejects them, and newly lost text still fails verification.
+
 - Preserve inherited typography when floating drawings move onto the page, including the visible fallback text of images that cannot decode.
 - Legacy VML text boxes with supported page or margin coordinates use their authored placement
   without accumulating their heights in the containing paragraph.
 
 - Blank lines inside fixed floating text boxes placed outside the paper no longer fail
-  source coverage. Visible text and ordinary flow clipping retain the completeness guard.
+  source coverage. Unmarked text and ordinary flow clipping retain the completeness guard.
 
 - Keep floating paragraph frames and drawings linked to their original source cells and tables after placement, so visible labels remain measurable in exported HTML and PDF.
 

@@ -525,6 +525,31 @@ wholly outside it is not drawn: a border of content an exact row hides is hidden
 the text, so the cell's horizontal overflow clip does not trim them. A paragraph no exact row cuts
 is painted exactly as before.
 
+### Paragraphs outside authored fixed text boxes
+
+A paragraph that the source text box already hides completely has no painted PageMap fragment.
+The converter identifies positive fixed DrawingML boxes with explicit `a:noAutofit`, and VML
+boxes without fit, shrink or linked-story directives. Explicit DrawingML overflow or ellipsis is
+not eligible for internal clipping. Pagination records the original box and non-whitespace text
+before moving source content; running stories use their pristine attached measurement. The final
+map permits an unmapped paragraph only when it remains present, unchanged and wholly clipped by
+that same box. Newly clipped or removed paragraphs still fail completeness. Linked stories,
+auto-fit boxes, partial geometry and active percentage sizing cannot use this allowance.
+
+A separate source-position marker admits an implicit DrawingML box only when supported page or
+margin coordinates, or the supported column/paragraph pair, place both its whole extent and all
+text rectangles outside the paper. Its
+paper-relative box and text geometry must remain unchanged in the final map; paragraph-relative
+placement also preserves the source host paragraph geometry. This does not admit
+internal clipping in implicit boxes or clipping by an ordinary flow band.
+
+Each newly admitted nonblank omission produces a `source_text_clipped` warning with its canonical
+anchor ID. `unsupportedContent: "strict"` rejects it at `output_verification`. Source text remains
+in the clipped HTML story, and its page citation is unavailable because it has no painted fragment.
+The print snapshot still verifies every visible fragment, so shrinking a box after finalization
+cannot silently hide another paragraph. This does not change the existing exact-row text-layer
+preservation below.
+
 ### Text clipped by exact-height rows (issue #1140)
 
 The converter clips the cells of an exact-height row (`w:hRule="exact"`) with `overflow: hidden`, as
