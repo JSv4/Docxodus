@@ -9,11 +9,10 @@ import { gzipSync } from 'node:zlib';
 // in the same change that needs it. export-browser.bundle.js is absent on purpose: it runs inside
 // @docxodus/export's pinned Chromium, where download size does not matter.
 const budgetsKiB = {
-  // The balloon appendix (balloonOverflow) adds about 1.5 KiB to every bundle that carries the
-  // paginator. Embed/iife/editor/pagination measured 133.3/133.4/112.8/31.8 KiB before it and
-  // 135.0/135.1/114.5/33.4 KiB with it; each budget rose by 2 KiB.
-  'embed.bundle.js': 137,
-  'embed.iife.js': 137,
+  // Running-story table fitting reuses the body fitting path. With both paths, embed and IIFE
+  // measure 136.99/137.04 KiB; retain a small margin above the previous 137 KiB ceiling.
+  'embed.bundle.js': 138,
+  'embed.iife.js': 138,
   // Tab caret/clipboard handling adds ~1 KiB; leave ~1 KiB of headroom above its 116 KiB size.
   'editor.bundle.js': 117,
   'pagination.bundle.js': 34,
