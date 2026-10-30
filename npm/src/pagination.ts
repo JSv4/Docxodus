@@ -1619,6 +1619,7 @@ export class PaginationEngine {
     sectionIndex: number,
   ): MeasuredBlock[] {
     const blocks: MeasuredBlock[] = [];
+    if (this.fragmentParagraphs) this.fitOverwideTables(section, dims);
     this.prepareShapeClearance(section, dims);
 
     // Get direct children (paragraphs, tables, divs, etc.)
@@ -1674,6 +1675,57 @@ export class PaginationEngine {
     }
 
     return blocks;
+  }
+
+  /** Reflow an over-wide table into its containing band without shrinking its text. */
+  private fitOverwideTables(section: HTMLElement, dims: PageDimensions): void {
+    const sectionLeft = section.getBoundingClientRect().left;
+    const paperLeft = sectionLeft - ptToPx(dims.marginLeft);
+    const paperRight = sectionLeft + ptToPx(dims.contentWidth + dims.marginRight);
+    const fitted = new Set<HTMLTableElement>();
+    // Outer tables are visited first: a nested table is then fitted against its actual cell.
+    for (const table of Array.from(section.querySelectorAll<HTMLTableElement>("table"))) {
+      this.checkpoint();
+      if (table.closest("#pagination-hf-registry, #pagination-footnote-registry, #pagination-comment-margin-registry")) continue;
+      const parent = table.parentElement;
+      if (!parent) continue;
+      const rect = table.getBoundingClientRect();
+      const outer = parent.closest("table");
+      // Body content may intentionally extend into a margin. Preserve that geometry while all
+      // of it remains on the paper; nested grids of a fitted table must fit their new cells.
+      if (!outer || !fitted.has(outer)) {
+        if (rect.left >= paperLeft - 1 && rect.right <= paperRight + 1) continue;
+      }
+      const style = this.view.getComputedStyle(table);
+      const parentStyle = this.view.getComputedStyle(parent);
+      if (style.position === "absolute" || style.position === "fixed") continue;
+      const available = parent.clientWidth - parseFloat(parentStyle.paddingLeft)
+        - parseFloat(parentStyle.paddingRight) - Math.max(0, parseFloat(style.marginLeft))
+        - Math.max(0, parseFloat(style.marginRight));
+      const width = rect.width;
+      if (!(available > 0) || width <= available + 1) continue;
+
+      // Browser-resolved columns include grid gaps and spanning cells. Preserve their relative
+      // widths while allowing the cell text to wrap in the narrower grid on every continuation.
+      const columns = Array.from(table.querySelectorAll<HTMLTableColElement>(":scope > colgroup > col"));
+      const columnWidths = columns.map(column => column.getBoundingClientRect().width);
+      const total = columnWidths.reduce((sum, value) => sum + value, 0);
+      const cells = Array.from(table.rows).flatMap(row => Array.from(row.cells));
+      const cellWidths = cells.map(cell => parseFloat(this.view.getComputedStyle(cell).width));
+      table.style.setProperty("width", `${available}px`, "important");
+      table.style.setProperty("min-width", "0", "important");
+      table.style.setProperty("table-layout", "fixed", "important");
+      for (const group of Array.from(table.children).filter(child => child.localName === "colgroup"))
+        (group as HTMLElement).style.setProperty("width", "auto", "important");
+      columns.forEach((column, index) => {
+        if (total > 0) column.style.setProperty("width", `${columnWidths[index] / total * 100}%`, "important");
+      });
+      cells.forEach((cell, index) => {
+        cell.style.setProperty("width", total > 0 ? "auto" : `${cellWidths[index] * available / width}px`, "important");
+        cell.style.setProperty("min-width", "0", "important");
+      });
+      fitted.add(table);
+    }
   }
 
   /**

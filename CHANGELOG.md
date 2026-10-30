@@ -47,6 +47,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Read-only pagination proportionally refits body table columns that extend outside the paper,
+  preserving font sizes and all cells across continuations. Tables that only extend into a
+  visible page margin retain their original widths.
+
 - Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
   distinct rendering positions, so an equation edit after a tab is tracked and rejecting it restores
   the original (#1421). Source positions follow the reader's retained text and atoms through fields,
