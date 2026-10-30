@@ -23,7 +23,8 @@ const budgetsKiB = {
   'editor.bundle.js': 120,
   // Oversized merged-grid recovery adds 0.389 KiB (34.870 -> 35.259); retain a tight 36 KiB gate.
   // Shared presentation preservation measures 36.036 KiB gzip in the combined renderer.
-  'pagination.bundle.js': 37,
+  // Linked frame upper-bound and keep-chain checks add 0.165 KiB (36.938 -> 37.103).
+  'pagination.bundle.js': 38,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,

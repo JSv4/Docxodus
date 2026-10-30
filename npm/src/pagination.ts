@@ -6047,53 +6047,41 @@ export class PaginationEngine {
       // typography while allowing every paragraph to wrap at its destination frame's width.
       for (const paragraph of pending) this.preserveInheritedPresentation(paragraph);
       boxes[0].replaceChildren();
-      let next = 0;
-      for (const box of boxes) {
+      let next = 0, relaxedKeepUntil = 0;
+      for (let frameIndex = 0; frameIndex < boxes.length; frameIndex++) {
+        const box = boxes[frameIndex];
         this.checkpoint();
-        const fits = (): boolean => {
-          const last = box.lastElementChild as HTMLElement | null;
-          if (!last) return true;
-          const style = this.view.getComputedStyle(box), rect = box.getBoundingClientRect();
-          const scale = rect.width / parseFloat(style.width);
-          if (!(scale > 0)) return false;
-          const inset = (name: string) => (parseFloat(style.getPropertyValue(name)) || 0) * scale;
-          const bottom = rect.bottom - inset("border-bottom-width") - inset("padding-bottom");
-          const right = rect.right - inset("border-right-width") - inset("padding-right");
-          const left = rect.left + inset("border-left-width") + inset("padding-left");
-          const range = this.document.createRange();
-          range.selectNodeContents(box);
-          const ink = range.getBoundingClientRect(), block = last.getBoundingClientRect();
-          if (Math.max(ink.bottom, block.bottom) > bottom + 0.5) return false;
-          if (ink.right <= right + 0.5 && ink.left >= left - 0.5) return true;
-          // Preserved trailing spaces may have advances outside the line without painting
-          // anything there. Check actual word/object rectangles before rejecting that width.
-          const outside = (rect: DOMRect) => rect.width > 0 && rect.height > 0
-            && (rect.right > right + 0.5 || rect.left < left - 0.5);
-          const walker = this.document.createTreeWalker(box, this.view.NodeFilter.SHOW_TEXT);
-          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-            this.checkpoint();
-            const text = node as Text;
-            for (const word of text.data.matchAll(/[^\s\u200B-\u200F\uFEFF]+/gu)) {
-              range.setStart(text, word.index!);
-              range.setEnd(text, word.index! + word[0].length);
-              if (Array.from(range.getClientRects()).some(outside)) return false;
-            }
-          }
-          return !Array.from(box.querySelectorAll<HTMLElement>('img,svg,canvas,[data-docx-shape],[data-docx-tab]')).some(element => {
-            if (element.hasAttribute("data-docx-tab") && this.view.getComputedStyle(element).borderBottomStyle === "none") return false;
-            return outside(element.getBoundingClientRect());
-          });
-        };
         while (next < pending.length) {
           this.checkpoint();
           const paragraph = pending[next];
-          box.appendChild(paragraph);
-          if (fits()) { next++; continue; }
+          let end = next + 1;
+          if (next >= relaxedKeepUntil) {
+            while (end < pending.length && pending[end - 1].dataset.keepWithNext === "true") end++;
+          }
+          const group = pending.slice(next, end);
+          for (const item of group) box.appendChild(item);
+          if (this.linkedTextBoxFits(box)) { next = end; continue; }
+          if (group.length > 1) {
+            for (const item of group) item.remove();
+            // Honor a keep chain when any remaining frame can hold it. If none can, use the
+            // ordinary paragraph fragmenter to relax that impossible keep without dropping text.
+            const fitsLater = boxes.slice(frameIndex + 1).some(frame => {
+              this.checkpoint();
+              for (const item of group) frame.appendChild(item);
+              try { return this.linkedTextBoxFits(frame); }
+              finally { for (const item of group) item.remove(); }
+            });
+            if (fitsLater) break;
+            relaxedKeepUntil = end;
+            box.appendChild(paragraph);
+            if (this.linkedTextBoxFits(box)) { next++; continue; }
+          }
           const measureHead = (head: HTMLElement): boolean => {
             paragraph.replaceWith(head);
-            try { return fits(); } finally { head.replaceWith(paragraph); }
+            try { return this.linkedTextBoxFits(box); } finally { head.replaceWith(paragraph); }
           };
-          if (this.canRangeFragmentParagraph(paragraph, false, false, true, next === pending.length - 1, true)) {
+          if (this.canRangeFragmentParagraph(paragraph, false, false, true,
+            next < relaxedKeepUntil || next === pending.length - 1, true)) {
             const split = this.splitParagraphAtLargestFit(paragraph, measureHead, {
               preserveWidowLines: paragraph.dataset.widowControl !== "false",
             });
@@ -6112,6 +6100,42 @@ export class PaginationEngine {
       // detect lost text, so an exhausted linked story must fail rather than serialize its clip.
       if (next < pending.length) throw new Error("Linked text-box content does not fit its declared continuation frames");
     }
+  }
+
+  private linkedTextBoxFits(box: HTMLElement): boolean {
+    const last = box.lastElementChild as HTMLElement | null;
+    if (!last) return true;
+    const style = this.view.getComputedStyle(box), rect = box.getBoundingClientRect();
+    const scale = rect.width / parseFloat(style.width);
+    if (!(scale > 0)) return false;
+    const inset = (name: string) => (parseFloat(style.getPropertyValue(name)) || 0) * scale;
+    const top = rect.top + inset("border-top-width") + inset("padding-top");
+    const bottom = rect.bottom - inset("border-bottom-width") - inset("padding-bottom");
+    const right = rect.right - inset("border-right-width") - inset("padding-right");
+    const left = rect.left + inset("border-left-width") + inset("padding-left");
+    const range = this.document.createRange();
+    range.selectNodeContents(box);
+    const ink = range.getBoundingClientRect(), block = last.getBoundingClientRect();
+    if ((ink.height > 0 && ink.top < top - 0.5) || Math.max(ink.bottom, block.bottom) > bottom + 0.5) return false;
+    if (ink.right <= right + 0.5 && ink.left >= left - 0.5) return true;
+    // Preserved trailing spaces may have advances outside the line without painting
+    // anything there. Check actual word/object rectangles before rejecting that width.
+    const outside = (rect: DOMRect) => rect.width > 0 && rect.height > 0
+      && (rect.right > right + 0.5 || rect.left < left - 0.5);
+    const walker = this.document.createTreeWalker(box, this.view.NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      this.checkpoint();
+      const text = node as Text;
+      for (const word of text.data.matchAll(/[^\s\u200B-\u200F\uFEFF]+/gu)) {
+        range.setStart(text, word.index!);
+        range.setEnd(text, word.index! + word[0].length);
+        if (Array.from(range.getClientRects()).some(outside)) return false;
+      }
+    }
+    return !Array.from(box.querySelectorAll<HTMLElement>('img,svg,canvas,[data-docx-shape],[data-docx-tab]')).some(element => {
+      if (element.hasAttribute("data-docx-tab") && this.view.getComputedStyle(element).borderBottomStyle === "none") return false;
+      return outside(element.getBoundingClientRect());
+    });
   }
 
   private sizeDrawingAnchor(anchor: HTMLElement, dims: PageDimensions, pageNumber: number,
