@@ -45,6 +45,259 @@ public class IrInlineEnvelopeMarkupRendererTests
         IrReader.Read(doc).Body.Blocks.OfType<IrParagraph>().Single();
 
     [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    public void PureTextboxCarrier_PreservesGeometryAndNestedBodyEdits(bool geometry, bool text, bool facade)
+    {
+        WmlDocument Input(int width, string words)
+        {
+            string Shape(string id, int size, string content) =>
+                $"<v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\" id=\"{id}\" style=\"width:{size}pt;height:40pt\">"
+                + "<v:textbox><w:txbxContent>" + Plain(content) + "</w:txbxContent></v:textbox></v:shape>";
+            return Doc("<w:p><w:r><w:t xml:space=\"preserve\">before </w:t></w:r><w:r><w:pict>"
+                + Shape("first", width, words) + (geometry ? "" : "</w:pict></w:r><w:r><w:pict>")
+                + Shape("second", 20, "second box")
+                + "</w:pict></w:r><w:r><w:t xml:space=\"preserve\"> after</w:t></w:r></w:p>");
+        }
+        var original = Input(20, "fixed text");
+        var revised = Input(geometry ? 40 : 20, text ? "changed text" : "fixed text");
+        AssertSchemaValid(original);
+        AssertSchemaValid(revised);
+        var redline = facade ? DocxCompare.Compare(original, revised) : DocxDiff.Compare(original, revised);
+        AssertSchemaValid(redline);
+        foreach (var (resolved, expected) in new[]
+        {
+            (RevisionProcessor.AcceptRevisions(redline), revised),
+            (RevisionProcessor.RejectRevisions(redline), original),
+        })
+        {
+            AssertSchemaValid(resolved);
+            AssertNoRevisionMarkup(resolved);
+            var actual = MainXml(resolved);
+            Assert.Equal(MainXml(expected).Root!.Value, actual.Root!.Value);
+            XNamespace v = "urn:schemas-microsoft-com:vml";
+            Assert.Equal(MainXml(expected).Descendants(v + "shape").Select(s => (string?)s.Attribute("style")),
+                actual.Descendants(v + "shape").Select(s => (string?)s.Attribute("style")));
+        }
+        foreach (bool sources in new[] { false, true })
+        {
+            IrParagraph Read(WmlDocument doc) => Assert.IsType<IrParagraph>(
+                Assert.Single(IrReader.Read(doc, new IrReaderOptions { RetainSources = sources }).Body.Blocks));
+            var left = IrReader.Read(original, new IrReaderOptions { RetainSources = sources });
+            var right = IrReader.Read(revised, new IrReaderOptions { RetainSources = sources });
+            var leftBoxes = Read(original).Inlines.OfType<IrTextbox>().ToArray();
+            var rightBoxes = Read(revised).Inlines.OfType<IrTextbox>().ToArray();
+            Assert.Equal(!geometry, leftBoxes[0].CarrierDigest == rightBoxes[0].CarrierDigest);
+            var op = Assert.Single(IrEditScriptBuilder.Build(left, right, new IrDiffSettings()).Operations);
+            Assert.Equal(geometry, op.RequiresWholeParagraphReplace);
+            if (text)
+            {
+                Assert.NotNull(op.TextboxDiffs);
+                Assert.Equal(2, op.TextboxDiffs!.Count);
+                Assert.Contains(op.TextboxDiffs[0].Ops, nested => nested.Kind != IrEditOpKind.EqualBlock);
+                Assert.All(op.TextboxDiffs[1].Ops, nested => Assert.Equal(IrEditOpKind.EqualBlock, nested.Kind));
+            }
+        }
+        var revisions = MainXml(redline).Descendants().Where(e => e.Name == W + "ins" || e.Name == W + "del").ToList();
+        if (!geometry && text)
+        {
+            Assert.NotEmpty(revisions);
+            // The markup renderer currently emits a whole-block pair for nested textbox diffs;
+            // the edit script above must still retain the existing nested body operations.
+        }
+        if (!geometry && !text) Assert.Empty(revisions);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void PureTextboxCarrier_SafeParagraphSplitAndMergeRemainNative(bool merge, bool geometry)
+    {
+        const string box = "<w:r><w:pict><v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\" "
+            + "id=\"stable\" style=\"width:60pt;height:40pt\"><v:textbox><w:txbxContent>"
+            + "<w:p><w:r><w:t>Stable box.</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>";
+        const string first = "<w:r><w:t xml:space=\"preserve\">Alder birch cedar dogwood. </w:t></w:r>";
+        const string last = "<w:r><w:t>Elm fir gingko hemlock.</w:t></w:r>";
+        var joined = Doc("<w:p>" + first + box + last + "</w:p>" + Plain("Anchor remains stable across both views."));
+        var split = Doc("<w:p>" + first + (geometry ? box.Replace("width:60pt", "width:100pt") : box) + "</w:p><w:p>" + last + "</w:p>" + Plain("Anchor remains stable across both views."));
+        var original = merge ? split : joined;
+        var revised = merge ? joined : split;
+        foreach (bool sources in new[] { false, true })
+        {
+            var options = new IrReaderOptions { RetainSources = sources };
+            var script = IrEditScriptBuilder.Build(IrReader.Read(original, options), IrReader.Read(revised, options), new IrDiffSettings());
+            var kind = merge ? IrEditOpKind.MergeBlock : IrEditOpKind.SplitBlock;
+            if (geometry) Assert.DoesNotContain(script.Operations, op => op.Kind == kind);
+            else Assert.Single(script.Operations, op => op.Kind == kind);
+        }
+        var redline = DocxDiff.Compare(original, revised);
+        AssertSchemaValid(redline);
+        foreach (var (resolved, expected) in new[]
+        {
+            (RevisionProcessor.AcceptRevisions(redline), revised),
+            (RevisionProcessor.RejectRevisions(redline), original),
+        })
+        {
+            AssertSchemaValid(resolved);
+            AssertNoRevisionMarkup(resolved);
+            var actual = MainXml(resolved);
+            Assert.Equal(MainXml(expected).Root!.Value, actual.Root!.Value);
+            Assert.Single(actual.Descendants(W + "pict"));
+            AssertTextboxGeometry(expected, resolved);
+            Assert.Equal(MainXml(expected).Root!.Element(W + "body")!.Elements(W + "p").Count(),
+                actual.Root!.Element(W + "body")!.Elements(W + "p").Count());
+        }
+    }
+
+    private static string TextboxCarrier(int width, string body, string kind = "vml")
+    {
+        string vml = "<w:pict><v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\" style=\"width:"
+            + width + "pt;height:40pt\"><v:textbox><w:txbxContent>" + body
+            + "</w:txbxContent></v:textbox></v:shape></w:pict>";
+        string drawing = "<w:drawing xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" "
+            + "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">"
+            + "<wp:inline><wp:extent cx=\"" + width * 12700 + "\" cy=\"508000\"/><wp:docPr id=\"1\" name=\"Box\"/>"
+            + "<a:graphic><a:graphicData uri=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">"
+            + "<wps:wsp><wps:cNvSpPr txBox=\"1\"/><wps:spPr><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></wps:spPr>"
+            + "<wps:txbx><w:txbxContent>" + body + "</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp>"
+            + "</a:graphicData></a:graphic></wp:inline></w:drawing>";
+        string carrier = kind == "vml" ? vml : kind == "drawing" ? drawing
+            : "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" "
+                + "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">"
+                + "<mc:Choice Requires=\"wps\">" + drawing + "</mc:Choice><mc:Fallback>" + vml + "</mc:Fallback></mc:AlternateContent>";
+        return "<w:r>" + carrier + "</w:r>";
+    }
+
+    private static void AssertTextboxGeometry(WmlDocument expected, WmlDocument actual)
+    {
+        XNamespace v = "urn:schemas-microsoft-com:vml";
+        XNamespace wp = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+        Assert.Equal(MainXml(expected).Descendants(v + "shape").Select(e => (string?)e.Attribute("style")),
+            MainXml(actual).Descendants(v + "shape").Select(e => (string?)e.Attribute("style")));
+        Assert.Equal(MainXml(expected).Descendants(wp + "extent").Select(e => (string?)e.Attribute("cx")),
+            MainXml(actual).Descendants(wp + "extent").Select(e => (string?)e.Attribute("cx")));
+    }
+
+    [Theory]
+    [InlineData("vml")]
+    [InlineData("drawing")]
+    [InlineData("alternate")]
+    public void TextboxCarrier_GeometrySurvivesNestedScopesAndSourceElision(string kind)
+    {
+        string Cell(string content) => "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"6000\"/></w:tblGrid>"
+            + "<w:tr><w:tc>" + content + "<w:p/></w:tc></w:tr></w:tbl>";
+        foreach (string scope in new[] { "body", "cell", "nested-cell", "textbox", "sdt" })
+        {
+            WmlDocument Input(int width)
+            {
+                string body = "<w:p>" + TextboxCarrier(width, Plain("Stable body."), kind) + "</w:p>";
+                body = scope switch
+                {
+                    "cell" => Cell(body),
+                    "nested-cell" => Cell(Cell(body)),
+                    "textbox" => "<w:p>" + TextboxCarrier(200, Cell(body)) + "</w:p>",
+                    "sdt" => "<w:sdt><w:sdtPr/><w:sdtContent>" + body + "</w:sdtContent></w:sdt>",
+                    _ => body,
+                };
+                return Doc(body);
+            }
+            var left = Input(60);
+            var right = Input(100);
+            AssertSchemaValid(left);
+            AssertSchemaValid(right);
+            string Script(bool sources) => IrEditScriptJson.Write(IrEditScriptBuilder.Build(
+                IrReader.Read(left, new IrReaderOptions { RetainSources = sources }),
+                IrReader.Read(right, new IrReaderOptions { RetainSources = sources }), new IrDiffSettings()));
+            Assert.Equal(Script(true), Script(false));
+            var redline = DocxCompare.Compare(left, right);
+            AssertSchemaValid(redline);
+            foreach (var (resolved, expected) in new[]
+            {
+                (RevisionProcessor.AcceptRevisions(redline), right),
+                (RevisionProcessor.RejectRevisions(redline), left),
+            })
+            {
+                AssertSchemaValid(resolved);
+                AssertNoRevisionMarkup(resolved);
+                Assert.Equal(MainXml(expected).Root!.Value, MainXml(resolved).Root!.Value);
+                AssertTextboxGeometry(expected, resolved);
+            }
+            Assert.NotEmpty(Docxodus.Verification.SemanticDiff.Compare(left, right).Changes);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TextboxCarrier_ConsolidationDistinguishesGeometryConsensusFromConflict(bool same)
+    {
+        WmlDocument Input(int width) => Doc("<w:p>" + TextboxCarrier(width, Plain("Stable body.")) + "</w:p>");
+        var original = Input(60);
+        var first = Input(100);
+        var second = Input(same ? 100 : 140);
+        var script = IrCompositeMergerTests.MergeOf(original, ("Alice", first), ("Bob", second));
+        Assert.Equal(same, script.Conflicts.Count == 0);
+        var redline = DocxDiff.Consolidate(original, new[]
+        {
+            new DocxDiffReviewer { Author = "Alice", Document = first },
+            new DocxDiffReviewer { Author = "Bob", Document = second },
+        });
+        AssertSchemaValid(redline);
+        AssertTextboxGeometry(original, RevisionProcessor.RejectRevisions(redline));
+        if (same) AssertTextboxGeometry(first, RevisionProcessor.AcceptRevisions(redline));
+    }
+
+    [Theory]
+    [InlineData("paragraph")]
+    [InlineData("table")]
+    [InlineData("row")]
+    public void TextboxCarrier_MovedGeometryRemainsObservableAndReversible(string scope)
+    {
+        string Box(int width) => "<w:p><w:r><w:t>Moving boxed paragraph distinctive words.</w:t></w:r>"
+            + TextboxCarrier(width, Plain("Stable textbox.")) + "</w:p>";
+        var anchors = Plain("Anchor alpha beta gamma stays first.") + Plain("Anchor delta epsilon zeta stays second.")
+            + Plain("Anchor eta theta iota stays third.");
+        string Row(string body) => "<w:tr><w:tc>" + body + "</w:tc></w:tr>";
+        string Table(string rows) => "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"6000\"/></w:tblGrid>" + rows + "</w:tbl>";
+        var leftBody = Box(60) + anchors;
+        var rightBody = anchors + Box(100);
+        if (scope == "table")
+        {
+            leftBody = Table(Row(Box(60))) + anchors;
+            rightBody = anchors + Table(Row(Box(100)));
+        }
+        else if (scope == "row")
+        {
+            var rows = Row(Plain("fixed alpha one")) + Row(Plain("fixed beta two")) + Row(Plain("fixed gamma three"));
+            leftBody = Table(Row(Box(60)) + rows);
+            rightBody = Table(rows + Row(Box(100)));
+        }
+        var left = Doc(leftBody);
+        var right = Doc(rightBody);
+        var changes = Docxodus.Verification.SemanticDiff.Compare(left, right).Changes;
+        Assert.Contains(changes, change => change.Operation == Docxodus.Verification.SemanticChangeOperation.Move);
+        Assert.Contains(changes, change => change.Path.Contains("textbox_carrier"));
+        var redline = DocxDiff.Compare(left, right);
+        AssertSchemaValid(redline);
+        var accepted = RevisionProcessor.AcceptRevisions(redline);
+        var rejected = RevisionProcessor.RejectRevisions(redline);
+        AssertSchemaValid(accepted);
+        AssertSchemaValid(rejected);
+        AssertTextboxGeometry(right, accepted);
+        AssertTextboxGeometry(left, rejected);
+        Assert.Equal(MainXml(right).Root!.Value, MainXml(accepted).Root!.Value);
+        Assert.Equal(MainXml(left).Root!.Value, MainXml(rejected).Root!.Value);
+    }
+
+    [Theory]
     [InlineData("hyperlink", false)]
     [InlineData("hyperlink", true)]
     [InlineData("sdt", false)]

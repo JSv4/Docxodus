@@ -1191,7 +1191,7 @@ internal static class IrEditScriptBuilder
             {
                 case IrAlignmentKind.Unchanged:
                     if (StructuralCarrierDiffers(entry.Left!, entry.Right!))
-                        ops.Add(MakeParagraphModifyOp((IrParagraph)entry.Left!, (IrParagraph)entry.Right!, settings));
+                        ops.Add(MakeModifyOp(entry.Left!, entry.Right!, settings));
                     else
                         ops.Add(new IrEditOp(IrEditOpKind.EqualBlock,
                             entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
@@ -1200,7 +1200,7 @@ internal static class IrEditScriptBuilder
 
                 case IrAlignmentKind.FormatOnly:
                     if (StructuralCarrierDiffers(entry.Left!, entry.Right!))
-                        ops.Add(MakeParagraphModifyOp((IrParagraph)entry.Left!, (IrParagraph)entry.Right!, settings));
+                        ops.Add(MakeModifyOp(entry.Left!, entry.Right!, settings));
                     else
                         ops.Add(new IrEditOp(IrEditOpKind.FormatOnlyBlock,
                             entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
@@ -1893,6 +1893,9 @@ internal static class IrEditScriptBuilder
     private static bool SplitMergeSplitsSourceCarrier(IrParagraph singular, IReadOnlyList<IrParagraph> members,
         IReadOnlyList<IrTokenDiff> diffs, IrDiffSettings settings)
     {
+        if (TextboxCarriersDiffer(CollectTextboxes(singular.Inlines),
+                members.SelectMany(p => CollectTextboxes(p.Inlines)).ToList()))
+            return true;
         if (singular.Source.SharedCarriers.Count == 0 && members.All(p => p.Source.SharedCarriers.Count == 0))
             return false;
         var ranges = new List<(int Start, int End)>();
@@ -1908,14 +1911,60 @@ internal static class IrEditScriptBuilder
     }
 
     /// <summary>
-    /// Inline SDT/smartTag wrappers and non-hyperlink field code/state are deliberately transparent to ordinary
-    /// token alignment, but either carrier can be corrupted by slicing its source around a revision. Keep the
-    /// alignment stable and mark a differing paired paragraph for a reversible whole-paragraph replacement.
+    /// Structural carrier facts stay outside visible-content identity. Descend through equal containers so
+    /// textbox geometry changes are still compared, without making stable textbox shells unsliceable.
     /// </summary>
-    private static bool StructuralCarrierDiffers(IrBlock left, IrBlock right) =>
-        left is IrParagraph lp && right is IrParagraph rp &&
-        (lp.InlineEnvelopeDigest != rp.InlineEnvelopeDigest ||
-         lp.FieldEnvelopeDigest != rp.FieldEnvelopeDigest);
+    internal static bool StructuralCarrierDiffers(IrBlock left, IrBlock right)
+    {
+        if (left is IrParagraph lp && right is IrParagraph rp)
+            return lp.InlineEnvelopeDigest != rp.InlineEnvelopeDigest ||
+                lp.FieldEnvelopeDigest != rp.FieldEnvelopeDigest ||
+                ((ContainsTextbox(lp.Inlines) || ContainsTextbox(rp.Inlines)) &&
+                 TextboxCarriersDiffer(CollectTextboxes(lp.Inlines), CollectTextboxes(rp.Inlines)));
+        if (left is IrTable lt && right is IrTable rt)
+        {
+            for (int i = 0; i < Math.Min(lt.Rows.Count, rt.Rows.Count); i++)
+                if (RowCarriersDiffer(lt.Rows[i], rt.Rows[i])) return true;
+            return false;
+        }
+        return left is IrSdtBlock ls && right is IrSdtBlock rs && BlockCarriersDiffer(ls.Blocks, rs.Blocks);
+    }
+
+    internal static bool RowCarriersDiffer(IrRow left, IrRow right)
+    {
+        for (int i = 0; i < Math.Min(left.Cells.Count, right.Cells.Count); i++)
+            if (BlockCarriersDiffer(left.Cells[i].Blocks, right.Cells[i].Blocks)) return true;
+        return false;
+    }
+
+    internal static bool BlockCarriersDiffer(IReadOnlyList<IrBlock> left, IReadOnlyList<IrBlock> right)
+    {
+        for (int i = 0; i < Math.Min(left.Count, right.Count); i++)
+            if (StructuralCarrierDiffers(left[i], right[i])) return true;
+        return false;
+    }
+
+    private static bool TextboxCarriersDiffer(IReadOnlyList<IrTextbox> left, IReadOnlyList<IrTextbox> right)
+    {
+        // Surplus textboxes retain the existing nested insertion/deletion behavior. A changed paired
+        // shell is a separate structural edit, including geometry inside a nested textbox or table.
+        for (int i = 0; i < Math.Min(left.Count, right.Count); i++)
+            if (left[i].CarrierDigest != right[i].CarrierDigest ||
+                BlockCarriersDiffer(left[i].Blocks, right[i].Blocks)) return true;
+        return false;
+    }
+
+    private static bool ContainsTextbox(IReadOnlyList<IrInline> inlines)
+    {
+        for (int i = 0; i < inlines.Count; i++)
+        {
+            var inline = inlines[i];
+            if (inline is IrTextbox ||
+                (inline is IrFieldRun field && ContainsTextbox(field.CachedResult)) ||
+                (inline is IrHyperlink link && ContainsTextbox(link.Inlines))) return true;
+        }
+        return false;
+    }
 
     private static bool HasStructuralCarrier(IrParagraph paragraph) =>
         paragraph.Source.SharedCarriers.Count > 0 || HasFieldOrInlineCarrier(paragraph);

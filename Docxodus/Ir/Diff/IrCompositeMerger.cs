@@ -1627,6 +1627,7 @@ internal static class IrCompositeMerger
                 paragraph.PPrDigest == first.PPrDigest &&
                 paragraph.InlineEnvelopeDigest == first.InlineEnvelopeDigest &&
                 paragraph.FieldEnvelopeDigest == first.FieldEnvelopeDigest &&
+                !IrEditScriptBuilder.StructuralCarrierDiffers(paragraph, first) &&
                 BlockResultText(entry.Op, reviewers[entry.Reviewer].Ir, settings) == firstText;
         });
     }
