@@ -58,6 +58,10 @@ All notable changes to this project will be documented in this file.
   on a fresh page, preserving their text and legal line boundaries instead of refusing the
   document. Paragraphs that fit a page still retain their keep settings.
 
+- Read-only pagination continues long paragraphs and nested tables inside ordinary body table
+  cells across pages, reusing the measured note-table fragmenter and preserving each cell
+  content once instead of leaving the whole cell clipped below the page.
+
 - Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
   distinct rendering positions, so an equation edit after a tab is tracked and rejecting it restores
   the original (#1421). Source positions follow the reader's retained text and atoms through fields,

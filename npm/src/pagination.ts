@@ -2300,6 +2300,38 @@ export class PaginationEngine {
       return null;
     }
 
+    if (this.fragmentParagraphs) {
+      // Body cells and note cells have the same block structure. Continue their paragraphs and
+      // nested tables through the shared fragmenter before treating a whole cell as indivisible.
+      // A carried table is detached, so restore its styled measurement context for the layout gate.
+      const host = !wrapper.isConnected ? this.document.createElement("div") : null;
+      const candidate = host ? wrapper.cloneNode(true) as HTMLElement : wrapper;
+      if (host) {
+        host.style.cssText = `position:absolute;visibility:hidden;left:-9999px;width:${dims.contentWidth}pt`;
+        host.appendChild(candidate);
+        this.stagingElement.appendChild(host);
+      }
+      try {
+        const split = this.splitTableContent(candidate, head =>
+          this.measureElement(head, dims, block.sectionIndex).heightPt <= maximumFragmentHeight, false);
+        if (split) {
+          this.reconcileFragmentIdentities(split.head, split.tail);
+          split.head.style.setProperty("margin-bottom", "0", "important");
+          split.tail.style.setProperty("margin-top", "0", "important");
+          return [split.head, split.tail].map(element => ({
+            ...this.measureElement(element, dims, block.sectionIndex),
+            element,
+            keepWithNext: false,
+            keepLines: false,
+            pageBreakBefore: false,
+            isPageBreak: false,
+          }));
+        }
+      } finally {
+        host?.remove();
+      }
+    }
+
     // The header run must end at a safe boundary and leave body rows to carry.
     const headerCount = repeatHeaderRows ? this.leadingHeaderRowCount(rows, rowGroupEnds) : 0;
     const headerRows = rows.slice(0, headerCount);
@@ -3842,8 +3874,8 @@ export class PaginationEngine {
     return { head: fragment(0, cut, true), tail: fragment(cut, rows.length, false) };
   }
 
-  /** Split a note's table between rows, or inside the first row when no complete row fits. */
-  private splitNoteTable(
+  /** Split a table between rows, or inside the first row when no complete row fits. */
+  private splitTableContent(
     element: HTMLElement,
     fits: (head: HTMLElement) => boolean,
     forceFirst: boolean,
@@ -3920,7 +3952,7 @@ export class PaginationEngine {
             const paragraph = this.splitParagraphAtLargestFit(child, fitsChild);
             if (paragraph.kind === "split") split = paragraph;
           } else {
-            split = this.splitNoteTable(child, fitsChild, false);
+            split = this.splitTableContent(child, fitsChild, false);
           }
         }
         if (split) {
@@ -4028,7 +4060,7 @@ export class PaginationEngine {
           });
         }
         const tableSplit = split?.kind === "split" ? null
-          : this.splitNoteTable(candidate, fitsCandidate, fitting.length === 0);
+          : this.splitTableContent(candidate, fitsCandidate, fitting.length === 0);
         candidate.remove();
         if (split?.kind === "split") {
           if (sourcePosition) {
@@ -4271,7 +4303,7 @@ export class PaginationEngine {
           })
           : null;
         const tableSplit = split ? null
-          : this.splitNoteTable(child, fitsCandidate, fits.length === 0 && forceProgress);
+          : this.splitTableContent(child, fitsCandidate, fits.length === 0 && forceProgress);
         if (tableSplit) {
           fits.push(tableSplit.head);
           tableSplit.tail.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, i === 0 ? "first" : "later");
