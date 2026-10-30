@@ -667,7 +667,7 @@ function eligibleSourceTextBox(box: HTMLElement, placement = false): boolean {
     && (!placement || (box.dataset.docxDrawingAnchor === 'true'
       && ((['page', 'margin'].includes(box.dataset.docxAnchorHRelative ?? '')
         && ['page', 'margin'].includes(box.dataset.docxAnchorVRelative ?? ''))
-        || (box.dataset.docxAnchorHRelative === 'column' && box.dataset.docxAnchorVRelative === 'paragraph'))));
+        || (['column', 'margin'].includes(box.dataset.docxAnchorHRelative ?? '') && box.dataset.docxAnchorVRelative === 'paragraph'))));
 }
 
 function sourcePlacementBounds(box: DOMRect, rects: DOMRect[], paper: DOMRect): number[] | undefined {

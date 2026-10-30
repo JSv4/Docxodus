@@ -50,6 +50,8 @@ All notable changes to this project will be documented in this file.
 - Position supported floating VML shape placeholders through the existing anchor adapter instead of consuming body space.
 - Preserve oversized floating drawings and report relaxed top/bottom clearance when no page can contain their exclusion and anchor text.
 
+- Recognize wholly off-paper text boxes with horizontal margin alignment and vertical paragraph placement, retaining the existing source geometry and visible-content guards.
+
 - Export wholly clipped paragraphs from proven fixed, unlinked text boxes or authored off-paper placements with source warnings; strict content policy rejects them, and newly lost text still fails verification.
 
 

@@ -537,7 +537,7 @@ that same box. Newly clipped or removed paragraphs still fail completeness. Link
 auto-fit boxes, partial geometry and active percentage sizing cannot use this allowance.
 
 A separate source-position marker admits an implicit DrawingML box only when supported page or
-margin coordinates, or the supported column/paragraph pair, place both its whole extent and all
+margin coordinates, or horizontal column/margin with vertical paragraph coordinates, place both its whole extent and all
 text rectangles outside the paper. Its
 paper-relative box and text geometry must remain unchanged in the final map; paragraph-relative
 placement also preserves the source host paragraph geometry. This does not admit
