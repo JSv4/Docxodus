@@ -3121,8 +3121,13 @@ export class PaginationEngine {
       const wordLine = descendant.dataset.docxWordLine === "true"
         && Number(descendant.parentElement!.dataset.docxWordFit) > 0
         && descendant.children.length === 0;
+      // Converter tab advances are empty, heightless boxes. Range endpoints never enter
+      // them, so their width and leader stay whole with the adjoining source run.
+      const tab = descendant.hasAttribute("data-docx-tab") && descendant.childNodes.length === 0
+        && style.height === "0px";
       if (
-        (style.display !== "inline" && !(wordLine && style.display === "block")) ||
+        (style.display !== "inline" && !(wordLine && style.display === "block")
+          && !(tab && style.display === "inline-block")) ||
         !this.hasRangeFragmentSafePosition(descendant, style) ||
         style.float !== "none" ||
         (style.whiteSpace !== "normal" && style.whiteSpace !== "pre-wrap" && !(wordLine && style.whiteSpace === "pre"))
