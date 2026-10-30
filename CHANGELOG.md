@@ -57,6 +57,8 @@ All notable changes to this project will be documented in this file.
 
 - Continue long paragraphs around complete converter tab segments and unsupported-shape placeholders, retaining every inline box and its content.
 
+- Interpret wrapped signed DrawingML text-clearance distances consistently for anchored shapes and floating pictures, preventing enormous page bands from encoded tiny negative clearances.
+
 - Continue oversized kept paragraphs in table cells after their fresh-page retry, preserving widow lines and fitting row keeps.
 
 - Recover read-only tables whose vertical merge groups exceed a fresh page by continuing their row grid while retaining each source cell’s content once. Fitting merges and authored exact-height/header groups remain unchanged.
