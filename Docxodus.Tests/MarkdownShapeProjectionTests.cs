@@ -111,7 +111,7 @@ public class MarkdownShapeProjectionTests
     [InlineData(65, false)]
     public void TextboxDiscoveryHonorsCellWrapperDepth(int depth, bool visible)
     {
-        var content = Host(Box(P("Deep")));
+        var content = "<w:p><w:r>" + Box(P("Deep")) + "</w:r></w:p>";
         for (int i = 0; i < depth; i++) content = "<w:customXml>" + content + "</w:customXml>";
         var doc = Doc("<w:tbl><w:tr><w:tc>" + content + "</w:tc></w:tr></w:tbl>");
         Assert.Equal(visible, Project(doc).Markdown.Contains("Deep"));
