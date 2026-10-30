@@ -31,7 +31,7 @@ for (const variant of ['page', 'paragraph', 'relative'] as const) {
     } finally { await task.destroy(); }
     await page.setContent(result.html!);
     const positions = await page.locator('.page-box').evaluateAll(boxes => boxes.map(box => {
-      const anchor = box.querySelector<HTMLElement>(':scope > [data-docx-drawing-anchor]')!;
+      const anchor = box.querySelector<HTMLElement>('[data-docx-drawing-anchor]')!;
       const image = anchor.querySelector('img')!;
       const bounds = box.getBoundingClientRect(), rect = image.getBoundingClientRect();
       return { x: rect.left - bounds.left, y: rect.top - bounds.top, width: rect.width / bounds.width,
