@@ -47,6 +47,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Oversized body tables with footnote citations split at complete row groups while reserving
+  room for each cited note, keeping the note with its citation instead of clipping the table.
+
 - Standalone export tolerates malformed unused XML or package-level custom properties and
   missing preview thumbnails under the default warning policy. Diagnostics and source bytes are preserved;
   strict exports and defects in required document parts still fail preflight.
