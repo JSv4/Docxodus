@@ -62,6 +62,9 @@ All notable changes to this project will be documented in this file.
   cells across pages, reusing the measured note-table fragmenter and preserving each cell
   content once instead of leaving the whole cell clipped below the page.
 
+- Standalone export tolerates malformed unused XML or package-level custom properties and
+  missing preview thumbnails under the default warning policy. Diagnostics and source bytes are preserved;
+  strict exports and defects in required document parts still fail preflight.
 - Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
   distinct rendering positions, so an equation edit after a tab is tracked and rejecting it restores
   the original (#1421). Source positions follow the reader's retained text and atoms through fields,

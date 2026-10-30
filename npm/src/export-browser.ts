@@ -26,6 +26,7 @@ import {
   RevisionPresentation,
   type PackageManifest,
   type PackageManifestInspectionLimits,
+  type VerificationFinding,
   type VersionInfo,
 } from "./types.js";
 import {
@@ -1622,6 +1623,32 @@ function inspectionLimits(options: NormalizedOptions): PackageManifestInspection
   };
 }
 
+/** Ignore only defects in parts the renderer cannot reach or never reads. */
+function isUnrenderedPackageFinding(manifest: PackageManifest, finding: VerificationFinding): boolean {
+  const thumbnail = finding.code === "missing_target";
+  if (!thumbnail && finding.code !== "malformed_xml") return false;
+  const uri = thumbnail ? finding.location?.targetUri : finding.location?.entryUri;
+  if (!uri) return false;
+  const references = manifest.relationships.filter(relationship =>
+    relationship.targetMode === "Internal" && relationship.resolvedTargetUri === uri);
+  if (!thumbnail) {
+    const entry = manifest.entries.find(entry => entry.uri === uri);
+    if (!entry || uri === "/[Content_Types].xml" || uri.endsWith(".rels")
+      || entry.contentType === "application/vnd.openxmlformats-package.relationships+xml") return false;
+    // Orphan content parts have no relationship through which conversion could read them.
+    if (references.length === 0) return uri !== manifest.facts.mainDocumentUri;
+    if (entry.contentType !== "application/vnd.openxmlformats-officedocument.custom-properties+xml") return false;
+  }
+  if (thumbnail && !references.some(relationship => relationship.ownerUri === finding.location?.ownerUri
+    && relationship.id === finding.location?.relationshipId)) return false;
+  // A shared target must not also be a style, image, or other rendered document part.
+  return references.length > 0 && references.every(relationship => relationship.ownerUri === "/"
+    && (thumbnail
+      ? relationship.type === "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"
+      : relationship.type === "http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties"
+        || relationship.type === "http://purl.oclc.org/ooxml/officeDocument/relationships/custom-properties"));
+}
+
 async function preflightManifest(
   manifest: PackageManifest,
   bytes: Uint8Array,
@@ -1698,8 +1725,11 @@ async function preflightManifest(
     }
   }
 
-  if (manifest.packageKind !== "opc" || !manifest.isValid || !manifest.facts.mainDocumentUri) {
-    const finding = manifest.findings.find(finding => finding.severity === "error");
+  const errors = manifest.findings.filter(finding => finding.severity === "error");
+  const finding = errors.find(finding => options.unsupportedContent === "strict"
+    || !isUnrenderedPackageFinding(manifest, finding));
+  const renderable = manifest.isValid || (errors.length > 0 && !finding);
+  if (manifest.packageKind !== "opc" || !renderable || !manifest.facts.mainDocumentUri) {
     fail("invalid_document", "package_preflight",
       `The input is not a valid DOCX OPC package (${manifest.packageKind}).`,
       "Repair or decrypt the document before export.", {
