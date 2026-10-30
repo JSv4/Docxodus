@@ -1,4 +1,5 @@
 import { expect, test, type Browser } from '@playwright/test';
+import { PDFDocument, PDFDict, PDFName } from 'pdf-lib';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 import { imageIdentityDocx } from './docx-image-identity-fixture.js';
 import { backgroundPictureDocx } from './docx-background-picture-fixture.js';
@@ -63,4 +64,14 @@ test('a repeated undecodable header image retains one warning and one source ide
   expect(identities).toHaveLength(2);
   expect(identities[0]).toBeTruthy();
   expect(new Set(identities).size).toBe(1);
+  const fonts = await page.locator('.page-box img').evaluateAll(images =>
+    images.map(image => getComputedStyle(image).fontFamily));
+  expect(fonts.every(font => font.includes('Liberation Serif'))).toBe(true);
+  const pdf = await PDFDocument.load(result.pdf!);
+  const names = pdf.context.enumerateIndirectObjects().flatMap(([, object]) => {
+    const name = object instanceof PDFDict ? object.get(PDFName.of('BaseFont')) : undefined;
+    return name instanceof PDFName ? [name.asString()] : [];
+  });
+  expect(names.length).toBeGreaterThan(0);
+  expect(names.every(name => name.includes('LiberationSerif'))).toBe(true);
 });

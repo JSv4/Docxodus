@@ -46,6 +46,8 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+
+- Preserve inherited typography when floating drawings move onto the page, including the visible fallback text of images that cannot decode.
 - Preserve embedded image and SVG identities when pagination promotes or repeats drawings, so an already-reported decoding failure does not become a false serialization error. Newly damaged resources still fail verification.
 
 - Refit header and footer grids that extend beyond the paper with the shared table column
