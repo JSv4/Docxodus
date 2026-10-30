@@ -1144,6 +1144,8 @@ export class PaginationEngine {
       pageNumber += sectionPages.length;
     }
 
+    this.flowLinkedTextBoxes();
+
     // Hide staging after measurement
     this.stagingElement.style.display = "none";
 
@@ -3081,12 +3083,13 @@ export class PaginationEngine {
     bodyParagraph: boolean = false,
     relaxKeepLines = false,
     terminalCellParagraph = false,
+    textBoxParagraph = false,
   ): boolean {
     // The converter writes a Word paragraph with an outline level (a heading style) as h1-h6;
     // it breaks across pages like any other paragraph unless it keeps its lines together.
-    const wordParagraph = bodyParagraph
-      ? this.isWordParagraphElement(paragraph)
-      : paragraph.tagName === "P";
+    const wordParagraph = textBoxParagraph
+      ? paragraph.localName === "span" && paragraph.dataset.docxTextboxParagraph === "true"
+      : bodyParagraph ? this.isWordParagraphElement(paragraph) : paragraph.tagName === "P";
     if (
       !wordParagraph ||
       (paragraph.dataset.keepWithNext === "true" && !terminalCellParagraph) ||
@@ -3102,7 +3105,7 @@ export class PaginationEngine {
     // Inline ids/editor anchors are reconciled after Range cloning, and list
     // markers are kept atomically with the leading text fragment.
     const unsupportedDescendants = [
-      ...(bodyParagraph ? [] : ["img"]),
+      ...(bodyParagraph || textBoxParagraph ? [] : ["img"]),
       "picture",
       "svg",
       "math",
@@ -6013,6 +6016,103 @@ export class PaginationEngine {
       frame.style.margin = '0';
     }
     return frames;
+  }
+
+  /** Flow one source story through its declared, already positioned text-box frames. */
+  private flowLinkedTextBoxes(): void {
+    if (!this.fragmentParagraphs) return;
+    const stories = new Map<string, HTMLElement[]>();
+    for (const box of Array.from(this.containerElement.querySelectorAll<HTMLElement>('[data-docx-textbox-linked="true"]'))) {
+      this.checkpoint();
+      const story = box.dataset.docxTextboxStory;
+      if (!story) throw new Error("A linked text box has no source story identity");
+      // Running stories repeat independently on each page; body chains may cross pages.
+      const key = story + (box.dataset.docxTextboxRepeat === "true"
+        ? "@" + box.closest<HTMLElement>(".page-box")?.dataset.pageNumber : "");
+      const boxes = stories.get(key) ?? [];
+      boxes.push(box);
+      stories.set(key, boxes);
+    }
+    for (const boxes of stories.values()) {
+      boxes.sort((a, b) => Number(a.dataset.docxTextboxSeq) - Number(b.dataset.docxTextboxSeq));
+      const sequences = boxes.map(box => box.dataset.docxTextboxSeq);
+      if (sequences[0] !== "0" || sequences.some((sequence, index) => !/^\d+$/.test(sequence ?? "")
+          || (index > 0 && Number(sequence) <= Number(sequences[index - 1])))) {
+        throw new Error("A linked text-box story has a missing or repeated frame sequence");
+      }
+      if (boxes.slice(1).some(box => box.childNodes.length > 0)) {
+        throw new Error("A linked text-box continuation unexpectedly owns source content");
+      }
+      const pending = Array.from(boxes[0].children) as HTMLElement[];
+      // A continuation may have a differently styled anchor run. Retain the story's inherited
+      // typography while allowing every paragraph to wrap at its destination frame's width.
+      for (const paragraph of pending) this.preserveInheritedPresentation(paragraph);
+      boxes[0].replaceChildren();
+      let next = 0;
+      for (const box of boxes) {
+        this.checkpoint();
+        const fits = (): boolean => {
+          const last = box.lastElementChild as HTMLElement | null;
+          if (!last) return true;
+          const style = this.view.getComputedStyle(box), rect = box.getBoundingClientRect();
+          const scale = rect.width / parseFloat(style.width);
+          if (!(scale > 0)) return false;
+          const inset = (name: string) => (parseFloat(style.getPropertyValue(name)) || 0) * scale;
+          const bottom = rect.bottom - inset("border-bottom-width") - inset("padding-bottom");
+          const right = rect.right - inset("border-right-width") - inset("padding-right");
+          const left = rect.left + inset("border-left-width") + inset("padding-left");
+          const range = this.document.createRange();
+          range.selectNodeContents(box);
+          const ink = range.getBoundingClientRect(), block = last.getBoundingClientRect();
+          if (Math.max(ink.bottom, block.bottom) > bottom + 0.5) return false;
+          if (ink.right <= right + 0.5 && ink.left >= left - 0.5) return true;
+          // Preserved trailing spaces may have advances outside the line without painting
+          // anything there. Check actual word/object rectangles before rejecting that width.
+          const outside = (rect: DOMRect) => rect.width > 0 && rect.height > 0
+            && (rect.right > right + 0.5 || rect.left < left - 0.5);
+          const walker = this.document.createTreeWalker(box, this.view.NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            this.checkpoint();
+            const text = node as Text;
+            for (const word of text.data.matchAll(/[^\s\u200B-\u200F\uFEFF]+/gu)) {
+              range.setStart(text, word.index!);
+              range.setEnd(text, word.index! + word[0].length);
+              if (Array.from(range.getClientRects()).some(outside)) return false;
+            }
+          }
+          return !Array.from(box.querySelectorAll<HTMLElement>('img,svg,canvas,[data-docx-shape],[data-docx-tab]')).some(element => {
+            if (element.hasAttribute("data-docx-tab") && this.view.getComputedStyle(element).borderBottomStyle === "none") return false;
+            return outside(element.getBoundingClientRect());
+          });
+        };
+        while (next < pending.length) {
+          this.checkpoint();
+          const paragraph = pending[next];
+          box.appendChild(paragraph);
+          if (fits()) { next++; continue; }
+          const measureHead = (head: HTMLElement): boolean => {
+            paragraph.replaceWith(head);
+            try { return fits(); } finally { head.replaceWith(paragraph); }
+          };
+          if (this.canRangeFragmentParagraph(paragraph, false, false, true, next === pending.length - 1, true)) {
+            const split = this.splitParagraphAtLargestFit(paragraph, measureHead, {
+              preserveWidowLines: paragraph.dataset.widowControl !== "false",
+            });
+            if (split.kind === "split") {
+              this.reconcileFragmentIdentities(split.head, split.tail);
+              paragraph.replaceWith(split.head);
+              pending[next] = split.tail;
+              break;
+            }
+          }
+          paragraph.remove();
+          break;
+        }
+      }
+      // A partially visible paragraph still has a measurable source anchor. That alone cannot
+      // detect lost text, so an exhausted linked story must fail rather than serialize its clip.
+      if (next < pending.length) throw new Error("Linked text-box content does not fit its declared continuation frames");
+    }
   }
 
   private sizeDrawingAnchor(anchor: HTMLElement, dims: PageDimensions, pageNumber: number,

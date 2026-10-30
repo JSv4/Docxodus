@@ -48,6 +48,9 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - Position supported floating VML shape placeholders through the existing anchor adapter instead of consuming body space.
 - Preserve oversized floating drawings and report relaxed top/bottom clearance when no page can contain their exclusion and anchor text.
+
+- Flow linked DrawingML text-box stories through their declared continuation frames, preserving text, inline images, typography and source fragments across different frame widths or pages. Exhausted or malformed chains report an error instead of silently clipping their remaining text.
+
 - Blank lines inside fixed floating text boxes placed outside the paper no longer fail
   source coverage. Visible text and ordinary flow clipping retain the completeness guard.
 
