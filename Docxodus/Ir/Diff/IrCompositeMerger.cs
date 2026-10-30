@@ -1268,7 +1268,7 @@ internal static class IrCompositeMerger
             // only retains touched[0]'s). Carry them additively per contributing reviewer with a right anchor.
             var sourceRightAnchors = touched
                 .Where(e => e.Op.RightAnchor != null)
-                .Select(e => new IrSourceRightAnchor(e.Reviewer, e.Op.RightAnchor!))
+                .Select(e => new IrSourceRightAnchor(e.Reviewer, e.Op.RightAnchor!, e.Op.TokenDiff, reviewers[e.Reviewer].Author))
                 .ToList();
             // Only the first conflict id is linked on the op; consumers needing all conflict ids
             // on this op must scan IrCompositeScript.Conflicts independently (by design).

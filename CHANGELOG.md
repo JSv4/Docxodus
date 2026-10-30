@@ -95,6 +95,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Consolidation preserves a reviewer’s inline bookmark additions and removals beside independent
+  text or equation edits, keeping endpoint order and reviewer ownership through accept/reject (#1426).
+
 - Keep paginated text from overlapping in Firefox by measuring natural line heights below its rendered-font size limit (#1424).
 - **Textbox geometry survives comparison rejection** (#1425): include the outer textbox carrier's geometry and relationships in comparison identity while keeping textbox bodies independently diffable. Reject All restores the original shape dimensions; unchanged carriers retain native paragraph split/merge behavior.
 

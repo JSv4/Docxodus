@@ -6161,22 +6161,18 @@ internal static partial class IrMarkupRenderer
         // Per-reviewer right paragraph: tokens + run model, resolved from op.SourceRightAnchors (each
         // contributing reviewer's OWN right paragraph for this base block) and cached so a reviewer with
         // several disjoint word edits builds its model once.
-        var rightAnchorByReviewer = new Dictionary<int, string>();
-        if (op.SourceRightAnchors != null)
-            foreach (var sra in op.SourceRightAnchors)
-                rightAnchorByReviewer[sra.Reviewer] = sra.Anchor;
         var fieldSources = new Dictionary<int, SourceBoundarySource> { [-1] = new(leftTokens, leftRuns) };
-        foreach (var group in authored.Where(item => item.SourceReviewer >= 0).GroupBy(item => item.SourceReviewer))
+        foreach (var source in op.SourceRightAnchors ?? IrNodeList.Empty<IrSourceRightAnchor>())
         {
-            int reviewer = group.Key;
-            string? anchor = rightAnchorByReviewer.TryGetValue(reviewer, out var value) ? value : null;
-            var tokens = ParagraphRenderTokens(anchor, reviewerIrs[reviewer], state.Settings);
-            var paragraph = SourceElement(anchor, reviewerIrs[reviewer]);
+            var tokens = ParagraphRenderTokens(source.Anchor, reviewerIrs[source.Reviewer], state.Settings);
+            var paragraph = SourceElement(source.Anchor, reviewerIrs[source.Reviewer]);
             var runs = new SourceRunModel(paragraph ?? new XElement(W.p));
-            fieldSources[reviewer] = new(tokens, runs, group.First().Author);
+            fieldSources[source.Reviewer] = new(tokens, runs, source.Author);
         }
         authored = SyncSourceBoundaries(authored, item => item.Op, (item, tokenOp) => item with { Op = tokenOp },
             item => item.SourceReviewer, leftTokens, leftRuns, fieldSources, out var fieldCharactersBefore);
+
+        var markers = PlanComposedMarkers(op, authored, leftTokens, fieldSources, baseIr, reviewerIrs, state, ref fieldCharactersBefore);
 
         // Clone the BASE pPr (deterministic; composed edits are text-only).
         var newPara = new XElement(W.p);
@@ -6214,7 +6210,7 @@ internal static partial class IrMarkupRenderer
                 state.AuthorOverride = null;
                 state.RightSource = baseIr;
                 state.RightSourceId = -1;
-                newPara.Add(BuildTokenOpContent(subDiff, leftTokens, leftTokens, leftRuns, leftRuns, state));
+                newPara.Add(BuildTokenOpContent(subDiff, leftTokens, leftTokens, leftRuns, leftRuns, state, composedMarkers: markers));
             }
             else
             {
@@ -6743,7 +6739,7 @@ internal static partial class IrMarkupRenderer
         IrTokenDiff tokenDiff,
         IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
         SourceRunModel leftRuns, SourceRunModel rightRuns, RenderState state,
-        bool syncSourceBoundaries = false)
+        bool syncSourceBoundaries = false, ComposedMarkerPlan? composedMarkers = null)
     {
         var content = new List<XElement>();
 
@@ -6793,6 +6789,8 @@ internal static partial class IrMarkupRenderer
                     var representedMarkers = new HashSet<string>(StringComparer.Ordinal);
                     List<XElement> StableSlice(int start, int end)
                     {
+                        if (composedMarkers is not null)
+                            return composedMarkers.Slice(start, end, rightRuns, state);
                         if (!leftRuns.HasRangeMarkers && !rightRuns.HasRangeMarkers)
                             return rightRuns.Slice(start, end);
                         var result = new List<XElement>();
@@ -6976,6 +6974,16 @@ internal static partial class IrMarkupRenderer
                 .Where(key => leftMarkers.Count(marker => marker.Type == key) == 1 &&
                     rightMarkers.Values.All(markers => markers.Count(marker => marker.Type == key) == 1))
                 .Distinct().ToList();
+            // A composed one-sided endpoint may share this gap with a common endpoint. Plan that
+            // entire marker sequence together below, retaining its source order around the edit.
+            if (sources.Count > 1)
+            {
+                var shared = common.ToHashSet();
+                common.RemoveAll(key => leftMarkers.Any(marker => marker.Type == key &&
+                    leftMarkers.Any(other => other.Position == marker.Position && !shared.Contains(other.Type))) ||
+                    rightMarkers.Values.Any(markers => markers.Any(marker => marker.Type == key &&
+                        markers.Any(other => other.Position == marker.Position && !shared.Contains(other.Type)))));
+            }
             var ids = common.Select((key, index) => (key, index)).ToDictionary(item => item.key, item => -2 - item.index);
             var augmentedLeft = leftRuns.OrderBoundaries(left.Concat(leftMarkers
                 .Where(marker => ids.ContainsKey(marker.Type)).Select(marker => marker with { Field = ids[marker.Type] })));
@@ -7257,8 +7265,8 @@ internal static partial class IrMarkupRenderer
                 else
                     OneSided(false, r[rj++]);
             }
-            if (!after)
-                Add(false, right.Primary, null);
+            if (!after && right.Primary is { } primary)
+                Add(false, primary, null);
         }
         return steps;
     }
@@ -11634,7 +11642,7 @@ internal static partial class IrMarkupRenderer
             /// <summary>The <c>w:fldChar</c> and the instruction runs right after it.</summary>
             public IEnumerable<XElement> Core => Items.Where(item => item.IsCore).Select(item => item.Element);
 
-            public XElement Primary => Items.First(item => item.IsCore && !item.AfterFieldChar).Element;
+            public XElement? Primary => Items.FirstOrDefault(item => item.IsCore && !item.AfterFieldChar)?.Element;
 
             /// <summary>Every source element the character is made of: its core and the markers beside it.</summary>
             public IEnumerable<XElement> Members => Items.Select(item => item.Element);
