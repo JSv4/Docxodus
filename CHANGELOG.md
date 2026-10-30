@@ -121,6 +121,9 @@ All notable changes to this project will be documented in this file.
   Tab measures use the shared invariant unit parser and retain integer truncation; row heights
   retain fractional precision, their range checks, and property-specific malformed-value errors.
 
+
+- Continue table-cell paragraphs when line or row keeps cannot fit a fresh page, preserving widow lines and fitting kept rows.
+
 - Oversized body tables with footnote citations split at complete row groups while reserving
   room for each cited note, keeping the note with its citation instead of clipping the table.
 
