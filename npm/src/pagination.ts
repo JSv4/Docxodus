@@ -2672,7 +2672,7 @@ export class PaginationEngine {
       if (this.measureElement(sample, dims, sectionIndex).heightPt <= maximumHeight) continue;
       recovered ??= wrapper.cloneNode(true) as HTMLElement;
       const target = this.blockTable(recovered)!.tBodies[0];
-      const slots: Array<{ cell: HTMLTableCellElement; column: number; from: number; to: number }> = [];
+      let slots: Array<{ cell: HTMLTableCellElement; column: number; from: number; to: number }> = [];
       for (let index = 0; index < group.length; index++) {
         this.checkpoint();
         const row = group[index];
@@ -2700,6 +2700,9 @@ export class PaginationEngine {
           clone.appendChild(cell);
         }
         target.rows[first + index].replaceWith(clone);
+        // Only spans still occupying the next row matter; ordinary/expired cells must not
+        // accumulate into a history scanned again for every row of a long merged group.
+        slots = slots.filter(slot => slot.to > index + 1);
       }
     }
     return recovered;
