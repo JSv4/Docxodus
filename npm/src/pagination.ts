@@ -643,17 +643,20 @@ function clippedAwayByExactRow(element: HTMLElement, rect: DOMRect): boolean {
   return false;
 }
 
-/** A blank paragraph wholly outside a fixed source text box has no painted line to map. */
-function blankLineClippedByTextBox(view: Window, element: HTMLElement, rect: DOMRect): boolean {
+/** A blank paragraph outside its fixed source text box's painted area has no line to map. */
+function blankLineClippedByTextBox(view: Window, element: HTMLElement, rect: DOMRect, page: DOMRect): boolean {
   if (!rendersOnlyItsLine(element) || !(rect.width > 0 && rect.height > 0)) return false;
   for (let clip = element.parentElement?.closest<HTMLElement>('[data-docx-textbox-clip="true"]'); clip;
     clip = clip.parentElement?.closest<HTMLElement>('[data-docx-textbox-clip="true"]')) {
     const style = view.getComputedStyle(clip);
     const box = clip.getBoundingClientRect();
+    // Source-positioned floating boxes are also bounded by the paper. Ordinary flow clips
+    // still count as lost content: only an explicitly placed source drawing gets this bound.
+    const paper = clip.dataset.docxDrawingAnchor === "true" && style.position === "absolute" ? page : box;
     const clipsX = style.overflowX === "hidden" || style.overflowX === "clip";
     const clipsY = style.overflowY === "hidden" || style.overflowY === "clip";
-    if ((clipsX && (rect.right <= box.left || rect.left >= box.right))
-      || (clipsY && (rect.bottom <= box.top || rect.top >= box.bottom))) return true;
+    if ((clipsX && (rect.right <= Math.max(box.left, paper.left) || rect.left >= Math.min(box.right, paper.right)))
+      || (clipsY && (rect.bottom <= Math.max(box.top, paper.top) || rect.top >= Math.min(box.bottom, paper.bottom)))) return true;
   }
   return false;
 }
@@ -1329,7 +1332,7 @@ export class PaginationEngine {
           // A source-sized zero-font blank line has no painted substrate. A visible run or a
           // line with authored height still has geometry and must remain in the map.
           const collapsedBlankLine = rect.height === 0 && style.fontSize === "0px" && rendersOnlyItsLine(element);
-          if (collapsedBlankLine || clippedAwayByExactRow(element, rect) || blankLineClippedByTextBox(this.view, element, rect))
+          if (collapsedBlankLine || clippedAwayByExactRow(element, rect) || blankLineClippedByTextBox(this.view, element, rect, pageRect))
             unpaintedAnchorIds.add(anchorId);
           continue;
         }
