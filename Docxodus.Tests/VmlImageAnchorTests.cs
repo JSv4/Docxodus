@@ -15,7 +15,7 @@ public class VmlImageAnchorTests
         "margin-left:0;margin-top:0;mso-position-horizontal:center;mso-position-horizontal-relative:margin;" +
         "mso-position-vertical:center;mso-position-vertical-relative:margin";
 
-    private static XElement Render(string style, bool paginated = true, bool precedingShape = false)
+    private static XElement Render(string style, bool paginated = true, bool precedingShape = false, string? wrap = null)
     {
         using var stream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -33,7 +33,9 @@ public class VmlImageAnchorTests
                 <w:hdr xmlns:w="{W.w}" xmlns:r="{R.r}" xmlns:v="urn:schemas-microsoft-com:vml">
                   <w:p><w:r><w:t>Oriole background ledger.</w:t></w:r><w:r><w:pict>
                     {(precedingShape ? "<v:shape id=\"EmptyShape\" style=\"width:11pt;height:9pt\"/>" : "")}
-                    <v:shape id="OrioleBackdrop" style="{style}"><v:imagedata r:id="picture"/></v:shape>
+                    <v:shape id="OrioleBackdrop" style="{style}"><v:imagedata r:id="picture"/>
+                      {(wrap == null ? "" : "<w10:wrap xmlns:w10=\"urn:schemas-microsoft-com:office:word\" type=\"" + wrap + "\"/>")}
+                    </v:shape>
                   </w:pict></w:r></w:p>
                 </w:hdr>
                 """));
@@ -95,6 +97,18 @@ public class VmlImageAnchorTests
     {
         var html = Render(BackgroundStyle, paginated: false);
         Assert.DoesNotContain("data-docx-drawing-anchor", html.ToString());
+        Assert.Single(html.Descendants(), e => e.Name.LocalName == "img");
+    }
+
+    [Theory]
+    [InlineData("none", false)]
+    [InlineData("none", true)]
+    [InlineData("square", false)]
+    [InlineData("square", true)]
+    public void ExplicitLegacyWrappingDoesNotBecomeNonwrappingPlacement(string wrap, bool behind)
+    {
+        var html = Render(behind ? BackgroundStyle : BackgroundStyle.Replace("z-index:-37", "z-index:37"), wrap: wrap);
+        Assert.Equal(wrap == "none", html.ToString().Contains("data-docx-drawing-anchor"));
         Assert.Single(html.Descendants(), e => e.Name.LocalName == "img");
     }
 

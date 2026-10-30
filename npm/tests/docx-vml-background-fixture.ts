@@ -2,15 +2,17 @@ import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
 import { encodePng } from './visual-parity/png.js';
 
 /** Original Oriole page stationery, including its generated two-color bitmap. */
-export function generateVmlBackgroundDocx(kind: 'vml' | 'drawing' | 'inline'): Uint8Array {
+export function generateVmlBackgroundDocx(kind: 'vml' | 'drawing' | 'inline' | 'wrapped'): Uint8Array {
   const wp = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
   const a = 'http://schemas.openxmlformats.org/drawingml/2006/main';
   const pic = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
-  const width = kind === 'inline' ? 96 : 648, height = kind === 'inline' ? 48 : 828;
+  const small = kind === 'inline' || kind === 'wrapped';
+  const width = small ? 96 : 648, height = small ? 48 : 828;
   const vmlStyle = (kind === 'inline' ? '' :
     'position:absolute; z-index:-53; margin-left:0; margin-top:0; mso-position-horizontal:center; mso-position-horizontal-relative:margin; mso-position-vertical:center; mso-position-vertical-relative:margin;')
     + `width:${width}pt;height:${height}pt`;
-  const vml = `<w:pict><v:shape id="OrioleStationery" style="${vmlStyle}"><v:imagedata r:id="stationery"/></v:shape></w:pict>`;
+  const vml = `<w:pict><v:shape id="OrioleStationery" style="${vmlStyle}"><v:imagedata r:id="stationery"/>
+    ${kind === 'wrapped' ? '<w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word" type="square"/>' : ''}</v:shape></w:pict>`;
   const drawing = `<w:drawing><wp:anchor simplePos="0" relativeHeight="7" behindDoc="1" locked="0" layoutInCell="1" allowOverlap="1"
       distT="0" distB="0" distL="0" distR="0"><wp:simplePos x="0" y="0"/>
     <wp:positionH relativeFrom="margin"><wp:align>center</wp:align></wp:positionH>
