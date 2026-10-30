@@ -212,6 +212,8 @@ public sealed partial class DocxSession : IDisposable
         if (!portable.Success)
             return portable;
 
+        var elements = AnchorTarget.ResolveAll(_doc!,
+            pageMap.Fragments.Select(fragment => FindAnchor(fragment.AnchorId)).OfType<AnchorTarget>());
         foreach (var fragment in pageMap.Fragments)
         {
             var target = FindAnchor(fragment.AnchorId);
@@ -223,7 +225,7 @@ public sealed partial class DocxSession : IDisposable
                 return Fail(PageMapRegistrationError.InvalidMap,
                     $"PageMap story does not match anchor scope: {fragment.AnchorId}");
 
-            var element = target.Resolve(_doc!);
+            var element = elements.GetValueOrDefault(target);
             var actuallyInTableCell = target.Anchor.Kind == "tc"
                 || (element?.AncestorsAndSelf(W.tc).Any() ?? false);
             // A comment's canonical source lives in comments.xml, while its inline presentation
