@@ -39,3 +39,26 @@ for(const mode of ['recover','editor','exact','header'] as const) {
     }
   });
 }
+
+test('a long narrow merged group retains every row and only its active span identity',async({page})=>{
+  const count=640;
+  await page.setContent(`<style>table{border-collapse:collapse;width:260pt}td{padding:0;vertical-align:top}p{margin:0;font:3pt/4pt Arial}</style>
+    <div id="staging"><section data-section-index="0" data-page-width="300" data-page-height="160"
+    data-content-width="260" data-content-height="120" data-margin-top="20" data-margin-bottom="20"
+    data-margin-left="20" data-margin-right="20"><div><table>${Array.from({length:count},(_,i)=>`<tr>
+    ${i===0?`<td rowspan="${count}" id="spruce-span"><p>SpruceSpan</p></td>`:''}
+    <td><p>Spruce${String(i+1).padStart(3,'0')}</p></td></tr>`).join('')}</table></div></section></div><div id="container"></div>`);
+  await page.addScriptTag({path:bundle});
+  const result=await page.evaluate(()=>{
+    const result=new (window as any).DocxodusPagination.PaginationEngine(document.getElementById('staging'),document.getElementById('container'),
+      {fragmentParagraphs:true,showPageNumbers:false}).paginate();
+    const root=document.getElementById('container')!;
+    return{pages:result.totalPages,text:root.textContent,rows:root.querySelectorAll('tr').length,
+      identities:root.querySelectorAll('#spruce-span').length};
+  });
+  expect(result.pages).toBeGreaterThan(10);
+  expect(result.rows).toBe(count);
+  expect(result.identities).toBe(1);
+  expect(result.text?.match(/Spruce\d+/g)).toEqual(Array.from({length:count},(_,i)=>`Spruce${String(i+1).padStart(3,'0')}`));
+  expect(result.text?.match(/SpruceSpan/g)).toHaveLength(1);
+});
