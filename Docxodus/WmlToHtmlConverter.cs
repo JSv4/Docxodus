@@ -11786,9 +11786,9 @@ namespace Docxodus
         /// <summary>
         /// Projects a DrawingML or VML text box into valid inline HTML. Word commonly stores the
         /// same logical box in an <c>mc:Choice</c> and a VML fallback; callers select one branch
-        /// before reaching here. This models the portable core (dimensions, simple fill/border and
-        /// its Word paragraphs) rather than passing VML's absolute-positioning directives through
-        /// to a browser, where they otherwise escape the document flow.
+        /// before reaching here. This models dimensions, simple fill/border and its Word paragraphs.
+        /// Supported page/margin VML coordinates use the shared DrawingML anchor model during
+        /// pagination; other legacy placement keeps its established inline fallback.
         /// </summary>
         private static XElement? ProcessTextBox(WordprocessingDocument wordDoc, XElement element,
             WmlToHtmlConverterSettings? settings)
@@ -11811,8 +11811,8 @@ namespace Docxodus
 
             var drawingContainer = element.Elements()
                 .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
-            var vmlShape = element.Descendants(VML.shape).FirstOrDefault();
-            var autoFit = HasAutoFitTextBox(element);
+            var vmlShape = textBoxContent.Ancestors(VML.shape).FirstOrDefault();
+            var autoFit = vmlShape != null ? HasVmlTextBoxAutoFit(vmlShape) : HasAutoFitTextBox(element);
             // ProcessImage's settings parameter defaults to null for callers with no pagination
             // config, but AddDrawingTextBoxStyle dereferences settings.RenderPagination once the
             // drawing has an anchor, and ConvertToHtmlTransform requires non-null settings
@@ -11821,7 +11821,11 @@ namespace Docxodus
             if (drawingContainer != null)
                 AddDrawingTextBoxStyle(style, wrapper, element, drawingContainer, settings!, autoFit);
             else if (vmlShape != null)
+            {
+                if (settings?.RenderPagination == PaginationMode.Paginated && CreateVmlDrawingAnchor(vmlShape) is XElement anchor)
+                    AddDrawingFrameStyle(style, wrapper, anchor, settings, autoFit);
                 AddVmlTextBoxStyle(style, vmlShape);
+            }
 
             // A fixed source-authored text box intentionally clips overflow. Preserve that
             // provenance so pagination can distinguish an unpainted blank line from content loss.
@@ -12682,6 +12686,12 @@ namespace Docxodus
             WmlToHtmlConverterSettings? settings)
         {
             if (image == null || settings?.RenderPagination != PaginationMode.Paginated) return image;
+            var anchor = CreateVmlDrawingAnchor(shape);
+            return anchor == null ? image : ApplyAnchorTextWrap(image, anchor, settings);
+        }
+
+        private static XElement? CreateVmlDrawingAnchor(XElement shape)
+        {
             var declarations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var token in ((string?)shape.Attribute("style") ?? "").Split(';'))
             {
@@ -12691,23 +12701,22 @@ namespace Docxodus
             if (!string.Equals(declarations.GetValueOrDefault("position"), "absolute", StringComparison.OrdinalIgnoreCase)
                 || !TryVmlPointEmu(declarations.GetValueOrDefault("width"), out var width) || width <= 0
                 || !TryVmlPointEmu(declarations.GetValueOrDefault("height"), out var height) || height <= 0
-                || !TryVmlImageAxis(declarations, "horizontal", out var horizontal)
-                || !TryVmlImageAxis(declarations, "vertical", out var vertical)
+                || !TryVmlAnchorAxis(declarations, "horizontal", out var horizontal)
+                || !TryVmlAnchorAxis(declarations, "vertical", out var vertical)
                 || !int.TryParse(declarations.GetValueOrDefault("z-index") ?? "0", NumberStyles.Integer,
-                    CultureInfo.InvariantCulture, out var order)) return image;
+                    CultureInfo.InvariantCulture, out var order)) return null;
             // Explicit wrapping needs a clearance model regardless of the picture's z-order.
             // Retain that established fallback; only nonwrapping objects use this anchor path.
             if (shape.Elements(XName.Get("wrap", "urn:schemas-microsoft-com:office:word"))
-                .Any(wrap => (string?)wrap.Attribute("type") is not (null or "none"))) return image;
-            var anchor = new XElement(WP.anchor,
+                .Any(wrap => (string?)wrap.Attribute("type") is not (null or "none"))) return null;
+            return new XElement(WP.anchor,
                 new XAttribute("behindDoc", order < 0),
                 new XAttribute("relativeHeight", (uint)((long)order - int.MinValue)),
                 new XElement(WP.extent, new XAttribute(NoNamespace.cx, width), new XAttribute(NoNamespace.cy, height)),
                 horizontal, vertical, new XElement(WP.wrapNone));
-            return ApplyAnchorTextWrap(image, anchor, settings);
         }
 
-        private static bool TryVmlImageAxis(Dictionary<string, string> declarations, string axis, out XElement? position)
+        private static bool TryVmlAnchorAxis(Dictionary<string, string> declarations, string axis, out XElement? position)
         {
             position = null;
             var reference = declarations.GetValueOrDefault($"mso-position-{axis}-relative")?.ToLowerInvariant();
