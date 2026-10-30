@@ -12,7 +12,8 @@ const budgetsKiB = {
   // Whole inline-image atoms add ~0.25 KiB to the shared paginator: embed/iife/editor/
   // pagination measured 136.950/136.991/116.339/33.813 KiB before and
   // 137.195/137.229/116.591/34.065 KiB after. Raise only the exhausted budgets by 1 KiB.
-  'embed.bundle.js': 138,
+  // Bookmark-aware table wrappers add 0.044 KiB (137.986 -> 138.030); restore 1 KiB headroom.
+  'embed.bundle.js': 139,
   // Empty tab continuation adds 0.037 KiB here (137.979 -> 138.016); restore 1 KiB headroom.
   'embed.iife.js': 139,
   // Including floated-picture geometry adds 0.158 KiB here (116.941 -> 117.099).
