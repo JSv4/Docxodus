@@ -46,6 +46,9 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Empty zero-font paragraphs with no line height no longer fail PageMap completeness. Visible
+  text runs and blank lines with authored height keep their measured fragments.
+
 
 - Page fitting includes a wrapped floating picture’s visible height even when its paragraph
   is shorter. Each floating-picture block is measured independently so a preceding float

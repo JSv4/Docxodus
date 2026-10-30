@@ -1,13 +1,20 @@
 import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
 
-export type UnpaintedSourceKind = 'rowless-table' | 'empty-cell' | 'joined-hidden' | 'joined-visible' | 'standalone-hidden' | 'cell-hidden' | 'joined-hidden-empty';
+export type UnpaintedSourceKind = 'rowless-table' | 'empty-cell' | 'joined-hidden' | 'joined-visible' | 'standalone-hidden' | 'cell-hidden' | 'joined-hidden-empty'
+  | 'zero-font-blank' | 'zero-font-border' | 'zero-font-visible-run';
 
 /** Independently authored package containing a structural object with no visible content. */
 export function unpaintedSourceDocx(kind: UnpaintedSourceKind): Uint8Array {
   const paragraph = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
   const hidden = kind === 'joined-hidden' || kind === 'joined-hidden-empty';
   const hiddenParagraph = '<w:p><w:pPr><w:rPr><w:vanish/></w:rPr></w:pPr></w:p>';
-  const content = kind === 'standalone-hidden' ? paragraph('Comet observation.') + hiddenParagraph
+  const content = kind.startsWith('zero-font-')
+    ? `<w:p><w:pPr><w:spacing w:line="${kind === 'zero-font-border' ? '260' : '300'}" w:lineRule="${kind === 'zero-font-border' ? 'exact' : 'auto'}"/>
+        <w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="0"/><w:szCs w:val="0"/></w:rPr>
+        ${kind === 'zero-font-border' ? '<w:pBdr><w:bottom w:val="single" w:sz="12" w:space="3" w:color="336655"/></w:pBdr>' : ''}
+        </w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="${kind === 'zero-font-visible-run' ? '20' : '0'}"/></w:rPr>
+        <w:t xml:space="preserve">${kind === 'zero-font-visible-run' ? 'Aperture aligned.' : ' '}</w:t></w:r></w:p>` + paragraph('Comet observation.')
+    : kind === 'standalone-hidden' ? paragraph('Comet observation.') + hiddenParagraph
     : kind === 'cell-hidden' ? `<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc>${paragraph('Comet observation.')}${hiddenParagraph}</w:tc></w:tr></w:tbl>`
     : kind === 'rowless-table' || kind === 'empty-cell'
     ? `<w:tbl><w:tblPr/><w:tblGrid/>${kind === 'empty-cell' ? '<w:tr><w:tc><w:p/></w:tc></w:tr>' : ''}</w:tbl>`
