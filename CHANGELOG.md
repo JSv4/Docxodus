@@ -46,6 +46,9 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Blank lines inside fixed floating text boxes placed outside the paper no longer fail
+  source coverage. Visible text and ordinary flow clipping retain the completeness guard.
+
 
 - Preserve inherited typography when floating drawings move onto the page, including the visible fallback text of images that cannot decode.
 - Preserve embedded image and SVG identities when pagination promotes or repeats drawings, so an already-reported decoding failure does not become a false serialization error. Newly damaged resources still fail verification.
