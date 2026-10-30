@@ -1640,7 +1640,7 @@ export class PaginationEngine {
     const blocks: MeasuredBlock[] = [];
     if (this.fragmentParagraphs) {
       this.fitOverwideTables(section, dims);
-      this.fitOversizedInlineImages(section, dims, sectionIndex);
+      this.fitOversizedPictures(section, dims, sectionIndex);
     }
     this.prepareShapeClearance(section, dims);
 
@@ -1728,8 +1728,8 @@ export class PaginationEngine {
     return [...carriers];
   }
 
-  /** An indivisible inline picture must fit one page before paragraph fragmentation can help. */
-  private fitOversizedInlineImages(section: HTMLElement, dims: PageDimensions, sectionIndex: number): void {
+  /** An indivisible picture must fit one page before paragraph fragmentation can help. */
+  private fitOversizedPictures(section: HTMLElement, dims: PageDimensions, sectionIndex: number): void {
     const sectionLeft = section.getBoundingClientRect().left;
     const paperLeft = sectionLeft - ptToPx(dims.marginLeft);
     const paperRight = sectionLeft + ptToPx(dims.contentWidth + dims.marginRight);
@@ -1737,20 +1737,37 @@ export class PaginationEngine {
     for (const image of Array.from(section.querySelectorAll<HTMLImageElement>("img"))) {
       this.checkpoint();
       if (image.closest("#pagination-hf-registry, #pagination-footnote-registry, #pagination-comment-margin-registry, [data-docx-drawing-anchor]")) continue;
+      if (image.closest(EXACT_ROW_CELL)) continue;
       const paragraph = image.closest<HTMLElement>("p,h1,h2,h3,h4,h5,h6");
       if (!paragraph) continue;
-      let inline = true;
+      let supported = true;
+      let floating: HTMLElement | null = null;
       for (let carrier: HTMLElement | null = image; carrier && carrier !== paragraph; carrier = carrier.parentElement) {
         const style = this.view.getComputedStyle(carrier);
+        if (carrier !== image && style.overflowY !== "visible") { supported = false; break; }
+        if (style.float !== "none" && style.position === "static" && style.transform === "none"
+          && !floating && (carrier === image || (carrier.querySelectorAll("img").length === 1
+            && !this.hasVisibleText(carrier.textContent ?? "")))) {
+          floating = carrier;
+          continue;
+        }
         if (style.display !== "inline" || !this.rangeImageCarrierPosition(carrier, style)
-          || style.float !== "none" || style.transform !== "none") { inline = false; break; }
+          || style.float !== "none" || style.transform !== "none") { supported = false; break; }
       }
-      if (!inline) continue;
+      if (!supported) continue;
       const style = this.view.getComputedStyle(paragraph);
       const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2;
-      const maximumHeight = bodyHeight - lineHeight - Math.max(0, parseFloat(style.marginTop));
-      const maximumWidth = paragraph.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
       const rect = image.getBoundingClientRect();
+      const frame = floating?.getBoundingClientRect();
+      const frameStyle = floating ? this.view.getComputedStyle(floating) : null;
+      const extraWidth = frame ? Math.max(0, frame.width - rect.width) : 0;
+      const extraHeight = frame ? Math.max(0, frame.height - rect.height) : 0;
+      const frameMargins = (first: "marginLeft" | "marginTop", second: "marginRight" | "marginBottom") =>
+        frameStyle ? Math.max(0, parseFloat(frameStyle[first]) || 0) + Math.max(0, parseFloat(frameStyle[second]) || 0) : 0;
+      const maximumHeight = bodyHeight - lineHeight - Math.max(0, parseFloat(style.marginTop))
+        - extraHeight - frameMargins("marginTop", "marginBottom");
+      const maximumWidth = paragraph.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+        - extraWidth - frameMargins("marginLeft", "marginRight");
       if (!(maximumHeight > 0 && maximumWidth > 0 && rect.width > 0 && rect.height > 0)) continue;
       // Several fitting pictures may make their paragraph tall. Judge this indivisible image's
       // own line with its original inline carriers; the Range fragmenter can carry the others.
@@ -1772,6 +1789,15 @@ export class PaginationEngine {
       image.style.setProperty("height", `${rect.height * ratio}px`, "important");
       image.style.setProperty("min-width", "0", "important");
       image.style.setProperty("min-height", "0", "important");
+      if (floating && floating !== image) {
+        // Tight-wrap frames may have explicit dimensions. Their contour follows the fitted
+        // image, retaining the frame's original padding/border/line-box clearance.
+        floating.style.setProperty("box-sizing", "border-box", "important");
+        floating.style.setProperty("width", `${rect.width * ratio + extraWidth}px`, "important");
+        floating.style.setProperty("height", `${rect.height * ratio + extraHeight}px`, "important");
+        floating.style.setProperty("min-width", "0", "important");
+        floating.style.setProperty("min-height", "0", "important");
+      }
     }
   }
 

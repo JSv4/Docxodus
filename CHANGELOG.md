@@ -52,6 +52,10 @@ All notable changes to this project will be documented in this file.
   text runs and blank lines with authored height keep their measured fragments.
 
 
+- Wrapped floating pictures that exceed a physical page use the same proportional fitting
+  as inline pictures. Tight-wrap frames follow the fitted bitmap, while fitting pictures
+  and intentionally clipped content retain their original geometry.
+
 - Page fitting includes a wrapped floating picture’s visible height even when its paragraph
   is shorter. Each floating-picture block is measured independently so a preceding float
   cannot distort its size on a fresh page.
