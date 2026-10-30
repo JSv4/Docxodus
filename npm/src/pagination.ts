@@ -645,20 +645,74 @@ function clippedAwayByExactRow(element: HTMLElement, rect: DOMRect): boolean {
 
 /** A blank paragraph outside its fixed source text box's painted area has no line to map. */
 function blankLineClippedByTextBox(view: Window, element: HTMLElement, rect: DOMRect, page: DOMRect): boolean {
-  if (!rendersOnlyItsLine(element) || !(rect.width > 0 && rect.height > 0)) return false;
+  if (!rendersOnlyItsLine(element) || !(rect.height > 0) || rect.width < 0) return false;
+  // A source indent can collapse an empty line to a point beyond the fixed clip. Keep the
+  // ordinary zero-width guard unless the converter supplies the stronger fixed-box evidence.
+  if (rect.width === 0) {
+    const owner = element.parentElement?.closest<HTMLElement>('[data-docx-textbox-source-clip="true"]');
+    if (!owner || !eligibleSourceTextBox(owner)) return false;
+  }
+  return clippedByTextBox(view, element, [rect], page) !== null;
+}
+
+function eligibleSourceTextBox(box: HTMLElement, placement = false): boolean {
+  return box.dataset.docxTextboxClip === 'true'
+    && (placement ? box.dataset.docxTextboxSourcePosition === 'true' : box.dataset.docxTextboxSourceClip === 'true')
+    && box.dataset.docxTextboxLinked !== 'true' && box.dataset.docxAnchorAutofit !== 'true'
+    && box.dataset.docxShape !== 'partial'
+    && ['width', 'height'].every(axis => {
+      const percent = box.getAttribute(`data-docx-anchor-${axis}-percent`);
+      return percent === null || (percent.trim() !== '' && Number(percent) === 0);
+    })
+    && (!placement || (box.dataset.docxDrawingAnchor === 'true'
+      && ((['page', 'margin'].includes(box.dataset.docxAnchorHRelative ?? '')
+        && ['page', 'margin'].includes(box.dataset.docxAnchorVRelative ?? ''))
+        || (['column', 'margin'].includes(box.dataset.docxAnchorHRelative ?? '') && box.dataset.docxAnchorVRelative === 'paragraph'))));
+}
+
+function sourcePlacementBounds(box: DOMRect, rects: DOMRect[], paper: DOMRect): number[] | undefined {
+  const outside = (rect: DOMRect) => rect.right <= paper.left || rect.left >= paper.right
+    || rect.bottom <= paper.top || rect.top >= paper.bottom;
+  if (!(box.width > 0 && box.height > 0) || !rects.length || !outside(box) || !rects.every(outside)) return;
+  return [box, ...rects].flatMap(rect => [rect.left - paper.left, rect.top - paper.top, rect.width, rect.height]);
+}
+
+function sourceTextRects(view: Window & typeof globalThis, element: HTMLElement, checkpoint: () => void): DOMRect[] {
+  const result: DOMRect[] = [];
+  const walker = element.ownerDocument.createTreeWalker(element, view.NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    checkpoint();
+    if (!(node.textContent ?? '').replace(/\s/g, '')) continue;
+    const range = element.ownerDocument.createRange();
+    range.selectNodeContents(node);
+    result.push(...Array.from(range.getClientRects()).filter(rect => rect.width > 0 && rect.height > 0));
+  }
+  return result;
+}
+
+/** The authored box owns its clip; page clipping applies only to a placed source drawing. */
+function clippedByTextBox(view: Window, element: HTMLElement, rects: DOMRect[], page?: DOMRect,
+  provenSource = false): HTMLElement | null {
+  if (!rects.length) return null;
   for (let clip = element.parentElement?.closest<HTMLElement>('[data-docx-textbox-clip="true"]'); clip;
     clip = clip.parentElement?.closest<HTMLElement>('[data-docx-textbox-clip="true"]')) {
+    if (provenSource && !eligibleSourceTextBox(clip)) continue;
     const style = view.getComputedStyle(clip);
     const box = clip.getBoundingClientRect();
+    if (provenSource && !(box.width > 0 && box.height > 0)) continue;
     // Source-positioned floating boxes are also bounded by the paper. Ordinary flow clips
     // still count as lost content: only an explicitly placed source drawing gets this bound.
-    const paper = clip.dataset.docxDrawingAnchor === "true" && style.position === "absolute" ? page : box;
+    const paper = page && clip.dataset.docxDrawingAnchor === "true" && style.position === "absolute" ? page : box;
     const clipsX = style.overflowX === "hidden" || style.overflowX === "clip";
     const clipsY = style.overflowY === "hidden" || style.overflowY === "clip";
-    if ((clipsX && (rect.right <= Math.max(box.left, paper.left) || rect.left >= Math.min(box.right, paper.right)))
-      || (clipsY && (rect.bottom <= Math.max(box.top, paper.top) || rect.top >= Math.min(box.bottom, paper.bottom)))) return true;
+    const left = Math.max(box.left, paper.left), right = Math.min(box.right, paper.right);
+    const top = Math.max(box.top, paper.top), bottom = Math.min(box.bottom, paper.bottom);
+    if ((clipsX && right <= left) || (clipsY && bottom <= top)) return clip;
+    if (rects.every(rect =>
+      (clipsX && (rect.right <= left || rect.left >= right))
+      || (clipsY && (rect.bottom <= top || rect.top >= bottom)))) return clip;
   }
-  return false;
+  return null;
 }
 
 /** True when `element` shows no text (beyond white space) and no image, SVG or canvas. */
@@ -831,6 +885,11 @@ export class PaginationEngine {
   private pageNumbering: Map<number, SectionPageNumbering> = new Map();
   private lastPages: PageInfo[] = [];
   private expectedPageMapAnchorIds: Set<string> = new Set();
+  private sourceClipBoxes = new WeakSet<HTMLElement>();
+  private inspectedSourceText = new WeakSet<HTMLElement>();
+  private sourceClipBoxSequence = 0;
+  private initiallyClippedText = new Map<string, { boxId: string; text: string; placement?: number[]; host?: { id: string; bounds: number[] } }>();
+  private lastClippedTextAnchors: string[] = [];
   private state: "ready" | "running" | "complete" | "failed" = "ready";
 
   /**
@@ -945,6 +1004,12 @@ export class PaginationEngine {
     // accumulated down every page (issues #850, #1151). Resolve each line height before
     // anything here is measured.
     applyUnroundedNormalLineHeights(this.stagingElement);
+
+    this.sourceClipBoxes = new WeakSet();
+    this.inspectedSourceText = new WeakSet();
+    this.sourceClipBoxSequence = 0;
+    this.initiallyClippedText.clear();
+    this.lastClippedTextAnchors = [];
 
     // Parse the header/footer registry if present
     this.hfRegistry = this.parseHeaderFooterRegistry();
@@ -1297,6 +1362,7 @@ export class PaginationEngine {
     }
     const measuredAnchorIds = new Set<string>();
     const unpaintedAnchorIds = new Set<string>();
+    const clippedTextAnchorIds = new Set<string>();
     const emittedFragmentCounts = new Map<string, number>();
     for (const page of this.lastPages) {
       this.checkpoint();
@@ -1336,6 +1402,10 @@ export class PaginationEngine {
           const collapsedBlankLine = rect.height === 0 && style.fontSize === "0px" && rendersOnlyItsLine(element);
           if (collapsedBlankLine || clippedAwayByExactRow(element, rect) || blankLineClippedByTextBox(this.view, element, rect, pageRect))
             unpaintedAnchorIds.add(anchorId);
+          else if (this.isInitiallyClippedText(element, pageRect, page.element)) {
+            unpaintedAnchorIds.add(anchorId);
+            clippedTextAnchorIds.add(anchorId);
+          }
           continue;
         }
 
@@ -1375,6 +1445,7 @@ export class PaginationEngine {
     if (missingAnchor) {
       throw new Error(`source anchor ${missingAnchor} has no measurable fragment in the paginated layout`);
     }
+    this.lastClippedTextAnchors = Array.from(clippedTextAnchorIds).filter(id => !measuredAnchorIds.has(id));
 
     return {
       schemaVersion: 1,
@@ -1452,8 +1523,85 @@ export class PaginationEngine {
       }
       if (this.isDeliberatelyUnrenderedSource(element, source)) continue;
       const anchorId = element.dataset.sourceAnchorId;
-      if (anchorId) destination.add(anchorId);
+      if (anchorId) {
+        destination.add(anchorId);
+        this.captureSourceTextClip(element);
+      }
     }
+  }
+
+  /** Source paragraphs intentionally unpainted by their authored box or placement, after final mapping. */
+  getSourceClippedTextAnchors(): readonly string[] {
+    return [...this.lastClippedTextAnchors];
+  }
+
+  private captureSourceTextClip(element: HTMLElement, paper?: DOMRect, paragraph?: HTMLElement | null): void {
+    if (!paper) {
+      if (this.inspectedSourceText.has(element)) return;
+      this.inspectedSourceText.add(element);
+    }
+    const owner = element.parentElement?.closest<HTMLElement>('[data-docx-textbox-source-clip="true"], [data-docx-textbox-source-position="true"]');
+    if (!owner || (!eligibleSourceTextBox(owner) && !eligibleSourceTextBox(owner, true))) return;
+    if (!this.sourceClipBoxes.has(owner) && !paper) {
+      owner.dataset.docxSourceClipId = `textbox-${++this.sourceClipBoxSequence}`;
+      this.sourceClipBoxes.add(owner);
+    }
+    const boxId = owner.dataset.docxSourceClipId;
+    const anchorId = element.dataset.sourceAnchorId;
+    if (!boxId || !anchorId) return;
+    const text = (element.textContent ?? '').replace(/\s/g, '');
+    if (!text) return;
+    const rects = sourceTextRects(this.view, element, () => this.checkpoint());
+    if (paper && eligibleSourceTextBox(owner, true)) {
+      const placement = sourcePlacementBounds(owner.getBoundingClientRect(), rects, paper);
+      if (placement) {
+        let host: { id: string; bounds: number[] } | undefined;
+        if (owner.dataset.docxAnchorVRelative === 'paragraph') {
+          if (!paragraph?.dataset.sourceAnchorId) return;
+          const rect = paragraph.getBoundingClientRect();
+          host = { id: paragraph.dataset.sourceAnchorId,
+            bounds: [rect.left - paper.left, rect.top - paper.top, rect.width, rect.height] };
+        }
+        this.initiallyClippedText.set(anchorId, { boxId, text, placement, host });
+        return;
+      }
+    }
+    if (!eligibleSourceTextBox(owner)) return;
+    // At placement, only the paper can establish new authored clipping. A new overflow of
+    // the box itself must still fail; it may be a pagination or inherited-formatting defect.
+    if (paper) {
+      const box = owner.getBoundingClientRect(), style = this.view.getComputedStyle(owner);
+      const outsideX = (style.overflowX === 'hidden' || style.overflowX === 'clip')
+        && (box.right <= paper.left || box.left >= paper.right);
+      const outsideY = (style.overflowY === 'hidden' || style.overflowY === 'clip')
+        && (box.bottom <= paper.top || box.top >= paper.bottom);
+      if (!outsideX && !outsideY && !rects.every(rect => rect.right <= paper.left || rect.left >= paper.right
+        || rect.bottom <= paper.top || rect.top >= paper.bottom)) return;
+    }
+    const clip = clippedByTextBox(this.view, element, rects, paper, true);
+    if (clip?.dataset.docxSourceClipId === boxId)
+      this.initiallyClippedText.set(anchorId, { boxId, text });
+  }
+
+  private isInitiallyClippedText(element: HTMLElement, page: DOMRect, pageElement: HTMLElement): boolean {
+    const proof = this.initiallyClippedText.get(element.dataset.sourceAnchorId ?? '');
+    if (!proof || (element.textContent ?? '').replace(/\s/g, '') !== proof.text) return false;
+    const rects = sourceTextRects(this.view, element, () => this.checkpoint());
+    if (proof.placement) {
+      if (proof.host) {
+        const host = pageElement.querySelector<HTMLElement>(`[data-source-anchor-id="${this.view.CSS.escape(proof.host.id)}"]`);
+        if (!host) return false;
+        const rect = host.getBoundingClientRect();
+        const bounds = [rect.left - page.left, rect.top - page.top, rect.width, rect.height];
+        if (bounds.some((value, index) => Math.abs(value - proof.host!.bounds[index]) >= 0.1)) return false;
+      }
+      const owner = element.parentElement?.closest<HTMLElement>('[data-docx-textbox-source-position="true"]');
+      if (!owner || owner.dataset.docxSourceClipId !== proof.boxId || !eligibleSourceTextBox(owner, true)) return false;
+      const bounds = sourcePlacementBounds(owner.getBoundingClientRect(), rects, page);
+      return bounds?.length === proof.placement.length
+        && bounds.every((value, index) => Math.abs(value - proof.placement![index]) < 0.1);
+    }
+    return clippedByTextBox(this.view, element, rects, page, true)?.dataset.docxSourceClipId === proof.boxId;
   }
 
   private isZeroHeightExplicitBreakCarrier(element: HTMLElement): boolean {
@@ -4911,6 +5059,12 @@ export class PaginationEngine {
 
     if (this.fragmentParagraphs) this.fitOverwideTables(measureContainer, dims);
 
+    // This pristine source story is attached only for measurement. Capture authored clipping
+    // now; page clones inherit its box identity, while later band/placement changes cannot
+    // turn newly lost text into source clipping.
+    for (const element of Array.from(measureContainer.querySelectorAll<HTMLElement>('[data-source-anchor-id]')))
+      this.captureSourceTextClip(element);
+
     // Measure
     const rect = measureContainer.getBoundingClientRect();
     const heightPt = pxToPt(rect.height);
@@ -6328,6 +6482,8 @@ export class PaginationEngine {
       anchor.style.left = `${left}pt`;
       anchor.style.top = `${top}pt`;
       anchor.style.margin = '0';
+      for (const source of Array.from(anchor.querySelectorAll<HTMLElement>('[data-source-anchor-id]')))
+        this.captureSourceTextClip(source, pageRect, paragraph);
     }
 
     // relativeHeight is an unsigned 32-bit value; using it directly as a CSS z-index would
