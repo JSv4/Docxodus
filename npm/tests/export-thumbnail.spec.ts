@@ -26,8 +26,20 @@ for (const variant of [
   { label: 'package-rooted', owner: 'package' as const, absolute: true },
   { label: 'document-relative', owner: 'document' as const, absolute: false },
 ]) {
-  test(`${variant.label} missing thumbnail rejects before PDF rendering`, async ({ browser }) => {
-    await expect(renderDocxArtifacts(generateThumbnailDocx('missing', variant.owner, variant.absolute), { browser, ...options }))
+  if (variant.owner === 'package') {
+    test(`${variant.label} missing thumbnail warns while preserving the printed body`, async ({ browser }) => {
+      test.setTimeout(120_000);
+      const actual = await renderDocxArtifacts(generateThumbnailDocx('missing', variant.owner, variant.absolute), { browser, ...options });
+      const expected = await renderDocxArtifacts(generateThumbnailDocx('none'), { browser, ...options });
+      expect(await facts(actual.pdf!)).toEqual(await facts(expected.pdf!));
+      expect(actual.renderReport.warnings.some(warning => warning.code === 'missing_target')).toBe(true);
+    });
+  }
+
+  test(`${variant.label} missing thumbnail rejects under strict policy`, async ({ browser }) => {
+    await expect(renderDocxArtifacts(generateThumbnailDocx('missing', variant.owner, variant.absolute), {
+      browser, ...options, unsupportedContent: 'strict',
+    }))
       .rejects.toMatchObject({ code: 'invalid_document', phase: 'package_preflight',
         message: 'The input is not a valid DOCX OPC package (opc).' });
   });
