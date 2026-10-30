@@ -1667,6 +1667,13 @@ export class PaginationEngine {
         }
       }
 
+      // A float may extend far below its paragraph and may have been pushed down by a prior
+      // source float. Measure its own fresh block, including the picture's painted extent.
+      if (this.floatingPictureCarriers(child).length > 0) {
+        blocks.push(this.measureElement(child, dims, sectionIndex));
+        continue;
+      }
+
       // Measure height and margins separately for proper margin collapsing calculation
       // getBoundingClientRect() returns content+padding+border, not margins
       const rect = child.getBoundingClientRect();
@@ -1694,6 +1701,28 @@ export class PaginationEngine {
     }
 
     return blocks;
+  }
+
+  /** Floated pictures participate in page fit even though normal block height excludes them. */
+  private floatingPictureCarriers(element: HTMLElement): HTMLElement[] {
+    const carriers = new Set<HTMLElement>();
+    const images = Array.from(element.querySelectorAll<HTMLImageElement>("img"));
+    if (images.length === 0 || this.view.getComputedStyle(element).overflowY !== "visible") return [];
+    for (const image of images) {
+      this.checkpoint();
+      if (image.closest(`[data-docx-drawing-anchor], ${EXACT_ROW_CELL}`)) continue;
+      let floated: HTMLElement | null = null;
+      for (let current: HTMLElement | null = image; current && current !== element; current = current.parentElement) {
+        const style = this.view.getComputedStyle(current);
+        if (style.position === "absolute" || style.position === "fixed" || (current !== image && style.overflowY !== "visible")) {
+          floated = null;
+          break;
+        }
+        if (style.float !== "none") floated = current;
+      }
+      if (floated) carriers.add(floated);
+    }
+    return [...carriers];
   }
 
   /** An indivisible inline picture must fit one page before paragraph fragmentation can help. */
@@ -2122,7 +2151,8 @@ export class PaginationEngine {
     const measured: MeasuredBlock = {
       element,
       sectionIndex,
-      heightPt: pxToPt(rect.height),
+      heightPt: pxToPt(Math.max(rect.height, ...this.floatingPictureCarriers(measuredElement)
+        .map(picture => picture.getBoundingClientRect().bottom - rect.top))),
       marginTopPt: pxToPt(margins.topPx),
       marginBottomPt: pxToPt(margins.bottomPx),
       keepWithNext: element.dataset.keepWithNext === "true",
