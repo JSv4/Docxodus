@@ -162,6 +162,8 @@ All notable changes to this project will be documented in this file.
 - Empty or automatic frame defaults inherited from a style keep ordinary paragraphs in page
   flow, while directly declared frames retain their geometry and inherited settings.
 
+- Normalize mixed text and tab runs inside text boxes, preserving tab columns and visible lines regardless of run boundaries.
+
 - Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
   distinct rendering positions, so an equation edit after a tab is tracked and rejecting it restores
   the original (#1421). Source positions follow the reader's retained text and atoms through fields,

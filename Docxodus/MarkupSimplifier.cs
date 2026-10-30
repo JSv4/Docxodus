@@ -711,7 +711,9 @@ namespace Docxodus
             {
                 IEnumerable<XElement> runChildren = element.Elements().Where(e => e.Name != W.rPr);
                 XElement? rPr = element.Element(W.rPr);
-                return runChildren.Select(rc => new XElement(W.r, rPr, rc));
+                // A drawing run can contain another Word story. Normalize its text-box runs
+                // too, so text following a tab reaches the same renderer as a body paragraph.
+                return runChildren.Select(rc => new XElement(W.r, rPr, SeparateRunChildrenIntoSeparateRuns(rc)));
             }
 
             return new XElement(element.Name,
