@@ -13,6 +13,54 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- A package with XML nested deeper than its part's limit is now refused when it is read, instead of
+  crashing the process with a stack overflow in whichever recursive walk reached it first (undo
+  snapshots, the SDK's typed DOM, the strict-conformance conversion, the HTML render, comparison,
+  revisions). The refusal is an exception whose message starts `xml_depth_limit_exceeded:` (an
+  `XmlException`, or the `PowerToolsDocumentException` that `WmlDocument`-based APIs wrap package
+  errors in). The shared read step — which sessions, the HTML render from bytes or a `WmlDocument`,
+  comparison, the OpenContracts export of a `WmlDocument`, metrics, the DocxDiff compatibility probe
+  and the WASM profiling exports go through — measures every part the package relationships reach, as
+  the packaging layer assembles it (interleaved pieces joined), after the strict conversion and again
+  after open-time repair, streaming each once before any tree is built; the two steps that parse
+  package entries themselves, referenced or not (the strict conversion and DocxDiff's
+  markup-compatibility pass), parse them depth-limited and leave a deeper entry untouched. Main applied no limit when
+  reading a package, so these packages, which main opened, are now refused:
+  - a story or definition part (reached by a story relationship — main document, header, footer,
+    notes, comments, styles, numbering, glossary — or declared one of their content types) nested
+    more than 128 elements deep; real documents nest a few dozen levels at most (the test corpus
+    peaks at 25);
+  - any other reachable part nested more than 256 deep;
+  - a package where measuring would pass the package manifest's limits: two reachable parts that
+    carry a DTD (`xml_size_limit_exceeded`), or a reachable part past the manifest's per-entry size,
+    total size or 1,000× compression-ratio limits.
+  Parts nothing references are not read, as on main. Package manifests keep their 256 limit for every
+  entry and now also report a story part past 128 (or a joined interleaved part past its limit) as
+  `xml_depth_limit_exceeded`, so `GetSemanticChanges` (an `InvalidDataException` from its manifest
+  preflight) and deliverable verification (which now stops on that finding before the Open XML
+  validator) refuse such packages too. A session's own checkpoints and preview shadows are not
+  measured again. On the stdio and MCP hosts a refusal surfaces as `internal_error` with the message.
+  - A session edit — any typed op or raw-XML edit — that would nest its part past that part's limit
+    (inserting a table into the innermost cell of tables already nested to the limit, say) is refused
+    with `ValidationFailed` and an `xml_depth_limit_exceeded:` message, and changes nothing: the
+    version, the document and the undo history are as before. Main accepted such edits, and the
+    session's next render could crash the process.
+  - The public APIs that take a `WordprocessingDocument` the caller opened — `ConvertToHtml`,
+    `RevisionProcessor`/`RevisionAccepter` accept and reject, `WmlToMarkdownConverter.Convert`,
+    `MarkupSimplifier.SimplifyMarkup` and `TransformToSingleCharacterRuns`,
+    `FormattingAssembler.AssembleFormatting` and `OpenContractExporter.Export` — measure the package
+    the same way once per call (a part's loaded LINQ tree, if the caller has one, otherwise its stream,
+    plus any loaded SDK tree),
+    so the `docx2html` CLI now exits with `Error: xml_depth_limit_exceeded: …` instead of aborting.
+    `GetDocumentMetadata` measures only the main story, the one part it walks recursively, as it loads
+    it. An open package exposes no entry sizes, so the size and ratio limits do not apply to it.
+    `OpenContractExporter.Export` preserves unsaved edits in the caller's loaded SDK trees, measuring
+    them before exporting them. Other parts use their measured LINQ trees without forcing an SDK
+    load from a stream that could differ from the caller's cached tree.
+  - `ExternalAnnotationProjector`'s HTML input and the Flat OPC dumps (`FlatOpc.OpcToXmlDocument`,
+    `OpcToXDocument`, `OpcToText`, which read every part, referenced or not) are parsed refusing
+    nesting past 256 (#1389).
+
 - **Breaking: visible run atoms share the session's text coordinates (#1409).** `w:br` and
   `w:cr` occupy one `\n`, positional tabs (`w:ptab`) one `\t`, special hyphens their Unicode
   characters, and valid `w:sym` codes their displayed character. These previously omitted atoms

@@ -93,7 +93,7 @@ internal static class IrReader
         try
         {
             stream = new OpenXmlMemoryStreamDocument(working);
-            wdoc = stream.GetWordprocessingDocument();
+            wdoc = stream.GetMeasuredWordprocessingDocument();
 
             var transformed = ApplyRevisionView(working, wdoc, options.RevisionView);
             if (transformed is not null)
@@ -104,7 +104,7 @@ internal static class IrReader
                 stream = null;
                 working = transformed;
                 stream = new OpenXmlMemoryStreamDocument(working);
-                wdoc = stream.GetWordprocessingDocument();
+                wdoc = stream.GetMeasuredWordprocessingDocument();
             }
 
             return ReadOpenPackage(working, wdoc, options);

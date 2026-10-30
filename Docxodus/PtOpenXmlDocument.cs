@@ -7,7 +7,7 @@ Here is modification of a WmlDocument:
     {
         using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
         {
-            using (WordprocessingDocument document = streamDoc.GetWordprocessingDocument())
+            using (WordprocessingDocument document = streamDoc.GetMeasuredWordprocessingDocument())
             {
                 SimplifyMarkup(document, settings);
             }
@@ -20,7 +20,7 @@ Here is read-only of a WmlDocument:
     public static string GetBackgroundColor(WmlDocument doc)
     {
         using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
-        using (WordprocessingDocument document = streamDoc.GetWordprocessingDocument())
+        using (WordprocessingDocument document = streamDoc.GetMeasuredWordprocessingDocument())
         {
             XDocument mainDocument = document.MainDocumentPart.GetXDocument();
             XElement backgroundElement = mainDocument.Descendants(W.background).FirstOrDefault();
@@ -34,7 +34,7 @@ Here is creating a new WmlDocument:
     {
         using (OpenXmlMemoryStreamDocument streamDoc = OpenXmlMemoryStreamDocument.CreateWordprocessingDocument())
         {
-            using (WordprocessingDocument document = streamDoc.GetWordprocessingDocument())
+            using (WordprocessingDocument document = streamDoc.GetMeasuredWordprocessingDocument())
             {
                 DocumentBuilder.FixRanges(source.MainDocumentPart.GetXDocument(), contents);
                 PowerToolsExtensions.SetContent(document, contents);
@@ -169,6 +169,8 @@ namespace Docxodus
         [MemberNotNull(nameof(DocumentByteArray))]
         private void ConvertToTransitional(string? fileName, byte[] tempByteArray)
         {
+            // Forcing every part's typed DOM below recurses: refuse over-deep XML first (issue #1389).
+            Internal.PartDepthGuard.EnsurePackage(tempByteArray);
             Type? type;
             try
             {
@@ -472,14 +474,25 @@ namespace Docxodus
             return DocPackage!;
         }
 
-        public WordprocessingDocument GetWordprocessingDocument()
+        public WordprocessingDocument GetWordprocessingDocument() => OpenWordprocessingDocument(measured: false);
+
+        /// <summary><see cref="GetWordprocessingDocument"/> for the library's own pipelines, which only
+        /// the library edits: a package from a document's bytes, which went through the read step's
+        /// depth door (<see cref="DocxodusDocument.GetTransitionalBytes"/>), is not measured again by the
+        /// open-document entry points (issue #1389). A caller's instance may have had its streams
+        /// rewritten, so the public getter never claims that.</summary>
+        internal WordprocessingDocument GetMeasuredWordprocessingDocument() => OpenWordprocessingDocument(measured: true);
+
+        private WordprocessingDocument OpenWordprocessingDocument(bool measured)
         {
             try
             {
                 if (GetDocumentType() != typeof(WordprocessingDocument))
                     throw new PowerToolsDocumentException("Not a Wordprocessing document.");
                 DropDanglingRelationships(DocPackage!);
-                return WordprocessingDocument.Open(DocPackage!);
+                var document = WordprocessingDocument.Open(DocPackage!);
+                if (measured && Document is not null) Internal.PartDepthGuard.MarkMeasured(document);
+                return document;
             }
             catch (Exception e)
             {

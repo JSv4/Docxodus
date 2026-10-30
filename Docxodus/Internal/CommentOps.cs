@@ -38,7 +38,7 @@ internal static class CommentOps
         var identities = documents.Select(document =>
         {
             using var stream = new OpenXmlMemoryStreamDocument(document);
-            using var package = stream.GetWordprocessingDocument();
+            using var package = stream.GetMeasuredWordprocessingDocument();
             return package.MainDocumentPart?.WordprocessingCommentsPart?.GetXDocument().Root?.Elements(W.comment)
                 .Where(comment => comment.Attribute(W.id) is not null)
                 .Select(comment => (Id: (string)comment.Attribute(W.id)!, Key: Identity(comment))).ToList() ?? new();
@@ -76,7 +76,7 @@ internal static class CommentOps
             }
             if (remap.Count == 0) continue;
             using var output = new OpenXmlMemoryStreamDocument(documents[index]);
-            using (var package = output.GetWordprocessingDocument())
+            using (var package = output.GetMeasuredWordprocessingDocument())
             {
                 var main = package.MainDocumentPart!;
                 foreach (var part in ReferenceHostParts(main).Append(main.WordprocessingCommentsPart!))

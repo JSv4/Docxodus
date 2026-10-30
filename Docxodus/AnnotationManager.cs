@@ -52,7 +52,7 @@ namespace Docxodus
 
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
             {
-                using (WordprocessingDocument wordDoc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument wordDoc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     // Check for duplicate ID
                     var existingAnnotations = GetAnnotationsInternal(wordDoc);
@@ -142,7 +142,7 @@ namespace Docxodus
 
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
             {
-                using (WordprocessingDocument wordDoc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument wordDoc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     // Check for duplicate ID
                     var existingAnnotations = GetAnnotationsInternal(wordDoc);
@@ -223,7 +223,7 @@ namespace Docxodus
 
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
             {
-                using (WordprocessingDocument wordDoc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument wordDoc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     // Get the annotation to find the bookmark name
                     var annotation = GetAnnotationInternal(wordDoc, annotationId);
@@ -258,7 +258,7 @@ namespace Docxodus
             if (doc == null) throw new ArgumentNullException(nameof(doc));
 
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
-            using (WordprocessingDocument wordDoc = streamDoc.GetWordprocessingDocument())
+            using (WordprocessingDocument wordDoc = streamDoc.GetMeasuredWordprocessingDocument())
             {
                 return GetAnnotationsInternal(wordDoc);
             }
@@ -287,7 +287,7 @@ namespace Docxodus
             if (string.IsNullOrEmpty(annotationId)) throw new ArgumentNullException(nameof(annotationId));
 
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
-            using (WordprocessingDocument wordDoc = streamDoc.GetWordprocessingDocument())
+            using (WordprocessingDocument wordDoc = streamDoc.GetMeasuredWordprocessingDocument())
             {
                 return GetAnnotationInternal(wordDoc, annotationId);
             }
@@ -307,7 +307,7 @@ namespace Docxodus
 
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
             {
-                using (WordprocessingDocument wordDoc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument wordDoc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     // Find existing annotation
                     var existing = GetAnnotationInternal(wordDoc, annotation.Id);
@@ -342,7 +342,7 @@ namespace Docxodus
 
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
             {
-                using (WordprocessingDocument wordDoc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument wordDoc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     var customXmlPart = GetOrCreateAnnotationsCustomXmlPart(wordDoc);
                     var xdoc = customXmlPart.GetXDocument();
@@ -385,7 +385,7 @@ namespace Docxodus
             if (doc == null) throw new ArgumentNullException(nameof(doc));
 
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
-            using (WordprocessingDocument wordDoc = streamDoc.GetWordprocessingDocument())
+            using (WordprocessingDocument wordDoc = streamDoc.GetMeasuredWordprocessingDocument())
             {
                 var customXmlPart = FindAnnotationsCustomXmlPart(wordDoc);
                 if (customXmlPart == null) return false;
@@ -407,7 +407,7 @@ namespace Docxodus
             if (string.IsNullOrEmpty(annotationId)) throw new ArgumentNullException(nameof(annotationId));
 
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
-            using (WordprocessingDocument wordDoc = streamDoc.GetWordprocessingDocument())
+            using (WordprocessingDocument wordDoc = streamDoc.GetMeasuredWordprocessingDocument())
             {
                 var annotation = GetAnnotationInternal(wordDoc, annotationId);
                 if (annotation == null) return null;
@@ -750,7 +750,7 @@ namespace Docxodus
 
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
             {
-                using (WordprocessingDocument wordDoc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument wordDoc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     // Check for duplicate ID
                     var existingAnnotations = GetAnnotationsInternal(wordDoc);

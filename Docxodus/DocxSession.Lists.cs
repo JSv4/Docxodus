@@ -90,37 +90,44 @@ public sealed partial class DocxSession
                 $"SetListLevel requiring numbering level {next} synthesis", anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
-        // Nesting only renders if the abstractNum actually DEFINES the target level — many docs
-        // define just level 0, so synthesize any missing levels before bumping ilvl.
-        if (effectiveNumId.HasValue)
-            Internal.NumberingFactory.EnsureLevelDefined(_doc!, effectiveNumId.Value, next);
+        try
+        {
+            // Nesting only renders if the abstractNum actually DEFINES the target level — many docs
+            // define just level 0, so synthesize any missing levels before bumping ilvl.
+            if (effectiveNumId.HasValue)
+                Internal.NumberingFactory.EnsureLevelDefined(_doc!, effectiveNumId.Value, next);
 
-        if (numPr is not null)
-        {
-            numPr.Element(W.ilvl)?.Remove();
-            numPr.AddFirst(new XElement(W.ilvl, new XAttribute(W.val, next))); // ilvl precedes numId
+            if (numPr is not null)
+            {
+                numPr.Element(W.ilvl)?.Remove();
+                numPr.AddFirst(new XElement(W.ilvl, new XAttribute(W.val, next))); // ilvl precedes numId
+            }
+            else
+            {
+                if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
+                SetPPrChildInOrder(pPr, new XElement(W.numPr,
+                    new XElement(W.ilvl, new XAttribute(W.val, next)),
+                    new XElement(W.numId, new XAttribute(W.val, effectiveNumId!.Value))));
+            }
+            TrackListPropertyMutation(element, oldPPr, insertedNumPr);
+            // Flush the body mutation to the part stream immediately — same as NumberingFactory does for
+            // the numbering part. Without this the materialized w:numPr lives only in the in-memory
+            // XDocument; under WASM the typed-DOM/XDocument divergence means a later Save() serializes
+            // the un-flushed state and the nest silently vanishes on save and re-render. (Body lists are
+            // body-scoped; flushing the main part covers them.)
+            _doc!.MainDocumentPart!.PutXDocument();
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { target.Anchor },
+                Patch = PatchFor(target),
+            };
         }
-        else
+        catch (Exception ex)
         {
-            if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
-            SetPPrChildInOrder(pPr, new XElement(W.numPr,
-                new XElement(W.ilvl, new XAttribute(W.val, next)),
-                new XElement(W.numId, new XAttribute(W.val, effectiveNumId!.Value))));
+            return FailInternal(ex, anchorId);
         }
-        TrackListPropertyMutation(element, oldPPr, insertedNumPr);
-        // Flush the body mutation to the part stream immediately — same as NumberingFactory does for
-        // the numbering part. Without this the materialized w:numPr lives only in the in-memory
-        // XDocument; under WASM the typed-DOM/XDocument divergence means a later Save() serializes
-        // the un-flushed state and the nest silently vanishes on save and re-render. (Body lists are
-        // body-scoped; flushing the main part covers them.)
-        _doc!.MainDocumentPart!.PutXDocument();
-        InvalidateProjectionCache();
-        return new EditResult
-        {
-            Success = true,
-            Modified = new[] { target.Anchor },
-            Patch = PatchFor(target),
-        };
     }
 
     /// <summary>
@@ -175,23 +182,30 @@ public sealed partial class DocxSession
         bool needsStyleOverride = ResolveStyleNumbering(element).numId is not null;
 
         _history.RecordPreOp(TakeSnapshot());
-        directNumPr?.Remove();
-        if (needsStyleOverride)
+        try
         {
-            if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
-            SetPPrChildInOrder(pPr, new XElement(W.numPr,
-                new XElement(W.ilvl, new XAttribute(W.val, 0)),
-                new XElement(W.numId, new XAttribute(W.val, 0))));
+            directNumPr?.Remove();
+            if (needsStyleOverride)
+            {
+                if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
+                SetPPrChildInOrder(pPr, new XElement(W.numPr,
+                    new XElement(W.ilvl, new XAttribute(W.val, 0)),
+                    new XElement(W.numId, new XAttribute(W.val, 0))));
+            }
+            TrackListPropertyMutation(element, oldPPr, insertedNumPr: false);
+            InvalidateProjectionCache();
+            var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { updated },
+                Patch = PatchFor(target),
+            };
         }
-        TrackListPropertyMutation(element, oldPPr, insertedNumPr: false);
-        InvalidateProjectionCache();
-        var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
-        return new EditResult
+        catch (Exception ex)
         {
-            Success = true,
-            Modified = new[] { updated },
-            Patch = PatchFor(target),
-        };
+            return FailInternal(ex, anchorId);
+        }
     }
 
     /// <summary>

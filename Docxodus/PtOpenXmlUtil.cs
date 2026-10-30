@@ -138,7 +138,12 @@ namespace Docxodus
             return null;
         }
 
-        public static XDocument GetXDocument(this OpenXmlPart? part)
+        public static XDocument GetXDocument(this OpenXmlPart? part) => GetXDocument(part, maxDepth: null);
+
+        /// <summary><see cref="GetXDocument(OpenXmlPart)"/>, loading a part not yet loaded through a reader
+        /// that refuses nesting past <paramref name="maxDepth"/>, so the load is its own depth measurement
+        /// (issue #1389).</summary>
+        internal static XDocument GetXDocument(this OpenXmlPart? part, int? maxDepth)
         {
             if (part == null) throw new ArgumentNullException("part");
 
@@ -154,7 +159,9 @@ namespace Docxodus
                 }
                 else
                 {
-                    using (XmlReader partXmlReader = XmlReader.Create(partStream))
+                    using (XmlReader partXmlReader = maxDepth is { } limit
+                        ? new Internal.DepthLimitedXmlReader(XmlReader.Create(partStream), limit)
+                        : XmlReader.Create(partStream))
                         partXDocument = XDocument.Load(partXmlReader);
                 }
             }
@@ -456,9 +463,12 @@ namespace Docxodus
 
             if (part.ContentType.EndsWith("xml"))
             {
+                // Every part is dumped, referenced or not, so each is held to the general depth limit
+                // here rather than by the read step's door (issue #1389).
                 using (Stream str = part.GetStream())
                 using (StreamReader streamReader = new StreamReader(str))
-                using (XmlReader xr = XmlReader.Create(streamReader))
+                using (XmlReader xr = new Internal.DepthLimitedXmlReader(XmlReader.Create(streamReader),
+                    Verification.XmlSemanticNormalizer.MaxElementDepth))
                     return new XElement(pkg + "part",
                         new XAttribute(pkg + "name", part.Uri),
                         new XAttribute(pkg + "contentType", part.ContentType),

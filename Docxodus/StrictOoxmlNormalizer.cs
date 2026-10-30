@@ -70,10 +70,8 @@ internal static class StrictOoxmlNormalizer
     /// </summary>
     internal static WmlDocument NormalizeToTransitional(WmlDocument doc)
     {
-        if (!IsStrict(doc.DocumentByteArray))
-            return doc;
-
-        return new WmlDocument(doc.FileName, NormalizeStrict(doc.DocumentByteArray));
+        var bytes = NormalizeToTransitional(doc.DocumentByteArray);
+        return ReferenceEquals(bytes, doc.DocumentByteArray) ? doc : new WmlDocument(doc.FileName, bytes);
     }
 
     /// <summary>
@@ -81,10 +79,19 @@ internal static class StrictOoxmlNormalizer
     /// a <see cref="WmlDocument"/> for the overwhelmingly common transitional case, which matters
     /// for byte-based rendering entry points.
     /// </summary>
-    internal static byte[] NormalizeToTransitional(byte[] docxBytes)
+    internal static byte[] NormalizeToTransitional(byte[] docxBytes) => NormalizeToTransitional(docxBytes, trusted: false);
+
+    /// <param name="trusted">The bytes are the session's own checkpoint, already read through the
+    /// depth door once, so they are not scanned again (issue #1389).</param>
+    private static byte[] NormalizeToTransitional(byte[] docxBytes, bool trusted)
     {
         ArgumentNullException.ThrowIfNull(docxBytes);
-        return IsStrict(docxBytes) ? NormalizeStrict(docxBytes) : docxBytes;
+        // The XML depth door (issue #1389), before any tree is built. A strict package is measured as
+        // the unfold leaves it: its text rewrites can make an entry well-formed, and so deep, that was
+        // not XML before (the unfold guards its own parse).
+        var result = IsStrict(docxBytes) ? NormalizeStrict(docxBytes) : docxBytes;
+        if (!trusted) Internal.PartDepthGuard.EnsurePackage(result);
+        return result;
     }
 
     /// <summary>
@@ -93,11 +100,16 @@ internal static class StrictOoxmlNormalizer
     /// is returned unchanged, so the open that follows reports the damage exactly as it did before
     /// conversion existed.
     /// </summary>
-    internal static byte[] NormalizeForReading(byte[] docxBytes)
+    internal static byte[] NormalizeForReading(byte[] docxBytes, bool trusted = false)
     {
         try
         {
-            return PackageOpenRepair.Repair(NormalizeToTransitional(docxBytes));
+            var transitional = NormalizeToTransitional(docxBytes, trusted);
+            var repaired = PackageOpenRepair.Repair(transitional);
+            // Repair can give an untyped part the type its relationship implies, exposing a part the
+            // packaging layer did not see before: measure what it wrote.
+            if (!trusted && !ReferenceEquals(repaired, transitional)) Internal.PartDepthGuard.EnsurePackage(repaired);
+            return repaired;
         }
         catch (Exception e) when (e is InvalidDataException or IOException)
         {
@@ -176,7 +188,9 @@ internal static class StrictOoxmlNormalizer
         XDocument doc;
         try
         {
-            doc = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
+            // Depth-limited: the recursive re-homing below must not meet a deeper tree, and this entry
+            // may be one the read step never measured; the package is measured again afterwards.
+            doc = Internal.DepthLimitedXmlReader.Parse(xml, LoadOptions.PreserveWhitespace);
         }
         catch (System.Xml.XmlException)
         {

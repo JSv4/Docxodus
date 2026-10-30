@@ -355,7 +355,7 @@ public static class WmlToMarkdownConverter
 
         using var stream = new OpenXmlMemoryStreamDocument(document);
         MarkdownProjection projection;
-        using (var wdoc = stream.GetWordprocessingDocument())
+        using (var wdoc = stream.GetMeasuredWordprocessingDocument())
         {
             projection = Convert(wdoc, settings);
         }
@@ -375,6 +375,7 @@ public static class WmlToMarkdownConverter
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(settings);
+        using var depthScope = Internal.PartDepthGuard.Enter(document);
 
         var (index, scopes, renderMap) = BuildAnchorIndex(document, settings);
         var markdown = EmitMarkdown(document, settings, scopes, renderMap);

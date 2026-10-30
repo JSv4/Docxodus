@@ -338,6 +338,23 @@ public static class PackageManifestGenerator
         var relationships = ReadRelationships(
             works, allEntryUris, options, payloadsInspected, findings, out var unreadableOwners);
         ValidateRelationshipReferences(works, relationships, unreadableOwners, findings);
+        // The read step's depth door measures the parts as the packaging layer assembles them
+        // (interleaved pieces joined) and classes them by the relationship that reaches them, which
+        // a per-entry parse cannot see; report what it refuses the same way (issue #1389).
+        if (payloadsInspected)
+        {
+            try
+            {
+                Internal.PartDepthGuard.EnsurePackage(packageBytes);
+            }
+            catch (XmlDepthLimitException e) when (!e.IsBudgetRefusal && e.PartUri is { } part
+                && !findings.Any(finding => finding.Code == "xml_depth_limit_exceeded" && finding.Location?.EntryUri == part))
+            {
+                AddFinding(findings, "xml_depth_limit_exceeded", VerificationFindingSeverity.Error,
+                    e.Message, new ChangeLocation { EntryUri = part });
+            }
+            catch (XmlDepthLimitException) { }
+        }
         var facts = BuildFacts(works, relationships);
 
         // A truncated inspection has not seen the whole package, so it cannot state a content

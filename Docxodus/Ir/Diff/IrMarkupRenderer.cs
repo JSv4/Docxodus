@@ -299,9 +299,9 @@ internal static partial class IrMarkupRenderer
         var result = new WmlDocument(left);
         using (var streamDoc = new OpenXmlMemoryStreamDocument(result))
         {
-            using (var wDoc = streamDoc.GetWordprocessingDocument())
+            using (var wDoc = streamDoc.GetMeasuredWordprocessingDocument())
             using (var rightStream = new OpenXmlMemoryStreamDocument(right))
-            using (var wDocRight = rightStream.GetWordprocessingDocument())
+            using (var wDocRight = rightStream.GetMeasuredWordprocessingDocument())
             {
                 var main = wDoc.MainDocumentPart
                     ?? throw new DocxodusException("LEFT document has no MainDocumentPart.");
@@ -653,7 +653,7 @@ internal static partial class IrMarkupRenderer
     private static WmlDocument NormalizeRevisionAuthors(WmlDocument doc, string author)
     {
         using var streamDoc = new OpenXmlMemoryStreamDocument(doc);
-        using (var wDoc = streamDoc.GetWordprocessingDocument())
+        using (var wDoc = streamDoc.GetMeasuredWordprocessingDocument())
         {
             var main = wDoc.MainDocumentPart;
             if (main is null)
@@ -10470,7 +10470,7 @@ internal static partial class IrMarkupRenderer
 
         var map = new Dictionary<XElement, List<XElement>>();
         using (var streamDoc = new OpenXmlMemoryStreamDocument(right))
-        using (var wDoc = streamDoc.GetWordprocessingDocument())
+        using (var wDoc = streamDoc.GetMeasuredWordprocessingDocument())
         {
             var main = wDoc.MainDocumentPart;
             var originalBody = main?.GetXDocument().Root?.Element(W.body);
@@ -10510,7 +10510,7 @@ internal static partial class IrMarkupRenderer
             return null;
 
         using var streamDoc = new OpenXmlMemoryStreamDocument(left);
-        using var wDoc = streamDoc.GetWordprocessingDocument();
+        using var wDoc = streamDoc.GetMeasuredWordprocessingDocument();
         var rawLeftBody = wDoc.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
         if (rawLeftBody == null)
             return null;

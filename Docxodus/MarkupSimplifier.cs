@@ -55,7 +55,7 @@ namespace Docxodus
         {
             using (var streamDoc = new OpenXmlMemoryStreamDocument(doc))
             {
-                using (WordprocessingDocument document = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument document = streamDoc.GetMeasuredWordprocessingDocument())
                     SimplifyMarkup(document, settings);
                 return streamDoc.GetModifiedWmlDocument();
             }
@@ -63,6 +63,7 @@ namespace Docxodus
 
         public static void SimplifyMarkup(WordprocessingDocument doc, SimplifyMarkupSettings settings)
         {
+            using var depthScope = Internal.PartDepthGuard.Enter(doc);
             if (settings.RemoveMarkupForDocumentComparison)
             {
                 settings.RemoveRsidInfo = true;
@@ -171,6 +172,7 @@ namespace Docxodus
 
         public static void TransformToSingleCharacterRuns(WordprocessingDocument doc)
         {
+            using var depthScope = Internal.PartDepthGuard.Enter(doc);
             if (RevisionAccepter.HasTrackedRevisions(doc))
                 throw new DocxodusException(
                     "Transforming a document to single character runs is not supported for " +

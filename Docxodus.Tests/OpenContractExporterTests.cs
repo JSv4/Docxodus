@@ -4,6 +4,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Xml;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -61,6 +62,207 @@ namespace Docxodus.Tests
         #endregion
 
         #region Basic Functionality Tests
+
+        [Theory]
+        [InlineData("body", false)]
+        [InlineData("header", false)]
+        [InlineData("footer", false)]
+        [InlineData("footnotes", false)]
+        [InlineData("endnotes", false)]
+        [InlineData("body", true)]
+        [InlineData("header", true)]
+        [InlineData("footer", true)]
+        [InlineData("footnotes", true)]
+        [InlineData("endnotes", true)]
+        public void Export_OpenDocument_IncludesUnsavedSdkEdits(string story, bool cacheLinqTree)
+        {
+            using var stream = new MemoryStream();
+            using var document = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document);
+            var part = AddStory(document, story);
+            document.Save();
+            // A caller may already have loaded the separate LINQ tree before editing through the SDK.
+            var cached = cacheLinqTree ? part.GetXDocument() : null;
+            var text = part.RootElement!.Descendants<Text>().Single();
+            text.Text = "Edited story text";
+
+            var export = OpenContractExporter.Export(document);
+
+            Assert.Contains("Edited story text", export.Content);
+            Assert.DoesNotContain("Original story text", export.Content);
+            if (cached is not null)
+            {
+                Assert.Same(cached, part.GetXDocument());
+                Assert.Contains("Original story text", cached.ToString());
+            }
+            // Exporting twice must not freeze the first SDK snapshot in the LINQ cache.
+            text.Text = "Edited again";
+            Assert.Contains("Edited again", OpenContractExporter.Export(document).Content);
+        }
+
+        [Theory]
+        [InlineData("body")]
+        [InlineData("header")]
+        [InlineData("footer")]
+        [InlineData("footnotes")]
+        [InlineData("endnotes")]
+        public void Export_OpenDocument_IncludesNewUnsavedSdkContent(string story)
+        {
+            using var stream = new MemoryStream();
+            using var document = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document);
+            var part = AddStory(document, story);
+            var root = part.RootElement;
+
+            Assert.Contains("Original story text", OpenContractExporter.Export(document).Content);
+            Assert.Same(root, part.RootElement);
+        }
+
+        [Fact]
+        public void Export_OpenDocument_PreservesLoadedLinqEditsWithoutLoadingTheSdkTree()
+        {
+            var bytes = CreateTestDocument(body => body.Append(new Paragraph(new Run(new Text("Original text"))))).DocumentByteArray;
+            using var stream = new MemoryStream();
+            stream.Write(bytes);
+            using var document = WordprocessingDocument.Open(stream, true);
+            var part = document.MainDocumentPart!;
+            part.GetXDocument().Descendants(W.t).Single().Value = "Edited LINQ text";
+            Assert.False(part.IsRootElementLoaded);
+
+            Assert.Contains("Edited LINQ text", OpenContractExporter.Export(document).Content);
+            Assert.False(part.IsRootElementLoaded);
+        }
+
+        [Theory]
+        [InlineData("body")]
+        [InlineData("header")]
+        [InlineData("footer")]
+        [InlineData("footnotes")]
+        [InlineData("endnotes")]
+        public void Export_OpenDocument_RefusesOverDeepSdkEditsEvenWithAShallowLinqTree(string story)
+        {
+            using var stream = new MemoryStream();
+            using var document = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document,
+                autoSave: false);
+            var part = AddStory(document, story);
+            document.Save();
+            part.GetXDocument();
+            OpenXmlElement content = new Paragraph(new Run(new Text("Deep SDK text")));
+            for (int level = 0; level < 2000; level++)
+            {
+                var wrapper = new CustomXmlBlock();
+                wrapper.Append(content);
+                content = wrapper;
+            }
+            part.RootElement!.Append(content);
+
+            DocxDepthLimitSweepTests.OnThread(1024, () =>
+            {
+                var refusal = Assert.ThrowsAny<XmlException>(() => OpenContractExporter.Export(document));
+                Assert.StartsWith("xml_depth_limit_exceeded:", refusal.Message, StringComparison.Ordinal);
+            });
+        }
+
+        [Theory]
+        [InlineData(128, false, false)]
+        [InlineData(129, true, false)]
+        [InlineData(128, false, true)]
+        [InlineData(129, true, true)]
+        public void Export_OpenDocument_BoundsLoadedSdkTreesAtTheStoryLimit(int depth, bool refused, bool commentLeaf)
+        {
+            using var stream = new MemoryStream();
+            using var document = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document,
+                autoSave: false);
+            AddStory(document, "body");
+            document.Save();
+            // document/body + wrappers + leaf: exactly the requested element depth. An SDK
+            // comment is a child node too, but must not count as another element level.
+            OpenXmlElement content = commentLeaf
+                ? new CustomXmlBlock(new OpenXmlMiscNode(XmlNodeType.Comment, "<!--At the limit-->"))
+                : new Paragraph(new Run(new Text("At the limit")));
+            for (int level = 0; level < depth - (commentLeaf ? 3 : 5); level++)
+            {
+                var wrapper = new CustomXmlBlock();
+                wrapper.Append(content);
+                content = wrapper;
+            }
+            document.MainDocumentPart!.Document!.Body!.Append(content);
+
+            DocxDepthLimitSweepTests.OnThread(1024, () =>
+            {
+                if (refused)
+                    Assert.ThrowsAny<XmlException>(() => OpenContractExporter.Export(document));
+                else
+                    Assert.Contains("Original story text", OpenContractExporter.Export(document).Content);
+            });
+        }
+
+        [Theory]
+        [InlineData(128, true)]
+        [InlineData(129, true)]
+        [InlineData(2000, true)]
+        [InlineData(128, false)]
+        [InlineData(129, false)]
+        [InlineData(2000, false)]
+        public void Export_OpenDocument_BoundsLazySdkXmlBeforeParsingIt(int depth, bool lazyRoot)
+        {
+            using var stream = new MemoryStream();
+            using var document = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document,
+                autoSave: false);
+            var part = (MainDocumentPart)AddStory(document, "body");
+            var levels = depth - (lazyRoot ? 5 : 6);
+            var payload = string.Concat(Enumerable.Repeat("<w:customXml>", levels))
+                + "<w:p><w:r><w:t>Deep text</w:t></w:r></w:p>"
+                + string.Concat(Enumerable.Repeat("</w:customXml>", levels));
+            const string ns = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
+            if (lazyRoot)
+                part.Document = new Document($"<w:document {ns}><w:body>"
+                    + "<w:p><w:r><w:t>Original story text</w:t></w:r></w:p>"
+                    + payload + "</w:body></w:document>");
+            else
+                part.Document!.Body!.Append(new CustomXmlBlock($"<w:customXml {ns}>{payload}</w:customXml>"));
+
+            DocxDepthLimitSweepTests.OnThread(1024, () =>
+            {
+                if (depth > 128)
+                {
+                    var refusal = Assert.ThrowsAny<XmlException>(() => OpenContractExporter.Export(document));
+                    Assert.StartsWith("xml_depth_limit_exceeded:", refusal.Message, StringComparison.Ordinal);
+                }
+                else
+                    Assert.Contains("Original story text", OpenContractExporter.Export(document).Content);
+            });
+        }
+
+        private static OpenXmlPart AddStory(WordprocessingDocument document, string story)
+        {
+            var main = document.AddMainDocumentPart();
+            main.Document = new Document(new Body(new Paragraph(new Run(new Text("Body text")))));
+            var paragraph = new Paragraph(new Run(new Text("Original story text")));
+            switch (story)
+            {
+                case "body":
+                    main.Document.Body!.RemoveAllChildren();
+                    main.Document.Body.Append(paragraph);
+                    return main;
+                case "header":
+                    var header = main.AddNewPart<HeaderPart>();
+                    header.Header = new Header(paragraph);
+                    return header;
+                case "footer":
+                    var footer = main.AddNewPart<FooterPart>();
+                    footer.Footer = new Footer(paragraph);
+                    return footer;
+                case "footnotes":
+                    var footnotes = main.AddNewPart<FootnotesPart>();
+                    footnotes.Footnotes = new Footnotes(new Footnote(paragraph) { Id = 1 });
+                    return footnotes;
+                case "endnotes":
+                    var endnotes = main.AddNewPart<EndnotesPart>();
+                    endnotes.Endnotes = new Endnotes(new Endnote(paragraph) { Id = 1 });
+                    return endnotes;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(story));
+            }
+        }
 
         [Fact]
         public void OC001_Export_ReturnsValidExport()
