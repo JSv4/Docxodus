@@ -12541,7 +12541,7 @@ namespace Docxodus
         /// flow-level equivalent: it excludes the anchored rect from the line layout of the
         /// current and following blocks in both continuous and paginated rendering. Tight and
         /// through wrapping retain the source contour as a CSS shape rather than excluding the
-        /// entire picture rectangle. Nonwrapping and behind-text pictures use the shared drawing
+        /// entire picture rectangle. Nonwrapping pictures use the shared drawing
         /// anchor in paginated output, so their extent never consumes the story's text-flow height.
         /// </summary>
         private static XElement? ApplyAnchorTextWrap(XElement? imageHtml, XElement drawingContainer,
@@ -12550,8 +12550,7 @@ namespace Docxodus
             if (imageHtml == null || drawingContainer == null || drawingContainer.Name != WP.anchor)
                 return imageHtml;
 
-            if (settings?.RenderPagination == PaginationMode.Paginated &&
-                (drawingContainer.Element(WP.wrapNone) != null || IsTrueAttribute(drawingContainer, "behindDoc")))
+            if (settings?.RenderPagination == PaginationMode.Paginated && drawingContainer.Element(WP.wrapNone) != null)
             {
                 var positioned = new XElement(Xhtml.span, imageHtml);
                 var frameStyle = new Dictionary<string, string> { { "display", "inline-block" } };

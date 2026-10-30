@@ -148,9 +148,10 @@ All notable changes to this project will be documented in this file.
 
 - Preserve embedded image and SVG identities when pagination promotes or repeats drawings, so an already-reported decoding failure does not become a false serialization error. Newly damaged resources still fail verification.
 
-- Paginated DrawingML pictures behind text or without wrapping use the shared drawing-anchor
+- Paginated DrawingML pictures without wrapping use the shared drawing-anchor
   placement, including page-relative sizing. Full-page header backgrounds no longer consume the
-  body area; linked images retain their contents and ordinary wrapping pictures keep their flow.
+  body area; linked images retain their contents and explicitly wrapping pictures keep their flow,
+  including pictures placed behind the text.
 - Prevent off-paper floating drawings from adding blank PDF pages. A page-sized drawing layer
   keeps their original geometry and stacking while clipping print overflow to the paper, including
   partially visible drawings and repeated header/footer objects.
