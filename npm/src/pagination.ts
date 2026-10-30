@@ -1635,7 +1635,10 @@ export class PaginationEngine {
     sectionIndex: number,
   ): MeasuredBlock[] {
     const blocks: MeasuredBlock[] = [];
-    if (this.fragmentParagraphs) this.fitOverwideTables(section, dims);
+    if (this.fragmentParagraphs) {
+      this.fitOverwideTables(section, dims);
+      this.fitOversizedInlineImages(section, dims, sectionIndex);
+    }
     this.prepareShapeClearance(section, dims);
 
     // Get direct children (paragraphs, tables, divs, etc.)
@@ -1691,6 +1694,53 @@ export class PaginationEngine {
     }
 
     return blocks;
+  }
+
+  /** An indivisible inline picture must fit one page before paragraph fragmentation can help. */
+  private fitOversizedInlineImages(section: HTMLElement, dims: PageDimensions, sectionIndex: number): void {
+    const sectionLeft = section.getBoundingClientRect().left;
+    const paperLeft = sectionLeft - ptToPx(dims.marginLeft);
+    const paperRight = sectionLeft + ptToPx(dims.contentWidth + dims.marginRight);
+    const bodyHeight = ptToPx(this.smallestEffectiveContentHeight(dims, sectionIndex));
+    for (const image of Array.from(section.querySelectorAll<HTMLImageElement>("img"))) {
+      this.checkpoint();
+      if (image.closest("#pagination-hf-registry, #pagination-footnote-registry, #pagination-comment-margin-registry, [data-docx-drawing-anchor]")) continue;
+      const paragraph = image.closest<HTMLElement>("p,h1,h2,h3,h4,h5,h6");
+      if (!paragraph) continue;
+      let inline = true;
+      for (let carrier: HTMLElement | null = image; carrier && carrier !== paragraph; carrier = carrier.parentElement) {
+        const style = this.view.getComputedStyle(carrier);
+        if (style.display !== "inline" || !this.rangeImageCarrierPosition(carrier, style)
+          || style.float !== "none" || style.transform !== "none") { inline = false; break; }
+      }
+      if (!inline) continue;
+      const style = this.view.getComputedStyle(paragraph);
+      const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2;
+      const maximumHeight = bodyHeight - lineHeight - Math.max(0, parseFloat(style.marginTop));
+      const maximumWidth = paragraph.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const rect = image.getBoundingClientRect();
+      if (!(maximumHeight > 0 && maximumWidth > 0 && rect.width > 0 && rect.height > 0)) continue;
+      // Several fitting pictures may make their paragraph tall. Judge this indivisible image's
+      // own line with its original inline carriers; the Range fragmenter can carry the others.
+      let tooTall = rect.height > bodyHeight;
+      if (!tooTall && rect.height > maximumHeight) {
+        let isolated = image.cloneNode(true) as HTMLElement;
+        for (let carrier = image.parentElement; carrier && carrier !== paragraph; carrier = carrier.parentElement) {
+          const wrapper = carrier.cloneNode(false) as HTMLElement;
+          wrapper.appendChild(isolated);
+          isolated = wrapper;
+        }
+        const imageLine = paragraph.cloneNode(false) as HTMLElement;
+        imageLine.appendChild(isolated);
+        tooTall = ptToPx(this.measureElement(imageLine, dims, sectionIndex).heightPt) > bodyHeight;
+      }
+      if (!tooTall && rect.left >= paperLeft - 1 && rect.right <= paperRight + 1) continue;
+      const ratio = Math.min(1, maximumWidth / rect.width, maximumHeight / rect.height);
+      image.style.setProperty("width", `${rect.width * ratio}px`, "important");
+      image.style.setProperty("height", `${rect.height * ratio}px`, "important");
+      image.style.setProperty("min-width", "0", "important");
+      image.style.setProperty("min-height", "0", "important");
+    }
   }
 
   /** Reflow an over-wide table into its containing band without shrinking its text. */

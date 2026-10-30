@@ -81,3 +81,9 @@ export function inlineImageParagraphDocx(labels: boolean): Uint8Array {
     <w:spacing w:after="0"/></w:pPr>${images}</w:p>
     <w:p><w:r><w:t>Image inventory complete.</w:t></w:r></w:p>`);
 }
+
+export function oversizedInlineImageDocx(height = 870, count = 1): Uint8Array {
+  return pageFittingDocx(`<w:p><w:r><w:t>Before the tall tile.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:spacing w:after="0"/></w:pPr>${Array.from({ length: count }, (_, index) => fittingImageRun(index + 1, 320, height)).join('')}</w:p>
+    <w:p><w:r><w:t>After the tall tile.</w:t></w:r></w:p>`);
+}
