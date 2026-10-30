@@ -617,4 +617,25 @@ public class HtmlDrawingShapeTests
         Assert.NotEmpty(paragraph.Value);
         Assert.True(string.IsNullOrWhiteSpace(paragraph.Value));
     }
+    [Theory]
+    [InlineData(true, "oval")]
+    [InlineData(true, "rect")]
+    [InlineData(false, "oval")]
+    public void LegacyShapeFallbackUsesSupportedPageCoordinates(bool positioned, string kind)
+    {
+        var placement = positioned ? "position:absolute;margin-left:8pt;margin-top:12pt;mso-position-horizontal-relative:page;mso-position-vertical-relative:page;" : "";
+        var input = Docx("<w:r><w:pict><v:" + kind + " xmlns:v=\"urn:schemas-microsoft-com:vml\" style=\"" +
+            placement + "width:90pt;height:72pt;z-index:-1\"><v:fill color=\"#ddeedd\"/></v:" + kind + "></w:pict></w:r>");
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
+        var shape = paragraph.Descendants().Single(e => (string?)e.Attribute("data-docx-shape") == "unrendered");
+        Assert.Equal(positioned ? "true" : null, (string?)shape.Attribute("data-docx-drawing-anchor"));
+        Assert.Contains("[SHAPE]", shape.Value);
+        if (positioned)
+        {
+            Assert.Equal("8", (string?)shape.Attribute("data-docx-anchor-h-offset"));
+            Assert.Equal("12", (string?)shape.Attribute("data-docx-anchor-v-offset"));
+            Assert.Equal("true", (string?)shape.Attribute("data-docx-anchor-behind"));
+        }
+    }
+
 }

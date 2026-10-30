@@ -46,6 +46,8 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Position supported floating VML shape placeholders through the existing anchor adapter instead of consuming body space.
+
 - Normalize mixed text and tab runs inside text boxes, preserving tab columns and visible lines regardless of run boundaries.
 
 
