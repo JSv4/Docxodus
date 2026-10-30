@@ -14,7 +14,8 @@ const budgetsKiB = {
   // 137.195/137.229/116.591/34.065 KiB after. Raise only the exhausted budgets by 1 KiB.
   'embed.bundle.js': 138,
   'embed.iife.js': 138,
-  'editor.bundle.js': 117,
+  // Including floated-picture geometry adds 0.158 KiB here (116.941 -> 117.099).
+  'editor.bundle.js': 118,
   'pagination.bundle.js': 35,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
