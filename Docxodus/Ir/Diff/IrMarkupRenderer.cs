@@ -1708,7 +1708,7 @@ internal static partial class IrMarkupRenderer
     /// role and stays unmarked. ACCEPT keeps the marks → the N right paragraphs. REJECT removes each
     /// inserted mark — RevisionProcessor merges a reject-removed mark's paragraph into the NEXT one — so
     /// paragraphs 0..N-1 re-fuse, and the rejected per-segment ins/del restore the LEFT slices: the
-    /// single LEFT paragraph reconstructs. Slice token lists retain the source paragraph's absolute char
+    /// single LEFT paragraph reconstructs. Slice token lists retain the source paragraph's absolute rendering
     /// positions, so the FULL left paragraph's <see cref="SourceRunModel"/> serves every segment.
     /// Falls back to conservative whole-block del(left)+ins(members) when a source is missing.
     /// </summary>
@@ -1726,7 +1726,7 @@ internal static partial class IrMarkupRenderer
         }
 
         var leftRuns = new SourceRunModel(leftPara);
-        var leftTokens = ParagraphTokens(op.LeftAnchor, state.Left, state.Settings);
+        var leftTokens = ParagraphRenderTokens(op.LeftAnchor, state.Left, state.Settings);
 
         int offset = 0;
         for (int s = 0; s < anchors.Count; s++)
@@ -1742,7 +1742,7 @@ internal static partial class IrMarkupRenderer
                 EmitWholeBlock(anchors[s], state.RightSource, state, sink, RevKind.Ins, fromRight: true);
                 continue;
             }
-            var memberTokens = ParagraphTokens(anchors[s], state.RightSource, state.Settings);
+            var memberTokens = ParagraphRenderTokens(anchors[s], state.RightSource, state.Settings);
             var rightRuns = new SourceRunModel(memberPara);
 
             var newPara = new XElement(W.p);
@@ -1785,7 +1785,7 @@ internal static partial class IrMarkupRenderer
         }
 
         var rightRuns = new SourceRunModel(rightPara);
-        var rightTokens = ParagraphTokens(op.RightAnchor, state.RightSource, state.Settings);
+        var rightTokens = ParagraphRenderTokens(op.RightAnchor, state.RightSource, state.Settings);
         var rightPPr = rightPara.Element(W.pPr);
 
         int offset = 0;
@@ -1802,7 +1802,7 @@ internal static partial class IrMarkupRenderer
                 EmitWholeBlock(anchors[m], state.Left, state, sink, RevKind.Del, fromRight: false);
                 continue;
             }
-            var memberTokens = ParagraphTokens(anchors[m], state.Left, state.Settings);
+            var memberTokens = ParagraphRenderTokens(anchors[m], state.Left, state.Settings);
             var leftRuns = new SourceRunModel(memberPara);
 
             var newPara = new XElement(W.p);
@@ -1839,7 +1839,7 @@ internal static partial class IrMarkupRenderer
         return n;
     }
 
-    /// <summary>A contiguous sub-list of a token list. The tokens keep their ABSOLUTE char positions in
+    /// <summary>A contiguous sub-list of a token list. The tokens keep their absolute rendering positions in
     /// the source paragraph, which is what lets a slice compose with the full paragraph's
     /// <see cref="SourceRunModel"/> inside <see cref="BuildTokenOpContent"/>.</summary>
     private static IReadOnlyList<IrDiffToken> SubTokens(IReadOnlyList<IrDiffToken> tokens, int offset, int len)
@@ -1895,11 +1895,11 @@ internal static partial class IrMarkupRenderer
 
             var leftTokens = cell.LeftAnchor is null
                 ? (IReadOnlyList<IrDiffToken>)Array.Empty<IrDiffToken>()
-                : SubTokens(ParagraphTokens(cell.LeftAnchor, state.Left, state.Settings),
+                : SubTokens(ParagraphRenderTokens(cell.LeftAnchor, state.Left, state.Settings),
                     cell.LeftSliceStart, cell.LeftSliceLen);
             var rightTokens = cell.RightAnchor is null
                 ? (IReadOnlyList<IrDiffToken>)Array.Empty<IrDiffToken>()
-                : SubTokens(ParagraphTokens(cell.RightAnchor, state.RightSource, state.Settings),
+                : SubTokens(ParagraphRenderTokens(cell.RightAnchor, state.RightSource, state.Settings),
                     cell.RightSliceStart, cell.RightSliceLen);
 
             var leftRuns = new SourceRunModel(leftPara ?? new XElement(W.p));
@@ -6076,7 +6076,7 @@ internal static partial class IrMarkupRenderer
             state.RegisterMediaReferences(clone);
             if (clone.Name == W.r)
             {
-                var oldRPr = leftRuns.RPrAtChar(cursor);
+                var oldRPr = leftRuns.RPrAtTextOffset(cursor);
                 ApplyRPrChange(clone, oldRPr, state);
                 cursor += RunTextLength(clone);
             }
@@ -6155,7 +6155,7 @@ internal static partial class IrMarkupRenderer
         }
 
         // Base left tokens + run model, built once (every group's Equal/Delete spans read these).
-        var leftTokens = ParagraphTokens(baseAnchor, baseIr, state.Settings);
+        var leftTokens = ParagraphRenderTokens(baseAnchor, baseIr, state.Settings);
         var leftRuns = new SourceRunModel(basePara);
 
         // Per-reviewer right paragraph: tokens + run model, resolved from op.SourceRightAnchors (each
@@ -6165,17 +6165,17 @@ internal static partial class IrMarkupRenderer
         if (op.SourceRightAnchors != null)
             foreach (var sra in op.SourceRightAnchors)
                 rightAnchorByReviewer[sra.Reviewer] = sra.Anchor;
-        var fieldSources = new Dictionary<int, FieldCharacterSource> { [-1] = new(leftTokens, leftRuns) };
+        var fieldSources = new Dictionary<int, SourceBoundarySource> { [-1] = new(leftTokens, leftRuns) };
         foreach (var group in authored.Where(item => item.SourceReviewer >= 0).GroupBy(item => item.SourceReviewer))
         {
             int reviewer = group.Key;
             string? anchor = rightAnchorByReviewer.TryGetValue(reviewer, out var value) ? value : null;
-            var tokens = ParagraphTokens(anchor, reviewerIrs[reviewer], state.Settings);
+            var tokens = ParagraphRenderTokens(anchor, reviewerIrs[reviewer], state.Settings);
             var paragraph = SourceElement(anchor, reviewerIrs[reviewer]);
             var runs = new SourceRunModel(paragraph ?? new XElement(W.p));
             fieldSources[reviewer] = new(tokens, runs, group.First().Author);
         }
-        authored = SyncFieldCharacters(authored, item => item.Op, (item, tokenOp) => item with { Op = tokenOp },
+        authored = SyncSourceBoundaries(authored, item => item.Op, (item, tokenOp) => item with { Op = tokenOp },
             item => item.SourceReviewer, leftTokens, leftRuns, fieldSources, out var fieldCharactersBefore);
 
         // Clone the BASE pPr (deterministic; composed edits are text-only).
@@ -6193,7 +6193,7 @@ internal static partial class IrMarkupRenderer
         var count = authored.Count;
         while (i < count)
         {
-            newPara.Add(EmitFieldCharacters(fieldCharactersBefore?[i], leftRuns, leftRuns, state, reviewerIrs, baseIr));
+            newPara.Add(EmitSourceBoundaries(fieldCharactersBefore?[i], leftRuns, leftRuns, state, reviewerIrs, baseIr));
             // Coalesce ops with the same author/source, stopping at a planned field boundary.
             int reviewer = authored[i].SourceReviewer;
             string author = authored[i].Author;
@@ -6231,7 +6231,7 @@ internal static partial class IrMarkupRenderer
             }
         }
 
-        newPara.Add(EmitFieldCharacters(fieldCharactersBefore?[count], leftRuns, leftRuns, state, reviewerIrs, baseIr));
+        newPara.Add(EmitSourceBoundaries(fieldCharactersBefore?[count], leftRuns, leftRuns, state, reviewerIrs, baseIr));
         state.AuthorOverride = savedAuthor;
         state.RightSource = savedRightSource;
         state.RightSourceId = savedRightSourceId;
@@ -6268,8 +6268,8 @@ internal static partial class IrMarkupRenderer
 
         // Resolve token char spans: a token op's left span is [left[LeftStart].StartChar, left[LeftEnd-1].EndChar)
         // and likewise right. We resolve via the tokenizers so char coordinates match the diff's exactly.
-        var leftTokens = ParagraphTokens(op.LeftAnchor, state.Left, state.Settings);
-        var rightTokens = ParagraphTokens(op.RightAnchor, state.RightSource, state.Settings);
+        var leftTokens = ParagraphRenderTokens(op.LeftAnchor, state.Left, state.Settings);
+        var rightTokens = ParagraphRenderTokens(op.RightAnchor, state.RightSource, state.Settings);
 
         // The new paragraph: clone the RIGHT paragraph's pPr (accepted-state paragraph properties) and rebuild
         // its run-level content from the spans. A right pStyle absent from the LEFT style universe is
@@ -6286,7 +6286,7 @@ internal static partial class IrMarkupRenderer
         StampResolvedNumberingChange(newPara, op.LeftAnchor, op.RightAnchor, state);
 
         newPara.Add(BuildTokenOpContent(tokenDiff, leftTokens, rightTokens, leftRuns, rightRuns, state,
-            syncFieldCharacters: true));
+            syncSourceBoundaries: true));
         sink.Add(newPara);
     }
 
@@ -6743,7 +6743,7 @@ internal static partial class IrMarkupRenderer
         IrTokenDiff tokenDiff,
         IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
         SourceRunModel leftRuns, SourceRunModel rightRuns, RenderState state,
-        bool syncFieldCharacters = false)
+        bool syncSourceBoundaries = false)
     {
         var content = new List<XElement>();
 
@@ -6758,65 +6758,18 @@ internal static partial class IrMarkupRenderer
             leftRuns, rightRuns).ToList();
 
         // The field characters both sides of a paired paragraph carry are emitted once each, where both sides
-        // reach them (issue #1165); see SyncFieldCharacters. Only a whole-paragraph pair is planned this way: the
+        // reach them (issue #1165); see SyncSourceBoundaries. Only a whole-paragraph pair is planned this way: the
         // other callers render a slice of a paragraph's tokens, or one reviewer's ops at a time.
-        List<List<FieldCharacterStep>>[]? fieldCharactersBefore = null;
-        if (syncFieldCharacters)
-            ops = SyncFieldCharacters(ops, leftTokens, rightTokens, leftRuns, rightRuns, out fieldCharactersBefore);
+        List<List<SourceBoundaryStep>>[]? fieldCharactersBefore = null;
+        if (syncSourceBoundaries)
+            ops = SyncSourceBoundaries(ops, leftTokens, rightTokens, leftRuns, rightRuns, out fieldCharactersBefore);
 
-        void EmitFieldCharactersBefore(int opIndex) =>
-            content.AddRange(EmitFieldCharacters(fieldCharactersBefore?[opIndex], leftRuns, rightRuns, state));
-
-        // An op slices the left source only when it draws left content: a deletion, or an Equal/FormatChanged span
-        // whose raw text differs (drawn as del + ins). Any other Equal/FormatChanged span emits the right runs alone.
-        bool SlicesLeft(IrTokenOp op) =>
-            op.Kind == IrTokenOpKind.Delete ||
-            (op.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged &&
-             !string.Equals(RawSpanText(leftTokens, op.LeftStart, op.LeftEnd),
-                 RawSpanText(rightTokens, op.RightStart, op.RightEnd), StringComparison.Ordinal));
-
-        // A span may leave the always-kept markers behind a trailing zero-width token to the op that owns that token
-        // (see SourceRunModel.Slice) only when that op is rendered here, from the same side's tokens (the next op
-        // holding tokens of that side, starting where this one ends; a Consolidate paragraph renders each reviewer's
-        // ops in a call of their own), and only when that op keeps the token unchanged: an Equal or FormatChanged
-        // span with identical raw text, which emits its runs unwrapped. A marker both documents carry stays unmarked
-        // that way. Behind a token that is itself inserted or deleted, deferring would pull the shared marker into
-        // that revision, so the marker stays with this op, as before. One backward pass records the owners.
-        var nextLeftOwner = new int[ops.Count];
-        var nextRightOwner = new int[ops.Count];
-        for (int j = ops.Count - 1, leftOwner = -1, rightOwner = -1; j >= 0; j--)
-        {
-            nextLeftOwner[j] = leftOwner;
-            nextRightOwner[j] = rightOwner;
-            if (ops[j].LeftEnd > ops[j].LeftStart)
-                leftOwner = j;
-            if (ops[j].RightEnd > ops[j].RightStart)
-                rightOwner = j;
-        }
-        bool KeepsUnchanged(IrTokenOp op) =>
-            op.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged && !SlicesLeft(op);
-        bool LeftNextOwns(int index) =>
-            nextLeftOwner[index] >= 0 && ops[nextLeftOwner[index]].LeftStart == ops[index].LeftEnd &&
-            KeepsUnchanged(ops[nextLeftOwner[index]]) &&
-            NextOwnsEndZeroWidth(leftTokens, ops[index].LeftStart, ops[index].LeftEnd);
-        bool RightNextOwns(int index) =>
-            nextRightOwner[index] >= 0 && ops[nextRightOwner[index]].RightStart == ops[index].RightEnd &&
-            KeepsUnchanged(ops[nextRightOwner[index]]) &&
-            NextOwnsEndZeroWidth(rightTokens, ops[index].RightStart, ops[index].RightEnd);
-
-        // That owner emits only the right side's runs, so of the left markers only those with a counterpart in its
-        // right span may be left to it; it claims them as represented by the right copy it emits.
-        ISet<string> LeftDeferOnlyKeys(int index)
-        {
-            if (nextLeftOwner[index] < 0)
-                return new HashSet<string>(); // no owner here, so LeftNextOwns is false and nothing is deferred
-            var (ownerStart, ownerEnd) = RightSpanChars(rightTokens, ops[nextLeftOwner[index]]);
-            return rightRuns.MarkerKeysBetween(ownerStart, ownerEnd);
-        }
+        void EmitSourceBoundariesBefore(int opIndex) =>
+            content.AddRange(EmitSourceBoundaries(fieldCharactersBefore?[opIndex], leftRuns, rightRuns, state));
 
         for (int opIndex = 0; opIndex < ops.Count; opIndex++)
         {
-            EmitFieldCharactersBefore(opIndex);
+            EmitSourceBoundariesBefore(opIndex);
             var tokenOp = ops[opIndex];
             switch (tokenOp.Kind)
             {
@@ -6830,25 +6783,47 @@ internal static partial class IrMarkupRenderer
                     // restoring the LEFT (space). So when the span's raw left/right text is NOT byte-identical,
                     // fall back to del(left)+ins(right) for that span — the accept/reject text invariant then
                     // holds byte-for-byte.
-                    var (rs, re) = RightSpanChars(rightTokens, tokenOp);
-                    var (ls, le) = LeftSpanChars(leftTokens, tokenOp);
-                    var (rzs, rze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
-                    var (lzs, lze) = ZeroWidthBoundaries(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
+                    var (rs, re) = RightSpanPositions(rightTokens, tokenOp);
+                    var (ls, le) = LeftSpanPositions(leftTokens, tokenOp);
                     string rawRight = RawSpanText(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
                     string rawLeft = RawSpanText(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
                     bool rawEqual = string.Equals(rawLeft, rawRight, StringComparison.Ordinal);
                     // Keys of the markers the right-only rendering below emits: they stand in for the left copies of
                     // the same markers in this span, which no later left-side op may then emit again.
                     var representedMarkers = new HashSet<string>(StringComparer.Ordinal);
-                    int spanStart = content.Count;
+                    List<XElement> StableSlice(int start, int end)
+                    {
+                        if (!leftRuns.HasRangeMarkers && !rightRuns.HasRangeMarkers)
+                            return rightRuns.Slice(start, end);
+                        var result = new List<XElement>();
+                        int cursor = start;
+                        void TakeRight(int to)
+                        {
+                            result.AddRange(rightRuns.Slice(cursor, to));
+                            representedMarkers.UnionWith(rightRuns.LastEmittedMarkerKeys);
+                            cursor = to;
+                        }
+                        var removed = leftRuns.UnrepresentedMarkers(ls + start - rs, ls + end - rs,
+                            rightRuns.MarkerKeysBetween(0, int.MaxValue))
+                            .Select(group => (Position: rs + group.Key - ls, Source: leftRuns, Kind: RevKind.Del, Members: group.ToList()));
+                        var added = rightRuns.UnrepresentedMarkers(start, end, leftRuns.MarkerKeysBetween(0, int.MaxValue))
+                            .Select(group => (Position: group.Key, Source: rightRuns, Kind: RevKind.Ins, Members: group.ToList()));
+                        var endpoints = removed.Concat(added).OrderBy(group => group.Position).ToList();
+                        foreach (var endpoint in endpoints) endpoint.Source.WithholdSourceBoundary(endpoint.Members);
+                        foreach (var endpoint in endpoints)
+                        {
+                            if (cursor < endpoint.Position) TakeRight(endpoint.Position);
+                            foreach (var marker in endpoint.Source.EmitSourceBoundary(endpoint.Members))
+                                result.AddRange(WrapOneSidedMarker(marker, endpoint.Kind, state));
+                        }
+                        TakeRight(end);
+                        return result;
+                    }
                     if (!rawEqual)
                     {
-                        foreach (var r in leftRuns.Slice(ls, le, lzs, lze,
-                                     LeftNextOwns(opIndex),
-                                     LeftDeferOnlyKeys(opIndex)))
+                        foreach (var r in leftRuns.Slice(ls, le))
                             content.AddRange(WrapFieldAware(r, RevKind.Del, state));
-                        foreach (var r in rightRuns.Slice(rs, re, rzs, rze,
-                                     RightNextOwns(opIndex)))
+                        foreach (var r in rightRuns.Slice(rs, re))
                             content.AddRange(WrapFieldAware(r, RevKind.Ins, state));   // registers media on its clone
                     }
                     else if (tokenOp.Kind == IrTokenOpKind.FormatChanged)
@@ -6866,26 +6841,16 @@ internal static partial class IrMarkupRenderer
                         // split the right span at the LEFT-format boundaries: each sub-span carries one uniform old
                         // rPr, so reject restores EVERY left region's original formatting. A left boundary at left
                         // char lc maps to the right cut rs + (lc - ls). An empty boundary set (single left run, or
-                        // several runs with identical rPr) yields exactly one Slice(rs,re,rzs,rze) call stamped with
+                        // several runs with identical rPr) yields exactly one Slice(rs,re) call stamped with
                         // the constant left rPr — byte-identical to the pre-split renderer.
                         var boundaries = leftRuns.FormatBoundaries(ls, le);
                         int subStart = rs;
                         for (int bi = 0; bi <= boundaries.Count; bi++)
                         {
                             int subEnd = bi < boundaries.Count ? rs + (boundaries[bi] - ls) : re;
-                            // Zero-width ownership: the first sub-span owns the span's leading zero-width (per the
-                            // op's boundary flag), the last owns the trailing one. An interior cut was strictly
-                            // interior to the whole span, so the sub-span STARTING there claims its zero-width
-                            // (includeStart = true) and the previous one does not (includeEnd = false) — reproducing
-                            // the single-slice ownership exactly (claim-dedup guarantees each is emitted once).
-                            bool subStartZw = bi == 0 ? rzs : true;
-                            bool subEndZw = bi == boundaries.Count ? rze : false;
-                            // An interior cut always has a next sub-span starting at it.
-                            bool subNextOwns = bi < boundaries.Count ||
-                                RightNextOwns(opIndex);
-                            // Left format is uniform across the sub-span, so one RPrAtChar at its start suffices.
-                            var oldRPr = leftRuns.RPrAtChar(ls + (subStart - rs));
-                            var subSpan = rightRuns.Slice(subStart, subEnd, subStartZw, subEndZw, subNextOwns);
+                            // Left format is uniform across the sub-span, so one RPrAtPosition at its start suffices.
+                            var oldRPr = leftRuns.RPrAtPosition(ls + (subStart - rs));
+                            var subSpan = StableSlice(subStart, subEnd);
                             representedMarkers.UnionWith(rightRuns.LastEmittedMarkerKeys);
                             foreach (var r in subSpan)
                             {
@@ -6901,32 +6866,25 @@ internal static partial class IrMarkupRenderer
                     }
                     else
                     {
-                        var span = rightRuns.Slice(rs, re, rzs, rze,
-                            RightNextOwns(opIndex));
+                        var span = StableSlice(rs, re);
                         representedMarkers.UnionWith(rightRuns.LastEmittedMarkerKeys);
                         foreach (var r in span)
                             AddStableSpan(r);
                     }
                     if (rawEqual)
                     {
-                        leftRuns.ClaimRepresented(ls, le, lzs, lze,
-                            LeftNextOwns(opIndex),
-                            LeftDeferOnlyKeys(opIndex), representedMarkers);
-                        if (state.Left.Comments.Comments.Count > 0)
-                            leftRuns.CarryDeletedComments(content, spanStart, ls, le, AnchoredCommentIds(state.RightSource));
+                        leftRuns.ClaimRepresented(ls, le, representedMarkers);
                     }
                     break;
                 }
                 case IrTokenOpKind.Insert:
                 {
-                    var (s, e) = RightSpanChars(rightTokens, tokenOp);
-                    var (zs, ze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
+                    var (s, e) = RightSpanPositions(rightTokens, tokenOp);
                     var arrival = RelocatedSpanName(tokenOp, state);
                     var range = arrival is null ? default : CreateMoveRange(isFrom: false, arrival, state);
                     if (arrival is not null)
                         content.Add(range.Start);
-                    foreach (var r in rightRuns.Slice(s, e, zs, ze,
-                                 RightNextOwns(opIndex)))
+                    foreach (var r in rightRuns.Slice(s, e))
                         content.AddRange(WrapFieldAware(r, arrival is null ? RevKind.Ins : RevKind.MoveTo, state));   // registers media on its clone
                     if (arrival is not null)
                         content.Add(range.End);
@@ -6934,15 +6892,12 @@ internal static partial class IrMarkupRenderer
                 }
                 case IrTokenOpKind.Delete:
                 {
-                    var (s, e) = LeftSpanChars(leftTokens, tokenOp);
-                    var (zs, ze) = ZeroWidthBoundaries(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
+                    var (s, e) = LeftSpanPositions(leftTokens, tokenOp);
                     var departure = RelocatedSpanName(tokenOp, state);
                     var range = departure is null ? default : CreateMoveRange(isFrom: true, departure, state);
                     if (departure is not null)
                         content.Add(range.Start);
-                    foreach (var r in leftRuns.Slice(s, e, zs, ze,
-                                 LeftNextOwns(opIndex),
-                                 LeftDeferOnlyKeys(opIndex)))
+                    foreach (var r in leftRuns.Slice(s, e))
                         content.AddRange(WrapFieldAware(r, departure is null ? RevKind.Del : RevKind.MoveFrom, state));
                     if (departure is not null)
                         content.Add(range.End);
@@ -6950,12 +6905,12 @@ internal static partial class IrMarkupRenderer
                 }
             }
         }
-        EmitFieldCharactersBefore(ops.Count);
+        EmitSourceBoundariesBefore(ops.Count);
 
         return CoalesceAdjacentHyperlinks(content);
     }
 
-    private sealed record FieldCharacterSource(IReadOnlyList<IrDiffToken> Tokens, SourceRunModel Runs, string? Author = null);
+    private sealed record SourceBoundarySource(IReadOnlyList<IrDiffToken> Tokens, SourceRunModel Runs, string? Author = null);
 
     /// <summary>
     /// Plan where each field character of a paired paragraph is emitted (issue #1165). A fine-rendered pair carries
@@ -6975,41 +6930,71 @@ internal static partial class IrMarkupRenderer
     /// character strictly inside a span whose text is unchanged is also left to it: that span alone emits it, once,
     /// in place.</para>
     /// </summary>
-    private static List<IrTokenOp> SyncFieldCharacters(
+    private static List<IrTokenOp> SyncSourceBoundaries(
         List<IrTokenOp> ops, IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
         SourceRunModel leftRuns, SourceRunModel rightRuns,
-        out List<List<FieldCharacterStep>>[]? emitBefore) =>
-        SyncFieldCharacters(ops, op => op, (_, op) => op, _ => 0, leftTokens, leftRuns,
-            new Dictionary<int, FieldCharacterSource> { [0] = new(rightTokens, rightRuns) }, out emitBefore);
+        out List<List<SourceBoundaryStep>>[]? emitBefore) =>
+        SyncSourceBoundaries(ops, op => op, (_, op) => op, _ => 0, leftTokens, leftRuns,
+            new Dictionary<int, SourceBoundarySource> { [0] = new(rightTokens, rightRuns) }, out emitBefore);
 
     // Every op keeps its source identity while the common field boundaries split and order it. A two-way
     // paragraph has one right source; a composed paragraph has a base source and each contributing reviewer.
-    private static List<T> SyncFieldCharacters<T>(
+    private static List<T> SyncSourceBoundaries<T>(
         List<T> entries, Func<T, IrTokenOp> operation, Func<T, IrTokenOp, T> replaceOperation,
         Func<T, int> sourceOf, IReadOnlyList<IrDiffToken> leftTokens, SourceRunModel leftRuns,
-        IReadOnlyDictionary<int, FieldCharacterSource> sources,
-        out List<List<FieldCharacterStep>>[]? emitBefore)
+        IReadOnlyDictionary<int, SourceBoundarySource> sources,
+        out List<List<SourceBoundaryStep>>[]? emitBefore)
     {
         emitBefore = null;
-        var left = leftRuns.FieldCharacters();
-        if (left is null || left.Count == 0)
-            return entries;
-        var right = new Dictionary<int, List<SourceRunModel.FieldCharacter>>();
+        var left = leftRuns.SourceBoundaries();
+        var right = new Dictionary<int, List<SourceRunModel.SourceBoundary>>();
+        bool compatibleFields = left is not null;
         foreach (var (source, model) in sources)
         {
-            var characters = model.Runs.FieldCharacters();
-            if (characters is null || characters.Count != left.Count)
-                return entries;
-            for (int k = 0; k < left.Count; k++)
-                if (left[k].Type != characters[k].Type || left[k].InInstruction || characters[k].InInstruction ||
-                    left[k].Field != characters[k].Field)
-                    return entries;
-            right[source] = characters;
+            var characters = model.Runs.SourceBoundaries();
+            compatibleFields &= left is not null && characters is not null &&
+                left.Select(c => (c.Type, c.InInstruction, c.Field))
+                    .SequenceEqual(characters.Select(c => (c.Type, c.InInstruction, c.Field))) &&
+                left.All(c => !c.InInstruction);
+            right[source] = characters ?? new();
         }
+        if (!compatibleFields)
+        {
+            left = new();
+            right = sources.ToDictionary(pair => pair.Key, _ => new List<SourceRunModel.SourceBoundary>());
+        }
+        left ??= new();
 
-        var leftPoints = left.Select(character => FieldCharacterTokenIndex(leftTokens, character)).ToArray();
+        // Shared endpoints are synchronization boundaries too. A bookmark after a replaced atom must
+        // follow both its insertion and deletion, independent of which side the diff emits first.
+        if (leftRuns.HasAtomicContent || sources.Values.Any(source => source.Runs.HasAtomicContent))
+        {
+            var leftMarkers = leftRuns.StandaloneMarkers(left);
+            var rightMarkers = right.ToDictionary(pair => pair.Key,
+                pair => sources[pair.Key].Runs.StandaloneMarkers(pair.Value));
+            var common = leftMarkers.Select(marker => marker.Type)
+                .Where(key => leftMarkers.Count(marker => marker.Type == key) == 1 &&
+                    rightMarkers.Values.All(markers => markers.Count(marker => marker.Type == key) == 1))
+                .Distinct().ToList();
+            var ids = common.Select((key, index) => (key, index)).ToDictionary(item => item.key, item => -2 - item.index);
+            var augmentedLeft = leftRuns.OrderBoundaries(left.Concat(leftMarkers
+                .Where(marker => ids.ContainsKey(marker.Type)).Select(marker => marker with { Field = ids[marker.Type] })));
+            var augmentedRight = right.ToDictionary(pair => pair.Key, pair => sources[pair.Key].Runs.OrderBoundaries(
+                pair.Value.Concat(rightMarkers[pair.Key].Where(marker => ids.ContainsKey(marker.Type))
+                    .Select(marker => marker with { Field = ids[marker.Type] }))));
+            // Moved/crossing endpoints are handled by the bookmark reconciler, not paired by ordinal.
+            if (augmentedRight.Values.All(boundaries => boundaries.Select(b => (b.Type, b.Field))
+                    .SequenceEqual(augmentedLeft.Select(b => (b.Type, b.Field)))))
+            {
+                left = augmentedLeft;
+                right = augmentedRight;
+            }
+        }
+        if (left.Count == 0) return entries;
+
+        var leftPoints = left.Select(character => SourceBoundaryTokenIndex(leftTokens, character)).ToArray();
         var rightPoints = right.ToDictionary(pair => pair.Key,
-            pair => pair.Value.Select(character => FieldCharacterTokenIndex(sources[pair.Key].Tokens, character)).ToArray());
+            pair => pair.Value.Select(character => SourceBoundaryTokenIndex(sources[pair.Key].Tokens, character)).ToArray());
         var status = new int[left.Count]; // -1: unplaceable; -2: held by unchanged text; 0: placed here.
         var sole = sources.Count == 1 ? sources.Keys.First() : -1;
         for (int k = 0; k < left.Count; k++)
@@ -7018,12 +7003,12 @@ internal static partial class IrMarkupRenderer
             if (sources.Count == 1 && (lt < 0 || rightPoints[sole][k] < 0) &&
                 left[k].CoreSignature == right[sole][k].CoreSignature &&
                 HeldInPlaceByUnchangedSpan(entries.Select(operation).ToList(), leftTokens, sources[sole].Tokens,
-                    left[k].Char, right[sole][k].Char))
+                    left[k].Position, right[sole][k].Position))
             {
                 status[k] = -2;
                 continue;
             }
-            static string NestedMarkers(SourceRunModel.FieldCharacter c) => string.Join(" ",
+            static string NestedMarkers(SourceRunModel.SourceBoundary c) => string.Join(" ",
                 c.Items.Where(item => item.Nested && !item.IsCore).Select(item => item.AfterFieldChar + item.Key));
             bool onPath = lt >= 0 && right.All(pair => rightPoints[pair.Key][k] >= 0 &&
                 left[k].CoreSignature == pair.Value[k].CoreSignature &&
@@ -7091,7 +7076,7 @@ internal static partial class IrMarkupRenderer
         }
         var ordered = split.Select((entry, index) => (Entry: entry, Index: index, Follows: Follows(entry)))
             .OrderBy(entry => entry.Follows).ThenBy(entry => entry.Index).ToList();
-        emitBefore = new List<List<FieldCharacterStep>>[ordered.Count + 1];
+        emitBefore = new List<List<SourceBoundaryStep>>[ordered.Count + 1];
         int emittedSource = sources.Count == 1 ? sole : -1;
         for (int j = 0; j < synced.Count; j++)
         {
@@ -7099,19 +7084,19 @@ internal static partial class IrMarkupRenderer
             int slot = ordered.FindIndex(entry => entry.Follows > j);
             if (slot < 0) slot = ordered.Count;
             var placed = sources.Count == 1
-                ? PlaceFieldCharacter(left[k], right[emittedSource][k]).Select(step => step with
+                ? PlaceSourceBoundary(left[k], right[emittedSource][k]).Select(step => step with
                     { Source = step.FromLeft ? leftRuns : sources[emittedSource].Runs }).ToList()
-                : PlaceComposedFieldCharacter(left[k], leftRuns,
+                : PlaceComposedSourceBoundary(left[k], leftRuns,
                     right.ToDictionary(pair => pair.Key, pair => pair.Value[k]), sources);
             (emitBefore[slot] ??= new()).Add(placed);
-            leftRuns.WithholdFieldCharacter(left[k].Members);
+            leftRuns.WithholdSourceBoundary(left[k].Members);
             foreach (var (source, model) in sources)
-                model.Runs.WithholdFieldCharacter(right[source][k].Members);
+                model.Runs.WithholdSourceBoundary(right[source][k].Members);
         }
         return ordered.Select(entry => entry.Entry).ToList();
     }
 
-    private static IEnumerable<XElement> EmitFieldCharacters(List<List<FieldCharacterStep>>? due,
+    private static IEnumerable<XElement> EmitSourceBoundaries(List<List<SourceBoundaryStep>>? due,
         SourceRunModel leftRuns, SourceRunModel rightRuns, RenderState state,
         IReadOnlyList<IrDocument>? reviewers = null, IrDocument? baseIr = null)
     {
@@ -7128,7 +7113,7 @@ internal static partial class IrMarkupRenderer
                 }
                 try
                 {
-                    foreach (var run in (step.Source ?? (step.FromLeft ? leftRuns : rightRuns)).EmitFieldCharacter(step.Members))
+                    foreach (var run in (step.Source ?? (step.FromLeft ? leftRuns : rightRuns)).EmitSourceBoundary(step.Members))
                         if (step.Kind is { } kind)
                         {
                             foreach (var marked in WrapOneSidedMarker(run, kind, state)) yield return marked;
@@ -7145,18 +7130,18 @@ internal static partial class IrMarkupRenderer
     // Each two-way placement supplies its marker deltas in source order. Merge those deltas around the
     // base's shared field plumbing, retaining the reviewer on each insertion/deletion instead of emitting
     // another begin/instruction/separate for every reviewer who touches the paragraph.
-    private static List<FieldCharacterStep> PlaceComposedFieldCharacter(
-        SourceRunModel.FieldCharacter left, SourceRunModel leftRuns,
-        IReadOnlyDictionary<int, SourceRunModel.FieldCharacter> right,
-        IReadOnlyDictionary<int, FieldCharacterSource> sources)
+    private static List<SourceBoundaryStep> PlaceComposedSourceBoundary(
+        SourceRunModel.SourceBoundary left, SourceRunModel leftRuns,
+        IReadOnlyDictionary<int, SourceRunModel.SourceBoundary> right,
+        IReadOnlyDictionary<int, SourceBoundarySource> sources)
     {
         var removed = new Dictionary<XElement, int>();
-        var inserted = new Dictionary<int, List<FieldCharacterStep>>();
+        var inserted = new Dictionary<int, List<SourceBoundaryStep>>();
         var additions = new HashSet<(int Slot, string Key, bool After, int Occurrence)>();
         foreach (var (reviewer, character) in right.Where(pair => pair.Key >= 0))
         {
             int cursor = 0;
-            var pending = new List<(SourceRunModel.FieldCharacterItem Item, int Occurrence)>();
+            var pending = new List<(SourceRunModel.SourceBoundaryItem Item, int Occurrence)>();
             var occurrences = new Dictionary<string, int>();
             void Flush(int slot)
             {
@@ -7169,7 +7154,7 @@ internal static partial class IrMarkupRenderer
                     }
                 pending.Clear();
             }
-            foreach (var step in PlaceFieldCharacter(left, character))
+            foreach (var step in PlaceSourceBoundary(left, character))
                 foreach (var item in (step.FromLeft ? left : character).Items.Where(item => step.Members.Contains(item.Element)))
                 {
                     if (step.Kind == RevKind.Ins)
@@ -7189,8 +7174,8 @@ internal static partial class IrMarkupRenderer
                 }
             Flush(left.Items.Count);
         }
-        var result = new List<FieldCharacterStep>();
-        void Add(FieldCharacterStep step)
+        var result = new List<SourceBoundaryStep>();
+        void Add(SourceBoundaryStep step)
         {
             if (result.Count > 0 && result[^1].Source == step.Source && result[^1].Kind == step.Kind &&
                 result[^1].Reviewer == step.Reviewer)
@@ -7212,7 +7197,7 @@ internal static partial class IrMarkupRenderer
     /// <summary>One step of what a placed field character emits, in order: source elements of one side, bare
     /// (<see cref="Kind"/> null: the revision's copy of the core and of the markers both sides carry) or as that
     /// side's own deletion or insertion (a marker only one side carries there).</summary>
-    private sealed record FieldCharacterStep(bool FromLeft, HashSet<XElement> Members, RevKind? Kind,
+    private sealed record SourceBoundaryStep(bool FromLeft, HashSet<XElement> Members, RevKind? Kind,
         SourceRunModel? Source = null, string? Author = null, int? Reviewer = null);
 
     /// <summary>The emission of one placed field character. Each side's elements before the <c>w:fldChar</c>, and
@@ -7225,18 +7210,18 @@ internal static partial class IrMarkupRenderer
     /// dropped when only one side carries it: Word's <c>_GoBack</c> bookmark (the last edit position), as the
     /// unchanged spans drop it, and a rendered page break (a layout cache Word rewrites on save; inside a field
     /// code a deleted one would be lifted back out with the code's plumbing).</summary>
-    private static List<FieldCharacterStep> PlaceFieldCharacter(
-        SourceRunModel.FieldCharacter left, SourceRunModel.FieldCharacter right)
+    private static List<SourceBoundaryStep> PlaceSourceBoundary(
+        SourceRunModel.SourceBoundary left, SourceRunModel.SourceBoundary right)
     {
-        var steps = new List<FieldCharacterStep>();
+        var steps = new List<SourceBoundaryStep>();
         void Add(bool fromLeft, XElement element, RevKind? kind)
         {
             if (steps.Count > 0 && steps[^1].FromLeft == fromLeft && steps[^1].Kind == kind)
                 steps[^1].Members.Add(element);
             else
-                steps.Add(new FieldCharacterStep(fromLeft, new HashSet<XElement> { element }, kind));
+                steps.Add(new SourceBoundaryStep(fromLeft, new HashSet<XElement> { element }, kind));
         }
-        void OneSided(bool fromLeft, SourceRunModel.FieldCharacterItem item)
+        void OneSided(bool fromLeft, SourceRunModel.SourceBoundaryItem item)
         {
             if (item.IsCore)
             {
@@ -7250,8 +7235,8 @@ internal static partial class IrMarkupRenderer
 
         foreach (var after in new[] { false, true })
         {
-            var l = left.Items.Where(item => item.Key != "fldChar" && item.AfterFieldChar == after).ToList();
-            var r = right.Items.Where(item => item.Key != "fldChar" && item.AfterFieldChar == after).ToList();
+            var l = left.Items.Where(item => item.Element != left.Primary && item.AfterFieldChar == after).ToList();
+            var r = right.Items.Where(item => item.Element != right.Primary && item.AfterFieldChar == after).ToList();
             var lengths = new int[l.Count + 1, r.Count + 1];
             for (int i = l.Count - 1; i >= 0; i--)
                 for (int j = r.Count - 1; j >= 0; j--)
@@ -7273,7 +7258,7 @@ internal static partial class IrMarkupRenderer
                     OneSided(false, r[rj++]);
             }
             if (!after)
-                Add(false, right.Items.First(item => item.Key == "fldChar").Element, null);
+                Add(false, right.Primary, null);
         }
         return steps;
     }
@@ -7302,8 +7287,8 @@ internal static partial class IrMarkupRenderer
             var op = ops[i];
             if (op.LeftEnd > op.LeftStart && op.RightEnd > op.RightStart)
             {
-                var (ls, le) = LeftSpanChars(leftTokens, op);
-                var (rs, re) = RightSpanChars(rightTokens, op);
+                var (ls, le) = LeftSpanPositions(leftTokens, op);
+                var (rs, re) = RightSpanPositions(rightTokens, op);
                 if (ls <= leftChar && leftChar <= le && rs <= rightChar && rightChar <= re &&
                     leftChar - ls == rightChar - rs)
                     return KeepsTextUnchanged(op, leftTokens, rightTokens) &&
@@ -7311,8 +7296,8 @@ internal static partial class IrMarkupRenderer
                            TokensAtWithin(rightTokens, rightChar, op.RightStart, op.RightEnd);
             }
             // An earlier op reaching the offset on one side would take that side's copy first.
-            if ((op.LeftEnd > op.LeftStart && LeftSpanChars(leftTokens, op) is var (l0, l1) && l0 <= leftChar && leftChar <= l1) ||
-                (op.RightEnd > op.RightStart && RightSpanChars(rightTokens, op) is var (r0, r1) && r0 <= rightChar && rightChar <= r1))
+            if ((op.LeftEnd > op.LeftStart && LeftSpanPositions(leftTokens, op) is var (l0, l1) && l0 <= leftChar && leftChar <= l1) ||
+                (op.RightEnd > op.RightStart && RightSpanPositions(rightTokens, op) is var (r0, r1) && r0 <= rightChar && rightChar <= r1))
                 return false;
         }
         return false;
@@ -7322,7 +7307,7 @@ internal static partial class IrMarkupRenderer
     /// hyperlink (a table-of-contents entry's) comes in a clone of the hyperlink: the clone stays bare and each
     /// marker in it is wrapped, as a <c>w:del</c>/<c>w:ins</c> may hold a bookmark or comment endpoint there (the
     /// generic container wrap copies such children as they are). A hyperlink is the only container a field
-    /// character is placed in (<see cref="SourceRunModel.FieldCharacters"/>: a content control or smart tag is
+    /// character is placed in (<see cref="SourceRunModel.SourceBoundaries"/>: a content control or smart tag is
     /// one atomic segment, and a nested container leaves the paragraph to the ops).</summary>
     private static IEnumerable<XElement> WrapOneSidedMarker(XElement runLevel, RevKind kind, RenderState state)
     {
@@ -7336,30 +7321,14 @@ internal static partial class IrMarkupRenderer
         return new[] { container };
     }
 
-    /// <summary>The index of the token a field character sits before: the tokens wholly before its character
-    /// position, plus the zero-width tokens (a tab, a break) at that position that precede it in document order.
-    /// -1 when a token straddles the position, or when the paragraph's zero-width content at the position does not
-    /// pair one to one with those tokens, so the order cannot be read.</summary>
-    private static int FieldCharacterTokenIndex(IReadOnlyList<IrDiffToken> tokens, SourceRunModel.FieldCharacter fieldCharacter)
+    /// <summary>The token boundary at a source position, or -1 if a token straddles it.</summary>
+    private static int SourceBoundaryTokenIndex(IReadOnlyList<IrDiffToken> tokens, SourceRunModel.SourceBoundary boundary)
     {
-        int before = 0, zeroWidthAt = 0;
+        int before = 0;
         foreach (var token in tokens)
-        {
-            if (token.StartChar == token.EndChar)
-            {
-                if (token.StartChar < fieldCharacter.Char)
-                    before++;
-                else if (token.StartChar == fieldCharacter.Char)
-                    zeroWidthAt++;
-            }
-            else if (token.EndChar <= fieldCharacter.Char)
-                before++;
-            else if (token.StartChar < fieldCharacter.Char)
-                return -1;
-        }
-        if (zeroWidthAt == 0)
-            return before;
-        return zeroWidthAt == fieldCharacter.ZeroWidthAt ? before + fieldCharacter.ZeroWidthBefore : -1;
+            if (token.EndChar <= boundary.Position) before++;
+            else if (token.StartChar < boundary.Position) return -1;
+        return before;
     }
 
     /// <summary>An Equal or FormatChanged span whose raw text is identical on both sides: it emits the revision's
@@ -7529,27 +7498,6 @@ internal static partial class IrMarkupRenderer
         return true;
     }
 
-    /// <summary>Whether the half-open token range <c>[start,end)</c> STARTS / ENDS with a zero-width token — a
-    /// tab, break, note ref, image, opaque, or textbox placeholder, each contributing 0 chars (<c>StartChar ==
-    /// EndChar</c>). A boundary zero-width token sits exactly at the op's start/end char, which two adjacent ops
-    /// share; the caller passes these flags to <see cref="SourceRunModel.Slice"/> so the op that OWNS the token
-    /// (it is the op's first / last token) claims it and the other does not — keeping a tail footnote reference
-    /// from being dropped and a shared tab from being double-counted.</summary>
-    private static (bool Start, bool End) ZeroWidthBoundaries(
-        IReadOnlyList<IrDiffToken> tokens, int start, int end) =>
-        end <= start
-            ? (false, false)
-            : (tokens[start].StartChar == tokens[start].EndChar,
-               tokens[end - 1].StartChar == tokens[end - 1].EndChar);
-
-    /// <summary>Whether the token right after the non-empty token span [<paramref name="start"/>,
-    /// <paramref name="end"/>) is zero-width and sits at the span's end character, so the next op of the same side
-    /// owns a zero-width token at that position (see <see cref="SourceRunModel.Slice"/>).</summary>
-    private static bool NextOwnsEndZeroWidth(IReadOnlyList<IrDiffToken> tokens, int start, int end) =>
-        end > start && end < tokens.Count &&
-        tokens[end].StartChar == tokens[end].EndChar &&
-        tokens[end].StartChar == tokens[end - 1].EndChar;
-
     /// <summary>Concatenate the RAW token text over a half-open token-index span (empty span ⇒ "").</summary>
     private static string RawSpanText(IReadOnlyList<IrDiffToken> tokens, int start, int end)
     {
@@ -7562,7 +7510,7 @@ internal static partial class IrMarkupRenderer
     }
 
     /// <summary>Right char span of a token op: empty (zero-width at the right anchor) for a Delete op.</summary>
-    private static (int Start, int End) RightSpanChars(IReadOnlyList<IrDiffToken> tokens, IrTokenOp op)
+    private static (int Start, int End) RightSpanPositions(IReadOnlyList<IrDiffToken> tokens, IrTokenOp op)
     {
         if (op.RightStart >= op.RightEnd)
         {
@@ -7575,7 +7523,7 @@ internal static partial class IrMarkupRenderer
     }
 
     /// <summary>Left char span of a token op: empty (zero-width) for an Insert op.</summary>
-    private static (int Start, int End) LeftSpanChars(IReadOnlyList<IrDiffToken> tokens, IrTokenOp op)
+    private static (int Start, int End) LeftSpanPositions(IReadOnlyList<IrDiffToken> tokens, IrTokenOp op)
     {
         if (op.LeftStart >= op.LeftEnd)
         {
@@ -10905,10 +10853,22 @@ internal static partial class IrMarkupRenderer
             .Where(t => !t.Ancestors(W.moveFrom).Any() && !t.Ancestors(W.del).Any())
             .Select(t => t.Value));
 
-    private static IReadOnlyList<IrDiffToken> ParagraphTokens(string? anchor, IrDocument doc, IrDiffSettings settings)
+    private static IReadOnlyList<IrDiffToken> ParagraphRenderTokens(string? anchor, IrDocument doc, IrDiffSettings settings)
     {
         if (anchor != null && doc.AnchorIndex.TryGetValue(anchor, out var block) && block is IrParagraph p)
-            return IrDiffTokenizer.Tokenize(p, settings);
+        {
+            var tokens = IrDiffTokenizer.Tokenize(p, settings);
+            if (p.Source.Element?.Annotation<IrSourceContent>() is not { } source || !source.Entries.Any(entry => entry.Atomic)) return tokens;
+            // Renderer-private positions: text retains its width and each atomic token occupies one unit.
+            // Convert the full paragraph before SubTokens so every slice retains its original positions.
+            int atoms = 0;
+            return tokens.Select(token =>
+            {
+                int start = token.StartChar + atoms;
+                if (token.Kind is not (IrDiffTokenKind.Word or IrDiffTokenKind.Separator)) atoms++;
+                return token with { StartChar = start, EndChar = token.EndChar + atoms };
+            }).ToArray();
+        }
         return Array.Empty<IrDiffToken>();
     }
 
@@ -11293,24 +11253,21 @@ internal static partial class IrMarkupRenderer
     }
 
     /// <summary>
-    /// A run-level slicer over a source paragraph: walks the paragraph's run-level children, tracks the
-    /// half-open char offset of each <c>w:t</c>'s text EXACTLY as <see cref="IrDiffTokenizer"/> does (only
-    /// <c>w:t</c> text — including a field's cached result — advances the counter; <c>w:tab</c>/<c>w:br</c>/
-    /// note refs/drawings/etc. are zero-width), and can produce the run-level XElements covering a half-open
-    /// char span, splitting a run whose text straddles a boundary (cloning it and trimming the <c>w:t</c>) so
-    /// every fragment keeps the run's full <c>w:rPr</c> — modeled AND unmodeled.
+    /// Slice retained source XML using the reader's committed text and atomic contributions. Rendering
+    /// positions give every atom one unit; public text offsets omit them. Splittable text retains its run
+    /// properties, while source-only structure occupies a gap and is claimed once. Unannotated sources
+    /// (used by source-text bookmark analysis) retain the ordinary visible-text traversal.
     /// </summary>
     private sealed class SourceRunModel
     {
-        // Each segment is a contiguous piece of run-level content with a [Start,End) char span. A text segment
-        // is one w:t inside one run (so it is splittable); a zero-width segment is a non-text run child or a
-        // whole run carrying no text.
+        // Each segment occupies [Start,End) in rendering positions and [TextStart,TextEnd) in public text
+        // offsets. A text segment can be split; an atomic carrier is copied whole; source-only structure has
+        // zero width. A container's width is the sum of the reader contributions it contains.
         private readonly List<Segment> _segments = new();
 
-        /// <summary>Source zero-width child elements already emitted by a previous <see cref="Slice"/> call on
-        /// THIS model (one model per paragraph side), so a boundary-shared zero-width inline is never emitted
-        /// twice across adjacent token ops. Keyed by reference identity.</summary>
-        private readonly HashSet<XElement> _claimedZeroWidth = new();
+        /// <summary>Indivisible source elements already emitted or represented on this paragraph side.
+        /// Field/marker synchronization and ordinary slicing share this claim set.</summary>
+        private readonly HashSet<XElement> _claimedSourceElements = new();
 
         /// <summary>0-based ordinal of each top-level source <c>w:hyperlink</c> element within this paragraph, in
         /// document order, keyed by the source element's reference identity. The LEFT and RIGHT models walk their
@@ -11341,17 +11298,37 @@ internal static partial class IrMarkupRenderer
         {
             var segment = _segments.FirstOrDefault(s => s.Element == marker || s.Element.Descendants().Contains(marker));
             if (segment is null) return null;
-            int offset = segment.Start;
+            int offset = segment.TextStart;
             for (var child = marker; child != segment.Element && child.Parent is not null; child = child.Parent)
-                offset += child.ElementsBeforeSelf().Sum(e => child.Parent.Name == W.r
-                    ? VisibleRunChildTextLength(e) : VisibleRunLevelTextLength(e, 0));
+                offset += child.ElementsBeforeSelf().Sum(e => _sourceWidths is not null
+                    ? _sourceWidths.GetValueOrDefault(e).Text
+                    : child.Parent.Name == W.r ? VisibleRunChildTextLength(e) : VisibleRunLevelTextLength(e, 0));
             return offset;
         }
 
-        public int TextLength => _segments.Count == 0 ? 0 : _segments.Max(s => s.End);
+        public int TextLength => _segments.Count == 0 ? 0 : _segments.Max(s => s.TextEnd);
+        public bool HasAtomicContent { get; }
+        public bool HasRangeMarkers { get; }
+
+        private readonly Dictionary<XElement, (int Text, int Atoms)>? _sourceWidths;
+        private readonly HashSet<XElement>? _atomicCarriers;
 
         public SourceRunModel(XElement para)
         {
+            if (para.Annotation<IrSourceContent>() is { } source)
+            {
+                _sourceWidths = new(ReferenceEqualityComparer.Instance);
+                _atomicCarriers = new(ReferenceEqualityComparer.Instance);
+                foreach (var entry in source.Entries)
+                {
+                    if (entry.Atomic) _atomicCarriers.Add(entry.Source);
+                    for (var element = entry.Source; element is not null && element != para; element = element.Parent)
+                    {
+                        var width = _sourceWidths.GetValueOrDefault(element);
+                        _sourceWidths[element] = (width.Text + entry.TextLength, width.Atoms + (entry.Atomic ? 1 : 0));
+                    }
+                }
+            }
             SupportsWhitespaceReanchoring = para.Elements()
                 .Where(e => e.Name != W.pPr)
                 .All(IsPlainDirectTextRun);
@@ -11359,6 +11336,24 @@ internal static partial class IrMarkupRenderer
             int charOffset = 0;
             foreach (var child in para.Elements().Where(e => e.Name != W.pPr))
                 WalkRunLevel(child, ref charOffset, ContainerChain.Empty);
+            HasRangeMarkers = _segments.Any(segment => segment.AlwaysKeep && !IsFieldChar(segment) && !IsInstruction(segment));
+
+            if (_sourceWidths is not null)
+            {
+                int text = 0, atoms = 0;
+                foreach (var segment in _segments)
+                {
+                    var width = _sourceWidths.GetValueOrDefault(segment.TextChild ?? segment.OtherChild ?? segment.Element);
+                    segment.TextStart = text;
+                    segment.Start = text + atoms;
+                    text += width.Text;
+                    atoms += width.Atoms;
+                    segment.AtomCount = width.Atoms;
+                    segment.TextEnd = text;
+                    segment.End = text + atoms;
+                }
+                HasAtomicContent = atoms > 0;
+            }
         }
 
         private static bool IsPlainDirectTextRun(XElement element) =>
@@ -11369,7 +11364,9 @@ internal static partial class IrMarkupRenderer
 
         private void WalkRunLevel(XElement runLevel, ref int charOffset, ContainerChain chain)
         {
-            if (runLevel.Name == W.r)
+            if (_atomicCarriers?.Contains(runLevel) == true)
+                _segments.Add(new Segment(runLevel, charOffset, charOffset, SegmentKind.Container) { Chain = chain });
+            else if (runLevel.Name == W.r)
             {
                 WalkRun(runLevel, ref charOffset, chain);
             }
@@ -11461,7 +11458,7 @@ internal static partial class IrMarkupRenderer
             foreach (var child in run.Elements().Where(e => e.Name != W.rPr))
             {
                 any = true;
-                if (child.Name == W.t)
+                if (child.Name == W.t && (_sourceWidths is null || _sourceWidths.GetValueOrDefault(child).Text > 0))
                 {
                     string text = child.Value;
                     int start = charOffset;
@@ -11483,7 +11480,7 @@ internal static partial class IrMarkupRenderer
                     // boundary slice over this run is off by one and drops an adjacent character (the reject of a
                     // "Company‑Controlled Intellectual" run dropped the "I"). Emitted whole as its source element.
                     int start = charOffset;
-                    charOffset += 1;
+                    charOffset += child.Name != W.sym || IsVisibleSym(child) ? 1 : 0;
                     _segments.Add(new Segment(run, start, charOffset, SegmentKind.RunOther) { OtherChild = child, Chain = chain });
                 }
                 else
@@ -11570,14 +11567,7 @@ internal static partial class IrMarkupRenderer
             return child.Name == W.sym && IsVisibleSym(child) ? 1 : 0;
         }
 
-        private static bool IsVisibleSym(XElement sym)
-        {
-            var raw = (string?)sym.Attribute(W.w + "char");
-            return raw is not null
-                && int.TryParse(raw, System.Globalization.NumberStyles.HexNumber,
-                    System.Globalization.CultureInfo.InvariantCulture, out var code)
-                && code is >= 0x20 and <= 0xFFFF;
-        }
+        private static bool IsVisibleSym(XElement sym) => XmlText.SymbolText(sym).Length > 0;
 
         /// <summary>Resolve a source <c>w:hyperlink</c>'s target, mirroring <c>IrReader.BuildHyperlink</c>: an
         /// <c>@r:id</c> resolves against the owning part's hyperlink relationships to the external URI (the part is
@@ -11602,37 +11592,11 @@ internal static partial class IrMarkupRenderer
             return anchor != null ? "#" + anchor : null;
         }
 
-        /// <summary>Produce run-level XElements covering the half-open char span [start,end). Run children that
-        /// fall (partly) inside the span are grouped back into per-source-run <c>w:r</c> clones carrying the
-        /// original <c>w:rPr</c>; a straddling <c>w:t</c> is split.
-        /// <para><b>Boundary zero-width ownership.</b> A zero-width inline (footnote/endnote reference, drawing,
-        /// tab, break, …) occupies a single char position that two adjacent token ops SHARE (one ends there, the
-        /// next starts there). It belongs to whichever op's token range holds it as its FIRST or LAST token — the
-        /// diff already decided this. The caller passes <paramref name="includeStartZeroWidth"/> (its first token
-        /// is zero-width) / <paramref name="includeEndZeroWidth"/> (its last token is zero-width); a STRICTLY
-        /// interior zero-width is always taken. Without this, a half-open char span both DROPS a trailing
-        /// zero-width (it sits at <c>end</c>, which no op's interior and no later op covers — the footnote-ref
-        /// corruption) and DOUBLE-COUNTS a boundary one (an equal tab claimed both as equal by the op that owns it
-        /// AND as deleted by the next op's start). Defaults <c>(true,false)</c> reproduce the original
-        /// always-start-inclusive / end-exclusive rule for callers that don't pass token boundaries.</para>
-        /// <para><b>Trailing markers keep their place behind a zero-width token.</b> An always-kept marker (field
-        /// plumbing, a bookmark or comment range endpoint) is not a diff token, so it is taken at either boundary of
-        /// the span. When <paramref name="nextOwnsEndZeroWidth"/> says the zero-width token at <c>end</c> belongs to
-        /// the next op of this same source model, a marker that FOLLOWS that token in document order is left to the
-        /// next op too (its start-inclusive rule takes it). Otherwise this op would emit the marker ahead of the
-        /// token the next op emits, inverting their order — an edited table-of-contents entry's tab landed after its
-        /// PAGEREF field's begin, instruction and separate characters (issue #1156). A marker before the token stays
-        /// with this op, and with no next op to defer to (the flag false) every marker at <c>end</c> is still taken,
-        /// so none is dropped. The caller passes the flag only when that op keeps the token unchanged (emits it
-        /// unwrapped), so a marker both sides carry is never pulled into an insertion or deletion.
-        /// <paramref name="deferOnlyKeys"/> narrows the deferral when the next op does not slice
-        /// this model at all (a left marker before an Equal span, which emits only the right side's runs): then only
-        /// a marker whose counterpart lies in that op's span on the other side (<see cref="MarkerKeysBetween"/>) is
-        /// deferred, and that op claims it as represented by the copy it emits (<see cref="ClaimRepresented"/>); any
-        /// other marker stays with this op so it is not lost.</para></summary>
-        public List<XElement> Slice(int start, int end, bool includeStartZeroWidth = true, bool includeEndZeroWidth = false,
-            bool nextOwnsEndZeroWidth = false, ISet<string>? deferOnlyKeys = null) =>
-            Scan(start, end, includeStartZeroWidth, includeEndZeroWidth, nextOwnsEndZeroWidth, deferOnlyKeys, claimOnlyKeys: null);
+        /// <summary>Render content in the half-open position interval, plus source-only structure at its
+        /// boundaries. Text occupies UTF-16 units; each atomic token occupies one unit. Shared markers are
+        /// scheduled across both views before slicing; claimed source elements are emitted exactly once.
+        /// Source runs and hyperlink shells are reconstructed around the selected children.</summary>
+        public List<XElement> Slice(int start, int end) => Scan(start, end, claimOnlyKeys: null);
 
         /// <summary>
         /// Mark as emitted, without emitting them, the always-kept markers of this side's span that the other side's
@@ -11642,43 +11606,35 @@ internal static partial class IrMarkupRenderer
         /// side's copies of those markers are already in the output, at the same place; a later Delete starting at
         /// the span's end must not emit them a second time (issue #1156). A marker whose counterpart sits elsewhere
         /// (a bookmark moved within the paragraph) is not represented and stays for a later op of this side. The span bounds
-        /// and the trailing deferral follow <see cref="Slice"/>. A marker only this side carries is left unclaimed
+        /// follow <see cref="Slice"/>. A marker only this side carries is left unclaimed
         /// for a later op of this side.
         /// </summary>
-        public void ClaimRepresented(int start, int end, bool includeStartZeroWidth, bool includeEndZeroWidth,
-            bool nextOwnsEndZeroWidth, ISet<string>? deferOnlyKeys, ISet<string> representedKeys) =>
-            Scan(start, end, includeStartZeroWidth, includeEndZeroWidth, nextOwnsEndZeroWidth, deferOnlyKeys, representedKeys);
+        public void ClaimRepresented(int start, int end, ISet<string> representedKeys) =>
+            Scan(start, end, representedKeys);
 
-        // An equal span emits the right text, but a deleted comment can lie wholly inside it.
-        // Keep its otherwise-unclaimed markers at their source offsets for NormalizeComments.
-        public void CarryDeletedComments(List<XElement> content, int spanStart, int start, int end,
-            ISet<string> remaining)
+        // One-sided range endpoints can lie wholly inside a stable span. Retain their source positions and
+        // revision ownership. Nested hyperlinks are schema-invalid and cannot be rejoined by the existing
+        // container coalescer; their markers remain on the ordinary source-preservation path.
+        public IEnumerable<IGrouping<int, XElement>> UnrepresentedMarkers(int start, int end, ISet<string> represented)
         {
-            var missing = _segments.Where(segment => segment.Start >= start && segment.Start <= end)
-                .Select(segment => (Element: segment.OtherChild ?? segment.Element, Offset: segment.Start - start))
-                .Where(item => IsCommentMarker(item.Element) && (string?)item.Element.Attribute(W.id) is { } id &&
-                    !remaining.Contains(id) && !_claimedZeroWidth.Contains(item.Element)).ToList();
-            if (missing.Count == 0) return;
-            var emitted = new XElement(W.p, content.Skip(spanStart));
-            CarryCommentMarkers(emitted, missing);
-            _claimedZeroWidth.UnionWith(missing.Select(item => item.Element));
-            content.RemoveRange(spanStart, content.Count - spanStart);
-            content.AddRange(emitted.Elements());
+            return _segments.Where(segment => segment.Start >= start && segment.Start <= end && segment.IsZeroWidth && segment.Chain.Count <= 1)
+                .Where(segment => segment.AlwaysKeep && !IsFieldChar(segment) && !IsInstruction(segment))
+                .Where(segment => MarkerKey(segment) is { } key && key != "bookmark:_GoBack" && !represented.Contains(key))
+                .Where(segment => !_claimedSourceElements.Contains(segment.OtherChild ?? segment.Element))
+                .GroupBy(segment => segment.Start, segment => segment.OtherChild ?? segment.Element);
         }
 
-        /// <summary>One <c>w:fldChar</c> of this paragraph (issue #1165): its <see cref="Type"/>, its character
-        /// position, how many of the zero-width segments that could be diff tokens (a tab, a break, a note
-        /// reference…) sit at that position before it and in all, its <see cref="Core"/> (the <c>w:fldChar</c> and
-        /// the instruction runs right after it), the <see cref="Markers"/> that share its position next to it in
-        /// document order, the field it belongs to (<see cref="Field"/>: the characters of one top-level field share
-        /// an id, and the characters of fields opened or closed in another paragraph share -1), and whether it lies
-        /// in another field's instruction (a field nested in a field code).</summary>
-        public sealed record FieldCharacter(
-            string Type, int Char, int ZeroWidthBefore, int ZeroWidthAt, IReadOnlyList<FieldCharacterItem> Items,
+        /// <summary>A synchronized source boundary: a field character with its instruction/adjacent markers,
+        /// or a standalone range endpoint. Position is in rendering coordinates. Field groups related
+        /// characters; negative ids identify spanning fields or independently paired markers.</summary>
+        public sealed record SourceBoundary(
+            string Type, int Position, IReadOnlyList<SourceBoundaryItem> Items,
             int Field, bool InInstruction)
         {
             /// <summary>The <c>w:fldChar</c> and the instruction runs right after it.</summary>
             public IEnumerable<XElement> Core => Items.Where(item => item.IsCore).Select(item => item.Element);
+
+            public XElement Primary => Items.First(item => item.IsCore && !item.AfterFieldChar).Element;
 
             /// <summary>Every source element the character is made of: its core and the markers beside it.</summary>
             public IEnumerable<XElement> Members => Items.Select(item => item.Element);
@@ -11694,7 +11650,7 @@ internal static partial class IrMarkupRenderer
         /// its identity on both sides (<c>fldChar</c>, <c>instr</c>, a bookmark by name, a comment by id, a proofing
         /// mark by type); <see cref="AfterFieldChar"/> whether it follows the <c>w:fldChar</c>; <see cref="Nested"/>
         /// whether it sits in a container inside another (a hyperlink nested in a hyperlink).</summary>
-        public sealed record FieldCharacterItem(XElement Element, string Key, bool IsCore, bool AfterFieldChar, bool Nested);
+        public sealed record SourceBoundaryItem(XElement Element, string Key, bool IsCore, bool AfterFieldChar, bool Nested);
 
         /// <summary>The paragraph's field characters in document order, or null when an instruction run follows no
         /// field character at its position (the characters cannot be told apart then). Field characters inside an
@@ -11704,33 +11660,9 @@ internal static partial class IrMarkupRenderer
         /// A marker between two field characters at one position goes with the first. Emitting the markers both
         /// sides carry with the character keeps them on their side of it in both views: a bookmark ending after a
         /// caption's <c>SEQ</c> field still encloses the field's end.</para></summary>
-        public List<FieldCharacter>? FieldCharacters()
+        public List<SourceBoundary>? SourceBoundaries()
         {
-            var result = new List<FieldCharacter>();
-            // InlineWalker flattens nested fields into the outer result. Instruction runs after the
-            // outer separate therefore also have opaque zero-width tokens, unlike outer field code.
-            var resultInstructions = new HashSet<int>();
-            // Each hyperlink has its own InlineWalker, so an outer field does not make a
-            // hyperlink's own field instructions part of that walker's result tokens.
-            foreach (var scope in Enumerable.Range(0, _segments.Count).GroupBy(index =>
-                         _segments[index].Chain.Count == 0 ? null : _segments[index].Chain[^1]))
-            {
-                int depth = 0;
-                bool inResult = false;
-                foreach (int i in scope)
-                {
-                    var segment = _segments[i];
-                    if (IsFieldChar(segment))
-                        switch ((string?)segment.OtherChild!.Attribute(W.fldCharType))
-                        {
-                            case "begin": if (depth++ == 0) inResult = false; break;
-                            case "separate": if (depth == 1) inResult = true; break;
-                            case "end": if (depth > 0 && --depth == 0) inResult = false; break;
-                        }
-                    else if (inResult && IsInstruction(segment)) resultInstructions.Add(i);
-                }
-            }
-            bool IsToken(int index) => MayBeZeroWidthToken(_segments[index]) || resultInstructions.Contains(index);
+            var result = new List<SourceBoundary>();
             var attached = new HashSet<int>();
             var open = new List<(bool Separated, int Field)>();
             int nextField = 0;
@@ -11756,7 +11688,7 @@ internal static partial class IrMarkupRenderer
                         IsEmptyRun(_segments[last + 1])))
                     last++;
 
-                var items = new List<FieldCharacterItem>();
+                var items = new List<SourceBoundaryItem>();
                 for (int j = first; j <= last; j++)
                 {
                     attached.Add(j);
@@ -11765,9 +11697,9 @@ internal static partial class IrMarkupRenderer
                         continue;
                     var element = member.OtherChild ?? member.Element;
                     bool nested = member.Chain.Count > 1;
-                    items.Add(IsFieldChar(member) ? new FieldCharacterItem(element, "fldChar", true, false, nested)
-                        : IsInstruction(member) ? new FieldCharacterItem(element, "instr", true, true, nested)
-                        : new FieldCharacterItem(element,
+                    items.Add(IsFieldChar(member) ? new SourceBoundaryItem(element, "fldChar", true, false, nested)
+                        : IsInstruction(member) ? new SourceBoundaryItem(element, "instr", true, true, nested)
+                        : new SourceBoundaryItem(element,
                             element.Name.LocalName + ":" + (MarkerKey(member) ?? (string?)element.Attribute(W.type)), false, j > i, nested));
                 }
 
@@ -11790,16 +11722,32 @@ internal static partial class IrMarkupRenderer
                         open.RemoveAt(open.Count - 1);
                 }
 
-                int before = Enumerable.Range(0, first).Count(index => _segments[index].Start == seg.Start && IsToken(index));
-                result.Add(new FieldCharacter(type, seg.Start, before, 0, items, field, inInstruction));
+                result.Add(new SourceBoundary(type, seg.Start, items, field, inInstruction));
                 i = last;
             }
-            for (int k = 0; k < result.Count; k++)
-            {
-                int at = result[k].Char;
-                result[k] = result[k] with { ZeroWidthAt = Enumerable.Range(0, _segments.Count).Count(index => _segments[index].Start == at && IsToken(index)) };
-            }
             return result;
+        }
+
+        public List<SourceBoundary> StandaloneMarkers(IEnumerable<SourceBoundary> fields)
+        {
+            var attached = fields.SelectMany(field => field.Members).ToHashSet();
+            return _segments.Where(segment => segment.IsZeroWidth && segment.AlwaysKeep)
+                .Where(segment => !attached.Contains(segment.OtherChild ?? segment.Element))
+                .Where(segment => !IsFieldChar(segment) && !IsInstruction(segment) && MarkerKey(segment) is not null)
+                .Select(segment =>
+                {
+                    var element = segment.OtherChild ?? segment.Element;
+                    string key = element.Name.LocalName + ":" + MarkerKey(segment);
+                    return new SourceBoundary(key, segment.Start,
+                        new[] { new SourceBoundaryItem(element, key, true, false, segment.Chain.Count > 1) }, -2, false);
+                }).ToList();
+        }
+
+        public List<SourceBoundary> OrderBoundaries(IEnumerable<SourceBoundary> boundaries)
+        {
+            var order = _segments.Select((segment, index) => (Element: segment.OtherChild ?? segment.Element, index))
+                .GroupBy(item => item.Element).ToDictionary(group => group.Key, group => group.First().index);
+            return boundaries.OrderBy(boundary => order[boundary.Members.First()]).ToList();
         }
 
         private static bool IsFieldChar(Segment seg) => seg.Kind == SegmentKind.RunOther && seg.OtherChild?.Name == W.fldChar;
@@ -11821,32 +11769,21 @@ internal static partial class IrMarkupRenderer
             seg.IsZeroWidth && seg.Kind != SegmentKind.Container &&
             ((seg.AlwaysKeep && !IsFieldChar(seg) && !IsInstruction(seg)) || IsLayoutMark(seg));
 
-        private static bool MayBeZeroWidthToken(Segment seg) =>
-            seg.IsZeroWidth && !seg.AlwaysKeep && !IsEmptyRun(seg) && !IsLayoutMark(seg);
-
         /// <summary>Keep the slices of this model from emitting these source elements of a field character: they
-        /// are emitted on their own (<see cref="EmitFieldCharacter"/>), or the other side's copy stands in for
+        /// are emitted on their own (<see cref="EmitSourceBoundary"/>), or the other side's copy stands in for
         /// them.</summary>
-        public void WithholdFieldCharacter(IEnumerable<XElement> members) => _claimedZeroWidth.UnionWith(members);
+        public void WithholdSourceBoundary(IEnumerable<XElement> members) => _claimedSourceElements.UnionWith(members);
 
         /// <summary>The run-level elements of a field character's <paramref name="members"/>, bare, in source order,
         /// inside clones of the containers (a hyperlink) that hold them in the source.</summary>
-        public List<XElement> EmitFieldCharacter(IReadOnlyCollection<XElement> members) =>
-            Scan(0, 0, false, false, false, null, null, members as ISet<XElement> ?? members.ToHashSet());
+        public List<XElement> EmitSourceBoundary(IReadOnlyCollection<XElement> members) =>
+            Scan(0, 0, null, members as ISet<XElement> ?? members.ToHashSet());
 
-        private List<XElement> Scan(int start, int end, bool includeStartZeroWidth, bool includeEndZeroWidth,
-            bool nextOwnsEndZeroWidth, ISet<string>? deferOnlyKeys, ISet<string>? claimOnlyKeys,
+        private List<XElement> Scan(int start, int end, ISet<string>? claimOnlyKeys,
             ISet<XElement>? onlyMembers = null)
         {
             var result = new List<XElement>();
-            if (claimOnlyKeys is null)
-                _emittedMarkerKeys.Clear();
-            // Set once the scan passes a zero-width segment at `end` that the next op owns: always-kept markers at
-            // `end` after it are left to that op (only those in deferOnlyKeys, when given).
-            bool deferTrailingMarkers = false;
-            bool Deferred(Segment seg) =>
-                seg.Start == end && deferTrailingMarkers &&
-                (deferOnlyKeys is null || (MarkerKey(seg) is { } key && deferOnlyKeys.Contains(key)));
+            if (claimOnlyKeys is null) _emittedMarkerKeys.Clear();
 
             // Two-level grouping. INNER: consecutive RunText/RunOther segments sharing the SAME source run are
             // rebuilt into one w:r (so a split w:t and its siblings keep one run + its rPr). OUTER: consecutive
@@ -11923,45 +11860,28 @@ internal static partial class IrMarkupRenderer
                 bool overlaps;
                 if (onlyMembers is not null)
                     overlaps = seg.Kind != SegmentKind.RunText && onlyMembers.Contains(seg.OtherChild ?? seg.Element);
-                else if (start == end)
-                    overlaps = seg.Start == start && seg.IsZeroWidth;     // empty span: only zero-width at the point
-                else if (seg.IsZeroWidth && seg.AlwaysKeep)
-                    // A bookmark marker is taken anywhere in [start,end] (BOTH boundaries inclusive), regardless of
-                    // the token-driven ownership flags — it is not a diff token, so those flags can't see it and a
-                    // boundary bookmark would otherwise be dropped. _claimedZeroWidth keeps it once per model. The
-                    // one exception keeps document order: a marker behind a trailing zero-width token the next op
-                    // owns goes with that op.
-                    overlaps = seg.Start >= start && seg.Start <= end && !Deferred(seg);
-                else if (seg.IsZeroWidth)
-                {
-                    overlaps = (seg.Start > start && seg.Start < end)     // strictly interior: always taken
-                            || (seg.Start == start && includeStartZeroWidth)  // leading: only if this op owns it
-                            || (seg.Start == end && includeEndZeroWidth);     // trailing: only if this op owns it
-                    if (!overlaps && seg.Start == end && nextOwnsEndZeroWidth)
-                        deferTrailingMarkers = true;
-                }
                 else
-                    overlaps = seg.Start < end && seg.End > start;        // text overlap
+                    // Content owns a half-open interval. Source-only structure (field plumbing, markers,
+                    // shape definitions, layout metadata) belongs to a gap, including paragraph edges.
+                    // The claim set preserves exactly one copy when adjacent intervals share that gap.
+                    overlaps = seg.IsZeroWidth ? seg.Start >= start && seg.Start <= end
+                        : seg.Start < end && seg.End > start;
 
                 if (claimOnlyKeys is not null)
                 {
                     // Claim-only scan: record the represented always-kept markers as emitted, emit nothing.
                     if (overlaps && seg.IsZeroWidth && seg.AlwaysKeep &&
                         MarkerKey(seg) is { } represented && claimOnlyKeys.Contains(represented))
-                        _claimedZeroWidth.Add(seg.OtherChild ?? seg.Element);
+                        _claimedSourceElements.Add(seg.OtherChild ?? seg.Element);
                     continue;
                 }
 
-                // A zero-width inline (note ref, drawing, tab, …) sits at ONE char position two adjacent
-                // token-ops can SHARE (prev op's end char == this op's start char), so a char-span slice would
-                // emit it twice. De-duplicate by the specific source CHILD element identity across the
-                // paragraph: a given zero-width source node is sliced into exactly one output op (the first to
-                // claim it). A standalone ZeroWidth segment keys on its own Element; a RunOther zero-width keys
-                // on its OtherChild (so two distinct zero-width children of one run are not conflated).
-                if (overlaps && onlyMembers is null && seg.IsZeroWidth && seg.Kind != SegmentKind.Container)
+                // Shared gaps and explicit field emission can encounter the same source again. Claim the
+                // specific child rather than its run, so distinct atoms in a run stay independent.
+                if (overlaps && onlyMembers is null && (seg.IsZeroWidth || seg.AtomCount > 0) && seg.Kind != SegmentKind.Container)
                 {
                     var key = seg.OtherChild ?? seg.Element;
-                    if (key != null && !_claimedZeroWidth.Add(key))
+                    if (key != null && !_claimedSourceElements.Add(key))
                         overlaps = false;
                 }
 
@@ -11970,7 +11890,7 @@ internal static partial class IrMarkupRenderer
                 // (the first op to overlap it wins); later overlapping ops skip it. Keyed by element identity.
                 if (overlaps && seg.Kind == SegmentKind.Container)
                 {
-                    if (!_claimedZeroWidth.Add(seg.Element))
+                    if (!_claimedSourceElements.Add(seg.Element))
                         overlaps = false;
                 }
 
@@ -12041,21 +11961,19 @@ internal static partial class IrMarkupRenderer
         /// <summary>The <c>w:rPr</c> of the source run whose text covers char position <paramref name="at"/>,
         /// cloned (or null if that run has none / no segment covers the position). Used to recover the LEFT/old
         /// run properties for a FormatChanged span's <c>w:rPrChange</c>.</summary>
-        public XElement? RPrAtChar(int at)
+        public XElement? RPrAtTextOffset(int at) => RPrAtPosition(at, textOffset: true);
+
+        public XElement? RPrAtPosition(int at) => RPrAtPosition(at, textOffset: false);
+
+        private XElement? RPrAtPosition(int at, bool textOffset)
         {
-            // Prefer a RunText segment that strictly contains [at, at+1); fall back to a segment starting at `at`.
-            Segment? hit = null;
-            foreach (var seg in _segments)
-            {
-                if (seg.Kind == SegmentKind.RunText && seg.Start <= at && at < seg.End)
-                {
-                    hit = seg;
-                    break;
-                }
-            }
-            hit ??= _segments.FirstOrDefault(s => s.Start <= at && (at < s.End || (s.IsZeroWidth && s.Start == at)));
-            var rPr = hit?.Element.Element(W.rPr);
-            return rPr != null ? new XElement(rPr) : null;
+            int Start(Segment segment) => textOffset ? segment.TextStart : segment.Start;
+            int End(Segment segment) => textOffset ? segment.TextEnd : segment.End;
+            var hit = _segments.FirstOrDefault(segment => segment.Kind == SegmentKind.RunText &&
+                Start(segment) <= at && at < End(segment));
+            hit ??= _segments.FirstOrDefault(segment => Start(segment) <= at &&
+                (at < End(segment) || (Start(segment) == End(segment) && Start(segment) == at)));
+            return hit?.Element.Element(W.rPr) is { } rPr ? new XElement(rPr) : null;
         }
 
         /// <summary>Char positions STRICTLY inside <c>(start,end)</c> where the covering source run's old-rPr —
@@ -12187,14 +12105,17 @@ internal static partial class IrMarkupRenderer
             public Segment(XElement element, int start, int end, SegmentKind kind)
             {
                 Element = element;
-                Start = start;
-                End = end;
+                Start = TextStart = start;
+                End = TextEnd = end;
                 Kind = kind;
             }
 
             public XElement Element { get; }
-            public int Start { get; }
-            public int End { get; }
+            public int Start { get; set; }
+            public int End { get; set; }
+            public int TextStart { get; set; }
+            public int TextEnd { get; set; }
+            public int AtomCount { get; set; }
             public SegmentKind Kind { get; }
             public XElement? TextChild { get; init; }
             public XElement? OtherChild { get; init; }
@@ -12207,7 +12128,7 @@ internal static partial class IrMarkupRenderer
             /// token-driven <c>includeStart/EndZeroWidth</c> ownership flags are blind to it and a boundary
             /// bookmark would otherwise fall through the cracks (neither op claims it) — orphaning the bookmark
             /// and dangling every cross-reference that targets it. An always-keep marker is taken anywhere in
-            /// the op's <c>[start,end]</c> (boundaries inclusive); the per-model <see cref="_claimedZeroWidth"/>
+            /// the op's <c>[start,end]</c> (boundaries inclusive); the per-model <see cref="_claimedSourceElements"/>
             /// set still guarantees exactly-once emission, and <c>NormalizeBookmarks</c> reconciles the
             /// del/ins-context duplicates a both-sides edit produces.</summary>
             public bool AlwaysKeep { get; init; }

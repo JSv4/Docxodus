@@ -37,6 +37,11 @@ internal sealed class IrProvenance
     /// <summary>The URI of the part the source element lived in, if known.</summary>
     public Uri? PartUri { get; init; }
 
+    /// <summary>Atom-ordinal spans whose leaves share one source element. These source-layout facts carry
+    /// no XML references and are available even without retained sources. Like the source itself, they are
+    /// excluded from IR value equality; the edit builder inspects them explicitly before composing edits.</summary>
+    public IrNodeList<IrSourceContent.CarrierSpan> SharedCarriers { get; init; } = IrNodeList.Empty<IrSourceContent.CarrierSpan>();
+
     /// <summary>Always equal to any other <see cref="IrProvenance"/> so provenance is excluded from record equality.</summary>
     public override bool Equals(object? obj) => obj is IrProvenance;
 

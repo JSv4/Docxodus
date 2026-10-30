@@ -5156,3 +5156,27 @@ A paragraph moved by comparison can contain either carrier under its source wrap
 
 The source move is still removed on accept and restored on reject. The desktop observation is
 reported in the issue; the Word Online check is not evidence that the desktop behavior was reproduced.
+
+### Equation edits following tabs (#1421)
+
+The equation is opaque to word-level comparison. Its source carrier must still belong to the equation's
+own edit, even though both it and a preceding tab have zero width in public diff character offsets:
+
+```xml
+<w:r><w:t>III.</w:t><w:tab/></w:r>
+<m:oMath><m:r><m:t>old</m:t></m:r></m:oMath>
+<!-- Revision changes only old to new. -->
+```
+
+| Consumer | Observed behavior |
+|---|---|
+| Word for Microsoft 365 desktop | The issue reporter expected the inserted equation to have revision ownership, as in the space-separated control. No desktop verification was available in this session. |
+| Word Online | On October 29, 2026, both the original output and the space-separated control retained both equations after Reject All. Correcting the missing insertion wrapper did not change that web behavior. This is a limitation of this Word Online check, not proof of desktop round-trip behavior. |
+| LibreOffice 25.8.7.3 | Authored n-ary equation redlines retained both alternatives after accept and reject, including the space control. Those specific consumer checks are declared unsupported in the fidelity benchmark; independent XML resolution and schema validation remain mandatory. |
+| Docxodus | The original renderer assigned both atoms to the same character boundary, leaving the new equation bare. Reader-owned rendering positions now keep the tab stable, put the old/new equations under deletion/insertion ownership, and restore the respective input on reject/accept. |
+
+`IrReader` retains final source contributions in `IrSourceContent`; `IrMarkupRenderer` converts tokens and
+source slices to the same private coordinate. The public text-offset contract remains unchanged.
+The regression suite checks simple and n-ary equations, Compare and Consolidate, source content order,
+range endpoints, paragraph splitting/merging, and Open XML validity. Word Online is not used as a desktop
+Word oracle for this behavior.

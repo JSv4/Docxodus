@@ -1238,7 +1238,9 @@ internal static class IrEditScriptBuilder
                 {
                     var lp = (IrParagraph)entry.Left!;
                     var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
-                    if (HasStructuralCarrier(lp) || members.Any(HasStructuralCarrier))
+                    bool structural = HasFieldOrInlineCarrier(lp) || members.Any(HasFieldOrInlineCarrier);
+                    var diffs = structural ? null : IrSplitSegmenter.ComputeSegmentDiffs(lp, members, settings, singularIsLeft: true);
+                    if (structural || SplitMergeSplitsSourceCarrier(lp, members, diffs!, settings))
                     {
                         // A split has no one-to-one paragraph shell in which to place an atomic inline carrier
                         // or a non-tokenizable field carrier. Lower it to the existing whole-block pair.
@@ -1252,7 +1254,7 @@ internal static class IrEditScriptBuilder
                     ops.Add(new IrEditOp(IrEditOpKind.SplitBlock,
                         lp.Anchor.ToString(), null, null, null, null, null, null,
                         IrNodeList.From(members.Select(m => m.Anchor.ToString()).ToList()),
-                        IrSplitSegmenter.ComputeSegmentDiffs(lp, members, settings, singularIsLeft: true)));
+                        diffs!));
                     break;
                 }
 
@@ -1260,7 +1262,9 @@ internal static class IrEditScriptBuilder
                 {
                     var rp = (IrParagraph)entry.Right!;
                     var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
-                    if (HasStructuralCarrier(rp) || members.Any(HasStructuralCarrier))
+                    bool structural = HasFieldOrInlineCarrier(rp) || members.Any(HasFieldOrInlineCarrier);
+                    var sliced = structural ? null : IrSplitSegmenter.ComputeSegmentDiffs(rp, members, settings, singularIsLeft: false);
+                    if (structural || SplitMergeSplitsSourceCarrier(rp, members, sliced!, settings))
                     {
                         foreach (var member in members)
                             ops.Add(new IrEditOp(IrEditOpKind.DeleteBlock,
@@ -1272,11 +1276,10 @@ internal static class IrEditScriptBuilder
                     // Segment diffs are computed singular-vs-members (rp sliced against each left
                     // member) then MIRRORED so each stored diff reads left-member → right-slice,
                     // keeping the universal "left = left document" orientation for every consumer.
-                    var sliced = IrSplitSegmenter.ComputeSegmentDiffs(rp, members, settings, singularIsLeft: false);
                     ops.Add(new IrEditOp(IrEditOpKind.MergeBlock,
                         null, rp.Anchor.ToString(), null, null, null, null, null,
                         IrNodeList.From(members.Select(m => m.Anchor.ToString()).ToList()),
-                        IrNodeList.From(sliced.Select(IrSplitSegmenter.MirrorDiff).ToList())));
+                        IrNodeList.From(sliced!.Select(IrSplitSegmenter.MirrorDiff).ToList())));
                     break;
                 }
 
@@ -1858,7 +1861,50 @@ internal static class IrEditScriptBuilder
             tokenDiff, null, null, null,
             nest ? IrNodeList.From(textboxDiffs!) : null,
             RequiresWholeParagraphReplace: StructuralCarrierDiffers(lp, rp) ||
-                HasUnsliceableFieldCarrier(lp, rp));
+                HasUnsliceableFieldCarrier(lp, rp) ||
+                SplitsSourceCarrier(lp, leftTokens, tokenDiff, leftSide: true) ||
+                SplitsSourceCarrier(rp, rightTokens, tokenDiff, leftSide: false));
+    }
+
+    private static bool SplitsSourceCarrier(IrParagraph paragraph, IReadOnlyList<IrDiffToken> tokens,
+        IrTokenDiff diff, bool leftSide)
+        => SplitsSourceCarrier(paragraph, tokens, diff.Ops.Select(op => leftSide
+            ? (op.LeftStart, op.LeftEnd) : (op.RightStart, op.RightEnd)));
+
+    private static bool SplitsSourceCarrier(IrParagraph paragraph, IReadOnlyList<IrDiffToken> tokens,
+        IEnumerable<(int Start, int End)> ranges)
+    {
+        if (paragraph.Source.SharedCarriers.Count == 0) return false;
+        var ownership = ranges.Where(range => range.Start < range.End).ToArray();
+        var atomTokens = tokens.Select((token, index) => (token, index))
+            .Where(item => item.token.Kind is not (IrDiffTokenKind.Word or IrDiffTokenKind.Separator))
+            .Select(item => item.index).ToArray();
+        foreach (var carrier in paragraph.Source.SharedCarriers)
+        {
+            int start = atomTokens[carrier.Start], end = atomTokens[carrier.End - 1] + 1;
+            int owners = 0;
+            foreach (var range in ownership)
+                if (range.Start < end && range.End > start && ++owners > 1) return true;
+        }
+        return false;
+    }
+
+    // Segment diffs always use singular-left orientation here; merge diffs are mirrored only after preflight.
+    private static bool SplitMergeSplitsSourceCarrier(IrParagraph singular, IReadOnlyList<IrParagraph> members,
+        IReadOnlyList<IrTokenDiff> diffs, IrDiffSettings settings)
+    {
+        if (singular.Source.SharedCarriers.Count == 0 && members.All(p => p.Source.SharedCarriers.Count == 0))
+            return false;
+        var ranges = new List<(int Start, int End)>();
+        int offset = 0;
+        for (int i = 0; i < diffs.Count; i++)
+        {
+            if (SplitsSourceCarrier(members[i], IrDiffTokenizer.Tokenize(members[i], settings), diffs[i], leftSide: false))
+                return true;
+            foreach (var op in diffs[i].Ops) ranges.Add((offset + op.LeftStart, offset + op.LeftEnd));
+            offset += diffs[i].Ops.Sum(op => op.LeftEnd - op.LeftStart);
+        }
+        return SplitsSourceCarrier(singular, IrDiffTokenizer.Tokenize(singular, settings), ranges);
     }
 
     /// <summary>
@@ -1872,6 +1918,9 @@ internal static class IrEditScriptBuilder
          lp.FieldEnvelopeDigest != rp.FieldEnvelopeDigest);
 
     private static bool HasStructuralCarrier(IrParagraph paragraph) =>
+        paragraph.Source.SharedCarriers.Count > 0 || HasFieldOrInlineCarrier(paragraph);
+
+    private static bool HasFieldOrInlineCarrier(IrParagraph paragraph) =>
         paragraph.InlineEnvelopeDigest != default ||
         paragraph.FieldEnvelopeDigest != default ||
         ContainsFieldCarrier(paragraph.Inlines);

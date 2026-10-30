@@ -47,6 +47,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
+  distinct rendering positions, so an equation edit after a tab is tracked and rejecting it restores
+  the original (#1421). Source positions follow the reader's retained text and atoms through fields,
+  hyperlinks and text-run merging; shared range endpoints keep their place in both resolved views.
+  Changes to indivisible image/textbox carriers and unfinished field scaffolding use structural replacement.
 - Comparison, consolidation and tracked block moves write moved-from text and field instructions as ordinary text,
   matching Word's move markup instead of using deletion-only elements that Word can reject (#1420).
 - HTML rendering coalesces deeply nested inline containers once, avoiding exponential work
