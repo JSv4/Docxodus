@@ -46,6 +46,8 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Normalize mixed text and tab runs inside text boxes, preserving tab columns and visible lines regardless of run boundaries.
+
 
 - Preserve inherited typography when floating drawings move onto the page, including the visible fallback text of images that cannot decode.
 - Legacy VML text boxes with supported page or margin coordinates use their authored placement
