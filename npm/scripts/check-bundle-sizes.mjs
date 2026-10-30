@@ -18,7 +18,8 @@ const budgetsKiB = {
   'embed.iife.js': 139,
   // Including floated-picture geometry adds 0.158 KiB here (116.941 -> 117.099).
   'editor.bundle.js': 118,
-  'pagination.bundle.js': 35,
+  // Oversized merged-grid recovery adds 0.389 KiB (34.870 -> 35.259); retain a tight 36 KiB gate.
+  'pagination.bundle.js': 36,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,
