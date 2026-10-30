@@ -13,7 +13,8 @@ const budgetsKiB = {
   // paginator. Embed/iife/editor/pagination measured 133.3/133.4/112.8/31.8 KiB before it and
   // 135.0/135.1/114.5/33.4 KiB with it; each budget rose by 2 KiB.
   // Body-table fitting on current main measures 137.128/137.164 KiB; retain a 138 KiB gate.
-  'embed.bundle.js': 138,
+  // Zero-font source coverage brings the ESM bundle just above 138 KiB.
+  'embed.bundle.js': 139,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   'embed.iife.js': 139,
   // Individually fitted inline pictures bring the current editor to 117.2 KiB gzip.
