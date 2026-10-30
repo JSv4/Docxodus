@@ -1720,9 +1720,20 @@ export class PaginationEngine {
       const maximumWidth = paragraph.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
       const rect = image.getBoundingClientRect();
       if (!(maximumHeight > 0 && maximumWidth > 0 && rect.width > 0 && rect.height > 0)) continue;
-      const paragraphRect = paragraph.getBoundingClientRect();
-      const tooTall = rect.height > maximumHeight && (paragraphRect.height > bodyHeight
-        || rect.bottom - paragraphRect.top > bodyHeight);
+      // Several fitting pictures may make their paragraph tall. Judge this indivisible image's
+      // own line with its original inline carriers; the Range fragmenter can carry the others.
+      let tooTall = rect.height > bodyHeight;
+      if (!tooTall && rect.height > maximumHeight) {
+        let isolated = image.cloneNode(true) as HTMLElement;
+        for (let carrier = image.parentElement; carrier && carrier !== paragraph; carrier = carrier.parentElement) {
+          const wrapper = carrier.cloneNode(false) as HTMLElement;
+          wrapper.appendChild(isolated);
+          isolated = wrapper;
+        }
+        const imageLine = paragraph.cloneNode(false) as HTMLElement;
+        imageLine.appendChild(isolated);
+        tooTall = ptToPx(this.measureElement(imageLine, dims, sectionIndex).heightPt) > bodyHeight;
+      }
       if (!tooTall && rect.left >= paperLeft - 1 && rect.right <= paperRight + 1) continue;
       const ratio = Math.min(1, maximumWidth / rect.width, maximumHeight / rect.height);
       image.style.setProperty("width", `${rect.width * ratio}px`, "important");
