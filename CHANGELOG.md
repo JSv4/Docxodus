@@ -46,6 +46,9 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Rowless tables and paragraphs whose text and paragraph marks are hidden retain their source
+  identities without requiring painted PageMap fragments, including joined and section-ending paragraphs.
+
 - Keep paragraph-border spacing consistent when standalone HTML reopens and prints. Prepared
   border styles use their serialized values before pagination, preventing accumulated subpixel
   shifts from invalidating the PageMap.
