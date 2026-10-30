@@ -1212,6 +1212,8 @@ public class BlockLevelMarkerDiffTests
                 XElement Story(WmlDocument d) => story == "body" ? Body(d) : StoryRootOf(d, story == "header");
                 var definitions = CommentTexts(actual);
                 Assert.Equal(StreamLayout(expected, Story(expected)), StreamLayout(actual, Story(actual)));
+                // A marker-only slice through a surviving run must not manufacture an empty text node.
+                Assert.DoesNotContain(Story(actual).Descendants(W + "t"), text => text.Value.Length == 0);
                 var references = Story(actual).Descendants(W + "commentReference");
                 Assert.Equal(Story(expected).Descendants(W + "commentReference").Count(), references.Count());
                 Assert.All(references, r => Assert.Equal("Check dune clause", definitions[(string)r.Attribute(W + "id")!]));

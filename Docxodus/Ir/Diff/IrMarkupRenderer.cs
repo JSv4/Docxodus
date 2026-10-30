@@ -11864,8 +11864,9 @@ internal static partial class IrMarkupRenderer
                     // Content owns a half-open interval. Source-only structure (field plumbing, markers,
                     // shape definitions, layout metadata) belongs to a gap, including paragraph edges.
                     // The claim set preserves exactly one copy when adjacent intervals share that gap.
+                    // An empty request selects gap structure only, even inside a positive-width segment.
                     overlaps = seg.IsZeroWidth ? seg.Start >= start && seg.Start <= end
-                        : seg.Start < end && seg.End > start;
+                        : start < end && seg.Start < end && seg.End > start;
 
                 if (claimOnlyKeys is not null)
                 {
