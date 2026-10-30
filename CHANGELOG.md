@@ -55,6 +55,8 @@ All notable changes to this project will be documented in this file.
   text runs and blank lines with authored height keep their measured fragments.
 
 
+- Continue long read-only paragraphs containing empty inline tab advances, preserving their widths and leaders across pages.
+
 - Paragraphs with automatic Word line spacing can continue across pages while retaining the
   converter’s vertical baseline adjustment. The shared fragmenter recognizes this measured
   inline layout and still rejects unsupported relative-positioned content.

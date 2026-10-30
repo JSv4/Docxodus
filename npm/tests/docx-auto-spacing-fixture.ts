@@ -1,10 +1,10 @@
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
 /** Original multi-spaced inventory with alternating emphasis and an optional short footnote. */
-export function autoSpacingParagraphDocx(note: boolean): Uint8Array {
+export function autoSpacingParagraphDocx(note: boolean, tabs = false): Uint8Array {
   const lines = Array.from({ length: 83 }, (_, index) => `<w:r><w:rPr>${index % 2 ? '<w:i/>' : '<w:b/>'}</w:rPr>
-    <w:t>Juniper${String(index + 1).padStart(3, '0')} checkpoint recorded.</w:t></w:r>
-    ${note && index === 35 ? '<w:r><w:footnoteReference w:id="1"/></w:r>' : ''}`).join('<w:r><w:br/></w:r>');
+    <w:t>Juniper${String(index + 1).padStart(3, '0')}</w:t>${tabs && index === 40 ? '<w:tab/>' : ''}<w:t xml:space="preserve"> checkpoint recorded.</w:t></w:r>
+    ${note && index === 35 ? '<w:r><w:footnoteReference w:id="1"/></w:r>' : ''}`).join(tabs ? '<w:r><w:t xml:space="preserve"> </w:t></w:r>' : '<w:r><w:br/></w:r>');
   const relations = (content: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${content}</Relationships>`;
   const parts = {
     '[Content_Types].xml': `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -25,9 +25,9 @@ export function autoSpacingParagraphDocx(note: boolean): Uint8Array {
       <w:footnote w:id="1"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t>Juniper note checked.</w:t></w:r></w:p></w:footnote></w:footnotes>`,
     'word/document.xml': `<w:document xmlns:w="${W_NS}"><w:body>
       <w:p><w:pPr><w:keepLines w:val="0"/><w:widowControl w:val="0"/>
-      <w:spacing w:before="0" w:after="0" w:line="300" w:lineRule="auto"/></w:pPr>${lines}</w:p>
+      ${tabs ? '<w:tabs><w:tab w:val="left" w:pos="3600" w:leader="dot"/></w:tabs>' : ''}<w:spacing w:before="0" w:after="0" w:line="300" w:lineRule="auto"/></w:pPr>${lines}</w:p>
       <w:p><w:r><w:t>Checkpoint inventory complete.</w:t></w:r></w:p>
-      <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440"
+      <w:sectPr><w:pgSz w:w="${tabs ? 7200 : 12240}" w:h="15840"/><w:pgMar w:top="1440" w:right="1440"
       w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/></w:sectPr></w:body></w:document>`,
   };
   return storedZip(Object.entries(parts).map(([name, value]) => ({ name, data: xml(value) })));
