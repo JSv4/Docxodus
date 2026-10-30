@@ -5180,3 +5180,27 @@ source slices to the same private coordinate. The public text-offset contract re
 The regression suite checks simple and n-ary equations, Compare and Consolidate, source content order,
 range endpoints, paragraph splitting/merging, and Open XML validity. Word Online is not used as a desktop
 Word oracle for this behavior.
+
+### Behind-text placement and explicit picture wrapping (#1444)
+
+The drawing's text-wrapping instruction remains meaningful when `behindDoc="1"`:
+
+```xml
+<wp:anchor behindDoc="1" simplePos="0" relativeHeight="1"
+           locked="0" layoutInCell="1" allowOverlap="1">
+  <!-- Required position, extent and graphic children omitted here. -->
+  <wp:wrapSquare wrapText="right"/>
+</wp:anchor>
+```
+
+| Consumer | Behavior and evidence |
+|---|---|
+| Word, documented | Microsoft's Open Specifications support clarification says explicit top/bottom wrapping takes precedence over `behindDoc`. Desktop Word was not run for these examples. |
+| LibreOffice | An original 140pt-wide rectangle with square wrapping and `behindDoc="1"` shifts the first word from x=36.1pt to x=185.2pt. Changing the wrapping to `wrapNone` leaves it at x=36.1pt. |
+| Docxodus | `ApplyAnchorTextWrap` uses shared absolute placement only for `wrapNone`; explicitly wrapping pictures retain their existing exclusion, including behind-text pictures. Native and public PDF controls cover both z-orders. |
+
+Treating every behind-text picture as nonwrapping incorrectly bypassed that exclusion.
+The page-background fix therefore tests the wrap element, rather than using z-order as a
+substitute. [Microsoft's clarification](https://learn.microsoft.com/en-us/answers/questions/195851/behinddoc-%28wp-wraptopandbottom%29-%28w10-wrap%29-style-m)
+also distinguishes DrawingML choice content from its legacy VML fallback; the two are alternative
+representations, not competing instructions to combine.

@@ -47,7 +47,6 @@ public class RenderingFidelityImageWrapTests
     [Theory]
     [InlineData("wrapNone", true)]
     [InlineData("wrapNone", false)]
-    [InlineData("wrapSquare", true)]
     public void NonFlowingPicturesUseTheSharedDrawingAnchor(string wrap, bool behind)
     {
         var html = Render($"<wp:{wrap}/>", offset: 254000, behind: behind);
@@ -65,6 +64,17 @@ public class RenderingFidelityImageWrapTests
         var html = Render("<wp:wrapNone/>", behind: true, paginationMode: 0);
         Assert.DoesNotContain("data-docx-drawing-anchor", html.ToString());
         Assert.Single(html.Descendants().Where(e => e.Name.LocalName == "img"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExplicitWrappingStillExcludesTextWhenThePictureIsBehindIt(bool behind)
+    {
+        var html = Render("<wp:wrapSquare wrapText=\"right\"/>", behind: behind);
+        var image = Assert.Single(html.Descendants().Where(e => e.Name.LocalName == "img"));
+        Assert.Contains("float: left", (string?)image.Parent!.Attribute("style"));
+        Assert.DoesNotContain("data-docx-drawing-anchor", html.ToString());
     }
 
     [Theory]
