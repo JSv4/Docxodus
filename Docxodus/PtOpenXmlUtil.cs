@@ -6191,6 +6191,7 @@ listSeparator
         public static XName HtmlStructure = pt + "HtmlStructure";
         public static XName HtmlStyle = pt + "HtmlStyle";
         public static XName StyleName = pt + "StyleName";
+        internal static readonly XName InheritedFrame = pt + "InheritedFrame";
         public static XName TabWidth = pt + "TabWidth";
         public static XName Leader = pt + "Leader";
         public static XName TabAlignment = pt + "TabAlignment";

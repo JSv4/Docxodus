@@ -154,6 +154,8 @@ All notable changes to this project will be documented in this file.
   strict exports and defects in required document parts still fail preflight.
 - Text boxes keep their own line heights and inline placement when the containing paragraph
   uses automatic line spacing, preserving text within fixed DrawingML and VML boxes.
+- Empty or automatic frame defaults inherited from a style keep ordinary paragraphs in page
+  flow, while directly declared frames retain their geometry and inherited settings.
 
 - Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
   distinct rendering positions, so an equation edit after a tab is tracked and rejecting it restores

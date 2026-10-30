@@ -903,6 +903,7 @@ namespace Docxodus
             PtOpenXml.ListValue,
             PtOpenXml.ListFormat,
             PtOpenXml.StyleName,
+            PtOpenXml.InheritedFrame,
             PtOpenXml.LanguageType,
             PtOpenXml.ListItemRun,
             PtOpenXml.Unid,
@@ -2543,6 +2544,13 @@ namespace Docxodus
 
             XElement? accumulatedParaProps = para.Element(PtOpenXml.pt + "pPr");
             XElement newAccumulatedParaProps = MergeStyleElement(mergedParaProps, accumulatedParaProps)!;
+
+            // Keep source provenance for HTML layout without removing inherited properties
+            // from the effective-formatting cascade. A later render of assembled markup must
+            // retain this marker even though the merged frame is now in the paragraph's pPr.
+            if (settings.CreateHtmlConverterAnnotationAttributes &&
+                localParaProps.Element(W.framePr) == null && newAccumulatedParaProps.Element(W.framePr) != null)
+                para.SetAttributeValue(PtOpenXml.InheritedFrame, true);
 
             AdjustFontAttributes(wDoc, para, newAccumulatedParaProps, newAccumulatedParaProps.Element(W.rPr), settings);
             newAccumulatedParaProps.Name = PtOpenXml.pt + "pPr";
