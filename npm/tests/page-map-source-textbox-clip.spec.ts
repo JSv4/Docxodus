@@ -97,7 +97,7 @@ for (const story of ['header', 'footer'] as const) for (const mutate of [false, 
   });
 }
 
-for (const kind of ['outside', 'column-paragraph', 'changed-paragraph', 'unsupported-basis', 'straddling', 'ink-crosses-paper', 'fixed-ink-crosses-paper', 'autofit', 'linked', 'partial', 'changed-position', 'changed-font'] as const) {
+for (const kind of ['outside', 'column-paragraph', 'margin-paragraph', 'changed-paragraph', 'changed-margin-paragraph', 'unsupported-basis', 'straddling', 'ink-crosses-paper', 'fixed-ink-crosses-paper', 'autofit', 'linked', 'partial', 'changed-position', 'changed-font'] as const) {
   test(`source placement preserves the ${kind} paper boundary`, async ({ page }) => {
     await page.setContent('<div id="viewer"></div>');
     await page.addScriptTag({ path: bundle });
@@ -108,7 +108,7 @@ for (const kind of ['outside', 'column-paragraph', 'changed-paragraph', 'unsuppo
         <p data-source-anchor-id="p:body:host" style="font:10pt/14pt Arial;margin:0">Quail outer host
           <span data-docx-textbox="true" data-docx-textbox-clip="true" data-docx-textbox-source-position="true"
             ${kind === 'fixed-ink-crosses-paper' ? 'data-docx-textbox-source-clip="true"' : ''}
-            data-docx-drawing-anchor="true" data-docx-anchor-h-relative="${['column-paragraph', 'changed-paragraph'].includes(kind) ? 'column' : kind === 'unsupported-basis' ? 'unknown' : 'page'}" data-docx-anchor-v-relative="${['column-paragraph', 'changed-paragraph'].includes(kind) ? 'paragraph' : 'page'}"
+            data-docx-drawing-anchor="true" data-docx-anchor-h-relative="${['column-paragraph', 'changed-paragraph'].includes(kind) ? 'column' : ['margin-paragraph', 'changed-margin-paragraph'].includes(kind) ? 'margin' : kind === 'unsupported-basis' ? 'unknown' : 'page'}" data-docx-anchor-v-relative="${['column-paragraph', 'changed-paragraph', 'margin-paragraph', 'changed-margin-paragraph'].includes(kind) ? 'paragraph' : 'page'}"
             data-docx-anchor-h-offset="${kind === 'straddling' ? -40 : -170}" data-docx-anchor-v-offset="60"
             ${kind === 'autofit' ? 'data-docx-anchor-autofit="true"' : ''}
             ${kind === 'linked' ? 'data-docx-textbox-linked="true"' : ''}
@@ -120,14 +120,14 @@ for (const kind of ['outside', 'column-paragraph', 'changed-paragraph', 'unsuppo
         const engine = new (window as any).DocxodusPagination.PaginationEngine('pagination-staging', 'pagination-container', { showPageNumbers: false });
         engine.paginate();
         const box = document.querySelector<HTMLElement>('#pagination-container [data-docx-textbox]')!;
-        if (kind === 'changed-paragraph') document.querySelector<HTMLElement>('#pagination-container [data-source-anchor-id="p:body:host"]')!.style.transform = 'translateY(10pt)';
+        if (kind === 'changed-paragraph' || kind === 'changed-margin-paragraph') document.querySelector<HTMLElement>('#pagination-container [data-source-anchor-id="p:body:host"]')!.style.transform = 'translateY(10pt)';
         if (kind === 'changed-position') box.style.left = '-180pt';
         if (kind === 'changed-font') box.firstElementChild!.setAttribute('style', 'display:block;font:11pt/14pt Arial');
         const map = engine.materializePageMap(0, 'quail-paper-clip');
         return { error: null, anchors: map.fragments.map((f: any) => f.anchorId), warnings: engine.getSourceClippedTextAnchors() };
       } catch (error) { return { error: String(error), anchors: [], warnings: [] }; }
     }, kind);
-    if (kind === 'outside' || kind === 'column-paragraph' || kind === 'fixed-ink-crosses-paper') {
+    if (kind === 'outside' || kind === 'column-paragraph' || kind === 'margin-paragraph' || kind === 'fixed-ink-crosses-paper') {
       expect(result.error).toBeNull();
       expect(result.anchors).toContain('p:body:host');
       expect(result.anchors).not.toContain('p:body:hidden');

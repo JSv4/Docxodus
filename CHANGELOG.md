@@ -56,6 +56,8 @@ All notable changes to this project will be documented in this file.
 - Normalize mixed text and tab runs inside text boxes, preserving tab columns and visible lines regardless of run boundaries.
 
 
+- Recognize wholly off-paper text boxes with horizontal margin alignment and vertical paragraph placement, retaining the existing source geometry and visible-content guards.
+
 - Export wholly clipped paragraphs from proven fixed, unlinked text boxes or authored off-paper placements with source warnings; strict content policy rejects them, and newly lost text still fails verification.
 
 - Preserve inherited typography when floating drawings move onto the page, including the visible fallback text of images that cannot decode.
