@@ -5204,3 +5204,22 @@ The page-background fix therefore tests the wrap element, rather than using z-or
 substitute. [Microsoft's clarification](https://learn.microsoft.com/en-us/answers/questions/195851/behinddoc-%28wp-wraptopandbottom%29-%28w10-wrap%29-style-m)
 also distinguishes DrawingML choice content from its legacy VML fallback; the two are alternative
 representations, not competing instructions to combine.
+## Raised inline text boxes can paint above the body margin
+
+An inline DrawingML text box inside a run with `<w:position w:val="48"/>`
+can paint above the body text band while remaining inside the paper. An independently
+authored 180×36pt box on a 432×576pt page with 36pt margins demonstrates this with one
+label and a following body paragraph. The box has explicit zero insets and `a:noAutofit`.
+
+| Output | Ordinary label y | Raised label y | Following paragraph y |
+| --- | ---: | ---: | ---: |
+| LibreOffice reference | 36.508pt | 8.908pt | 72.490pt |
+| Docxodus after placement fix | 35.807pt | 11.807pt | 72.091pt |
+| Docxodus before fix | visible | rejected as missing source text | visible |
+
+These are extracted glyph bounds, not a claim of exact reference parity; Word was not
+measured. Both successful renderers retain the following paragraph's position. The shared
+paginator now preserves the inline flow slot and promotes the raised box into page coordinates,
+using the same source ownership and inherited presentation handling as floating objects.
+The box's internal clipping and the paper boundary remain active. An intervening authored
+clip or unsupported transform keeps the existing completeness failure instead of escaping it.

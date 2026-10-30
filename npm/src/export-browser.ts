@@ -2852,7 +2852,7 @@ function releasePageBox(page: HTMLElement): void {
 function clipPositionedPageContent(page: HTMLElement): void {
   const positioned = Array.from(page.children).filter((element): element is HTMLElement =>
     element instanceof page.ownerDocument.defaultView!.HTMLElement
-    && element.matches('[data-docx-drawing-anchor="true"], [data-docx-text-frame="true"]'));
+    && element.matches('[data-docx-drawing-anchor="true"], [data-docx-text-frame="true"], [data-docx-raised-inline-textbox="true"]'));
   if (positioned.length === 0) return;
   const layer = page.ownerDocument.createElement("div");
   layer.className = "page-drawing-layer";
