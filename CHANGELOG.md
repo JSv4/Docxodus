@@ -46,6 +46,10 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Read-only pagination proportionally refits body table columns that extend outside the paper,
+  preserving font sizes and all cells across continuations. Tables that only extend into a
+  visible page margin retain their original widths.
+
 - HTML and PDF conversion accept fractional twips in style tab stops and table row heights.
   Tab measures use the shared invariant unit parser and retain integer truncation; row heights
   retain fractional precision, their range checks, and property-specific malformed-value errors.
