@@ -46,6 +46,10 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Keep paragraph-border spacing consistent when standalone HTML reopens and prints. Prepared
+  border styles use their serialized values before pagination, preventing accumulated subpixel
+  shifts from invalidating the PageMap.
+
 - Header and footer tables can extend into the page side margins without losing cells or failing
   PDF export; running stories retain vertical clipping and the paper edge remains the horizontal boundary.
 
