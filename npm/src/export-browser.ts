@@ -3942,6 +3942,15 @@ export async function convertDocxToPaginatedHtml(
     }
     frame = finalized.frame;
     const { document: renderDocument, engine, pages } = finalized;
+    for (const spacer of Array.from(renderDocument.querySelectorAll<HTMLElement>('#pagination-container [data-docx-relaxed-clearance]'))) {
+      policyWarning(state, options, {
+        code: "drawing_clearance_relaxed",
+        phase: "output_verification",
+        anchorId: spacer.closest<HTMLElement>('[data-source-anchor-id]')?.dataset.sourceAnchorId,
+        message: "A drawing's top/bottom text clearance cannot fit a page and was relaxed; its authored size and placement are retained.",
+        remediation: "Reduce the drawing's extent or wrapping distance to reserve text clearance on a page.",
+      });
+    }
     // Chromium also puts each baseline up to a pixel off Word's (issue #942). Relative offsets take that back
     // without changing a line box. They run on the final page tree, after the clipping check: a glyph moved
     // down stays inside its line, but its inline box can pass a page band's edge by a pixel.
