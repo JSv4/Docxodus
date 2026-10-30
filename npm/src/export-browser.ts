@@ -2841,6 +2841,26 @@ function releasePageBox(page: HTMLElement): void {
   ]) page.style.removeProperty(property);
 }
 
+/** Keep promoted objects clipped to their paper without contributing off-paper print fragments. */
+function clipPositionedPageContent(page: HTMLElement): void {
+  const positioned = Array.from(page.children).filter((element): element is HTMLElement =>
+    element instanceof page.ownerDocument.defaultView!.HTMLElement
+    && element.matches('[data-docx-drawing-anchor="true"], [data-docx-text-frame="true"]'));
+  if (positioned.length === 0) return;
+  const layer = page.ownerDocument.createElement("div");
+  layer.className = "page-drawing-layer";
+  // An in-flow page box's overflow clip still lets Chromium paginate an absolute child beyond
+  // the paper. An out-of-flow clip contains that layout overflow as well as its visible paint.
+  // No z-index: the objects retain their existing positions relative to the page's text.
+  layer.style.cssText = "position:absolute;inset:0;overflow:hidden;pointer-events:none";
+  for (const element of positioned) {
+    const pointerEvents = page.ownerDocument.defaultView!.getComputedStyle(element).pointerEvents;
+    element.style.pointerEvents = pointerEvents;
+    layer.append(element);
+  }
+  page.append(layer);
+}
+
 function finalizePageTree(
   document: Document,
   pages: HTMLElement[],
@@ -2856,7 +2876,10 @@ function finalizePageTree(
     element.style.removeProperty("will-change");
     element.style.removeProperty("contain");
   }
-  for (const page of pages) releasePageBox(page);
+  for (const page of pages) {
+    releasePageBox(page);
+    clipPositionedPageContent(page);
+  }
   normalizeFragmentTargets(document, pages, state, options);
   document.documentElement.dataset.docxodusStandalone = "v1";
   const policy = document.querySelector<HTMLMetaElement>(

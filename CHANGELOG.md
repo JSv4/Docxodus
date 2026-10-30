@@ -46,6 +46,10 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Prevent off-paper floating drawings from adding blank PDF pages. A page-sized drawing layer
+  keeps their original geometry and stacking while clipping print overflow to the paper, including
+  partially visible drawings and repeated header/footer objects.
+
 - Fixed-height text boxes can contain a wholly clipped blank trailing paragraph without failing
   PageMap completeness; visible text hidden by the same clip remains an export error.
 
