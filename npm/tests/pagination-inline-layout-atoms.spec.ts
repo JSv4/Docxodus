@@ -31,3 +31,19 @@ for (const kind of ['tab', 'shape', 'unmarked', 'positioned', 'nonempty-tab'] as
     else expect(result.atoms.map(atom => atom.id)).toEqual(Array.from({ length: 29 }, (_, i) => String(i)));
   });
 }
+
+test('fitted Word line wrappers remain whole across paragraph continuations', async ({ page }) => {
+  const lines = Array.from({ length: 29 }, (_, i) => `<span id="line-${i}" data-docx-word-line="true" style="display:block;white-space:pre">Cedar${String(i).padStart(2, '0')}  recorded. </span>`).join('');
+  await page.setContent(`<style>p{margin:0;font:12pt/16pt Arial}</style><div id="staging"><section data-section-index="0"
+    data-page-width="300" data-page-height="160" data-content-width="260" data-content-height="120"
+    data-margin-top="20" data-margin-bottom="20" data-margin-left="20" data-margin-right="20"><p><span data-docx-word-fit="1">${lines}</span></p></section></div><div id="container"></div>`);
+  await page.addScriptTag({ path: bundle });
+  const result = await page.evaluate(() => {
+    new (window as any).DocxodusPagination.PaginationEngine(document.getElementById('staging'), document.getElementById('container'),
+      { fragmentParagraphs: true, showPageNumbers: false }).paginate();
+    return { paragraphs: document.querySelectorAll('#container p').length,
+      lines: Array.from(document.querySelectorAll('#container [data-docx-word-line]'), line => ({ id: line.id, text: line.textContent })) };
+  });
+  expect(result.paragraphs).toBeGreaterThan(1);
+  expect(result.lines).toEqual(Array.from({ length: 29 }, (_, i) => ({ id: `line-${i}`, text: `Cedar${String(i).padStart(2, '0')}  recorded. ` })));
+});
