@@ -5223,7 +5223,7 @@ export class PaginationEngine {
       // and footnote accounting as every other block. Only the paragraph's own lines decide
       // this: notes too tall for the page are split or moved by the note placement below.
       if (effectiveMarginTop + block.heightPt > effectiveRemainingHeight) {
-        const paragraphFragments = this.tryFragmentParagraph(
+        const fragments = this.tryFragmentParagraph(
           block,
           blockDimensions,
           effectiveRemainingHeight,
@@ -5236,9 +5236,14 @@ export class PaginationEngine {
           (block.keepLines || block.element.dataset.widowControl === "true")
             && isFirstOnPage && block.heightPt > freshBlockPageBodyHeight
             && allBlockFootnoteIds.every(id => this.footnoteRegistry.has(id)),
-        );
-        if (paragraphFragments) {
-          blocks.splice(i, 1, ...paragraphFragments);
+        ) ?? (allBlockFootnoteIds.length > 0 && freshBlockHeight > freshBlockPageBodyHeight
+          // A table taller than a fresh page also needs the note-aware row splitter. The
+          // generic oversized-table fallback cannot reserve room beside its citations.
+          ? this.tryFragmentCitingTable(block, blockDimensions, effectiveRemainingHeight,
+            effectiveMarginTop, headNotesStart)
+          : null);
+        if (fragments) {
+          blocks.splice(i, 1, ...fragments);
           i--;
           continue;
         }
