@@ -98,6 +98,9 @@ All notable changes to this project will be documented in this file.
 - PDF export continues text paragraphs whose keep-lines or widow-control setting cannot fit
   on a fresh page, preserving their text and legal line boundaries instead of refusing the
   document. Paragraphs that fit a page still retain their keep settings.
+- Preserve supported floating VML image positions in paginated export. Explicit page/margin
+  alignments and point offsets use the shared drawing-anchor layout, keeping backgrounds out of
+  header/body flow while retaining their size, stacking order, and inline/continuous fallbacks.
 
 - Paginated DrawingML pictures behind text or without wrapping use the shared drawing-anchor
   placement, including page-relative sizing. Full-page header backgrounds no longer consume the

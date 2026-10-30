@@ -12658,11 +12658,73 @@ namespace Docxodus
             return objectCenterEmu <= referencePt * 12700.0 / 2.0 ? "left" : "right";
         }
 
+        private static XElement? ApplyVmlImageAnchor(XElement? image, XElement shape,
+            WmlToHtmlConverterSettings? settings)
+        {
+            if (image == null || settings?.RenderPagination != PaginationMode.Paginated) return image;
+            var declarations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var token in ((string?)shape.Attribute("style") ?? "").Split(';'))
+            {
+                var colon = token.IndexOf(':');
+                if (colon > 0) declarations[token[..colon].Trim()] = token[(colon + 1)..].Trim();
+            }
+            if (!string.Equals(declarations.GetValueOrDefault("position"), "absolute", StringComparison.OrdinalIgnoreCase)
+                || !TryVmlPointEmu(declarations.GetValueOrDefault("width"), out var width) || width <= 0
+                || !TryVmlPointEmu(declarations.GetValueOrDefault("height"), out var height) || height <= 0
+                || !TryVmlImageAxis(declarations, "horizontal", out var horizontal)
+                || !TryVmlImageAxis(declarations, "vertical", out var vertical)
+                || !int.TryParse(declarations.GetValueOrDefault("z-index") ?? "0", NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out var order)) return image;
+            // Foreground wrapping needs a clearance model; retain its existing fallback. Behind-text
+            // pictures and nonwrapping page/margin pictures share DrawingML's floating-image path.
+            if (order >= 0 && shape.Elements(XName.Get("wrap", "urn:schemas-microsoft-com:office:word"))
+                .Any(wrap => (string?)wrap.Attribute("type") is not (null or "none"))) return image;
+            var anchor = new XElement(WP.anchor,
+                new XAttribute("behindDoc", order < 0),
+                new XAttribute("relativeHeight", (uint)((long)order - int.MinValue)),
+                new XElement(WP.extent, new XAttribute(NoNamespace.cx, width), new XAttribute(NoNamespace.cy, height)),
+                horizontal, vertical, new XElement(WP.wrapNone));
+            return ApplyAnchorTextWrap(image, anchor, settings);
+        }
+
+        private static bool TryVmlImageAxis(Dictionary<string, string> declarations, string axis, out XElement? position)
+        {
+            position = null;
+            var reference = declarations.GetValueOrDefault($"mso-position-{axis}-relative")?.ToLowerInvariant();
+            // These explicit bases have the same meaning in VML and DrawingML. Do not infer a
+            // page position for missing or unsupported legacy coordinate systems.
+            if (reference is not ("page" or "margin")) return false;
+            var horizontal = axis == "horizontal";
+            var align = declarations.GetValueOrDefault($"mso-position-{axis}")?.ToLowerInvariant();
+            var offset = declarations.GetValueOrDefault(horizontal ? "margin-left" : "margin-top") ?? "0";
+            if (!TryVmlPointEmu(offset, out var offsetEmu)) return false;
+            var aligned = horizontal ? align is "left" or "center" or "right" or "inside" or "outside"
+                : align is "top" or "center" or "bottom" or "inside" or "outside";
+            if (!aligned && align is not (null or "absolute")) return false;
+            position = new XElement(horizontal ? WP.positionH : WP.positionV,
+                new XAttribute(NoNamespace.relativeFrom, reference),
+                aligned ? new XElement(WP.align, align) : new XElement(WP.posOffset, offsetEmu));
+            return true;
+        }
+
+        private static bool TryVmlPointEmu(string? value, out long emu)
+        {
+            emu = 0;
+            if (value == "0") return true;
+            if (value == null || !value.EndsWith("pt", StringComparison.OrdinalIgnoreCase)
+                || !decimal.TryParse(value[..^2], NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+                    CultureInfo.InvariantCulture, out var points)
+                || points < long.MinValue / 12700m || points > long.MaxValue / 12700m) return false;
+            emu = (long)decimal.Round(points * 12700m);
+            return true;
+        }
+
         private static XElement? ProcessPictureOrObject(WordprocessingDocument wordDoc,
             XElement element, Func<ImageInfo, XElement?> imageHandler, WmlToHtmlConverterSettings? settings = null)
         {
             var ownerPart = GetOwningPart(wordDoc, element);
-            var imageRid = (string?)element.Elements(VML.shape).Elements(VML.imagedata).Attributes(R.id).FirstOrDefault();
+            var shape = element.Elements(VML.shape).FirstOrDefault(candidate => candidate.Elements(VML.imagedata).Attributes(R.id).Any());
+            var imageRid = (string?)shape?.Elements(VML.imagedata).Attributes(R.id).FirstOrDefault();
             if (imageRid == null) return null;
 
             try
@@ -12732,7 +12794,7 @@ namespace Docxodus
                                 DrawingElement = element
                             };
 
-                            var style = (string?)element.Elements(VML.shape).Attributes("style").FirstOrDefault();
+                            var style = (string?)shape!.Attribute("style");
                             if (style == null) return imageHandler(imageInfo);
 
                             var tokens = style.Split(';');
@@ -12744,7 +12806,7 @@ namespace Docxodus
                                     string.Format(NumberFormatInfo.InvariantInfo,
                                         "width: {0}pt; height: {1}pt", widthInPoints, heightInPoints));
                             }
-                            return imageHandler(imageInfo);
+                            return ApplyVmlImageAnchor(imageHandler(imageInfo), shape, settings);
                         }
                         finally
                         {
