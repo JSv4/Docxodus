@@ -95,6 +95,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Keep paginated text from overlapping in Firefox by measuring natural line heights below its rendered-font size limit (#1424).
 - Markdown projection includes textbox and group-shape text once from the supported compatibility
   branch, with anchored blocks after their host. Tables include rows and cells wrapped in content
   controls, and textbox edits return complete projection patches (#1445).

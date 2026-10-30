@@ -185,7 +185,7 @@ jobs:
         with:
           name: docxodus-build
 
-      # Firefox runs only the cross-block drag canary, which the config keeps in this lane so
+      # Firefox runs the drag and pagination canaries, which the config keeps in this lane so
       # that the pool shards never install it.
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers

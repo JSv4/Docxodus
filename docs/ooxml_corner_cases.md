@@ -2257,7 +2257,11 @@ with one decimal, so `w:line="253"` (12.65 pt) rendered as 12.7 pt. They now kee
 point (`{0:0.0#}pt`). The paginated export now runs `applyUnroundedNormalLineHeights`
 (`npm/src/line-metrics.ts`) before pagination. It gives every element whose computed line height is
 `normal` an explicit height for its own font, measured at 10000 px to reduce rounding of its
-ascent, descent and line gap.
+ascent, descent and line gap. Firefox caps rendered fonts at 2000 px while retaining the requested
+computed size: a 10000 px probe therefore produced roughly one fifth of the correct line height
+and overlapping paginated text (#1424). A once-per-document capability probe detects when doubling
+the font size leaves its rendered height unchanged. In that browser both natural-height and descent
+probes use 1000 px; Chromium retains the 10000 px precision required by the long-line controls below.
 The converter's output is unchanged. Since issue #1151 the paginator itself runs the same pass on its
 staging tree, so the paginated view and the paginated editor lay single-spaced lines out at the same
 unrounded pitch as the export; after the export's earlier pass no line height is `normal`, so the

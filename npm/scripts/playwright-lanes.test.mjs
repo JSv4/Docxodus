@@ -98,9 +98,9 @@ test('the pool and serial lanes partition the spec files between their Chromium 
   const pool = listSpecFiles('pool');
   const serial = listSpecFiles('serial');
   assert.deepEqual([...pool.keys()], ['chromium']);
-  assert.deepEqual([...serial.keys()], ['chromium-serial', 'chromium-pixel5', 'firefox-cross-block-selection']);
+  assert.deepEqual([...serial.keys()], ['chromium-serial', 'chromium-pixel5', 'firefox-cross-block-selection', 'firefox-pagination']);
 
-  // Firefox re-runs one pool spec on purpose; the Chromium projects are the partition.
+  // Firefox re-runs selected pool specs on purpose; the Chromium projects are the partition.
   const poolFiles = pool.get('chromium');
   const serialFiles = new Set([...serial.get('chromium-serial'), ...serial.get('chromium-pixel5')]);
   const inBoth = [...poolFiles].filter(file => serialFiles.has(file));
@@ -115,7 +115,7 @@ test('the pool and serial lanes partition the spec files between their Chromium 
 
 test('without a lane, an ad-hoc run still reaches every project', () => {
   const projects = [...listSpecFiles(undefined).keys()];
-  assert.deepEqual(projects, ['chromium', 'chromium-serial', 'chromium-pixel5', 'firefox-cross-block-selection']);
+  assert.deepEqual(projects, ['chromium', 'chromium-serial', 'chromium-pixel5', 'firefox-cross-block-selection', 'firefox-pagination']);
 });
 
 test('an unknown lane is refused instead of silently running nothing', () => {

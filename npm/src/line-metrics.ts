@@ -12,6 +12,24 @@
 
 /** Large-font probe reduces per-component pixel rounding before scaling back to the run's size. */
 const PROBE_FONT_SIZE_PX = 10000;
+const probeSizes = new WeakMap<Document, number>();
+
+/** Firefox clamps large rendered fonts without changing their computed size (#1424). */
+function fontProbeSize(document: Document): number {
+  let size = probeSizes.get(document);
+  if (size !== undefined) return size;
+  const probe = document.createElement("span");
+  probe.style.cssText = "position:absolute;left:-100000px;top:0;visibility:hidden;display:inline-block;"
+    + `font:${PROBE_FONT_SIZE_PX / 2}px/normal serif;margin:0;padding:0;border:0;`;
+  probe.textContent = "Hg";
+  (document.body ?? document.documentElement).appendChild(probe);
+  const height = probe.getBoundingClientRect().height;
+  probe.style.fontSize = `${PROBE_FONT_SIZE_PX}px`;
+  size = height > 0 && probe.getBoundingClientRect().height === height ? 1000 : PROBE_FONT_SIZE_PX;
+  probe.remove();
+  if (height > 0) probeSizes.set(document, size);
+  return size;
+}
 
 /** Probe text for an element whose own text the primary font covers (Latin, through U+024F). */
 const LATIN_PROBE = "Hg";
@@ -52,6 +70,7 @@ type ProbeFont = Pick<CSSStyleDeclaration, "fontStyle" | "fontWeight" | "fontStr
  * {@link PROBE_FONT_SIZE_PX} with the given text.
  */
 function naturalLineHeightRatios(document: Document): (style: ProbeFont, text: string) => number {
+  const probeSize = fontProbeSize(document);
   const ratios = new Map<string, number>();
   const ratio = (style: ProbeFont, text: string): number => {
     const key = `${style.fontStyle}|${style.fontWeight}|${style.fontStretch}|${style.fontFamily}|${text}`;
@@ -65,10 +84,10 @@ function naturalLineHeightRatios(document: Document): (style: ProbeFont, text: s
       probe.style.fontStyle = style.fontStyle;
       probe.style.fontWeight = style.fontWeight;
       probe.style.fontStretch = style.fontStretch;
-      probe.style.fontSize = `${PROBE_FONT_SIZE_PX}px`;
+      probe.style.fontSize = `${probeSize}px`;
       probe.textContent = text;
       (document.body ?? document.documentElement).appendChild(probe);
-      ratio = probe.getBoundingClientRect().height / PROBE_FONT_SIZE_PX;
+      ratio = probe.getBoundingClientRect().height / probeSize;
       probe.remove();
       ratios.set(key, ratio);
     }
@@ -309,6 +328,7 @@ export function alignBaselinesToWord(root: Element): number {
   const view = document.defaultView;
   if (!view) return 0;
   const descents = new Map<string, number>();
+  const probeSize = fontProbeSize(document);
   const ratioFor = naturalLineHeightRatios(document);
   const chromiumOffset = baselineOffsets(document);
 
@@ -316,15 +336,15 @@ export function alignBaselinesToWord(root: Element): number {
   const descentRatio = (style: CSSStyleDeclaration): number => {
     // The canvas font shorthand takes no percentage stretch (computed styles give one), and ignores a value it
     // cannot parse, so the stretch is left out and an assignment that did not take counts as unmeasurable.
-    const font = `${style.fontStyle} ${style.fontWeight} ${PROBE_FONT_SIZE_PX}px ${style.fontFamily}`;
+    const font = `${style.fontStyle} ${style.fontWeight} ${probeSize}px ${style.fontFamily}`;
     let ratio = descents.get(font);
     if (ratio === undefined) {
       const context = document.createElement("canvas").getContext("2d");
       ratio = Number.NaN;
       if (context) {
         context.font = font;
-        if (context.font.includes(`${PROBE_FONT_SIZE_PX}px`))
-          ratio = context.measureText(LATIN_PROBE).fontBoundingBoxDescent / PROBE_FONT_SIZE_PX;
+        if (context.font.includes(`${probeSize}px`))
+          ratio = context.measureText(LATIN_PROBE).fontBoundingBoxDescent / probeSize;
       }
       descents.set(font, ratio);
     }
