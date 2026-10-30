@@ -46,6 +46,10 @@ All notable changes to this project will be documented in this file.
   `CoalesceWhitespaceAroundEmptyFill` no longer absorbs a tab beside an emptied placeholder.
 
 ### Fixed
+- Paginated DrawingML pictures without wrapping use the shared drawing-anchor
+  placement, including page-relative sizing. Full-page header backgrounds no longer consume the
+  body area; linked images retain their contents and explicitly wrapping pictures keep their flow,
+  including pictures placed behind the text.
 - Prevent off-paper floating drawings from adding blank PDF pages. A page-sized drawing layer
   keeps their original geometry and stacking while clipping print overflow to the paper, including
   partially visible drawings and repeated header/footer objects.

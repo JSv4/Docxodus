@@ -12476,9 +12476,9 @@ namespace Docxodus
                         {
                             return ApplyAnchorTextWrap(new XElement(XhtmlNoNamespace.a,
                                 new XAttribute(XhtmlNoNamespace.href, hyperlinkUri),
-                                imgElement2), containerElement);
+                                imgElement2), containerElement, settings);
                         }
-                        return ApplyAnchorTextWrap(imgElement2, containerElement);
+                        return ApplyAnchorTextWrap(imgElement2, containerElement, settings);
                     }
 
                     var imageInfo2 = new ImageInfo()
@@ -12496,9 +12496,9 @@ namespace Docxodus
                     {
                         return ApplyAnchorTextWrap(new XElement(XhtmlNoNamespace.a,
                             new XAttribute(XhtmlNoNamespace.href, hyperlinkUri),
-                            imgElement), containerElement);
+                            imgElement), containerElement, settings);
                     }
-                    return ApplyAnchorTextWrap(imgElement, containerElement);
+                    return ApplyAnchorTextWrap(imgElement, containerElement, settings);
                 }
                 finally
                 {
@@ -12516,12 +12516,29 @@ namespace Docxodus
         /// flow-level equivalent: it excludes the anchored rect from the line layout of the
         /// current and following blocks in both continuous and paginated rendering. Tight and
         /// through wrapping retain the source contour as a CSS shape rather than excluding the
-        /// entire picture rectangle. wrapTopAndBottom and wrapNone keep the existing placement.
+        /// entire picture rectangle. Nonwrapping pictures use the shared drawing
+        /// anchor in paginated output, so their extent never consumes the story's text-flow height.
         /// </summary>
-        private static XElement? ApplyAnchorTextWrap(XElement? imageHtml, XElement drawingContainer)
+        private static XElement? ApplyAnchorTextWrap(XElement? imageHtml, XElement drawingContainer,
+            WmlToHtmlConverterSettings? settings = null)
         {
             if (imageHtml == null || drawingContainer == null || drawingContainer.Name != WP.anchor)
                 return imageHtml;
+
+            if (settings?.RenderPagination == PaginationMode.Paginated && drawingContainer.Element(WP.wrapNone) != null)
+            {
+                var positioned = new XElement(Xhtml.span, imageHtml);
+                var frameStyle = new Dictionary<string, string> { { "display", "inline-block" } };
+                AddDrawingFrameStyle(frameStyle, positioned, drawingContainer, settings, false);
+                // Relative anchor sizing changes the frame later. Its bitmap follows that frame;
+                // an absent extent keeps the handler's intrinsic dimension instead of collapsing it.
+                var imageSize = string.Join(" ", new[] { "width", "height" }
+                    .Where(frameStyle.ContainsKey).Select(dimension => dimension + ":100%;"));
+                foreach (var image in positioned.Descendants().Where(e => e.Name.LocalName == "img"))
+                    image.SetAttributeValue("style", ((string?)image.Attribute("style") ?? "") + ";" + imageSize);
+                positioned.AddAnnotation(frameStyle);
+                return positioned;
+            }
 
             var wrap = drawingContainer.Elements().FirstOrDefault(e =>
                 e.Name == WP.wrapSquare || e.Name == WP.wrapTight || e.Name == WP.wrapThrough);
