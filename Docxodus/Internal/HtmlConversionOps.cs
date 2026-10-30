@@ -1064,11 +1064,9 @@ internal static class HtmlConversionOps
         {
             if (!enabled) return null;
             var liveIdByElement = new Dictionary<XElement, string>();
+            var sources = AnchorTarget.ResolveAll(doc, index.Values);
             foreach (var target in index.Values)
-            {
-                var source = target.Resolve(doc);
-                if (source is not null) liveIdByElement[source] = target.Anchor.Id;
-            }
+                if (sources.TryGetValue(target, out var source)) liveIdByElement[source] = target.Anchor.Id;
             return new BlockSourceIdentity(liveIdByElement);
         }
 

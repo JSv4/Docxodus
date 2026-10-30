@@ -166,6 +166,12 @@ All notable changes to this project will be documented in this file.
   percent-escaped string is reserved: it is read as the library's own encoding and written back
   decoded.
 
+- Operations that look up many anchors at once no longer slow down quadratically with document
+  size: `Grep`, `GrepCrossBlock`, `GetAnchorInfos`, `GetBlockMetadatas`, `RegisterPageMap` and the
+  anchor-stamped HTML renders (the editor's full and single-block renders) found each block by
+  walking its whole part, so a grep over a 16,000-paragraph document took over two minutes; each
+  part is now read once per call, and that grep takes about two seconds (#1389).
+
 - Packages the Open XML SDK rejects are repaired as they are read where the package says what the
   repair is, so a session, a comparison, HTML conversion and the DocxDiff compatibility probe open
   them and a session saves them (#1384). A part a relationship reaches with no content type keeps

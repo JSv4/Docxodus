@@ -251,26 +251,56 @@ public sealed class AnchorTarget
     public XElement? Resolve(WordprocessingDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
+        return PartRoot(document, PartUri)?.DescendantsAndSelf()
+            .FirstOrDefault(e => (string?)e.Attribute(PtOpenXml.Unid) == Unid);
+    }
 
+    /// <summary>
+    /// Resolves every one of <paramref name="targets"/> as <see cref="Resolve"/> would — the first
+    /// element in its part carrying its Unid — reading each part once, where calling
+    /// <see cref="Resolve"/> per target walks the whole part every time: over a document's whole
+    /// index that is quadratic in its size (issue #1389). A target that does not resolve is absent.
+    /// Valid while the trees do not change.
+    /// </summary>
+    internal static Dictionary<AnchorTarget, XElement> ResolveAll(
+        WordprocessingDocument document, IEnumerable<AnchorTarget> targets)
+    {
+        var resolved = new Dictionary<AnchorTarget, XElement>(ReferenceEqualityComparer.Instance);
+        foreach (var part in targets.GroupBy(t => t.PartUri, StringComparer.Ordinal))
+        {
+            if (PartRoot(document, part.Key) is not { } root) continue;
+            var byUnid = part.GroupBy(t => t.Unid, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+            foreach (var element in root.DescendantsAndSelf())
+            {
+                if ((string?)element.Attribute(PtOpenXml.Unid) is not { } unid
+                    || !byUnid.Remove(unid, out var waiting)) continue;
+                foreach (var target in waiting) resolved[target] = element;
+                if (byUnid.Count == 0) break;
+            }
+        }
+        return resolved;
+    }
+
+    /// <summary>The root of the projected part at <paramref name="partUri"/>, or null.</summary>
+    private static XElement? PartRoot(WordprocessingDocument document, string partUri)
+    {
         var main = document.MainDocumentPart;
         if (main == null) return null;
 
         OpenXmlPart? part = null;
-        var targetUri = PartUri;
-        if (main.Uri.ToString() == targetUri) part = main;
+        if (main.Uri.ToString() == partUri) part = main;
         else
         {
-            foreach (var h in main.HeaderParts) if (h.Uri.ToString() == targetUri) { part = h; break; }
+            foreach (var h in main.HeaderParts) if (h.Uri.ToString() == partUri) { part = h; break; }
             if (part == null)
-                foreach (var f in main.FooterParts) if (f.Uri.ToString() == targetUri) { part = f; break; }
-            if (part == null && main.FootnotesPart?.Uri.ToString() == targetUri) part = main.FootnotesPart;
-            if (part == null && main.EndnotesPart?.Uri.ToString() == targetUri) part = main.EndnotesPart;
-            if (part == null && main.WordprocessingCommentsPart?.Uri.ToString() == targetUri) part = main.WordprocessingCommentsPart;
+                foreach (var f in main.FooterParts) if (f.Uri.ToString() == partUri) { part = f; break; }
+            if (part == null && main.FootnotesPart?.Uri.ToString() == partUri) part = main.FootnotesPart;
+            if (part == null && main.EndnotesPart?.Uri.ToString() == partUri) part = main.EndnotesPart;
+            if (part == null && main.WordprocessingCommentsPart?.Uri.ToString() == partUri) part = main.WordprocessingCommentsPart;
         }
 
-        var root = part?.GetXDocument().Root;
-        return root?.DescendantsAndSelf()
-            .FirstOrDefault(e => (string?)e.Attribute(PtOpenXml.Unid) == Unid);
+        return part?.GetXDocument().Root;
     }
 }
 
