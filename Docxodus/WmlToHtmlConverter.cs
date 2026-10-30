@@ -12151,6 +12151,14 @@ namespace Docxodus
 
         }
 
+        private static long? DrawingWrapDistance(long? value)
+        {
+            // Some DrawingML writers serialize negative text clearance as uint32, while the
+            // paired VML representation retains its signed distance. Decode only this field;
+            // positions, extents and text-box insets have separate coordinate semantics.
+            return value is > int.MaxValue and <= uint.MaxValue ? value - (1L << 32) : value;
+        }
+
         /// <summary>
         /// Preserves the geometry of a floating DrawingML object for the browser paginator. Page,
         /// margin, column, paragraph, line, and character bases cannot be collapsed to one static
@@ -12183,13 +12191,13 @@ namespace Docxodus
             var verticalWrap = anchor.Element(WP.wrapTopAndBottom);
             var sideWrap = anchor.Elements().FirstOrDefault(e => e.Name == WP.wrapSquare || e.Name == WP.wrapTight || e.Name == WP.wrapThrough);
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-top",
-                (long?)verticalWrap?.Attribute(NoNamespace.distT) ?? (long?)anchor.Attribute(NoNamespace.distT));
+                DrawingWrapDistance((long?)verticalWrap?.Attribute(NoNamespace.distT) ?? (long?)anchor.Attribute(NoNamespace.distT)));
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-right",
-                (long?)sideWrap?.Attribute(NoNamespace.distR) ?? (long?)anchor.Attribute(NoNamespace.distR));
+                DrawingWrapDistance((long?)sideWrap?.Attribute(NoNamespace.distR) ?? (long?)anchor.Attribute(NoNamespace.distR)));
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-bottom",
-                (long?)verticalWrap?.Attribute(NoNamespace.distB) ?? (long?)anchor.Attribute(NoNamespace.distB));
+                DrawingWrapDistance((long?)verticalWrap?.Attribute(NoNamespace.distB) ?? (long?)anchor.Attribute(NoNamespace.distB)));
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-left",
-                (long?)sideWrap?.Attribute(NoNamespace.distL) ?? (long?)anchor.Attribute(NoNamespace.distL));
+                DrawingWrapDistance((long?)sideWrap?.Attribute(NoNamespace.distL) ?? (long?)anchor.Attribute(NoNamespace.distL)));
 
             AddRelativeSizeMetadata(wrapper, anchor.Element(WP14.sizeRelH), WP14.pctWidth,
                 "width");
@@ -12559,13 +12567,13 @@ namespace Docxodus
             // The anchor's dist* attributes are text clearance around the object, which is
             // exactly what CSS margins are on a float.
             var style = new Dictionary<string, string> { { "float", side } };
-            AddEmuPadding(style, "margin-top", (long?)drawingContainer.Attribute(NoNamespace.distT));
-            var rightDistance = (long?)wrap.Attribute(NoNamespace.distR)
-                ?? (long?)drawingContainer.Attribute(NoNamespace.distR);
-            var leftDistance = (long?)wrap.Attribute(NoNamespace.distL)
-                ?? (long?)drawingContainer.Attribute(NoNamespace.distL);
+            AddEmuPadding(style, "margin-top", DrawingWrapDistance((long?)drawingContainer.Attribute(NoNamespace.distT)));
+            var rightDistance = DrawingWrapDistance((long?)wrap.Attribute(NoNamespace.distR)
+                ?? (long?)drawingContainer.Attribute(NoNamespace.distR));
+            var leftDistance = DrawingWrapDistance((long?)wrap.Attribute(NoNamespace.distL)
+                ?? (long?)drawingContainer.Attribute(NoNamespace.distL));
             AddEmuPadding(style, "margin-right", rightDistance);
-            AddEmuPadding(style, "margin-bottom", (long?)drawingContainer.Attribute(NoNamespace.distB));
+            AddEmuPadding(style, "margin-bottom", DrawingWrapDistance((long?)drawingContainer.Attribute(NoNamespace.distB)));
             AddEmuPadding(style, "margin-left", leftDistance);
 
             // A column-edge picture starts at its anchor, not at the text-clearance inset.

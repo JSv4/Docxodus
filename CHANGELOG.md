@@ -51,6 +51,8 @@ All notable changes to this project will be documented in this file.
 
 - Continue long paragraphs around complete converter tab segments and unsupported-shape placeholders, retaining every inline box and its content.
 
+- Interpret wrapped signed DrawingML text-clearance distances consistently for anchored shapes and floating pictures, preventing enormous page bands from encoded tiny negative clearances.
+
 - Preserve inherited typography when floating drawings move onto the page, including the visible fallback text of images that cannot decode.
 - Preserve embedded image and SVG identities when pagination promotes or repeats drawings, so an already-reported decoding failure does not become a false serialization error. Newly damaged resources still fail verification.
 
