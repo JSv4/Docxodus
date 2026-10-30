@@ -162,6 +162,8 @@ All notable changes to this project will be documented in this file.
 - Empty or automatic frame defaults inherited from a style keep ordinary paragraphs in page
   flow, while directly declared frames retain their geometry and inherited settings.
 
+- Measure tabs in fixed-width DrawingML and VML text boxes against their own content width, so long prefixes wrap within the frame before the tab. Active relative-width frames keep their existing unknown-width path.
+
 - Normalize mixed text and tab runs inside text boxes, preserving tab columns and visible lines regardless of run boundaries.
 
 - Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
