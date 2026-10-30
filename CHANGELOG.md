@@ -85,6 +85,9 @@ All notable changes to this project will be documented in this file.
 - Header and footer tables can extend into the page side margins without losing cells or failing
   PDF export; running stories retain vertical clipping and the paper edge remains the horizontal boundary.
 
+- Refit header and footer grids that extend beyond the paper with the shared table column
+  sizing path, retaining all repeated labels and preserving widths that already fit.
+
 - Read-only pagination proportionally refits body table columns that extend outside the paper,
   preserving font sizes and all cells across continuations. Tables that only extend into a
   visible page margin retain their original widths.

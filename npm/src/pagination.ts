@@ -3647,16 +3647,14 @@ export class PaginationEngine {
 
     if (!registryEl) return registry;
 
-    // Build a map of section index -> content width for measurement
-    const sectionWidths = new Map<number, number>();
+    // Measure each running story against the same paper and content band as its section.
+    const sectionDimensions = new Map<number, PageDimensions>();
     const sections = Array.from(this.stagingElement.querySelectorAll<HTMLElement>("[data-section-index]"));
     for (const section of sections) {
       const idx = parseInt(section.dataset.sectionIndex || "0", 10);
-      const contentWidth = parseFloat(section.dataset.contentWidth || "") || DEFAULT_PAGE_WIDTH - 2 * DEFAULT_MARGIN;
-      sectionWidths.set(idx, contentWidth);
+      sectionDimensions.set(idx, parseSectionDimensions(section));
     }
-    // Fallback content width if no sections found
-    const defaultContentWidth = sectionWidths.get(0) || DEFAULT_PAGE_WIDTH - 2 * DEFAULT_MARGIN;
+    const defaultDimensions = sectionDimensions.get(0) ?? parseSectionDimensions(this.stagingElement);
 
     const entries = Array.from(registryEl.querySelectorAll<HTMLElement>("[data-section][data-hf-type]"));
 
@@ -3672,11 +3670,10 @@ export class PaginationEngine {
       // Clone the first child element (the actual header/footer content)
       const content = entry.cloneNode(true) as HTMLElement;
 
-      // Get content width for this section (for accurate measurement)
-      const contentWidth = sectionWidths.get(sectionIndex) || defaultContentWidth;
+      const dims = sectionDimensions.get(sectionIndex) ?? defaultDimensions;
 
       // Measure height during parsing (one-time cost, enables lazy loading)
-      const measuredHeight = this.measureHeaderFooterHeight(content, contentWidth);
+      const measuredHeight = this.measureHeaderFooterHeight(content, dims);
 
       switch (hfType) {
         case "header-default":
@@ -4763,32 +4760,35 @@ export class PaginationEngine {
    */
   private measureHeaderFooterHeight(
     source: HTMLElement,
-    contentWidth: number
+    dims: PageDimensions
   ): number {
     // Create a temporary measurement container
     const measureContainer = this.document.createElement("div");
     measureContainer.style.position = "absolute";
     measureContainer.style.visibility = "hidden";
-    measureContainer.style.width = `${contentWidth}pt`;
+    measureContainer.style.width = `${dims.contentWidth}pt`;
     measureContainer.style.left = "-9999px";
     // Final running-story bands are flex columns: adjoining paragraph margins add rather than
     // collapse. Measure in that same formatting context or later paragraphs can be clipped away.
     measureContainer.style.display = "flex";
     measureContainer.style.flexDirection = "column";
 
-    // Clone and add the header/footer content
+    // The source is already a registry clone. Retain fitted column widths for every page copy.
     for (const child of Array.from(source.childNodes)) {
-      measureContainer.appendChild(child.cloneNode(true));
+      measureContainer.appendChild(child);
     }
 
     // Append to staging for measurement
     this.stagingElement.appendChild(measureContainer);
+
+    if (this.fragmentParagraphs) this.fitOverwideTables(measureContainer, dims);
 
     // Measure
     const rect = measureContainer.getBoundingClientRect();
     const heightPt = pxToPt(rect.height);
 
     // Clean up
+    source.replaceChildren(...Array.from(measureContainer.childNodes));
     this.stagingElement.removeChild(measureContainer);
 
     return heightPt;
