@@ -2582,6 +2582,7 @@ export class PaginationEngine {
     const textStarts = new Map<Text, number>();
     const lastTextByAtomic = new Map<HTMLElement, Text>();
     const breaks: Array<{ element: HTMLElement; textOffset: number }> = [];
+    const images: Array<{ element: HTMLElement; textOffset: number }> = [];
     const walker = this.document.createTreeWalker(paragraph,
       this.view.NodeFilter.SHOW_TEXT | this.view.NodeFilter.SHOW_ELEMENT);
     const flattenedChunks: string[] = [];
@@ -2593,6 +2594,11 @@ export class PaginationEngine {
         if ((node as Element).localName === "br") {
           breaks.push({ element: node as HTMLElement, textOffset: flattenedLength });
           flattenedChunks.push("\n");
+          flattenedLength++;
+        } else if ((node as Element).localName === "img") {
+          // An inline image occupies one indivisible object position in the break inventory.
+          images.push({ element: node as HTMLElement, textOffset: flattenedLength });
+          flattenedChunks.push("\uFFFC");
           flattenedLength++;
         }
         continue;
@@ -2631,11 +2637,23 @@ export class PaginationEngine {
       if (!this.isLegalParagraphLineBoundary(paragraph, flattenedText, textOffset)) return;
       if (graphemeBoundaries) {
         if (!graphemeBoundaries.has(textOffset)) return;
-      } else if (!candidate.consumeBreak && !this.isConservativeFallbackTextBoundary(flattenedText, textOffset)) {
+      } else if (!candidate.consumeBreak && flattenedText[textOffset - 1] !== "\uFFFC"
+          && flattenedText[textOffset] !== "\uFFFC"
+          && !this.isConservativeFallbackTextBoundary(flattenedText, textOffset)) {
         return;
       }
       candidates.push(candidate);
     };
+
+    for (const { element, textOffset } of images) {
+      this.checkpoint();
+      if (element.closest("[data-field], [data-list-marker], a[data-comment-id]")) continue;
+      const parent = element.parentNode;
+      if (!parent) continue;
+      const offset = Array.prototype.indexOf.call(parent.childNodes, element);
+      addCandidate({ node: parent, offset, textOffset, priority: 1 });
+      addCandidate({ node: parent, offset: offset + 1, textOffset: textOffset + 1, priority: 1 });
+    }
 
     for (const { element, textOffset } of breaks) {
       this.checkpoint();
@@ -2767,6 +2785,7 @@ export class PaginationEngine {
     if (/^[\u0009-\u000D\u0020]$/.test(before)
         || /^[\u0009-\u000D\u0020]$/.test(after)) return true;
     if (/[-\u00AD\u2010]$/u.test(before)) return true;
+    if (before === "\uFFFC" || after === "\uFFFC") return true;
 
     const style = this.view.getComputedStyle(paragraph);
     if (style.wordBreak === "break-all"
@@ -2806,12 +2825,10 @@ export class PaginationEngine {
   }
 
   /**
-   * Whether a range contains visible text after ignoring bidi/zero-width marks.
-   * Paragraph fragmentation deliberately excludes non-textual descendants, so
-   * this is enough to reject empty head or tail fragments.
+   * Whether a range retains visible text or a whole inline image.
    */
-  private hasVisibleFragmentText(fragment: DocumentFragment): boolean {
-    return this.hasVisibleText(fragment.textContent || "");
+  private hasVisibleFragmentContent(fragment: DocumentFragment): boolean {
+    return this.hasVisibleText(fragment.textContent || "") || fragment.querySelector("img") !== null;
   }
 
   private hasVisibleText(text: string): boolean {
@@ -2822,10 +2839,8 @@ export class PaginationEngine {
   }
 
   /**
-   * Phase one handles text-like paragraph descendants and hard line breaks.
-   * Objects, notes, and out-of-flow/inline-block content require their own
-   * line-layout rules and retain the established whole-block fallback instead
-   * of risking broken content or duplicate anchors.
+   * Text, hard line breaks and whole inline images share Range fragmentation.
+   * Out-of-flow objects and richer inline boxes retain their dedicated layout rules.
    */
   private canFragmentParagraph(block: MeasuredBlock, relaxKeepLines = false): boolean {
     if (!this.fragmentParagraphs) {
@@ -2882,7 +2897,7 @@ export class PaginationEngine {
     // Inline ids/editor anchors are reconciled after Range cloning, and list
     // markers are kept atomically with the leading text fragment.
     const unsupportedDescendants = [
-      "img",
+      ...(bodyParagraph ? [] : ["img"]),
       "picture",
       "svg",
       "math",
@@ -2916,8 +2931,29 @@ export class PaginationEngine {
       return false;
     }
 
+    // Range endpoints keep images whole, but floats and positioned picture carriers have their
+    // own placement rules. Do not mistake an empty-text leading wrapper for a safe inline atom.
+    for (const image of Array.from(paragraph.querySelectorAll<HTMLElement>("img"))) {
+      if (image.closest("[data-field], [data-list-marker], a[data-comment-id]")) return false;
+      if (!(image.getBoundingClientRect().width > 0 && image.getBoundingClientRect().height > 0)) return false;
+      for (let carrier: HTMLElement | null = image; carrier && carrier !== paragraph; carrier = carrier.parentElement) {
+        const style = this.view.getComputedStyle(carrier);
+        if (style.display !== "inline" || !this.rangeImageCarrierPosition(carrier, style)
+          || style.float !== "none" || style.transform !== "none") return false;
+      }
+    }
+
     const isValidatedEndnote = paragraph.dataset.paginationSafeEndnote === "true";
     return isValidatedEndnote || this.hasRangeFragmentSafeLayout(paragraph, allowInlineRoot, relaxKeepLines);
+  }
+
+  /** Baseline-adjusted image runs stay in inline flow and clone without changing their layout. */
+  private rangeImageCarrierPosition(element: HTMLElement, style: CSSStyleDeclaration): boolean {
+    return style.position === "static" || (style.position === "relative"
+      && element.localName !== "img" && !!element.querySelector("img")
+      && !this.hasVisibleText(element.textContent ?? "")
+      && (style.left === "auto" || parseFloat(style.left) === 0)
+      && (style.right === "auto" || parseFloat(style.right) === 0));
   }
 
   /**
@@ -2959,7 +2995,7 @@ export class PaginationEngine {
         && descendant.children.length === 0;
       if (
         (style.display !== "inline" && !(wordLine && style.display === "block")) ||
-        style.position !== "static" ||
+        !this.rangeImageCarrierPosition(descendant, style) ||
         style.float !== "none" ||
         (style.whiteSpace !== "normal" && style.whiteSpace !== "pre-wrap" && !(wordLine && style.whiteSpace === "pre"))
       ) {
@@ -3176,7 +3212,7 @@ export class PaginationEngine {
         lastRange.setStart(paragraph, 0);
         lastRange.setEnd(lastEndpoint.node, lastEndpoint.offset);
         const lastContents = lastRange.cloneContents();
-        if (this.hasVisibleFragmentText(lastContents)) {
+        if (this.hasVisibleFragmentContent(lastContents)) {
           const lastHead = this.createParagraphFragment(paragraph, lastRange, true, false);
           if (fits(lastHead)) return { endpoint: lastEndpoint, head: lastHead };
         }
@@ -3193,7 +3229,7 @@ export class PaginationEngine {
         headRange.setStart(paragraph, 0);
         headRange.setEnd(endpoint.node, endpoint.offset);
         const headContents = headRange.cloneContents();
-        if (!this.hasVisibleFragmentText(headContents)) {
+        if (!this.hasVisibleFragmentContent(headContents)) {
           low = middle + 1;
           continue;
         }
@@ -3258,7 +3294,7 @@ export class PaginationEngine {
     tailRange.setStart(best.endpoint.node, best.endpoint.offset + (best.endpoint.consumeBreak ? 1 : 0));
     tailRange.setEnd(paragraph, paragraph.childNodes.length);
     const tailContents = tailRange.cloneContents();
-    if (!this.hasVisibleFragmentText(tailContents)) return { kind: "indivisible" };
+    if (!this.hasVisibleFragmentContent(tailContents)) return { kind: "indivisible" };
 
     const tail = this.createParagraphFragment(paragraph, tailRange, false, true);
     this.reconcileFragmentIdentities(best.head, tail);
@@ -3431,7 +3467,7 @@ export class PaginationEngine {
       }, {
         lineStartsOnly: notesStart !== undefined,
         preserveWidowLines: (relaxKeepLines || block.relaxedKeepLines === true)
-          && paragraph.dataset.widowControl !== "false",
+          && paragraph.dataset.widowControl !== "false" && !paragraph.querySelector("img"),
       });
     } finally {
       host?.remove();
