@@ -10835,6 +10835,12 @@ namespace Docxodus
                 var frame = e.Name == W.p ? e.Element(W.pPr)?.Element(W.framePr) : null;
                 if (frame == null || ((string?)frame.Attribute(W.dropCap) is string dropCap && dropCap != "none"))
                     return string.Empty;
+                // Empty/default-only properties inherited from a style do not activate a
+                // separate text story. Direct declarations and nondefault style placement
+                // still form frames; their original dimensions and offsets are retained.
+                if ((string?)e.Attribute(PtOpenXml.InheritedFrame) == "true" &&
+                    frame.Attributes().All(a => a.Name.Namespace != W.w || (a.Name == W.wrap && a.Value == "auto")))
+                    return string.Empty;
                 return "frame|" + string.Join("|", frame.Attributes().Where(a => a.Name.Namespace == W.framePr.Namespace)
                     .OrderBy(a => a.Name.LocalName).Select(a => a.Name.LocalName + "=" + a.Value));
             });
