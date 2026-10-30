@@ -226,6 +226,25 @@ survive placement; the PageMap measures the positioned source paragraphs. Ordina
 paragraphs retain their existing conversion. Frame geometry supports explicit offsets and
 horizontal/vertical alignment; surrounding-body text exclusion around frames remains unsupported.
 
+### Linked DrawingML text boxes
+
+A `wps:txbx` start and matching `wps:linkedTxbx` continuations form a story within their
+owning document part. The converter retains empty continuation frames and records the story,
+sequence and linked membership on their wrappers. Membership is recomputed for each conversion,
+so editing a document and rendering it again cannot leave stale clipping eligibility. Linked
+stories are excluded from fixed-box clipping exemptions.
+
+With read-only paragraph fragmentation enabled, the paginator flows the story through the
+frames in sequence using the shared paragraph fragmenter. Frame sizes and inherited typography
+are retained; text and inline pictures move as complete supported fragments. Fitting keep groups
+move together, while keeps that cannot fit any available frame may relax. Repeated header/footer
+chains are resolved separately on each physical page. Source identities continue across frames
+and pages through the ordinary PageMap path.
+
+Fit checks include all four content bounds, including the upper edge of vertically aligned
+frames. Invalid chains, indivisible content that fits no frame, and exhausted story capacity
+report an export error instead of discarding the remaining content.
+
 ### Runs (Text Formatting)
 
 Run properties (`w:rPr`) map to CSS:
