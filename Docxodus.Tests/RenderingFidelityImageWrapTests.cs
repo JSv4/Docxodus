@@ -11,7 +11,7 @@ namespace Docxodus.Tests;
 
 public class RenderingFidelityImageWrapTests
 {
-    private static XElement Render(string wrap, long offset = 0)
+    private static XElement Render(string wrap, long offset = 0, bool behind = false, int paginationMode = 1)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -24,7 +24,7 @@ public class RenderingFidelityImageWrapTests
             main.PutXDocument(XDocument.Parse($"""
                 <w:document xmlns:w="{W.w}" xmlns:r="{R.r}" xmlns:wp="{WP.wp}" xmlns:a="{A.a}" xmlns:pic="{Pic.pic}">
                   <w:body><w:p><w:r><w:drawing>
-                    <wp:anchor distT="0" distB="0" distL="68580" distR="68580" simplePos="0" relativeHeight="0" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
+                    <wp:anchor distT="0" distB="0" distL="68580" distR="68580" simplePos="0" relativeHeight="0" behindDoc="{(behind ? 1 : 0)}" locked="0" layoutInCell="1" allowOverlap="1">
                       <wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>{offset}</wp:posOffset></wp:positionH>
                       <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
                       <wp:extent cx="914400" cy="457200"/>{wrap}<wp:docPr id="1" name="Authored triangle"/>
@@ -41,7 +41,30 @@ public class RenderingFidelityImageWrapTests
             main.AddNewPart<DocumentSettingsPart>().PutXDocument(XDocument.Parse($"<w:settings xmlns:w=\"{W.w}\"/>"));
         }
         return XElement.Parse(HtmlConversionOps.ConvertToHtml(stream.ToArray(),
-            new HtmlConversionOptions { FabricateCssClasses = false, PaginationMode = 1 }));
+            new HtmlConversionOptions { FabricateCssClasses = false, PaginationMode = paginationMode }));
+    }
+
+    [Theory]
+    [InlineData("wrapNone", true)]
+    [InlineData("wrapNone", false)]
+    [InlineData("wrapSquare", true)]
+    public void NonFlowingPicturesUseTheSharedDrawingAnchor(string wrap, bool behind)
+    {
+        var html = Render($"<wp:{wrap}/>", offset: 254000, behind: behind);
+        var anchor = html.Descendants().Single(e => (string?)e.Attribute("data-docx-drawing-anchor") == "true");
+        Assert.Contains("position: absolute", (string?)anchor.Attribute("style"));
+        Assert.Equal(behind ? "true" : "false", (string?)anchor.Attribute("data-docx-anchor-behind"));
+        Assert.Equal("20", (string?)anchor.Attribute("data-docx-anchor-h-offset"));
+        Assert.Single(anchor.Descendants().Where(e => e.Name.LocalName == "img"));
+        Assert.Contains("Authored wrapping test text.", html.Value);
+    }
+
+    [Fact]
+    public void ContinuousPicturesRetainTheirInlineFallback()
+    {
+        var html = Render("<wp:wrapNone/>", behind: true, paginationMode: 0);
+        Assert.DoesNotContain("data-docx-drawing-anchor", html.ToString());
+        Assert.Single(html.Descendants().Where(e => e.Name.LocalName == "img"));
     }
 
     [Theory]
