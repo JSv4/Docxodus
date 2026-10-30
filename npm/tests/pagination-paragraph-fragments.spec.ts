@@ -155,7 +155,7 @@ test.describe('Pagination paragraph fragments', () => {
     expect(result.heights.every(height => height <= 72)).toBe(true);
   });
 
-  test('keeps paragraphs with pagination-sensitive or complex descendants intact', async ({ page }) => {
+  test('relaxes impossible line keeps while guarding pagination-sensitive descendants', async ({ page }) => {
     await page.setContent(viewerHtml(`
       <p data-case="keep-lines" data-keep-lines="true">${words}</p>
       <p data-case="unresolved-note" data-keep-lines="true">${words}<sup data-footnote-id="missing">9</sup></p>
@@ -187,10 +187,10 @@ test.describe('Pagination paragraph fragments', () => {
     });
 
     expect(result).toEqual({
-      keepLines: 1,
+      keepLines: 3,
       unresolvedNote: 1,
       keepNext: 1,
-      lineBreak: 1,
+      lineBreak: 2,
       clearingBreak: 1,
       pageBreak: 1,
     });
