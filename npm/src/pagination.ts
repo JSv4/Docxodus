@@ -1751,7 +1751,7 @@ export class PaginationEngine {
           floating = carrier;
           continue;
         }
-        if (style.display !== "inline" || !this.rangeImageCarrierPosition(carrier, style)
+        if (style.display !== "inline" || !this.hasRangeFragmentSafePosition(carrier, style)
           || style.float !== "none" || style.transform !== "none") { supported = false; break; }
       }
       if (!supported) continue;
@@ -3063,7 +3063,7 @@ export class PaginationEngine {
       if (!(image.getBoundingClientRect().width > 0 && image.getBoundingClientRect().height > 0)) return false;
       for (let carrier: HTMLElement | null = image; carrier && carrier !== paragraph; carrier = carrier.parentElement) {
         const style = this.view.getComputedStyle(carrier);
-        if (style.display !== "inline" || !this.rangeImageCarrierPosition(carrier, style)
+        if (style.display !== "inline" || !this.hasRangeFragmentSafePosition(carrier, style)
           || style.float !== "none" || style.transform !== "none") return false;
       }
     }
@@ -3072,11 +3072,14 @@ export class PaginationEngine {
     return isValidatedEndnote || this.hasRangeFragmentSafeLayout(paragraph, allowInlineRoot, relaxKeepLines);
   }
 
-  /** Baseline-adjusted image runs stay in inline flow and clone without changing their layout. */
-  private rangeImageCarrierPosition(element: HTMLElement, style: CSSStyleDeclaration): boolean {
+  /** The converter's automatic-spacing lift moves ink without changing inline line boxes. */
+  private hasRangeFragmentSafePosition(element: HTMLElement, style: CSSStyleDeclaration): boolean {
+    const spacing = parseFloat(style.getPropertyValue("--docx-auto-line-spacing"));
+    const automaticBaseline = spacing > 0 && spacing !== 1 && parseFloat(style.top) <= 0;
+    const imageCarrier = element.localName !== "img" && !!element.querySelector("img")
+      && !this.hasVisibleText(element.textContent ?? "");
     return style.position === "static" || (style.position === "relative"
-      && element.localName !== "img" && !!element.querySelector("img")
-      && !this.hasVisibleText(element.textContent ?? "")
+      && (automaticBaseline || imageCarrier)
       && (style.left === "auto" || parseFloat(style.left) === 0)
       && (style.right === "auto" || parseFloat(style.right) === 0));
   }
@@ -3120,7 +3123,7 @@ export class PaginationEngine {
         && descendant.children.length === 0;
       if (
         (style.display !== "inline" && !(wordLine && style.display === "block")) ||
-        !this.rangeImageCarrierPosition(descendant, style) ||
+        !this.hasRangeFragmentSafePosition(descendant, style) ||
         style.float !== "none" ||
         (style.whiteSpace !== "normal" && style.whiteSpace !== "pre-wrap" && !(wordLine && style.whiteSpace === "pre"))
       ) {

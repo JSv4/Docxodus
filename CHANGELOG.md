@@ -80,6 +80,10 @@ All notable changes to this project will be documented in this file.
 - Header and footer tables can extend into the page side margins without losing cells or failing
   PDF export; running stories retain vertical clipping and the paper edge remains the horizontal boundary.
 
+- Paragraphs with automatic Word line spacing can continue across pages while retaining the
+  converter’s vertical baseline adjustment. The shared fragmenter recognizes this measured
+  inline layout and still rejects unsupported relative-positioned content.
+
 - Wrapped floating pictures that exceed a physical page use the same proportional fitting
   as inline pictures. Tight-wrap frames follow the fitted bitmap, while fitting pictures
   and intentionally clipped content retain their original geometry.
