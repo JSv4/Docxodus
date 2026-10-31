@@ -584,6 +584,15 @@ review column leaves space for text at deeper levels. Header items can wrap and 
 names within the available width. The same rules cover dates, resolved badges and return links,
 including custom class prefixes; paragraph text and comment topology remain unchanged.
 
+For standalone HTML/PDF, a physical-margin column that exceeds its page band moves its complete
+threads to a paginated appendix (#1490). `PaginationEngine` projects the existing comment DOM's
+headers, paragraphs and replies into ordinary fragmentable blocks. The original page keeps a
+link when space permits; fitting columns retain their layout. Parent comment identities travel
+with each paragraph and reply header, and return-link metadata survives block cloning until
+final targets are known. Identity-only spans inherit whitespace so they do not change layout.
+This changes overflow layout, not the converter's existing comment-body projection: it does not
+add rich OOXML comment rendering. Outside viewer panels and the Word balloon policy are separate.
+
 ## WASM/npm Integration
 
 The npm package exposes comment options via `ConversionOptions`:

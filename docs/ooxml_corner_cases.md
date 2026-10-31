@@ -5718,3 +5718,41 @@ in the actual page prefix before admission, including when a later section widen
 Page ownership still selects vertical bands, running stories and numbering. Notes clone their
 width from the registry shell in whole, partial and continuation forms; current-page note
 measurement uses the owner's outer width, while fresh-page probes use the prospective owner.
+
+## Physical-margin comments in a static PDF (#1490)
+
+A margin column can scroll interactively, but its off-viewport text cannot be recovered from
+an already printed PDF. This original repro uses Letter paper, 72pt margins, 12pt Liberation
+Serif, and one body reference to a comment. Repeat the comment sentence with unique labels:
+
+```xml
+<w:p><w:commentRangeStart w:id="0"/><w:r><w:t>Maple inventory anchor.</w:t></w:r>
+  <w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>
+<!-- word/comments.xml -->
+<w:comment w:id="0" w:author="Maple Reviewer" w:date="2026-10-31T12:00:00Z">
+  <w:p><w:r><w:t>Maple0001 The cabinet keeps one blue folder for each route.
+    ... Maple0900 The cabinet keeps one blue folder for each route. COMMENT END SENTINEL</w:t></w:r></w:p>
+</w:comment>
+```
+
+| Original probe | Word | LibreOffice 25.8.7.3, PDF comments in margin | Docxodus physical-margin export |
+| --- | --- | --- | --- |
+| One paragraph, 30 labeled sentences | Not captured | One page, all 30 labels and tail | Previously one page with nine labels and no tail; now complete in an appendix |
+| One paragraph, 900 labeled sentences | Not captured | One page, 38 labels and no tail | Previously one page with nine labels and no tail; now 11 pages with all 900 labels and tail |
+| 30 separate comment paragraphs | Not captured | One page, 29 labels and no tail | Previously refused for a missing source anchor; now two pages with all 30 labels and tail |
+| Hidden comments | Not captured | Default PDF omits comments | One unchanged body page |
+
+LibreOffice captures explicitly use `ExportNotesInMargin=true`; its documented policy scales
+the document to make room for comments ([PDF export options](https://help.libreoffice.org/latest/en-US/text/shared/01/ref_pdf_export_general.html)).
+They are diagnostic comparisons, not an oracle for complete overflowing comments. The paired
+benchmark therefore compares body layout with comments hidden and separately checks every
+source word in an actual margin-profile PDF, without claiming native comment-layout parity.
+
+The shared `PaginationEngine` now projects an overflowing column's complete threads into ordinary
+flow on appended pages. Paragraph fragments retain paragraph, comment and ancestor-thread source
+identities. Reply headers preserve flex layout, and source-only wrappers preserve whitespace.
+Appended pages use the last paper dimensions without repeating running stories. They participate
+in page limits and NUMPAGES; fitting columns, outside viewer panels and balloon policies retain
+their existing behavior. `export-browser.ts` refuses any remaining physical-margin clipping.
+The existing converter projects comment bodies to plain text; this fix does not add rich comment
+formatting. Long `endnotes`-profile comments have a separate wrapper-fragmentation defect (#1505).

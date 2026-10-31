@@ -344,6 +344,8 @@ export interface PaginationOptions {
    * "outside", comments then have no PageMap citations.
    */
   commentColumnPlacement?: "margin" | "outside" | "balloons";
+  /** Physical-margin overflow: scroll in viewers (default), or append complete threads for print. */
+  commentOverflow?: "scroll" | "appendix";
   /**
    * Under "balloons", what becomes of the rest of a comment whose balloon is cut short to fit beside
    * its page. "truncate" (the default) prints it nowhere, as Word's Save as PDF does. "appendix"
@@ -865,6 +867,7 @@ export class PaginationEngine {
   private showPageNumbers: boolean;
   private pageGap: number;
   private commentColumnPlacement: "margin" | "outside" | "balloons";
+  private commentOverflow: "scroll" | "appendix";
   private deferMarkupBalloons: boolean;
   private balloonOverflow: "truncate" | "appendix";
   private markupBalloons?: { comments: MarkupBalloonComment[]; commentPrefix: string; result?: MarkupBalloonLayout };
@@ -884,7 +887,6 @@ export class PaginationEngine {
   private footnoteContinuationSeparator: HTMLElement | null = null;
   private commentMarginRegistry: Map<string, HTMLElement>;
   private commentReturnLinks: Array<{
-    link: HTMLAnchorElement;
     href: string;
     ariaDisabled: string | null;
     tabIndex: string | null;
@@ -956,6 +958,10 @@ export class PaginationEngine {
     this.showPageNumbers = options.showPageNumbers ?? true;
     this.pageGap = options.pageGap ?? 20;
     this.commentColumnPlacement = options.commentColumnPlacement ?? "margin";
+    this.commentOverflow = options.commentOverflow ?? "scroll";
+    if (!["scroll", "appendix"].includes(this.commentOverflow)) {
+      throw new RangeError("commentOverflow must be scroll or appendix");
+    }
     this.commentColumnWidthPt = options.commentColumnWidthPt ?? 144;
     this.commentColumnGapPt = options.commentColumnGapPt ?? 12;
     if (!["margin", "outside", "balloons"].includes(this.commentColumnPlacement)) {
@@ -1325,6 +1331,13 @@ export class PaginationEngine {
 
     this.flowLinkedTextBoxes();
 
+    if (this.commentColumnPlacement === "margin" && this.commentOverflow === "appendix") {
+      const bodyFragmentation = this.fragmentParagraphs;
+      this.fragmentParagraphs = true;
+      try { this.appendCommentOverflow(pages); }
+      finally { this.fragmentParagraphs = bodyFragmentation; }
+    }
+
     // Hide staging after measurement
     this.stagingElement.style.display = "none";
 
@@ -1332,6 +1345,93 @@ export class PaginationEngine {
     this.substitutePageNumberFields(pages.length);
 
     return pages;
+  }
+
+  /** Move overflowing columns' complete threads into ordinary flow; each column keeps a pointer. */
+  private appendCommentOverflow(pages: PageInfo[]): void {
+    const columns = Array.from(this.containerElement.querySelectorAll<HTMLElement>(`.${this.cssPrefix}comment-margin`))
+      .filter(column => column.scrollHeight > column.clientHeight + 1);
+    const overflow = new Map<string, HTMLElement>();
+    for (const column of columns) {
+      for (const note of Array.from(column.children) as HTMLElement[]) {
+        this.checkpoint();
+        overflow.set(note.dataset.commentId!, note);
+      }
+    }
+    if (overflow.size === 0) return;
+
+    // A presentation-only section has the last paper geometry and no running stories. Reusing
+    // ordinary flow gives its paragraphs the same split, page-limit and cancellation rules.
+    const last = pages[pages.length - 1], dims = last.dimensions;
+    const sectionIndex = Math.max(...this.bodySectionDimensions.keys()) + 1;
+    const blocks: MeasuredBlock[] = [];
+    for (const [id, note] of overflow) {
+      const projected = this.measureCommentBlocks(note, dims, sectionIndex);
+      const first = projected.find(block => block.heightPt > 0);
+      if (!first) throw new Error(`Comment ${id} has no printable blocks`);
+      first.element.id = `comment-appendix-${id}`;
+      blocks.push(...projected);
+    }
+    for (const column of columns) {
+      const pointer = this.document.createElement("a");
+      pointer.href = `#comment-appendix-${(column.firstElementChild as HTMLElement).dataset.commentId}`;
+      pointer.textContent = "Full comments after the document.";
+      pointer.title = pointer.textContent;
+      pointer.setAttribute("aria-label", pointer.textContent);
+      column.replaceChildren(pointer);
+      if (column.scrollHeight > column.clientHeight + 1) {
+        pointer.textContent = "[+]";
+        pointer.style.cssText = "font-size:9pt;line-height:1";
+        if (column.scrollHeight > column.clientHeight + 1) pointer.remove();
+      }
+    }
+    const appended = this.flowToPages(blocks, dims, last.pageNumber + 1, sectionIndex,
+      new Map([[sectionIndex, dims]]));
+    for (const page of appended) page.element.dataset.commentAppendix = "true";
+    pages.push(...appended);
+  }
+
+  /** Project converter comment headers, paragraphs and replies without their indivisible wrappers. */
+  private measureCommentBlocks(root: HTMLElement, dims: PageDimensions, sectionIndex: number): MeasuredBlock[] {
+    const blocks: MeasuredBlock[] = [];
+    const visit = (element: HTMLElement, owners: string[] = []) => {
+      this.checkpoint();
+      if (element.dataset.sourceAnchorId?.startsWith("cmt:")) owners = [...owners, element.dataset.sourceAnchorId];
+      const header = Array.from(element.classList).some(name => name.endsWith("-header"));
+      if (header || element.localName === "p") {
+        const clone = element.cloneNode(true) as HTMLElement;
+        const style = this.view.getComputedStyle(element);
+        this.preserveInheritedPresentation(clone, style);
+        for (const property of ["margin-top", "margin-bottom", "overflow-wrap"])
+          clone.style.setProperty(property, style.getPropertyValue(property));
+        if (header && owners.length > 0) {
+          clone.dataset.sourceAnchorId = owners[owners.length - 1];
+          clone.dataset.keepWithNext = "true";
+        }
+        if (!header) for (const id of [...owners].reverse()) {
+          const owner = this.document.createElement("span");
+          owner.dataset.sourceAnchorId = id;
+          owner.style.whiteSpace = "inherit";
+          while (clone.firstChild) owner.appendChild(clone.firstChild);
+          clone.appendChild(owner);
+        }
+        if (element.localName === "p" && this.hasRangeFragmentSafeLayout(element))
+          clone.dataset.paginationSafeEndnote = "true";
+        let projected = clone;
+        if (header) for (const id of owners.slice(0, -1).reverse()) {
+          const owner = this.document.createElement("div");
+          owner.dataset.sourceAnchorId = id;
+          owner.dataset.keepWithNext = "true";
+          owner.appendChild(projected);
+          projected = owner;
+        }
+        blocks.push(this.measureElement(projected, dims, sectionIndex));
+      } else {
+        for (const child of Array.from(element.children) as HTMLElement[]) visit(child, owners);
+      }
+    };
+    visit(root);
+    return blocks;
   }
 
   private initializeRunningStyles(): void {
@@ -6308,7 +6408,9 @@ export class PaginationEngine {
         if (element instanceof this.view.HTMLAnchorElement && /^#comment-ref--?[0-9]+$/.test(href)
             && Array.from(element.classList).some(name => name.endsWith("margin-backref"))
             && element.getAttribute("aria-disabled") !== "true") {
-          this.commentReturnLinks.push({ link: element, href,
+          // This temporary key survives ordinary block/Range clones in a comment appendix.
+          element.dataset.paginationCommentReturn = String(this.commentReturnLinks.length);
+          this.commentReturnLinks.push({ href,
             ariaDisabled: element.getAttribute("aria-disabled"),
             tabIndex: element.getAttribute("tabindex") });
         }
@@ -6354,8 +6456,12 @@ export class PaginationEngine {
       }
       if (!transparent) eligible.add(id);
     }
-    for (const { link, href, ariaDisabled, tabIndex } of this.commentReturnLinks) {
+    for (const link of Array.from(this.containerElement.querySelectorAll<HTMLAnchorElement>("a[data-pagination-comment-return]"))) {
       this.checkpoint();
+      const entry = this.commentReturnLinks[Number(link.dataset.paginationCommentReturn)];
+      delete link.dataset.paginationCommentReturn;
+      if (!entry) continue;
+      const { href, ariaDisabled, tabIndex } = entry;
       if (!eligible.has(href.slice(1))) continue;
       link.setAttribute("href", href);
       if (ariaDisabled === null) link.removeAttribute("aria-disabled");

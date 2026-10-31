@@ -95,6 +95,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Standalone margin-comment export prints complete overflowing threads on appended pages instead
+  of silently printing only a scroll viewport or refusing later comment paragraphs (#1490).
+  Replies and running-story comments retain their source identities and return links; fitting
+  margin comments, hidden comments and balloon overflow keep their existing behavior.
+
 - Long text after a right tab wraps instead of becoming a single atomic row that loses words
   beyond the page (#1488). Tab measurement uses the following runs' fonts and letter spacing;
   short tails can also wrap when browser glyph widths exceed the estimate.
