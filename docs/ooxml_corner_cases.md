@@ -24,6 +24,7 @@ This document tracks edge cases and quirks in Open XML document processing where
    - [`w:color`/`w:fill` are a CACHE; `w:themeColor`/`w:themeFill` are the authority](#wcolorwfill-are-a-cache-wthemecolorwthemefill-are-the-authority)
 6. [Tracked Drawings](#tracked-drawings)
    - [LibreOffice fails on tracked anchored header groups with text boxes](#libreoffice-fails-on-tracked-anchored-header-groups-with-text-boxes)
+   - [TIFF and WMF need browser image normalization](#tiff-and-wmf-need-browser-image-normalization)
 7. [Contributing](#contributing)
 
 ---
@@ -5516,3 +5517,50 @@ retains fractional positioning. The 11pt fixture measures 10.992pt in the DOM an
 PDF; public-export tests allow one CSS pixel (0.75pt) in PDF baseline distance while retaining
 0.05pt DOM tolerance. Zero/22pt cases reject an omitted correction. This is a documented print
 precision limit, not a claim of exact Word geometry.
+
+### TIFF and WMF need browser image normalization
+
+Issue #1484 used original Cypress rectangle/ellipse graphics. A TIFF can be a valid image
+part yet remain undecodable by Chromium; an accepted package MIME type does not establish
+browser support. The same DrawingML relationship can point to either TIFF or WMF:
+
+```xml
+<!-- image part content type: image/tiff or image/x-wmf -->
+<wp:inline>
+  <wp:extent cx="914400" cy="609600"/>
+  <wp:docPr id="1" name="CypressGeometry"/>
+  <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+    <pic:pic><pic:blipFill><a:blip r:embed="picture"/>
+      <a:stretch><a:fillRect/></a:stretch></pic:blipFill></pic:pic>
+  </a:graphicData></a:graphic>
+</wp:inline>
+```
+
+The equivalent legacy carrier is `<w:pict><v:shape style="width:72pt;height:48pt">`
+with `<v:imagedata r:id="picture"/>`. The related part belongs to its body/header story.
+
+| Case | Word for the web | LibreOffice 25.8.7.3 | Docxodus |
+| --- | --- | --- | --- |
+| Original placeable WMF rectangle/ellipse | Fresh PDF capture paints both outlines | Paints both outlines | Previously `[WMF IMAGE]`; now static SVG |
+| Identical PNG/TIFF pixels | Fresh PDF capture paints the graphic | Both paint the same graphic | PNG unchanged; TIFF normalized to PNG with identical rendered pixels |
+| Nonuniform WMF extent and grouped VML image | Not measured | Uniform pen width follows horizontal scale | Viewport-relative SVG pen width preserves uniform strokes after final sizing |
+| Unsupported TIFF colorimetry or WMF records | Not measured | Provider-dependent | Explicit placeholder/warning; strict export refuses it |
+
+Word substituted Times New Roman for requested Liberation Serif in these captures; this is
+image-behavior evidence, not a font-matched whole-page oracle. Source and capture hashes are
+retained with the issue evidence outside version control.
+
+`WmlToHtmlConverter.Images.cs` handles both image carriers and delegates to the bounded
+`Internal/TiffImage.cs` and `Internal/WmfImage.cs` decoders. TIFF normalization applies the
+orientation and unpremultiplies associated alpha before encoding PNG. Unknown colorimetry is
+reported rather than silently treating calibrated samples as sRGB. WMF maps shape geometry
+through its window, but the pen remains uniform: its width is an x-axis measure. Expressing
+that width in SVG viewport units with `vector-effect="non-scaling-stroke"` also handles a VML
+group or page-relative anchor that changes the final size after image conversion. SVG width
+and height are rounded upward to positive integral intrinsic sizes so subpixel placeable
+headers do not produce a decoded image with a zero natural dimension.
+
+The supported subsets and bounds follow [TIFF 6.0](https://www.itu.int/itudoc/itu-t/com16/tiff-fx/docs/tiff6.pdf)
+and Microsoft's [WMF format](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wmf/).
+The converter's image contract documents remaining format exclusions. Native facade tests,
+CLI embedded/extracted output tests, and public HTML/PDF export tests cover these paths.

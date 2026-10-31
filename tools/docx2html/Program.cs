@@ -7,7 +7,6 @@ using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
-using SkiaSharp;
 
 namespace Docx2Html;
 
@@ -176,109 +175,29 @@ class Program
                 RenderHeadersAndFooters = renderHeadersFooters,
                 ImageHandler = imageInfo =>
                 {
-                    if (imageInfo.ContentType == null)
-                        return null;
-
-                    string extension = imageInfo.ContentType.Split('/')[1].ToLower();
-                    SKEncodedImageFormat? imageFormat = extension switch
-                    {
-                        "png" => SKEncodedImageFormat.Png,
-                        "gif" => SKEncodedImageFormat.Gif,
-                        "bmp" => SKEncodedImageFormat.Png, // Convert BMP to PNG
-                        "jpeg" => SKEncodedImageFormat.Jpeg,
-                        "tiff" => SKEncodedImageFormat.Png, // Convert TIFF to PNG
-                        "x-wmf" => SKEncodedImageFormat.Png, // Convert WMF to PNG
-                        _ => null
-                    };
-
-                    if (imageFormat == null)
-                        return null;
-
-                    // Update extension for converted formats
-                    if (extension is "bmp" or "tiff" or "x-wmf")
-                        extension = "png";
-
+                    // The converter normalizes TIFF/WMF once for every consumer. Persist its
+                    // browser-ready bytes, including generated SVG, without a second decoder.
+                    string? extension = imageInfo.ContentType switch {
+                        "image/png" => "png", "image/gif" => "gif", "image/jpeg" => "jpeg",
+                        "image/svg+xml" => "svg", _ => null };
+                    if (extension == null || imageInfo.ImageBytes == null) return null;
                     ++imageCounter;
-
-                    if (embedImages)
+                    try
                     {
-                        // Embed as base64 data URI
-                        try
+                        string source;
+                        if (embedImages)
+                            source = $"data:{imageInfo.ContentType};base64,{Convert.ToBase64String(imageInfo.ImageBytes)}";
+                        else
                         {
-                            string base64;
-                            string mimeType;
-
-                            if (imageInfo.ImageBytes != null)
-                            {
-                                // Re-encode if format changed, otherwise use original
-                                if (imageInfo.ContentType.Contains(extension))
-                                {
-                                    base64 = Convert.ToBase64String(imageInfo.ImageBytes);
-                                    mimeType = imageInfo.ContentType;
-                                }
-                                else
-                                {
-                                    using var bitmap = SKBitmap.Decode(imageInfo.ImageBytes);
-                                    if (bitmap == null) return null;
-                                    using var image = SKImage.FromBitmap(bitmap);
-                                    using var data = image.Encode(imageFormat.Value, 90);
-                                    base64 = Convert.ToBase64String(data.ToArray());
-                                    mimeType = $"image/{extension}";
-                                }
-                            }
-                            else if (imageInfo.Bitmap != null)
-                            {
-                                using var image = SKImage.FromBitmap(imageInfo.Bitmap);
-                                using var data = image.Encode(imageFormat.Value, 90);
-                                base64 = Convert.ToBase64String(data.ToArray());
-                                mimeType = $"image/{extension}";
-                            }
-                            else
-                            {
-                                return null;
-                            }
-
-                            return new XElement(Xhtml.img,
-                                new XAttribute(NoNamespace.src, $"data:{mimeType};base64,{base64}"),
-                                imageInfo.ImgStyleAttribute,
-                                imageInfo.AltText != null
-                                    ? new XAttribute(NoNamespace.alt, imageInfo.AltText)
-                                    : null);
+                            Directory.CreateDirectory(imageDirectoryName);
+                            string imageFileName = Path.Combine(imageDirectoryName, $"image{imageCounter}.{extension}");
+                            File.WriteAllBytes(imageFileName, imageInfo.ImageBytes);
+                            source = Path.GetFileName(imageDirectoryName) + "/" + Path.GetFileName(imageFileName);
                         }
-                        catch
-                        {
-                            return null;
-                        }
+                        return new XElement(Xhtml.img, new XAttribute(NoNamespace.src, source), imageInfo.ImgStyleAttribute,
+                            imageInfo.AltText != null ? new XAttribute(NoNamespace.alt, imageInfo.AltText) : null);
                     }
-                    else
-                    {
-                        // Save to external file
-                        try
-                        {
-                            if (!Directory.Exists(imageDirectoryName))
-                                Directory.CreateDirectory(imageDirectoryName);
-
-                            string imageFileName = Path.Combine(imageDirectoryName,
-                                $"image{imageCounter}.{extension}");
-
-                            imageInfo.SaveImage(imageFileName, imageFormat.Value);
-
-                            // Use relative path in HTML
-                            string relativePath = Path.GetFileName(imageDirectoryName) + "/" +
-                                Path.GetFileName(imageFileName);
-
-                            return new XElement(Xhtml.img,
-                                new XAttribute(NoNamespace.src, relativePath),
-                                imageInfo.ImgStyleAttribute,
-                                imageInfo.AltText != null
-                                    ? new XAttribute(NoNamespace.alt, imageInfo.AltText)
-                                    : null);
-                        }
-                        catch
-                        {
-                            return null;
-                        }
-                    }
+                    catch { return null; }
                 }
             };
 

@@ -69,7 +69,7 @@ When `ImageHandler` is invoked, it receives an `ImageInfo` object:
 public class ImageInfo
 {
     public SKBitmap? Bitmap;           // Decoded image (SkiaSharp)
-    public byte[]? ImageBytes;         // Raw image bytes
+    public byte[]? ImageBytes;         // Encoded output bytes; TIFF/WMF may be normalized
     public XAttribute? ImgStyleAttribute; // Pre-computed style attribute with dimensions
     public string? ContentType;        // MIME type (e.g., "image/png")
     public XElement? DrawingElement;   // Original Word XML element
@@ -417,28 +417,33 @@ the run-aware path and its conservative following-text reservations. Leader rule
 
 ### Images
 
-Images require a custom `ImageHandler` callback. Supported formats:
-- PNG (`image/png`)
-- GIF (`image/gif`)
-- TIFF (`image/tiff`)
-- JPEG (`image/jpeg`)
+Images require an `ImageHandler` callback. PNG, GIF and JPEG retain their encoded bytes.
+The shared DrawingML/VML path in `WmlToHtmlConverter.Images.cs` normalizes two bounded subsets
+before invoking that callback, identically in native and WASM builds:
 
-**Not supported:**
-- WMF (`image/x-wmf`) - Excluded due to memory issues
-- EMF - Not processed
-- SVG - Not processed
+- Classic, single-page TIFF: chunky unsigned 8-bit RGB/RGBA, uncompressed or PackBits strips,
+  either byte order, orientations 1–8 and associated/unassociated alpha. Output is RGBA PNG.
+  LZW/Deflate, tiles, palette/grayscale, custom colorimetry/profiles and multi-page files retain
+  an unsupported-content diagnostic.
+- Placeable WMF (`image/x-wmf` or `image/wmf`): positive anisotropic windows, rectangle/ellipse
+  records and solid/null pens and brushes. Output is static SVG with a bounded object table and
+  record count. A uniform pen follows the final image width through viewport units and
+  `non-scaling-stroke`, including grouped and relative-sized pictures. Unknown records reject
+  the whole image; text, bitmaps, clipping and other map modes remain unsupported.
+
+Input is limited to 64 MiB; normalized dimensions are limited to 32,768 per axis and
+16 megapixels. Source EMF and SVG image parts retain their existing placeholders. Generated
+WMF SVG contains only numeric geometry and paint attributes, with no external resources.
+`ImageInfo.ContentType` names the output encoding and `ImageBytes` holds those encoded bytes;
+`Bitmap` can be null for vector output. Handlers should preserve the encoded resource.
 
 **Example ImageHandler:**
 
 ```csharp
 settings.ImageHandler = imageInfo =>
 {
-    // Save image to file
-    var filename = $"image_{Guid.NewGuid()}.png";
-    imageInfo.SaveImage(filename, SKEncodedImageFormat.Png);
-
     return new XElement(Xhtml.img,
-        new XAttribute("src", filename),
+        new XAttribute("src", $"data:{imageInfo.ContentType};base64,{Convert.ToBase64String(imageInfo.ImageBytes!)}"),
         new XAttribute("alt", imageInfo.AltText ?? ""),
         imageInfo.ImgStyleAttribute);
 };
@@ -669,7 +674,7 @@ Only **HYPERLINK** fields are converted to `<a>` elements. All other field types
 
 ### Image Limitations
 
-- **WMF files excluded** - Known to cause memory issues
+- **TIFF/WMF subsets only** - Unsupported encodings or records produce explicit diagnostics
 - **EMF not supported** - Not in allowed content types
 - **SVG not supported** - Not in allowed content types
 - **Requires ImageHandler** - Returns `null` without callback
