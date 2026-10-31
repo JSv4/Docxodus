@@ -6361,8 +6361,13 @@ namespace Docxodus
             return null;
         }
 
+        private sealed record TableRenderingGrid(Dictionary<XElement, int> RowSpans, int LeadingColumns);
+
         private static object ProcessTable(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
         {
+            element.RemoveAnnotations<TableRenderingGrid>();
+            element.AddAnnotation(new TableRenderingGrid(Internal.TableGridModel.VerticalMergeSpans(element),
+                WordprocessingMLUtil.TableRows(element).Select(Internal.TableGridModel.GridBefore).DefaultIfEmpty(0).Min()));
             var style = new Dictionary<string, string>();
             style.AddIfMissing("border-collapse", "collapse");
             style.AddIfMissing("border", "none");
@@ -6596,11 +6601,7 @@ namespace Docxodus
             // HTML rows contain only the actual cells. A grid prefix omitted by every row
             // must therefore be omitted here too, or CSS assigns its width to the first cell.
             // Nested rows belong to their own grid; rows inside content controls still count.
-            var leadingColumns = tableElement.Descendants(W.tr)
-                .Where(row => row.Ancestors(W.tbl).First() == tableElement)
-                .Select(row => Math.Max(0, (int?)row.Elements(W.trPr).Elements(W.gridBefore)
-                    .Attributes(W.val).FirstOrDefault() ?? 0))
-                .DefaultIfEmpty(0).Min();
+            var leadingColumns = tableElement.Annotation<TableRenderingGrid>()!.LeadingColumns;
             if (leadingColumns >= cols.Count)
                 return null;
 
@@ -6651,35 +6652,14 @@ namespace Docxodus
             var tcPr = element.Element(W.tcPr);
             if (tcPr != null)
             {
-                if ((string?) tcPr.Elements(W.vMerge).Attributes(W.val).FirstOrDefault() == "restart")
+                // Only matched continuations are suppressed. Orphans retain their ordinary cell content.
+                // RenderBlockHtml also converts isolated cells without a table context.
+                var grid = element.Ancestors(W.tbl).FirstOrDefault()?.Annotation<TableRenderingGrid>();
+                if (grid != null && grid.RowSpans.TryGetValue(element, out var span))
                 {
-                    // A w:tc is always inside a w:tr inside a w:tbl.
-                    var currentRow = element.Parent!.ElementsBeforeSelf(W.tr).Count();
-                    var currentCell = element.ElementsBeforeSelf(W.tc).Count();
-                    var tbl = element.Parent!.Parent!;
-                    int rowSpanCount = 1;
-                    currentRow += 1;
-                    while (true)
-                    {
-                        var row = tbl.Elements(W.tr).Skip(currentRow).FirstOrDefault();
-                        if (row == null)
-                            break;
-                        var cell2 = row.Elements(W.tc).Skip(currentCell).FirstOrDefault();
-                        if (cell2 == null)
-                            break;
-                        if (cell2.Elements(W.tcPr).Elements(W.vMerge).FirstOrDefault() == null)
-                            break;
-                        if ((string?) cell2.Elements(W.tcPr).Elements(W.vMerge).Attributes(W.val).FirstOrDefault() == "restart")
-                            break;
-                        currentRow += 1;
-                        rowSpanCount += 1;
-                    }
-                    rowSpan = new XAttribute("rowspan", rowSpanCount);
+                    if (span == 0) return null;
+                    rowSpan = new XAttribute("rowspan", span);
                 }
-
-                if (tcPr.Element(W.vMerge) != null &&
-                    (string?) tcPr.Elements(W.vMerge).Attributes(W.val).FirstOrDefault() != "restart")
-                    return null;
 
                 if (tcPr.Element(W.vAlign) != null)
                 {
@@ -6920,6 +6900,12 @@ namespace Docxodus
             var trHeight = TableRowHeightInTwips(heightElement?.Attribute(W.val));
             var heightRule = (string?)heightElement?.Attribute(W.hRule) ?? "atLeast";
             var cells = element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)).ToList();
+            var grid = element.Ancestors(W.tbl).FirstOrDefault()?.Annotation<TableRenderingGrid>();
+            var omitted = grid == null ? 0 : Internal.TableGridModel.GridBefore(element) - grid.LeadingColumns;
+            if (omitted > 0)
+                cells.Insert(0, new XElement(Xhtml.td, new XAttribute("colspan", omitted),
+                    new XAttribute("aria-hidden", "true"), new XAttribute("style", "border: none; padding: 0;")));
+
             // A collapsed-border table row's CSS height includes half of each horizontal border.
             // w:hRule decides whether w:trHeight does too (issue #1122): an exact height is the
             // row's whole pitch and clips content that needs more, while a minimum height bounds

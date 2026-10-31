@@ -5266,3 +5266,33 @@ paginator now preserves the inline flow slot and promotes the raised box into pa
 using the same source ownership and inherited presentation handling as floating objects.
 The box's internal clipping and the paper boundary remain active. An intervening authored
 clip or unsupported transform keeps the existing completeness failure instead of escaping it.
+
+## Vertical merges follow grid columns, not physical cell positions (#1489)
+
+These two rows merge the same third grid column even though its physical cell index changes
+(paragraphs, widths and the three-column `tblGrid` are omitted for brevity):
+
+```xml
+<w:tr>
+  <w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><!-- TopLeft TopRight --></w:tc>
+  <w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><!-- MergedLabel --></w:tc>
+</w:tr>
+<w:tr>
+  <w:tc><!-- BottomLeft --></w:tc><w:tc><!-- BottomRight --></w:tc>
+  <w:tc><w:tcPr><w:vMerge/></w:tcPr><!-- empty paragraph --></w:tc>
+</w:tr>
+```
+
+| Consumer | Observed behavior |
+|---|---|
+| Word | No fresh capture claimed. |
+| LibreOffice 25.8.7.3 | Preserves the merged third column across both rows, including multi-column and `gridBefore` variants. |
+| Docxodus before fix | Matches physical cell indexes, emits `rowspan="1"`, and discards the continuation. |
+| Docxodus after fix | Matches the shared logical interval and emits `rowspan="2"`; omitted starter columns retain their positions. |
+
+`TableGridModel.VerticalMergeSpans` follows adjacent rows in one pass, reusing the wrapper-aware
+row/cell traversal. `ProcessTableCell` suppresses only matched continuations; orphan or mismatched
+continuations retain their text as ordinary cells. `ProcessTableRow` emits empty cells for omitted
+columns beyond the table's common omitted prefix. A standalone row or cell fragment has no table
+grid context and retains its ordinary content. The paired benchmark independently checks full
+PDF text, column placement and the delivered HTML's merge span.

@@ -349,6 +349,31 @@ public class DocxSessionTableAddressingTests
         Assert.Equal("hdr1", Assert.Single(edit.Modified).Scope);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DT258_WrappedRowsAndCellsKeepTheirOwnStructuralAnchors(bool wrapRow)
+    {
+        static string Wrap(string xml) => "<w:customXml w:element=\"entry\">" + xml + "</w:customXml>";
+        var first = "<w:tr>" + Wrap(CellXml("TopLeft"))
+            + CellXml("MergedRight", "<w:vMerge w:val=\"restart\"/>") + "</w:tr>";
+        var rows = (wrapRow ? Wrap(first) : first) + "<w:tr>" + CellXml("BottomLeft")
+            + CellXml("", "<w:vMerge/>") + "</w:tr>";
+        var document = IrTestDocuments.FromBodyXml(TableXml(Grid(2), rows) + "<w:p/>");
+        AssertSchemaValid(document.DocumentByteArray);
+        using var session = new DocxSession(document.DocumentByteArray);
+        var metadata = session.GetTableMetadata(AnchorId(session, "tbl")).Metadata!;
+        var structure = DocumentStructureAnalyzer.Analyze(document);
+        var structureRows = structure.FindByType(DocumentElementType.TableRow).ToArray();
+        Assert.Equal(metadata.Rows.Select(row => row.Anchor.Id), structureRows.Select(row => row.AnchorId));
+        var cells = structure.FindByType(DocumentElementType.TableCell).ToArray();
+        Assert.Equal(new[] { "TopLeft", "MergedRight", "BottomLeft", "" }, cells.Select(cell => cell.TextPreview ?? ""));
+        Assert.Equal(metadata.Rows.SelectMany(row => row.Cells).Select(cell => cell.Anchor.Id),
+            cells.Select(cell => cell.AnchorId));
+        Assert.Equal(2, cells[1].RowSpan);
+        Assert.Equal(1, cells[1].ColumnIndex);
+    }
+
     [Fact]
     public void DT257_TableInsideRevisionWrapper_HasCanonicalAnchorsAndNativeRowRevision()
     {
