@@ -3021,6 +3021,47 @@ which the bidi algorithm placed by the surrounding RLM marks.
   `ReverseTableBordersForRtlTables`, all reading through `IsOnOffPropertyEnabled`.
 - Tests: `Docxodus.Tests/WmlToHtmlOnOffDirectionTests.cs`.
 
+## Long text after a right tab must remain wrappable (#1488)
+
+With 12 pt Liberation Serif, a Letter page and one-inch margins, this paragraph loses
+most of its following text on main `b3d6de06`. Expand the final `w:t` to eighteen
+numbered sentences, ending in `TAIL COMPLETE`:
+
+```xml
+<w:p>
+  <w:pPr><w:tabs><w:tab w:val="right" w:pos="8640"/></w:tabs></w:pPr>
+  <w:r><w:t>Item</w:t></w:r><w:r><w:tab/></w:r>
+  <w:r><w:t>Wren01 The eastern store keeps every copper token beside the window.
+    ... Wren18 The eastern store keeps every copper token beside the window. TAIL COMPLETE</w:t></w:r>
+</w:p>
+```
+
+The input packages are original, SDK-valid fixtures. The comparison uses LibreOffice
+25.8.7.3 and the public `renderDocxArtifacts` HTML/PDF API, with installed Liberation
+Serif; no fresh Word capture or exact visual equivalence is claimed.
+
+| Case | LibreOffice | Docxodus before |
+|---|---|---|
+| Long right-tab tail, separate or mixed run | All words wrap within the page | A roughly 12,080 px atomic segment loses the tail while reporting complete export |
+| Larger following font or expanded character spacing | Complete, wrapped text | The width reservation ignores following-run font properties or character spacing |
+| Short wide-glyph tail | Complete text | Estimated glyph widths can leave words beyond the text column |
+| Same tail in a VML rectangle textbox | Complete text inside the box | The width lookup recognizes `v:shape` but misses the supported `v:rect` alias |
+| Wrapped title followed by a nearly full-width tail | Complete text on one page | The clipped prefix collapses to a few pixels; its resulting height makes export fail |
+| Left/center, short-tail, long-prefix and long-both controls | Complete text | Complete text |
+
+`CalculateSpanWidthTransform` now measures the following runs' own resolved fonts and
+properties. `CalcWidthOfRunInTwips` includes character spacing. If a following stretch
+exceeds both the text column and its authored stop, the existing run-aware path keeps
+the paragraph fragmentable instead of building an unbounded atomic row. Deliberate
+overhanging stops retain their existing treatment.
+
+The browser remains the authority on actual glyph width: a short following flex item
+can shrink and wrap. In `WrappedSegment`, the title keeps its minimum word width and
+the row can wrap, so an underestimated tail cannot squeeze the clipped title to zero.
+The textbox width helper uses the same `IsVmlShape` predicate as textbox rendering.
+Regression coverage includes text extraction, actual word bounds, a multi-page tail,
+and the fitting title/page-number controls.
+
 ## A right tab stop inside the right indent: the page number reaches the stop
 
 Table-of-contents and index entries often set a right indent, so long titles wrap short of the

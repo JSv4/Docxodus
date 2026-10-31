@@ -95,6 +95,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Long text after a right tab wraps instead of becoming a single atomic row that loses words
+  beyond the page (#1488). Tab measurement uses the following runs' fonts and letter spacing;
+  short tails can also wrap when browser glyph widths exceed the estimate.
+
 - A fitting footnote with an inherited font revision on its source marker exports without a
   false clipping error (#1493). Body and note checks measure nested inline content once per band,
   excluding decorative borders while retaining real text, generated content and image overflow.
