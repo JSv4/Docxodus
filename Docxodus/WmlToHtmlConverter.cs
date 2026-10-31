@@ -6903,8 +6903,11 @@ namespace Docxodus
             var grid = element.Ancestors(W.tbl).FirstOrDefault()?.Annotation<TableRenderingGrid>();
             var omitted = grid == null ? 0 : Internal.TableGridModel.GridBefore(element) - grid.LeadingColumns;
             if (omitted > 0)
+            {
                 cells.Insert(0, new XElement(Xhtml.td, new XAttribute("colspan", omitted),
-                    new XAttribute("aria-hidden", "true"), new XAttribute("style", "border: none; padding: 0;")));
+                    new XAttribute("aria-hidden", "true"), new XAttribute("data-page-map-exclude", "true"),
+                    new XAttribute("style", "border: none; padding: 0;"), OmittedRowHeightStruts(element, grid!)));
+            }
 
             // A collapsed-border table row's CSS height includes half of each horizontal border.
             // w:hRule decides whether w:trHeight does too (issue #1122): an exact height is the
@@ -7009,6 +7012,35 @@ namespace Docxodus
             }
 
             return htmlRow;
+        }
+
+        private static XElement? OmittedRowHeightStruts(XElement row, TableRenderingGrid grid)
+        {
+            var cells = WordprocessingMLUtil.RowCells(row).ToList();
+            if (cells.Any(cell => grid.RowSpans.GetValueOrDefault(cell, 1) == 1))
+                return null; // An ordinary cell already establishes this row's height.
+
+            // A row made only of spanning cells still needs its own line pitch. Overlap one
+            // empty line per restart so the largest font/padding wins, without affecting width,
+            // copying content/anchors, or adding these layout-only boxes to the PageMap.
+            var struts = new XElement(Xhtml.div,
+                new XAttribute("style", "display: grid; width: 0; overflow: hidden; visibility: hidden;"));
+            foreach (var cell in cells.Where(cell => grid.RowSpans.GetValueOrDefault(cell) > 1))
+            {
+                var paragraph = cell.DescendantsTrimmed(W.tbl).FirstOrDefault(e => e.Name == W.p);
+                if (paragraph == null) continue;
+                var style = DefineParagraphStyle(paragraph, Xhtml.p, false, 0m, false);
+                style["grid-area"] = "1 / 1";
+                style["margin-left"] = style["margin-right"] = style["text-indent"] = "0";
+                foreach (var side in new[] { W.top, W.bottom })
+                    style["padding-" + side.LocalName] = string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt",
+                        CellMarginTwips(cell, side) / 20m);
+                var strut = new XElement(Xhtml.p, new XElement(Xhtml.span, "\u00a0"));
+                ApplyAutomaticLineSpacingToInlineContent(strut, style);
+                strut.AddAnnotation(style);
+                struts.Add(strut);
+            }
+            return struts.HasElements ? struts : null;
         }
 
         private static bool HasHiddenParagraphMark(XElement? element)

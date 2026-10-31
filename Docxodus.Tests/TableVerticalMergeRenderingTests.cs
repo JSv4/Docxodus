@@ -77,7 +77,12 @@ public class TableVerticalMergeRenderingTests
         var cells = rows[0].Elements(Xhtml.td).ToArray();
         Assert.Equal(commonPrefix ? 1 : 2, cells.Length);
         if (!commonPrefix)
-            Assert.Empty(cells[0].Value);
+        {
+            Assert.True(string.IsNullOrWhiteSpace(cells[0].Value));
+            Assert.Contains("visibility: hidden", (string?)cells[0].Element(Xhtml.div)?.Attribute("style"));
+            Assert.Equal("true", (string?)cells[0].Attribute("data-page-map-exclude"));
+            Assert.Empty(cells[0].DescendantsAndSelf().Attributes("data-source-anchor-id"));
+        }
         Assert.Contains("Merged", cells[^1].Value);
         Assert.Equal(2, (int?)cells[^1].Attribute("rowspan"));
     }
@@ -98,6 +103,32 @@ public class TableVerticalMergeRenderingTests
         }
         Measure(10); // JIT outside the allocation comparison.
         Assert.True(Measure(2000) < 3 * Measure(1000), "Doubling a merge must not quadruple grid allocations.");
+    }
+
+    [Theory]
+    [InlineData("auto", 240, false)]
+    [InlineData("auto", 480, true)]
+    [InlineData("exact", 360, true)]
+    public void OmittedStarterPreservesItsFirstLineFormatting(string rule, int line, bool wrapped)
+    {
+        var start = Cell("Merged", 1, "restart");
+        start.Element(W.tcPr)!.Add(new XElement(W.tcMar,
+            new XElement(W.top, new XAttribute(W._w, 80), new XAttribute(W.type, "dxa")),
+            new XElement(W.bottom, new XAttribute(W._w, 120), new XAttribute(W.type, "dxa"))));
+        var paragraph = start.Element(W.p)!;
+        paragraph.AddFirst(new XElement(W.pPr, new XElement(W.spacing,
+            new XAttribute(W.line, line), new XAttribute(W.lineRule, rule))));
+        paragraph.Element(W.r)!.AddFirst(new XElement(W.rPr, new XElement(W.sz, new XAttribute(W.val, 48))));
+        if (wrapped)
+            paragraph.ReplaceWith(new XElement(W.customXml, new XAttribute(W.element, "entry"), new XElement(paragraph)));
+        var html = Render(Row(1, start), Row(0, Cell("Left"), Cell("", 1, "continue")));
+        var spacer = html.Descendants(Xhtml.td).First();
+        var style = (string)spacer.Descendants(Xhtml.p).Single().Attribute("style")!;
+        Assert.Contains("font-size: 24pt", style);
+        Assert.Contains("padding-top: 4pt", style);
+        Assert.Contains("padding-bottom: 6pt", style);
+        Assert.Contains(rule == "exact" ? "line-height: 18.0pt" : "--docx-auto-line-spacing: " + line / 240, style);
+        Assert.True(string.IsNullOrWhiteSpace(spacer.Value));
     }
 
     [Theory]
