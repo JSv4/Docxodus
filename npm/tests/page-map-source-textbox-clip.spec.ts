@@ -4,6 +4,95 @@ import { fileURLToPath } from 'node:url';
 
 const bundle = join(dirname(fileURLToPath(import.meta.url)), '../dist/pagination.bundle.js');
 
+for (const change of ['none', 'zoom-half', 'zoom-small', 'zoom-large', 'zoom-double', 'upper-edge', 'partial-source', 'partial-before', 'partial-after', 'before-placement', 'offset-before', 'transform-before', 'after-placement', 'font', 'box'] as const) {
+  test(`partial source placement preserves original ink geometry: ${change}`, async ({ page }) => {
+    await page.setContent(`<div id="pagination-staging"><div data-section-index="0"
+      data-page-width="300" data-page-height="360" data-content-width="228" data-content-height="288"
+      data-margin-top="36" data-margin-right="36" data-margin-bottom="36" data-margin-left="36">
+      <p data-source-anchor-id="p:body:host" style="font:10pt/12pt Arial;margin:0">Birch host
+        <span data-docx-textbox="true" data-docx-textbox-clip="true" data-docx-textbox-source-position="true"
+          data-docx-drawing-anchor="true" data-docx-anchor-h-relative="page" data-docx-anchor-v-relative="page"
+          data-docx-anchor-h-offset="36" data-docx-anchor-v-offset="330"
+          style="display:inline-block;position:absolute;width:160pt;height:70pt;overflow:hidden">
+          <span data-source-anchor-id="p:body:visible" style="display:block;font:10pt/12pt Arial;margin-top:10pt">Birch visible</span>
+          <span data-source-anchor-id="p:body:marker" style="display:block;font:10pt/12pt Arial;margin-top:30pt">¶</span>
+        </span></p></div></div><div id="pagination-container"></div>`);
+    await page.addScriptTag({ path: bundle });
+    const result = await page.evaluate(change => {
+      try {
+        if (change === 'partial-source')
+          document.querySelector<HTMLElement>('[data-source-anchor-id="p:body:visible"]')!.style.transform = 'translateY(14pt)';
+        if (change === 'upper-edge') {
+          const box = document.querySelector<HTMLElement>('[data-docx-textbox]')!;
+          const marker = box.querySelector('[data-source-anchor-id="p:body:marker"]')!;
+          const range = document.createRange();
+          range.selectNodeContents(marker);
+          const bottom = range.getBoundingClientRect().bottom - box.getBoundingClientRect().top;
+          box.dataset.docxAnchorVOffset = String((-bottom + 0.1) * 0.75);
+        }
+        const engine = new (window as any).DocxodusPagination.PaginationEngine('pagination-staging', 'pagination-container', { showPageNumbers: false, scale: change === 'zoom-half' ? 0.5 : change === 'zoom-small' || change === 'upper-edge' ? 0.7 : change === 'zoom-large' ? 1.25 : change === 'zoom-double' ? 2 : 1 });
+        if (['partial-before', 'before-placement', 'offset-before', 'transform-before'].includes(change)) {
+          const position = engine.positionDrawingAnchors.bind(engine);
+          engine.positionDrawingAnchors = (...args: any[]) => {
+            for (const box of args[1].querySelectorAll('[data-docx-textbox]')) {
+              if (change === 'partial-before') box.firstElementChild.style.transform = 'translateY(14pt)';
+              if (change === 'before-placement') box.firstElementChild.style.marginTop = '40pt';
+              if (change === 'offset-before') box.dataset.docxAnchorVOffset = '359';
+              if (change === 'transform-before') box.style.transform = 'translateY(29pt)';
+            }
+            return position(...args);
+          };
+        }
+        engine.paginate();
+        const root = document.getElementById('pagination-container')!;
+        const box = root.querySelector<HTMLElement>('[data-docx-textbox]')!;
+        if (change === 'partial-after') engine.materializePageMap(0, 'before-mutation');
+        if (change === 'partial-after') root.querySelector<HTMLElement>('[data-source-anchor-id="p:body:visible"]')!.style.transform = 'translateY(14pt)';
+        if (change === 'after-placement') root.querySelector<HTMLElement>('[data-source-anchor-id="p:body:visible"]')!.style.marginTop = '40pt';
+        if (change === 'font') root.querySelector<HTMLElement>('[data-source-anchor-id="p:body:marker"]')!.style.fontSize = '15pt';
+        if (change === 'box') box.style.top = '340pt';
+        const map = engine.materializePageMap(0, 'birch-edge');
+        return { error: '', anchors: map.fragments.map((f: any) => f.anchorId), clipped: engine.getSourceClippedTextAnchors() };
+      } catch (error) { return { error: String(error), anchors: [], clipped: [] }; }
+    }, change);
+    if (change === 'none' || change.startsWith('zoom-')) {
+      expect(result.error).toBe('');
+      expect(result.anchors).toContain('p:body:visible');
+      expect(result.clipped).toEqual(['p:body:marker']);
+    } else if (change === 'upper-edge') {
+      expect(result.clipped).not.toContain('p:body:marker');
+      if (!result.error) expect(result.anchors).toContain('p:body:marker');
+      else expect(result.error).toContain('has no measurable fragment');
+    } else expect(result.error).toContain('has no measurable fragment');
+  });
+}
+
+test('off-paper textbox verification scans source text linearly', async ({ page }) => {
+  const paragraphs = 100;
+  await page.setContent(`<div id="pagination-staging"><div data-section-index="0"
+    data-page-width="300" data-page-height="360" data-content-width="228" data-content-height="288"
+    data-margin-top="36" data-margin-right="36" data-margin-bottom="36" data-margin-left="36">
+    <p data-source-anchor-id="p:body:host">Birch host<span data-docx-textbox="true" data-docx-textbox-clip="true"
+      data-docx-textbox-source-position="true" data-docx-drawing-anchor="true"
+      data-docx-anchor-h-relative="page" data-docx-anchor-v-relative="page"
+      data-docx-anchor-h-offset="36" data-docx-anchor-v-offset="400"
+      style="display:inline-block;position:absolute;width:160pt;height:70pt;overflow:hidden">
+      ${Array.from({ length: paragraphs }, (_, i) => `<span data-source-anchor-id="p:body:t${i}" style="display:block">Birch ${i}</span>`).join('')}
+    </span></p></div></div><div id="pagination-container"></div>`);
+  await page.addScriptTag({ path: bundle });
+  const result = await page.evaluate(() => {
+    let ranges = 0;
+    const createRange = document.createRange.bind(document);
+    document.createRange = () => { ranges++; return createRange(); };
+    const engine = new (window as any).DocxodusPagination.PaginationEngine('pagination-staging', 'pagination-container', { showPageNumbers: false });
+    engine.paginate();
+    engine.materializePageMap(0, 'linear-source-scan');
+    return { ranges, clipped: engine.getSourceClippedTextAnchors().length };
+  });
+  expect(result.clipped).toBe(paragraphs);
+  expect(result.ranges).toBeLessThanOrEqual(paragraphs * 10);
+});
+
 for (const kind of ['fixed', 'unmarked', 'linked', 'autofit', 'partial', 'percentage', 'inactive-percentage', 'visible-zero-width', 'blank-zero-outside', 'blank-zero-inside', 'blank-zero-unmarked', 'unclipped', 'new-loss', 'removed', 'replaced', 'moved', 'ordinary-off-paper'] as const) {
   test(`source textbox clipping preserves the ${kind} completeness boundary`, async ({ page }) => {
     await page.setContent('<div id="viewer"></div>');

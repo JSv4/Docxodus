@@ -685,8 +685,12 @@ function eligibleSourceTextBox(box: HTMLElement, placement = false): boolean {
 function sourcePlacementBounds(box: DOMRect, rects: DOMRect[], paper: DOMRect): number[] | undefined {
   const outside = (rect: DOMRect) => rect.right <= paper.left || rect.left >= paper.right
     || rect.bottom <= paper.top || rect.top >= paper.bottom;
-  if (!(box.width > 0 && box.height > 0) || !rects.length || !outside(box) || !rects.every(outside)) return;
-  return [box, ...rects].flatMap(rect => [rect.left - paper.left, rect.top - paper.top, rect.width, rect.height]);
+  if (!(box.width > 0 && box.height > 0) || !rects.length || !rects.every(outside)) return;
+  return textBounds(box, rects, paper);
+}
+
+function textBounds(box: DOMRect, rects: DOMRect[], origin: DOMRect): number[] {
+  return [box, ...rects].flatMap(rect => [rect.left - origin.left, rect.top - origin.top, rect.width, rect.height]);
 }
 
 function sourceTextRects(view: Window & typeof globalThis, element: HTMLElement, checkpoint: () => void): DOMRect[] {
@@ -902,6 +906,7 @@ export class PaginationEngine {
   private inspectedSourceText = new WeakSet<HTMLElement>();
   private sourceClipBoxSequence = 0;
   private initiallyClippedText = new Map<string, { boxId: string; text: string; placement?: number[]; host?: { id: string; bounds: number[] } }>();
+  private sourceTextPlacement = new Map<string, { identity: string; bounds: number[] }>();
   private lastClippedTextAnchors: string[] = [];
   private state: "ready" | "running" | "complete" | "failed" = "ready";
   private runningStyleSources: StyleReferenceSource[] = [];
@@ -1116,6 +1121,7 @@ export class PaginationEngine {
     this.inspectedSourceText = new WeakSet();
     this.sourceClipBoxSequence = 0;
     this.initiallyClippedText.clear();
+    this.sourceTextPlacement.clear();
     this.lastClippedTextAnchors = [];
 
     // Parse the header/footer registry if present
@@ -1621,6 +1627,7 @@ export class PaginationEngine {
     const unpaintedAnchorIds = new Set<string>();
     const clippedTextAnchorIds = new Set<string>();
     const emittedFragmentCounts = new Map<string, number>();
+    const partialTextBoxInk = new Map<HTMLElement, boolean>();
     for (const page of this.lastPages) {
       this.checkpoint();
       const pageRect = page.element.getBoundingClientRect();
@@ -1659,7 +1666,7 @@ export class PaginationEngine {
           const collapsedBlankLine = rect.height === 0 && style.fontSize === "0px" && rendersOnlyItsLine(element);
           if (collapsedBlankLine || clippedAwayByExactRow(element, rect) || blankLineClippedByTextBox(this.view, element, rect, pageRect))
             unpaintedAnchorIds.add(anchorId);
-          else if (this.isInitiallyClippedText(element, pageRect, page.element)) {
+          else if (this.isInitiallyClippedText(element, pageRect, page.element, partialTextBoxInk)) {
             unpaintedAnchorIds.add(anchorId);
             clippedTextAnchorIds.add(anchorId);
           }
@@ -1798,7 +1805,24 @@ export class PaginationEngine {
     return [...this.lastClippedTextAnchors];
   }
 
-  private captureSourceTextClip(element: HTMLElement, paper?: DOMRect, paragraph?: HTMLElement | null): void {
+  private sourceTextPlacementBounds(owner: HTMLElement, rects: DOMRect[], paper: DOMRect,
+    partialInk?: Map<HTMLElement, boolean>): number[] | undefined {
+    const bounds = sourcePlacementBounds(owner.getBoundingClientRect(), rects, paper);
+    if (!bounds) return;
+    let partial = partialInk?.get(owner);
+    if (partial === undefined) {
+      // A hidden paragraph cannot excuse sibling ink cut by the paper edge. Cache only within
+      // one placement batch or read-only map pass; later layout must measure the owner again.
+      partial = sourceTextRects(this.view, owner, () => this.checkpoint()).some(rect =>
+        rect.right > paper.left && rect.left < paper.right && rect.bottom > paper.top && rect.top < paper.bottom
+        && (rect.left < paper.left || rect.right > paper.right || rect.top < paper.top || rect.bottom > paper.bottom));
+      partialInk?.set(owner, partial);
+    }
+    return partial ? undefined : bounds;
+  }
+
+  private captureSourceTextClip(element: HTMLElement, paper?: DOMRect, paragraph?: HTMLElement | null,
+    partialInk?: Map<HTMLElement, boolean>): void {
     if (!paper) {
       if (this.inspectedSourceText.has(element)) return;
       this.inspectedSourceText.add(element);
@@ -1815,8 +1839,31 @@ export class PaginationEngine {
     const text = (element.textContent ?? '').replace(/\s/g, '');
     if (!text) return;
     const rects = sourceTextRects(this.view, element, () => this.checkpoint());
-    if (paper && eligibleSourceTextBox(owner, true)) {
-      const placement = sourcePlacementBounds(owner.getBoundingClientRect(), rects, paper);
+    let originalOutside = false;
+    if (eligibleSourceTextBox(owner, true)) {
+      const box = owner.getBoundingClientRect();
+      const style = this.view.getComputedStyle(owner);
+      const identity = JSON.stringify([boxId, text, style.transform, style.translate, style.rotate, style.scale,
+        ...Array.from(owner.attributes).filter(a => a.name.startsWith('data-docx-anchor-') && a.name !== DRAWING_HOST_ATTRIBUTE).map(a => [a.name, a.value])]);
+      const bounds = textBounds(box, [element.getBoundingClientRect(), ...rects], box)
+        .map(value => value / (paper ? this.scale : 1));
+      if (!paper) this.sourceTextPlacement.set(anchorId, { identity, bounds });
+      else {
+        const source = this.sourceTextPlacement.get(anchorId);
+        if (!source || source.identity !== identity || source.bounds.length !== bounds.length
+          || bounds.some((value, index) => Math.abs(value - source.bounds[index]) >= 0.1
+            && !(this.scale !== 1 && index >= 8 && index % 2 === 1))) return;
+        // Zoom rounds Range glyph ascents/heights; the box and paragraph geometry stays bound.
+        // Both original and actual ink must be off paper, so rounding cannot excuse new loss.
+        const original = [];
+        for (let i = 8; i < source.bounds.length; i += 4)
+          original.push(new this.view.DOMRect(box.left + source.bounds[i] * this.scale,
+            box.top + source.bounds[i + 1] * this.scale, source.bounds[i + 2] * this.scale, source.bounds[i + 3] * this.scale));
+        originalOutside = sourcePlacementBounds(box, original, paper) !== undefined;
+      }
+    }
+    if (paper && originalOutside && eligibleSourceTextBox(owner, true)) {
+      const placement = this.sourceTextPlacementBounds(owner, rects, paper, partialInk);
       if (placement) {
         let host: { id: string; bounds: number[] } | undefined;
         if (owner.dataset.docxAnchorVRelative === 'paragraph') {
@@ -1846,7 +1893,8 @@ export class PaginationEngine {
       this.initiallyClippedText.set(anchorId, { boxId, text });
   }
 
-  private isInitiallyClippedText(element: HTMLElement, page: DOMRect, pageElement: HTMLElement): boolean {
+  private isInitiallyClippedText(element: HTMLElement, page: DOMRect, pageElement: HTMLElement,
+    partialInk: Map<HTMLElement, boolean>): boolean {
     const proof = this.initiallyClippedText.get(element.dataset.sourceAnchorId ?? '');
     if (!proof || (element.textContent ?? '').replace(/\s/g, '') !== proof.text) return false;
     const rects = sourceTextRects(this.view, element, () => this.checkpoint());
@@ -1860,7 +1908,7 @@ export class PaginationEngine {
       }
       const owner = element.parentElement?.closest<HTMLElement>('[data-docx-textbox-source-position="true"]');
       if (!owner || owner.dataset.docxSourceClipId !== proof.boxId || !eligibleSourceTextBox(owner, true)) return false;
-      const bounds = sourcePlacementBounds(owner.getBoundingClientRect(), rects, page);
+      const bounds = this.sourceTextPlacementBounds(owner, rects, page, partialInk);
       return bounds?.length === proof.placement.length
         && bounds.every((value, index) => Math.abs(value - proof.placement![index]) < 0.1);
     }
@@ -6895,8 +6943,9 @@ export class PaginationEngine {
       anchor.style.left = `${left}pt`;
       anchor.style.top = `${top}pt`;
       anchor.style.margin = '0';
+      const partialTextBoxInk = new Map<HTMLElement, boolean>();
       for (const source of Array.from(anchor.querySelectorAll<HTMLElement>('[data-source-anchor-id]')))
-        this.captureSourceTextClip(source, pageRect, paragraph);
+        this.captureSourceTextClip(source, pageRect, paragraph, partialTextBoxInk);
     }
 
     // relativeHeight is an unsigned 32-bit value; using it directly as a CSS z-index would
