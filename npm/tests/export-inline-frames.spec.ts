@@ -148,16 +148,12 @@ for (const wrap of ['around', 'notBeside'] as const) {
       expect(after.transform[4]).toBeCloseTo(wrap === 'around' ? 270 : 72, 0);
       expect(first.transform[5] - before.transform[5]).toBeCloseTo(-12, 0);
       expect(first.transform[5] - after.transform[5]).toBeCloseTo(wrap === 'around' ? 0 : 24, 0);
-      expect(result.renderReport.unsupportedContent).toEqual(wrap === 'around'
-        ? [expect.objectContaining({ contentType: 'Other', action: 'placeholder' })] : []);
+      expect(result.renderReport.unsupportedContent).toEqual([]);
     } finally { await task.destroy(); }
   });
 }
 
 for (const [name, frameOptions, left] of [
-  ['centered wrapping', { wrap: 'around', horizontalAlign: 'center' }, 216],
-  ['right wrapping', { wrap: 'around', horizontalAlign: 'right' }, 360],
-  ['page-relative wrapping', { wrap: 'around', horizontalAnchor: 'page' }, 12],
   ['around vertical distance', { wrap: 'around', verticalTextDistance: 4 }, 84],
   ['notBeside vertical distance', { wrap: 'notBeside', verticalTextDistance: 4 }, 84],
 ] as const) {
@@ -229,11 +225,16 @@ test('inline left-edge horizontal text distance remains exact under strict polic
   } finally { await task.destroy(); }
 });
 
-test('inline explicit interior offset diagnoses conservative one-sided wrapping', async ({ browser }) => {
-  const input = inlineFrameFixture({ wrap: 'around', horizontalOffset: '2880', tailWords: 16 });
-  const options = { browser, outputs: ['pdf'] as const, reviewProfile: 'final' as const, commentProfile: 'hidden' as const, timeoutMs: 120_000 };
-  const result = await renderDocxArtifacts(input, options);
-  expect(result.renderReport.unsupportedContent).toEqual([expect.objectContaining({ contentType: 'Other' })]);
+for (const [name, placement, left, tailLeft] of [
+  ['center', { horizontalAlign: 'center' }, 216, 72],
+  ['interior', { horizontalOffset: '2880' }, 216, 72],
+  ['right', { horizontalAlign: 'right' }, 360, 72],
+  ['page', { horizontalAnchor: 'page' }, 12, 192],
+] as const) test(`inline ${name} frame wraps complete text in the available intervals under strict policy`, async ({ browser, page }) => {
+  const input = inlineFrameFixture({ wrap: 'around', ...placement, tailWords: 16 });
+  const result = await renderDocxArtifacts(input, { browser, outputs: ['html', 'pdf'], reviewProfile: 'final',
+    commentProfile: 'hidden', unsupportedContent: 'strict', timeoutMs: 120_000 });
+  expect(result.renderReport.unsupportedContent).toEqual([]);
   const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
   try {
     const pdf = await task.promise;
@@ -245,12 +246,34 @@ test('inline explicit interior offset diagnoses conservative one-sided wrapping'
       expect(tokens.filter(token => token === text)).toHaveLength(1);
     }
     const frame = items.find(item => item.str === 'SageFrameFirst')!, tail = items.find(item => item.str.startsWith('SageTail000'))!;
-    expect(frame.transform[4]).toBeCloseTo(216, 0);
-    expect(tail.transform[4]).toBeCloseTo(396, 0);
+    expect(frame.transform[4]).toBeCloseTo(left, 0);
+    expect(tail.transform[4]).toBeCloseTo(tailLeft, 0);
     expect(tail.transform[5]).toBeCloseTo(frame.transform[5], 0);
+    if (name === 'center' || name === 'interior') {
+      const other = items.find(item => item.str.startsWith('SageTail002'))!;
+      expect(other.transform[4]).toBeCloseTo(396, 0);
+      expect(other.transform[5]).toBeCloseTo(tail.transform[5], 0);
+    }
   } finally { await task.destroy(); }
+  await page.setContent(result.html!);
+  const owners = await page.locator('.page-box p').evaluateAll(paragraphs => paragraphs.map(p => (p as HTMLElement).dataset.sourceAnchorId));
+  expect(owners).toHaveLength(4);
+  for (const anchorId of owners) {
+    expect(anchorId).toBeTruthy();
+    expect(result.pageMap.fragments.filter(fragment => fragment.anchorId === anchorId)).toEqual([
+      expect.objectContaining({ pageNumber: 1, story: 'body' }),
+    ]);
+  }
+});
+
+test('mixed bidi text retains the interval warning and strict refusal after pagination', async ({ browser }) => {
+  const input = inlineFrameFixture({ wrap: 'around', horizontalAlign: 'center', tailWords: 16, tailPrefix: 'אבג דהו ' });
+  const options = { browser, outputs: ['html'] as const, reviewProfile: 'final' as const, commentProfile: 'hidden' as const, timeoutMs: 120_000 };
+  const result = await renderDocxArtifacts(input, options);
+  expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'unsupported_content_placeholder', phase: 'pagination' }));
+  expect(result.renderReport.unsupportedContent).toEqual([expect.objectContaining({ contentType: 'Other' })]);
   await expect(renderDocxArtifacts(input, { ...options, unsupportedContent: 'strict' }))
-    .rejects.toMatchObject({ code: 'resource_policy_failure' });
+    .rejects.toMatchObject({ code: 'resource_policy_failure', phase: 'pagination' });
 });
 
 for (const mode of ['notBeside', 'around', 'floating'] as const) {

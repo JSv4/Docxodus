@@ -95,6 +95,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Inline paragraph frames now wrap supported text through both available line intervals at
+  centered and interior positions, and honor right/page-relative placement during measurement
+  and painting. Fragmented paragraphs retain source ownership; unsupported arrangements keep
+  explicit diagnostics and strict export refusal (#1509).
+
 - Long endnote-style comments now split across pages while retaining their metadata, reply
   nesting, return links, and comment/paragraph PageMap ownership (#1505).
 

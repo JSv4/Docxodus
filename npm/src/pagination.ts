@@ -94,7 +94,7 @@ interface PreparedRunningStories {
   footerHeight: number;
 }
 
-type FrameExclusion = { top: number; bottom: number; right: number };
+type FrameExclusion = { top: number; bottom: number; left: number; right: number };
 
 /**
  * A measured content block with metadata for pagination decisions.
@@ -1511,11 +1511,14 @@ export class PaginationEngine {
 
   /** Measurement and page cloning share these exact resolved stories within a pass. */
   private prepareRunningStories(
-    dims: PageDimensions, sectionIndex: number, pageInSection: number, displayed: number,
+    dims: PageDimensions, sectionIndex: number, pageInSection: number, displayed: number, physical = displayed,
   ): PreparedRunningStories | undefined {
-    if (this.runningStyleSources.length === 0) return undefined;
+    const headerSource = this.selectHeader(sectionIndex, pageInSection, displayed);
+    const footerSource = this.selectFooter(sectionIndex, pageInSection, displayed);
+    if (this.runningStyleSources.length === 0
+      && ![headerSource, footerSource].some(source => source?.querySelector('[data-docx-frame-exclusion]'))) return undefined;
     const pageKey = this.runningStylePageKey(sectionIndex, pageInSection, displayed);
-    const key = `${pageKey}:${dims.contentWidth}`;
+    const key = `${pageKey}:${dims.contentWidth}:${physical}`;
     const cached = this.preparedRunningStories.get(key);
     if (cached) return cached;
     const context = this.runningStyleContexts.get(pageKey) ?? this.runningStyleDefaults;
@@ -1531,11 +1534,11 @@ export class PaginationEngine {
       this.substituteStoryPageNumbers(clone, sectionIndex, displayed, this.runningStylePageCount);
       return clone;
     };
-    const header = prepare(this.selectHeader(sectionIndex, pageInSection, displayed));
-    const footer = prepare(this.selectFooter(sectionIndex, pageInSection, displayed));
+    const header = prepare(headerSource);
+    const footer = prepare(footerSource);
     const result = { header, footer,
-      headerHeight: header ? this.measureHeaderFooterHeight(header, dims) : 0,
-      footerHeight: footer ? this.measureHeaderFooterHeight(footer, dims) : 0 };
+      headerHeight: header ? this.measureHeaderFooterHeight(header, dims, physical) : 0,
+      footerHeight: footer ? this.measureHeaderFooterHeight(footer, dims, physical) : 0 };
     this.preparedRunningStories.set(key, result);
     return result;
   }
@@ -2712,6 +2715,7 @@ export class PaginationEngine {
     dims: PageDimensions,
     sectionIndex: number,
     preceding: readonly HTMLElement[] = [],
+    pageNumber = Number(element.dataset.paginationPhysicalPage ?? 1),
   ): MeasuredBlock {
     element.dataset.paginationSection = String(sectionIndex);
     const measurementHost = this.document.createElement("div");
@@ -2725,7 +2729,7 @@ export class PaginationEngine {
       [...preceding.map(previous => previous.cloneNode(true) as HTMLElement), measuredElement], dims);
     this.stagingElement.appendChild(measurementHost);
 
-    this.prepareFrameExclusions(measurementHost);
+    this.prepareFrameExclusions(measurementHost, dims, pageNumber);
     const rect = measuredElement.getBoundingClientRect();
     const margins = collapsedBlockMarginsPx(this.view, measuredElement);
     let clearancePt = 0;
@@ -2733,11 +2737,7 @@ export class PaginationEngine {
       // A table/formatting context can move below a float without growing its own box.
       // Replace it briefly with an ordinary block to measure the un-cleared position;
       // inserting a sibling instead would count the table's top margin twice.
-      const flowPosition = this.document.createElement('div');
-      flowPosition.style.cssText = `height:1px;margin-top:${margins.topPx}px`;
-      measuredElement.replaceWith(flowPosition);
-      clearancePt = pxToPt(Math.max(0, rect.top - flowPosition.getBoundingClientRect().top));
-      flowPosition.replaceWith(measuredElement);
+      clearancePt = pxToPt(Math.max(0, rect.top - this.unclearedBlockTop(measuredElement)));
     }
     const frameBottoms = Array.from(measurementHost.querySelectorAll<HTMLElement>('[data-docx-frame-exclusion]'))
       .filter(frame => !frame.closest('[data-docx-textbox]'))
@@ -3385,7 +3385,7 @@ export class PaginationEngine {
     const atomicAncestor = (element: Element | null): HTMLElement | null => {
       let outer: HTMLElement | null = null;
       for (let current = element; current && current !== paragraph; current = current.parentElement) {
-        if (layoutAtoms.has(current as HTMLElement) || current.matches("[data-field], [data-docx-word-line=true]")) {
+        if (layoutAtoms.has(current as HTMLElement) || current.matches("[data-field], [data-docx-word-line=true], [data-docx-frame-line]")) {
           outer = current as HTMLElement;
         }
       }
@@ -3482,7 +3482,7 @@ export class PaginationEngine {
       // receives one boundary outside its wrapper below; a list marker stays
       // with the first real text fragment and is never emitted by itself.
       const atomic = node.parentElement?.closest<HTMLElement>(
-        "[data-field], [data-list-marker], a[data-comment-id], [data-docx-word-line=true]",
+        "[data-field], [data-list-marker], a[data-comment-id], [data-docx-word-line=true], [data-docx-frame-line]",
       );
       if (atomicAncestor(node.parentElement) || (atomic && paragraph.contains(atomic))) continue;
 
@@ -3770,8 +3770,9 @@ export class PaginationEngine {
   private rangeAtomicInlineBoxes(paragraph: HTMLElement): Set<HTMLElement> {
     const boxes = new Set<HTMLElement>();
     for (const marker of Array.from(paragraph.querySelectorAll<HTMLElement>(
-      '[data-docx-shape="unrendered"], [data-docx-tab], [data-docx-ruby="true"]',
+      '[data-docx-shape="unrendered"], [data-docx-tab], [data-docx-ruby="true"], [data-docx-frame-line]',
     ))) {
+      if (marker.hasAttribute('data-docx-frame-line')) { boxes.add(marker); continue; }
       let box: HTMLElement | null = marker;
       if (marker.hasAttribute("data-docx-tab")) {
         if (marker.childNodes.length || this.view.getComputedStyle(marker).height !== "0px") continue;
@@ -4309,7 +4310,7 @@ export class PaginationEngine {
         [...prefix.map(previous => previous.cloneNode(true) as HTMLElement), paragraph], dims);
       this.stagingElement.appendChild(host);
     }
-    if (host) this.prepareFrameExclusions(host);
+    if (host) this.prepareFrameExclusions(host, dims, Number(paragraph.dataset.paginationPhysicalPage ?? 1));
     let split: ParagraphSplitAttempt;
     try {
       if (!this.canFragmentParagraph({ ...block, element: paragraph }, relaxKeepLines)) return null;
@@ -5486,8 +5487,9 @@ export class PaginationEngine {
     sectionIndex: number,
     pageInSection: number,
     displayedPageNumber: number,
+    physical = displayedPageNumber,
   ): PageBands {
-    const prepared = this.prepareRunningStories(dims, sectionIndex, pageInSection, displayedPageNumber);
+    const prepared = this.prepareRunningStories(dims, sectionIndex, pageInSection, displayedPageNumber, physical);
     if (prepared) return resolvePageBands(dims, prepared.headerHeight, prepared.footerHeight);
     const sectionHf = this.hfRegistry.get(sectionIndex);
     return resolvePageBands(
@@ -5526,15 +5528,15 @@ export class PaginationEngine {
   }
 
   /** Carry the selected header's overhanging frame exclusion into body layout, without its text. */
-  private headerFramePrefix(dims: PageDimensions, section: number, page: number, displayed: number): HTMLElement[] {
-    const prepared = this.prepareRunningStories(dims, section, page, displayed);
+  private headerFramePrefix(dims: PageDimensions, section: number, page: number, displayed: number, physical = displayed): HTMLElement[] {
+    const prepared = this.prepareRunningStories(dims, section, page, displayed, physical);
     const source = prepared ? prepared.header : this.selectHeader(section, page, displayed);
     const measured = source ? this.storyFrameExclusions.get(source) ?? [] : [];
     if (measured.length === 0) return [];
-    const bands = this.getPageBands(dims, section, page, displayed);
+    const bands = this.getPageBands(dims, section, page, displayed, physical);
     const offset = bands.headerTop - bands.bodyTop;
     const rectangles = measured
-      .map(rect => ({ top: Math.max(0, rect.top + offset), bottom: rect.bottom + offset, right: rect.right }))
+      .map(rect => ({ top: Math.max(0, rect.top + offset), bottom: rect.bottom + offset, left: rect.left, right: rect.right }))
       .filter(rect => rect.bottom > rect.top && rect.right > 0);
     if (rectangles.length === 0) return [];
     const exclusion = this.document.createElement('div');
@@ -5551,7 +5553,7 @@ export class PaginationEngine {
       .map(frame => {
         const rect = frame.getBoundingClientRect();
         const distance = parseFloat(this.view.getComputedStyle(frame).marginRight) || 0;
-        return { top: pxToPt(rect.top - origin.top), bottom: pxToPt(rect.bottom - origin.top), right: pxToPt(rect.right - origin.left + distance) };
+        return { top: pxToPt(rect.top - origin.top), bottom: pxToPt(rect.bottom - origin.top), left: pxToPt(rect.left - origin.left - distance), right: pxToPt(rect.right - origin.left + distance) };
       });
   }
 
@@ -5573,7 +5575,120 @@ export class PaginationEngine {
     return `polygon(${points.join(',')})`;
   }
 
-  private prepareFrameExclusions(host: HTMLElement): void {
+  /** Probe ordinary flow without changing the preceding paragraphs' float wrapping. */
+  private unclearedBlockTop(element: HTMLElement): number {
+    const probe = this.document.createElement('div');
+    probe.style.cssText = `height:1px;margin-top:${collapsedBlockMarginsPx(this.view, element).topPx}px`;
+    element.replaceWith(probe);
+    const top = probe.getBoundingClientRect().top;
+    probe.replaceWith(element);
+    return top;
+  }
+
+  /** Lay out each source line in the intervals left by the union of frame rectangles. */
+  private layoutFrameParagraph(paragraph: HTMLElement, rectangles: FrameExclusion[], scale: number): boolean {
+    const style = this.view.getComputedStyle(paragraph);
+    if (!this.hasVisibleText(paragraph.textContent ?? '') && !paragraph.querySelector('img')) return true;
+    if (style.direction !== 'ltr' || style.writingMode !== 'horizontal-tb' || paragraph.querySelector('br,img,svg')
+      || !this.hasRangeFragmentSafeLayout(paragraph, false, true)) return false;
+    // Independent intervals do not share a bidi ordering context. Keep complex scripts
+    // diagnosed, as the precision text fitter does, until that ordering is implemented.
+    if (!/^[\u0020-\u024f\s\u2000-\u200a\u2010-\u201f\u2026]*$/u.test(paragraph.textContent ?? '')
+      || style.unicodeBidi.includes('override')
+      || Array.from(paragraph.querySelectorAll('*')).some(node => {
+        const run = this.view.getComputedStyle(node);
+        return run.direction !== 'ltr' || run.unicodeBidi !== 'normal';
+      })) return false;
+    const box = paragraph.getBoundingClientRect();
+    const inset = (side: string) => (parseFloat(style.getPropertyValue(`padding-${side}`))
+      + parseFloat(style.getPropertyValue(`border-${side}-width`))) * scale;
+    const left = box.left + inset('left'), right = box.right - inset('right');
+    const pitch = parseFloat(style.lineHeight) * scale;
+    if (!(pitch > 0 && right > left)) return false;
+    const holder = this.document.createElement('div');
+    holder.style.cssText = `position:absolute;visibility:hidden;width:${(right - left) / scale}px`;
+    paragraph.parentElement!.appendChild(holder);
+    let remaining: HTMLElement | null = paragraph.cloneNode(true) as HTMLElement;
+    // Precision lines chosen at full width are provisional when this page has exclusions.
+    for (const line of Array.from(remaining.querySelectorAll<HTMLElement>('[data-docx-word-line]'))) {
+      line.parentElement!.removeAttribute('data-docx-word-fit');
+      line.replaceWith(...Array.from(line.childNodes));
+    }
+    remaining.normalize();
+    const output = this.document.createDocumentFragment();
+    let top = box.top + inset('top'), firstLine = true;
+    const measure = (candidate: HTMLElement, width: number) => {
+      candidate.style.cssText += `;width:${width / scale}px;margin:0;padding:0;border:0;text-indent:0`;
+      holder.appendChild(candidate);
+      const range = this.document.createRange(); range.selectNodeContents(candidate);
+      const first = this.rangeEdgeGlyph(range, true), last = this.rangeEdgeGlyph(range, false);
+      const rect = candidate.getBoundingClientRect();
+      const fits = !this.rangeHasMultipleTextLines(range)
+        && (!first || first.left >= rect.left - .1)
+        && (!last || last.right <= rect.right + .1)
+        && rect.height <= pitch + .1;
+      candidate.remove();
+      return fits;
+    };
+    try {
+      while (remaining) {
+        this.checkpoint();
+        holder.appendChild(remaining);
+        const start = left + (firstLine ? (parseFloat(style.textIndent) || 0) * scale : 0);
+        let intervals = [{ left: start, right }];
+        for (const rect of rectangles.filter(rect => rect.top < top + pitch && rect.bottom > top)) {
+          intervals = intervals.flatMap(slot => rect.right <= slot.left || rect.left >= slot.right ? [slot]
+            : [{ left: slot.left, right: Math.min(slot.right, rect.left) },
+              { left: Math.max(slot.left, rect.right), right: slot.right }].filter(slot => slot.right > slot.left));
+        }
+        const line = this.document.createElement('span');
+        line.dataset.docxFrameLine = 'true';
+        line.style.cssText = `display:block;position:relative;height:${pitch / scale}px;text-indent:0;text-align:left`;
+        let consumed = false;
+        for (const interval of intervals) {
+          if (!remaining) break;
+          const width = interval.right - interval.left;
+          const whole = remaining.cloneNode(true) as HTMLElement;
+          let head: HTMLElement;
+          if (measure(whole, width)) {
+            head = whole; remaining.remove(); remaining = null;
+          } else {
+            const split = this.splitParagraphAtLargestFit(remaining, candidate => measure(candidate, width));
+            if (split.kind !== 'split') continue;
+            head = split.head; remaining.replaceWith(split.tail); remaining = split.tail;
+          }
+          consumed = true;
+          const slot = this.document.createElement('span');
+          slot.dataset.docxFrameSlot = 'true';
+          slot.style.cssText = `position:absolute;left:${(interval.left - left) / scale}px;top:0;width:${width / scale}px;text-indent:0`;
+          slot.style.textAlign = style.textAlign;
+          slot.style.textAlignLast = remaining && style.textAlign === 'justify' ? 'justify' : style.textAlignLast;
+          slot.append(...Array.from(head.childNodes));
+          line.appendChild(slot);
+        }
+        if (!consumed) {
+          // An unbreakable word may fit neither side. Advance below an exclusion, never retry
+          // the same word at the same height or invent a break inside its source text.
+          const bottom = Math.min(...rectangles.filter(rect => rect.bottom > top && rect.top < top + pitch).map(rect => rect.bottom));
+          if (!Number.isFinite(bottom)) return false;
+          line.style.height = `${(bottom - top) / scale}px`;
+          top = bottom;
+        } else {
+          top += pitch;
+          firstLine = false;
+        }
+        output.appendChild(line);
+      }
+      paragraph.replaceChildren(output);
+      return true;
+    } finally {
+      holder.remove();
+    }
+  }
+
+  private prepareFrameExclusions(host: HTMLElement, dims: PageDimensions, pageNumber = 1): void {
+    for (const node of Array.from(host.querySelectorAll('[data-docx-frame-line],[data-docx-frame-slot]')).reverse())
+      node.replaceWith(...Array.from(node.childNodes));
     for (const proxy of Array.from(host.querySelectorAll('[data-docx-frame-exclusion-segment]'))) proxy.remove();
     const carriers = Array.from(host.querySelectorAll<HTMLElement>('[data-docx-header-exclusion],[data-docx-frame-exclusion]'))
       .filter(carrier => !carrier.closest('[data-docx-textbox]'));
@@ -5583,6 +5698,19 @@ export class PaginationEngine {
       carrier.style.position = 'absolute';
       carrier.style.left = carrier.style.top = '0';
     }
+    const hostRect = host.getBoundingClientRect();
+    const pageHost = host.classList.contains(`${this.cssPrefix}box`);
+    const pixelsPerPoint = hostRect.width / (pageHost ? dims.pageWidth : dims.contentWidth);
+    const pageLeft = hostRect.left - (pageHost ? 0 : dims.marginLeft * pixelsPerPoint);
+    for (const carrier of carriers) for (const frame of Array.from(carrier.children) as HTMLElement[]) {
+      if (!frame.hasAttribute('data-docx-text-frame')) continue;
+      const rect = frame.getBoundingClientRect(), anchor = carrier.parentElement!.getBoundingClientRect();
+      const context = { staticLeft: (anchor.left - pageLeft) / pixelsPerPoint,
+        paragraphLeft: (anchor.left - pageLeft) / pixelsPerPoint, paragraphWidth: anchor.width / pixelsPerPoint };
+      const left = this.frameHorizontalPosition(frame, dims, pageNumber, context, rect.width / pixelsPerPoint);
+      const margin = pxToPt(parseFloat(this.view.getComputedStyle(frame).marginLeft) || 0);
+      frame.style.marginLeft = `${margin + left - (rect.left - pageLeft) / pixelsPerPoint}pt`;
+    }
     type Segment = { proxy: HTMLElement; origin: DOMRect; scale: number; rectangles: FrameExclusion[] };
     const previous = new Map<HTMLElement, Segment>();
     const render = (segment: Segment, end = Infinity) => {
@@ -5590,13 +5718,15 @@ export class PaginationEngine {
       const rectangles = segment.rectangles.map(rect => ({
         top: Math.max(0, rect.top - origin.top),
         bottom: Math.min(end, rect.bottom) - origin.top,
+        left: rect.left - origin.left,
         right: rect.right - origin.left,
       })).filter(rect => rect.bottom > rect.top && rect.right > 0);
       proxy.style.width = `${Math.max(0, ...rectangles.map(rect => rect.right)) / scale}px`;
       proxy.style.height = `${Math.max(0, ...rectangles.map(rect => rect.bottom)) / scale}px`;
       proxy.style.shapeOutside = this.frameExclusionPolygon(rectangles);
     };
-    for (const carrier of carriers) {
+    let supported = true;
+    for (const [index, carrier] of carriers.entries()) {
       const context = carrier.closest<HTMLElement>(`[data-docx-frame-story],.${this.cssPrefix}content`) ?? host;
       const preceding = previous.get(context);
       const header = carrier.dataset.docxHeaderExclusion;
@@ -5618,16 +5748,47 @@ export class PaginationEngine {
         for (const rect of JSON.parse(header) as FrameExclusion[]) rectangles.push({
           top: origin.top + ptToPx(rect.top) * scale,
           bottom: origin.top + ptToPx(rect.bottom) * scale,
+          left: origin.left + ptToPx(rect.left) * scale,
           right: origin.left + ptToPx(rect.right) * scale,
         });
       } else for (const frame of Array.from(carrier.children) as HTMLElement[]) {
         const rect = frame.getBoundingClientRect();
         const distance = parseFloat(this.view.getComputedStyle(frame).marginRight) || 0;
-        rectangles.push({ top: rect.top, bottom: rect.bottom, right: rect.right + distance * scale });
+        rectangles.push({ top: rect.top, bottom: rect.bottom, left: rect.left - distance * scale, right: rect.right + distance * scale });
       }
       const segment = { proxy, origin, scale, rectangles };
       render(segment);
+      const next = carriers.slice(index + 1).find(other =>
+        (other.closest<HTMLElement>(`[data-docx-frame-story],.${this.cssPrefix}content`) ?? host) === context);
+      const between = (node: Element) => !!(carrier.compareDocumentPosition(node) & this.view.Node.DOCUMENT_POSITION_FOLLOWING)
+        && (!next || !!(node.compareDocumentPosition(next) & this.view.Node.DOCUMENT_POSITION_FOLLOWING))
+        && !node.closest('[data-docx-text-frame]');
+      const obstacles = Array.from(context.querySelectorAll<HTMLElement>('table,hr,div,p')).filter(node => {
+        if (!between(node)) return false;
+        const style = this.view.getComputedStyle(node);
+        return node.matches('table,hr') || ['flow-root', 'flex', 'grid', 'inline-block'].includes(style.display)
+          || style.overflow !== 'visible' || style.columnCount !== 'auto' || style.columnWidth !== 'auto';
+      });
+      for (const paragraph of Array.from(context.querySelectorAll<HTMLElement>('p,h1,h2,h3,h4,h5,h6')).filter(between)) {
+        if (obstacles.some(obstacle => obstacle.contains(paragraph))) continue;
+        const bounds = paragraph.getBoundingClientRect();
+        if (rectangles.some(rect => rect.bottom > bounds.top && rect.top < bounds.bottom)
+          // The existing float already represents a union joined to the left edge exactly.
+          && rectangles.some(rect => rect.left > bounds.left)
+          && !this.layoutFrameParagraph(paragraph, rectangles, scale)) supported = false;
+      }
+      for (const obstacle of obstacles) {
+        const bounds = obstacle.getBoundingClientRect(), top = this.unclearedBlockTop(obstacle);
+        if (rectangles.some(rect => rect.left > origin.left && rect.top < top + bounds.height && rect.bottom > top))
+          supported = false;
+      }
       previous.set(context, segment);
+    }
+    if (pageHost && supported) for (const carrier of carriers) {
+      for (const frame of Array.from(carrier.querySelectorAll<HTMLElement>('[data-docx-frame-pending]'))) {
+        for (const name of ['data-docx-frame-pending', 'data-docx-shape', 'data-content-type', 'data-element-name', 'title'])
+          frame.removeAttribute(name);
+      }
     }
   }
 
@@ -5641,7 +5802,8 @@ export class PaginationEngine {
    */
   private measureHeaderFooterHeight(
     source: HTMLElement,
-    dims: PageDimensions
+    dims: PageDimensions,
+    physical = 1,
   ): number {
     // Create a temporary measurement container
     const measureContainer = this.document.createElement("div");
@@ -5688,7 +5850,7 @@ export class PaginationEngine {
     const frameStory = measureContainer.querySelector<HTMLElement>('[data-docx-frame-story]');
     if (frameStory) frameStory.style.height = '';
     if (this.fragmentParagraphs) this.fitOverwideTables(measureContainer, dims);
-    this.prepareFrameExclusions(measureContainer);
+    this.prepareFrameExclusions(measureContainer, dims, physical);
     if (frameStory) {
       // Flex items contain descendant floats. Count ordinary flow after every field refresh
       // and table fit; frame paint may overhang that band without freezing later story heights.
@@ -5748,8 +5910,9 @@ export class PaginationEngine {
       return chain.map(source => {
         const element = source.element.cloneNode(true) as HTMLElement;
         this.prepareShapeClearance(element, page);
+        element.dataset.paginationPhysicalPage = String(physical);
         const { heightPt, frameExtentPt, clearancePt, marginTopPt, marginBottomPt } =
-          this.measureElement(element, page, source.sectionIndex, prefix);
+          this.measureElement(element, page, source.sectionIndex, prefix, physical);
         prefix.push(element);
         return { ...source, element, heightPt, frameExtentPt, clearancePt, marginTopPt, marginBottomPt };
       });
@@ -5782,13 +5945,13 @@ export class PaginationEngine {
     const pagePrefix = (preceding: readonly HTMLElement[], owner = pageSectionIndex, physical = pageNumber): HTMLElement[] => {
       const page = pageInSection(owner, physical);
       const prefix = [...this.headerFramePrefix(dimensionsFor(owner), owner, page,
-        displayedPageNumber(owner, page, physical)), ...preceding];
+        displayedPageNumber(owner, page, physical), physical), ...preceding];
       return this.hasFlowExclusion(prefix) ? prefix : [];
     };
 
     // Get effective content height for first page (accounts for header/footer sizes)
     let effectiveContentHeight = this.bodyBudgetPt(this.getPageBands(
-      dimensionsFor(), pageSectionIndex, pageInSection(), displayedPageNumber()
+      dimensionsFor(), pageSectionIndex, pageInSection(), displayedPageNumber(), pageNumber
     ).bodyHeight, pageNumber);
     let remainingHeight = effectiveContentHeight;
 
@@ -5833,6 +5996,7 @@ export class PaginationEngine {
         owner,
         pageInSection(owner),
         displayedPageNumber(owner),
+        pageNumber,
       );
       effectiveContentHeight = this.bodyBudgetPt(bands.bodyHeight, pageNumber);
       remainingHeight = effectiveContentHeight;
@@ -5857,6 +6021,7 @@ export class PaginationEngine {
         pageSectionIndex,
         pageInSection(),
         displayedPageNumber(),
+        pageNumber,
       );
       const partition = this.splitContinuationForPage(
         currentContinuation!,
@@ -5910,6 +6075,7 @@ export class PaginationEngine {
         pageSectionIndex,
         ownedPageInSection,
         ownedDisplayedPageNumber,
+        pageNumber,
       );
       const maxFootnoteHeight = noteBandLimit(pageBands.bodyHeight);
       // `prepareCurrentContinuation` has already packed the exact head for this
@@ -6020,6 +6186,7 @@ export class PaginationEngine {
         pageSectionIndex,
         pageInSection(),
         displayedPageNumber(),
+        pageNumber,
       );
       effectiveContentHeight = this.bodyBudgetPt(newBands.bodyHeight, pageNumber);
       remainingHeight = effectiveContentHeight;
@@ -6108,6 +6275,7 @@ export class PaginationEngine {
           pageSectionIndex,
           pageInSection(),
           displayedPageNumber(),
+          pageNumber,
         );
         const ownerMaxFootnoteArea = ownerBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO;
         if (currentFootnoteHeight > ownerMaxFootnoteArea) {
@@ -6162,6 +6330,7 @@ export class PaginationEngine {
         block.sectionIndex,
         nextBlockPageInSection,
         displayedPageNumber(block.sectionIndex, nextBlockPageInSection, pageNumber + 1),
+        pageNumber + 1,
       ).bodyHeight;
       const freshMeasured = measureOnPage([sourceBlock], blockDimensions, [], block.sectionIndex, pageNumber + 1)[0];
       const freshBlockHeight = Math.max(freshMeasured.heightPt, freshMeasured.frameExtentPt ?? 0)
@@ -6279,6 +6448,7 @@ export class PaginationEngine {
                 pageInSection(block.sectionIndex, pageNumber + 1),
                 pageNumber + 1,
               ),
+              pageNumber + 1,
             );
             const freshChain = measureOnPage(sourceChain, blockDimensions, [], block.sectionIndex, pageNumber + 1);
             const freshChainMeasurement = this.measureKeepWithNextChainHeight(
@@ -6860,6 +7030,22 @@ export class PaginationEngine {
     }
   }
 
+  /** Measurement and paint read the same authored offset, before placement mutates inline styles. */
+  private frameHorizontalPosition(frame: HTMLElement, dims: PageDimensions, pageNumber: number,
+    context: { staticLeft: number; paragraphLeft: number; paragraphWidth: number }, width: number): number {
+    if (frame.dataset.docxFrameOffset === undefined) {
+      const style = this.view.getComputedStyle(frame);
+      const offset = frame.closest('[data-docx-frame-exclusion]') ? style.marginLeft : style.left;
+      frame.dataset.docxFrameOffset = String(pxToPt(parseFloat(offset) || 0));
+    }
+    const horizontal = this.horizontalAnchorReference(
+      frame.dataset.docxFrameHAnchor === 'text' ? 'column' : frame.dataset.docxFrameHAnchor ?? 'column',
+      dims, pageNumber, context, this.horizontalSectionDimensions(frame, dims));
+    const alignment = frame.getAttribute('data-docx-frame-xalign');
+    return this.resolveAnchorAxis(horizontal, width, alignment,
+      alignment ? undefined : Number(frame.dataset.docxFrameOffset), pageNumber);
+  }
+
   /** Resolve legacy paragraph frames after their ordinary anchor paragraphs have flowed. */
   private positionTextFrames(pageBox: HTMLElement, dims: PageDimensions, pageNumber: number): HTMLElement[] {
     const frames = Array.from(pageBox.querySelectorAll<HTMLElement>('[data-docx-text-frame="true"]'));
@@ -6890,18 +7076,12 @@ export class PaginationEngine {
         paragraphHeight: anchorRect.height / pixelsPerPoint,
         lineHeight: anchorRect.height / pixelsPerPoint,
       };
-      const horizontal = this.horizontalAnchorReference(
-        frame.dataset.docxFrameHAnchor === 'text' ? 'column' : frame.dataset.docxFrameHAnchor ?? 'column',
-        dims, pageNumber, context, this.horizontalSectionDimensions(frame, dims),
-      );
       const vertical = this.verticalAnchorReference(
         frame.dataset.docxFrameVAnchor === 'text' ? 'paragraph' : frame.dataset.docxFrameVAnchor ?? 'paragraph',
         dims, pageNumber, context,
       );
-      const xAlign = frame.getAttribute('data-docx-frame-xalign');
       const yAlign = frame.getAttribute('data-docx-frame-yalign');
-      const left = this.resolveAnchorAxis(horizontal, rect.width / pixelsPerPoint, xAlign,
-        xAlign ? undefined : pxToPt(parseFloat(exclusion ? computed.marginLeft : computed.left) || 0), pageNumber);
+      const left = this.frameHorizontalPosition(frame, dims, pageNumber, context, rect.width / pixelsPerPoint);
       const top = inlineFlow || exclusion ? (rect.top - pageRect.top) / pixelsPerPoint
         : this.resolveAnchorAxis(vertical, rect.height / pixelsPerPoint, yAlign,
           yAlign ? undefined : pxToPt(parseFloat(computed.top) || 0), pageNumber);
@@ -7374,8 +7554,8 @@ export class PaginationEngine {
     pageBox.dataset.pageInSection = String(pageInSection);
 
     // Band measurement and cloning use the same prepared running stories.
-    const bands = this.getPageBands(dims, sectionIndex, pageInSection, displayedPageNumber);
-    const prepared = this.prepareRunningStories(dims, sectionIndex, pageInSection, displayedPageNumber);
+    const bands = this.getPageBands(dims, sectionIndex, pageInSection, displayedPageNumber, pageNumber);
+    const prepared = this.prepareRunningStories(dims, sectionIndex, pageInSection, displayedPageNumber, pageNumber);
 
     // Add header if available for this section/page
     const headerSource = isSectionFiller
@@ -7435,7 +7615,7 @@ export class PaginationEngine {
 
     // Add content
     this.appendSectionContent(contentArea, [
-      ...(!isSectionFiller ? this.headerFramePrefix(dims, sectionIndex, pageInSection, displayedPageNumber) : []),
+      ...(!isSectionFiller ? this.headerFramePrefix(dims, sectionIndex, pageInSection, displayedPageNumber, pageNumber) : []),
       ...content,
     ], dims);
 
@@ -7577,7 +7757,7 @@ export class PaginationEngine {
 
     // Floating objects need the final page and anchor-paragraph boxes. Resolve them only after
     // append, when getBoundingClientRect() is meaningful, and lift them out of content clipping.
-    this.prepareFrameExclusions(pageBox);
+    this.prepareFrameExclusions(pageBox, dims, pageNumber);
     this.positionTextFrames(pageBox, dims, pageNumber);
     // One page-wide pass includes running stories and compares all drawings in the same
     // stacking order, including those nested in a promoted paragraph frame.

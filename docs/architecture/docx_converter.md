@@ -249,17 +249,21 @@ survive placement; the PageMap measures the positioned source paragraphs. Ordina
 paragraphs retain their existing conversion. Floating-frame geometry supports explicit offsets and
 horizontal/vertical alignment.
 
-Inline wrapping has an explicit capability boundary. A positive interior offset keeps complete,
-conservative one-sided wrapping and reports that Word's two-sided wrapping is not represented.
-This warning describes the general capability; a particular short paragraph may still match Word.
-Other horizontal wrapping anchors/alignments and positive `vSpace` use the existing full-height
-flow slot with an approximation diagnostic. They preserve authored horizontal placement, all text
-and source anchors. `notBeside` horizontal alignment remains supported without a warning, and
-`wrap="none"` and non-inline floating frames retain their existing behavior. The shared
-unsupported-content policy reports these approximations in normal export and refuses them in
-strict export. It does not claim native-equivalent centered wrapping or preceding-line reflow.
-Native horizontal wrapping is tracked in [#1509](https://github.com/JSv4/Docxodus/issues/1509),
-and vertical clearance that reflows earlier lines in [#1510](https://github.com/JSv4/Docxodus/issues/1510).
+Inline wrapping uses the same horizontal anchor resolver during measurement and final placement.
+A union touching the left text edge keeps native CSS float wrapping. Interior or right-side
+rectangles instead divide each line into available intervals; the existing legal DOM Range
+splitter fills those intervals while preserving runs and source ownership. Derived line boxes
+are disposable: fragment tails and page-specific running stories recompute them at their new
+positions. An unbreakable word advances below the exclusion when neither interval can hold it.
+
+The converter retains a pending diagnostic until pagination verifies the affected layout.
+Simple left-to-right Latin paragraphs with measurable line heights are supported. Complex scripts,
+bidi runs, hard breaks, inline objects and affected tables or other independent formatting
+contexts keep the conservative fallback and warning; strict export refuses those arrangements.
+Positive `vSpace` still uses diagnosed ordinary flow pending preceding-line reflow in
+[#1510](https://github.com/JSv4/Docxodus/issues/1510). `notBeside`, `none` and non-inline frames keep
+their existing behavior. Running-story measurement includes physical page parity, independently
+of displayed page-number restarts.
 
 ### Linked DrawingML text boxes
 
