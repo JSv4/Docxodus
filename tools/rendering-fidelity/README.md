@@ -12,6 +12,10 @@ authority policy in `word-reference-policy.json`:
 
 - Every candidate case still has to pass all mandatory checks, including the
   eight cases with Word evidence.
+- Unmapped mandatory failures on current main are reported in
+  `baselineMandatoryFailures` and may be repaired by the candidate. Mapped
+  original inputs must pass on main as well as the candidate to establish Word
+  authority. Historical baseline protection is unchanged.
 - All five Word page metrics must hold or improve against current main, using
   the same registered Word bundle. Every Word case must score at least 95.
 - Word authority covers only the exact eight original/captured input hashes in

@@ -71,6 +71,21 @@ class SeparateProviderGate(unittest.TestCase):
         self.lo_after['cases'][0]['checks'][0]['passed'] = False
         self.assertFalse(self.decide()['passed'])
 
+    def test_candidate_can_repair_an_unmapped_base_failure(self):
+        self.lo_main['cases'][1]['checks'][0]['passed'] = False
+        report = self.decide()
+        self.assertTrue(report['passed'])
+        self.assertEqual(report['baselineMandatoryFailures'], ['other'])
+
+    def test_mapped_base_failure_cannot_establish_word_authority(self):
+        self.lo_main['cases'][0]['checks'][0]['passed'] = False
+        self.assertFalse(self.decide()['passed'])
+
+    def test_unmapped_candidate_failure_still_blocks_a_repair(self):
+        self.lo_main['cases'][1]['checks'][0]['passed'] = False
+        self.lo_after['cases'][1]['checks'][0]['passed'] = False
+        self.assertFalse(self.decide()['passed'])
+
     def test_changed_main_or_candidate_proxy_pixels_block(self):
         for name in ('word_before', 'word_after'):
             with self.subTest(renderer=name):

@@ -1641,6 +1641,19 @@ settings-part `notePr` → spec default), `FormatNoteNumber` renders the glyph v
 `ListItemTextGetter_Default.GetListItemText`, and the footnotes/endnotes section `<ol>` carries
 the matching CSS `list-style-type` (`NoteListStyleType`).
 
+### Pagination must preserve an endnote paragraph's computed font
+
+Flattening `section.endnotes > ol > li > p` lets a long note continue across pages.
+Its paragraph can get its font from a CSS class or a list ancestor, so an empty
+inline `style.fontSize` does not mean the section's font applies. Copy the attached
+paragraph's computed presentation before detaching it, using the same helper as
+promoted drawings. Substituting the section's 12 pt font for an 11 pt paragraph
+also disables natural-line baseline correction: the original `notes-endnote`
+benchmark moved its text upward by 0.75 pt while leaving its marker unchanged.
+Preserving the paragraph font restores its historical baseline and retains
+automatic-spacing fragmentation. Browser tests compare glyph placement with an
+equivalent body paragraph and verify every word of a continued note.
+
 ## Layout: Word's line breaking and table sizing have no matching CSS default
 
 ### The behavior
