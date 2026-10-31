@@ -393,6 +393,58 @@ unaffected.
 
 ## Footnotes
 
+### A source marker's inherited formatting revision can look like clipped note text (#1493)
+
+A 10 pt Times New Roman note inherits a font revision from its paragraph style, including
+the source `w:footnoteRef` run. An 11 pt Arial separator makes the final band fractional:
+
+```xml
+<!-- styles.xml -->
+<w:style w:type="paragraph" w:styleId="Note">
+  <w:name w:val="Note"/>
+  <w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>
+    <w:sz w:val="20"/>
+    <w:rPrChange w:id="41" w:author="Example"><w:rPr>
+      <w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>
+    </w:rPr></w:rPrChange>
+  </w:rPr>
+</w:style>
+<!-- footnotes.xml; ordinary body citation and continuation separator omitted -->
+<w:footnote w:type="separator" w:id="-1"><w:p>
+  <w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>
+    <w:sz w:val="22"/></w:rPr></w:pPr>
+  <w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>
+    <w:sz w:val="22"/></w:rPr><w:separator/></w:r>
+</w:p></w:footnote>
+<w:footnote w:id="1"><w:p><w:pPr><w:pStyle w:val="Note"/>
+  <w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>
+  <w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteRef/></w:r>
+  <w:r><w:t>A short note.</w:t></w:r>
+</w:p></w:footnote>
+```
+
+| Renderer | Observed result |
+|---|---|
+| Word | No fresh capture for this case; no native Word equivalence claim. |
+| LibreOffice 25.8.7.3 | All six original benchmark notes fit on one page with complete text. |
+| Docxodus before the fix | Refuses the 11, 11.5 and 12.5 pt separator cases as clipped; the 12 pt, unrevised and generated-marker controls export. |
+| Docxodus after the fix | All six public HTML/PDF exports retain complete note text and pass the declared PDF checks. |
+
+The marker wrapper has zero line height. Its rectangle includes the nested revision's dotted
+border even though the wrapper has no border of its own, so subtracting only its own padding and
+border misses the decoration. In the original 11 pt reproduction, a 32.1875 px band has 34 px
+scroll height and 32 px client height. The wrapper appears 1.671875 px below the band, while the
+superscript text is 5.921875 px above its bottom. Changing the separator can bypass the integer
+scroll-height precheck without changing which glyphs fit.
+
+`measureLaidOutBottoms` in `npm/src/line-metrics.ts` measures nested inline text and child content
+in one walk, shared by the body and note guards in `export-browser.ts`. Atomic boxes retain their
+borders; lowered text and `display: contents` descendants remain measurable. Unboxed generated
+content uses its boxed ancestor conservatively. The one-pixel tolerance and overflow precheck
+are unchanged, and decorative ink may still be clipped at the band edge. Tests pair the actual
+public export with fractional zoom/device scales, genuinely clipped text and images, and linear
+traversal with fresh measurements after a layout change.
+
 ### Footnote Numbering Uses Raw XML IDs Instead of Sequential Display Numbers
 
 **Status:** Fixed (December 2024)

@@ -332,22 +332,40 @@ export function isPreservedExactLineInk(element: HTMLElement, content: HTMLEleme
 const REPLACED_ELEMENTS = new Set(["img", "svg", "canvas", "video", "object", "embed", "iframe", "input", "textarea", "select"]);
 
 /**
- * How far down a page band an element's laid-out content reaches, in viewport pixels (issue #1271).
- *
- * This is its border box, except for an inline box, whose bottom padding and border are left out: CSS paints
- * them below the box's text without making its line any taller, so they are decoration — the dotted rule under
- * a formatting revision, a comment or annotation highlight's underline. A band that cuts them hides no text,
- * though the decoration itself is cut at the band's edge. The box's text is still measured where it is (a
- * lowered run moves its content box too), and so is a replaced element, whose padding and border are laid out.
+ * Measure each descendant's content bottom once for this layout snapshot (#1271, #1493).
+ * Inline padding/borders can paint beyond a fitting line, including through zero-height
+ * wrappers. Measure nested text/children without those decorations; atomic boxes keep
+ * their full bounds. Unboxed generated content conservatively uses its boxed ancestor.
  */
-export function laidOutBottom(element: Element, band: HTMLElement): number {
-  const bottom = element.getBoundingClientRect().bottom;
-  const view = element.ownerDocument.defaultView;
-  if (!view || REPLACED_ELEMENTS.has(element.localName)) return bottom;
-  const style = view.getComputedStyle(element);
-  if (style.display !== "inline") return bottom;
+export function measureLaidOutBottoms(band: HTMLElement): Map<Element, number> {
+  const bottoms = new Map<Element, number>();
+  const view = band.ownerDocument.defaultView;
   const scale = band.getBoundingClientRect().width / band.offsetWidth || 1;
-  return bottom - (Number.parseFloat(style.paddingBottom) + Number.parseFloat(style.borderBottomWidth)) * scale;
+  const range = band.ownerDocument.createRange();
+  const visit = (element: Element, ancestorBottom: number): number => {
+    const style = view?.getComputedStyle(element);
+    const transparent = style?.display === "contents";
+    const inline = style?.display === "inline" && !REPLACED_ELEMENTS.has(element.localName);
+    const boxBottom = transparent ? ancestorBottom : element.getBoundingClientRect().bottom
+      - (inline ? (Number.parseFloat(style.paddingBottom) + Number.parseFloat(style.borderBottomWidth)) * scale : 0);
+    const measureChildren = transparent || (inline && element.children.length > 0);
+    const generated = measureChildren && ["::before", "::after"].some(pseudo =>
+      !["none", "normal"].includes(view!.getComputedStyle(element, pseudo).content));
+    let contentBottom = -Infinity;
+    for (const child of Array.from(element.childNodes)) {
+      if (child.nodeType === 1) contentBottom = Math.max(contentBottom, visit(child as Element, boxBottom));
+      else if (measureChildren && child.nodeType === 3) {
+        range.selectNodeContents(child);
+        for (const rect of Array.from(range.getClientRects())) contentBottom = Math.max(contentBottom, rect.bottom);
+      }
+    }
+    const bottom = measureChildren && !generated && Number.isFinite(contentBottom) ? contentBottom : boxBottom;
+    bottoms.set(element, bottom);
+    return bottom;
+  };
+  const boundary = band.getBoundingClientRect().bottom;
+  for (const element of Array.from(band.children)) visit(element, boundary);
+  return bottoms;
 }
 
 /**

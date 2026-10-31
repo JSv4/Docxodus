@@ -8,7 +8,7 @@
 
 import limitsContractJson from "./export-resource-limits-v1.json";
 import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
-import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExactLineInk, laidOutBottom } from "./line-metrics.js";
+import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExactLineInk, measureLaidOutBottoms } from "./line-metrics.js";
 import { prepareWordText, paintWordText } from "./word-text.js";
 import { preserveClippedExactRowText } from "./exact-row-text.js";
 import { prepareParagraphBorders, paintParagraphBorders } from "./paragraph-borders.js";
@@ -2920,8 +2920,8 @@ function findClippedContent(document: Document): ClippedBodyPage[] {
   for (const footnotes of Array.from(document.querySelectorAll<HTMLElement>(".page-footnotes"))) {
     if (footnotes.scrollHeight <= footnotes.clientHeight + 1) continue;
     const boundary = footnotes.getBoundingClientRect().bottom;
-    const hasVisibleOverflow = Array.from(footnotes.querySelectorAll<HTMLElement>("*"))
-      .some((element) => laidOutBottom(element, footnotes) > boundary + 1);
+    const hasVisibleOverflow = Array.from(measureLaidOutBottoms(footnotes).values())
+      .some(bottom => bottom > boundary + 1);
     if (hasVisibleOverflow) {
       fail("pagination_failure", "running_story_placement",
         "A footnote continuation is clipped in the final page tree.",
@@ -2933,11 +2933,9 @@ function findClippedContent(document: Document): ClippedBodyPage[] {
     if (content.scrollHeight > content.clientHeight + 1) {
       const pageNumber = content.closest<HTMLElement>(".page-box")?.dataset.pageNumber ?? "unknown";
       const boundary = content.getBoundingClientRect().bottom;
-      const overflowing = Array.from(content.querySelectorAll<HTMLElement>("*"))
-        .map((element) => ({
-          element,
-          bottom: laidOutBottom(element, content),
-        }))
+      const overflowing = Array.from(measureLaidOutBottoms(content), ([element, bottom]) => ({
+        element: element as HTMLElement, bottom,
+      }))
         .filter(({ element, bottom }) => bottom > boundary + 1 && !isPreservedExactLineInk(element, content)
           && !findOversizedExactRow(element))
         .sort((left, right) => right.bottom - left.bottom);

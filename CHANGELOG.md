@@ -95,6 +95,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A fitting footnote with an inherited font revision on its source marker exports without a
+  false clipping error (#1493). Body and note checks measure nested inline content once per band,
+  excluding decorative borders while retaining real text, generated content and image overflow.
 - Continuous sections can change margins without forcing a page break (#1486).
   Body widths and column-relative anchors follow their section on a shared page, while
   its vertical bands and page-margin anchors keep the page owner's geometry. Fragment

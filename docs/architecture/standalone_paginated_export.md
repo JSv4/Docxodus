@@ -878,13 +878,18 @@ the font's height: CSS centres the glyph box on the line, so the last line's des
 pixels past the band (corrected by this pass).
 
 Both the body-band check and the footnote-band check measure an element down to what it lays out
-(`laidOutBottom` in `line-metrics.ts`, issue #1271). That is its border box, except that an inline
+(`measureLaidOutBottoms` in `line-metrics.ts`, issues #1271 and #1493). That is its border box, except that an inline
 box's own bottom padding and border are left out: CSS paints them below the text without making the
 line taller, so the dotted rule under a formatting revision (`rev-format-change`), a comment
 highlight's underline or a custom annotation's underline and padding could hang a pixel or two past
 a band whose text fits. Counted as clipped, they failed a one-line footnote outright (in a body
 band they would have asked for a needless correction round). Text, blocks, inline-blocks and
-replaced elements (images, SVG) are measured as before, so genuinely clipped content still fails.
+replaced elements (images, SVG) retain their content bounds, so genuinely clipped content still fails.
+Inline wrappers measure direct text ranges and child content separately: a zero-line-height note
+number can otherwise inherit a descendant's dotted border in its own rectangle. `display: contents`
+is transparent to this walk; generated content without its own box conservatively retains the
+nearest boxed ancestor's bound because DOM ranges cannot measure pseudo-elements. One traversal
+builds all descendant bounds for each band at its current layout; nothing is cached across reflow.
 The decoration itself is still cut at the band's edge: on a note's last line, which ends at the
 text's own bottom, the formatting-revision rule disappears entirely from the PDF, and on a body
 page's last line it may be partly cut, depending on the space left below it.
