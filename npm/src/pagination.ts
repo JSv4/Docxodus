@@ -32,18 +32,13 @@ import { BalloonAppendix } from "./balloon-appendix.js";
 export type { PageBands, PageDimensions } from "./page-geometry.js";
 
 /**
- * Whether two sections describe the same physical page box. A continuous section
- * break is only honorable when it does — a changed page size or margin set forces
- * a real page break, which is Word's behavior too.
+ * A continuous section can share paper dimensions while changing its text margins.
+ * The existing page retains its vertical geometry; new pages adopt the new section.
  */
 function samePageBox(a: PageDimensions, b: PageDimensions): boolean {
   return (
     a.pageWidth === b.pageWidth &&
-    a.pageHeight === b.pageHeight &&
-    a.marginTop === b.marginTop &&
-    a.marginRight === b.marginRight &&
-    a.marginBottom === b.marginBottom &&
-    a.marginLeft === b.marginLeft
+    a.pageHeight === b.pageHeight
   );
 }
 
@@ -898,6 +893,7 @@ export class PaginationEngine {
   private pendingFootnoteContinuation: FootnoteContinuation | null = null;
   /** Per-section `w:pgNumType` (start / format), read off the section wrappers. */
   private pageNumbering: Map<number, SectionPageNumbering> = new Map();
+  private bodySectionDimensions = new Map<number, PageDimensions>();
   private lastPages: PageInfo[] = [];
   private expectedPageMapAnchorIds: Set<string> = new Set();
   private sourceClipBoxes = new WeakSet<HTMLElement>();
@@ -1091,6 +1087,7 @@ export class PaginationEngine {
     this.pendingFootnoteContinuation = null;
     this.markupBalloons = undefined;
     this.preparedRunningStories.clear();
+    this.bodySectionDimensions.clear();
     const pages: PageInfo[] = [];
     let pageNumber = 1;
 
@@ -1195,8 +1192,7 @@ export class PaginationEngine {
 
     // Group adjacent sections into page runs. A `w:type="continuous"` section keeps
     // filling the page its predecessor started rather than opening a fresh one, so it
-    // joins the previous run — provided the page box (size and margins) is unchanged,
-    // which is also Word's own condition for honoring a continuous break. Pages of a
+    // joins the previous run when the paper dimensions agree. Pages of a
     // merged run begins under the leading section's running stories. Each measured block retains
     // its own section, though: once a continuous section spills to a later physical page, that
     // page must switch to the new section's headers, footers, and page-numbering state.
@@ -1211,6 +1207,16 @@ export class PaginationEngine {
     for (const section of sectionsToProcess) {
       this.checkpoint();
       const dims = parseSectionDimensions(section);
+      this.bodySectionDimensions.set(parseInt(section.dataset.sectionIndex || "0", 10), dims);
+      for (const id of this.extractFootnoteRefs(section)) {
+        const note = this.footnoteRegistry.get(id);
+        if (note) {
+          // A note wraps to its citing section, capped by the physical page's band.
+          // Whole, partial and continued notes clone this same presentation shell.
+          note.style.width = `${dims.contentWidth}pt`;
+          note.style.maxWidth = '100%';
+        }
+      }
       const previous = runs[runs.length - 1];
       if (
         previous &&
@@ -1276,10 +1282,13 @@ export class PaginationEngine {
       this.stagingElement.style.display = "block";
 
       const blocks: MeasuredBlock[] = [];
+      let pictureBodyHeight = 0;
       for (const section of run.sections) {
         this.checkpoint();
         const sectionIndex = parseInt(section.dataset.sectionIndex || "0", 10);
         const sectionDims = run.sectionDimensions.get(sectionIndex) ?? run.dims;
+        pictureBodyHeight = Math.max(pictureBodyHeight,
+          this.smallestEffectiveContentHeight(sectionDims, sectionIndex));
         // Set width for accurate line wrapping
         section.style.width = `${sectionDims.contentWidth}pt`;
 
@@ -1296,11 +1305,12 @@ export class PaginationEngine {
               && section === sectionsToProcess[sectionsToProcess.length - 1],
           ));
         } else {
-          blocks.push(...this.measureBlocks(section, sectionDims, sectionIndex));
+          blocks.push(...this.measureBlocks(section, sectionDims, sectionIndex, pictureBodyHeight));
         }
       }
 
       // Flow blocks into pages
+      for (const block of blocks) block.element.dataset.paginationSection = String(block.sectionIndex);
       const sectionPages = this.flowToPages(
         blocks,
         run.dims,
@@ -1946,11 +1956,12 @@ export class PaginationEngine {
     section: HTMLElement,
     dims: PageDimensions,
     sectionIndex: number,
+    pictureBodyHeight = this.smallestEffectiveContentHeight(dims, sectionIndex),
   ): MeasuredBlock[] {
     const blocks: MeasuredBlock[] = [];
     if (this.fragmentParagraphs) {
       this.fitOverwideTables(section, dims);
-      this.fitOversizedPictures(section, dims, sectionIndex);
+      this.fitOversizedPictures(section, dims, sectionIndex, pictureBodyHeight);
     }
     this.prepareShapeClearance(section, dims);
 
@@ -1963,7 +1974,7 @@ export class PaginationEngine {
       if (child.dataset.sectionIndex !== undefined) {
         // Recursively get blocks from nested sections
         const nestedSectionIndex = parseInt(child.dataset.sectionIndex || String(sectionIndex), 10);
-        const nestedBlocks = this.measureBlocks(child, dims, nestedSectionIndex);
+        const nestedBlocks = this.measureBlocks(child, dims, nestedSectionIndex, pictureBodyHeight);
         blocks.push(...nestedBlocks);
         continue;
       }
@@ -2118,7 +2129,7 @@ export class PaginationEngine {
     return changed;
   }
 
-  /** A running field can shorten a later page after the section's initial picture fit. */
+  /** Fit to the actual page after a section transition or running field changes its body band. */
   private fitBlockPicturesToPage(block: MeasuredBlock, dims: PageDimensions, bodyHeight: number): MeasuredBlock | null {
     if (!block.element.querySelector("img")) return null;
     const host = this.document.createElement("div");
@@ -2503,6 +2514,7 @@ export class PaginationEngine {
     sectionIndex: number,
     preceding: readonly HTMLElement[] = [],
   ): MeasuredBlock {
+    element.dataset.paginationSection = String(sectionIndex);
     const measurementHost = this.document.createElement("div");
     measurementHost.style.position = "absolute";
     measurementHost.style.visibility = "hidden";
@@ -2510,8 +2522,8 @@ export class PaginationEngine {
     measurementHost.style.width = `${dims.contentWidth}pt`;
 
     const measuredElement = element.cloneNode(true) as HTMLElement;
-    for (const previous of preceding) measurementHost.appendChild(previous.cloneNode(true));
-    measurementHost.appendChild(measuredElement);
+    this.appendSectionContent(measurementHost,
+      [...preceding.map(previous => previous.cloneNode(true) as HTMLElement), measuredElement], dims);
     this.stagingElement.appendChild(measurementHost);
 
     const rect = measuredElement.getBoundingClientRect();
@@ -2640,6 +2652,41 @@ export class PaginationEngine {
       clone.style.setProperty("margin-top", "0", "important");
     }
     return clone;
+  }
+
+  /** Horizontal body geometry follows the source section, independently of the page's bands. */
+  private horizontalSectionDimensions(element: HTMLElement, page: PageDimensions): PageDimensions {
+    const section = element.closest<HTMLElement>('[data-pagination-section]')?.dataset.paginationSection;
+    const dims = section === undefined ? undefined : this.bodySectionDimensions.get(Number(section));
+    return dims ?? page;
+  }
+
+  /** Use the same ordinary block containers for physical pages and fragment measurement prefixes. */
+  private appendSectionContent(host: HTMLElement, content: readonly HTMLElement[], dims: PageDimensions): void {
+    let group: HTMLElement | undefined;
+    let groupLeft = NaN, groupWidth = NaN;
+    for (const element of content) {
+      const section = this.horizontalSectionDimensions(element, dims);
+      if (section.marginLeft === dims.marginLeft && section.contentWidth === dims.contentWidth) {
+        host.appendChild(element);
+        group = undefined;
+      } else {
+        if (!group || section.marginLeft !== groupLeft || section.contentWidth !== groupWidth) {
+          group = this.document.createElement('div');
+          group.style.width = `${section.contentWidth}pt`;
+          group.style.marginLeft = `${section.marginLeft - dims.marginLeft}pt`;
+          host.appendChild(group);
+          groupLeft = section.marginLeft;
+          groupWidth = section.contentWidth;
+        }
+        group.appendChild(element);
+      }
+    }
+  }
+
+  private hasFlowExclusion(content: readonly HTMLElement[]): boolean {
+    const selector = '[data-docx-edge-picture],[data-docx-shape-exclusion],[data-docx-shape-clearance]';
+    return content.some(element => element.matches(selector) || element.querySelector(selector));
   }
 
   /**
@@ -4003,15 +4050,13 @@ export class PaginationEngine {
     // A preceding float still narrows this paragraph's first lines. Measure candidate heads
     // beside the actual page prefix, not in a full-width paragraph in isolation. Continuations
     // on another page do not inherit that page-owned exclusion.
-    const floatSelector = '[data-docx-edge-picture],[data-docx-shape-exclusion]';
-    const prefix = preceding.some(element => element.matches(floatSelector) || element.querySelector(floatSelector))
-      ? preceding : [];
+    const prefix = this.hasFlowExclusion(preceding) ? preceding : [];
     const host = !block.element.isConnected || prefix.length > 0 ? this.document.createElement("div") : null;
     const paragraph = host ? block.element.cloneNode(true) as HTMLElement : block.element;
     if (host) {
       host.style.cssText = `position:absolute;visibility:hidden;left:-9999px;width:${dims.contentWidth}pt`;
-      for (const previous of prefix) host.appendChild(previous.cloneNode(true));
-      host.appendChild(paragraph);
+      this.appendSectionContent(host,
+        [...prefix.map(previous => previous.cloneNode(true) as HTMLElement), paragraph], dims);
       this.stagingElement.appendChild(host);
     }
     let split: ParagraphSplitAttempt;
@@ -5294,6 +5339,23 @@ export class PaginationEngine {
       physicalPage - (sectionStartPages.get(owner) ?? physicalPage) + 1;
     const dimensionsFor = (owner = pageSectionIndex) =>
       sectionDimensions.get(owner) ?? dims;
+    // Float wrapping and shape clearance belong to the destination page. Keep these
+    // measurements local: a fresh-page retry must not reuse the previous page's height,
+    // and the source block identities are also the keep-chain retry guards.
+    const hasExclusions = this.hasFlowExclusion(blocks.map(block => block.element));
+    const measureOnPage = (chain: MeasuredBlock[], page: PageDimensions,
+      preceding: readonly HTMLElement[] = []): MeasuredBlock[] => {
+      if (!hasExclusions) return chain;
+      const prefix = this.hasFlowExclusion(preceding) ? [...preceding] : [];
+      return chain.map(source => {
+        const element = source.element.cloneNode(true) as HTMLElement;
+        this.prepareShapeClearance(element, page);
+        const { heightPt, marginTopPt, marginBottomPt } =
+          this.measureElement(element, page, source.sectionIndex, prefix);
+        prefix.push(element);
+        return { ...source, element, heightPt, marginTopPt, marginBottomPt };
+      });
+    };
     const markSectionPlaced = (owner: number) => {
       if (!sectionStartPages.has(owner)) sectionStartPages.set(owner, pageNumber);
     };
@@ -5603,7 +5665,8 @@ export class PaginationEngine {
 
     for (let i = 0; i < blocks.length; i++) {
       this.checkpoint();
-      const block = blocks[i];
+      const sourceBlock = blocks[i];
+      let block = sourceBlock;
       const allBlockFootnoteIds = this.extractFootnoteRefs(block.element);
 
       // Word normally lets a same-box continuous section begin on its predecessor's page. By
@@ -5678,7 +5741,9 @@ export class PaginationEngine {
         }
       }
       const blockDimensions = dimensionsFor(block.sectionIndex);
-      if (this.fragmentParagraphs && this.runningStyleSources.length > 0 && currentContent.length === 0
+      const noteWidth = dimensionsFor().contentWidth;
+      block = measureOnPage([sourceBlock], dimensionsFor(), currentContent)[0];
+      if (this.fragmentParagraphs && currentContent.length === 0
         && block.heightPt > effectiveContentHeight) {
         const fitted = this.fitBlockPicturesToPage(block, blockDimensions, effectiveContentHeight);
         if (fitted) {
@@ -5694,7 +5759,7 @@ export class PaginationEngine {
         nextBlockPageInSection,
         displayedPageNumber(block.sectionIndex, nextBlockPageInSection, pageNumber + 1),
       ).bodyHeight;
-      const freshBlockHeight = block.heightPt
+      const freshBlockHeight = measureOnPage([sourceBlock], blockDimensions)[0].heightPt
         + this.effectiveBlockMarginTop(block, 0, true, nextBlockPageInSection);
 
       // Handle explicit page breaks
@@ -5730,12 +5795,13 @@ export class PaginationEngine {
         if (chain.length > 1 && this.fragmentParagraphs && last.keepLines
           && this.isWordParagraphElement(last.element)
           && this.collectNewFootnoteIds(chain, currentFootnoteIds).length > 0) {
-          retriedKeepChains.add(block);
+          retriedKeepChains.add(sourceBlock);
           releasedKeepPredecessors.add(last);
         }
       }
-      if (pageHasOccupiedSpace && block.keepWithNext && startsKeepChain && !retriedKeepChains.has(block)) {
-        const keepChain = this.getKeepWithNextChain(blocks, i);
+      if (pageHasOccupiedSpace && block.keepWithNext && startsKeepChain && !retriedKeepChains.has(sourceBlock)) {
+        const sourceChain = this.getKeepWithNextChain(blocks, i);
+        const keepChain = measureOnPage(sourceChain, dimensionsFor(), currentContent);
         if (keepChain.length > 1) {
           const newChainFootnoteIds = this.collectNewFootnoteIds(
             keepChain,
@@ -5745,10 +5811,10 @@ export class PaginationEngine {
           // the chain's notes can start is asked the way a citing paragraph asks it
           // (notesCanStartOnPage), here beside this page's notes and on a fresh page alike.
           const chainNotesStart = (bodyPt: number, bandPt: number, payload: FootnotePackingContext,
-            closed: boolean, ids = newChainFootnoteIds) =>
+            closed: boolean, ids = newChainFootnoteIds, width = noteWidth) =>
             ids.length === 0 || this.footnoteRegistry.size === 0
             || this.notesCanStartOnPage(ids, bandPt - bodyPt,
-              blockDimensions.contentWidth, payload, closed);
+              width, payload, closed);
           const currentChainHeight =
             this.measureKeepWithNextChainBodyHeight(
               keepChain,
@@ -5777,15 +5843,16 @@ export class PaginationEngine {
             const canRelaxChain = this.fragmentParagraphs && last.keepLines
               && this.isWordParagraphElement(last.element) && newChainFootnoteIds.length > 0;
             const precedingNoteIds = this.collectNewFootnoteIds(keepChain.slice(0, -1), currentFootnoteIds);
-            const fragmentLast = (chainHeight: number, available: number, band: number,
-              payload: FootnotePackingContext, closed: boolean, preceding: readonly HTMLElement[]) => {
+            const fragmentLast = (chain: MeasuredBlock[], chainHeight: number, available: number, band: number,
+              payload: FootnotePackingContext, closed: boolean, preceding: readonly HTMLElement[], width = noteWidth) => {
+              const last = chain[chain.length - 1];
               const beforeLastHeight = chainHeight - last.heightPt;
-              return this.tryFragmentParagraph(last, blockDimensions, available - beforeLastHeight, 0,
+              return this.tryFragmentParagraph(last, dimensionsFor(last.sectionIndex), available - beforeLastHeight, 0,
                 (ids, headHeight) => chainNotesStart(beforeLastHeight + headHeight, band, payload, closed,
-                  [...new Set([...precedingNoteIds, ...ids])].filter(id => !currentFootnoteIds.includes(id))),
-                [...preceding, ...keepChain.slice(0, -1).map(item => item.element)]);
+                  [...new Set([...precedingNoteIds, ...ids])].filter(id => !currentFootnoteIds.includes(id)), width),
+                [...preceding, ...chain.slice(0, -1).map(item => item.element)]);
             };
-            const fragments = fragmentLast(currentChainHeight, currentAvailableHeight, remainingHeight, {
+            const fragments = fragmentLast(keepChain, currentChainHeight, currentAvailableHeight, remainingHeight, {
               footnoteIds: currentFootnoteIds,
               continuation: currentContinuation,
               partialFootnotes: currentPartialFootnotes,
@@ -5806,8 +5873,9 @@ export class PaginationEngine {
                 pageNumber + 1,
               ),
             );
+            const freshChain = measureOnPage(sourceChain, blockDimensions);
             const freshChainBodyHeight = this.measureKeepWithNextChainBodyHeight(
-              keepChain,
+              freshChain,
               0,
               true,
               pageInSection(block.sectionIndex, pageNumber + 1)
@@ -5820,15 +5888,16 @@ export class PaginationEngine {
             if (
               (freshChainBodyHeight <= nextPageBands.bodyHeight
                 && (canRelaxChain || chainNotesStart(freshChainBodyHeight, nextPageBands.bodyHeight,
-                  { footnoteIds: [], continuation: null, partialFootnotes: [] }, false)))
-              || fragmentLast(freshChainBodyHeight, nextPageBands.bodyHeight, nextPageBands.bodyHeight,
-                { footnoteIds: [], continuation: null, partialFootnotes: [] }, false, []) !== null
+                  { footnoteIds: [], continuation: null, partialFootnotes: [] }, false,
+                  newChainFootnoteIds, blockDimensions.contentWidth)))
+              || fragmentLast(freshChain, freshChainBodyHeight, nextPageBands.bodyHeight, nextPageBands.bodyHeight,
+                { footnoteIds: [], continuation: null, partialFootnotes: [] }, false, [], blockDimensions.contentWidth) !== null
             ) {
               // Start the chain over on the fresh page, so that page's carried note is
               // partitioned first and the chain is judged again beside it.
               if (canRelaxChain) {
-                retriedKeepChains.add(block);
-                releasedKeepPredecessors.add(last);
+                retriedKeepChains.add(sourceBlock);
+                releasedKeepPredecessors.add(sourceChain[sourceChain.length - 1]);
               }
               finishPage(block.sectionIndex);
               i--;
@@ -5859,7 +5928,7 @@ export class PaginationEngine {
         const combinedFootnoteIds = [...currentFootnoteIds, ...newFootnoteIds];
         combinedFootnoteHeight = this.measureFootnotesHeight(
           combinedFootnoteIds,
-          blockDimensions.contentWidth,
+          noteWidth,
           currentContinuation,
           currentPartialFootnotes,
         );
@@ -5915,7 +5984,7 @@ export class PaginationEngine {
       const headNotesStart = (footnoteIds: string[], headHeightPt: number) => {
         const headIds = footnoteIds.filter((id) => !currentFootnoteIds.includes(id));
         return headIds.length === 0 || this.notesCanStartOnPage(headIds,
-          noteBandWith(effectiveMarginTop + headHeightPt), blockDimensions.contentWidth,
+          noteBandWith(effectiveMarginTop + headHeightPt), noteWidth,
           notePayload, laterNotesClosed(), noteStartMemo);
       };
 
@@ -5988,7 +6057,7 @@ export class PaginationEngine {
           const turnHelps = noteBandWith(blockSpaceWithoutFootnotes) - currentFootnoteHeight
             < freshBlockPageBodyHeight * MAX_FOOTNOTE_AREA_RATIO;
           if ((this.fragmentParagraphs || table) && turnHelps && !this.notesCanStartOnPage(newFootnoteIds,
-            noteBandWith(blockSpaceWithoutFootnotes), blockDimensions.contentWidth, notePayload,
+            noteBandWith(blockSpaceWithoutFootnotes), noteWidth, notePayload,
             laterNotesClosed(), noteStartMemo)) {
             const fragments = this.tryFragmentParagraph(
               block,
@@ -6010,7 +6079,7 @@ export class PaginationEngine {
               blockDimensions.contentWidth, { footnoteIds: [], continuation: null, partialFootnotes: [] }, false));
             // A preceding keep-with-next block belongs with the citation; the chain path owns it.
             if (currentContent.length > 0 && canMoveWhole
-                && (!blocks[i - 1]?.keepWithNext || releasedKeepPredecessors.has(block))) {
+                && (!blocks[i - 1]?.keepWithNext || releasedKeepPredecessors.has(sourceBlock))) {
               finishPage(block.sectionIndex);
               i--;
               continue;
@@ -6059,7 +6128,7 @@ export class PaginationEngine {
             const candidateIds = [...currentFootnoteIds, footnoteId];
             const candidateHeight = this.measureFootnotesHeight(
               candidateIds,
-              blockDimensions.contentWidth,
+              noteWidth,
               currentContinuation,
               currentPartialFootnotes,
             );
@@ -6080,7 +6149,7 @@ export class PaginationEngine {
                 let { fits, overflow, keptParagraph } = this.splitFootnoteToFit(
                   footnote,
                   availableForFootnotes,
-                  blockDimensions.contentWidth,
+                  noteWidth,
                   deferralCannotHelp,
                   payload,
                 );
@@ -6096,7 +6165,7 @@ export class PaginationEngine {
                     ? nextPageMaxFootnoteArea - freshBlockHeight
                     : nextPageMaxFootnoteArea, blockDimensions.contentWidth).fits.length === 0) {
                   ({ fits, overflow } = this.splitFootnoteToFit(
-                    footnote, availableForFootnotes, blockDimensions.contentWidth, true, payload));
+                    footnote, availableForFootnotes, noteWidth, true, payload));
                 }
 
                 if (fits.length > 0) {
@@ -6115,7 +6184,7 @@ export class PaginationEngine {
                   }
                   currentFootnoteHeight = this.measureFootnotesHeight(
                     currentFootnoteIds,
-                    blockDimensions.contentWidth,
+                    noteWidth,
                     currentContinuation,
                     currentPartialFootnotes,
                   );
@@ -6308,6 +6377,8 @@ export class PaginationEngine {
 
   /** Keep the visible content of emptied paragraphs, cells and tables linked to its source. */
   private promoteSourceContent(content: HTMLElement, pageBox: HTMLElement): void {
+    const section = content.closest<HTMLElement>('[data-pagination-section]')?.dataset.paginationSection;
+    if (section !== undefined) content.dataset.paginationSection = section;
     this.preserveInheritedPresentation(content);
     const hosts: HTMLElement[] = [];
     const ownerIds = new Set<string>();
@@ -6402,7 +6473,7 @@ export class PaginationEngine {
       };
       const horizontal = this.horizontalAnchorReference(
         frame.dataset.docxFrameHAnchor === 'text' ? 'column' : frame.dataset.docxFrameHAnchor ?? 'column',
-        dims, pageNumber, context,
+        dims, pageNumber, context, this.horizontalSectionDimensions(frame, dims),
       );
       const vertical = this.verticalAnchorReference(
         frame.dataset.docxFrameVAnchor === 'text' ? 'paragraph' : frame.dataset.docxFrameVAnchor ?? 'paragraph',
@@ -6647,6 +6718,7 @@ export class PaginationEngine {
         paragraphHeight: paragraphRect.height / pixelsPerPoint,
       };
 
+      const sectionDimensions = this.horizontalSectionDimensions(anchor, dims);
       this.sizeDrawingAnchor(anchor, dims, pageNumber, context);
 
       // Read the final border-box size after relative sizing and before reparenting. The stored
@@ -6659,6 +6731,7 @@ export class PaginationEngine {
         dims,
         pageNumber,
         context,
+        sectionDimensions,
       );
       const vertical = this.verticalAnchorReference(
         anchor.getAttribute('data-docx-anchor-v-relative') ?? 'paragraph',
@@ -6717,6 +6790,7 @@ export class PaginationEngine {
       paragraphLeft: number;
       paragraphWidth: number;
     },
+    columnDimensions = dims,
   ): { start: number; size: number } {
     const leftMargin = { start: 0, size: dims.marginLeft };
     const rightMargin = {
@@ -6741,11 +6815,11 @@ export class PaginationEngine {
         // intuitive base without conflating it with the whole text column.
         return { start: context.paragraphLeft, size: context.paragraphWidth };
       case 'column':
+        return { start: columnDimensions.marginLeft, size: columnDimensions.contentWidth };
       case 'margin':
       default:
-        // The paginator currently lays out one text column per section, so the column and page
-        // margin boxes coincide. Keeping the names distinct here leaves multi-column geometry
-        // localized to this resolver when that layout support is added.
+        // Page-relative margins remain owned by the page even when a continuous section
+        // changes the horizontal text column on that same sheet.
         return { start: dims.marginLeft, size: dims.contentWidth };
     }
   }
@@ -6931,9 +7005,7 @@ export class PaginationEngine {
     contentArea.style.overflowY = "clip";
 
     // Add content
-    for (const el of content) {
-      contentArea.appendChild(el);
-    }
+    this.appendSectionContent(contentArea, content, dims);
 
     pageBox.appendChild(contentArea);
 

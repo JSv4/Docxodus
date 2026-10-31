@@ -687,3 +687,29 @@ Only a stable pass finalizes fragment identities, baseline alignment, comments, 
 A repeated non-stable state or twelve-pass limit throws an explicit running-field stability error.
 The ordinary path without running style fields retains one flow pass. Character-style references,
 numbering switches, and unsupported stories retain their cached text with the configured diagnostic.
+
+## Continuous sections with different margins
+
+Continuous sections share a page run when their paper dimensions agree. The leading section
+owns the existing page's vertical bands, running stories and numbering; a body spill gives the
+new page to the section supplying its content. A changed top or bottom margin therefore takes
+effect on later body pages. Explicit page breaks and changed paper dimensions remain boundaries.
+
+Horizontal body layout is section-owned even on a shared page. Source blocks retain a section
+marker through cloning and fragmentation. One append helper supplies ordinary block containers
+with the source width and an offset relative to the containing page or measurement host. It does
+not create a new formatting context, overwrite paragraph/table indents, or suppress collapsed
+margins. Fragment probes and normal admission beside floats use the same positioned prefix.
+Whole keep chains are measured in sequence against that prefix; fresh-page probes start again
+without it. These measurements remain local so retries retain source identity and cannot reuse
+an earlier page's float height. Shape sizing and clearance use the destination page's margins
+before measurement, matching the final drawing's relative size and vertical clearance.
+Column-relative drawings follow that section context; page-margin-relative drawings retain the
+page owner's geometry, and promotion preserves the source section marker.
+
+A cited note carries its section width on the registry shell, capped by the physical page band.
+Whole notes, partial notes and continuations clone that shell. Their outer band keeps the page
+owner's origin and bottom; current-page measurements use that width, while fresh-page probes
+use the prospective owner. Trailing note-only continuations retain the existing page owner.
+The native Word observations and minimal XML are recorded in
+[the continuous-margin corner case](../ooxml_corner_cases.md#continuous-sections-can-change-margins-on-a-shared-page-1486).
