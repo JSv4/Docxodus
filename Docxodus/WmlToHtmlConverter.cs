@@ -10933,13 +10933,15 @@ namespace Docxodus
         private static List<XElement> CreateBorderDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             IEnumerable<XElement> elements)
         {
-            // Equal frame properties on adjacent paragraphs identify one floating text frame.
-            // A zero-height placeholder keeps that frame beside its next ordinary anchor without
-            // charging its text height to the body or running-story flow.
+            // Equal frame properties on adjacent paragraphs identify one text frame. Inline
+            // frames either reserve a flow slot or exclude text beside their painted rectangle.
             var groups = elements.GroupAdjacent(e =>
             {
                 var frame = e.Name == W.p ? e.Element(W.pPr)?.Element(W.framePr) : null;
                 if (frame == null || ((string?)frame.Attribute(W.dropCap) is string dropCap && dropCap != "none"))
+                    return string.Empty;
+                if ((string?)frame.Attribute(W.yAlign) == "inline" &&
+                    e.Ancestors().TakeWhile(a => a.Name != W.txbxContent).Any(a => a.Name == W.tc))
                     return string.Empty;
                 // Empty/default-only properties inherited from a style do not activate a
                 // separate text story. Direct declarations and nondefault style placement
@@ -10959,13 +10961,29 @@ namespace Docxodus
                     continue;
                 }
                 var frame = group.First().Element(W.pPr)!.Element(W.framePr)!;
+                var inline = (string?)frame.Attribute(W.yAlign) == "inline";
+                var wrap = (string?)frame.Attribute(W.wrap) ?? "auto";
+                var horizontalOffset = (WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W.x)) ?? 0m) / 20m;
+                var textWrap = inline && wrap != "none";
+                var verticalDistance = WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W.vSpace)) ?? 0m;
+                var leftWrap = ((string?)frame.Attribute(W.hAnchor) ?? "text") == "text" &&
+                    (string?)frame.Attribute(W.xAlign) is null or "left";
+                var approximate = textWrap && (verticalDistance > 0 || wrap != "notBeside" && !leftWrap);
+                var inFlow = textWrap && (wrap == "notBeside" || approximate);
+                var excludes = textWrap && !inFlow;
+                var interior = excludes && frame.Attribute(W.xAlign) == null && horizontalOffset > 0;
                 var style = new Dictionary<string, string>
                 {
-                    { "position", "absolute" }, { "box-sizing", "border-box" },
-                    { "left", PointsCss((WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W.x)) ?? 0m) / 20m) },
+                    { "position", inFlow || excludes ? "relative" : "absolute" }, { "box-sizing", "border-box" },
+                    { "left", PointsCss(inline && frame.Attribute(W.xAlign) != null ? 0m : horizontalOffset) },
                     { "top", PointsCss((WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W.y)) ?? 0m) / 20m) },
                     { "line-height", "normal" },
                 };
+                if (inFlow || excludes)
+                {
+                    style["display"] = "flow-root";
+                    style["top"] = "0pt";
+                }
                 var width = WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W._w));
                 if (width > 0m) style["width"] = PointsCss(width.Value / 20m);
                 var height = WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W.h));
@@ -10975,17 +10993,63 @@ namespace Docxodus
                     new XAttribute("data-docx-frame-h-anchor", (string?)frame.Attribute(W.hAnchor) ?? "text"),
                     new XAttribute("data-docx-frame-v-anchor", (string?)frame.Attribute(W.vAnchor) ?? "text"),
                     CreateBorderDivsCore(wordDoc, settings, group));
-                foreach (var name in new[] { W.x, W.y, W.xAlign, W.yAlign })
+                if (approximate || interior)
+                    ReportShapeLayoutLoss(rendered, settings, verticalDistance > 0
+                        ? "Paragraph frame clearance that reflows earlier text is approximated by ordinary flow"
+                        : interior ? "Paragraph frame wrapping on both sides is approximated by conservative one-sided clearance"
+                            : "Paragraph frame wrapping at this horizontal position is approximated by top/bottom clearance", "framePr");
+                foreach (var name in new[] { W.x, W.y, W.xAlign, W.yAlign, W.wrap, W.hSpace, W.vSpace })
                     if (frame.Attribute(name) is XAttribute value)
                         rendered.Add(new XAttribute("data-docx-frame-" + name.LocalName.ToLowerInvariant(), value.Value));
                 rendered.AddAnnotation(style);
                 var placeholder = new XElement(Xhtml.div,
                     new XAttribute("data-docx-frame-container", "true"),
-                    new XAttribute("data-keep-with-next", "true"), rendered);
-                placeholder.AddAnnotation(new Dictionary<string, string>
+                    inFlow ? new XAttribute("data-docx-frame-flow", "true") : new XAttribute("data-keep-with-next", "true"));
+                if (excludes)
                 {
-                    { "position", "relative" }, { "height", "0" }, { "margin", "0" }, { "padding", "0" },
-                });
+                    style["grid-area"] = "1 / 1";
+                    style["align-self"] = "start";
+                    style["margin-left"] = style["left"];
+                    var horizontalDistance = WordprocessingMLUtil.AttributeToDecimalTwips(frame.Attribute(W.hSpace)) ?? 0m;
+                    if (horizontalDistance > 0) style["margin-right"] = PointsCss(horizontalDistance / 20m);
+                    style["left"] = "0pt";
+                    // Distinct adjacent frames share the following ordinary anchor. Overlay
+                    // their exclusions in one grid so their union, rather than summed widths,
+                    // determines the available line width; each frame keeps its own identity.
+                    var preceding = result.LastOrDefault() as XElement;
+                    var shared = preceding?.Elements().FirstOrDefault(e => e.Attribute("data-docx-frame-exclusion") != null);
+                    if (shared != null)
+                    {
+                        shared.Add(rendered);
+                        continue;
+                    }
+                    var exclusion = new XElement(Xhtml.div, new XAttribute("data-docx-frame-exclusion", "true"), rendered);
+                    exclusion.AddAnnotation(new Dictionary<string, string>
+                    {
+                        { "float", "left" }, { "display", "grid" },
+                    });
+                    placeholder.Add(exclusion);
+                }
+                else placeholder.Add(rendered);
+                var placeholderStyle = new Dictionary<string, string>
+                {
+                    { "position", "relative" }, { "height", inFlow ? "auto" : "0" }, { "margin", "0" }, { "padding", "0" },
+                };
+                if (inFlow)
+                {
+                    // The last paragraph's after-space belongs between the frame and the next
+                    // paragraph, where Word collapses it with that paragraph's before-space.
+                    var trailing = rendered.Elements().LastOrDefault();
+                    while (trailing != null && trailing.Name.LocalName is not ("p" or "h1" or "h2" or "h3" or "h4" or "h5" or "h6"))
+                        trailing = trailing.Elements().LastOrDefault();
+                    if (trailing?.Annotation<Dictionary<string, string>>() is { } trailingStyle &&
+                        trailingStyle.TryGetValue("margin-bottom", out var after))
+                    {
+                        placeholderStyle["margin-bottom"] = after;
+                        trailingStyle["margin-bottom"] = "0";
+                    }
+                }
+                placeholder.AddAnnotation(placeholderStyle);
                 result.Add(placeholder);
             }
             // Flatten nested projections once, then detach before their final insertion. Letting

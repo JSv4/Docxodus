@@ -1454,6 +1454,71 @@ taken, and the schema finding survives on both sides.
 
 ---
 
+## Inline paragraph frames: wrapping determines flow height (#1487)
+
+Two paragraphs with the same inline frame properties share one frame. The next ordinary
+paragraph's placement depends on `w:wrap`, even though the frame uses `w:yAlign="inline"`:
+
+```xml
+<w:p><w:r><w:t>Before</w:t></w:r></w:p>
+<w:p><w:pPr><w:framePr w:w="3600" w:x="240" w:hAnchor="text"
+  w:vAnchor="text" w:yAlign="inline" w:wrap="around"/></w:pPr>
+  <w:r><w:t>Frame first</w:t></w:r></w:p>
+<w:p><w:pPr><w:framePr w:w="3600" w:x="240" w:hAnchor="text"
+  w:vAnchor="text" w:yAlign="inline" w:wrap="around"/></w:pPr>
+  <w:r><w:t>Frame last</w:t></w:r></w:p>
+<w:p><w:r><w:t>After</w:t></w:r></w:p>
+```
+
+The original Sage probes use 12 pt exact lines and no paragraph before/after spacing. The
+frame is 180 pt wide and offset 12 pt from the text edge. Native Word for the web substituted
+Times New Roman for the requested Liberation Serif, so these captures establish behavior,
+not font-matched raster parity.
+
+| Placement | Word for the web | LibreOffice 25.8.7.3 | Docxodus before | Docxodus after |
+|---|---|---|---|---|
+| Body, inline `around` | After beside the first frame line, 192 pt from the text edge | Ignores inline frame positioning; four ordinary lines | After overprints the first frame line | After beside the frame |
+| Body, inline `notBeside` | After below both frame lines | Ordinary paragraph flow | After overprints the first frame line | Frame height precedes After |
+| Header/footer, inline `around` | Following story text wraps beside the frame; paint may extend past the normal story flow | Ordinary paragraph flow | Following text overprints frame text | Story wrapping and header-to-body exclusion retained |
+| Inline frame in a table cell | Frame properties ignored; ordinary text edge and flow | Ordinary paragraph flow | Frame offsets and overlap retained | Ordinary paragraph flow |
+
+With 52 preceding 12 pt lines on Letter paper with 72 pt margins, Word keeps the two-line
+frame on page 1. `around` keeps After beside it; `notBeside` moves only After to page 2.
+With 53 preceding lines the frame itself moves as a whole. Exact/minimum frame heights keep
+their stored size, while `hRule="auto"` uses the text's natural height.
+
+`CreateBorderDivs` in `WmlToHtmlConverter.cs` owns paragraph grouping and the flow/wrapping
+contract. The paginator measures the resulting frame rectangles, shares their exclusions with
+paragraph fragmentation and running stories, and promotes the frame text to the page without
+losing source anchors. Exclusion segments end at each following frame anchor so later frames
+cannot widen earlier tables' float boxes. A frame's required painted extent is separate from
+ordinary flow height; a table's clearance below a frame is additive after margin collapse.
+
+Four isolated native captures distinguish text distances. `hSpace="120"` adds 6 pt beside an
+`around` frame without moving the frame or preceding paragraph; `notBeside` ignores it.
+`vSpace="80"` leaves frame paint fixed but reflows preceding text: `around` puts Before beside
+the frame, while `notBeside` moves Before below it and then lays out After. With a long preceding
+paragraph, Word can move only its final line below the frame. Adding placeholder margins cannot
+reproduce that behavior.
+At a page edge, Word can move the frame to page 2 while leaving the preceding paragraph on page 1.
+The diagnosed ordinary-flow fallback fits that same probe on one page; it does not claim native
+pagination parity for vertical text distance.
+
+Native centered wrapping uses both sides of the same line. A 180 pt frame centered at x216 pt
+leaves text at x72 pt and x396 pt on each of its first two lines. Right alignment puts the frame
+at x360 pt and text on its left; a page-relative 12 pt offset puts the frame at x12 pt and text
+at x192 pt. The existing single-sided exclusion does not implement all these arrangements.
+
+Positive interior text offsets therefore retain conservative one-sided wrapping with an explicit
+approximation warning. Other unsupported horizontal wrapping and positive vertical text distance
+use complete below-frame flow, also with a warning; strict export refuses both approximations.
+Horizontal frame placement and source content survive. Exact two-sided wrapping and reflow of
+earlier lines remain separate limitations, recorded in
+[the converter architecture](architecture/docx_converter.md#paragraph-text-frames).
+Their native captures and completion criteria are retained in
+[#1509](https://github.com/JSv4/Docxodus/issues/1509) and
+[#1510](https://github.com/JSv4/Docxodus/issues/1510).
+
 ## Text frames: a partial direct `w:framePr` combines with the style's
 
 A paragraph style can define a text frame, and a paragraph that uses the style can carry its own

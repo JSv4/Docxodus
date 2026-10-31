@@ -10,7 +10,8 @@ namespace Docxodus.Tests;
 
 public class ParagraphFrameTests
 {
-    private static byte[] Fixture(string story, bool framed, bool multiple = false, string? heightRule = null)
+    private static byte[] Fixture(string story, bool framed, bool multiple = false, string? heightRule = null,
+        string? inlineWrap = null, string frameAttributes = "")
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -27,7 +28,10 @@ public class ParagraphFrameTests
                 first.PrependChild(new Wp.ParagraphProperties());
                 var height = heightRule == null ? "" : " w:h=\"400\"" +
                     (heightRule == "omitted" ? "" : " w:hRule=\"" + heightRule + "\"");
-                first.ParagraphProperties!.InnerXml = "<w:framePr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:w=\"10080\" w:hAnchor=\"page\" w:vAnchor=\"text\" w:x=\"840\" w:y=\"20\" w:wrap=\"auto\"" + height + "/>";
+                var placement = inlineWrap == null
+                    ? "w:w=\"10080\" w:hAnchor=\"page\" w:vAnchor=\"text\" w:x=\"840\" w:y=\"20\" w:wrap=\"auto\""
+                    : "w:w=\"3600\" w:hAnchor=\"text\" w:vAnchor=\"text\" w:x=\"240\" w:yAlign=\"inline\" w:wrap=\"" + inlineWrap + "\"";
+                first.ParagraphProperties!.InnerXml = "<w:framePr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" " + placement + height + frameAttributes + "/>";
             }
             var second = new Wp.Paragraph(new Wp.ParagraphProperties(new Wp.Justification { Val = Wp.JustificationValues.Center }),
                 new Wp.Run(new Wp.Text("Cedar page control")));
@@ -125,5 +129,67 @@ public class ParagraphFrameTests
                 RenderPagination = PaginationMode.Paginated });
         var paragraph = html.Descendants().Single(e => e.Name.LocalName == "p" && e.Value == "CEDAR RECORD 731");
         Assert.DoesNotContain("position: absolute", (string?)paragraph.Attribute("style") ?? "");
+    }
+
+    [Theory]
+    [InlineData("body", "notBeside", true, false)]
+    [InlineData("header", "notBeside", true, false)]
+    [InlineData("footer", "notBeside", true, false)]
+    [InlineData("body", "around", false, true)]
+    [InlineData("body", "auto", false, true)]
+    [InlineData("body", "tight", false, true)]
+    [InlineData("body", "through", false, true)]
+    [InlineData("body", "none", false, false)]
+    public void InlineFrame_PreservesOneGroupedStoryAndItsWrappingContract(
+        string story, string wrap, bool inFlow, bool excludes)
+    {
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("inline-frame.docx",
+            Fixture(story, true, multiple: true, inlineWrap: wrap)), new WmlToHtmlConverterSettings
+            { FabricateCssClasses = false, RenderHeadersAndFooters = true, RenderPagination = PaginationMode.Paginated });
+        var frame = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-docx-text-frame") == "true");
+        Assert.Contains("CEDAR RECORD 731", frame.Value);
+        Assert.Contains("CEDAR FRAME SECOND", frame.Value);
+        Assert.DoesNotContain("Cedar page control", frame.Value);
+        var slot = Assert.Single(frame.Ancestors(), e => (string?)e.Attribute("data-docx-frame-container") == "true");
+        Assert.Equal(inFlow, slot.Attribute("data-docx-frame-flow") != null);
+        Assert.Equal(excludes, frame.Ancestors().Any(e => e.Attribute("data-docx-frame-exclusion") != null));
+        Assert.Equal(!inFlow, slot.Attribute("data-keep-with-next") != null);
+        Assert.Contains(inFlow || excludes ? "position: relative" : "position: absolute", (string?)frame.Attribute("style"));
+    }
+
+    [Theory]
+    [InlineData("around", " w:xAlign=\"center\"", true)]
+    [InlineData("around", " w:xAlign=\"right\"", true)]
+    [InlineData("around", " w:vSpace=\"80\"", true)]
+    [InlineData("notBeside", " w:vSpace=\"80\"", true)]
+    [InlineData("notBeside", " w:xAlign=\"right\"", false)]
+    public void InlineFrame_UnsupportedWrappingPreservesContentWithADiagnostic(string wrap, string attributes, bool approximate)
+    {
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("inline-frame.docx",
+            Fixture("body", true, multiple: true, inlineWrap: wrap, frameAttributes: attributes)),
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, RenderPagination = PaginationMode.Paginated,
+                RenderUnsupportedContentPlaceholders = true, IncludeUnsupportedContentMetadata = true });
+        var frame = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-docx-text-frame") == "true");
+        Assert.Contains("CEDAR RECORD 731", frame.Value);
+        Assert.Contains("CEDAR FRAME SECOND", frame.Value);
+        Assert.Contains(frame.Ancestors(), e => (string?)e.Attribute("data-docx-frame-flow") == "true");
+        Assert.Equal(approximate ? "partial" : null, (string?)frame.Attribute("data-docx-shape"));
+        Assert.Equal(approximate ? "Other" : null, (string?)frame.Attribute("data-content-type"));
+        Assert.Equal(approximate ? "framePr" : null, (string?)frame.Attribute("data-element-name"));
+    }
+
+    [Theory]
+    [InlineData("", true)]
+    [InlineData(" w:xAlign=\"left\"", false)]
+    public void InlineFrame_InteriorOffsetReportsConservativeWrapping(string attributes, bool approximate)
+    {
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("inline-frame.docx",
+            Fixture("body", true, inlineWrap: "around", frameAttributes: attributes)),
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, RenderPagination = PaginationMode.Paginated,
+                RenderUnsupportedContentPlaceholders = true, IncludeUnsupportedContentMetadata = true });
+        var frame = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-docx-text-frame") == "true");
+        Assert.Contains(frame.Ancestors(), e => e.Attribute("data-docx-frame-exclusion") != null);
+        Assert.Equal(approximate ? "partial" : null, (string?)frame.Attribute("data-docx-shape"));
+        Assert.Contains(approximate ? "margin-left: 12pt;" : "margin-left: 0;", (string?)frame.Attribute("style"));
     }
 }

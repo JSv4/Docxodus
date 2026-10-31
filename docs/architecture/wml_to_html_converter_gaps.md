@@ -310,7 +310,9 @@ Unsupported run properties:
 **Location:** Lines 2508-2555
 
 Unimplemented paragraph properties:
-- `framePr` (frames)
+- `framePr` is partly implemented: floating placement, inline flow and left-edge wrapping are
+  covered. Interior wrapping and preceding-line clearance have explicit approximation diagnostics;
+  see [Paragraph text frames](docx_converter.md#paragraph-text-frames).
 - `keepLines`, `keepNext` (pagination control)
 - `mirrorIndents`
 - `pageBreakBefore`

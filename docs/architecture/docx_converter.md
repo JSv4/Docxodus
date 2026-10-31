@@ -219,19 +219,47 @@ still apply to the number.
 `w:framePr` identifies a floating paragraph frame. Adjacent paragraphs with identical frame
 attributes share one frame, anchored to the next ordinary paragraph, as specified by
 [OOXML FrameProperties](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.frameproperties?view=openxml-3.0.1).
-The converter groups their ordinary paragraph HTML inside one absolutely positioned
-`data-docx-text-frame` wrapper. A zero-height placeholder keeps the frame with its following
-anchor without adding a line to the body, header or footer. Drop-cap properties retain their
+The converter groups their ordinary paragraph HTML inside one `data-docx-text-frame` wrapper.
+A placeholder keeps the frame with its following anchor. Drop-cap properties retain their
 existing conversion path. Explicit automatic height ignores the stored height; exact and minimum
 heights retain their declared size. Omitted anchors use Word's text-relative defaults
 ([MS-OE376](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/6ff920ba-f035-407d-aa15-c4e2ad916cb6)).
+
+For `w:yAlign="inline"`, `w:wrap="notBeside"` gives the placeholder the frame's flow height.
+Text-anchored `around`, `auto`, `tight` and `through` frames with left-edge placement or explicit
+offsets instead leave a zero-height source slot and exclude their occupied area, including
+`hSpace`, from following lines. Separate frames keep their own
+source positions. `prepareFrameExclusions` represents the active rectangles with a float whose
+right edge follows their union, ending each float at the next frame's source slot. That next
+slot carries any surviving rectangles into a new exclusion. This prevents CSS float packing
+from shifting frames sideways and prevents a later, wider frame from moving an earlier table.
+Adjacent distinct frames share one slot; paragraphs with identical properties share one frame.
+`wrap="none"` retains overlap. Inline frames directly in a table cell become ordinary paragraphs,
+as in Word; a nested text-box story is a separate frame context.
+
+Body admission counts a wrapping frame's painted extent separately from normal flow height.
+Header overhangs narrow body lines without consuming that height a second time. Tables and other
+formatting contexts that must move below an exclusion contribute their measured clearance after
+margin collapse. Running stories use the same wrapping geometry when their fields are refreshed.
 
 The paginator resolves page, margin and text anchors after the ordinary content has flowed.
 It then places the frame directly in its page so body and running-story clipping cannot crop
 its overhang. Inherited presentation, canonical source identities and table-cell ownership
 survive placement; the PageMap measures the positioned source paragraphs. Ordinary running-story
-paragraphs retain their existing conversion. Frame geometry supports explicit offsets and
-horizontal/vertical alignment; surrounding-body text exclusion around frames remains unsupported.
+paragraphs retain their existing conversion. Floating-frame geometry supports explicit offsets and
+horizontal/vertical alignment.
+
+Inline wrapping has an explicit capability boundary. A positive interior offset keeps complete,
+conservative one-sided wrapping and reports that Word's two-sided wrapping is not represented.
+This warning describes the general capability; a particular short paragraph may still match Word.
+Other horizontal wrapping anchors/alignments and positive `vSpace` use the existing full-height
+flow slot with an approximation diagnostic. They preserve authored horizontal placement, all text
+and source anchors. `notBeside` horizontal alignment remains supported without a warning, and
+`wrap="none"` and non-inline floating frames retain their existing behavior. The shared
+unsupported-content policy reports these approximations in normal export and refuses them in
+strict export. It does not claim native-equivalent centered wrapping or preceding-line reflow.
+Native horizontal wrapping is tracked in [#1509](https://github.com/JSv4/Docxodus/issues/1509),
+and vertical clearance that reflows earlier lines in [#1510](https://github.com/JSv4/Docxodus/issues/1510).
 
 ### Linked DrawingML text boxes
 

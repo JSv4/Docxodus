@@ -179,13 +179,14 @@ namespace Docxodus
                 ReportShapeLayoutLoss(wrapper, settings, "This drawing's relative sizing needs a physical page or page-dependent margin context");
         }
 
-        private static void ReportShapeLayoutLoss(XElement anchor, WmlToHtmlConverterSettings settings, string message)
+        private static void ReportShapeLayoutLoss(XElement anchor, WmlToHtmlConverterSettings settings, string message,
+            string elementName = "anchor")
         {
             anchor.SetAttributeValue("data-docx-shape", "partial");
             if (settings is { RenderUnsupportedContentPlaceholders: true, IncludeUnsupportedContentMetadata: true })
             {
                 anchor.SetAttributeValue("data-content-type", nameof(UnsupportedContentType.Other));
-                anchor.SetAttributeValue("data-element-name", "anchor");
+                anchor.SetAttributeValue("data-element-name", elementName);
                 anchor.SetAttributeValue("title", message);
             }
         }
