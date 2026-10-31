@@ -46,8 +46,8 @@ public class HtmlImageNormalizationTests
         var svg = XElement.Parse(Encoding.UTF8.GetString(Bytes(image)));
         Assert.Equal("svg", svg.Name.LocalName);
         Assert.Equal("none", (string?)svg.Attribute("preserveAspectRatio"));
-        Assert.Single(svg.Descendants().Where(e => e.Name.LocalName == "rect"));
-        Assert.Single(svg.Descendants().Where(e => e.Name.LocalName == "ellipse"));
+        Assert.Single(svg.Descendants(), e => e.Name.LocalName == "rect");
+        Assert.Single(svg.Descendants(), e => e.Name.LocalName == "ellipse");
         Assert.DoesNotContain("[WMF IMAGE]", html.Value);
         Assert.Contains(vml ? "height: 48pt" : "height: 0.666", (string?)image.Attribute("style"));
     }
@@ -148,7 +148,7 @@ public class HtmlImageNormalizationTests
             Array.Copy(BitConverter.GetBytes(colorOffset), 0, bytes, 138, 4);
         }
         var html = Render(bytes, "image/tiff");
-        Assert.Empty(html.Descendants().Where(e => e.Name.LocalName == "img"));
+        Assert.DoesNotContain(html.Descendants(), e => e.Name.LocalName == "img");
         Assert.Contains(html.Descendants(), e => e.Attribute("data-content-type") != null);
         Assert.Contains("CypressAfter", html.Value);
     }
@@ -158,7 +158,7 @@ public class HtmlImageNormalizationTests
     {
         var bytes = Wmf(unsupported: true);
         var html = Render(bytes, "image/x-wmf");
-        Assert.Empty(html.Descendants().Where(e => e.Name.LocalName == "img"));
+        Assert.DoesNotContain(html.Descendants(), e => e.Name.LocalName == "img");
         Assert.Contains(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "WmfImage");
     }
 
@@ -169,7 +169,7 @@ public class HtmlImageNormalizationTests
         Array.Copy(BitConverter.GetBytes((short)48), 0, bytes, 66, 2);
         Array.Copy(BitConverter.GetBytes((short)4), 0, bytes, 76, 2);
         var svg = XElement.Parse(Encoding.UTF8.GetString(Bytes(Picture(Render(bytes, "image/x-wmf")))));
-        var rect = Assert.Single(svg.Descendants().Where(e => e.Name.LocalName == "rect"));
+        var rect = Assert.Single(svg.Descendants(), e => e.Name.LocalName == "rect");
         Assert.Equal("16", (string?)rect.Attribute("x"));
         Assert.Equal("8.333333333333334vw", (string?)rect.Attribute("stroke-width"));
         Assert.Equal("non-scaling-stroke", (string?)rect.Attribute("vector-effect"));
@@ -191,7 +191,7 @@ public class HtmlImageNormalizationTests
         var svg = XElement.Parse(Encoding.UTF8.GetString(Bytes(image)));
         Assert.Equal("0 0 96 64", (string?)svg.Attribute("viewBox"));
         Assert.Contains(vml ? $"width: {72 * widthScale}pt" : $"width: {widthScale}in", (string?)image.Attribute("style"));
-        var rect = Assert.Single(svg.Descendants().Where(e => e.Name.LocalName == "rect"));
+        var rect = Assert.Single(svg.Descendants(), e => e.Name.LocalName == "rect");
         Assert.Equal("2.0833333333333335vw", (string?)rect.Attribute("stroke-width"));
         Assert.Equal("non-scaling-stroke", (string?)rect.Attribute("vector-effect"));
     }
@@ -246,7 +246,7 @@ public class HtmlImageNormalizationTests
         finally { Directory.Delete(temp, recursive: true); }
     }
 
-    private static XElement Picture(XElement html) => Assert.Single(html.Descendants().Where(e => e.Name.LocalName == "img"));
+    private static XElement Picture(XElement html) => Assert.Single(html.Descendants(), e => e.Name.LocalName == "img");
     private static byte[] Bytes(XElement image) => Convert.FromBase64String(((string)image.Attribute("src")!).Split(',')[1]);
 
     private static XElement Render(byte[] bytes, string contentType, bool header = false, bool vml = false,
