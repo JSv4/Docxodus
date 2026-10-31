@@ -153,45 +153,57 @@ for (const wrap of ['around', 'notBeside'] as const) {
   });
 }
 
-for (const [name, frameOptions, left] of [
-  ['around vertical distance', { wrap: 'around', verticalTextDistance: 4 }, 84],
-  ['notBeside vertical distance', { wrap: 'notBeside', verticalTextDistance: 4 }, 84],
+for (const [story, mode] of [
+  ['body', 'around'], ['body', 'notBeside'], ['body', 'long'], ['body', 'page-end'],
+  ['header', 'around'], ['header', 'notBeside'], ['footer', 'around'], ['footer', 'notBeside'],
 ] as const) {
-  test(`inline ${name} reports complete-flow approximation and honors strict policy`, async ({ browser, page }) => {
-    const input = inlineFrameFixture(frameOptions);
-    const options = { browser, outputs: ['html', 'pdf'] as const, reviewProfile: 'final' as const,
-      commentProfile: 'hidden' as const, timeoutMs: 120_000 };
-    const result = await renderDocxArtifacts(input, options);
-    expect(result.warnings.map(warning => warning.code)).toContain('unsupported_content_placeholder');
-    expect(result.renderReport.unsupportedContent).toEqual([
-      expect.objectContaining({ contentType: 'Other', action: 'placeholder' }),
-    ]);
+  test(`inline ${story} ${mode} vertical clearance matches native Word without moving frame paint`, async ({ browser, page }) => {
+    const wrap = mode === 'around' ? 'around' : 'notBeside';
+    const input = inlineFrameFixture({ story, wrap, verticalTextDistance: 4,
+      precedingWords: mode === 'long' ? 60 : 1, fillerCount: mode === 'page-end' ? 50 : 0 });
+    const result = await renderDocxArtifacts(input, { browser, outputs: ['html', 'pdf'], reviewProfile: 'final',
+      commentProfile: 'hidden', unsupportedContent: 'strict', timeoutMs: 120_000 });
+    expect(result.renderReport.unsupportedContent).toEqual([]);
     const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
     try {
       const pdf = await task.promise;
-      expect(pdf.numPages).toBe(1);
-      const items = (await (await pdf.getPage(1)).getTextContent()).items.filter(item => 'str' in item);
-      const [before, first, last, after] = ['SageBefore', 'SageFrameFirst', 'SageFrameLast', 'SageAfter'].map(text => {
-        const matches = items.filter(item => item.str === text);
-        expect(matches).toHaveLength(1);
-        return matches[0];
-      });
-      expect(first.transform[4]).toBeCloseTo(left, 0);
-      expect(before.transform[5] - first.transform[5]).toBeCloseTo(12, 0);
-      expect(first.transform[5] - last.transform[5]).toBeCloseTo(12, 0);
-      expect(last.transform[5] - after.transform[5]).toBeCloseTo(12, 0);
-      expect(after.transform[4]).toBeCloseTo(72, 0);
+      expect(pdf.numPages).toBe(mode === 'page-end' ? 2 : 1);
+      const words: { text: string; page: number; x: number; y: number }[] = [];
+      for (let page = 1; page <= pdf.numPages; page++) {
+        const items = (await (await pdf.getPage(page)).getTextContent()).items.filter(item => 'str' in item);
+        words.push(...items.flatMap(item => item.str.split(/\s+/).filter(Boolean)
+          .map(text => ({ text, page, x: item.transform[4], y: item.transform[5] }))));
+      }
+      const word = (text: string) => {
+        const matches = words.filter(word => word.text === text); expect(matches).toHaveLength(1); return matches[0];
+      };
+      if (mode === 'long') for (let i = 0; i < 60; i++) word(`SageBefore${String(i).padStart(2, '0')}`);
+      const first = word('SageFrameFirst'), last = word('SageFrameLast'), after = word('SageAfter');
+      const before = word(mode === 'long' ? 'SageBefore59' : 'SageBefore');
+      expect(first.x).toBeCloseTo(84, 0);
+      expect(first.y - last.y).toBeCloseTo(12, 0);
+      expect(first.page).toBe(mode === 'page-end' ? 2 : 1); expect(after.page).toBe(first.page);
+      expect(before.page).toBe(1);
+      if (story === 'header') expect(first.y - word('SageDocument').y).toBeCloseTo(mode === 'around' ? 24 : 52, 0);
+      if (story === 'footer') expect(word('SageDocument').y - before.y).toBeCloseTo(660, 0);
+      if (mode === 'page-end') {
+        expect(word('SageFiller000').y - before.y).toBeCloseTo(600, 0);
+        expect(first.y - after.y).toBeCloseTo(28, 0);
+      } else {
+        if (mode !== 'long') expect(before.x).toBeCloseTo(mode === 'around' ? 264 : 72, 0);
+        expect(first.y - before.y).toBeCloseTo(mode === 'around' ? -12 : 28, 0);
+        expect(first.y - after.y).toBeCloseTo(mode === 'around' ? 0 : 40, 0);
+        if (mode === 'long') expect(word('SageBefore00').y - first.y).toBeCloseTo(108, 0);
+      }
     } finally { await task.destroy(); }
     await page.setContent(result.html!);
-    for (const text of ['SageBefore', 'SageFrameFirst', 'SageFrameLast', 'SageAfter']) {
+    for (const text of ['SageFrameFirst', 'SageFrameLast', 'SageAfter']) {
       const id = await page.locator('.page-box p').filter({ hasText: new RegExp(`^${text}$`) }).getAttribute('data-source-anchor-id');
       expect(id).toBeTruthy();
       expect(result.pageMap.fragments.filter(fragment => fragment.anchorId === id)).toEqual([
-        expect.objectContaining({ pageNumber: 1, story: 'body' }),
+        expect.objectContaining({ pageNumber: mode === 'page-end' ? 2 : 1, story }),
       ]);
     }
-    await expect(renderDocxArtifacts(input, { ...options, unsupportedContent: 'strict' }))
-      .rejects.toMatchObject({ code: 'resource_policy_failure' });
   });
 }
 

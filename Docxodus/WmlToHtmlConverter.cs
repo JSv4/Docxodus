@@ -10969,7 +10969,7 @@ namespace Docxodus
                 var leftWrap = ((string?)frame.Attribute(W.hAnchor) ?? "text") == "text" &&
                     (string?)frame.Attribute(W.xAlign) is null or "left";
                 var approximate = textWrap && (verticalDistance > 0 || wrap != "notBeside" && !leftWrap);
-                var inFlow = textWrap && (wrap == "notBeside" || verticalDistance > 0);
+                var inFlow = textWrap && wrap == "notBeside" && verticalDistance <= 0;
                 var excludes = textWrap && !inFlow;
                 var interior = excludes && frame.Attribute(W.xAlign) == null && horizontalOffset > 0;
                 var style = new Dictionary<string, string>
@@ -10993,11 +10993,11 @@ namespace Docxodus
                     new XAttribute("data-docx-frame-h-anchor", (string?)frame.Attribute(W.hAnchor) ?? "text"),
                     new XAttribute("data-docx-frame-v-anchor", (string?)frame.Attribute(W.vAnchor) ?? "text"),
                     CreateBorderDivsCore(wordDoc, settings, group));
+                if (excludes && verticalDistance > 0)
+                    rendered.Add(new XAttribute("data-docx-frame-clearance", verticalDistance / 20m));
                 if (approximate || interior)
                 {
-                    ReportShapeLayoutLoss(rendered, settings, verticalDistance > 0
-                        ? "Paragraph frame clearance that reflows earlier text is approximated by ordinary flow"
-                        : "Paragraph frame wrapping at this horizontal position requires line-interval layout", "framePr");
+                    ReportShapeLayoutLoss(rendered, settings, "Paragraph frame wrapping requires verified line layout", "framePr");
                     if (excludes) rendered.Add(new XAttribute("data-docx-frame-pending", "true"));
                 }
                 foreach (var name in new[] { W.x, W.y, W.xAlign, W.yAlign, W.wrap, W.hSpace, W.vSpace })

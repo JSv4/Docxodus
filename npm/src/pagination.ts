@@ -2729,6 +2729,17 @@ export class PaginationEngine {
       [...preceding.map(previous => previous.cloneNode(true) as HTMLElement), measuredElement], dims);
     this.stagingElement.appendChild(measurementHost);
 
+    let prefixTop: number | undefined;
+    if (measuredElement.querySelector('[data-docx-frame-clearance]')) {
+      // Compare the same admitted prefix with and without this prospective block. An ordinary
+      // sentinel measures flow, excluding float overhang that has its own frame extent budget.
+      const sentinel = this.document.createElement('div');
+      sentinel.style.cssText = 'height:0;margin:0';
+      measuredElement.replaceWith(sentinel);
+      this.prepareFrameExclusions(measurementHost, dims, pageNumber);
+      prefixTop = sentinel.getBoundingClientRect().top;
+      sentinel.replaceWith(measuredElement);
+    }
     this.prepareFrameExclusions(measurementHost, dims, pageNumber);
     const rect = measuredElement.getBoundingClientRect();
     const margins = collapsedBlockMarginsPx(this.view, measuredElement);
@@ -2739,9 +2750,10 @@ export class PaginationEngine {
       // inserting a sibling instead would count the table's top margin twice.
       clearancePt = pxToPt(Math.max(0, rect.top - this.unclearedBlockTop(measuredElement)));
     }
-    const frameBottoms = Array.from(measurementHost.querySelectorAll<HTMLElement>('[data-docx-frame-exclusion]'))
+    if (prefixTop !== undefined) clearancePt += pxToPt(rect.top - prefixTop);
+    const frameBottoms = Array.from(measurementHost.querySelectorAll<HTMLElement>('[data-docx-frame-exclusion] > [data-docx-text-frame]'))
       .filter(frame => !frame.closest('[data-docx-textbox]'))
-      .map(frame => frame.getBoundingClientRect().bottom - rect.top);
+      .map(frame => this.frameExclusionRectangle(frame).bottom - rect.top);
     const heightPt = pxToPt(Math.max(rect.height, ...this.floatingPictureCarriers(measuredElement)
       .map(picture => picture.getBoundingClientRect().bottom - rect.top)));
     const measured: MeasuredBlock = {
@@ -5551,10 +5563,19 @@ export class PaginationEngine {
     return Array.from(host.querySelectorAll<HTMLElement>('[data-docx-frame-exclusion] > [data-docx-text-frame]'))
       .filter(frame => !frame.closest('[data-docx-textbox]'))
       .map(frame => {
-        const rect = frame.getBoundingClientRect();
-        const distance = parseFloat(this.view.getComputedStyle(frame).marginRight) || 0;
-        return { top: pxToPt(rect.top - origin.top), bottom: pxToPt(rect.bottom - origin.top), left: pxToPt(rect.left - origin.left - distance), right: pxToPt(rect.right - origin.left + distance) };
+        const rect = this.frameExclusionRectangle(frame);
+        return { top: pxToPt(rect.top - origin.top), bottom: pxToPt(rect.bottom - origin.top), left: pxToPt(rect.left - origin.left), right: pxToPt(rect.right - origin.left) };
       });
+  }
+
+  private frameExclusionRectangle(frame: HTMLElement, scale = 1): FrameExclusion {
+    const paint = frame.getBoundingClientRect();
+    const distance = (parseFloat(this.view.getComputedStyle(frame).marginRight) || 0) * scale;
+    const vertical = ptToPx(Number(frame.dataset.docxFrameClearance ?? 0)) * scale;
+    const column = frame.closest('[data-docx-frame-container]')!.getBoundingClientRect();
+    const below = frame.dataset.docxFrameWrap === 'notBeside';
+    return { top: paint.top - vertical, bottom: paint.bottom + vertical,
+      left: below ? column.left : paint.left - distance, right: below ? column.right : paint.right + distance };
   }
 
   private frameExclusionPolygon(rectangles: FrameExclusion[]): string {
@@ -5586,7 +5607,7 @@ export class PaginationEngine {
   }
 
   /** Lay out each source line in the intervals left by the union of frame rectangles. */
-  private layoutFrameParagraph(paragraph: HTMLElement, rectangles: FrameExclusion[], scale: number): boolean {
+  private layoutFrameParagraph(paragraph: HTMLElement, rectangles: FrameExclusion[], scale: number, source = paragraph): boolean {
     const style = this.view.getComputedStyle(paragraph);
     if (!this.hasVisibleText(paragraph.textContent ?? '') && !paragraph.querySelector('img')) return true;
     if (style.direction !== 'ltr' || style.writingMode !== 'horizontal-tb' || paragraph.querySelector('br,img,svg')
@@ -5608,7 +5629,7 @@ export class PaginationEngine {
     const holder = this.document.createElement('div');
     holder.style.cssText = `position:absolute;visibility:hidden;width:${(right - left) / scale}px`;
     paragraph.parentElement!.appendChild(holder);
-    let remaining: HTMLElement | null = paragraph.cloneNode(true) as HTMLElement;
+    let remaining: HTMLElement | null = source.cloneNode(true) as HTMLElement;
     // Precision lines chosen at full width are provisional when this page has exclusions.
     for (const line of Array.from(remaining.querySelectorAll<HTMLElement>('[data-docx-word-line]'))) {
       line.parentElement!.removeAttribute('data-docx-word-fit');
@@ -5692,6 +5713,10 @@ export class PaginationEngine {
     for (const proxy of Array.from(host.querySelectorAll('[data-docx-frame-exclusion-segment]'))) proxy.remove();
     const carriers = Array.from(host.querySelectorAll<HTMLElement>('[data-docx-header-exclusion],[data-docx-frame-exclusion]'))
       .filter(carrier => !carrier.closest('[data-docx-textbox]'));
+    if (!carriers.length) return;
+    const reflowsPrefix = carriers.some(carrier => carrier.querySelector('[data-docx-frame-clearance]'));
+    const paragraphSources = new Map<HTMLElement, HTMLElement>(reflowsPrefix ? Array.from(host.querySelectorAll<HTMLElement>('p,h1,h2,h3,h4,h5,h6'))
+      .map(paragraph => [paragraph, paragraph.cloneNode(true) as HTMLElement]) : []);
     for (const carrier of carriers) if (carrier.hasAttribute('data-docx-frame-exclusion')) {
       // Float packing must not move a frame away from its own authored source anchor.
       carrier.style.float = 'none';
@@ -5704,6 +5729,10 @@ export class PaginationEngine {
     const pageLeft = hostRect.left - (pageHost ? 0 : dims.marginLeft * pixelsPerPoint);
     for (const carrier of carriers) for (const frame of Array.from(carrier.children) as HTMLElement[]) {
       if (!frame.hasAttribute('data-docx-text-frame')) continue;
+      if (reflowsPrefix) {
+        frame.dataset.docxFrameTopMargin ??= this.view.getComputedStyle(frame).marginTop;
+        frame.style.marginTop = frame.dataset.docxFrameTopMargin;
+      }
       const rect = frame.getBoundingClientRect(), anchor = carrier.parentElement!.getBoundingClientRect();
       const context = { staticLeft: (anchor.left - pageLeft) / pixelsPerPoint,
         paragraphLeft: (anchor.left - pageLeft) / pixelsPerPoint, paragraphWidth: anchor.width / pixelsPerPoint };
@@ -5711,8 +5740,10 @@ export class PaginationEngine {
       const margin = pxToPt(parseFloat(this.view.getComputedStyle(frame).marginLeft) || 0);
       frame.style.marginLeft = `${margin + left - (rect.left - pageLeft) / pixelsPerPoint}pt`;
     }
-    type Segment = { proxy: HTMLElement; origin: DOMRect; scale: number; rectangles: FrameExclusion[] };
+    type Segment = { proxy: HTMLElement; anchor: HTMLElement; origin: DOMRect; scale: number; rectangles: FrameExclusion[] };
     const previous = new Map<HTMLElement, Segment>();
+    const history = new Map<HTMLElement, Segment[]>();
+    const painted = new Map<HTMLElement, { top: number; scale: number }>();
     const render = (segment: Segment, end = Infinity) => {
       const { proxy, origin, scale } = segment;
       const rectangles = segment.rectangles.map(rect => ({
@@ -5744,6 +5775,7 @@ export class PaginationEngine {
       proxy.style.cssText = 'float:left;width:1px;height:0';
       const origin = proxy.getBoundingClientRect(), scale = origin.width;
       const rectangles = (preceding?.rectangles ?? []).filter(rect => rect.bottom > origin.top);
+      const backflow = Array.from(carrier.children).some(frame => Number((frame as HTMLElement).dataset.docxFrameClearance) > 0);
       if (header) {
         for (const rect of JSON.parse(header) as FrameExclusion[]) rectangles.push({
           top: origin.top + ptToPx(rect.top) * scale,
@@ -5753,18 +5785,21 @@ export class PaginationEngine {
         });
       } else for (const frame of Array.from(carrier.children) as HTMLElement[]) {
         const rect = frame.getBoundingClientRect();
-        const distance = parseFloat(this.view.getComputedStyle(frame).marginRight) || 0;
-        rectangles.push({ top: rect.top, bottom: rect.bottom, left: rect.left - distance * scale, right: rect.right + distance * scale });
+        painted.set(frame, { top: rect.top, scale });
+        rectangles.push(this.frameExclusionRectangle(frame, scale));
       }
-      const segment = { proxy, origin, scale, rectangles };
+      const segment = { proxy, anchor, origin, scale, rectangles };
+      const segments = [...(history.get(context) ?? []), segment];
+      history.set(context, segments);
+      const accumulated = segments.flatMap(segment => segment.rectangles);
       render(segment);
       const next = carriers.slice(index + 1).find(other =>
         (other.closest<HTMLElement>(`[data-docx-frame-story],.${this.cssPrefix}content`) ?? host) === context);
-      const between = (node: Element) => !!(carrier.compareDocumentPosition(node) & this.view.Node.DOCUMENT_POSITION_FOLLOWING)
+      const between = (node: Element) => (backflow || !!(carrier.compareDocumentPosition(node) & this.view.Node.DOCUMENT_POSITION_FOLLOWING))
         && (!next || !!(node.compareDocumentPosition(next) & this.view.Node.DOCUMENT_POSITION_FOLLOWING))
         && !node.closest('[data-docx-text-frame]');
       const obstacles = Array.from(context.querySelectorAll<HTMLElement>('table,hr,div,p')).filter(node => {
-        if (!between(node)) return false;
+        if (!between(node) || node.matches('[data-docx-frame-container],[data-docx-frame-exclusion],[data-docx-frame-exclusion-segment],[data-docx-header-exclusion]')) return false;
         const style = this.view.getComputedStyle(node);
         return node.matches('table,hr') || ['flow-root', 'flex', 'grid', 'inline-block'].includes(style.display)
           || style.overflow !== 'visible' || style.columnCount !== 'auto' || style.columnWidth !== 'auto';
@@ -5774,13 +5809,24 @@ export class PaginationEngine {
         const bounds = paragraph.getBoundingClientRect();
         if (rectangles.some(rect => rect.bottom > bounds.top && rect.top < bounds.bottom)
           // The existing float already represents a union joined to the left edge exactly.
-          && rectangles.some(rect => rect.left > bounds.left)
-          && !this.layoutFrameParagraph(paragraph, rectangles, scale)) supported = false;
+          && (backflow || rectangles.some(rect => rect.left > bounds.left))
+          && !this.layoutFrameParagraph(paragraph, backflow ? accumulated : rectangles, scale, paragraphSources.get(paragraph))) supported = false;
       }
       for (const obstacle of obstacles) {
         const bounds = obstacle.getBoundingClientRect(), top = this.unclearedBlockTop(obstacle);
-        if (rectangles.some(rect => rect.left > origin.left && rect.top < top + bounds.height && rect.bottom > top))
+        if (rectangles.some(rect => (backflow || rect.left > origin.left) && rect.top < top + bounds.height && rect.bottom > top))
           supported = false;
+      }
+      if (backflow) {
+        for (const [frame, fixed] of painted) {
+          const offset = (fixed.top - frame.getBoundingClientRect().top) / fixed.scale;
+          frame.style.marginTop = `${(parseFloat(this.view.getComputedStyle(frame).marginTop) || 0) + offset}px`;
+        }
+        // Reflow may move the source slots while their paint stays fixed. Rebuild the float
+        // origins from those new slots so following flow cannot be charged twice.
+        for (const prior of segments) prior.proxy.style.cssText = 'float:left;width:1px;height:0';
+        for (const prior of segments) prior.origin = prior.proxy.getBoundingClientRect();
+        segments.forEach((prior, index) => render(prior, segments[index + 1]?.anchor.getBoundingClientRect().top));
       }
       previous.set(context, segment);
     }
@@ -5903,6 +5949,7 @@ export class PaginationEngine {
     // measurements local: a fresh-page retry must not reuse the previous page's height,
     // and the source block identities are also the keep-chain retry guards.
     const hasExclusions = this.hasFlowExclusion(blocks.map(block => block.element));
+    const reflowsPrefix = blocks.some(block => block.element.querySelector('[data-docx-frame-clearance]'));
     const measureOnPage = (chain: MeasuredBlock[], page: PageDimensions,
       preceding: readonly HTMLElement[] = [], owner = pageSectionIndex, physical = pageNumber): MeasuredBlock[] => {
       const prefix = pagePrefix(preceding, owner, physical);
@@ -5946,7 +5993,7 @@ export class PaginationEngine {
       const page = pageInSection(owner, physical);
       const prefix = [...this.headerFramePrefix(dimensionsFor(owner), owner, page,
         displayedPageNumber(owner, page, physical), physical), ...preceding];
-      return this.hasFlowExclusion(prefix) ? prefix : [];
+      return reflowsPrefix || this.hasFlowExclusion(prefix) ? prefix : [];
     };
 
     // Get effective content height for first page (accounts for header/footer sizes)

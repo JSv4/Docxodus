@@ -1501,8 +1501,12 @@ the frame, while `notBeside` moves Before below it and then lays out After. With
 paragraph, Word can move only its final line below the frame. Adding placeholder margins cannot
 reproduce that behavior.
 At a page edge, Word can move the frame to page 2 while leaving the preceding paragraph on page 1.
-The diagnosed ordinary-flow fallback fits that same probe on one page; it does not claim native
-pagination parity for vertical text distance.
+The previous diagnosed ordinary-flow fallback fit that probe on one page. The paginator now
+expands the exclusion by the normalized vertical distance while keeping the painted anchor fixed.
+It replays pristine source paragraphs against all admitted rectangles, measures the extra prefix
+height on clones, and charges that height alongside frame extent and notes. Deferral discards the
+speculative replay. Adjacent frames capture their anchors together; separated frames capture
+theirs after the earlier frame has reflowed its prefix (#1510).
 
 Native centered wrapping uses both sides of the same line. A 180 pt frame centered at x216 pt
 leaves text at x72 pt and x396 pt on each of its first two lines. Right alignment puts the frame
