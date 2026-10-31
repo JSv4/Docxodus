@@ -43,7 +43,7 @@ public class TextBoxClipProvenanceTests
     [InlineData("auto", false)]
     [InlineData("shrink", false)]
     [InlineData("linked", false)]
-    public void Supported_placement_can_be_proven_without_claiming_implicit_internal_clipping(string mode, bool eligible)
+    public void Supported_placement_requires_effectively_fixed_sizing(string mode, bool eligible)
     {
         using var stream = new MemoryStream();
         stream.Write(Fixture("drawing", mode));
@@ -64,6 +64,115 @@ public class TextBoxClipProvenanceTests
         var box = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-docx-textbox") == "true" && e.Value.Contains("Quail marker"));
         Assert.Equal(eligible ? "true" : null, (string?)box.Attribute("data-docx-textbox-source-position"));
         if (mode == "implicit") Assert.Null(box.Attribute("data-docx-textbox-source-clip"));
+    }
+
+    [Theory]
+    [InlineData("implicit", "spAutoFit", "noAutofit", "noAutofit", false, true)]
+    [InlineData("implicit", "", "spAutoFit", "noAutofit", false, true)]
+    [InlineData("implicit", "", "", "spAutoFit", false, true)]
+    [InlineData("implicit", "noAutofit", "spAutoFit", "normAutofit", true, false)]
+    [InlineData("implicit", "normAutofit", "noAutofit", "noAutofit", false, false)]
+    [InlineData("fixed", "spAutoFit", "spAutoFit", "spAutoFit", true, false)]
+    [InlineData("auto", "noAutofit", "noAutofit", "noAutofit", false, true)]
+    [InlineData("shrink", "noAutofit", "noAutofit", "noAutofit", false, false)]
+    public void Drawing_fit_uses_shape_then_theme_text_line_and_shape_defaults(
+        string local, string text, string line, string shape, bool fixedFit, bool autoFit)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Fixture("drawing", local));
+        using var document = WordprocessingDocument.Open(stream, true);
+        var defaults = new XElement(A.objectDefaults);
+        foreach (var (name, fit) in new[] { (A.spDef, shape), (A.lnDef, line), (A.txDef, text) })
+            defaults.Add(new XElement(name, new XElement(A.spPr),
+                new XElement(A.bodyPr, fit == "" ? null : new XElement(A.a + fit)), new XElement(A.lstStyle)));
+        document.MainDocumentPart!.AddNewPart<ThemePart>().PutXDocument(
+            new XDocument(new XElement(A.theme, defaults)));
+        var inline = document.MainDocumentPart.GetXDocument().Descendants(WP.inline).Single();
+        inline.Name = WP.anchor;
+        inline.AddFirst(new XElement(WP.positionH, new XAttribute("relativeFrom", "page"), new XElement(WP.posOffset, 762000)),
+            new XElement(WP.positionV, new XAttribute("relativeFrom", "page"), new XElement(WP.posOffset, 762000)));
+        inline.Add(new XElement(WP.wrapNone));
+        document.MainDocumentPart.PutXDocument();
+        var html = WmlToHtmlConverter.ConvertToHtml(document,
+            new WmlToHtmlConverterSettings { RenderPagination = PaginationMode.Paginated, FabricateCssClasses = false });
+        var box = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-docx-textbox") == "true");
+        Assert.Equal(fixedFit ? "true" : null, (string?)box.Attribute("data-docx-textbox-source-position"));
+        Assert.Equal(!autoFit, ((string?)box.Attribute("style") ?? "").Split(';')
+            .Any(declaration => declaration.TrimStart().StartsWith("height:", System.StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Theme_fit_is_rechecked_after_source_edits()
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Fixture("drawing", "implicit"));
+        using var document = WordprocessingDocument.Open(stream, true);
+        var theme = document.MainDocumentPart!.AddNewPart<ThemePart>();
+        foreach (var mode in new[] { A.noAutofit, A.spAutoFit, A.normAutofit, A.noAutofit })
+        {
+            theme.PutXDocument(new XDocument(new XElement(A.theme, new XElement(A.objectDefaults,
+                new XElement(A.txDef, new XElement(A.bodyPr, new XElement(mode)))))));
+            var html = WmlToHtmlConverter.ConvertToHtml(document,
+                new WmlToHtmlConverterSettings { FabricateCssClasses = false });
+            var box = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-docx-textbox") == "true");
+            Assert.Equal(mode != A.spAutoFit, ((string?)box.Attribute("style") ?? "").Split(';')
+                .Any(declaration => declaration.TrimStart().StartsWith("height:", System.StringComparison.Ordinal)));
+        }
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("choice")]
+    [InlineData("body")]
+    [InlineData("theme-body")]
+    [InlineData("theme-defaults")]
+    public void Missing_or_ambiguous_fit_context_cannot_claim_source_provenance(string mode)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Fixture("drawing", "fixed"));
+        using var document = WordprocessingDocument.Open(stream, true);
+        var main = document.MainDocumentPart!;
+        var bodyPr = main.GetXDocument().Descendants(WPS.bodyPr).Single();
+        if (mode == "missing") bodyPr.Remove();
+        else if (mode == "choice") bodyPr.Add(new XElement(A.normAutofit));
+        else if (mode == "body") bodyPr.AddAfterSelf(new XElement(WPS.bodyPr, new XElement(A.spAutoFit)));
+        else
+        {
+            var properties = new XElement(A.bodyPr, new XElement(A.noAutofit));
+            var definition = new XElement(A.txDef, properties);
+            var defaults = new XElement(A.objectDefaults, definition);
+            if (mode == "theme-body") properties.AddAfterSelf(new XElement(A.bodyPr, new XElement(A.spAutoFit)));
+            else definition.AddAfterSelf(new XElement(A.txDef, new XElement(A.bodyPr, new XElement(A.spAutoFit))));
+            main.AddNewPart<ThemePart>().PutXDocument(new XDocument(new XElement(A.theme, defaults)));
+        }
+        main.PutXDocument();
+        var html = WmlToHtmlConverter.ConvertToHtml(document, new WmlToHtmlConverterSettings());
+        var box = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-docx-textbox") == "true");
+        Assert.Null(box.Attribute("data-docx-textbox-source-clip"));
+        Assert.Null(box.Attribute("data-docx-textbox-source-position"));
+    }
+
+    [Fact]
+    public void Nested_autofit_box_does_not_change_its_fixed_outer_story()
+    {
+        using var innerStream = new MemoryStream(Fixture("drawing", "auto"));
+        using var innerDocument = WordprocessingDocument.Open(innerStream, false);
+        var inner = new XElement(innerDocument.MainDocumentPart!.GetXDocument().Descendants(W.drawing).Single());
+        inner.Descendants(W.t).Single().Value = "Nested marker";
+        inner.Descendants(WP.docPr).Single().SetAttributeValue("id", 2);
+        using var stream = new MemoryStream();
+        stream.Write(Fixture("drawing", "fixed"));
+        using var document = WordprocessingDocument.Open(stream, true);
+        var main = document.MainDocumentPart!;
+        main.GetXDocument().Descendants(W.txbxContent).Single().Element(W.p)!.Add(new XElement(W.r, inner));
+        main.PutXDocument();
+        var html = WmlToHtmlConverter.ConvertToHtml(document, new WmlToHtmlConverterSettings { FabricateCssClasses = false });
+        var boxes = html.Descendants().Where(e => (string?)e.Attribute("data-docx-textbox") == "true").ToList();
+        Assert.Equal(2, boxes.Count);
+        Assert.Equal("true", (string?)boxes[0].Attribute("data-docx-textbox-source-clip"));
+        Assert.Contains("height:", (string?)boxes[0].Attribute("style"));
+        Assert.DoesNotContain(((string?)boxes[1].Attribute("style") ?? "").Split(';'),
+            declaration => declaration.TrimStart().StartsWith("height:", System.StringComparison.Ordinal));
     }
 
     [Theory]
@@ -136,6 +245,7 @@ public class TextBoxClipProvenanceTests
                 </w:document>
                 """));
             main.AddNewPart<StyleDefinitionsPart>().PutXDocument(new XDocument(new XElement(W.styles)));
+            main.AddNewPart<DocumentSettingsPart>().PutXDocument(new XDocument(new XElement(W.settings)));
         }
         return stream.ToArray();
     }

@@ -12339,14 +12339,16 @@ namespace Docxodus
             var drawingContainer = element.Elements()
                 .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
             var vmlShape = textBoxContent?.Ancestors().FirstOrDefault(IsVmlShape);
-            var autoFit = vmlShape != null ? HasVmlTextBoxAutoFit(vmlShape) : HasAutoFitTextBox(element);
+            var bodyPr = textBoxContent?.Ancestors(WPS.wsp).FirstOrDefault()?.Element(WPS.bodyPr);
+            var drawingFit = ResolveDrawingTextBoxFit(wordDoc, bodyPr);
+            var autoFit = vmlShape != null ? HasVmlTextBoxAutoFit(vmlShape) : drawingFit == A.spAutoFit;
             // ProcessImage's settings parameter defaults to null for callers with no pagination
             // config, but AddDrawingTextBoxStyle dereferences settings.RenderPagination once the
             // drawing has an anchor, and ConvertToHtmlTransform requires non-null settings
             // throughout. This mirrors pre-existing behavior: a null settings here has always
             // been able to NRE downstream when a text box is actually present.
             if (drawingContainer != null)
-                AddDrawingTextBoxStyle(style, wrapper, element, drawingContainer, settings!, autoFit);
+                AddDrawingTextBoxStyle(style, wrapper, element, drawingContainer, settings!, autoFit, bodyPr);
             else if (vmlShape != null)
             {
                 if (groupFrame == null && settings?.RenderPagination == PaginationMode.Paginated && CreateVmlDrawingAnchor(vmlShape) is XElement anchor)
@@ -12364,21 +12366,19 @@ namespace Docxodus
             if (!linked && !autoFit && style.ContainsKey("height"))
                 wrapper.SetAttributeValue("data-docx-textbox-clip", "true");
             // Internal clipping needs an explicitly fixed DrawingML box, or a legacy box with
-            // no fit/shrink/link directives. An implicit DrawingML fit mode can only establish
-            // a source placement proof: pagination must put the whole box AND all ink off paper.
+            // no fit/shrink/link directives. Effective fixed sizing also permits a separate
+            // page-placement proof, which binds the original ink geometry to the authored position.
             if (!linked && !autoFit && (string?)wrapper.Attribute("data-docx-shape") != "partial"
                 && TryVmlPointEmu(style.GetValueOrDefault("width"), out var clipWidth) && clipWidth > 0
                 && TryVmlPointEmu(style.GetValueOrDefault("height"), out var clipHeight) && clipHeight > 0)
             {
-                var bodyPr = textBoxContent?.Ancestors(WPS.wsp).FirstOrDefault()?.Element(WPS.bodyPr);
                 var fixedVml = vmlShape != null && HasFixedVmlTextBoxSizing(vmlShape, stories);
-                if (fixedVml || (vmlShape == null && bodyPr?.Element(A.noAutofit) != null
+                if (fixedVml || (vmlShape == null && drawingFit == A.noAutofit && bodyPr?.Element(A.noAutofit) != null
                     && (string?)bodyPr.Attribute("vertOverflow") is null or "clip"
                     && (string?)bodyPr.Attribute("horzOverflow") is null or "clip"))
                     wrapper.SetAttributeValue("data-docx-textbox-source-clip", "true");
                 if ((string?)wrapper.Attribute("data-docx-drawing-anchor") == "true"
-                    && (fixedVml || (vmlShape == null && bodyPr != null
-                        && bodyPr.Element(A.spAutoFit) == null && bodyPr.Element(A.normAutofit) == null)))
+                    && (fixedVml || (vmlShape == null && drawingFit == A.noAutofit)))
                     wrapper.SetAttributeValue("data-docx-textbox-source-position", "true");
             }
 
@@ -12626,7 +12626,7 @@ namespace Docxodus
         }
 
         private static void AddDrawingTextBoxStyle(Dictionary<string, string> style, XElement wrapper,
-            XElement drawing, XElement drawingContainer, WmlToHtmlConverterSettings settings, bool autoFit)
+            XElement drawing, XElement drawingContainer, WmlToHtmlConverterSettings settings, bool autoFit, XElement? bodyProperties)
         {
             AddDrawingFrameStyle(style, wrapper, drawingContainer, settings, autoFit);
             if (drawingContainer.Name == WP.anchor &&
@@ -12652,13 +12652,12 @@ namespace Docxodus
                 }
             }
 
-            var bodyProperties = drawing.Descendants(WPS.bodyPr).FirstOrDefault();
             if (bodyProperties != null)
             {
                 // LibreOffice honors DrawingML's automatic shape fitting: a one-line text box
                 // with a large stored extent shrinks to its content height. Leaving the fixed
                 // extent here creates a visibly oversized rectangle in the visual oracle.
-                if (bodyProperties.Element(A.spAutoFit) != null)
+                if (autoFit)
                     style.Remove("height");
                 AddEmuPadding(style, "padding-left", (long?)bodyProperties.Attribute("lIns"));
                 AddEmuPadding(style, "padding-top", (long?)bodyProperties.Attribute("tIns"));
@@ -12850,9 +12849,32 @@ namespace Docxodus
 
         }
 
-        private static bool HasAutoFitTextBox(XElement element) =>
-            element.Descendants(WPS.bodyPr).Elements(A.spAutoFit).Any() ||
-            HasVmlTextBoxAutoFit(element);
+        private static XName? ResolveDrawingTextBoxFit(WordprocessingDocument document, XElement? bodyPr)
+        {
+            if (bodyPr == null) return null; // Required shape context is missing.
+            var ambiguous = false;
+            XElement? Child(XElement? parent, XName name)
+            {
+                var matches = parent?.Elements(name).Take(2).ToList();
+                ambiguous |= matches?.Count > 1;
+                return matches?.FirstOrDefault();
+            }
+            bodyPr = Child(bodyPr.Parent, WPS.bodyPr);
+            var theme = document.MainDocumentPart?.ThemePart?.GetXDocument().Root;
+            var defaults = Child(theme, A.objectDefaults);
+            var hierarchy = new[] { bodyPr, Child(Child(defaults, A.txDef), A.bodyPr),
+                Child(Child(defaults, A.lnDef), A.bodyPr), Child(Child(defaults, A.spDef), A.bodyPr) };
+            if (ambiguous || (theme != null && theme.Name != A.theme)) return null;
+            // Office resolves omitted fit through the text-style hierarchy (MS-OE376 bodyPr
+            // and noAutofit notes). Word has no master tier; theme overrides cannot contain bodyPr.
+            foreach (var properties in hierarchy)
+            {
+                var choices = properties?.Elements().Where(e => e.Name == A.noAutofit
+                    || e.Name == A.normAutofit || e.Name == A.spAutoFit).ToList();
+                if (choices?.Count > 0) return choices.Count == 1 ? choices[0].Name : null;
+            }
+            return A.noAutofit;
+        }
 
         private static bool HasVmlTextBoxAutoFit(XElement element) =>
             element.Descendants(VML.textbox)

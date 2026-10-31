@@ -543,12 +543,16 @@ map permits an unmapped paragraph only when it remains present, unchanged and wh
 that same box. Newly clipped or removed paragraphs still fail completeness. Linked stories,
 auto-fit boxes, partial geometry and active percentage sizing cannot use this allowance.
 
-A separate source-position marker admits an implicit DrawingML box only when supported page or
-margin coordinates, or horizontal column/margin with vertical paragraph coordinates, place both its whole extent and all
-text rectangles outside the paper. Its
-paper-relative box and text geometry must remain unchanged in the final map; paragraph-relative
-placement also preserves the source host paragraph geometry. This does not admit
-internal clipping in implicit boxes or clipping by an ordinary flow band.
+A separate source-position marker admits a paragraph whose original ink is wholly off paper,
+even when part of its fixed box intersects the paper. DrawingML fit resolves from the selected
+shape's body properties through the theme's text, line and shape defaults; ambiguous contexts
+and shrinking or growing boxes cannot use this proof. Supported page/margin coordinates, or
+horizontal column/margin with vertical paragraph coordinates, retain their existing limits.
+Before pagination, the engine binds the box identity, anchor metadata, transforms and text
+geometry. Final placement must preserve those bounds; paragraph-relative placement also
+preserves the source host geometry. At viewer zoom, both original and current ink must be off
+paper, so glyph rounding cannot hide originally visible text. This does not admit internal
+clipping in implicit boxes or clipping by an ordinary flow band.
 
 Each newly admitted nonblank omission produces a `source_text_clipped` warning with its canonical
 anchor ID. `unsupportedContent: "strict"` rejects it at `output_verification`. Source text remains

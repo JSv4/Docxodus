@@ -685,8 +685,12 @@ function eligibleSourceTextBox(box: HTMLElement, placement = false): boolean {
 function sourcePlacementBounds(box: DOMRect, rects: DOMRect[], paper: DOMRect): number[] | undefined {
   const outside = (rect: DOMRect) => rect.right <= paper.left || rect.left >= paper.right
     || rect.bottom <= paper.top || rect.top >= paper.bottom;
-  if (!(box.width > 0 && box.height > 0) || !rects.length || !outside(box) || !rects.every(outside)) return;
-  return [box, ...rects].flatMap(rect => [rect.left - paper.left, rect.top - paper.top, rect.width, rect.height]);
+  if (!(box.width > 0 && box.height > 0) || !rects.length || !rects.every(outside)) return;
+  return textBounds(box, rects, paper);
+}
+
+function textBounds(box: DOMRect, rects: DOMRect[], origin: DOMRect): number[] {
+  return [box, ...rects].flatMap(rect => [rect.left - origin.left, rect.top - origin.top, rect.width, rect.height]);
 }
 
 function sourceTextRects(view: Window & typeof globalThis, element: HTMLElement, checkpoint: () => void): DOMRect[] {
@@ -902,6 +906,7 @@ export class PaginationEngine {
   private inspectedSourceText = new WeakSet<HTMLElement>();
   private sourceClipBoxSequence = 0;
   private initiallyClippedText = new Map<string, { boxId: string; text: string; placement?: number[]; host?: { id: string; bounds: number[] } }>();
+  private sourceTextPlacement = new Map<string, { identity: string; bounds: number[] }>();
   private lastClippedTextAnchors: string[] = [];
   private state: "ready" | "running" | "complete" | "failed" = "ready";
   private runningStyleSources: StyleReferenceSource[] = [];
@@ -1116,6 +1121,7 @@ export class PaginationEngine {
     this.inspectedSourceText = new WeakSet();
     this.sourceClipBoxSequence = 0;
     this.initiallyClippedText.clear();
+    this.sourceTextPlacement.clear();
     this.lastClippedTextAnchors = [];
 
     // Parse the header/footer registry if present
@@ -1815,7 +1821,30 @@ export class PaginationEngine {
     const text = (element.textContent ?? '').replace(/\s/g, '');
     if (!text) return;
     const rects = sourceTextRects(this.view, element, () => this.checkpoint());
-    if (paper && eligibleSourceTextBox(owner, true)) {
+    let originalOutside = false;
+    if (eligibleSourceTextBox(owner, true)) {
+      const box = owner.getBoundingClientRect();
+      const style = this.view.getComputedStyle(owner);
+      const identity = JSON.stringify([boxId, text, style.transform, style.translate, style.rotate, style.scale,
+        ...Array.from(owner.attributes).filter(a => a.name.startsWith('data-docx-anchor-') && a.name !== DRAWING_HOST_ATTRIBUTE).map(a => [a.name, a.value])]);
+      const bounds = textBounds(box, [element.getBoundingClientRect(), ...rects], box)
+        .map(value => value / (paper ? this.scale : 1));
+      if (!paper) this.sourceTextPlacement.set(anchorId, { identity, bounds });
+      else {
+        const source = this.sourceTextPlacement.get(anchorId);
+        if (!source || source.identity !== identity || source.bounds.length !== bounds.length
+          || bounds.some((value, index) => Math.abs(value - source.bounds[index]) >= 0.1
+            && !(this.scale !== 1 && index >= 8 && index % 2 === 1))) return;
+        // Zoom rounds Range glyph ascents/heights; the box and paragraph geometry stays bound.
+        // Both original and actual ink must be off paper, so rounding cannot excuse new loss.
+        const original = [];
+        for (let i = 8; i < source.bounds.length; i += 4)
+          original.push(new this.view.DOMRect(box.left + source.bounds[i] * this.scale,
+            box.top + source.bounds[i + 1] * this.scale, source.bounds[i + 2] * this.scale, source.bounds[i + 3] * this.scale));
+        originalOutside = sourcePlacementBounds(box, original, paper) !== undefined;
+      }
+    }
+    if (paper && originalOutside && eligibleSourceTextBox(owner, true)) {
       const placement = sourcePlacementBounds(owner.getBoundingClientRect(), rects, paper);
       if (placement) {
         let host: { id: string; bounds: number[] } | undefined;

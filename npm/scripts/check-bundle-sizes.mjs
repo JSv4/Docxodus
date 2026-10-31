@@ -29,17 +29,19 @@ const budgetsKiB = {
   // Body-table fitting on current main measures 137.128/137.164 KiB; retain a 138 KiB gate.
   // Zero-font source coverage brings the ESM bundle just above 138 KiB.
   // Whole inline-layout continuation adds 0.25 KiB (138.947 -> 139.196 on main).
-  'embed.bundle.js': 145,
+  // Authored textbox ink verification adds 275/290/293 bytes to embed/IIFE/pagination
+  // (145.213/145.278/42.077 KiB). Raise only these exhausted gates by 0.5 KiB.
+  'embed.bundle.js': 145.5,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
-  'embed.iife.js': 145,
+  'embed.iife.js': 145.5,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
   'editor.bundle.js': 125,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
   // Whole inline-layout continuation adds 0.24 KiB (35.801 -> 36.038 on main).
   // Independent textbox source inventories add 45 compressed bytes (39.978 -> 40.021 KiB).
-  'pagination.bundle.js': 42,
+  'pagination.bundle.js': 42.5,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,

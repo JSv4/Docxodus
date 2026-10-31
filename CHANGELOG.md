@@ -95,6 +95,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Fixed DrawingML text boxes at the paper edge no longer cause a false missing-paragraph
+  export error when their original text is wholly off paper (#1492). Fit mode follows local
+  properties and theme defaults; verification binds original text geometry and authored
+  placement so newly hidden text still fails.
+
 - Long bordered footnotes continue across every required page instead of failing PDF export
   with clipped content. Continuations retain side borders and leave horizontal borders open
   at page breaks; fitting notes and the clipping guard are unchanged (#1491).

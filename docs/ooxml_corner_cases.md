@@ -5762,6 +5762,29 @@ Page ownership still selects vertical bands, running stories and numbering. Note
 width from the registry shell in whole, partial and continuation forms; current-page note
 measurement uses the owner's outer width, while fresh-page probes use the prospective owner.
 
+## Omitted DrawingML fit at the paper edge (#1492)
+
+On Letter paper, place a 160pt by 80pt box at x=60pt, y=750pt. Give it three
+12pt lines followed by an empty deleted paragraph with 12pt space before it, and render
+revision markup. The visible labels fit; the final paragraph marker is already off paper.
+The minimal fit distinction is `<wps:bodyPr/>` versus
+`<wps:bodyPr><a:noAutofit/></wps:bodyPr>`.
+
+| Original probe | Word | LibreOffice 25.8.7.3 | Docxodus PDF |
+| --- | --- | --- | --- |
+| Omitted fit, paper edge | Not captured | All three labels on one page | Previously refused for the off-paper paragraph; now complete |
+| Explicit fixed fit, paper edge | Not captured | All three labels on one page | Complete before and after |
+| Omitted fit, y=60pt control | Not captured | All three labels on one page | Complete before and after |
+
+Office resolves omitted fit through the [text-style hierarchy](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/2ba5f0a2-4823-4128-b168-0fd1e9997939),
+as specified by its [noAutofit implementation note](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/c2e15906-2b97-4d4a-9cfa-96ca41635a6f).
+Fixed fit alone does not establish internal clipping: omitted
+[vertical overflow defaults to overflow](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.bodyproperties.verticaloverflow?view=openxml-3.0.1).
+`ResolveDrawingTextBoxFit` therefore supplies one effective mode to geometry and placement
+metadata, while `PaginationEngine` separately verifies that the original ink was off paper
+and stayed at its authored position. Missing or ambiguous fit context cannot certify an
+omission. Original geometry remains binding through viewer zoom and running-story copies.
+
 ## Physical-margin comments in a static PDF (#1490)
 
 A margin column can scroll interactively, but its off-viewport text cannot be recovered from
