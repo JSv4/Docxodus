@@ -426,10 +426,11 @@ before invoking that callback, identically in native and WASM builds:
   LZW/Deflate, tiles, palette/grayscale, custom colorimetry/profiles and multi-page files retain
   an unsupported-content diagnostic.
 - Placeable WMF (`image/x-wmf` or `image/wmf`): positive anisotropic windows, rectangle/ellipse
-  records and solid/null pens and brushes. Output is static SVG with a bounded object table and
-  record count. A uniform pen follows the final image width through viewport units and
-  `non-scaling-stroke`, including grouped and relative-sized pictures. Unknown records reject
-  the whole image; text, bitmaps, clipping and other map modes remain unsupported.
+  records and positive-width solid/null pens and solid/null brushes. Output is static SVG with
+  a bounded object table and record count. Word's device-pixel endpoint exclusion is resolved
+  in logical coordinates; window mapping and later picture sizing stretch the complete painted
+  graphic, including its outline. Visible zero-width device pens, collapsed bounds and unknown
+  records reject the whole image; text, bitmaps, clipping and other map modes remain unsupported.
 
 Input is limited to 64 MiB; normalized dimensions are limited to 32,768 per axis and
 16 megapixels. Source EMF and SVG image parts retain their existing placeholders. Generated

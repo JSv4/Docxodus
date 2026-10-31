@@ -5543,7 +5543,10 @@ with `<v:imagedata r:id="picture"/>`. The related part belongs to its body/heade
 | --- | --- | --- | --- |
 | Original placeable WMF rectangle/ellipse | Fresh PDF capture paints both outlines | Paints both outlines | Previously `[WMF IMAGE]`; now static SVG |
 | Identical PNG/TIFF pixels | Fresh PDF capture paints the graphic | Both paint the same graphic | PNG unchanged; TIFF normalized to PNG with identical rendered pixels |
-| Nonuniform WMF extent and grouped VML image | Not measured | Uniform pen width follows horizontal scale | Viewport-relative SVG pen width preserves uniform strokes after final sizing |
+| WMF picture stretched to twice its height | Fresh DrawingML capture stretches the complete outline: 3pt vertical edges, 6pt horizontal edges | Keeps a uniform 3pt outline | SVG transforms the complete painted graphic, matching Word's scaling |
+| WMF window x scales 0.5, 1 and 2 | Fresh captures exclude 2, 1 and 0 logical units from right bounds; pen scales on both axes | Uses different ellipse center rounding and uniform pen scaling | Resolves device-pixel exclusion before transforming logical shapes and paint |
+| Visible zero-width WMF pen | Fresh PDF uses a printer-device hairline (about 0.14pt before picture scaling) | Device-dependent | Explicit unsupported-content diagnostic; no assumed printer resolution |
+| Grouped VML image sizing | Not measured; the diagnostic VML carrier printed a linked-image error | Uniform pen width follows horizontal scale | Uses the same transformed image as DrawingML; carrier placement is tested separately |
 | Unsupported TIFF colorimetry or WMF records | Not measured | Provider-dependent | Explicit placeholder/warning; strict export refuses it |
 
 Word substituted Times New Roman for requested Liberation Serif in these captures; this is
@@ -5553,12 +5556,19 @@ retained with the issue evidence outside version control.
 `WmlToHtmlConverter.Images.cs` handles both image carriers and delegates to the bounded
 `Internal/TiffImage.cs` and `Internal/WmfImage.cs` decoders. TIFF normalization applies the
 orientation and unpremultiplies associated alpha before encoding PNG. Unknown colorimetry is
-reported rather than silently treating calibrated samples as sRGB. WMF maps shape geometry
-through its window, but the pen remains uniform: its width is an x-axis measure. Expressing
-that width in SVG viewport units with `vector-effect="non-scaling-stroke"` also handles a VML
-group or page-relative anchor that changes the final size after image conversion. SVG width
-and height are rounded upward to positive integral intrinsic sizes so subpixel placeable
-headers do not produce a decoded image with a zero natural dimension.
+reported rather than silently treating calibrated samples as sRGB. For a WMF window scale
+`sx`, Word excludes `truncate(1 / sx)` logical units from the right edge; the y rule is
+equivalent. A five-image native diagnostic pinned both rectangle endpoint parities, ellipse
+bounds, solid brushes and pen widths. For example, rectangle `(8,8)-(42,24)` ends at x=40,
+41 and 42 at x scales 0.5, 1 and 2. An SVG transform maps both logical geometry and paint;
+later picture stretching also stretches the outline. LibreOffice instead shifts a thick-pen
+ellipse's integer center and keeps its pen uniform, so it is not the geometry oracle here.
+
+The SVG viewBox retains the unrounded physical size. Only its width/height attributes round
+up to positive intrinsic dimensions. Bounds that collapse after device-pixel exclusion and
+visible zero-width pens reject the whole image, including previously decoded shapes. Null
+pens remain supported. This prevents a printer-specific hairline from silently becoming a
+different CSS-pixel stroke.
 
 The supported subsets and bounds follow [TIFF 6.0](https://www.itu.int/itudoc/itu-t/com16/tiff-fx/docs/tiff6.pdf)
 and Microsoft's [WMF format](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wmf/).

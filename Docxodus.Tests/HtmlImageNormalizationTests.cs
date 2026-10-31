@@ -46,8 +46,14 @@ public class HtmlImageNormalizationTests
         var svg = XElement.Parse(Encoding.UTF8.GetString(Bytes(image)));
         Assert.Equal("svg", svg.Name.LocalName);
         Assert.Equal("none", (string?)svg.Attribute("preserveAspectRatio"));
-        Assert.Single(svg.Descendants(), e => e.Name.LocalName == "rect");
-        Assert.Single(svg.Descendants(), e => e.Name.LocalName == "ellipse");
+        var rect = Assert.Single(svg.Descendants(), e => e.Name.LocalName == "rect");
+        var ellipse = Assert.Single(svg.Descendants(), e => e.Name.LocalName == "ellipse");
+        // Word's WMF playback excludes the authored right and bottom boundaries.
+        Assert.Equal("34", (string?)rect.Attribute("width"));
+        Assert.Equal("46", (string?)rect.Attribute("height"));
+        Assert.Equal("69.5", (string?)ellipse.Attribute("cx"));
+        Assert.Equal("29.5", (string?)ellipse.Attribute("cy"));
+        Assert.Equal("17.5", (string?)ellipse.Attribute("rx"));
         Assert.DoesNotContain("[WMF IMAGE]", html.Value);
         Assert.Contains(vml ? "height: 48pt" : "height: 0.666", (string?)image.Attribute("style"));
     }
@@ -162,18 +168,23 @@ public class HtmlImageNormalizationTests
         Assert.Contains(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "WmfImage");
     }
 
-    [Fact]
-    public void WmfAnisotropicWindowKeepsAUniformPenWidth()
+    [Theory]
+    [InlineData(192, "33", "scale(0.5 1)")]
+    [InlineData(96, "34", "scale(1 1)")]
+    [InlineData(48, "35", "scale(2 1)")]
+    public void WmfWindowUsesWordDeviceBoundsAndScalesPaint(short windowWidth, string expectedWidth, string transform)
     {
         var bytes = Wmf();
-        Array.Copy(BitConverter.GetBytes((short)48), 0, bytes, 66, 2);
+        Array.Copy(BitConverter.GetBytes(windowWidth), 0, bytes, 66, 2);
         Array.Copy(BitConverter.GetBytes((short)4), 0, bytes, 76, 2);
         var svg = XElement.Parse(Encoding.UTF8.GetString(Bytes(Picture(Render(bytes, "image/x-wmf")))));
         var rect = Assert.Single(svg.Descendants(), e => e.Name.LocalName == "rect");
-        Assert.Equal("16", (string?)rect.Attribute("x"));
-        Assert.Equal("8.333333333333334vw", (string?)rect.Attribute("stroke-width"));
-        Assert.Equal("non-scaling-stroke", (string?)rect.Attribute("vector-effect"));
-        Assert.Null(rect.Attribute("transform")); // Geometry is mapped before applying the uniform pen.
+        Assert.Equal("8", (string?)rect.Attribute("x"));
+        Assert.Equal(expectedWidth, (string?)rect.Attribute("width"));
+        Assert.Equal("4", (string?)rect.Attribute("stroke-width"));
+        Assert.Null(rect.Attribute("vector-effect"));
+        Assert.Equal(transform, (string?)rect.Attribute("transform"));
+        Assert.Equal("miter", (string?)rect.Attribute("stroke-linejoin"));
     }
 
     [Theory]
@@ -185,19 +196,19 @@ public class HtmlImageNormalizationTests
     [InlineData(1, 2, true, false)]
     [InlineData(2, 1, true, true)]
     [InlineData(1, 2, true, true)]
-    public void WmfAuthoredExtentMapsGeometryWithoutStretchingThePen(int widthScale, int heightScale, bool header, bool vml)
+    public void WmfAuthoredExtentScalesTheCompletePaintedGraphic(int widthScale, int heightScale, bool header, bool vml)
     {
         var image = Picture(Render(Wmf(), "image/x-wmf", header, vml, 914400 * widthScale, 609600 * heightScale));
         var svg = XElement.Parse(Encoding.UTF8.GetString(Bytes(image)));
         Assert.Equal("0 0 96 64", (string?)svg.Attribute("viewBox"));
         Assert.Contains(vml ? $"width: {72 * widthScale}pt" : $"width: {widthScale}in", (string?)image.Attribute("style"));
         var rect = Assert.Single(svg.Descendants(), e => e.Name.LocalName == "rect");
-        Assert.Equal("2.0833333333333335vw", (string?)rect.Attribute("stroke-width"));
-        Assert.Equal("non-scaling-stroke", (string?)rect.Attribute("vector-effect"));
+        Assert.Equal("2", (string?)rect.Attribute("stroke-width"));
+        Assert.Null(rect.Attribute("vector-effect"));
     }
 
     [Fact]
-    public void SubpixelWmfIntrinsicSizeStaysDecodableAtItsAuthoredExtent()
+    public void CollapsedWmfDeviceBoundsAreExplicitlyUnsupported()
     {
         var bytes = Wmf();
         Array.Copy(BitConverter.GetBytes((short)1), 0, bytes, 10, 2);
@@ -205,11 +216,42 @@ public class HtmlImageNormalizationTests
         Array.Copy(BitConverter.GetBytes(ushort.MaxValue), 0, bytes, 14, 2);
         ushort checksum = 0; for (int i = 0; i < 20; i += 2) checksum ^= BitConverter.ToUInt16(bytes, i);
         Array.Copy(BitConverter.GetBytes(checksum), 0, bytes, 20, 2);
-        var image = Picture(Render(bytes, "image/x-wmf"));
-        var svg = XElement.Parse(Encoding.UTF8.GetString(Bytes(image)));
-        Assert.True((double)svg.Attribute("width")! >= 1);
-        Assert.True((double)svg.Attribute("height")! >= 1);
-        Assert.Contains("width: 1in", (string?)image.Attribute("style"));
+        Assert.DoesNotContain(Render(bytes, "image/x-wmf").Descendants(), e => e.Name.LocalName == "img");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VisibleDeviceHairlineRejectsTheWholeWmf(bool afterSupportedShapes)
+    {
+        var html = Render(Wmf(penWidth: afterSupportedShapes ? (short)2 : (short)0, lateHairline: afterSupportedShapes), "image/x-wmf");
+        Assert.DoesNotContain(html.Descendants(), e => e.Name.LocalName == "img");
+        Assert.Contains(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "WmfImage");
+    }
+
+    [Fact]
+    public void NullPenDoesNotRejectAColoredBrush()
+    {
+        var svg = XElement.Parse(Encoding.UTF8.GetString(Bytes(Picture(Render(Wmf(penWidth: 0, filled: true), "image/x-wmf")))));
+        Assert.All(svg.Elements(), shape => {
+            Assert.Equal("none", (string?)shape.Attribute("stroke"));
+            Assert.Equal("#305080", (string?)shape.Attribute("fill"));
+        });
+    }
+
+    [Fact]
+    public void FractionalWmfSizeKeepsUnroundedDeviceExclusion()
+    {
+        var bytes = Wmf();
+        foreach (var (offset, value) in new (int, short)[] { (10, 128), (12, 96), (14, 101), (64, 96), (66, 365) })
+            Array.Copy(BitConverter.GetBytes(value), 0, bytes, offset, 2);
+        ushort checksum = 0;
+        for (int i = 0; i < 20; i += 2) checksum ^= BitConverter.ToUInt16(bytes, i);
+        Array.Copy(BitConverter.GetBytes(checksum), 0, bytes, 20, 2);
+        var svg = XElement.Parse(Encoding.UTF8.GetString(Bytes(Picture(Render(bytes, "image/x-wmf")))));
+        Assert.Equal("122", (string?)svg.Attribute("width"));
+        // Word excludes three logical x units here; rounding the viewport first excludes two.
+        Assert.Equal("32", (string?)Assert.Single(svg.Descendants(), e => e.Name.LocalName == "rect").Attribute("width"));
     }
 
     [Theory]
@@ -322,12 +364,13 @@ public class HtmlImageNormalizationTests
         return stream.ToArray();
     }
 
-    private static byte[] Wmf(bool unsupported = false)
+    private static byte[] Wmf(bool unsupported = false, short penWidth = 2, bool lateHairline = false, bool filled = false)
     {
         using var records = new MemoryStream(); using var writer = new BinaryWriter(records);
         void Record(ushort function, params short[] words) { writer.Write(3 + words.Length); writer.Write(function); foreach (var word in words) writer.Write(word); }
-        Record(0x0103,8); Record(0x020b,0,0); Record(0x020c,64,96); Record(0x02fa,0,2,0,0x5030,0x0080);
-        Record(0x012d,0); Record(0x02fc,1,0,0,0); Record(0x012d,1); Record(0x041b,55,43,8,8); Record(0x0418,48,88,12,52);
+        Record(0x0103,8); Record(0x020b,0,0); Record(0x020c,64,96); Record(0x02fa,filled ? (short)5 : (short)0,penWidth,0,0x5030,0x0080);
+        Record(0x012d,0); Record(0x02fc,filled ? (short)0 : (short)1,0x5030,0x0080,0); Record(0x012d,1); Record(0x041b,55,43,8,8); Record(0x0418,48,88,12,52);
+        if (lateHairline) { Record(0x01f0,0); Record(0x02fa,0,0,0,0x5030,0x0080); Record(0x012d,0); Record(0x041b,55,43,8,8); }
         if (unsupported) Record(0x061d,0,0,0,0,0,0); Record(0);
         using var output = new MemoryStream(); using var header = new BinaryWriter(output);
         header.Write(0x9ac6cdd7U); header.Write((ushort)0); header.Write((short)0); header.Write((short)0);

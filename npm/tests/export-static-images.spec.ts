@@ -7,7 +7,7 @@ import { decodePng } from './visual-parity/png.js';
 test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}) } });
 
-for (const format of ['png', 'tiff', 'wmf', 'anisotropic-wmf', 'tiny-wmf', 'wide-wmf', 'tall-wmf', 'group-wmf'] as const)
+for (const format of ['png', 'tiff', 'wmf', 'anisotropic-wmf', 'wide-wmf', 'tall-wmf', 'group-wmf'] as const)
 for (const header of ['wide-wmf', 'tall-wmf', 'group-wmf'].includes(format) ? [false] : [false, true]) {
   test(`${format} paints in the ${header ? 'header' : 'body'} with its authored extent`, async ({ browser, page }) => {
     test.setTimeout(120_000);
@@ -28,18 +28,18 @@ for (const header of ['wide-wmf', 'tall-wmf', 'group-wmf'].includes(format) ? [f
         pixel: [...context.getImageData(format === 'anisotropic-wmf' ? 16 : wmf ? 8 * widthScale : 0, wmf ? 16 * heightScale : 0, 1, 1).data] };
     }, { format, widthScale, heightScale });
     expect(rendered.width).toBeCloseTo(72 * widthScale, 1); expect(rendered.height).toBeCloseTo(48 * heightScale, 1);
-    expect(rendered.natural).toEqual(format === 'tiny-wmf' ? [1, 1] : wmf ? [96, 64] : [2, 3]);
+    expect(rendered.natural).toEqual(wmf ? [96, 64] : [2, 3]);
     expect(rendered.pixel).toEqual(wmf ? [48, 80, 128, 255] : [255, 0, 0, 255]);
     if (wmf) {
-      // drawImage first paints at intrinsic size and then stretches that raster. Inspect the
-      // delivered page instead: viewport-relative SVG pens are resolved at the CSS image size.
+      // Word stretches the complete painted graphic, including its outline, when the
+      // containing picture has a different aspect ratio from the metafile.
       const painted = decodePng(await image.screenshot());
-      const stroke = format === 'anisotropic-wmf' ? 8 : 2 * widthScale;
+      const stroke = format === 'anisotropic-wmf' ? 4 : 2;
       const coverage = (x: number, y: number) => (255 - painted.data[(y * painted.width + x) * 4]) / (255 - 48);
       const horizontal = Array.from({ length: 24 * heightScale }, (_, y) => coverage(32 * widthScale, y)).reduce((a, b) => a + b, 0);
       const vertical = Array.from({ length: 24 * widthScale }, (_, x) => coverage(x, 32 * heightScale)).reduce((a, b) => a + b, 0);
-      expect(Math.abs(horizontal - stroke)).toBeLessThan(0.15);
-      expect(Math.abs(vertical - stroke)).toBeLessThan(0.15);
+      expect(Math.abs(horizontal - stroke * heightScale)).toBeLessThan(0.15);
+      expect(Math.abs(vertical - stroke * widthScale * (format === 'anisotropic-wmf' ? 2 : 1))).toBeLessThan(0.15);
     }
     const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
     try {
@@ -56,7 +56,7 @@ for (const header of ['wide-wmf', 'tall-wmf', 'group-wmf'].includes(format) ? [f
   });
 }
 
-for (const format of ['unsupported-tiff', 'unsupported-wmf'] as const) test(`${format} remains explicit under warn and strict policies`, async ({ browser }) => {
+for (const format of ['unsupported-tiff', 'unsupported-wmf', 'tiny-wmf', 'hairline-wmf'] as const) test(`${format} remains explicit under warn and strict policies`, async ({ browser }) => {
   test.setTimeout(120_000);
   const input = staticImageDocx(format, false);
   const options = { browser, outputs: ['html', 'pdf'] as Array<'html' | 'pdf'>, reviewProfile: 'final' as const, commentProfile: 'hidden' as const, timeoutMs: 120_000 };

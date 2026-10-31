@@ -1,7 +1,7 @@
 import { R_NS as r, W_NS as w, storedZip, xml } from './docx-zip.js';
 import { encodePng } from './visual-parity/png.js';
 
-export type StaticImage = 'png' | 'tiff' | 'wmf' | 'anisotropic-wmf' | 'tiny-wmf' | 'wide-wmf' | 'tall-wmf' | 'group-wmf' | 'unsupported-tiff' | 'unsupported-wmf';
+export type StaticImage = 'png' | 'tiff' | 'wmf' | 'anisotropic-wmf' | 'tiny-wmf' | 'hairline-wmf' | 'wide-wmf' | 'tall-wmf' | 'group-wmf' | 'unsupported-tiff' | 'unsupported-wmf';
 
 /** Six original color pixels and a separate authored WMF rectangle/ellipse. */
 function imageBytes(kind: StaticImage): Buffer {
@@ -24,7 +24,7 @@ function imageBytes(kind: StaticImage): Buffer {
     words.forEach((word, i) => data.writeInt16LE(word, 6 + i * 2)); return data;
   };
   const records = [record(0x0103, 8), record(0x020b, 0, 0), record(0x020c, 64, kind === 'anisotropic-wmf' ? 48 : 96),
-    record(0x02fa, 0, kind === 'anisotropic-wmf' ? 4 : 2, 0, 0x5030, 0x0080),
+    record(0x02fa, 0, kind === 'hairline-wmf' ? 0 : kind === 'anisotropic-wmf' ? 4 : 2, 0, 0x5030, 0x0080),
     record(0x012d, 0), record(0x02fc, 1, 0, 0, 0), record(0x012d, 1), record(0x041b, 55, 43, 8, 8), record(0x0418, 48, 88, 12, 52)];
   if (kind === 'unsupported-wmf') records.push(record(0x061d, 0, 0, 0, 0, 0, 0));
   records.push(record(0));

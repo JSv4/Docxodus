@@ -98,7 +98,8 @@ All notable changes to this project will be documented in this file.
 - Embedded TIFF and simple placeable WMF images now render in browser HTML/PDF, including
   body and header pictures (#1484). The shared converter normalizes bounded RGB(A) TIFF strips
   to PNG and supported WMF rectangle/ellipse records to static SVG. Orientation, alpha and
-  uniform pen widths survive image sizing; unsupported formats retain explicit diagnostics.
+  Word's mapped shape bounds and scaled outlines survive image sizing; device hairlines,
+  collapsed bounds and unsupported formats retain explicit diagnostics.
   `docx2html` preserves the normalized resources in embedded and extracted-image modes.
 - Ruby annotations retain both their base and reading. Ordinary horizontal ruby uses semantic
   HTML with authored sizes, alignment, language and baseline raise; pagination keeps each pair

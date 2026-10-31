@@ -23,12 +23,13 @@ internal static class WmfImage
             || U16(bytes, 22) is not (1 or 2) || U16(bytes, 24) != 9 || U16(bytes, 26) != 0x300
             || (ulong)U32(bytes, 28) * 2 != (ulong)bytes.Length - 22 || U16(bytes, 38) != 0)
             throw new InvalidDataException("Invalid or oversized WMF header.");
-        double pixelWidth = Math.Ceiling(width * 96.0 / inch), pixelHeight = Math.Ceiling(height * 96.0 / inch);
+        double viewportWidth = width * 96.0 / inch, viewportHeight = height * 96.0 / inch;
+        double pixelWidth = Math.Ceiling(viewportWidth), pixelHeight = Math.Ceiling(viewportHeight);
         if (pixelWidth > 32768 || pixelHeight > 32768 || pixelWidth * pixelHeight > 16 * 1024 * 1024)
             throw new InvalidDataException("WMF intrinsic size exceeds the 16-megapixel limit.");
         XNamespace ns = "http://www.w3.org/2000/svg";
         var svg = new XElement(ns + "svg", new XAttribute("width", N(pixelWidth)), new XAttribute("height", N(pixelHeight)),
-            new XAttribute("viewBox", $"0 0 {N(pixelWidth)} {N(pixelHeight)}"), new XAttribute("preserveAspectRatio", "none"));
+            new XAttribute("viewBox", $"0 0 {N(viewportWidth)} {N(viewportHeight)}"), new XAttribute("preserveAspectRatio", "none"));
         var table = new Paint?[objects];
         Paint pen = new(true, "#000000"), brush = new(false, "#ffffff");
         int originX = left, originY = top, windowWidth = width, windowHeight = height, recordCount = 0;
@@ -81,19 +82,20 @@ internal static class WmfImage
                     Size(14);
                     int bottom = I16(bytes, start), right = I16(bytes, start + 2), y = I16(bytes, start + 4), x = I16(bytes, start + 6);
                     if (right <= x || bottom <= y) throw new NotSupportedException("WMF requires nonempty shape bounds.");
-                    double sx = pixelWidth / windowWidth, sy = pixelHeight / windowHeight;
-                    double mappedX = (x - originX) * sx, mappedY = (y - originY) * sy;
-                    double mappedWidth = (right - x) * sx, mappedHeight = (bottom - y) * sy;
+                    double sx = viewportWidth / windowWidth, sy = viewportHeight / windowHeight;
+                    // Word excludes one device pixel after truncating its logical-coordinate size.
+                    double shapeWidth = right - x - Math.Truncate(1 / sx), shapeHeight = bottom - y - Math.Truncate(1 / sy);
+                    if (shapeWidth <= 0 || shapeHeight <= 0 || (pen.Color != "none" && pen.Width == 0))
+                        throw new NotSupportedException("WMF device hairlines and collapsed shape bounds are not supported.");
                     var shape = function == 0x041b
-                        ? new XElement(ns + "rect", new XAttribute("x", N(mappedX)), new XAttribute("y", N(mappedY)),
-                            new XAttribute("width", N(mappedWidth)), new XAttribute("height", N(mappedHeight)))
-                        : new XElement(ns + "ellipse", new XAttribute("cx", N(mappedX + mappedWidth / 2)), new XAttribute("cy", N(mappedY + mappedHeight / 2)),
-                            new XAttribute("rx", N(mappedWidth / 2)), new XAttribute("ry", N(mappedHeight / 2)));
-                    // WMF scales the uniform pen on the x axis, including late group/anchor sizing.
-                    // Viewport units follow the final image width; vector-effect prevents y stretching.
+                        ? new XElement(ns + "rect", new XAttribute("x", x - originX), new XAttribute("y", y - originY),
+                            new XAttribute("width", N(shapeWidth)), new XAttribute("height", N(shapeHeight)))
+                        : new XElement(ns + "ellipse", new XAttribute("cx", N(x - originX + shapeWidth / 2)), new XAttribute("cy", N(y - originY + shapeHeight / 2)),
+                            new XAttribute("rx", N(shapeWidth / 2)), new XAttribute("ry", N(shapeHeight / 2)));
+                    // Both WMF mapping and later OOXML sizing stretch the complete painted graphic.
                     shape.Add(new XAttribute("fill", brush.Color), new XAttribute("stroke", pen.Color),
-                        new XAttribute("stroke-width", pen.Width == 0 ? "1" : N(pen.Width * 100.0 / windowWidth) + "vw"),
-                        new XAttribute("vector-effect", "non-scaling-stroke"), new XAttribute("stroke-linejoin", "round"));
+                        new XAttribute("stroke-width", pen.Width), new XAttribute("stroke-linejoin", "miter"),
+                        new XAttribute("transform", $"scale({N(sx)} {N(sy)})"));
                     svg.Add(shape);
                     break;
                 default:
