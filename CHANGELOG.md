@@ -95,6 +95,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Positive inline-frame vertical text distance now reflows preceding lines while preserving
+  frame paint. Pagination counts the changed prefix and reserved notes before admitting the
+  frame; deferral leaves the preceding page unchanged (#1510).
+
 - Inline paragraph frames now wrap supported text through both available line intervals at
   centered and interior positions, and honor right/page-relative placement during measurement
   and painting. Fragmented paragraphs retain source ownership; unsupported arrangements keep

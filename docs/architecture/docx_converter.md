@@ -260,8 +260,11 @@ The converter retains a pending diagnostic until pagination verifies the affecte
 Simple left-to-right Latin paragraphs with measurable line heights are supported. Complex scripts,
 bidi runs, hard breaks, inline objects and affected tables or other independent formatting
 contexts keep the conservative fallback and warning; strict export refuses those arrangements.
-Positive `vSpace` still uses diagnosed ordinary flow pending preceding-line reflow in
-[#1510](https://github.com/JSv4/Docxodus/issues/1510). `notBeside`, `none` and non-inline frames keep
+Positive `vSpace` expands the exclusion above and below the fixed painted rectangle. The
+paginator replays affected preceding paragraphs from their source content and measures the
+change in ordinary flow before admitting a frame. That extra height participates in keep-chain,
+fragment and note budgets; a deferred frame leaves the earlier page unchanged. The same replay
+runs for running stories and final pages. Zero-distance `notBeside`, `none` and non-inline frames keep
 their existing behavior. Running-story measurement includes physical page parity, independently
 of displayed page-number restarts.
 

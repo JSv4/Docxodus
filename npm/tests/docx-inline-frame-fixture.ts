@@ -8,6 +8,7 @@ export function inlineFrameFixture(options: {
   floating?: boolean;
   spill?: boolean;
   fillerCount?: number;
+  precedingWords?: number;
   spaceBefore?: number;
   spaceAfter?: number;
   horizontalTextDistance?: number;
@@ -29,7 +30,10 @@ export function inlineFrameFixture(options: {
   const horizontal = options.horizontalAlign ? `w:xAlign="${options.horizontalAlign}"` : `w:x="${horizontalOffset}"`;
   const frame = normal ? '' : `<w:framePr w:w="3600" ${options.heightRule ? `w:h="800" w:hRule="${options.heightRule}" ` : ''}w:hAnchor="${options.horizontalAnchor ?? 'text'}" w:vAnchor="text" ${horizontal} ${floating ? 'w:y="0"' : 'w:yAlign="inline"'} w:wrap="${wrap}"${distances}/>`;
   const secondFrame = options.secondOffset === undefined ? frame : frame.replace(`w:x="${horizontalOffset}"`, `w:x="${options.secondOffset}"`);
-  const content = (fillerCount ? Array.from({ length: fillerCount }, (_, i) => paragraph(`SageFiller${String(i).padStart(3, '0')}`)).join('') : paragraph('SageBefore'))
+  const content = (fillerCount ? Array.from({ length: fillerCount }, (_, i) => paragraph(`SageFiller${String(i).padStart(3, '0')}`)).join('') : '')
+    + (options.precedingWords !== undefined ? paragraph(options.precedingWords === 1 ? 'SageBefore'
+      : Array.from({ length: options.precedingWords }, (_, i) => `SageBefore${String(i).padStart(2, '0')}`).join(' '))
+      : fillerCount ? '' : paragraph('SageBefore'))
     + paragraph('SageFrameFirst', frame) + (options.separate ? paragraph('SageBetween') : '') + paragraph('SageFrameLast', secondFrame)
     + paragraph((options.tailPrefix ?? '') + (options.tailWords ? Array.from({ length: options.tailWords }, (_, i) => `SageTail${String(i).padStart(3, '0')}`).join(' ') : 'SageAfter'));
   const running = story === 'header' || story === 'footer';
