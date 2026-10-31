@@ -103,6 +103,11 @@ All notable changes to this project will be documented in this file.
 
 - Keep reserved continuation notices out of ordinary footnote and endnote lists, including positive-id definitions with no citations (#1485).
 
+- Legacy checkbox and dropdown form fields now display their metadata state in body and running
+  stories, even without cached text (#1480). Values are resolved before tab measurement; styled
+  caches, revision boundaries and existing text fields are preserved. Unsupported form metadata
+  uses the existing diagnostic placeholder. Checkboxes retain their size and baseline in print.
+
 - Consolidation preserves a reviewer’s inline bookmark additions and removals beside independent
   text or equation edits, keeping endpoint order and reviewer ownership through accept/reject (#1426).
 
