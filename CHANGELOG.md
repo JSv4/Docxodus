@@ -95,6 +95,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Long bordered footnotes continue across every required page instead of failing PDF export
+  with clipped content. Continuations retain side borders and leave horizontal borders open
+  at page breaks; fitting notes and the clipping guard are unchanged (#1491).
+
 - Standalone margin-comment export prints complete overflowing threads on appended pages instead
   of silently printing only a scroll viewport or refusing later comment paragraphs (#1490).
   Replies and running-story comments retain their source identities and return links; fitting

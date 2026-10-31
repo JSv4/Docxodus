@@ -821,6 +821,23 @@ test.describe('Paginated footnote layout', () => {
     expect(result.noteOnlyPages).toBeGreaterThan(0);
   });
 
+  test('continues a bordered footnote with open borders under the default body policy', async ({ page }) => {
+    const lines = Array.from({ length: 30 }, (_, index) => `Border${index.toString().padStart(2, '0')} note.`);
+    const html = longParagraphFootnoteHtml('', lines.join('<br>'))
+      .replace(/(<p id="source-long"[\s\S]*?<\/p>)/,
+        '<div data-test-border style="border:1px solid blue;padding:2px">$1</div>');
+    const result = await paginateScenario(page, html);
+    expect(result.totalPages).toBeGreaterThan(2);
+    expect(result.noteTextByPage.join(' ').match(/Border\d+/g)).toEqual(lines.map(line => line.split(' ')[0]));
+    expect(result.clipped).toEqual([]);
+    expect(result.overlaps).toEqual([]);
+    const sides = await page.locator('#container .page-footnotes [data-test-border]').evaluateAll(groups =>
+      groups.map(group => { const s = getComputedStyle(group); return [s.borderTopStyle, s.borderBottomStyle, s.borderLeftStyle, s.borderRightStyle]; }));
+    expect(sides).toEqual(Array.from({ length: result.totalPages }, (_, index) => [
+      index === 0 ? 'solid' : 'none', index === result.totalPages - 1 ? 'solid' : 'none', 'solid', 'solid',
+    ]));
+  });
+
   test('splits one long footnote paragraph across as many note bands as needed', async ({
     page,
   }, testInfo) => {
