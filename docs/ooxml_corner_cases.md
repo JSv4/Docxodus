@@ -24,6 +24,7 @@ This document tracks edge cases and quirks in Open XML document processing where
    - [`w:color`/`w:fill` are a CACHE; `w:themeColor`/`w:themeFill` are the authority](#wcolorwfill-are-a-cache-wthemecolorwthemefill-are-the-authority)
 6. [Tracked Drawings](#tracked-drawings)
    - [LibreOffice fails on tracked anchored header groups with text boxes](#libreoffice-fails-on-tracked-anchored-header-groups-with-text-boxes)
+   - [TIFF and WMF need browser image normalization](#tiff-and-wmf-need-browser-image-normalization)
 7. [Contributing](#contributing)
 
 ---
@@ -5516,3 +5517,60 @@ retains fractional positioning. The 11pt fixture measures 10.992pt in the DOM an
 PDF; public-export tests allow one CSS pixel (0.75pt) in PDF baseline distance while retaining
 0.05pt DOM tolerance. Zero/22pt cases reject an omitted correction. This is a documented print
 precision limit, not a claim of exact Word geometry.
+
+### TIFF and WMF need browser image normalization
+
+Issue #1484 used original Cypress rectangle/ellipse graphics. A TIFF can be a valid image
+part yet remain undecodable by Chromium; an accepted package MIME type does not establish
+browser support. The same DrawingML relationship can point to either TIFF or WMF:
+
+```xml
+<!-- image part content type: image/tiff or image/x-wmf -->
+<wp:inline>
+  <wp:extent cx="914400" cy="609600"/>
+  <wp:docPr id="1" name="CypressGeometry"/>
+  <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+    <pic:pic><pic:blipFill><a:blip r:embed="picture"/>
+      <a:stretch><a:fillRect/></a:stretch></pic:blipFill></pic:pic>
+  </a:graphicData></a:graphic>
+</wp:inline>
+```
+
+The equivalent legacy carrier is `<w:pict><v:shape style="width:72pt;height:48pt">`
+with `<v:imagedata r:id="picture"/>`. The related part belongs to its body/header story.
+
+| Case | Word for the web | LibreOffice 25.8.7.3 | Docxodus |
+| --- | --- | --- | --- |
+| Original placeable WMF rectangle/ellipse | Fresh PDF capture paints both outlines | Paints both outlines | Previously `[WMF IMAGE]`; now static SVG |
+| Identical PNG/TIFF pixels | Fresh PDF capture paints the graphic | Both paint the same graphic | PNG unchanged; TIFF normalized to PNG with identical rendered pixels |
+| WMF picture stretched to twice its height | Fresh DrawingML capture stretches the complete outline: 3pt vertical edges, 6pt horizontal edges | Keeps a uniform 3pt outline | SVG transforms the complete painted graphic, matching Word's scaling |
+| WMF window x scales 0.5, 1 and 2 | Fresh captures exclude 2, 1 and 0 logical units from right bounds; pen scales on both axes | Uses different ellipse center rounding and uniform pen scaling | Resolves device-pixel exclusion before transforming logical shapes and paint |
+| Visible zero-width WMF pen | Fresh PDF uses a printer-device hairline (about 0.14pt before picture scaling) | Device-dependent | Explicit unsupported-content diagnostic; no assumed printer resolution |
+| Grouped VML image sizing | Not measured; the diagnostic VML carrier printed a linked-image error | Uniform pen width follows horizontal scale | Uses the same transformed image as DrawingML; carrier placement is tested separately |
+| Unsupported TIFF colorimetry or WMF records | Not measured | Provider-dependent | Explicit placeholder/warning; strict export refuses it |
+
+Word substituted Times New Roman for requested Liberation Serif in these captures; this is
+image-behavior evidence, not a font-matched whole-page oracle. Source and capture hashes are
+retained with the issue evidence outside version control.
+
+`WmlToHtmlConverter.Images.cs` handles both image carriers and delegates to the bounded
+`Internal/TiffImage.cs` and `Internal/WmfImage.cs` decoders. TIFF normalization applies the
+orientation and unpremultiplies associated alpha before encoding PNG. Unknown colorimetry is
+reported rather than silently treating calibrated samples as sRGB. For a WMF window scale
+`sx`, Word excludes `truncate(1 / sx)` logical units from the right edge; the y rule is
+equivalent. A five-image native diagnostic pinned both rectangle endpoint parities, ellipse
+bounds, solid brushes and pen widths. For example, rectangle `(8,8)-(42,24)` ends at x=40,
+41 and 42 at x scales 0.5, 1 and 2. An SVG transform maps both logical geometry and paint;
+later picture stretching also stretches the outline. LibreOffice instead shifts a thick-pen
+ellipse's integer center and keeps its pen uniform, so it is not the geometry oracle here.
+
+The SVG viewBox retains the unrounded physical size. Only its width/height attributes round
+up to positive intrinsic dimensions. Bounds that collapse after device-pixel exclusion and
+visible zero-width pens reject the whole image, including previously decoded shapes. Null
+pens remain supported. This prevents a printer-specific hairline from silently becoming a
+different CSS-pixel stroke.
+
+The supported subsets and bounds follow [TIFF 6.0](https://www.itu.int/itudoc/itu-t/com16/tiff-fx/docs/tiff6.pdf)
+and Microsoft's [WMF format](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wmf/).
+The converter's image contract documents remaining format exclusions. Native facade tests,
+CLI embedded/extracted output tests, and public HTML/PDF export tests cover these paths.

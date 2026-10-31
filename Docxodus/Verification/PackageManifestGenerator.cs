@@ -41,7 +41,6 @@ public static class PackageManifestGenerator
         AsciiCaseInsensitiveComparer.Instance;
 
     internal static IEqualityComparer<string> CanonicalPartNameComparer => PartNameComparer;
-    private static readonly uint[] Crc32Table = CreateCrc32Table();
     private static readonly byte[] OleSignature = { 0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1 };
     private static readonly HashSet<string> WordprocessingXmlContentTypes = new(
         StringComparer.OrdinalIgnoreCase)
@@ -579,7 +578,7 @@ public static class PackageManifestGenerator
             {
                 work.ActualSize = preloaded.LongLength;
                 work.RawBytesDigest = Digest(preloaded);
-                ValidateCrc32(work, ComputeCrc32(preloaded), findings);
+                ValidateCrc32(work, Internal.Crc32.Compute(preloaded), findings);
                 if (work.ActualSize != work.Size)
                 {
                     AddFinding(findings, "entry_size_mismatch", VerificationFindingSeverity.Error,
@@ -614,7 +613,7 @@ public static class PackageManifestGenerator
                     throw new ManifestSafetyException(SafetyLimitKind.EntryExpansion);
                 readTotal += read;
                 hash.AppendData(buffer, 0, read);
-                crc32 = AppendCrc32(crc32, buffer.AsSpan(0, read));
+                crc32 = Internal.Crc32.Append(crc32, buffer.AsSpan(0, read));
                 if (xml is not null && !actualXmlLimitExceeded)
                 {
                     if (readTotal > options.MaxXmlPartBytes)
@@ -1770,29 +1769,6 @@ public static class PackageManifestGenerator
         AddFinding(findings, "crc_mismatch", VerificationFindingSeverity.Error,
             "Entry payload CRC-32 does not match the ZIP central-directory value.",
             new ChangeLocation { EntryUri = work.Uri });
-    }
-
-    private static uint ComputeCrc32(ReadOnlySpan<byte> bytes) =>
-        ~AppendCrc32(uint.MaxValue, bytes);
-
-    private static uint AppendCrc32(uint state, ReadOnlySpan<byte> bytes)
-    {
-        foreach (var value in bytes)
-            state = Crc32Table[(state ^ value) & 0xff] ^ (state >> 8);
-        return state;
-    }
-
-    private static uint[] CreateCrc32Table()
-    {
-        var table = new uint[256];
-        for (uint index = 0; index < table.Length; index++)
-        {
-            var value = index;
-            for (var bit = 0; bit < 8; bit++)
-                value = (value & 1) != 0 ? 0xedb88320U ^ (value >> 1) : value >> 1;
-            table[index] = value;
-        }
-        return table;
     }
 
     private static ushort ReadUInt16(byte[] bytes, int offset) =>

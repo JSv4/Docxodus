@@ -1418,11 +1418,18 @@ not mean arbitrary Word content is silently approximated.
 
 Explicitly unsupported in schema v1 are active content, macros, OLE activation, embedded video,
 external linked images/fonts/stylesheets, arbitrary HTML (`altChunk`), and any converter placeholder
-family not promoted by a follow-on issue. WMF/EMF, unsupported Office Math, form fields, and other
+family not promoted by a follow-on issue. EMF, unsupported WMF records, unsupported Office Math, form fields, and other
 opaque content remain visible placeholders with warnings when requested; they are never counted as
 faithful rendering. Native SVG image parts are not claimed until their current placeholder path is
 replaced and covered by readiness/vector tests. Password-protected/encrypted or malformed packages
 fail before rendering.
+
+The shared converter normalizes single-page 8-bit RGB(A) TIFF with uncompressed/PackBits
+strips to PNG and the bounded placeable WMF rectangle/ellipse subset to static SVG (#1484).
+These generated resources pass through the same decode readiness and image diagnostics as
+other supported images. The [converter image contract](docx_converter.md#images) lists exact
+format coverage and bounds. Generated WMF SVG is admitted as an embedded image resource;
+source SVG image parts still use the unsupported path.
 
 Eligible text-only footnote paragraphs continue within the paragraph at deterministic Unicode-safe
 boundaries, preserving inline structure, identities, ordering, and PageMap fragments. Structurally

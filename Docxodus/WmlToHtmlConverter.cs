@@ -12155,14 +12155,6 @@ namespace Docxodus
 
         #region Image Processing
 
-        // Don't process wmf files (with contentType == "image/x-wmf") because GDI consumes huge amounts
-        // of memory when dealing with wmf perhaps because it loads a DLL to do the rendering?
-        // It actually works, but is not recommended.
-        private static readonly List<string> ImageContentTypes = new List<string>
-        {
-            "image/png", "image/gif", "image/tiff", "image/jpeg"
-        };
-
         // Keep this deliberately small: it describes namespaces that are meaningful to this HTML
         // projection, not every namespace Word itself can consume. In particular, an obsolete
         // pre-release wps namespace must fall through to its VML fallback (as Word does).
@@ -13001,105 +12993,14 @@ namespace Docxodus
             }
             if (imagePart == null) return null;
 
-            var contentType = imagePart.ContentType;
-            if (!ImageContentTypes.Contains(contentType))
-            {
-                // Create placeholder for unsupported image types
-                if (settings != null)
-                {
-                    var imageType = contentType switch
-                    {
-                        "image/x-wmf" => UnsupportedContentType.WmfImage,
-                        "image/x-emf" => UnsupportedContentType.EmfImage,
-                        "image/svg+xml" => UnsupportedContentType.SvgImage,
-                        _ => UnsupportedContentType.Other
-                    };
-                    var placeholderText = imageType switch
-                    {
-                        UnsupportedContentType.WmfImage => "[WMF IMAGE]",
-                        UnsupportedContentType.EmfImage => "[EMF IMAGE]",
-                        UnsupportedContentType.SvgImage => "[SVG IMAGE]",
-                        _ => "[UNSUPPORTED IMAGE]"
-                    };
-                    return CreateUnsupportedContentPlaceholder(settings, element, imageType, placeholderText);
-                }
-                return null;
-            }
-
-            using (var partStream = imagePart.GetStream())
-            using (var memoryStream = new System.IO.MemoryStream())
-            {
-                partStream.CopyTo(memoryStream);
-                var imageBytes = memoryStream.ToArray();
-
-#if !WASM_BUILD
-                // Try to decode bitmap for width/height, but allow graceful fallback
-                SKBitmap? bitmap = null;
-                try
-                {
-                    bitmap = SKBitmap.Decode(imageBytes);
-                }
-                catch
-                {
-                    // SkiaSharp decode failed - continue with ImageBytes only
-                }
-#endif
-
-                try
-                {
-                    if (extentCx != null && extentCy != null)
-                    {
-                        var imageInfo = new ImageInfo()
-                        {
-#if !WASM_BUILD
-                            Bitmap = bitmap,
-#endif
-                            ImageBytes = imageBytes,
-                            ImgStyleAttribute = new XAttribute("style",
-                                string.Format(NumberFormatInfo.InvariantInfo,
-                                    "width: {0}in; height: {1}in",
-                                    (float)extentCx / (float)ImageInfo.EmusPerInch,
-                                    (float)extentCy / (float)ImageInfo.EmusPerInch)),
-                            ContentType = contentType,
-                            DrawingElement = element,
-                            AltText = altText,
-                        };
-                        var imgElement2 = imageHandler(imageInfo);
-                        if (hyperlinkUri != null)
-                        {
-                            return ApplyAnchorTextWrap(new XElement(XhtmlNoNamespace.a,
-                                new XAttribute(XhtmlNoNamespace.href, hyperlinkUri),
-                                imgElement2), containerElement, settings);
-                        }
-                        return ApplyAnchorTextWrap(imgElement2, containerElement, settings);
-                    }
-
-                    var imageInfo2 = new ImageInfo()
-                    {
-#if !WASM_BUILD
-                        Bitmap = bitmap,
-#endif
-                        ImageBytes = imageBytes,
-                        ContentType = contentType,
-                        DrawingElement = element,
-                        AltText = altText,
-                    };
-                    var imgElement = imageHandler(imageInfo2);
-                    if (hyperlinkUri != null)
-                    {
-                        return ApplyAnchorTextWrap(new XElement(XhtmlNoNamespace.a,
-                            new XAttribute(XhtmlNoNamespace.href, hyperlinkUri),
-                            imgElement), containerElement, settings);
-                    }
-                    return ApplyAnchorTextWrap(imgElement, containerElement, settings);
-                }
-                finally
-                {
-#if !WASM_BUILD
-                    bitmap?.Dispose();
-#endif
-                }
-            }
+            var style = extentCx != null && extentCy != null
+                ? new XAttribute("style", string.Format(NumberFormatInfo.InvariantInfo,
+                    "width: {0}in; height: {1}in", (float)extentCx / ImageInfo.EmusPerInch,
+                    (float)extentCy / ImageInfo.EmusPerInch)) : null;
+            var image = RenderImagePart(imagePart, element, imageHandler, settings, style, altText);
+            if (hyperlinkUri != null && image != null)
+                image = new XElement(XhtmlNoNamespace.a, new XAttribute(XhtmlNoNamespace.href, hyperlinkUri), image);
+            return ApplyAnchorTextWrap(image, containerElement, settings);
         }
 
         /// <summary>
@@ -13331,109 +13232,19 @@ namespace Docxodus
             var imageRid = (string?)shape?.Elements(VML.imagedata).Attributes(R.id).FirstOrDefault();
             if (imageRid == null) return null;
 
-            try
+            var imagePart = ownerPart.Parts.FirstOrDefault(part => part.RelationshipId == imageRid).OpenXmlPart as ImagePart;
+            if (imagePart == null) return null;
+            XAttribute? styleAttribute = null;
+            var style = (string?)shape!.Attribute("style");
+            if (style != null)
             {
-                var pp = ownerPart.Parts.FirstOrDefault(pp2 => pp2.RelationshipId == imageRid);
-
-                // VML <v:imagedata> can be malformed in exactly the same way as DrawingML:
-                // tolerate a relationship to a non-image part and simply omit the unusable image.
-                var imagePart = pp.OpenXmlPart as ImagePart;
-                if (imagePart == null) return null;
-
-                var contentType = imagePart.ContentType;
-                if (!ImageContentTypes.Contains(contentType))
-                {
-                    // Create placeholder for unsupported image types
-                    if (settings != null)
-                    {
-                        var imageType = contentType switch
-                        {
-                            "image/x-wmf" => UnsupportedContentType.WmfImage,
-                            "image/x-emf" => UnsupportedContentType.EmfImage,
-                            "image/svg+xml" => UnsupportedContentType.SvgImage,
-                            _ => UnsupportedContentType.Other
-                        };
-                        var placeholderText = imageType switch
-                        {
-                            UnsupportedContentType.WmfImage => "[WMF IMAGE]",
-                            UnsupportedContentType.EmfImage => "[EMF IMAGE]",
-                            UnsupportedContentType.SvgImage => "[SVG IMAGE]",
-                            _ => "[UNSUPPORTED IMAGE]"
-                        };
-                        return CreateUnsupportedContentPlaceholder(settings, element, imageType, placeholderText);
-                    }
-                    return null;
-                }
-
-                using (var partStream = imagePart.GetStream())
-                using (var memoryStream = new System.IO.MemoryStream())
-                {
-                    try
-                    {
-                        partStream.CopyTo(memoryStream);
-                        var imageBytes = memoryStream.ToArray();
-
-#if !WASM_BUILD
-                        // Try to decode bitmap, but allow graceful fallback
-                        SKBitmap? bitmap = null;
-                        try
-                        {
-                            bitmap = SKBitmap.Decode(imageBytes);
-                        }
-                        catch
-                        {
-                            // SkiaSharp decode failed - continue with ImageBytes only
-                        }
-#endif
-
-                        try
-                        {
-                            var imageInfo = new ImageInfo()
-                            {
-#if !WASM_BUILD
-                                Bitmap = bitmap,
-#endif
-                                ImageBytes = imageBytes,
-                                ContentType = contentType,
-                                DrawingElement = element
-                            };
-
-                            var style = (string?)shape!.Attribute("style");
-                            if (style == null) return imageHandler(imageInfo);
-
-                            var tokens = style.Split(';');
-                            var widthInPoints = WidthInPoints(tokens);
-                            var heightInPoints = HeightInPoints(tokens);
-                            if (widthInPoints != null && heightInPoints != null)
-                            {
-                                imageInfo.ImgStyleAttribute = new XAttribute("style",
-                                    string.Format(NumberFormatInfo.InvariantInfo,
-                                        "width: {0}pt; height: {1}pt", widthInPoints, heightInPoints));
-                            }
-                            return ApplyVmlImageAnchor(imageHandler(imageInfo), shape, settings);
-                        }
-                        finally
-                        {
-#if !WASM_BUILD
-                            bitmap?.Dispose();
-#endif
-                        }
-                    }
-                    catch (OutOfMemoryException)
-                    {
-                        // SKBitmap.Decode can throw OutOfMemoryException for corrupted images
-                        return null;
-                    }
-                    catch (ArgumentException)
-                    {
-                        return null;
-                    }
-                }
+                var tokens = style.Split(';');
+                var width = WidthInPoints(tokens); var height = HeightInPoints(tokens);
+                if (width != null && height != null)
+                    styleAttribute = new XAttribute("style", string.Format(NumberFormatInfo.InvariantInfo,
+                        "width: {0}pt; height: {1}pt", width, height));
             }
-            catch (ArgumentOutOfRangeException)
-            {
-                return null;
-            }
+            return ApplyVmlImageAnchor(RenderImagePart(imagePart, element, imageHandler, settings, styleAttribute), shape, settings);
         }
 
         private static float? HeightInPoints(IEnumerable<string> tokens)

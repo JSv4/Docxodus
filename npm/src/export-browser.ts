@@ -1896,7 +1896,7 @@ async function createIsolatedFrame(
 
 const STANDALONE_DATA_MEDIA_TYPES = new Set([
   "image/png", "image/jpeg", "image/gif", "image/bmp", "image/webp", "image/tiff",
-  "image/x-icon", "font/woff", "font/woff2", "font/ttf", "font/otf",
+  "image/x-icon", "image/svg+xml", "font/woff", "font/woff2", "font/ttf", "font/otf",
   "application/font-woff", "application/vnd.ms-fontobject",
 ]);
 
