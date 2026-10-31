@@ -5294,7 +5294,9 @@ These two rows merge the same third grid column even though its physical cell in
 row/cell traversal. `ProcessTableCell` suppresses only matched continuations; orphan or mismatched
 continuations retain their text as ordinary cells. `ProcessTableRow` emits empty cells for omitted
 columns beyond the table's common omitted prefix. When every visible cell in that row spans later
-rows, invisible first-line boxes preserve its minimum height using the source font, spacing and
-cell padding; those boxes neither widen the table nor enter PageMap. A standalone row or cell fragment has no table
+rows, an invisible first-line box preserves its minimum height using the first starter's font,
+spacing and cell padding. Later, larger starters do not enlarge that box: independent mixed-font
+LibreOffice controls show that source order matters. The box neither widens the table nor enters
+PageMap. A standalone row or cell fragment has no table
 grid context and retains its ordinary content. The paired benchmark independently checks full
 PDF text, column placement and the delivered HTML's merge span.

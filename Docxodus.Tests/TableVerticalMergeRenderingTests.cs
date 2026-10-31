@@ -121,7 +121,9 @@ public class TableVerticalMergeRenderingTests
         paragraph.Element(W.r)!.AddFirst(new XElement(W.rPr, new XElement(W.sz, new XAttribute(W.val, 48))));
         if (wrapped)
             paragraph.ReplaceWith(new XElement(W.customXml, new XAttribute(W.element, "entry"), new XElement(paragraph)));
-        var html = Render(Row(1, start), Row(0, Cell("Left"), Cell("", 1, "continue")));
+        var later = Cell("Larger", 1, "restart");
+        later.Element(W.p)!.Element(W.r)!.AddFirst(new XElement(W.rPr, new XElement(W.sz, new XAttribute(W.val, 80))));
+        var html = Render(Row(1, start, later), Row(0, Cell("Left"), Cell("", 1, "continue"), Cell("", 1, "continue")));
         var spacer = html.Descendants(Xhtml.td).First();
         var style = (string)spacer.Descendants(Xhtml.p).Single().Attribute("style")!;
         Assert.Contains("font-size: 24pt", style);

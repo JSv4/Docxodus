@@ -6906,7 +6906,7 @@ namespace Docxodus
             {
                 cells.Insert(0, new XElement(Xhtml.td, new XAttribute("colspan", omitted),
                     new XAttribute("aria-hidden", "true"), new XAttribute("data-page-map-exclude", "true"),
-                    new XAttribute("style", "border: none; padding: 0;"), OmittedRowHeightStruts(element, grid!)));
+                    new XAttribute("style", "border: none; padding: 0;"), OmittedRowHeightStrut(element, grid!)));
             }
 
             // A collapsed-border table row's CSS height includes half of each horizontal border.
@@ -7014,33 +7014,27 @@ namespace Docxodus
             return htmlRow;
         }
 
-        private static XElement? OmittedRowHeightStruts(XElement row, TableRenderingGrid grid)
+        private static XElement? OmittedRowHeightStrut(XElement row, TableRenderingGrid grid)
         {
             var cells = WordprocessingMLUtil.RowCells(row).ToList();
             if (cells.Any(cell => grid.RowSpans.GetValueOrDefault(cell, 1) == 1))
                 return null; // An ordinary cell already establishes this row's height.
 
-            // A row made only of spanning cells still needs its own line pitch. Overlap one
-            // empty line per restart so the largest font/padding wins, without affecting width,
-            // copying content/anchors, or adding these layout-only boxes to the PageMap.
-            var struts = new XElement(Xhtml.div,
-                new XAttribute("style", "display: grid; width: 0; overflow: hidden; visibility: hidden;"));
-            foreach (var cell in cells.Where(cell => grid.RowSpans.GetValueOrDefault(cell) > 1))
-            {
-                var paragraph = cell.DescendantsTrimmed(W.tbl).FirstOrDefault(e => e.Name == W.p);
-                if (paragraph == null) continue;
-                var style = DefineParagraphStyle(paragraph, Xhtml.p, false, 0m, false);
-                style["grid-area"] = "1 / 1";
-                style["margin-left"] = style["margin-right"] = style["text-indent"] = "0";
-                foreach (var side in new[] { W.top, W.bottom })
-                    style["padding-" + side.LocalName] = string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt",
-                        CellMarginTwips(cell, side) / 20m);
-                var strut = new XElement(Xhtml.p, new XElement(Xhtml.span, "\u00a0"));
-                ApplyAutomaticLineSpacingToInlineContent(strut, style);
-                strut.AddAnnotation(style);
-                struts.Add(strut);
-            }
-            return struts.HasElements ? struts : null;
+            // The omitted prefix uses the first starter's line pitch. Taking the largest
+            // starter instead makes a later, tall merged cell enlarge this row unnecessarily.
+            var cell = cells.FirstOrDefault(cell => grid.RowSpans.GetValueOrDefault(cell) > 1);
+            var paragraph = cell?.DescendantsTrimmed(W.tbl).FirstOrDefault(e => e.Name == W.p);
+            if (paragraph == null) return null;
+            var style = DefineParagraphStyle(paragraph, Xhtml.p, false, 0m, false);
+            style["margin-left"] = style["margin-right"] = style["text-indent"] = "0";
+            foreach (var side in new[] { W.top, W.bottom })
+                style["padding-" + side.LocalName] = string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt",
+                    CellMarginTwips(cell!, side) / 20m);
+            var strut = new XElement(Xhtml.p, new XElement(Xhtml.span, "\u00a0"));
+            ApplyAutomaticLineSpacingToInlineContent(strut, style);
+            strut.AddAnnotation(style);
+            return new XElement(Xhtml.div,
+                new XAttribute("style", "width: 0; overflow: hidden; visibility: hidden;"), strut);
         }
 
         private static bool HasHiddenParagraphMark(XElement? element)
