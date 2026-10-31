@@ -1654,8 +1654,9 @@ export class PaginationEngine {
     destination: Set<string>,
     excludeRegistries = false,
   ): void {
-    const candidates: HTMLElement[] = source.matches("[data-source-anchor-id]") ? [source] : [];
-    candidates.push(...Array.from(source.querySelectorAll<HTMLElement>("[data-source-anchor-id]")));
+    const selector = '[data-source-anchor-id], [data-docx-required-source-anchors]';
+    const candidates: HTMLElement[] = source.matches(selector) ? [source] : [];
+    candidates.push(...Array.from(source.querySelectorAll<HTMLElement>(selector)));
     for (const element of candidates) {
       if (excludeRegistries && element.closest(
         "#pagination-hf-registry, #pagination-footnote-registry, #pagination-comment-margin-registry",
@@ -1669,6 +1670,11 @@ export class PaginationEngine {
         element.dataset.pageMapExclude = "true";
       }
       if (this.isDeliberatelyUnrenderedSource(element, source)) continue;
+      // The converter inventories selected textbox paragraphs from OOXML on their host.
+      // Missing HTML must not silently shrink the expected source set.
+      for (const required of element.dataset.docxRequiredSourceAnchors?.split(/\s+/) ?? []) {
+        if (required) destination.add(required);
+      }
       const anchorId = element.dataset.sourceAnchorId;
       if (anchorId) {
         destination.add(anchorId);

@@ -33,7 +33,8 @@ const budgetsKiB = {
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
   // Whole inline-layout continuation adds 0.24 KiB (35.801 -> 36.038 on main).
-  'pagination.bundle.js': 40,
+  // Independent textbox source inventories add 45 compressed bytes (39.978 -> 40.021 KiB).
+  'pagination.bundle.js': 41,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,

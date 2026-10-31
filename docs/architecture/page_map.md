@@ -93,8 +93,16 @@ PageMap keys.
 
 Every rendered addressable block instead carries `data-source-anchor-id="kind:scope:unid"`.
 Paragraphs, headings, lists, tables, rows, cells, note definitions and their paragraphs, and
-visible comment representations are covered. The converter rebuilds this identity map from its
-final preprocessed `XElement` trees immediately before HTML transformation.
+visible comment representations are covered. The converter indexes canonical identities before
+preprocessing and resolves rewritten elements by their retained part URI and Unid.
+
+Textbox hosts also carry `data-docx-required-source-anchors`, independently derived from the
+selected OOXML textbox paragraphs. Pagination includes those IDs even when HTML conversion
+omits a drawing member (#1482). Only the selected compatibility branch contributes. An image
+or chart alternative suppresses its own text story only when that representation actually
+renders; callback or missing-image fallbacks retain the text expectations. The source inventory
+is collected after projection selects representations, without deriving it from projected HTML.
+As with ordinary anchors, unselected running-story variants do not become required.
 
 Pagination clones retain `data-source-anchor-id` and receive `data-page-number`,
 `data-fragment-index`, and `data-page-fragment-id`. Continuations and repeated headers, footers,
