@@ -95,6 +95,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Preserve every independent VML group textbox in body and running stories, including nested
+  coordinate spaces (#1482). PageMap completeness now checks textbox paragraphs inventoried
+  from the selected source markup, so conversion-time omissions fail explicitly. Unsupported
+  group transforms are diagnosed and cannot establish source-clipping exemptions.
+
 - Resolve read-only `TITLE` / `DOCPROPERTY Title` fields from the package title and paragraph-style
   `STYLEREF` fields from document text (#1481). Running style references follow each physical page,
   including first/last matching headings and preceding-heading fallback. Header/footer measurement

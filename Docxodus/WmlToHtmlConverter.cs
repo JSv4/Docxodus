@@ -330,6 +330,10 @@ namespace Docxodus
         /// </summary>
         internal Func<XElement, string?>? SourceAnchorIdentityProvider;
 
+        // Selected image alternatives suppress their own textbox story. Keep this decision on
+        // the source side so completeness never has to infer it from surviving HTML.
+        internal HashSet<XElement> ImageRepresentations = new HashSet<XElement>();
+
         /// <summary>Build <see cref="SourceAnchorIdentityProvider"/> from the converter's
         /// post-simplification trees immediately before the HTML transform. This timing matters:
         /// MarkupSimplifier and FormattingAssembler replace part roots, invalidating any earlier
@@ -1126,6 +1130,7 @@ namespace Docxodus
             // body into its owning content part before the normal simplification and formatting
             // pipeline, so it receives the same revision/style processing as inline textboxes.
             InlineExternalTextBoxBodies(wordDoc);
+            htmlConverterSettings.ImageRepresentations.Clear();
             foreach (var part in wordDoc.ContentParts()) part.RemoveAnnotations<LinkedTextBoxStoryIds>();
 
             // Canonical source identity (data-source-anchor-id) is the SOURCE document's: index it
@@ -1279,8 +1284,16 @@ namespace Docxodus
             rootElement.AddAnnotation(footnoteTracker);
 
             // The root w:document element always transforms to a real h:html element.
-            XElement xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
-                rootElement, false, 0m)!;
+            XElement xhtml;
+            try
+            {
+                xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
+                    rootElement, false, 0m)!;
+            }
+            finally
+            {
+                htmlConverterSettings.ImageRepresentations.Clear();
+            }
 
             // Only a whole-document render can answer "is the target in this output?" — see
             // RendersDocumentFragment.
@@ -7510,6 +7523,7 @@ namespace Docxodus
                     sourceAnchorAttr,
                     styleSourceAttrs,
                     ConvertContentThatCanContainFields(wordDoc, settings, paragraph.Elements()));
+                paraElement1.Add(TextBoxSourceInventory(settings, paragraph));
                 ApplyAutomaticLineSpacingToInlineContent(paraElement1, style);
                 paraElement1.AddAnnotation(style);
                 AnnotateSemanticListItem(paraElement1, paragraph, elementName, isBidi);
@@ -7533,6 +7547,7 @@ namespace Docxodus
                 styleSourceAttrs,
                 alignedTabContent ?? new List<object?> { txElementsPrecedingTab,
                     ConvertContentThatCanContainFields(wordDoc, settings, elementsSucceedingTab) });
+            if (!implied) paraElement.Add(TextBoxSourceInventory(settings, paragraph));
             ApplyAutomaticLineSpacingToInlineContent(paraElement, style);
             paraElement.AddAnnotation(style);
             AnnotateSemanticListItem(paraElement, paragraph, elementName, isBidi);
@@ -10579,7 +10594,7 @@ namespace Docxodus
                     bool hasContent = element
                         .Elements()
                         .Where(e => e.Name != W.pPr)
-                        .SelectMany(InFlowDescendantsAndSelf)
+                        .SelectMany(child => InFlowDescendantsAndSelf(child))
                         .Any(e =>
                             e.Name == W.dayLong ||
                             e.Name == W.dayShort ||
@@ -10617,14 +10632,14 @@ namespace Docxodus
             return node;
         }
 
-        /// <summary><paramref name="element"/> and its descendants, leaving out hidden runs, floating
-        /// (<c>wp:anchor</c>) drawings together with their content, and the branches of an
-        /// <c>mc:AlternateContent</c> the renderer does not select.</summary>
-        private static IEnumerable<XElement> InFlowDescendantsAndSelf(XElement element)
+        /// <summary><paramref name="element"/> and its descendants, leaving out hidden runs and
+        /// unselected compatibility branches. Floating drawings are excluded unless the caller
+        /// inventories all rendered stories rather than just the host paragraph's line.</summary>
+        private static IEnumerable<XElement> InFlowDescendantsAndSelf(XElement element, bool includeFloating = false)
         {
             if (element.Attribute(HiddenFieldInstructionAttribute) != null)
                 yield break;
-            if (element.Name == W.drawing && element.Elements(WP.anchor).Any())
+            if (!includeFloating && element.Name == W.drawing && element.Elements(WP.anchor).Any())
                 yield break;
             // Match run rendering after formatting assembly has resolved inherited properties.
             // Hidden text cannot supply the paragraph mark's line; keep its ordinary placeholder.
@@ -10638,8 +10653,21 @@ namespace Docxodus
                 ? SelectedMarkupBranch(element)?.Elements() ?? Enumerable.Empty<XElement>()
                 : element.Elements();
             foreach (var child in children)
-                foreach (var descendant in InFlowDescendantsAndSelf(child))
+                foreach (var descendant in InFlowDescendantsAndSelf(child, includeFloating))
                     yield return descendant;
+        }
+
+        // This source inventory belongs to the host, so losing a drawing member during HTML
+        // projection cannot also erase its expected paragraphs from export completeness checks.
+        private static XAttribute? TextBoxSourceInventory(WmlToHtmlConverterSettings settings, XElement paragraph)
+        {
+            if (settings.SourceAnchorIdentityProvider == null || !paragraph.Descendants(W.txbxContent).Any()) return null;
+            var ids = InFlowDescendantsAndSelf(paragraph, includeFloating: true)
+                .Where(element => element.Name == W.p && element.Parent?.Name == W.txbxContent
+                    && !IsUnpaintedHiddenParagraph(element)
+                    && !element.Ancestors().Any(settings.ImageRepresentations.Contains))
+                .Select(settings.SourceAnchorIdentityProvider).OfType<string>().Distinct().ToArray();
+            return ids.Length == 0 ? null : new XAttribute("data-docx-required-source-anchors", string.Join(" ", ids));
         }
 
         private class SectionAnnotation
@@ -12193,7 +12221,10 @@ namespace Docxodus
             {
                 var chart = ProcessChart(wordDoc, element);
                 if (chart != null)
+                {
+                    RecordImageRepresentation(settings, element);
                     return chart;
+                }
 
                 // Preserve established image output for the uncommon shape that carries both an
                 // image and textbox body. A textbox-only drawing falls through when no image can
@@ -12202,23 +12233,37 @@ namespace Docxodus
                 {
                     var image = ProcessDrawing(wordDoc, element, imageHandler, settings);
                     if (image != null)
+                    {
+                        RecordImageRepresentation(settings, element);
                         return image;
+                    }
                 }
                 return ProcessTextBox(wordDoc, element, settings)
                     ?? ProcessDrawingShape(wordDoc, element, imageHandler != null, settings);
             }
             if (element.Name == W.pict || element.Name == W._object)
             {
+                if (element.Elements(VML.group).Any() || element.Elements().Where(IsVmlShape).Skip(1).Any()
+                    || element.Elements(MC.AlternateContent).Any())
+                    return ProcessVmlMembers(wordDoc, element, imageHandler, settings);
                 if (imageHandler != null)
                 {
                     var image = ProcessPictureOrObject(wordDoc, element, imageHandler, settings);
                     if (image != null)
+                    {
+                        RecordImageRepresentation(settings, element);
                         return image;
+                    }
                 }
                 return ProcessTextBox(wordDoc, element, settings)
                     ?? ProcessVmlShape(element, settings);
             }
             return null;
+        }
+
+        private static void RecordImageRepresentation(WmlToHtmlConverterSettings? settings, XElement source)
+        {
+            if (settings?.SourceAnchorIdentityProvider != null) settings.ImageRepresentations.Add(source);
         }
 
         private sealed class LinkedTextBoxStoryIds
@@ -12255,7 +12300,7 @@ namespace Docxodus
         /// pagination; other legacy placement keeps its established inline fallback.
         /// </summary>
         private static XElement? ProcessTextBox(WordprocessingDocument wordDoc, XElement element,
-            WmlToHtmlConverterSettings? settings)
+            WmlToHtmlConverterSettings? settings, ShapeBox? groupFrame = null)
         {
             var textBoxContent = element.Descendants(W.txbxContent).FirstOrDefault();
             var continuation = element.Descendants(WPS.wps + "linkedTxbx").FirstOrDefault();
@@ -12293,7 +12338,7 @@ namespace Docxodus
 
             var drawingContainer = element.Elements()
                 .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
-            var vmlShape = textBoxContent?.Ancestors(VML.shape).FirstOrDefault();
+            var vmlShape = textBoxContent?.Ancestors().FirstOrDefault(IsVmlShape);
             var autoFit = vmlShape != null ? HasVmlTextBoxAutoFit(vmlShape) : HasAutoFitTextBox(element);
             // ProcessImage's settings parameter defaults to null for callers with no pagination
             // config, but AddDrawingTextBoxStyle dereferences settings.RenderPagination once the
@@ -12304,9 +12349,14 @@ namespace Docxodus
                 AddDrawingTextBoxStyle(style, wrapper, element, drawingContainer, settings!, autoFit);
             else if (vmlShape != null)
             {
-                if (settings?.RenderPagination == PaginationMode.Paginated && CreateVmlDrawingAnchor(vmlShape) is XElement anchor)
+                if (groupFrame == null && settings?.RenderPagination == PaginationMode.Paginated && CreateVmlDrawingAnchor(vmlShape) is XElement anchor)
                     AddDrawingFrameStyle(style, wrapper, anchor, settings, autoFit);
                 AddVmlTextBoxStyle(style, vmlShape);
+                if (groupFrame is { } frame)
+                {
+                    style["width"] = VmlPointLength(frame.Width);
+                    if (!autoFit) style["height"] = VmlPointLength(frame.Height);
+                }
             }
 
             // A fixed source-authored text box intentionally clips overflow. Preserve that
@@ -13280,7 +13330,8 @@ namespace Docxodus
             XElement element, Func<ImageInfo, XElement?> imageHandler, WmlToHtmlConverterSettings? settings = null)
         {
             var ownerPart = GetOwningPart(wordDoc, element);
-            var shape = element.Elements(VML.shape).FirstOrDefault(candidate => candidate.Elements(VML.imagedata).Attributes(R.id).Any());
+            var shape = (IsVmlShape(element) ? new[] { element } : element.Elements().Where(IsVmlShape))
+                .FirstOrDefault(candidate => candidate.Elements(VML.imagedata).Attributes(R.id).Any());
             var imageRid = (string?)shape?.Elements(VML.imagedata).Attributes(R.id).FirstOrDefault();
             if (imageRid == null) return null;
 

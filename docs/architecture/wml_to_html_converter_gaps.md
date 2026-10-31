@@ -356,9 +356,16 @@ reserves for them, pictures/charts/ink inside a group, and a canvas's own backgr
 (`wpc:bg`, `wpc:whole`). What cannot be drawn keeps its extent and is marked; see
 [Unsupported Content Placeholders](./unsupported_content_placeholders.md#inline-drawings).
 
-A group that contains a text box is still rendered by the text-box path, unchanged by #1270: the whole
+A DrawingML group that contains a text box is still rendered by the text-box path: the whole
 group becomes one box at the group's extent, styled with the first shape's fill and outline and holding
 only the text box's text; the group's other shapes are not drawn.
+
+VML groups project their independent shapes and text stories in order (#1482), including nested
+groups and picture siblings. Their child coordinate origins and extents map to physical frame
+bounds without scaling the text font or outline width. Group `coordsize` defaults to `1000,1000`.
+Compatibility selection applies at both the drawing and member boundaries. The textbox host's
+independent source inventory makes omitted paragraphs fail PageMap publication instead of
+disappearing from the completeness check; see `page_map.md`.
 
 Floating (`wp:anchor`) shapes and groups reuse the SVG renderer (#1346). The paginator resolves their
 stored anchor geometry and promotes them into the page. `behindDoc` separates background drawings

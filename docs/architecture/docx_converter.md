@@ -91,6 +91,13 @@ The conversion happens in the following stages:
 Run coalescing visits nested containers from the leaves upward on one copy of the input tree.
 Each container, including textbox paragraphs, is consolidated once (#1410).
 
+VML drawing containers project each independent member, with nested group coordinate maps
+preserving individual textbox and picture bounds (#1482). The ordinary textbox paragraph
+converter still owns formatting, contextual spacing, source identities and fixed-box clipping.
+The host records expected textbox identities from selected source OOXML; the image/chart paths
+record only their actual selected alternatives so a missing image can still fall back to text.
+This makes conversion-time loss observable to the paginator's existing completeness check.
+
 ```
 WordprocessingDocument
     │

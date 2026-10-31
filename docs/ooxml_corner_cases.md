@@ -5420,3 +5420,46 @@ The locked case is a diagnostic/control, not a LibreOffice parity claim. The thr
 pass Open XML SDK 3.5.1 validation. Browser regressions cover first/last matching paragraphs,
 forward/preceding fallback, style scope, split headings, story variants, numbering restarts,
 actual page-band geometry and explicit nonconvergence. No fresh Word rendering is claimed.
+
+## Independent text stories in VML groups (#1482)
+
+A `w:pict` can contain several textboxes. Each owns its own `w:txbxContent`; taking the first
+descendant loses later labels before pagination can see them. In this minimal group, the physical
+frame is 300 × 100 pt and the child space is 600 × 200 units, beginning at (100, 200):
+
+```xml
+<w:pict><v:group style="width:300pt;height:100pt" coordorigin="100,200" coordsize="600,200">
+  <v:shape style="left:100;top:200;width:240;height:56">
+    <v:textbox inset="0,0,0,0"><w:txbxContent><w:p><w:r><w:t>ALDER</w:t></w:r></w:p></w:txbxContent></v:textbox>
+  </v:shape>
+  <v:shape style="left:400;top:300;width:240;height:56">
+    <v:textbox inset="0,0,0,0"><w:txbxContent><w:p><w:r><w:t>BIRCH</w:t></w:r></w:p></w:txbxContent></v:textbox>
+  </v:shape>
+</v:group></w:pict>
+```
+
+The boxes are 120 × 28 pt, at offsets (0, 0) and (150, 50). Nested groups compose their own
+origin and scale. LibreOffice treats point-suffixed child coordinates like unitless coordinates
+within this space. An omitted group `coordsize` is 1000 × 1000, as specified by the group template
+in the [VML submission](https://www.w3.org/TR/1998/NOTE-VML-19980513); the shape element's
+different default does not apply.
+
+| Original one-page fixtures | Word | LibreOffice 25.8.7.3 | Docxodus before / after |
+|---|---|---|---|
+| Body or header group with ALDER and BIRCH | Not captured | Both labels at their separate positions | ALDER only / both labels at their separate positions |
+| Separate page-anchored boxes control | Not captured | Both labels, with its default text inset | Both labels; complete page rasters unchanged |
+| Omitted versus explicit 1000-unit group size | Not captured | Identical positions | Wrong default / identical positions |
+| Group rotated 90 degrees | Not captured | Rotated placement | Silently unrotated / explicit unsupported-layout diagnostic |
+
+The native separate-box control applies a roughly 4.4 pt text inset despite `inset="0,0,0,0"`;
+Docxodus continues to honor the zero inset. This existing difference is not a group regression.
+Rotation, flips and center-coordinate overrides remain unsupported, including at nested levels.
+Their descendants cannot claim authored clipping or off-page placement exemptions from approximate
+geometry. DrawingML group text handling is unchanged.
+
+`ProcessVmlMembers` traverses the selected compatibility branch and sends each member through
+the shared image/textbox paths. A source inventory on the host paragraph independently names
+the selected textbox paragraphs. Actual successful image representations suppress alternative
+text inventories; a missing image or null image callback keeps the text fallback. The paginator
+requires these source identities even when conversion omitted their HTML. Unused running-story
+variants remain outside the current page's completeness check.

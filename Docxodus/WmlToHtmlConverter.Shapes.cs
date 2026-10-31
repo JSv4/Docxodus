@@ -265,16 +265,138 @@ namespace Docxodus
             decimal.TryParse((string?)anchor.Attribute("data-docx-anchor-" + suffix), NumberStyles.Float,
                 CultureInfo.InvariantCulture, out var number) ? number : 0;
 
+        private static bool IsVmlShape(XElement element) => element.Name.Namespace == VML.vml &&
+            element.Name.LocalName is "shape" or "rect" or "roundrect" or "oval" or "line" or "polyline" or "arc";
+
+        // A pict is a drawing container, not one text story. Keep its independently authored
+        // members in source order and map group coordinates without scaling fonts or outlines.
+        private static XElement ProcessVmlMembers(WordprocessingDocument wordDoc, XElement source,
+            Func<ImageInfo, XElement?>? imageHandler, WmlToHtmlConverterSettings? settings, ShapeMap? map = null)
+        {
+            var wrapper = new XElement(Xhtml.span);
+            foreach (var child in source.Elements())
+            {
+                if (child.Name == MC.AlternateContent)
+                {
+                    if (SelectedMarkupBranch(child) is { } branch)
+                        wrapper.Add(ProcessVmlMembers(wordDoc, branch, imageHandler, settings, map));
+                    continue;
+                }
+                if (child.Name != VML.group && !IsVmlShape(child))
+                    continue;
+                var frame = VmlMemberFrame(child, map);
+                XElement? member;
+                if (child.Name == VML.group)
+                {
+                    var origin = VmlCoordinatePair(child, "coordorigin", 0);
+                    // VML groups default to a 1000 by 1000 child coordinate space. The
+                    // shape element's omitted coordsize rule does not apply to a group.
+                    var size = VmlCoordinatePair(child, "coordsize", 1000);
+                    ShapeMap? childMap = frame is { } bounds && origin != null && size is { X: > 0, Y: > 0 }
+                        ? new ShapeMap(bounds.Width / size.Value.X, bounds.Height / size.Value.Y,
+                            -origin.Value.X * bounds.Width / size.Value.X, -origin.Value.Y * bounds.Height / size.Value.Y)
+                        : null;
+                    member = ProcessVmlMembers(wordDoc, child, imageHandler, settings, childMap);
+                    var style = new Dictionary<string, string>
+                    {
+                        { "display", "inline-block" }, { "position", "relative" },
+                        { "vertical-align", "top" }, { "line-height", "normal" },
+                    };
+                    if (frame is { } groupFrame)
+                    {
+                        style["width"] = VmlPointLength(groupFrame.Width);
+                        style["height"] = VmlPointLength(groupFrame.Height);
+                    }
+                    if (map == null && settings?.RenderPagination == PaginationMode.Paginated &&
+                        CreateVmlDrawingAnchor(child) is { } anchor)
+                        AddDrawingFrameStyle(style, member, anchor, settings, false);
+                    member.AddAnnotation(style);
+                    var sourceStyle = ParseVmlStyle((string?)child.Attribute("style"));
+                    var rotation = sourceStyle.GetValueOrDefault("rotation", "0");
+                    var unsupported = childMap == null
+                        || !double.TryParse(rotation, NumberStyles.Float, CultureInfo.InvariantCulture, out var degrees)
+                        || !double.IsFinite(degrees) || degrees % 360 != 0
+                        || sourceStyle.GetValueOrDefault("flip", "") is not ("" or "none")
+                        || sourceStyle.ContainsKey("center-x") || sourceStyle.ContainsKey("center-y");
+                    if (unsupported)
+                    {
+                        if (settings != null)
+                            ReportShapeLayoutLoss(member, settings, "Unsupported VML group coordinate system or transform");
+                        // Child frames are approximate too: they cannot prove that source text
+                        // was intentionally clipped or placed outside the physical page.
+                        member.Descendants().Attributes().Where(a => a.Name.LocalName is
+                            "data-docx-textbox-source-clip" or "data-docx-textbox-source-position").Remove();
+                    }
+                }
+                else
+                {
+                    member = imageHandler == null ? null : ProcessPictureOrObject(wordDoc, child, imageHandler, settings);
+                    if (member != null) RecordImageRepresentation(settings, child);
+                    member ??= ProcessTextBox(wordDoc, child, settings, map == null ? null : frame)
+                        ?? ProcessVmlShape(child, settings);
+                }
+                if (member == null) continue;
+                if (map != null && frame is { } position)
+                {
+                    var style = member.Annotation<Dictionary<string, string>>();
+                    if (style == null)
+                    {
+                        style = ParseVmlStyle((string?)member.Attribute("style"));
+                        member.Attribute("style")?.Remove();
+                        member.AddAnnotation(style);
+                    }
+                    style["position"] = "absolute";
+                    style["left"] = VmlPointLength(position.X);
+                    style["top"] = VmlPointLength(position.Y);
+                    style["width"] = VmlPointLength(position.Width);
+                    if (!HasVmlTextBoxAutoFit(child)) style["height"] = VmlPointLength(position.Height);
+                }
+                wrapper.Add(member);
+            }
+            return wrapper;
+        }
+
+        private static string VmlPointLength(double value) => value.ToString("0.####", CultureInfo.InvariantCulture) + "pt";
+
+        private static (double X, double Y)? VmlCoordinatePair(XElement element, string attribute, double fallback)
+        {
+            var value = (string?)element.Attribute(attribute);
+            if (value == null) return (fallback, fallback);
+            var pair = value.Split(new[] { ',', ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            return pair.Length == 2 && double.TryParse(pair[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var x)
+                && double.TryParse(pair[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var y)
+                && double.IsFinite(x) && double.IsFinite(y) ? (x, y) : null;
+        }
+
+        private static ShapeBox? VmlMemberFrame(XElement element, ShapeMap? map)
+        {
+            var style = ParseVmlStyle((string?)element.Attribute("style"));
+            double? Coordinate(string name, double scale, bool optional = false)
+            {
+                var value = style.GetValueOrDefault(name);
+                if (value == null) return optional ? 0 : null;
+                if (TryVmlPointEmu(value, out var emu)) return emu / 12700d * scale;
+                return map != null && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var units)
+                    && double.IsFinite(units * scale) ? units * scale : null;
+            }
+            var width = Coordinate("width", map?.ScaleX ?? 1);
+            var height = Coordinate("height", map?.ScaleY ?? 1);
+            var left = Coordinate("left", map?.ScaleX ?? 1, true);
+            var top = Coordinate("top", map?.ScaleY ?? 1, true);
+            return width is > 0 && height is > 0 && left != null && top != null
+                ? new ShapeBox(left.Value + (map?.OffsetX ?? 0), top.Value + (map?.OffsetY ?? 0), width.Value, height.Value)
+                : null;
+        }
+
         private static XElement? ProcessVmlShape(XElement element, WmlToHtmlConverterSettings? settings)
         {
             // Image and textbox paths already had the opportunity to render their content.
             // Do not turn an explicitly omitted picture into an unsupported shape.
             if (element.Descendants(VML.imagedata).Any()) return null;
-            var shapes = element.Descendants().Where(e => e.Name.Namespace == VML.shape.Namespace &&
-                e.Name.LocalName is "rect" or "roundrect" or "oval" or "line" or "polyline" or "arc" or "shape").ToList();
+            var shapes = element.DescendantsAndSelf().Where(IsVmlShape).ToList();
             var shape = shapes.FirstOrDefault();
             if (shape == null) return null;
-            if (shapes.Count == 1 && shape.Parent == element && TryVmlRectangle(shape) is { } rectangle)
+            if (shapes.Count == 1 && (shape == element || shape.Parent == element) && TryVmlRectangle(shape) is { } rectangle)
                 return rectangle;
             var placeholder = (settings == null ? null
                 : CreateUnsupportedContentPlaceholder(settings, shape, UnsupportedContentType.Other, "[SHAPE]"))
@@ -285,7 +407,7 @@ namespace Docxodus
             // Keeping an undrawn oval or line's extent must not invent a filled rectangle.
             AddVmlDimensions(style, shape);
             placeholder.AddAnnotation(style);
-            if (settings?.RenderPagination == PaginationMode.Paginated && shapes.Count == 1 && shape.Parent == element &&
+            if (settings?.RenderPagination == PaginationMode.Paginated && shapes.Count == 1 && (shape == element || shape.Parent == element) &&
                 CreateVmlDrawingAnchor(shape) is XElement anchor)
                 return PlaceDrawingShape(placeholder, anchor, settings);
             return placeholder;
