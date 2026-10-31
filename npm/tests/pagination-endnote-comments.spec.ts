@@ -8,7 +8,7 @@ const layouts = [
 
 for (const { prefix, band } of layouts) test(`endnote ${prefix} threads retain presentation and ownership in ${band} bands`, async ({ page }) => {
   const base = prefix.replace(/-+$/, '');
-  const escaped = prefix.replace(/:/g, '\\:');
+  const escaped = await page.evaluate(value => CSS.escape(value), prefix);
   const geometry = `data-page-width="400" data-page-height="300" data-content-width="256" data-content-height="156"
     data-margin-top="72" data-margin-bottom="72" data-margin-left="72" data-margin-right="72"`;
   const preceding = band === 'continuous' ? `<section data-section-index="0" ${geometry}><p>Preceding section</p></section>` : '';
