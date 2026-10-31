@@ -5463,3 +5463,56 @@ the selected textbox paragraphs. Actual successful image representations suppres
 text inventories; a missing image or null image callback keeps the text fallback. The paginator
 requires these source identities even when conversion omitted their HTML. Unused running-story
 variants remain outside the current page's completeness check.
+
+## Ruby keeps two text layers and reserves the annotation raise (#1483)
+
+```xml
+<w:r><w:ruby><w:rubyPr><w:rubyAlign w:val="center"/><w:hps w:val="12"/>
+  <w:hpsRaise w:val="22"/><w:hpsBaseText w:val="22"/><w:lid w:val="en-US"/></w:rubyPr>
+  <w:rt><w:r><w:t>reading</w:t></w:r></w:rt>
+  <w:rubyBase><w:r><w:t>CEDAR</w:t></w:r></w:rubyBase>
+</w:ruby></w:r>
+```
+
+| Original fixture | Word for the web | LibreOffice 25.8.7.3 | Docxodus before / after |
+|---|---|---|---|
+| 11pt base, 6pt guide, raise 11pt | Both strings; baselines 11pt apart | Both strings above/below | Annotation lost / both strings, baselines 11pt apart |
+| Same source with raise 0pt | Both strings on the same baseline | Same geometry as its 11pt-raise rendering | Annotation lost / baseline distance zero |
+| Plain-run control | Not captured | Both strings | Both strings; local complete-page rasters unchanged |
+| Multiple formatted base runs | Not captured | Both layers, with base formatting | Annotation lost / both layers, with run formatting |
+
+Word exports were captured through the web UI from original authored inputs on 2026-10-31.
+Word substituted Times New Roman for requested Liberation Serif, so these establish raise behavior,
+not a font-matched fidelity reference. Word's PDF export failed for the 22pt-raise variant.
+LibreOffice ignores the tested raise values (0, 6, 11, 22pt), so it cannot adjudicate that property.
+It also ignores `hps` when the annotation run has no explicit size, and retains only the last
+annotation run in the tested multi-run guide. The independent benchmark therefore uses an explicit
+guide size and multiple base runs; public-export regressions separately cover multi-run guides.
+For the independently authored `ruby-multiple-base` benchmark, Word centers `needle` over the
+combined bold/plain `LARCH` base (guide center 115.30pt, base center 115.18pt). Docxodus agrees;
+LibreOffice puts the guide at the first run's left edge. This Word capture also substituted Times
+New Roman. The benchmark gates the shared base geometry and complete text, and treats
+LibreOffice's multi-run guide x-position as diagnostic rather than an oracle.
+
+The converter previously read only `rubyBase.Value`, losing `rt` entirely. `ProcessRuby` now
+projects both layers through ordinary run conversion. OOXML gives `hps` precedence over reading
+run sizes, including complex-script sizes; explicit base sizes take precedence over `hpsBaseText`.
+Size resolution precedes formatting assembly so those distinctions survive.
+
+Native HTML ruby is wrapped as an atomic inline pair. Its measured baseline distance is adjusted
+once before pagination, and its signed height contribution follows the authored raise. Long body
+and note paragraphs can split around the pair. Table coverage is continuation between short rows,
+not splitting a single oversized cell paragraph. Exact-spaced, tabbed, bidi, shifted/scripted and
+vertical-alignment variants retain complete readable fallback text and a diagnostic. Nested
+fallback runs do not independently correct the exact-line baseline or enlarge its line boxes.
+
+Tagged PDF preserves the pair's association and semantic order: Chromium 143 uses a `NonStruct`
+subtree for the pair, while Chrome 155 emits `Ruby`/`RT` roles for the same HTML. Raw PDF
+paint/operator order may place annotation text later; consumers should use the structure tree
+or geometric reading order rather than assuming paint order is reading order.
+
+Chromium 143 prints relative-positioned glyph baselines at whole CSS pixels even when the DOM
+retains fractional positioning. The 11pt fixture measures 10.992pt in the DOM and 10.5pt in its
+PDF; public-export tests allow one CSS pixel (0.75pt) in PDF baseline distance while retaining
+0.05pt DOM tolerance. Zero/22pt cases reject an omitted correction. This is a documented print
+precision limit, not a claim of exact Word geometry.

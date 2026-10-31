@@ -48,7 +48,7 @@ const html = await convertDocxToHtml(docxBytes, {
 | Checkbox | `w:ffData` with `w:checkBox` | `[CHECKBOX]` | `unsupported-form` |
 | Text Input | `w:ffData` with `w:textInput` | `[TEXT INPUT]` | `unsupported-form` |
 | Dropdown | `w:ffData` with `w:ddList` | `[DROPDOWN]` | `unsupported-form` |
-| Ruby Annotation | `w:ruby` | `{base text}` | `unsupported-ruby` |
+| Unsupported ruby variant | `w:ruby` | `{base text} ({reading})` | `unsupported-ruby` |
 | Inline drawing the converter cannot draw | `w:drawing/wp:inline` | `[SHAPE]`, `[SMARTART]`, `[CHART]`, `[UNSUPPORTED IMAGE]` or `[DRAWING]` | `unsupported-other` |
 
 ### Inline drawings
@@ -182,7 +182,8 @@ UnsupportedContentType.Other           // "Other"
 - Placeholders are **visual indicators only** - they don't preserve the original content
 - For math equations, consider using a library like MathJax to render the OMML content
 - For form fields, the placeholder doesn't preserve interactivity
-- Ruby annotations show the base text but lose the reading annotation
+- Unsupported ruby variants preserve both base and reading as text; ordinary horizontal ruby
+  renders both layers directly. See [ruby support](./docx_converter.md#ruby-annotations).
 
 ## Related Documentation
 

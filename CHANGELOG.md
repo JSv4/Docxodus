@@ -95,6 +95,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Ruby annotations retain both their base and reading. Ordinary horizontal ruby uses semantic
+  HTML with authored sizes, alignment, language and baseline raise; pagination keeps each pair
+  together while splitting surrounding prose. Unsupported layouts retain both text layers with
+  an explicit diagnostic and continue to honor strict export policy (#1483).
+
 - Preserve every independent VML group textbox in body and running stories, including nested
   coordinate spaces (#1482). PageMap completeness now checks textbox paragraphs inventoried
   from the selected source markup, so conversion-time omissions fail explicitly. Unsupported

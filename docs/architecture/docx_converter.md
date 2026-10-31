@@ -327,6 +327,25 @@ result. Removing rather than replacing them exposes the document's underlying TO
 <a href="url-from-field">field content</a>
 ```
 
+### Ruby annotations
+
+`WmlToHtmlConverter.Ruby.cs` resolves ruby size precedence before formatting assembly: `w:hps`
+overrides annotation run sizes, while an explicit base run size wins over `w:hpsBaseText`.
+Direct horizontal text runs use `ruby` / `rt` / `rp`, retaining run formatting and annotation
+language. A marked inline-block wrapper keeps the pair atomic. The shared line-metrics pass
+measures native ruby baselines after font preparation, shifts the annotation to the authored
+baseline distance, and reserves the corresponding signed change in line height, including
+hidden note registries. Fragment endpoints never enter the pair; line-boundary decisions use
+the base, while annotation ink remains part of layout measurement.
+Chromium's PDF paint path can round the measured baseline distance to CSS pixels; its tagged
+output retains pair association, with role names depending on the Chromium version. See the
+Ruby corner case for the measured bounds.
+
+Vertical ruby alignment, bidi paragraphs, tabs, exact-spaced paragraphs and shifted/scripted
+runs use a complete readable fallback. Its diagnostic participates in the existing strict
+export policy. With placeholders disabled, both text layers still render. Exact fallback
+runs share the enclosing run's baseline correction and use their own natural line heights.
+
 ### Tabs
 
 Before revision acceptance, simplification and formatting, `ExpandLiteralTextTabs` replaces literal
