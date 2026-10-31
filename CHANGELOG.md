@@ -95,6 +95,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Preserve endnote paragraph fonts when flattening them for pagination, keeping their glyph
+  baselines and long-note continuations intact. The fidelity gate now allows candidates to repair
+  unmapped failures on main while retaining all candidate checks and historical protections.
+
 - Consolidation preserves a reviewer’s inline bookmark additions and removals beside independent
   text or equation edits, keeping endpoint order and reviewer ownership through accept/reject (#1426).
 

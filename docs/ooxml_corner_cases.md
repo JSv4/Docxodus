@@ -1641,6 +1641,36 @@ settings-part `notePr` → spec default), `FormatNoteNumber` renders the glyph v
 `ListItemTextGetter_Default.GetListItemText`, and the footnotes/endnotes section `<ol>` carries
 the matching CSS `list-style-type` (`NoteListStyleType`).
 
+### Pagination must preserve an endnote paragraph's computed font
+
+The `notes-endnote` benchmark inherits this paragraph formatting from its defaults:
+
+```xml
+<w:docDefaults>
+  <w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="22"/></w:rPr></w:rPrDefault>
+  <w:pPrDefault><w:pPr><w:spacing w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>
+</w:docDefaults>
+```
+
+Flattening `section.endnotes > ol > li > p` lets a long note continue across pages.
+Its paragraph can get its font from a CSS class or a list ancestor, so an empty
+inline `style.fontSize` does not mean the section's font applies. Copy the attached
+paragraph's computed presentation before detaching it, using the same helper as
+promoted drawings. Substituting the section's 12 pt font for an 11 pt paragraph
+also disables natural-line baseline correction: the original `notes-endnote`
+benchmark moved its text upward by 0.75 pt while leaving its marker unchanged.
+Preserving the paragraph font restores its historical baseline and retains
+automatic-spacing fragmentation. Browser tests compare glyph placement with an
+equivalent body paragraph and verify every word of a continued note.
+
+| Renderer | `NoteText` top, pt |
+|---|---:|
+| LibreOffice 25.8.7.3 | 165.899 |
+| Historical Docxodus | 165.702203 |
+| Docxodus before repair | 164.952203 |
+| Docxodus after repair | 165.702203 |
+| Word | No fresh capture for this case |
+
 ## Layout: Word's line breaking and table sizing have no matching CSS default
 
 ### The behavior

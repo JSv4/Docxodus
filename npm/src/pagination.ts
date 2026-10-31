@@ -2072,8 +2072,7 @@ export class PaginationEngine {
 
         const clone = paragraph.cloneNode(true) as HTMLElement;
         clone.dataset.paginationSafeEndnote = "true";
-        clone.style.fontSize ||= sectionStyle.fontSize;
-        clone.style.lineHeight ||= sectionStyle.lineHeight;
+        this.preserveInheritedPresentation(clone, this.view.getComputedStyle(paragraph));
         clone.style.paddingLeft ||= listStyle.paddingLeft;
 
         // Older/custom producers may put the endnote identity only on the li.
