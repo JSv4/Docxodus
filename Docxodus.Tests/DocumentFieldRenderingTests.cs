@@ -118,6 +118,17 @@ public class DocumentFieldRenderingTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AnExistingCorePropertiesPartWithoutATitlePreservesTheCacheAndReportsIt(bool simple)
+    {
+        var html = Render("TITLE", simple, "body", "Old title", title: null,
+            creator: "Juniper Author", placeholders: true);
+        RemoveDiagnostic(html);
+        Assert.Equal("Before Old title After", Story(html, "body").Value);
+    }
+
+    [Theory]
     [InlineData(false, "TITLE \"Changed title\"")]
     [InlineData(true, "TITLE \"Changed title\"")]
     [InlineData(false, "DOCPROPERTY MissingProperty")]
@@ -179,6 +190,60 @@ public class DocumentFieldRenderingTests
         Assert.Equal(showDeleted ? "Before Old title After" : "Before  After", Story(html, "body").Value);
     }
 
+    [Theory]
+    [InlineData(false, "DATE")]
+    [InlineData(true, "DATE")]
+    [InlineData(false, "HYPERLINK \"https://example.test/juniper\"")]
+    [InlineData(true, "HYPERLINK \"https://example.test/juniper\"")]
+    public void PropertyResolutionLeavesOtherFieldsInTheSameStoryIntact(bool simple, string instruction)
+    {
+        var html = Render("TITLE", simple, "body", "Old title", placeholders: true, mutate: paragraph =>
+            paragraph.Elements().Last().AddBeforeSelf(
+                new XElement(W.r, new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), " / ")),
+                Field(instruction, simple, "Stored result")));
+        Assert.DoesNotContain(html.Descendants(), e => e.Attribute("data-content-type") != null);
+        if (!simple && instruction.StartsWith("HYPERLINK", StringComparison.Ordinal))
+            Assert.Equal("Stored result", Assert.Single(html.Descendants(Xhtml.a)
+                .Where(e => (string?)e.Attribute("href") == "https://example.test/juniper")).Value);
+        Assert.Equal("Before " + Title + " / Stored result After", Story(html, "body").Value);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AnAuthoritativeOuterResultReplacesItsNestedCachedField(bool simple)
+    {
+        var html = Render("TITLE", simple, "body", "Old title", mutate: paragraph =>
+            paragraph.Descendants(W.t).Single(e => e.Value == "Old title").Parent!
+                .ReplaceWith(Field("DATE", !simple, "Nested stale result")));
+        Assert.Equal("Before " + Title + " After", Story(html, "body").Value);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void APropertyFieldInsideAnotherFieldsResultRemainsVisible(bool simple)
+    {
+        var html = Render("TITLE", simple, "body", "Old title", mutate: paragraph =>
+        {
+            var field = paragraph.Elements().Skip(1).SkipLast(1).ToArray();
+            field[0].AddBeforeSelf(FieldChar("begin"), new XElement(W.r,
+                new XElement(W.instrText, " IF 1 = 1 \"Stored result\" \"Other result\" ")), FieldChar("separate"));
+            field[^1].AddAfterSelf(FieldChar("end"));
+        });
+        Assert.Equal("Before " + Title + " After", Story(html, "body").Value);
+    }
+
+    private static XElement[] Field(string instruction, bool simple, string cache, string? locked = null)
+    {
+        var result = new XElement(W.r, new XElement(W.t, cache));
+        return simple ? new[] { new XElement(W.fldSimple, new XAttribute(W.instr, instruction),
+            locked == null ? null : new XAttribute(W.fldLock, locked), result) } : new[] {
+            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"),
+                locked == null ? null : new XAttribute(W.fldLock, locked))),
+            new XElement(W.r, new XElement(W.instrText, instruction)), FieldChar("separate"), result, FieldChar("end") };
+    }
+
     private static XElement FieldChar(string type) =>
         new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, type)));
 
@@ -190,24 +255,18 @@ public class DocumentFieldRenderingTests
 
     private static XElement Render(string instruction, bool simple, string story, string cache,
         string? locked = null, Action<XElement>? mutate = null, string? title = Title,
-        bool placeholders = false, bool showDeleted = true)
+        bool placeholders = false, bool showDeleted = true, string? creator = null)
     {
         using var stream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
         {
             document.PackageProperties.Title = title;
+            document.PackageProperties.Creator = creator;
             var main = document.AddMainDocumentPart();
-            var result = new XElement(W.r, new XElement(W.t, cache));
-            var field = simple ? new object[] { new XElement(W.fldSimple, new XAttribute(W.instr, instruction),
-                locked == null ? null : new XAttribute(W.fldLock, locked), result) } : new object[] {
-                new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"),
-                    locked == null ? null : new XAttribute(W.fldLock, locked))),
-                new XElement(W.r, new XElement(W.instrText, instruction)),
-                new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate"))), result,
-                new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "end"))) };
             var paragraph = new XElement(W.p,
                 new XElement(W.r, new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), "Before ")),
-                field, new XElement(W.r, new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), " After")));
+                Field(instruction, simple, cache, locked),
+                new XElement(W.r, new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), " After")));
             mutate?.Invoke(paragraph);
             var body = new XElement(W.body);
             if (story == "body") body.Add(paragraph);
