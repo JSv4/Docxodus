@@ -99,6 +99,8 @@ All notable changes to this project will be documented in this file.
   baselines and long-note continuations intact. The fidelity gate now allows candidates to repair
   unmapped failures on main while retaining all candidate checks and historical protections.
 
+- Follow vertical table merges by logical grid interval, including preceding spans and omitted leading columns; preserve unmatched continuation cells instead of silently dropping their text (#1489).
+
 - Keep reserved continuation notices out of ordinary footnote and endnote lists, including positive-id definitions with no citations (#1485).
 
 - Consolidation preserves a reviewer’s inline bookmark additions and removals beside independent
