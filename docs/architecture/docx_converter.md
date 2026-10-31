@@ -376,6 +376,11 @@ second right or left stop inside the indent then lands on its own stop (issue #1
 end only because a right-aligned stretch ended on such a stop does not count as wrapped text.
 If text after the final left tab would exceed the column edge, the paragraph keeps the ordinary wrapping
 path. Forcing that text into the same nowrap box would send it past the page and lose visible words.
+Likewise, a right tab whose following text exceeds both the column and its authored stop keeps
+ordinary, fragmentable flow (#1488). Its following width is the sum of the actual runs' resolved
+fonts and sizes, with letter spacing included by the shared run measurement. A short tail whose
+browser glyphs are wider than that estimate can shrink and wrap within its segment; fitting tails
+still end on their stop. Deliberate overhanging stops retain their existing treatment.
 
 Complex fields stay on the flex path: their begin, instruction, separator and end runs draw nothing, so a
 table-of-contents page number held in a `PAGEREF` field ends on the stop like plain text (issue #1285).
@@ -389,6 +394,9 @@ segment instead starts at the left indent and reaches the stop. The text wraps i
 and the segment aligns its last line with the following text (`align-items: last baseline`), so the page
 number ends on the stop beside the last title line. The tab takes no room after the title's last word;
 its leader is as wide as the segment and is clipped (`overflow-x: clip`) where the number begins.
+The prefix keeps its minimum word width, and the segment can wrap onto another flex line if
+the following text leaves less room than that. This prevents an underestimated tail from
+collapsing the clipped title to zero width; fitting page-number lines retain their geometry.
 
 Bidirectional paragraphs, breaks, active comment/annotation ranges (including a bookmark
 that opens a rendered annotation) and tab runs with visibility, revision or exceptional geometry retain

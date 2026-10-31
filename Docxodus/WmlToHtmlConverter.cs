@@ -7901,6 +7901,12 @@ namespace Docxodus
                 }
                 var tabSpan = CreateFlexibleTabRun(wordDoc, settings, tabRun)!;
                 var followingSpan = TextSpan(following);
+                // Font estimates can still be narrower than the browser's glyphs. Allow
+                // that short tail to wrap within the segment instead of clipping it.
+                var followingStyle = followingSpan.Annotation<Dictionary<string, string>>()!;
+                followingStyle["flex-shrink"] = "1";
+                followingStyle["min-width"] = "0";
+                followingStyle["white-space"] = "normal";
                 var overhang = (decimal?)tab.Attribute(TabOverhangAttribute);
                 var wrappedWidth = (decimal?)tab.Attribute(TabWrappedSegmentWidthAttribute);
                 var segment = wrappedWidth is { } wrapped
@@ -7971,14 +7977,15 @@ namespace Docxodus
             var clip = new XElement(Xhtml.span, text);
             clip.AddAnnotation(new Dictionary<string, string>
             {
-                { "flex-grow", "1" }, { "flex-shrink", "1" }, { "flex-basis", "0" }, { "min-width", "0" },
+                { "flex-grow", "1" }, { "flex-shrink", "1" }, { "flex-basis", "0" }, { "min-width", "min-content" },
                 { "overflow-x", "clip" }, { "text-decoration", "inherit" },
             });
             var segment = new XElement(Xhtml.span, clip, followingSpan);
             // The segment's first line shares the paragraph's line, so its top meets the line top.
             segment.AddAnnotation(new Dictionary<string, string>
             {
-                { "display", "inline-flex" }, { "align-items", "last baseline" }, { "vertical-align", "top" },
+                { "display", "inline-flex" }, { "flex-wrap", "wrap" },
+                { "align-items", "last baseline" }, { "vertical-align", "top" },
                 { "text-indent", "0" }, { "width", InchesCss(width) },
             });
             return segment;
@@ -9944,17 +9951,13 @@ namespace Docxodus
                                 z.Name != W.cr)
                             .ToList();
 
-                        var textAfterTab = textElementsToMeasure
-                            .Where(z => (z.Name == W.t || z.Name == W.delText))
-                            .Select(t => (string)t)
-                            .StringConcatenate();
-
-                        var dummyRun2 = new XElement(W.r,
-                            fontNameAtt,
-                            runContainingTabToReplace.Elements(W.rPr),
-                            new XElement(W.t, textAfterTab));
-
-                        var widthOfTextAfterTab = CalcWidthOfRunInTwips(dummyRun2);
+                        // Following text can have a different size or font from the tab run.
+                        var widthOfTextAfterTab = textElementsToMeasure
+                            .Where(t => t.Name == W.t || t.Name == W.delText)
+                            .Sum(t => CalcWidthOfRunInTwips(new XElement(W.r,
+                                t.Parent!.Attribute(PtOpenXml.FontName) ?? fontNameAtt,
+                                t.Parent.Attribute(PtOpenXml.LanguageType), t.Parent.Elements(W.rPr),
+                                new XElement(W.t, t.Value))));
                         var delta2 = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) - widthOfTextAfterTab - twipCounter;
                         if (delta2 < 0)
                             delta2 = 0;
@@ -9966,6 +9969,10 @@ namespace Docxodus
                             GetLeader(tabAfterText));
                         var stopTwips = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!);
                         twipCounter = Math.Max(stopTwips, twipCounter + widthOfTextAfterTab);
+                        // A following stretch wider than the line must wrap as ordinary runs,
+                        // not become an unbounded atomic flex box. Preserve authored overhangs.
+                        if (lineWidthTwips is { } followingLineEnd && twipCounter > Math.Max(followingLineEnd, stopTwips))
+                            currentElement.SetAttributeValue(TabFollowingTextWrapsAttribute, true);
                         rightStopReached = Math.Max(rightStopReached, stopTwips);
                         // A right stop may lie inside the right indent or past the column edge: the
                         // right-aligned text then ends past the line, on the stop. Text estimated to
@@ -10306,7 +10313,7 @@ namespace Docxodus
                 if (IsHexColor((string?)line?.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val")))
                     width -= 2m * Math.Max(0L, (long?)line!.Attribute("w") ?? 12700) / 635m;
             }
-            else if (content.Ancestors(VML.shape).FirstOrDefault() is { } shape
+            else if (content.Ancestors().FirstOrDefault(IsVmlShape) is { } shape
                 && WidthInPoints(((string?)shape.Attribute("style") ?? "").Split(';')) is { } points
                 && float.IsFinite(points))
             {
@@ -10478,6 +10485,11 @@ namespace Docxodus
             if (runText.Length == 0 && tabLength == 0)
                 return (int)checkboxWidth;
 
+            // The rendered run's letter spacing also advances the pen, including in
+            // the font-estimation path used by WASM. Count text elements before repetition.
+            var spacingWidth = new StringInfo(runText).LengthInTextElements *
+                ((decimal?)rPr.Element(W.spacing)?.Attribute(W.val) ?? 0m);
+
             int multiplier = 1;
             if (runText.Length <= 2)
                 multiplier = 100;
@@ -10524,7 +10536,7 @@ namespace Docxodus
                 w = MetricsGetter.GetTextWidth(fontName, bold, italic, sz, runText);
             }
 
-            return (int)(w / 96m * 1440m / multiplier + tabLength * 1440m + checkboxWidth);
+            return (int)Math.Max(0m, w / 96m * 1440m / multiplier + spacingWidth + tabLength * 1440m + checkboxWidth);
         }
 
         private static void InsertAppropriateNonbreakingSpaces(WordprocessingDocument wordDoc)
