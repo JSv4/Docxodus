@@ -2917,6 +2917,12 @@ interface ClippedBodyPage {
  * with a smaller budget for the page (issue #848).
  */
 function findClippedContent(document: Document): ClippedBodyPage[] {
+  for (const column of Array.from(document.querySelectorAll<HTMLElement>(".page-comment-margin"))) {
+    if (column.scrollHeight > column.clientHeight + 1) {
+      fail("pagination_failure", "running_story_placement", "A margin comment is clipped in the final page tree.",
+        "Report the unsupported comment structure; overflowing threads must continue after the document.");
+    }
+  }
   for (const footnotes of Array.from(document.querySelectorAll<HTMLElement>(".page-footnotes"))) {
     if (footnotes.scrollHeight <= footnotes.clientHeight + 1) continue;
     const boundary = footnotes.getBoundingClientRect().bottom;
@@ -3825,6 +3831,7 @@ export async function convertDocxToPaginatedHtml(
           showPageNumbers: false,
           pageGap: 0,
           fragmentParagraphs: true,
+          commentOverflow: "appendix",
           // Running-story placement below changes the visible fragment set, and this path always
           // restamps through normalizePageMapFragmentIdentities(); stamping inside paginate()
           // would be a second full forced-layout pass whose result is immediately overwritten.

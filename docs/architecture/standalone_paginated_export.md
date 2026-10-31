@@ -180,11 +180,18 @@ staging tree. It has these invariants:
 - reopening offline must reproduce the same logical page count and section/page geometry without
   rerunning WASM or pagination.
 
-Margin-profile comment columns remain keyboard-focusable and scrollable in delivered HTML,
-including notes longer than the page's body band. Standalone export retains the physical-margin
-placement, independently of the read-only viewer's outside-panel default. A PDF shows a static
-margin viewport; use the endnotes comment profile when the complete comment must flow into printed
-pages. Interactive overflow is therefore checked in the delivered HTML alongside PDF page geometry.
+Standalone margin-profile export uses `PaginationOptions.commentOverflow: "appendix"` (#1490).
+A column that fits stays beside its original page. When a column exceeds its page band, its complete
+threads move to appended pages and the margin keeps a link to them. Repeated threads are appended
+once, including comments selected by body, running-story and note markers. HTML and PDF share this
+same complete page tree; a static PDF never relies on a scroll position to reveal a comment.
+
+The appendix uses the last page's paper geometry and a separate presentation section without
+running stories. Its existing rendered comment headers and paragraphs pass through ordinary
+paragraph pagination, retaining paragraph and ancestor-thread source identities on continuations.
+Appendix pages count toward export limits and NUMPAGES. Return links activate only after final
+clones exist. A final margin-overflow check rejects a remaining clipped column. The read-only
+viewer's outside panels retain scrolling, and balloon overflow keeps its independent policy.
 
 The finalization order is normative: paginate pristine converted content; clone/materialize the
 fixed page tree; remove staging, containment, viewer, selection, and other transient state; attach

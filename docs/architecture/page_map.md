@@ -84,6 +84,16 @@ can also select it explicitly with `commentColumnPlacement: "margin"` when comme
 are required. Width and gap options affect the outside panel, and physical page dimensions remain
 unchanged.
 
+Standalone physical-margin export appends columns that cannot print in full (#1490). These
+comments remain ordinary PageMap sources: each projected paragraph retains its `p:cmt` identity,
+and inner spans carry its comment and ancestor-thread identities through every Range split.
+Hiding a metadata header therefore cannot hide the comment's owner from the map. The added
+presentation section has the last paper geometry and no running stories; it does not change the
+DOCX section model. Interactive scrolling remains the default `commentOverflow: "scroll"` policy;
+the exporter selects `"appendix"`. Appendix paragraphs always permit fragmentation, independently
+of the body paragraph policy. Projected reply headers retain ancestor owners around their flex
+layout, including when a header occupies a page by itself.
+
 ## Source identity and clones
 
 `data-anchor` remains the bare Unid used by the editor, and an active bare value is unique across
