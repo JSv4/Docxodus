@@ -1627,6 +1627,7 @@ export class PaginationEngine {
     const unpaintedAnchorIds = new Set<string>();
     const clippedTextAnchorIds = new Set<string>();
     const emittedFragmentCounts = new Map<string, number>();
+    const partialTextBoxInk = new Map<HTMLElement, boolean>();
     for (const page of this.lastPages) {
       this.checkpoint();
       const pageRect = page.element.getBoundingClientRect();
@@ -1665,7 +1666,7 @@ export class PaginationEngine {
           const collapsedBlankLine = rect.height === 0 && style.fontSize === "0px" && rendersOnlyItsLine(element);
           if (collapsedBlankLine || clippedAwayByExactRow(element, rect) || blankLineClippedByTextBox(this.view, element, rect, pageRect))
             unpaintedAnchorIds.add(anchorId);
-          else if (this.isInitiallyClippedText(element, pageRect, page.element)) {
+          else if (this.isInitiallyClippedText(element, pageRect, page.element, partialTextBoxInk)) {
             unpaintedAnchorIds.add(anchorId);
             clippedTextAnchorIds.add(anchorId);
           }
@@ -1804,7 +1805,24 @@ export class PaginationEngine {
     return [...this.lastClippedTextAnchors];
   }
 
-  private captureSourceTextClip(element: HTMLElement, paper?: DOMRect, paragraph?: HTMLElement | null): void {
+  private sourceTextPlacementBounds(owner: HTMLElement, rects: DOMRect[], paper: DOMRect,
+    partialInk?: Map<HTMLElement, boolean>): number[] | undefined {
+    const bounds = sourcePlacementBounds(owner.getBoundingClientRect(), rects, paper);
+    if (!bounds) return;
+    let partial = partialInk?.get(owner);
+    if (partial === undefined) {
+      // A hidden paragraph cannot excuse sibling ink cut by the paper edge. Cache only within
+      // one placement batch or read-only map pass; later layout must measure the owner again.
+      partial = sourceTextRects(this.view, owner, () => this.checkpoint()).some(rect =>
+        rect.right > paper.left && rect.left < paper.right && rect.bottom > paper.top && rect.top < paper.bottom
+        && (rect.left < paper.left || rect.right > paper.right || rect.top < paper.top || rect.bottom > paper.bottom));
+      partialInk?.set(owner, partial);
+    }
+    return partial ? undefined : bounds;
+  }
+
+  private captureSourceTextClip(element: HTMLElement, paper?: DOMRect, paragraph?: HTMLElement | null,
+    partialInk?: Map<HTMLElement, boolean>): void {
     if (!paper) {
       if (this.inspectedSourceText.has(element)) return;
       this.inspectedSourceText.add(element);
@@ -1845,7 +1863,7 @@ export class PaginationEngine {
       }
     }
     if (paper && originalOutside && eligibleSourceTextBox(owner, true)) {
-      const placement = sourcePlacementBounds(owner.getBoundingClientRect(), rects, paper);
+      const placement = this.sourceTextPlacementBounds(owner, rects, paper, partialInk);
       if (placement) {
         let host: { id: string; bounds: number[] } | undefined;
         if (owner.dataset.docxAnchorVRelative === 'paragraph') {
@@ -1875,7 +1893,8 @@ export class PaginationEngine {
       this.initiallyClippedText.set(anchorId, { boxId, text });
   }
 
-  private isInitiallyClippedText(element: HTMLElement, page: DOMRect, pageElement: HTMLElement): boolean {
+  private isInitiallyClippedText(element: HTMLElement, page: DOMRect, pageElement: HTMLElement,
+    partialInk: Map<HTMLElement, boolean>): boolean {
     const proof = this.initiallyClippedText.get(element.dataset.sourceAnchorId ?? '');
     if (!proof || (element.textContent ?? '').replace(/\s/g, '') !== proof.text) return false;
     const rects = sourceTextRects(this.view, element, () => this.checkpoint());
@@ -1889,7 +1908,7 @@ export class PaginationEngine {
       }
       const owner = element.parentElement?.closest<HTMLElement>('[data-docx-textbox-source-position="true"]');
       if (!owner || owner.dataset.docxSourceClipId !== proof.boxId || !eligibleSourceTextBox(owner, true)) return false;
-      const bounds = sourcePlacementBounds(owner.getBoundingClientRect(), rects, page);
+      const bounds = this.sourceTextPlacementBounds(owner, rects, page, partialInk);
       return bounds?.length === proof.placement.length
         && bounds.every((value, index) => Math.abs(value - proof.placement![index]) < 0.1);
     }
@@ -6924,8 +6943,9 @@ export class PaginationEngine {
       anchor.style.left = `${left}pt`;
       anchor.style.top = `${top}pt`;
       anchor.style.margin = '0';
+      const partialTextBoxInk = new Map<HTMLElement, boolean>();
       for (const source of Array.from(anchor.querySelectorAll<HTMLElement>('[data-source-anchor-id]')))
-        this.captureSourceTextClip(source, pageRect, paragraph);
+        this.captureSourceTextClip(source, pageRect, paragraph, partialTextBoxInk);
     }
 
     // relativeHeight is an unsigned 32-bit value; using it directly as a CSS z-index would

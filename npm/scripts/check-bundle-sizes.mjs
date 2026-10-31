@@ -29,8 +29,8 @@ const budgetsKiB = {
   // Body-table fitting on current main measures 137.128/137.164 KiB; retain a 138 KiB gate.
   // Zero-font source coverage brings the ESM bundle just above 138 KiB.
   // Whole inline-layout continuation adds 0.25 KiB (138.947 -> 139.196 on main).
-  // Authored textbox ink verification adds 275/290/293 bytes to embed/IIFE/pagination
-  // (145.213/145.278/42.077 KiB). Raise only these exhausted gates by 0.5 KiB.
+  // Authored textbox ink verification adds 410/416/432 bytes to embed/IIFE/pagination
+  // (145.345/145.401/42.213 KiB). Raise only these exhausted gates by 0.5 KiB.
   'embed.bundle.js': 145.5,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.

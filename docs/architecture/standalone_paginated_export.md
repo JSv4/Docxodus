@@ -551,7 +551,8 @@ horizontal column/margin with vertical paragraph coordinates, retain their exist
 Before pagination, the engine binds the box identity, anchor metadata, transforms and text
 geometry. Final placement must preserve those bounds; paragraph-relative placement also
 preserves the source host geometry. At viewer zoom, both original and current ink must be off
-paper, so glyph rounding cannot hide originally visible text. This does not admit internal
+paper, so glyph rounding cannot hide originally visible text. Both placement and final mapping
+also refuse this proof if any sibling ink crosses the paper edge. This does not admit internal
 clipping in implicit boxes or clipping by an ordinary flow band.
 
 Each newly admitted nonblank omission produces a `source_text_clipped` warning with its canonical
