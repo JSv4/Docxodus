@@ -3501,11 +3501,11 @@ export class PaginationEngine {
       && (style.right === "auto" || parseFloat(style.right) === 0));
   }
 
-  /** Converter shape placeholders and tab segments can move as complete inline boxes. */
+  /** Converter shapes, tabs and ruby pairs can move as complete inline boxes. */
   private rangeAtomicInlineBoxes(paragraph: HTMLElement): Set<HTMLElement> {
     const boxes = new Set<HTMLElement>();
     for (const marker of Array.from(paragraph.querySelectorAll<HTMLElement>(
-      '[data-docx-shape="unrendered"], [data-docx-tab]',
+      '[data-docx-shape="unrendered"], [data-docx-tab], [data-docx-ruby="true"]',
     ))) {
       let box: HTMLElement | null = marker;
       if (marker.hasAttribute("data-docx-tab")) {
@@ -3514,13 +3514,17 @@ export class PaginationEngine {
           if (this.view.getComputedStyle(box).display === "inline-flex") break;
         }
         if (!box || box === paragraph) continue;
-      } else if (marker.children.length || this.view.getComputedStyle(marker).display !== "inline-block") {
+      } else if ((marker.dataset.docxRuby === "true"
+          ? marker.children.length !== 1 || marker.firstElementChild?.localName !== "ruby"
+          : marker.children.length > 0) || this.view.getComputedStyle(marker).display !== "inline-block") {
         continue;
       }
       if (box.localName !== "span" || box.querySelector("br, img")) continue;
       if ([box, ...Array.from(box.querySelectorAll<HTMLElement>("*"))].some((element) => {
         const style = this.view.getComputedStyle(element);
-        return !this.hasRangeFragmentSafePosition(element, style)
+        const rubyAnnotation = marker.dataset.docxRuby === "true" && element.localName === "rt"
+          && style.position === "relative" && (style.left === "auto" || parseFloat(style.left) === 0);
+        return (!rubyAnnotation && !this.hasRangeFragmentSafePosition(element, style))
           || style.float !== "none" || style.transform !== "none";
       })) continue;
       boxes.add(box);
@@ -3616,6 +3620,9 @@ export class PaginationEngine {
     }
     if (!forward) texts.reverse();
     for (const text of texts) {
+      // The reading shares its base's line. Its raised glyphs must not manufacture a line
+      // boundary for keep-lines or widow decisions; ordinary fit measurement still sees them.
+      if (text.parentElement?.closest('[data-docx-ruby="true"] rt, [data-docx-ruby="true"] rp')) continue;
       const start = text === range.startContainer ? range.startOffset : 0;
       const end = text === range.endContainer ? range.endOffset : text.data.length;
       for (let k = 0; k < end - start; k++) {

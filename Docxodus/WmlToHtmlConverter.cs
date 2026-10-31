@@ -1182,6 +1182,7 @@ namespace Docxodus
                 AddImpliedFootnoteSeparators(wordDoc);
             MarkStructuralTableEndParagraphs(wordDoc);
             ResolveTableIndentInputs(wordDoc);
+            ResolveRubySizes(wordDoc);
             // Balloon wording compares direct properties, which assembly replaces (issue #1300).
             if (htmlConverterSettings is { RenderTrackedChanges: true, RevisionPresentation: RevisionPresentation.Word })
             {
@@ -3855,12 +3856,7 @@ namespace Docxodus
 
             // Handle ruby annotations (East Asian text)
             if (element.Name == W.ruby)
-            {
-                // Extract the base text if available
-                var baseText = element.Descendants(W.rubyBase).FirstOrDefault()?.Value ?? "";
-                var placeholderText = string.IsNullOrEmpty(baseText) ? "[RUBY]" : baseText;
-                return CreateUnsupportedContentPlaceholder(settings, element, UnsupportedContentType.RubyAnnotation, placeholderText);
-            }
+                return ProcessRuby(wordDoc, settings, element);
 
             // Ignore element.
             return null;

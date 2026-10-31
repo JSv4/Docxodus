@@ -136,7 +136,51 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
   for (const { element, lineHeight } of targets) {
     element.style.setProperty("line-height", `${lineHeight.toFixed(4)}px`);
   }
+  positionRubyAnnotations(root);
   return targets.length;
+}
+
+/** Word's ruby raise is a baseline distance. Keep native horizontal ruby layout, moving only
+ * its annotation and reserving the same signed change in the surrounding line's height. */
+function positionRubyAnnotations(root: Element): void {
+  const document = root.ownerDocument, view = document.defaultView!;
+  for (const wrapper of Array.from(root.querySelectorAll<HTMLElement>('[data-docx-ruby="true"]'))) {
+    if (wrapper.dataset.docxRubyPositioned === "true") continue;
+    const raise = Number(wrapper.dataset.docxRubyRaise);
+    const annotation = wrapper.querySelector<HTMLElement>("ruby > rt");
+    if (!annotation || !Number.isFinite(raise) || raise < 0) continue;
+    // Notes can still be in a hidden registry. Copy resolved presentation into a measurable
+    // clone, including every styled run, rather than reading their zero-sized rectangles.
+    const clone = wrapper.cloneNode(true) as HTMLElement;
+    const originals = [wrapper, ...Array.from(wrapper.querySelectorAll<HTMLElement>("*"))];
+    const copies = [clone, ...Array.from(clone.querySelectorAll<HTMLElement>("*"))];
+    originals.forEach((element, index) => {
+      const style = view.getComputedStyle(element);
+      for (const property of ["font-family", "font-size", "font-style", "font-weight", "font-stretch",
+        "line-height", "letter-spacing", "word-spacing", "white-space", "direction"])
+        copies[index].style.setProperty(property, style.getPropertyValue(property));
+    });
+    const base = clone.querySelector<HTMLElement>("[data-docx-ruby-base]");
+    const rt = clone.querySelector<HTMLElement>("ruby > rt");
+    if (!base || !rt) continue;
+    const host = document.createElement("div");
+    host.style.cssText = "position:absolute;left:-100000px;top:0;visibility:hidden;width:max-content;";
+    host.append(clone);
+    (document.body ?? document.documentElement).append(host);
+    const marker = () => {
+      const span = document.createElement("span");
+      span.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline;margin:0;padding:0;border:0";
+      return span;
+    };
+    const baseMarker = marker(), annotationMarker = marker();
+    base.append(baseMarker); rt.append(annotationMarker);
+    const shift = baseMarker.getBoundingClientRect().top - annotationMarker.getBoundingClientRect().top - raise * 96 / 72;
+    host.remove();
+    annotation.style.position = "relative";
+    annotation.style.top = `${shift}px`;
+    wrapper.style.marginTop = `${-shift}px`;
+    wrapper.dataset.docxRubyPositioned = "true";
+  }
 }
 
 /** The elements the converter writes a Word paragraph as. */
