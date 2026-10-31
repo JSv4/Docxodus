@@ -5506,7 +5506,13 @@ not splitting a single oversized cell paragraph. Exact-spaced, tabbed, bidi, shi
 vertical-alignment variants retain complete readable fallback text and a diagnostic. Nested
 fallback runs do not independently correct the exact-line baseline or enlarge its line boxes.
 
-Tagged Chromium PDF preserves `Ruby`/`RT` association and semantic order. Raw PDF paint/operator
-order may place annotation text later; Poppler's normal/layout extraction agrees with the Word
-captures. Consumers should use the structure tree or geometric reading order rather than assuming
-paint order is reading order.
+Tagged PDF preserves the pair's association and semantic order: Chromium 143 uses a `NonStruct`
+subtree for the pair, while Chrome 155 emits `Ruby`/`RT` roles for the same HTML. Raw PDF
+paint/operator order may place annotation text later; consumers should use the structure tree
+or geometric reading order rather than assuming paint order is reading order.
+
+Chromium 143 prints relative-positioned glyph baselines at whole CSS pixels even when the DOM
+retains fractional positioning. The 11pt fixture measures 10.992pt in the DOM and 10.5pt in its
+PDF; public-export tests allow one CSS pixel (0.75pt) in PDF baseline distance while retaining
+0.05pt DOM tolerance. Zero/22pt cases reject an omitted correction. This is a documented print
+precision limit, not a claim of exact Word geometry.

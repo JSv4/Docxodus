@@ -337,6 +337,9 @@ measures native ruby baselines after font preparation, shifts the annotation to 
 baseline distance, and reserves the corresponding signed change in line height, including
 hidden note registries. Fragment endpoints never enter the pair; line-boundary decisions use
 the base, while annotation ink remains part of layout measurement.
+Chromium's PDF paint path can round the measured baseline distance to CSS pixels; its tagged
+output retains pair association, with role names depending on the Chromium version. See the
+Ruby corner case for the measured bounds.
 
 Vertical ruby alignment, bidi paragraphs, tabs, exact-spaced paragraphs and shifted/scripted
 runs use a complete readable fallback. Its diagnostic participates in the existing strict

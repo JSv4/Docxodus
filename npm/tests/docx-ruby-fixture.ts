@@ -1,13 +1,13 @@
 import { storedZip, xml, W_NS as w, R_NS as r } from './docx-zip.js';
 
-export type RubyFixture = 'simple' | 'zero-raise' | 'multiple' | 'long' | 'plain' | 'long-plain' | 'vertical' | 'tab';
+export type RubyFixture = 'simple' | 'zero-raise' | 'high-raise' | 'multiple' | 'long' | 'plain' | 'long-plain' | 'vertical' | 'tab';
 
 export function rubyDocx(kind: RubyFixture): Uint8Array {
   const run = (text: string, properties = '') => `<w:r><w:rPr>${properties}</w:rPr><w:t xml:space="preserve">${text}</w:t></w:r>`;
   const multiple = kind === 'multiple', plain = kind === 'plain' || kind === 'long-plain';
   const pair = plain ? run('CEDAR reading') : `<w:r><w:ruby><w:rubyPr>
     <w:rubyAlign w:val="${kind === 'vertical' ? 'rightVertical' : 'center'}"/><w:hps w:val="12"/>
-    <w:hpsRaise w:val="${kind === 'zero-raise' ? '0' : '22'}"/><w:hpsBaseText w:val="22"/><w:lid w:val="en-US"/></w:rubyPr>
+    <w:hpsRaise w:val="${kind === 'zero-raise' ? '0' : kind === 'high-raise' ? '44' : '22'}"/><w:hpsBaseText w:val="22"/><w:lid w:val="en-US"/></w:rubyPr>
     <w:rt>${multiple ? run('read', '<w:b/>') + run('ing', '<w:i/>') : run('reading')}</w:rt>
     <w:rubyBase>${multiple ? run('CE', '<w:b/>') + run('DAR') : run('CEDAR')}</w:rubyBase></w:ruby></w:r>`;
   const words = Array.from({ length: 100 }, (_, i) => `Pine${String(i).padStart(3, '0')}`);
