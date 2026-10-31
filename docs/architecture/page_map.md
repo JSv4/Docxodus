@@ -120,6 +120,14 @@ and notes are presentation fragments: they do not duplicate the active `data-anc
 copies of a table's header rows (`w:tblHeader`) that open each page a split table continues on
 (`data-docx-repeated-header-row`, issue #1171): the row has one fragment per page it opens.
 
+Bordered footnote paragraphs use the body's shared border-group fragmenter (#1491), with each
+candidate measured in the actual note payload. Both the citation page and later continuation
+pages and nested table cells use that path. Range fragments retain the paragraph's source identity; only the group's
+top/bottom border at an internal page break is omitted. The footnote path remains independent
+of the body paragraph-fragmentation option. Explicit line keeps retain the existing fresh-band
+retry policy; a kept heading stays with a nonempty prefix of the following paragraph. Indivisible
+overflow still fails export.
+
 Margin-note copies strip duplicate element IDs. Their generated return links are resolved only
 after all pages exist, against one actual rendered reading-content reference. Repeated notes can
 return to the same reference without adding another bookmark target or editor anchor. Link

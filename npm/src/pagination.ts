@@ -4080,40 +4080,10 @@ export class PaginationEngine {
       this.stagingElement.appendChild(host);
     }
     try {
-      if (!this.isBorderGroup(group)) return null;
-      const paragraphs = Array.from(group.children) as HTMLElement[];
-      const part = (content: HTMLElement[], open: "bottom" | "top") => {
-        const wrapper = group.cloneNode(false) as HTMLElement;
-        wrapper.style.setProperty(`border-${open}`, "none", "important");
-        wrapper.style.setProperty(`padding-${open}`, "0", "important");
-        wrapper.style.setProperty(`margin-${open}`, "0", "important");
-        omitPaintedBorderSide(wrapper, open);
-        for (const paragraph of content) wrapper.appendChild(paragraph);
-        return wrapper;
-      };
-      const fits = (content: HTMLElement[]) => effectiveMarginTopPt
-        + this.measureElement(part(content, "bottom"), dims, block.sectionIndex).heightPt <= availableHeightPt;
-      const clones = (from: number, to: number) => paragraphs.slice(from, to).map(p => p.cloneNode(true) as HTMLElement);
-
-      // Whole paragraphs that fit, never ending after one that keeps with its next.
-      let whole = 0;
-      while (whole + 1 < paragraphs.length && fits(clones(0, whole + 1))) whole++;
-      while (whole > 0 && paragraphs[whole - 1].dataset.keepWithNext === "true") whole--;
-
-      let head: HTMLElement[] = clones(0, whole);
-      let tail: HTMLElement[] = clones(whole, paragraphs.length);
-      const next = paragraphs[whole];
-      if (next.dataset.keepWithNext !== "true" && this.canRangeFragmentParagraph(next, false, true)) {
-        const split = this.splitParagraphAtLargestFit(next, (part) => fits([...clones(0, whole), part]));
-        if (split.kind === "split") {
-          head = [...head, split.head];
-          tail = [split.tail, ...clones(whole + 1, paragraphs.length)];
-        }
-      }
-      if (head.length === 0) return null;
-      // Word does not repeat a paragraph's space before at the top of the page the rest moves to.
-      tail[0].style.setProperty("margin-top", "0", "important");
-      return [part(head, "bottom"), part(tail, "top")].map(element => ({
+      const split = this.splitBorderGroup(group, head => effectiveMarginTopPt
+        + this.measureElement(head, dims, block.sectionIndex).heightPt <= availableHeightPt, { bodyParagraph: true });
+      if (!split) return null;
+      return [split.head, split.tail].map(element => ({
         ...this.measureElement(element, dims, block.sectionIndex),
         element,
         keepWithNext: false,
@@ -4124,6 +4094,58 @@ export class PaginationEngine {
     } finally {
       host?.remove();
     }
+  }
+
+  /** Shared open-border fragmentation, measured in the caller's body or footnote context. */
+  private splitBorderGroup(
+    group: HTMLElement,
+    fitsCandidate: (head: HTMLElement) => boolean,
+    options: { bodyParagraph?: boolean; relaxKeepLines?: boolean; forceProgress?: boolean } = {},
+  ): { head: HTMLElement; tail: HTMLElement } | null {
+    if (!this.isBorderGroup(group)) return null;
+    const paragraphs = Array.from(group.children) as HTMLElement[];
+    const part = (content: HTMLElement[], open: "bottom" | "top") => {
+      const wrapper = group.cloneNode(false) as HTMLElement;
+      wrapper.style.setProperty(`border-${open}`, "none", "important");
+      wrapper.style.setProperty(`padding-${open}`, "0", "important");
+      wrapper.style.setProperty(`margin-${open}`, "0", "important");
+      omitPaintedBorderSide(wrapper, open);
+      for (const paragraph of content) wrapper.appendChild(paragraph);
+      return wrapper;
+    };
+    const fits = (content: HTMLElement[]) => fitsCandidate(part(content, "bottom"));
+    const clones = (from: number, to: number) => paragraphs.slice(from, to).map(p => p.cloneNode(true) as HTMLElement);
+
+    // Keep a fitting heading with a nonempty fragment of the paragraph it introduces.
+    let whole = 0;
+    while (whole + 1 < paragraphs.length && fits(clones(0, whole + 1))) whole++;
+    let head = clones(0, whole);
+    let tail = clones(whole, paragraphs.length);
+    const next = paragraphs[whole];
+    const relaxKeepLines = options.relaxKeepLines
+      && paragraphs.slice(0, whole).every(p => p.dataset.keepWithNext === "true");
+    let divided = false;
+    if (this.canRangeFragmentParagraph(next, !options.bodyParagraph, options.bodyParagraph, relaxKeepLines)) {
+      const split = this.splitParagraphAtLargestFit(next, candidate => fits([...clones(0, whole), candidate]), {
+        emergencyGraphemeBreaks: options.forceProgress && whole === 0,
+        forceFirstOnNoFit: options.forceProgress && whole === 0,
+        preserveWidowLines: relaxKeepLines && next.dataset.widowControl !== "false",
+      });
+      if (split.kind === "split") {
+        head.push(split.head);
+        tail = [split.tail, ...clones(whole + 1, paragraphs.length)];
+        divided = true;
+      }
+    }
+    if (!divided) {
+      while (whole > 0 && paragraphs[whole - 1].dataset.keepWithNext === "true") whole--;
+      head = clones(0, whole);
+      tail = clones(whole, paragraphs.length);
+    }
+    if (head.length === 0) return null;
+    // Do not repeat a paragraph's space before at the top of its continuation.
+    tail[0].style.setProperty("margin-top", "0", "important");
+    return { head: part(head, "bottom"), tail: part(tail, "top") };
   }
 
   /**
@@ -4779,7 +4801,8 @@ export class PaginationEngine {
             });
             if (paragraph.kind === "split") split = paragraph;
           } else {
-            split = this.splitTableContent(child, fitsChild, false, relaxKeepLines);
+            split = this.splitBorderGroup(child, fitsChild, { relaxKeepLines })
+              ?? this.splitTableContent(child, fitsChild, false, relaxKeepLines);
           }
         }
         if (split) {
@@ -4886,8 +4909,11 @@ export class PaginationEngine {
             preserveWidowLines: relaxKeepLines && candidate.dataset.widowControl !== "false",
           });
         }
-        const tableSplit = split?.kind === "split" ? null
-          : this.splitTableContent(candidate, fitsCandidate, fitting.length === 0);
+        const wrappedSplit = split?.kind === "split" ? null : this.splitBorderGroup(candidate, fitsCandidate, {
+          relaxKeepLines: this.fragmentParagraphs && fitting.length === 0,
+          forceProgress: fitting.length === 0,
+        })
+          ?? this.splitTableContent(candidate, fitsCandidate, fitting.length === 0);
         candidate.remove();
         if (split?.kind === "split") {
           if (sourcePosition) {
@@ -4896,10 +4922,10 @@ export class PaginationEngine {
           }
           fitting.push(split.head);
           remaining = [split.tail, ...continuation.remainingElements.slice(index + 1)];
-        } else if (tableSplit) {
-          if (sourcePosition) tableSplit.tail.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, sourcePosition);
-          fitting.push(tableSplit.head);
-          remaining = [tableSplit.tail, ...continuation.remainingElements.slice(index + 1)];
+        } else if (wrappedSplit) {
+          if (sourcePosition) wrappedSplit.tail.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, sourcePosition);
+          fitting.push(wrappedSplit.head);
+          remaining = [wrappedSplit.tail, ...continuation.remainingElements.slice(index + 1)];
         } else if (fitting.length === 0) {
           // A genuinely indivisible first element retains the established visible
           // clipped fallback, but only for itself. Its siblings continue later.
@@ -5110,9 +5136,10 @@ export class PaginationEngine {
             head.remove();
           }
         };
+        const firstParagraph = this.isBorderGroup(child) ? child.firstElementChild as HTMLElement : child;
         keptParagraph = this.fragmentParagraphs && fits.length === 0
-          && child.dataset.keepLines === "true"
-          && this.canRangeFragmentParagraph(child, true, false, true);
+          && firstParagraph.dataset.keepLines === "true"
+          && this.canRangeFragmentParagraph(firstParagraph, true, false, true);
         // Word mode 15 retries the whole kept note on its own page. Older modes
         // relax an oversized keep beside the citation; the caller probes a fresh
         // band before requesting forced progress. Complex inline content keeps
@@ -5129,12 +5156,15 @@ export class PaginationEngine {
             preserveWidowLines: relaxKeepLines && child.dataset.widowControl !== "false",
           })
           : null;
-        const tableSplit = split ? null
-          : this.splitTableContent(child, fitsCandidate, fits.length === 0 && forceProgress);
-        if (tableSplit) {
-          fits.push(tableSplit.head);
-          tableSplit.tail.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, i === 0 ? "first" : "later");
-          overflow = [tableSplit.tail, ...children.slice(i + 1).map((element, offset) =>
+        const wrappedSplit = split ? null : this.splitBorderGroup(child, fitsCandidate, {
+          relaxKeepLines: this.fragmentParagraphs && fits.length === 0 && forceProgress,
+          forceProgress: fits.length === 0 && forceProgress,
+        })
+          ?? this.splitTableContent(child, fitsCandidate, fits.length === 0 && forceProgress);
+        if (wrappedSplit) {
+          fits.push(wrappedSplit.head);
+          wrappedSplit.tail.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, i === 0 ? "first" : "later");
+          overflow = [wrappedSplit.tail, ...children.slice(i + 1).map((element, offset) =>
             this.cloneFootnoteElementForContinuation(element, i + 1 + offset))];
         } else if (split?.kind === "split") {
           fits.push(split.head);

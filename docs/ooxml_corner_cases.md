@@ -5027,6 +5027,49 @@ that the resulting column has exactly zero width. Tests: `ZeroWidthColumnTests` 
 
 ## Blocks taller than a page: exact rows, header rows, nested tables and border groups (#1202)
 
+### Bordered footnotes must use the group fragmenter too (#1491)
+
+An ordinary footnote paragraph containing seventy 16pt lines fits across two Letter pages.
+Adding a paragraph border makes `CreateBorderDivs` wrap it in a `div`; previously both note
+splitters recognized only paragraphs and tables, so they carried the entire wrapper and the
+final export correctly rejected its clipped text. A hundred-line control additionally exposes
+the later-continuation path after the first page has split successfully.
+
+```xml
+<w:footnote w:id="1">
+  <w:p><w:pPr><w:widowControl w:val="0"/>
+    <w:pBdr><w:bottom w:val="single" w:sz="8" w:space="2" w:color="2060A0"/></w:pBdr>
+    <w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="exact"/>
+  </w:pPr><w:r><w:footnoteRef/></w:r>
+  <w:r><w:t>Ash001 The archive entry is complete.</w:t><w:br/>
+    <!-- repeat uniquely labeled lines through Ash070 -->
+    <w:t>Ash070 The archive entry is complete.</w:t></w:r></w:p>
+</w:footnote>
+```
+
+| Original Ash probe | LibreOffice 25.8.7.3 | Main before fix | Fixed Docxodus |
+| --- | --- | --- | --- |
+| 70 lines, box or bottom border | Two pages, all 70 labels | Clipping refusal | Two pages, all 70 labels |
+| 70 lines, no border or separate paragraphs | Two pages, all 70 labels | Complete | Complete |
+| Three lines, box border | One page, all three labels | Complete | Complete |
+
+No fresh Word footnote capture is claimed. The shared group's existing open-border convention
+comes from the registered body-border observations below: preserve side borders, omit the bottom
+on a head and top on its continuation. `splitFootnoteToFit` and `splitContinuationForPage` now
+both call `splitBorderGroup`, passing their exact payload measurement. Source paragraphs and
+painted-border metadata survive the same Range split used in the body. The clipping guard is
+unchanged; this does not make arbitrary oversized objects splittable.
+Table-cell splitting calls the same group helper. The note's existing fresh-band policy controls
+line-keep relaxation, and a heading that keeps with its successor remains with that successor's
+first nonempty fragment instead of preventing every split of the group.
+
+Placing the same 100-line paragraph in a single-cell footnote table exposes a separate native
+reference limitation. With a leading note-marker paragraph and required trailing paragraph,
+LibreOffice 25.8.7.3 retains only one of the 100 labels, with or without the border; fixed
+Docxodus retains all 100 across three pages. The paired benchmark preserves both complete
+source contracts but marks these two LibreOffice references ineligible and unscored pending
+valid native references. The other eleven authored comparisons have complete references.
+
 Native Word for the web exports of the exact inputs are recorded in
 `TestFiles/OversizedPageBlocks/word-observations.json`. All twenty-three inputs have zero Open XML SDK
 Microsoft365 findings. The browser regression checks compare the complete word multiset on every

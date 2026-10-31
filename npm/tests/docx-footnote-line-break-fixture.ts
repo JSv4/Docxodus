@@ -6,11 +6,17 @@ export interface FootnoteLineBreakOptions {
   blankEvery?: number;
   lineCount?: number;
   hyperlink?: boolean;
+  border?: 'box' | 'bottom';
+  keepLines?: boolean;
+  heading?: boolean;
+  table?: boolean;
 }
 
 /** Original Spruce archive note, authored from literal OOXML without a template. */
 export function generateFootnoteLineBreakDocx(options: FootnoteLineBreakOptions = {}): Uint8Array {
-  const props = '<w:pPr><w:widowControl w:val="0"/><w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="exact"/></w:pPr>';
+  const border = options.border ? `<w:pBdr>${(options.border === 'box' ? ['top', 'left', 'bottom', 'right'] : ['bottom'])
+    .map(side => `<w:${side} w:val="single" w:sz="8" w:space="2" w:color="2060A0"/>`).join('')}</w:pBdr>` : '';
+  const props = `<w:pPr>${options.keepLines ? '<w:keepLines/>' : ''}<w:widowControl w:val="0"/>${border}<w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="exact"/></w:pPr>`;
   const lines: string[] = [];
   for (let index = 0; index < (options.lineCount ?? 100); index++) {
     const text = `Note${String(index + 1).padStart(3, '0')} Spruce archive verified.`;
@@ -19,9 +25,11 @@ export function generateFootnoteLineBreakDocx(options: FootnoteLineBreakOptions 
     if (options.blankEvery && (index + 1) % options.blankEvery === 0 && index + 1 < (options.lineCount ?? 100)) lines.push('');
   }
   const marker = '<w:r><w:footnoteRef/></w:r>';
-  const note = options.paragraphs
+  let note = options.paragraphs
     ? lines.map((line, index) => `<w:p>${props}${index === 0 ? marker : ''}${line}</w:p>`).join('')
     : `<w:p>${props}${marker}${lines.join('<w:r><w:br/></w:r>')}</w:p>`;
+  if (options.heading) note = `<w:p>${props.replace('<w:pPr>', '<w:pPr><w:keepNext/>')}${marker}<w:r><w:t>KeepTitle</w:t></w:r></w:p>` + note.replace(marker, '');
+  if (options.table) note = '<w:tbl><w:tblPr><w:tblW w:w="8640" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid><w:gridCol w:w="8640"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="8640" w:type="dxa"/></w:tcPr>' + note + '</w:tc></w:tr></w:tbl><w:p/>';
   const relations = (content: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${content}</Relationships>`;
   const parts: Record<string, string> = {
     '[Content_Types].xml': `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -29,14 +37,17 @@ export function generateFootnoteLineBreakDocx(options: FootnoteLineBreakOptions 
       <Default Extension="xml" ContentType="application/xml"/>
       <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
       <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+      <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
       <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/></Types>`,
     '_rels/.rels': relations(`<Relationship Id="document" Type="${R_NS}/officeDocument" Target="word/document.xml"/>`),
     'word/_rels/document.xml.rels': relations(`<Relationship Id="styles" Type="${R_NS}/styles" Target="styles.xml"/>
+      <Relationship Id="settings" Type="${R_NS}/settings" Target="settings.xml"/>
       <Relationship Id="notes" Type="${R_NS}/footnotes" Target="footnotes.xml"/>`),
     'word/footnotes.xml': `<w:footnotes xmlns:w="${W_NS}" xmlns:r="${R_NS}">
       <w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>
       <w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>
       <w:footnote w:id="1">${note}</w:footnote></w:footnotes>`,
+    'word/settings.xml': `<w:settings xmlns:w="${W_NS}"/>`,
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>
       <w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="20"/>
       </w:rPr></w:rPrDefault></w:docDefaults></w:styles>`,
