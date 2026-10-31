@@ -99,6 +99,8 @@ All notable changes to this project will be documented in this file.
   baselines and long-note continuations intact. The fidelity gate now allows candidates to repair
   unmapped failures on main while retaining all candidate checks and historical protections.
 
+- Keep reserved continuation notices out of ordinary footnote and endnote lists, including positive-id definitions with no citations (#1485).
+
 - Consolidation preserves a reviewer’s inline bookmark additions and removals beside independent
   text or equation edits, keeping endpoint order and reviewer ownership through accept/reject (#1426).
 

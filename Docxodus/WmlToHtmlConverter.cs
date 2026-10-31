@@ -4257,12 +4257,7 @@ namespace Docxodus
 
             var footnotesXDoc = footnotesPart.GetXDocument();
             var allFootnotes = footnotesXDoc.Root?.Elements(W.footnote)
-                .Where(fn =>
-                {
-                    var typeAttr = (string?)fn.Attribute(W.type);
-                    // Skip separator and continuationSeparator footnotes
-                    return typeAttr != "separator" && typeAttr != "continuationSeparator";
-                })
+                .Where(fn => !WmlToMarkdownConverter.IsBoilerplateNote(fn))
                 .ToDictionary(fn => (string)fn.Attribute(W.id)!, fn => fn);
 
             if (allFootnotes == null || !allFootnotes.Any())
@@ -4304,12 +4299,7 @@ namespace Docxodus
 
             var endnotesXDoc = endnotesPart.GetXDocument();
             var allEndnotes = endnotesXDoc.Root?.Elements(W.endnote)
-                .Where(en =>
-                {
-                    var typeAttr = (string?)en.Attribute(W.type);
-                    // Skip separator and continuationSeparator endnotes
-                    return typeAttr != "separator" && typeAttr != "continuationSeparator";
-                })
+                .Where(en => !WmlToMarkdownConverter.IsBoilerplateNote(en))
                 .ToDictionary(en => (string)en.Attribute(W.id)!, en => en);
 
             if (allEndnotes == null || !allEndnotes.Any())

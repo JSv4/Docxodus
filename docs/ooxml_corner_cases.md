@@ -473,6 +473,15 @@ The reserved boilerplate footnotes are commonly assumed to occupy non-positive i
 
 Any code that (a) treats a typed note as reserved/kept-verbatim and (b) renumbers *content* notes from 1 will re-mint id 1 for the first content note → a **duplicate `w:id`** colliding with `continuationNotice`. In `DocxDiff` this corrupted **every** edit of the contract (even body/format-only edits that never touch a footnote), because the post-render renumber pass (`IrMarkupRenderer.RenumberNoteIds`) walks body references and re-sequences ids in reference order.
 
+The same classification applies to endnotes and HTML projection (#1485). An uncited
+`<w:endnote w:type="continuationNotice" w:id="2"><w:p><w:r><w:t>Notice</w:t></w:r></w:p></w:endnote>`
+must not become an ordinary numbered note. LibreOffice renders only the body; Docxodus
+previously appended the notice. No fresh Word capture is claimed for this case.
+`RenderEndnotesSection` and flow-mode `RenderFootnotesSection` now use the shared
+`IsBoilerplateNote` classifier, as the paginated footnote registry already did. Explicit
+`normal` and omitted types retain their existing cited/uncited behavior; paginated
+footnote separator templates remain available to continuation layout.
+
 #### Renderer comparison
 
 | | Renders the duplicate? |
