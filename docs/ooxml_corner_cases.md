@@ -5300,3 +5300,7 @@ LibreOffice controls show that source order matters. The box neither widens the 
 PageMap. A standalone row or cell fragment has no table
 grid context and retains its ordinary content. The paired benchmark independently checks full
 PDF text, column placement and the delivered HTML's merge span.
+
+An omitted-prefix row containing only matched continuations uses its first empty paragraph for
+the same minimum-height box. Leaving just a positive border sliver can pass a geometry guard
+while still losing the row's line pitch; the benchmark therefore also checks following-text placement.

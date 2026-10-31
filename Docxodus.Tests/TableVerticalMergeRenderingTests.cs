@@ -105,6 +105,17 @@ public class TableVerticalMergeRenderingTests
         Assert.True(Measure(2000) < 3 * Measure(1000), "Doubling a merge must not quadruple grid allocations.");
     }
 
+    [Fact]
+    public void OmittedContinuationRowKeepsItsEmptyParagraphHeight()
+    {
+        var html = Render(Row(0, Cell("Left"), Cell("Merged", 1, "restart")),
+            Row(1, Cell("", 1, "continue")));
+        var spacer = html.Descendants(Xhtml.tr).Last().Elements(Xhtml.td).Single();
+        Assert.Single(spacer.Descendants(Xhtml.p));
+        Assert.True(string.IsNullOrWhiteSpace(spacer.Value));
+        Assert.Equal("true", (string?)spacer.Attribute("data-page-map-exclude"));
+    }
+
     [Theory]
     [InlineData("auto", 240, false)]
     [InlineData("auto", 480, true)]

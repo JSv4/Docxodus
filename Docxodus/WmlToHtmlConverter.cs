@@ -7022,7 +7022,7 @@ namespace Docxodus
 
             // The omitted prefix uses the first starter's line pitch. Taking the largest
             // starter instead makes a later, tall merged cell enlarge this row unnecessarily.
-            var cell = cells.FirstOrDefault(cell => grid.RowSpans.GetValueOrDefault(cell) > 1);
+            var cell = cells.FirstOrDefault(cell => grid.RowSpans.GetValueOrDefault(cell) > 1) ?? cells.FirstOrDefault();
             var paragraph = cell?.DescendantsTrimmed(W.tbl).FirstOrDefault(e => e.Name == W.p);
             if (paragraph == null) return null;
             var style = DefineParagraphStyle(paragraph, Xhtml.p, false, 0m, false);
