@@ -5063,6 +5063,13 @@ Table-cell splitting calls the same group helper. The note's existing fresh-band
 line-keep relaxation, and a heading that keeps with its successor remains with that successor's
 first nonempty fragment instead of preventing every split of the group.
 
+Placing the same 100-line paragraph in a single-cell footnote table exposes a separate native
+reference limitation. With a leading note-marker paragraph and required trailing paragraph,
+LibreOffice 25.8.7.3 retains only one of the 100 labels, with or without the border; fixed
+Docxodus retains all 100 across three pages. The paired benchmark preserves both complete
+source contracts but marks these two LibreOffice references ineligible and unscored pending
+valid native references. The other eleven authored comparisons have complete references.
+
 Native Word for the web exports of the exact inputs are recorded in
 `TestFiles/OversizedPageBlocks/word-observations.json`. All twenty-three inputs have zero Open XML SDK
 Microsoft365 findings. The browser regression checks compare the complete word multiset on every
