@@ -24,11 +24,32 @@ async function facts(bytes: Uint8Array) {
   } finally { await task.destroy(); }
 }
 
+for (const option of ['keepLines', 'heading', 'table'] as const) {
+  test(`bordered footnote retains ${option} flow across later pages`, async ({ browser, page }) => {
+    for (const border of [undefined, 'box'] as const) {
+      const result = await renderDocxArtifacts(generateFootnoteLineBreakDocx({ [option]: true, border }), {
+        browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'hidden', timeoutMs: 120_000,
+      });
+      expect(result.pageCount).toBe(3);
+      const text = (await facts(result.pdf!)).flatMap(p => p.items).map(i => i.text).join(' ');
+      expect(text.match(/Note\d+/g)).toEqual(Array.from({ length: 100 }, (_, i) => `Note${String(i + 1).padStart(3, '0')}`));
+      if (option === 'heading') {
+        await page.setContent(result.html!);
+        const headingPage = page.locator('.page-box').filter({ hasText: 'KeepTitle' });
+        await expect(headingPage).toHaveCount(1);
+        await expect(headingPage).toContainText('Note001');
+      }
+    }
+  });
+}
+
 for (const [name, options] of Object.entries<FootnoteLineBreakOptions>({
   plain: {}, formatted: { formatted: true }, blanks: { blankEvery: 19 }, hyperlinks: { hyperlink: true },
   short: { lineCount: 4 },
+  box: { border: 'box' }, bottom: { border: 'bottom' },
+  'box-short': { border: 'box', lineCount: 4 },
 })) {
-  test(`${name} footnote hard breaks preserve complete PDF text and note-band geometry`, async ({ browser }, testInfo) => {
+  test(`${name} footnote hard breaks preserve complete PDF text and note-band geometry`, async ({ browser, page }, testInfo) => {
     test.setTimeout(120_000);
     const exportOptions = { browser, outputs: ['html', 'pdf'] as const,
       reviewProfile: 'markup' as const, commentProfile: 'margin' as const, timeoutMs: 120_000 };
@@ -38,7 +59,7 @@ for (const [name, options] of Object.entries<FootnoteLineBreakOptions>({
     expect(actual.pageCount).toBe(control.pageCount);
     // Continuation pages use up to 95% of the body band once the body is placed (issue #1119):
     // the hundred 16pt lines fill three pages, where the former 60% cap needed five.
-    expect(actual.pageCount).toBe(name === 'short' ? 1 : 3);
+    expect(actual.pageCount).toBe(options.lineCount === 4 ? 1 : 3);
     const actualFacts = await facts(actual.pdf!);
     const controlFacts = await facts(control.pdf!);
     expect(actualFacts.map(p => p.view)).toEqual(controlFacts.map(p => p.view));
@@ -88,6 +109,18 @@ for (const [name, options] of Object.entries<FootnoteLineBreakOptions>({
     expect(new Set(fragments.map(f => f.pageNumber)).size).toBe(actual.pageCount);
     expect(new Set(fragments.map(f => f.anchorId)).size).toBe(1);
     expect(new Set(fragments.map(f => f.fragmentId)).size).toBe(fragments.length);
+    if (options.border) {
+      await page.setContent(actual.html!);
+      const sides = await page.locator('.page-footnotes [data-docx-border-paint]').evaluateAll(groups => groups.map(group =>
+        (JSON.parse(group.getAttribute('data-docx-border-paint')!) as { side: string }[]).map(side => side.side).sort()));
+      expect(sides).toEqual(Array.from({ length: actual.pageCount }, (_, index) => [
+        ...(options.border === 'box' ? ['left', 'right', ...(index === 0 ? ['top'] : [])] : []),
+        ...(index === actual.pageCount - 1 ? ['bottom'] : []),
+      ].sort()));
+      // The open sides must affect the delivered paint, not just metadata.
+      expect(await page.locator('.page-box > svg > rect[fill="rgb(32, 96, 160)"]').count())
+        .toBe(sides.flat().length);
+    }
     writeFileSync(testInfo.outputPath(`${name}.docx`), source);
     writeFileSync(testInfo.outputPath(`${name}.pdf`), actual.pdf!);
   });
