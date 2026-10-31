@@ -34,17 +34,19 @@ const budgetsKiB = {
   // Shared inline-frame flow/exclusions add about 1.55 KiB on main 97c304f7:
   // embed/IIFE/editor/pagination 146.882/146.966/126.173/43.767 KiB.
   // Raise only the four exhausted gates; the other bundles are unchanged.
-  'embed.bundle.js': 147,
+  // Recursive endnote-comment splitting adds 0.4–0.5 KiB over 647aee2d:
+  // embed/IIFE/editor/pagination 147.3/147.4/126.6/44.2 KiB. Raise these gates by 0.5 KiB.
+  'embed.bundle.js': 147.5,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
-  'embed.iife.js': 147,
+  'embed.iife.js': 147.5,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
-  'editor.bundle.js': 126.5,
+  'editor.bundle.js': 127,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
   // Whole inline-layout continuation adds 0.24 KiB (35.801 -> 36.038 on main).
   // Independent textbox source inventories add 45 compressed bytes (39.978 -> 40.021 KiB).
-  'pagination.bundle.js': 44,
+  'pagination.bundle.js': 44.5,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,

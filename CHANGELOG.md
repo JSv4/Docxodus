@@ -95,6 +95,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Long endnote-style comments now split across pages while retaining their metadata, reply
+  nesting, return links, and comment/paragraph PageMap ownership (#1505).
+
 - Inline paragraph frames preserve their flow and page space instead of overprinting the next
   paragraph. Text-anchored wrapping frames exclude their actual occupied area, including separate
   frames and header overhangs; `notBeside` frames place following text below. Grouped paragraphs,

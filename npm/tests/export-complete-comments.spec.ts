@@ -27,11 +27,11 @@ async function printedText(bytes: Uint8Array): Promise<string> {
   } finally { await task.destroy(); }
 }
 
-for (const hideHeader of [false, true]) test(`comment owner covers every continuation with metadata hidden=${hideHeader}`, async ({ browser }) => {
+for (const commentProfile of ['margin', 'endnotes'] as const) for (const hideHeader of [false, true]) test(`${commentProfile} comment owner covers every continuation with metadata hidden=${hideHeader}`, async ({ browser }) => {
   test.setTimeout(120_000);
   const result = await renderDocxArtifacts(longCommentFixture(900), {
-    browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'margin', timeoutMs: 120_000,
-    additionalCss: hideHeader ? 'div.comment-margin-note-header { display: none }' : '',
+    browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile, timeoutMs: 120_000,
+    additionalCss: hideHeader ? '.comment-margin-note-header, .comment-header { display: none }' : '',
   });
   const paragraphPages = new Set(result.pageMap.fragments.filter(f => f.anchorId.startsWith('p:cmt:')).map(f => f.pageNumber));
   const ownerPages = new Set(result.pageMap.fragments.filter(f => f.anchorId.startsWith('cmt:')).map(f => f.pageNumber));
@@ -40,12 +40,12 @@ for (const hideHeader of [false, true]) test(`comment owner covers every continu
   expect(await printedText(result.pdf!)).toContain('CedarNote899');
 });
 
-for (const multipleParagraphs of [false, true]) {
-  test(`margin export prints every word of a long ${multipleParagraphs ? 'multi-paragraph' : 'single-paragraph'} comment`, async ({ browser }) => {
+for (const commentProfile of ['margin', 'endnotes'] as const) for (const multipleParagraphs of [false, true]) {
+  test(`${commentProfile} export prints every word of a long ${multipleParagraphs ? 'multi-paragraph' : 'single-paragraph'} comment`, async ({ browser }) => {
     test.setTimeout(120_000);
-    const count = 240;
+    const count = commentProfile === 'endnotes' && !multipleParagraphs ? 900 : 240;
     const result = await renderDocxArtifacts(longCommentFixture(count, true, true, multipleParagraphs), {
-      browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'margin', timeoutMs: 120_000,
+      browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile, timeoutMs: 120_000,
     });
     const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
     try {
@@ -67,20 +67,20 @@ for (const multipleParagraphs of [false, true]) {
   });
 }
 
-for (const threaded of [false, true]) {
-  test(`overflow prints all ${threaded ? 'nested replies' : 'short independent comments'} and keeps return links`, async ({ browser }) => {
+for (const commentProfile of ['margin', 'endnotes'] as const) for (const threaded of [false, true]) {
+  test(`${commentProfile} prints all ${threaded ? 'nested replies' : 'short independent comments'} and keeps return links`, async ({ browser }) => {
     test.setTimeout(120_000);
     const count = threaded ? 3 : 60, words = threaded ? 120 : 1;
     const result = await renderDocxArtifacts(commentThreadFixture(threaded, false, false, { count, words }), {
-      browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'margin', timeoutMs: 120_000,
+      browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile, timeoutMs: 120_000,
     });
     const text = await printedText(result.pdf!);
     for (let i = 0; i < count; i++) for (let j = 0; j < words; j++) expect(text).toContain(`CedarThread${i}Word${j}`);
     const page = await browser.newPage();
     try {
       await page.setContent(result.html!);
-      await expect(page.locator('[data-comment-appendix]')).not.toHaveCount(0);
-      const links = await page.locator('[data-comment-appendix] a.comment-margin-backref').evaluateAll(nodes =>
+      const selector = commentProfile === 'margin' ? '[data-comment-appendix] a.comment-margin-backref' : 'a.comment-backref';
+      const links = await page.locator(selector).evaluateAll(nodes =>
         nodes.map(node => ({ href: node.getAttribute('href'), disabled: node.getAttribute('aria-disabled') })));
       expect(links).toHaveLength(count);
       for (let i = 0; i < count; i++) expect(links[i]).toEqual({ href: `#comment-ref-${i}`, disabled: null });
@@ -100,9 +100,9 @@ test('overflow retains comments selected by body, header, footer, footnote and e
   }
 });
 
-test('comment appendix pages are charged against the export page limit', async ({ browser }) => {
+for (const commentProfile of ['margin', 'endnotes'] as const) test(`${commentProfile} pages are charged against the export page limit`, async ({ browser }) => {
   await expect(renderDocxArtifacts(longCommentFixture(240, false, false, true), {
-    browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'margin', limits: { finalPages: 1 },
+    browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile, limits: { finalPages: 1 },
   })).rejects.toMatchObject({ code: 'resource_limit' });
 });
 

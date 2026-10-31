@@ -2146,6 +2146,8 @@ export class PaginationEngine {
         }
       }
 
+      this.prepareCommentGroups(child);
+
       // A float may extend far below its paragraph and may have been pushed down by a prior
       // source float. Measure its own fresh block, including the picture's painted extent.
       if (this.floatingPictureCarriers(child).length > 0) {
@@ -2180,6 +2182,48 @@ export class PaginationEngine {
     }
 
     return blocks;
+  }
+
+  /** Only converter comment shells may be split recursively; retain custom HTML intact. */
+  private prepareCommentGroups(section: HTMLElement): void {
+    if (section.localName !== "aside") return;
+    const name = Array.from(section.classList).find(value => value.endsWith("s-section"));
+    if (!name) return;
+    const base = name.slice(0, -"s-section".length);
+    const header = section.children[1]?.firstElementChild?.firstElementChild;
+    const prefix = Array.from(header?.classList ?? []).find(value => value.endsWith("header")
+      && value.slice(0, -"header".length).replace(/-+$/, "") === base)?.slice(0, -"header".length);
+    if (prefix === undefined) return;
+    const matches = (element: HTMLElement, tag: string, name: string) =>
+      element.localName === tag && element.classList.contains(name);
+    const groups: HTMLElement[] = [], headings: HTMLElement[] = [];
+    const visit = (element: HTMLElement, kind: "section" | "list" | "item" | "body"): boolean => {
+      const children = Array.from(element.children) as HTMLElement[];
+      this.checkpoint();
+      const style = this.view.getComputedStyle(element);
+      if (style.position === "absolute" || style.position === "fixed" || style.float !== "none"
+        || !["block", "list-item"].includes(style.display) || style.columnCount !== "auto" || style.columnWidth !== "auto"
+        || Array.from(element.childNodes).some(node => node.nodeType === this.view.Node.TEXT_NODE
+          && this.hasVisibleText(node.textContent ?? ""))) return false;
+      groups.push(element);
+      if (kind === "section") {
+        if (children.length !== 2 || children[0].localName !== "h2"
+          || !matches(children[1], "ol", `${base}s-list`)) return false;
+        headings.push(children[0]);
+        return visit(children[1], "list");
+      }
+      if (kind === "list") return children.length > 0
+        && children.every(child => matches(child, "li", base) && visit(child, "item"));
+      if (kind === "body") return children.length > 0 && children.every(child => child.localName === "p");
+      if (children.length < 2 || children.length > 3 || !matches(children[0], "div", `${prefix}header`)
+        || !matches(children[1], "div", `${prefix}body`)) return false;
+      headings.push(children[0]);
+      return visit(children[1], "body") && (children.length === 2
+        || (matches(children[2], "ol", `${prefix}replies`) && visit(children[2], "list")));
+    };
+    if (!visit(section, "section")) return;
+    for (const group of groups) group.dataset.paginationCommentGroup = "true";
+    for (const heading of headings) heading.dataset.keepWithNext = "true";
   }
 
   /** Floated pictures participate in page fit even though normal block height excludes them. */
@@ -4136,7 +4180,7 @@ export class PaginationEngine {
    * border, so each part keeps its side borders. A group that cites notes, or keeps its lines or its
    * next paragraph, keeps the whole-block fallback.
    */
-  private tryFragmentBorderGroup(
+  private tryFragmentParagraphGroup(
     block: MeasuredBlock,
     dims: PageDimensions,
     availableHeightPt: number,
@@ -4154,7 +4198,7 @@ export class PaginationEngine {
       this.stagingElement.appendChild(host);
     }
     try {
-      const split = this.splitBorderGroup(group, head => effectiveMarginTopPt
+      const split = this.splitParagraphGroup(group, head => effectiveMarginTopPt
         + this.measureElement(head, dims, block.sectionIndex).heightPt <= availableHeightPt, { bodyParagraph: true });
       if (!split) return null;
       return [split.head, split.tail].map(element => ({
@@ -4170,13 +4214,14 @@ export class PaginationEngine {
     }
   }
 
-  /** Shared open-border fragmentation, measured in the caller's body or footnote context. */
-  private splitBorderGroup(
+  /** Split paragraph groups in the caller's context, retaining every comment shell around each candidate. */
+  private splitParagraphGroup(
     group: HTMLElement,
     fitsCandidate: (head: HTMLElement) => boolean,
     options: { bodyParagraph?: boolean; relaxKeepLines?: boolean; forceProgress?: boolean } = {},
   ): { head: HTMLElement; tail: HTMLElement } | null {
-    if (!this.isBorderGroup(group)) return null;
+    if (group.dataset.paginationCommentGroup !== "true" && !this.isBorderGroup(group)) return null;
+    this.checkpoint();
     const paragraphs = Array.from(group.children) as HTMLElement[];
     const part = (content: HTMLElement[], open: "bottom" | "top") => {
       const wrapper = group.cloneNode(false) as HTMLElement;
@@ -4210,6 +4255,13 @@ export class PaginationEngine {
         tail = [split.tail, ...clones(whole + 1, paragraphs.length)];
         divided = true;
       }
+    } else if (next.dataset.paginationCommentGroup === "true") {
+      const split = this.splitParagraphGroup(next, candidate => fits([...clones(0, whole), candidate]), options);
+      if (split) {
+        head.push(split.head);
+        tail = [split.tail, ...clones(whole + 1, paragraphs.length)];
+        divided = true;
+      }
     }
     if (!divided) {
       while (whole > 0 && paragraphs[whole - 1].dataset.keepWithNext === "true") whole--;
@@ -4219,7 +4271,9 @@ export class PaginationEngine {
     if (head.length === 0) return null;
     // Do not repeat a paragraph's space before at the top of its continuation.
     tail[0].style.setProperty("margin-top", "0", "important");
-    return { head: part(head, "bottom"), tail: part(tail, "top") };
+    const result = { head: part(head, "bottom"), tail: part(tail, "top") };
+    this.reconcileFragmentIdentities(result.head, result.tail);
+    return result;
   }
 
   /**
@@ -4237,8 +4291,8 @@ export class PaginationEngine {
     relaxKeepLines = false,
   ): MeasuredBlock[] | null {
     if (availableHeightPt <= effectiveMarginTopPt) return null;
-    if (block.element.localName === "div") {
-      return this.tryFragmentBorderGroup(block, dims, availableHeightPt, effectiveMarginTopPt);
+    if (block.element.localName === "div" || block.element.dataset.paginationCommentGroup === "true") {
+      return this.tryFragmentParagraphGroup(block, dims, availableHeightPt, effectiveMarginTopPt);
     }
 
     // Continuations are detached Range clones. Validate their computed layout
@@ -4876,7 +4930,7 @@ export class PaginationEngine {
             });
             if (paragraph.kind === "split") split = paragraph;
           } else {
-            split = this.splitBorderGroup(child, fitsChild, { relaxKeepLines })
+            split = this.splitParagraphGroup(child, fitsChild, { relaxKeepLines })
               ?? this.splitTableContent(child, fitsChild, false, relaxKeepLines);
           }
         }
@@ -4984,7 +5038,7 @@ export class PaginationEngine {
             preserveWidowLines: relaxKeepLines && candidate.dataset.widowControl !== "false",
           });
         }
-        const wrappedSplit = split?.kind === "split" ? null : this.splitBorderGroup(candidate, fitsCandidate, {
+        const wrappedSplit = split?.kind === "split" ? null : this.splitParagraphGroup(candidate, fitsCandidate, {
           relaxKeepLines: this.fragmentParagraphs && fitting.length === 0,
           forceProgress: fitting.length === 0,
         })
@@ -5231,7 +5285,7 @@ export class PaginationEngine {
             preserveWidowLines: relaxKeepLines && child.dataset.widowControl !== "false",
           })
           : null;
-        const wrappedSplit = split ? null : this.splitBorderGroup(child, fitsCandidate, {
+        const wrappedSplit = split ? null : this.splitParagraphGroup(child, fitsCandidate, {
           relaxKeepLines: this.fragmentParagraphs && fits.length === 0 && forceProgress,
           forceProgress: fits.length === 0 && forceProgress,
         })
