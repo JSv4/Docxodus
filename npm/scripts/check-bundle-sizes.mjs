@@ -9,6 +9,9 @@ import { gzipSync } from 'node:zlib';
 // in the same change that needs it. export-browser.bundle.js is absent on purpose: it runs inside
 // @docxodus/export's pinned Chromium, where download size does not matter.
 const budgetsKiB = {
+  // Page-owned STYLEREF measurement/reflow adds 1.15–1.20 KiB over parent 1f7dc8dd:
+  // embed/iife/editor/pagination 141.922/141.928/121.294/38.779 ->
+  // 143.116/143.126/122.441/39.978 KiB. Round only these exhausted gates to whole KiB.
   // Authored-clipping proofs add 1.12–1.18 KiB on main a6996d45:
   // embed/iife/editor/pagination 140.630/140.659/119.954/37.468 ->
   // 141.770/141.777/121.128/38.611 KiB. Round only exhausted gates up to whole KiB.
@@ -21,16 +24,16 @@ const budgetsKiB = {
   // Body-table fitting on current main measures 137.128/137.164 KiB; retain a 138 KiB gate.
   // Zero-font source coverage brings the ESM bundle just above 138 KiB.
   // Whole inline-layout continuation adds 0.25 KiB (138.947 -> 139.196 on main).
-  'embed.bundle.js': 142,
+  'embed.bundle.js': 144,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
-  'embed.iife.js': 142,
+  'embed.iife.js': 144,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
-  'editor.bundle.js': 122,
+  'editor.bundle.js': 123,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
   // Whole inline-layout continuation adds 0.24 KiB (35.801 -> 36.038 on main).
-  'pagination.bundle.js': 39,
+  'pagination.bundle.js': 40,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,
