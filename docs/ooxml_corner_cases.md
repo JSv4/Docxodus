@@ -5574,3 +5574,54 @@ The supported subsets and bounds follow [TIFF 6.0](https://www.itu.int/itudoc/it
 and Microsoft's [WMF format](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wmf/).
 The converter's image contract documents remaining format exclusions. Native facade tests,
 CLI embedded/extracted output tests, and public HTML/PDF export tests cover these paths.
+
+## Continuous sections can change margins on a shared page (#1486)
+
+The section properties ending the first paragraph describe the preceding section; the final
+`sectPr` below starts a continuous section with a different left margin:
+
+```xml
+<w:p><w:pPr><w:sectPr>
+  <w:pgSz w:w="12240" w:h="15840"/>
+  <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>
+</w:sectPr></w:pPr><w:r><w:t>SequoiaBefore</w:t></w:r></w:p>
+<w:p><w:r><w:t>SequoiaAfter</w:t></w:r></w:p>
+<w:sectPr><w:type w:val="continuous"/>
+  <w:pgSz w:w="12240" w:h="15840"/>
+  <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="2880"/>
+</w:sectPr>
+```
+
+| Original diagnostic | Word for the web | LibreOffice 25.8.7.3 | Docxodus |
+| --- | --- | --- | --- |
+| Short left-margin change, 72→144pt | One page; second paragraph starts at x144pt | One page; retains x72pt | Previously two pages; now one with section-specific x144pt |
+| Top margin 72→144pt with spilling text | Shared page starts at y72pt; next body page starts at y144pt | Continuous flow | Previously forced a fresh page; now retains the shared page's body band |
+| Bottom margin 72→144pt with long text | Shared page fills to its old bottom; later pages use the higher bottom boundary | Continuous flow | Same page-ownership distinction as the top margin |
+| Explicit `nextPage` or changed paper width | Two pages | `nextPage`: two; paper-width probe: one | Both remain page boundaries |
+| Later-section margin/column image anchors | Margin-relative x72pt; column-relative x144pt | Not captured for this diagnostic | Resolves page margins and the section column independently |
+| A 600pt inline image following a top-margin change | One page; image stays 600pt high | Not captured for this diagnostic | Retains the authored image when it fits the shared page |
+| Note cited only after the left-margin change | Note stays at page x72pt but wraps more narrowly | Not captured for this diagnostic | Note shell carries the citing section width, capped by the page band |
+
+Fresh Word PDFs bind the original inputs and output hashes in the issue evidence. Word
+substituted Times New Roman for Liberation Serif, so these captures establish section and
+image behavior rather than font-matched page fidelity. The 750-label left/right probes have
+three Word pages; the top-margin probe has two. The longer bottom-margin probe fills the
+first page to ink y717.10pt, then the next page to y641.33pt. Those absolute text baselines
+depend on the captured font; the section ownership rule does not.
+
+The paired 100-label note captures differ only in the later left margin. Narrowing the body
+changes the note from 17 lines to 20, while its left origin and final bottom stay fixed.
+Widening the body to a zero left margin leaves every note word coordinate identical to the
+same-margin control. This supports a note width bounded by both the citing section and the
+physical page's note band. A 500-label continuation retains that narrow wrapping and the
+original page origin across all three note pages; trailing note-only pages keep their owner.
+
+`npm/src/pagination.ts` previously required all margins to agree before joining a continuous
+page run. Runs now compare paper dimensions. Body blocks retain their source section through
+cloning and fragmentation. One append helper supplies ordinary block containers with the
+section width and horizontal offset in both physical pages and measurement hosts; it preserves
+authored indents, collapsed spacing and float exclusion. Blocks following floats are measured
+in the actual page prefix before admission, including when a later section widens the column.
+Page ownership still selects vertical bands, running stories and numbering. Notes clone their
+width from the registry shell in whole, partial and continuation forms; current-page note
+measurement uses the owner's outer width, while fresh-page probes use the prospective owner.

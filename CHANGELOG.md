@@ -95,6 +95,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Continuous sections can change margins without forcing a page break (#1486).
+  Body widths and column-relative anchors follow their section on a shared page, while
+  its vertical bands and page-margin anchors keep the page owner's geometry. Fragment
+  measurement preserves those widths beside floats; notes retain their section width
+  within the page's note band, and pictures that fit the shared page remain unscaled.
 - Embedded TIFF and simple placeable WMF images now render in browser HTML/PDF, including
   body and header pictures (#1484). The shared converter normalizes bounded RGB(A) TIFF strips
   to PNG and supported WMF rectangle/ellipse records to static SVG. Orientation, alpha and
