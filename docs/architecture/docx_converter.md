@@ -777,10 +777,29 @@ field-context annotations to choose that path.
 
 ### Legacy form results
 
-After formatting assembly, `NormalizeFormFields` resolves complete `FORMCHECKBOX` and
+After formatting assembly, `NormalizeFieldResults` resolves complete `FORMCHECKBOX` and
 `FORMDROPDOWN` fields from metadata on their begin character. This happens before paragraph
 emptiness and tab measurement, so metadata-only selections occupy the same space as cached
 text. Result leaves are replaced within their original run/revision boundaries; non-result
 instructions and reference/range markers are retained. Complete `FORMTEXT` caches pass through.
 Checkboxes are static read-only accessible spans with CSS borders; unsupported metadata uses
 the configured placeholder policy. See [the form-field corner case](../ooxml_corner_cases.md#legacy-form-metadata-lives-inside-the-fields-begin-character-1480).
+
+### Property and paragraph-style fields
+
+`NormalizeFieldResults` shares result ownership for simple and complex fields. It first resolves
+legacy forms and read-only `TITLE` / `DOCPROPERTY Title`, then rebuilds field annotations before
+resolving `STYLEREF`. An outer result can replace nested cached fields; instruction input stays
+hidden, including its note references. Replacement retains visible result formatting and range
+anchors. Locked property/style fields retain their caches. An absent title preserves the cache and
+uses the configured unsupported-field diagnostic; an explicitly empty title clears the result.
+Write-form TITLE arguments and unsupported properties/switches preserve their caches and report
+through the same placeholder policy.
+
+Style references match an exact paragraph style's friendly name, then its ID; numeric 1–9 selects
+Heading 1–9. Body fields search preceding text, then following text if no preceding match exists.
+Textboxes and character styles are outside this resolver. Visible text uses the existing text
+extraction helper, including special hyphens and symbols; deleted/hidden instruction text does not
+become the heading. Running stories emit `data-field="STYLEREF"` with the canonical style ID and
+optional last-on-page flag. Source paragraphs carry the full heading text through fragmentation.
+See [paginated headers and footers](paginated_headers_footers.md#running-style-references).

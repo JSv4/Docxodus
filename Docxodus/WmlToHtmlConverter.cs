@@ -1209,7 +1209,7 @@ namespace Docxodus
 
             FormattingAssembler.AssembleFormatting(wordDoc, formattingAssemblerSettings);
 
-            NormalizeFormFields(wordDoc, htmlConverterSettings);
+            NormalizeFieldResults(wordDoc, htmlConverterSettings);
             InsertAppropriateNonbreakingSpaces(wordDoc);
             CalculateSpanWidthForTabs(wordDoc, htmlConverterSettings.RenderTrackedChanges && htmlConverterSettings.ShowDeletedContent);
             ReverseTableBordersForRtlTables(wordDoc);
@@ -3391,6 +3391,16 @@ namespace Docxodus
         {
             var element = node as XElement;
             if (element == null) return null;
+            if (element.Attribute(HiddenFieldInstructionAttribute) != null) return null;
+            if (element.Attribute(StyleReferenceAttribute) is { } referencedStyle)
+                return new XElement(Xhtml.span, new XAttribute("data-field", "STYLEREF"),
+                    new XAttribute("data-field-style", referencedStyle.Value),
+                    element.Attribute(StyleReferenceLastAttribute) == null ? null : new XAttribute("data-field-last", "true"),
+                    element.Value);
+            if (element.Attribute(UnsupportedDocumentFieldAttribute) != null)
+                return new object?[] {
+                    CreateUnsupportedContentPlaceholder(settings, element, UnsupportedContentType.Other, "[DOCUMENT FIELD]"),
+                    element.Name == W.fldSimple ? CreateBorderDivs(wordDoc, settings, element.Elements()) : null };
             if (element.Attribute(FormCheckboxAttribute) is { } checkboxState)
                 return RenderFormCheckbox(element, checkboxState.Value == "true");
             if (element.Attribute(UnsupportedFormFieldAttribute) != null)
@@ -7462,6 +7472,10 @@ namespace Docxodus
                 ? new XAttribute("data-anchor", (string)paragraph.Attribute(PtOpenXml.Unid)!)
                 : null;
             var sourceAnchorAttr = implied ? null : SourceAnchorIdentityAttribute(settings, paragraph);
+            var styleSourceAttrs = paragraph.Attribute(StyleReferenceSourceAttribute) is { } sourceStyle
+                ? new[] { new XAttribute("data-paragraph-style", sourceStyle.Value),
+                    new XAttribute("data-styleref-text", (string?)paragraph.Attribute(StyleReferenceTextAttribute) ?? "") }
+                : null;
 
             // Analyze initial runs to see whether we have a tab, in which case we will render
             // a span with a defined width and ignore the tab rather than rendering the text
@@ -7494,6 +7508,7 @@ namespace Docxodus
                     firstMark,
                     anchorAttr,
                     sourceAnchorAttr,
+                    styleSourceAttrs,
                     ConvertContentThatCanContainFields(wordDoc, settings, paragraph.Elements()));
                 ApplyAutomaticLineSpacingToInlineContent(paraElement1, style);
                 paraElement1.AddAnnotation(style);
@@ -7515,6 +7530,7 @@ namespace Docxodus
                     new XAttribute("contenteditable", "false"), new XAttribute("aria-hidden", "true") } : null,
                 anchorAttr,
                 sourceAnchorAttr,
+                styleSourceAttrs,
                 alignedTabContent ?? new List<object?> { txElementsPrecedingTab,
                     ConvertContentThatCanContainFields(wordDoc, settings, elementsSucceedingTab) });
             ApplyAutomaticLineSpacingToInlineContent(paraElement, style);
@@ -9179,7 +9195,8 @@ namespace Docxodus
             int endnoteNumber = 0;
 
             // Scan for footnote and endnote references in document order
-            foreach (var element in rootElement.Descendants())
+            foreach (var element in rootElement.Descendants().Where(e =>
+                !e.AncestorsAndSelf().Any(a => a.Attribute(HiddenFieldInstructionAttribute) != null)))
             {
                 if (element.Name == W.footnoteReference)
                 {
@@ -9845,7 +9862,9 @@ namespace Docxodus
             int? stretchStart = firstInTwips;
             XElement? lastTab = null;
             var contentToMeasure = element.DescendantsTrimmed(z => z.Name == W.txbxContent || z.Name == W.pPr || z.Name == W.rPr ||
-                (!includeDeletedText && (z.Name == W.del || z.Name == W.moveFrom))).ToArray();
+                z.Attribute(HiddenFieldInstructionAttribute) != null ||
+                (!includeDeletedText && (z.Name == W.del || z.Name == W.moveFrom)))
+                .Where(z => z.Attribute(HiddenFieldInstructionAttribute) == null).ToArray();
             var currentElementIdx = 0;
             while (true)
             {
@@ -10429,7 +10448,8 @@ namespace Docxodus
             var italic = GetBoolProp(rPr, W.i) || GetBoolProp(rPr, W.iCs);
 
             var textElements = r.DescendantsTrimmed(W.txbxContent)
-                .Where(e => e.Name == W.t || e.Name == W.delText)
+                .Where(e => (e.Name == W.t || e.Name == W.delText)
+                    && !e.AncestorsAndSelf().Any(a => a.Attribute(HiddenFieldInstructionAttribute) != null))
                 .ToList();
             var checkboxWidth = textElements.Where(e => e.Attribute(FormCheckboxAttribute) != null)
                 .Sum(e => ((decimal?)e.Attribute(FormCheckboxSizeAttribute) ?? sz) * 10m);
@@ -10602,6 +10622,8 @@ namespace Docxodus
         /// <c>mc:AlternateContent</c> the renderer does not select.</summary>
         private static IEnumerable<XElement> InFlowDescendantsAndSelf(XElement element)
         {
+            if (element.Attribute(HiddenFieldInstructionAttribute) != null)
+                yield break;
             if (element.Name == W.drawing && element.Elements(WP.anchor).Any())
                 yield break;
             // Match run rendering after formatting assembly has resolved inherited properties.
@@ -11640,53 +11662,120 @@ namespace Docxodus
         private static readonly XName FormFieldNameAttribute = PtOpenXml.pt + "FormFieldName";
         private static readonly XName UnsupportedFormFieldAttribute = PtOpenXml.pt + "UnsupportedFormField";
 
-        private static bool HasFormFields(XElement root)
+        private static readonly XName UnsupportedDocumentFieldAttribute = PtOpenXml.pt + "UnsupportedDocumentField";
+        private static readonly XName HiddenFieldInstructionAttribute = PtOpenXml.pt + "HiddenFieldInstruction";
+
+        private static string FieldKind(string instruction) => instruction.TrimStart()
+            .Split((char[]?)null, 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToUpperInvariant() ?? "";
+
+        private static bool ResolvesField(string kind) => kind.StartsWith("FORM", StringComparison.Ordinal)
+            || kind is "TITLE" or "DOCPROPERTY" or "STYLEREF";
+
+        private static bool HasResolvableFields(XElement root)
         {
-            var prefix = new StringBuilder(4);
+            var prefix = new StringBuilder(12);
+            var finished = false;
             foreach (var element in root.Descendants())
             {
                 if (element.Name == W.ffData) return true;
-                if (element.Name == W.fldChar) prefix.Clear();
-                if (element.Name != W.instrText && element.Name != W.delInstrText) continue;
+                if (element.Name == W.fldSimple && ResolvesField(FieldKind((string?)element.Attribute(W.instr) ?? "")))
+                    return true;
+                if (element.Name == W.fldChar)
+                {
+                    if (ResolvesField(prefix.ToString())) return true;
+                    prefix.Clear(); finished = false;
+                }
+                if (finished || (element.Name != W.instrText && element.Name != W.delInstrText)) continue;
                 foreach (var c in element.Value)
                 {
-                    if (prefix.Length == 4) break;
                     if (prefix.Length == 0 && char.IsWhiteSpace(c)) continue;
+                    if (prefix.Length == 12 || char.IsWhiteSpace(c))
+                    {
+                        if (ResolvesField(prefix.ToString())) return true;
+                        finished = true; break;
+                    }
                     prefix.Append(char.ToUpperInvariant(c));
                 }
-                if (prefix.ToString() == "FORM") return true;
+                if (prefix.ToString().StartsWith("FORM", StringComparison.Ordinal)) return true;
             }
-            return false;
+            return ResolvesField(prefix.ToString());
         }
 
-        private static void NormalizeFormFields(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings)
+        private static bool InDeletedContent(XElement element) =>
+            element.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom);
+
+        private static bool IsFieldResultLeaf(XElement element) => element.Parent?.Name == W.r
+            && element.Name != W.rPr && element.Name != W.commentReference
+            && element.Name != W.footnoteReference && element.Name != W.endnoteReference;
+
+        private static bool IsFieldLocked(XElement element) =>
+            (string?)element.Attribute(W.fldLock) is "1" or "true" or "on";
+
+        private static bool InFieldInstruction(XElement element)
         {
-            foreach (var part in wordDoc.ContentParts())
-            {
-                if ((part is HeaderPart or FooterPart && !settings.RenderHeadersAndFooters)
-                    || (part is FootnotesPart or EndnotesPart && !settings.RenderFootnotesAndEndnotes))
-                    continue;
-                var root = part.GetXDocument().Root;
-                if (root == null || !HasFormFields(root)) continue;
-                FieldRetriever.AnnotateWithFieldInfo(part);
-                NormalizeFormFields(root, settings);
-            }
+            var stack = element.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>();
+            var enclosing = element.Name == W.fldSimple ? stack : stack?.Skip(1);
+            return enclosing?.Any(info => info.FieldElementType is
+                FieldRetriever.FieldElementTypeEnum.Begin or FieldRetriever.FieldElementTypeEnum.InstrText) == true;
         }
 
-        // Resolve each complete field by its own annotated id, then replace only its result
-        // leaves. Keeping the original runs and range markers preserves formatting and revisions,
-        // including nested fields and begin/separate/end characters sharing a run with body text.
-        // This precedes empty-paragraph and tab measurement, whose tree rewrites preserve XML
-        // attributes but not annotations. The checkbox's em placeholder reserves its actual width.
-        private static void NormalizeFormFields(XElement root, WmlToHtmlConverterSettings settings)
+        private sealed record RenderField(XElement Root, XElement Begin, string Instruction,
+            List<XElement> Results, List<XElement> NestedSimple, bool Complete, bool Locked)
+        {
+            public string Kind => FieldKind(Instruction);
+        }
+
+        private static void NormalizeFieldResults(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings)
+        {
+            var parts = wordDoc.ContentParts().Where(part =>
+                !(part is HeaderPart or FooterPart && !settings.RenderHeadersAndFooters)
+                && !(part is FootnotesPart or EndnotesPart && !settings.RenderFootnotesAndEndnotes))
+                .Where(part => part.GetXDocument().Root is { } root && HasResolvableFields(root)).ToList();
+            if (parts.Count == 0) return;
+            // Main is also the source of running style references. Its field annotations are
+            // always required by body conversion, even if it has no supported field of its own.
+            if (!parts.Contains(wordDoc.MainDocumentPart!)) parts.Insert(0, wordDoc.MainDocumentPart!);
+            var fields = new List<RenderField>();
+            foreach (var part in parts)
+            {
+                FieldRetriever.AnnotateWithFieldInfo(part);
+                fields.AddRange(ReadRenderableFields(part.GetXDocument().Root!));
+            }
+            // Package/form values can occur inside a heading. Resolve those before a STYLEREF
+            // reads the heading, including a forward body reference and running stories.
+            foreach (var field in fields.Where(field => field.Kind != "STYLEREF"))
+                NormalizeFieldResult(field, wordDoc.PackageProperties.Title, null, settings);
+            if (!fields.Any(field => field.Kind == "STYLEREF")) return;
+            var styles = new StyleReferenceResolver(wordDoc, settings);
+            // Property replacement may have changed a style field's cached result subtree.
+            // Read ownership again rather than keeping references to removed result leaves.
+            foreach (var part in parts)
+            {
+                FieldRetriever.AnnotateWithFieldInfo(part);
+                foreach (var field in ReadRenderableFields(part.GetXDocument().Root!).Where(field => field.Kind == "STYLEREF").ToList())
+                    NormalizeFieldResult(field, null, styles, settings);
+            }
+            styles.StampSources();
+        }
+
+        // Index the complete result region, including nested field syntax. An authoritative outer
+        // result replaces that syntax too; an unsupported outer leaves its child fields available.
+        // Range markers, reference anchors, run formatting and revision containers stay in place.
+        // This runs before empty-paragraph and tab measurement; internal XML attributes survive
+        // those tree rewrites, unlike annotations.
+        private static IEnumerable<RenderField> ReadRenderableFields(XElement root)
         {
             var begins = new Dictionary<int, XElement>();
             var complete = new HashSet<int>();
             var open = new Stack<int>();
             var results = new Dictionary<int, List<XElement>>();
+            var simpleResults = new Dictionary<int, List<XElement>>();
             foreach (var element in root.Descendants())
             {
-                var info = element.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()?.FirstOrDefault();
+                var stack = element.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>();
+                var info = stack?.FirstOrDefault();
+                if ((element.Parent?.Name == W.r || element.Name == W.fldSimple) && InFieldInstruction(element))
+                    element.SetAttributeValue(HiddenFieldInstructionAttribute, true);
                 if (element.Name == W.fldChar)
                 {
                     if ((string?)element.Attribute(W.fldCharType) == "begin" && info != null)
@@ -11697,59 +11786,187 @@ namespace Docxodus
                     else if ((string?)element.Attribute(W.fldCharType) == "end" && open.TryPop(out var id))
                         complete.Add(id);
                 }
-                if (info?.FieldElementType != FieldRetriever.FieldElementTypeEnum.Result
-                    || element.Parent?.Name != W.r || element.Name == W.rPr || element.Name == W.fldChar
-                    || element.Name == W.commentReference || element.Name == W.footnoteReference || element.Name == W.endnoteReference)
-                    continue;
-                if (!results.TryGetValue(info.Id, out var list))
-                    results[info.Id] = list = new List<XElement>();
-                list.Add(element);
+                if (stack == null) continue;
+                foreach (var owner in stack.Where(i => i.FieldElementType == FieldRetriever.FieldElementTypeEnum.Result))
+                {
+                    var index = element.Name == W.fldSimple ? simpleResults : results;
+                    if (element.Name != W.fldSimple && !IsFieldResultLeaf(element)) continue;
+                    if (!index.TryGetValue(owner.Id, out var list)) index[owner.Id] = list = new List<XElement>();
+                    list.Add(element);
+                }
             }
-            foreach (var (id, begin) in begins)
+            var fields = root.Descendants().Where(e => e.Name == W.fldSimple
+                || (e.Name == W.fldChar && (string?)e.Attribute(W.fldCharType) == "begin")).ToList();
+            foreach (var begin in fields)
             {
-                if (begin.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()!.Skip(1).Any(info =>
-                    info.FieldElementType is FieldRetriever.FieldElementTypeEnum.Begin or FieldRetriever.FieldElementTypeEnum.InstrText))
-                    continue; // A nested instruction is input to the outer field, not displayed content.
-                var instruction = FieldRetriever.InstrText(root, id).Trim('{', '}', ' ', '\t', '\r', '\n')
-                    .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToUpperInvariant();
-                if (instruction?.StartsWith("FORM", StringComparison.Ordinal) != true)
-                    continue;
-                var deleted = FieldRetriever.IsDeletedField(root, id);
-                if (deleted && !settings.ShowDeletedContent)
-                    continue;
-                var allCached = results.GetValueOrDefault(id, new List<XElement>());
-                var cached = allCached
-                    .Where(e => e.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom) == deleted).ToList();
-                // A live field whose result was deleted must not synthesize a replacement outside
-                // that deletion. The existing revision renderer retains or hides its cached value.
-                if (allCached.Count > 0 && cached.Count == 0)
-                    continue;
-                var data = begin.Element(W.ffData);
-                if (instruction == "FORMTEXT" && cached.Any(e => e.Value.Length > 0))
-                    continue;
-                var value = complete.Contains(id) ? ResolveFormField(instruction, data) : null;
-                if (value == null)
-                {
-                    begin.SetAttributeValue(UnsupportedFormFieldAttribute, true);
-                    continue;
-                }
-                // Checkboxes use the field character's font size; dropdowns use the cached run's
-                // formatting when present. Metadata-only fields inherit their begin run's style.
-                var host = instruction == "FORMCHECKBOX" ? begin
-                    : cached.FirstOrDefault(e => e.Name == W.t || e.Name == W.delText) ?? begin;
-                foreach (var element in cached)
-                    if (element == host)
-                    {
-                        value.Name = element.Name;
-                        element.ReplaceWith(value);
-                    }
-                    else element.Remove();
-                if (host == begin)
-                {
-                    if (deleted) value.Name = W.delText;
-                    begin.AddAfterSelf(value);
-                }
+                var simple = begin.Name == W.fldSimple;
+                var id = simple ? 0 : begin.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()!.First().Id;
+                var instruction = simple ? (string?)begin.Attribute(W.instr) ?? ""
+                    : FieldRetriever.InstrText(root, id).Trim('{', '}');
+                if (!ResolvesField(FieldKind(instruction))) continue;
+                var cached = simple ? begin.Descendants().Where(IsFieldResultLeaf).ToList()
+                    : results.GetValueOrDefault(id, new List<XElement>());
+                var nestedSimple = simple ? begin.Descendants(W.fldSimple).ToList()
+                    : simpleResults.GetValueOrDefault(id, new List<XElement>());
+                var locked = IsFieldLocked(begin) || begin.Ancestors(W.fldSimple).Any(IsFieldLocked)
+                    || begin.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()?.Any(i =>
+                        begins.TryGetValue(i.Id, out var outer) && IsFieldLocked(outer)) == true;
+                yield return new RenderField(root, begin, instruction, cached, nestedSimple, simple || complete.Contains(id), locked);
             }
+        }
+
+        private static void NormalizeFieldResult(RenderField field, string? title,
+            StyleReferenceResolver? styles, WmlToHtmlConverterSettings settings)
+        {
+            var begin = field.Begin;
+            // An earlier authoritative outer result may have removed this nested field.
+            if (begin.AncestorsAndSelf().Last() != field.Root || InFieldInstruction(begin)) return;
+            var kind = field.Kind;
+            var form = kind.StartsWith("FORM", StringComparison.Ordinal);
+            var deleted = InDeletedContent(begin);
+            if (deleted && (!settings.ShowDeletedContent || !form) || !form && field.Locked) return;
+            var cached = field.Results.Where(e => InDeletedContent(e) == deleted).ToList();
+            // A deleted-only cache stays inside its revision; do not resurrect it in live text.
+            if (field.Results.Count > 0 && cached.Count == 0) return;
+            if (kind == "FORMTEXT" && cached.Any(e => e.Value.Length > 0)) return;
+            var value = !field.Complete ? null : form ? ResolveFormField(kind, begin.Element(W.ffData))
+                : kind == "STYLEREF" ? styles!.Resolve(field.Instruction, begin)
+                : ResolveDocumentProperty(field.Instruction, title);
+            if (value == null)
+            {
+                begin.SetAttributeValue(form ? UnsupportedFormFieldAttribute : UnsupportedDocumentFieldAttribute, true);
+                return;
+            }
+            var host = kind == "FORMCHECKBOX" ? begin
+                : cached.FirstOrDefault(e => (e.Name == W.t || e.Name == W.delText)
+                    && !e.AncestorsAndSelf().Any(a => a.Attribute(HiddenFieldInstructionAttribute) != null)) ?? begin;
+            foreach (var element in cached)
+                if (element == host)
+                {
+                    value.Name = element.Name;
+                    element.ReplaceWith(value);
+                }
+                else element.Remove();
+            if (host == begin)
+            {
+                if (deleted) value.Name = W.delText;
+                if (begin.Name == W.fldSimple) begin.AddFirst(new XElement(W.r, value));
+                else begin.AddAfterSelf(value);
+            }
+            foreach (var nested in field.NestedSimple.Where(e => e.Parent != null).Reverse())
+                nested.ReplaceWith(nested.Nodes());
+        }
+
+        private static readonly XName StyleReferenceAttribute = PtOpenXml.pt + "StyleReference";
+        private static readonly XName StyleReferenceLastAttribute = PtOpenXml.pt + "StyleReferenceLast";
+        private static readonly XName StyleReferenceSourceAttribute = PtOpenXml.pt + "StyleReferenceSource";
+        private static readonly XName StyleReferenceTextAttribute = PtOpenXml.pt + "StyleReferenceText";
+
+        private sealed class StyleReferenceResolver
+        {
+            private readonly List<XElement> styles;
+            private readonly List<XElement> paragraphs;
+            private readonly Dictionary<XElement, int> positions;
+            private readonly Dictionary<string, List<(XElement Paragraph, int Ordinal)>> byStyle;
+            private readonly WmlToHtmlConverterSettings settings;
+            private readonly HashSet<string> runningStyles = new HashSet<string>(StringComparer.Ordinal);
+            private readonly string? defaultStyle;
+
+            internal StyleReferenceResolver(WordprocessingDocument document, WmlToHtmlConverterSettings settings)
+            {
+                this.settings = settings;
+                styles = document.MainDocumentPart!.StyleDefinitionsPart?.GetXDocument().Root?.Elements(W.style).ToList()
+                    ?? new List<XElement>();
+                defaultStyle = (string?)styles.FirstOrDefault(s => (string?)s.Attribute(W.type) == "paragraph"
+                    && (string?)s.Attribute(W._default) is "1" or "true" or "on")?.Attribute(W.styleId);
+                paragraphs = document.MainDocumentPart.GetXDocument().Root!.Element(W.body)!.Descendants(W.p)
+                    .Where(p => !p.Ancestors(W.txbxContent).Any()).ToList();
+                positions = paragraphs.Select((paragraph, ordinal) => (paragraph, ordinal))
+                    .ToDictionary(item => item.paragraph, item => item.ordinal);
+                byStyle = paragraphs.Select((paragraph, ordinal) => (Paragraph: paragraph, Ordinal: ordinal))
+                    .Where(item => ParagraphStyle(item.Paragraph) != null)
+                    .GroupBy(item => ParagraphStyle(item.Paragraph)!)
+                    .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+            }
+
+            private string? ParagraphStyle(XElement paragraph) =>
+                (string?)paragraph.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val) ?? defaultStyle;
+
+            internal XElement? Resolve(string instruction, XElement field)
+            {
+                var match = Regex.Match(instruction,
+                    @"\A\s*STYLEREF\s+(?:""(?<style>[^""]+)""|(?<style>[^\s""\\]+))(?<switches>(?:\s+\\(?:l|\*\s+MERGEFORMAT))*)\s*\z",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                if (!match.Success) return null;
+                var name = match.Groups["style"].Value;
+                if (name.Length == 1 && name[0] >= '1' && name[0] <= '9') name = "heading " + name;
+                var style = styles.FirstOrDefault(s => string.Equals((string?)s.Element(W.name)?.Attribute(W.val), name, StringComparison.OrdinalIgnoreCase))
+                    ?? styles.FirstOrDefault(s => string.Equals((string?)s.Attribute(W.styleId), name, StringComparison.OrdinalIgnoreCase));
+                if ((string?)style?.Attribute(W.type) != "paragraph") return null;
+                var id = (string?)style.Attribute(W.styleId);
+                if (id == null || field.Ancestors(W.txbxContent).Any()) return null;
+                var root = field.AncestorsAndSelf().Last();
+                var running = root.Name == W.hdr || root.Name == W.ftr;
+                if (!running && root.Name != W.document) return null;
+                var paragraph = field.Ancestors(W.p).FirstOrDefault();
+                var position = paragraph != null && positions.TryGetValue(paragraph, out var ordinal) ? ordinal : -1;
+                var source = Source(id, position, running);
+                if (source == null) return null;
+                var result = new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), Text(source));
+                if (running && (settings.RenderPagination == PaginationMode.Paginated || settings.StampPageNumberFields))
+                {
+                    runningStyles.Add(id);
+                    result.SetAttributeValue(StyleReferenceAttribute, id);
+                    if (Regex.IsMatch(match.Groups["switches"].Value, @"\\l(?:\s|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                        result.SetAttributeValue(StyleReferenceLastAttribute, true);
+                }
+                return result;
+            }
+
+            private XElement? Source(string style, int position, bool running)
+            {
+                if (!byStyle.TryGetValue(style, out var candidates)) return null;
+                if (running) return candidates[0].Paragraph;
+                if (position < 0) return null;
+                var low = 0;
+                var high = candidates.Count;
+                while (low < high)
+                {
+                    var middle = low + (high - low) / 2;
+                    if (candidates[middle].Ordinal < position) low = middle + 1;
+                    else high = middle;
+                }
+                if (low > 0) return candidates[low - 1].Paragraph;
+                if (candidates[low].Ordinal == position) low++; // Do not reference the field's own paragraph.
+                return low < candidates.Count ? candidates[low].Paragraph : null;
+            }
+
+            private string Text(XElement paragraph) => string.Concat(paragraph.Descendants()
+                .Where(e => e.Ancestors(W.p).FirstOrDefault() == paragraph
+                    && !e.AncestorsAndSelf().Any(a => a.Attribute(HiddenFieldInstructionAttribute) != null)
+                    && !e.Ancestors(W.r).Any(r => r.Element(W.rPr) is { } properties
+                        && GetBoolProp(properties, W.vanish) && !GetBoolProp(properties, W.specVanish))
+                    && (!InDeletedContent(e) || settings.RenderTrackedChanges && settings.ShowDeletedContent))
+                .Select(e => e.Name == W.delText ? e.Value : DocxSession.TextOf(e)));
+
+            internal void StampSources()
+            {
+                foreach (var paragraph in paragraphs)
+                    if (ParagraphStyle(paragraph) is { } id && runningStyles.Contains(id))
+                    {
+                        paragraph.SetAttributeValue(StyleReferenceSourceAttribute, id);
+                        paragraph.SetAttributeValue(StyleReferenceTextAttribute, Text(paragraph));
+                    }
+            }
+        }
+
+        private static XElement? ResolveDocumentProperty(string instruction, string? title)
+        {
+            // TITLE's optional argument writes a property. Unsupported instructions retain their
+            // cache and diagnostic rather than mutating the input or silently ignoring arguments.
+            const string pattern = "\\A\\s*(?:TITLE|DOCPROPERTY\\s+(?:Title|\"Title\"))\\s*(?:\\\\\\*\\s+MERGEFORMAT\\s*)?\\z";
+            return title != null && Regex.IsMatch(instruction, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+                ? new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), title) : null;
         }
 
         private static XElement? ResolveFormField(string instruction, XElement? data)

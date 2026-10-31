@@ -5353,7 +5353,7 @@ controls are `fields-legacy-*` in the paired fidelity bench. Its checkbox contra
 painted outlines, checked/unchecked interiors, fixed size and caption alignment in addition
 to accessibility state; PDF text cannot prove the presence of a non-text box.
 
-`WmlToHtmlConverter.NormalizeFormFields` resolves complete, independently annotated field IDs
+`WmlToHtmlConverter.NormalizeFieldResults` resolves complete, independently annotated field IDs
 after formatting assembly and before empty-paragraph/tab processing. Only result leaves owned
 by that field are replaced, preserving styled runs and range/revision markers. Nested fields
 inside an outer instruction stay hidden, and a deleted result is not recreated outside its
@@ -5366,3 +5366,57 @@ Liberation Serif. A zero-width whitespace strut keeps graphic-only runs on the t
 under exact spacing. Borders survive background-free printing and forced-colors mode; the
 three Chromium PDF captures have identical decoded page pixels. This is static rendering,
 not an editable form control.
+
+
+## Property fields and page-dependent running headings (#1481)
+
+A simple field may have no cached result, while a complex field's cache may itself contain another
+field. These represent the same read-only title lookup when `docProps/core.xml` contains a title:
+
+```xml
+<w:fldSimple w:instr="DOCPROPERTY Title"/>
+<w:r><w:fldChar w:fldCharType="begin"/></w:r>
+<w:r><w:instrText>TITLE</w:instrText></w:r>
+<w:r><w:fldChar w:fldCharType="separate"/></w:r>
+<w:r><w:t>Stale title</w:t></w:r>
+<w:r><w:fldChar w:fldCharType="end"/></w:r>
+```
+
+An explicit empty title differs from an absent property. Docxodus clears the former and preserves
+and diagnoses the latter. `w:fldLock="true"` keeps a stored property/style result, even when marked
+dirty. Nested fields inside an outer instruction contribute neither visible text nor note ordinals.
+Microsoft documents [TITLE](https://support.microsoft.com/en-us/word/field-codes-title-field) and
+[DOCPROPERTY](https://support.microsoft.com/en-us/word/field-codes-docproperty-field); TITLE's
+property-writing argument is deliberately outside the read-only resolver.
+
+A header can reference a paragraph style shared by headings on different pages:
+
+```xml
+<w:style w:type="paragraph" w:styleId="Chapter">
+  <w:name w:val="Juniper Chapter"/>
+</w:style>
+<!-- Main document paragraph -->
+<w:p><w:pPr><w:pStyle w:val="Chapter"/></w:pPr><w:r><w:t>BIRCH SECTION</w:t></w:r></w:p>
+<!-- Header paragraph -->
+<w:p><w:fldSimple w:instr='STYLEREF "Juniper Chapter"'>
+  <w:r><w:t>ALDER SECTION</w:t></w:r>
+</w:fldSimple></w:p>
+```
+
+The shared header cache cannot answer both pages. Resolution must follow the page's source headings,
+then measure the resulting header before assigning body space. A long heading can move its own
+source to another page, so substitution after pagination is insufficient. A genuine oscillation
+(for example a kept heading that alternately fits and does not fit under its own expanded header)
+is refused explicitly. Splittable column groups and oversized pictures first use their existing
+reflow/fitting policies against the actual page band.
+
+| Original two-page fixture | Word | LibreOffice 25.8.7.3 | Docxodus before / after |
+|---|---|---|---|
+| Uncached STYLEREF in header/footer | Not captured | ALDER then BIRCH | Blank / ALDER then BIRCH |
+| Both caches contain ALDER | Not captured | ALDER then BIRCH | ALDER on both pages / ALDER then BIRCH |
+| Locked cache contains LOCKED REGISTER | Not captured | Updates to ALDER then BIRCH despite lock | LOCKED REGISTER on both pages / unchanged |
+
+The locked case is a diagnostic/control, not a LibreOffice parity claim. The three original packages
+pass Open XML SDK 3.5.1 validation. Browser regressions cover first/last matching paragraphs,
+forward/preceding fallback, style scope, split headings, story variants, numbering restarts,
+actual page-band geometry and explicit nonconvergence. No fresh Word rendering is claimed.

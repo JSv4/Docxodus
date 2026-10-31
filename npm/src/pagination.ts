@@ -84,6 +84,21 @@ export interface SectionHeaderFooter {
  */
 export type HeaderFooterRegistry = Map<number, SectionHeaderFooter>;
 
+interface StyleReferenceSource {
+  id: string;
+  style: string;
+  text: string;
+}
+
+type RunningStyleContext = Map<string, { first: StyleReferenceSource; last: StyleReferenceSource }>;
+
+interface PreparedRunningStories {
+  header?: HTMLElement;
+  footer?: HTMLElement;
+  headerHeight: number;
+  footerHeight: number;
+}
+
 /**
  * A measured content block with metadata for pagination decisions.
  */
@@ -891,6 +906,11 @@ export class PaginationEngine {
   private initiallyClippedText = new Map<string, { boxId: string; text: string; placement?: number[]; host?: { id: string; bounds: number[] } }>();
   private lastClippedTextAnchors: string[] = [];
   private state: "ready" | "running" | "complete" | "failed" = "ready";
+  private runningStyleSources: StyleReferenceSource[] = [];
+  private runningStyleContexts = new Map<string, RunningStyleContext>();
+  private runningStyleDefaults: RunningStyleContext = new Map();
+  private preparedRunningStories = new Map<string, PreparedRunningStories>();
+  private runningStylePageCount = 1;
 
   /**
    * Creates a new pagination engine.
@@ -987,8 +1007,92 @@ export class PaginationEngine {
     this.state = "running";
 
     try {
-      const pages: PageInfo[] = [];
-      let pageNumber = 1;
+      this.initializeRunningStyles();
+      const pristine = this.runningStyleSources.length > 0
+        ? this.stagingElement.cloneNode(true) as HTMLElement : null;
+      const seen = new Set<string>();
+      let previous = "";
+      let pages: PageInfo[];
+      for (let pass = 0; ; pass++) {
+        this.checkpoint();
+        if (pass > 0 && pristine) {
+          this.containerElement.replaceChildren();
+          this.stagingElement.style.cssText = pristine.style.cssText;
+          this.stagingElement.replaceChildren(...Array.from(pristine.childNodes, node => node.cloneNode(true)));
+        }
+        pages = this.paginatePass();
+        if (!pristine) break;
+        const signature = this.updateRunningStyleContexts(pages);
+        if (signature === previous) break;
+        if (seen.has(signature) || pass === 11) {
+          throw new Error("Running style fields did not stabilize: pagination cycle or pass limit");
+        }
+        seen.add(signature);
+        previous = signature;
+      }
+
+      // Only running-story variants selected by a real page are expected to materialize. Read IDs
+      // from registry sources, not presentation clones, so a failed clone remains detectable.
+      for (const page of pages) {
+        this.checkpoint();
+        if (page.element.dataset.sectionFiller === "true") continue;
+        const pageInSection = parseInt(page.element.dataset.pageInSection || "1", 10);
+        const displayedPageNumber = parseInt(
+          page.element.dataset.displayedPageNumber || String(page.pageNumber),
+          10,
+        );
+        const header = this.selectHeader(page.sectionIndex, pageInSection, displayedPageNumber);
+        const footer = this.selectFooter(page.sectionIndex, pageInSection, displayedPageNumber);
+        for (const story of [header, footer]) {
+          if (!story) continue;
+          this.collectExpectedSourceAnchors(story, this.expectedPageMapAnchorIds);
+          // The story's margin comments materialize with it (issue #1310).
+          for (const reference of Array.from(story.querySelectorAll<HTMLElement>("[data-comment-id]"))) {
+            const source = this.commentMarginRegistry.get(reference.dataset.commentId ?? "");
+            if (source) this.collectExpectedSourceAnchors(source, this.expectedPageMapAnchorIds);
+          }
+        }
+      }
+
+      // Establish one active editor anchor and page-qualify every presentation fragment.
+      // Full canonical source identities remain on all clones, including table cells.
+      this.qualifyPageFragments(pages);
+      this.transferVisibleFragmentTargets();
+      if (!this.deferFragmentIdentities) this.normalizeVisiblePageFragments(pages);
+      // Glyph placement only: run once every page and running story is final.
+      if (this.alignBaselines) alignBaselinesToWord(this.containerElement);
+      this.activateCommentReturnLinks(pages);
+      // A copy: pages the balloon appendix adds join this list, not the caller's result.
+      this.lastPages = [...pages];
+      if (!this.deferMarkupBalloons) pages.push(...(this.layoutMarkupBalloons()?.appendedPages ?? []));
+
+      const result = {
+        totalPages: pages.length,
+        pages,
+        pageMap: this.layoutToken
+          ? this.materializePageMap(
+              this.layoutToken.documentVersion,
+              this.layoutToken.rendererFingerprint,
+            )
+          : undefined,
+      };
+      this.state = "complete";
+      return result;
+    } catch (error) {
+      this.state = "failed";
+      throw error;
+    }
+  }
+
+  /** One flow pass; field-dependent running bands are fixed for this pass. */
+  private paginatePass(): PageInfo[] {
+    this.createdPageCount = 0;
+    this.commentReturnLinks = [];
+    this.pendingFootnoteContinuation = null;
+    this.markupBalloons = undefined;
+    this.preparedRunningStories.clear();
+    const pages: PageInfo[] = [];
+    let pageNumber = 1;
 
     // The balloon layout hides comment reference marks, which changes line breaks: before measuring.
     // Any other placement clears what an earlier balloon pagination left on these containers.
@@ -1217,57 +1321,100 @@ export class PaginationEngine {
     // Every page box exists now, so NUMPAGES has an answer and each PAGE marker knows its page.
     this.substitutePageNumberFields(pages.length);
 
-    // Only running-story variants selected by a real page are expected to materialize. Read IDs
-    // from registry sources, not presentation clones, so a failed clone remains detectable.
-    for (const page of pages) {
-      this.checkpoint();
-      if (page.element.dataset.sectionFiller === "true") continue;
-      const pageInSection = parseInt(page.element.dataset.pageInSection || "1", 10);
-      const displayedPageNumber = parseInt(
-        page.element.dataset.displayedPageNumber || String(page.pageNumber),
-        10,
-      );
-      const header = this.selectHeader(page.sectionIndex, pageInSection, displayedPageNumber);
-      const footer = this.selectFooter(page.sectionIndex, pageInSection, displayedPageNumber);
-      for (const story of [header, footer]) {
-        if (!story) continue;
-        this.collectExpectedSourceAnchors(story, this.expectedPageMapAnchorIds);
-        // The story's margin comments materialize with it (issue #1310).
-        for (const reference of Array.from(story.querySelectorAll<HTMLElement>("[data-comment-id]"))) {
-          const source = this.commentMarginRegistry.get(reference.dataset.commentId ?? "");
-          if (source) this.collectExpectedSourceAnchors(source, this.expectedPageMapAnchorIds);
-        }
+    return pages;
+  }
+
+  private initializeRunningStyles(): void {
+    if (!this.stagingElement.querySelector('#pagination-hf-registry [data-field="STYLEREF"]')) return;
+    for (const paragraph of Array.from(this.stagingElement.querySelectorAll<HTMLElement>(
+      '[data-paragraph-style][data-styleref-text]',
+    ))) {
+      if (paragraph.closest('#pagination-hf-registry, #pagination-footnote-registry, '
+        + '#pagination-comment-margin-registry, [data-docx-textbox]')) continue;
+      const source = {
+        id: String(this.runningStyleSources.length),
+        style: paragraph.dataset.paragraphStyle!,
+        text: paragraph.dataset.stylerefText!,
+      };
+      paragraph.dataset.stylerefSource = source.id;
+      this.runningStyleSources.push(source);
+      if (!this.runningStyleDefaults.has(source.style)) {
+        this.runningStyleDefaults.set(source.style, { first: source, last: source });
       }
     }
+  }
 
-    // Establish one active editor anchor and page-qualify every presentation fragment.
-    // Full canonical source identities remain on all clones, including table cells.
-    this.qualifyPageFragments(pages);
-    this.transferVisibleFragmentTargets();
-    if (!this.deferFragmentIdentities) this.normalizeVisiblePageFragments(pages);
-    // Glyph placement only: run once every page and running story is final.
-    if (this.alignBaselines) alignBaselinesToWord(this.containerElement);
-    this.activateCommentReturnLinks(pages);
-    // A copy: pages the balloon appendix adds join this list, not the caller's result.
-    this.lastPages = [...pages];
-    if (!this.deferMarkupBalloons) pages.push(...(this.layoutMarkupBalloons()?.appendedPages ?? []));
+  private runningStylePageKey(section: number, pageInSection: number, displayed: number): string {
+    return `${section}:${pageInSection}:${displayed}`;
+  }
 
-      const result = {
-        totalPages: pages.length,
-        pages,
-        pageMap: this.layoutToken
-          ? this.materializePageMap(
-              this.layoutToken.documentVersion,
-              this.layoutToken.rendererFingerprint,
-            )
-          : undefined,
-      };
-      this.state = "complete";
-      return result;
-    } catch (error) {
-      this.state = "failed";
-      throw error;
+  /** The next pass reads these page-owned sources, including full text on split paragraphs. */
+  private updateRunningStyleContexts(pages: PageInfo[]): string {
+    const preceding = new Map<string, StyleReferenceSource>();
+    const contexts = new Map<string, RunningStyleContext>();
+    const ownership: unknown[] = [];
+    for (const page of pages) {
+      this.checkpoint();
+      const body = page.element.querySelector<HTMLElement>(`.${this.cssPrefix}content`)!;
+      const onPage: RunningStyleContext = new Map();
+      const ids = new Set<string>();
+      for (const element of Array.from(body.querySelectorAll<HTMLElement>('[data-styleref-source]'))) {
+        const id = element.dataset.stylerefSource!;
+        if (ids.has(id)) continue;
+        ids.add(id);
+        const source = this.runningStyleSources[Number(id)];
+        if (!source) continue;
+        const match = onPage.get(source.style);
+        onPage.set(source.style, { first: match?.first ?? source, last: source });
+      }
+      const context: RunningStyleContext = new Map();
+      for (const [style, initial] of this.runningStyleDefaults) {
+        const prior = preceding.get(style);
+        context.set(style, onPage.get(style) ?? (prior ? { first: prior, last: prior } : initial));
+      }
+      for (const [style, match] of onPage) preceding.set(style, match.last);
+      const key = this.runningStylePageKey(page.sectionIndex,
+        Number(page.element.dataset.pageInSection), Number(page.element.dataset.displayedPageNumber));
+      contexts.set(key, context);
+      ownership.push([key, [...context].map(([style, match]) => [style, match.first.id, match.last.id]),
+        [...ids], body.textContent, Array.from(body.querySelectorAll<HTMLElement>(
+          '[data-source-anchor-id], [data-anchor]',
+        ), element => element.dataset.sourceAnchorId ?? element.dataset.anchor)]);
     }
+    this.runningStyleContexts = contexts;
+    this.runningStylePageCount = pages.length;
+    return JSON.stringify(ownership);
+  }
+
+  /** Measurement and page cloning share these exact resolved stories within a pass. */
+  private prepareRunningStories(
+    dims: PageDimensions, sectionIndex: number, pageInSection: number, displayed: number,
+  ): PreparedRunningStories | undefined {
+    if (this.runningStyleSources.length === 0) return undefined;
+    const pageKey = this.runningStylePageKey(sectionIndex, pageInSection, displayed);
+    const key = `${pageKey}:${dims.contentWidth}`;
+    const cached = this.preparedRunningStories.get(key);
+    if (cached) return cached;
+    const context = this.runningStyleContexts.get(pageKey) ?? this.runningStyleDefaults;
+    const prepare = (source: HTMLElement | undefined) => {
+      if (!source) return undefined;
+      const clone = source.cloneNode(true) as HTMLElement;
+      for (const marker of Array.from(clone.querySelectorAll<HTMLElement>('[data-field]'))) {
+        if (marker.dataset.field === 'STYLEREF') {
+          const match = context.get(marker.dataset.fieldStyle ?? '');
+          if (match) marker.textContent = (marker.dataset.fieldLast === 'true' ? match.last : match.first).text;
+        }
+      }
+      this.substituteStoryPageNumbers(clone, sectionIndex, displayed, this.runningStylePageCount);
+      return clone;
+    };
+    const header = prepare(this.selectHeader(sectionIndex, pageInSection, displayed));
+    const footer = prepare(this.selectFooter(sectionIndex, pageInSection, displayed));
+    const result = { header, footer,
+      headerHeight: header ? this.measureHeaderFooterHeight(header, dims) : 0,
+      footerHeight: footer ? this.measureHeaderFooterHeight(footer, dims) : 0 };
+    this.preparedRunningStories.set(key, result);
+    return result;
   }
 
   private checkpoint(): void {
@@ -1748,10 +1895,9 @@ export class PaginationEngine {
    * marks these. `data-field-format` (the field's own `\*` switch) wins over the section's format
    * when present, which is exactly how Word resolves the two.
    *
-   * Runs after layout because NUMPAGES cannot be known before the last page exists. The
-   * substituted text can therefore be marginally wider than the cached result the header was
-   * measured with; the header band clips, so the failure mode is a hair of overflow rather than
-   * a layout that disagrees with itself.
+   * Runs after layout because NUMPAGES cannot be known before the last page exists. In documents
+   * with running STYLEREF fields, the reconciliation pass also measures these page-number values
+   * before allocating body space. Other documents retain the established late substitution.
    *
    * Ordinary cached fields are scoped to the CLONED header/footer regions. A page-number field in body text is
    * ordinary run content that the editor may make editable, and committing an edited block writes
@@ -1770,15 +1916,20 @@ export class PaginationEngine {
 
       const sectionIndex = parseInt(box.dataset.sectionIndex || "0", 10);
       const pageNumber = parseInt(box.dataset.pageNumber || "1", 10);
-      const numbering = this.pageNumbering.get(sectionIndex) ?? {};
       const displayed = parseInt(box.dataset.displayedPageNumber || String(pageNumber), 10);
+      this.substituteStoryPageNumbers(box, sectionIndex, displayed, totalPages, markers);
+    }
+  }
 
-      for (const marker of Array.from(markers)) {
-        const kind = marker.dataset.field;
-        if (kind !== "PAGE" && kind !== "NUMPAGES") continue;
-        const format = marker.dataset.fieldFormat ?? numbering.format;
-        marker.textContent = formatPageNumber(kind === "PAGE" ? displayed : totalPages, format);
-      }
+  private substituteStoryPageNumbers(
+    story: HTMLElement, sectionIndex: number, displayed: number, totalPages: number,
+    markers = story.querySelectorAll<HTMLElement>('[data-field]'),
+  ): void {
+    for (const marker of Array.from(markers)) {
+      const kind = marker.dataset.field;
+      if (kind !== "PAGE" && kind !== "NUMPAGES") continue;
+      const format = marker.dataset.fieldFormat ?? this.pageNumbering.get(sectionIndex)?.format;
+      marker.textContent = formatPageNumber(kind === "PAGE" ? displayed : totalPages, format);
     }
   }
 
@@ -1882,11 +2033,15 @@ export class PaginationEngine {
   }
 
   /** An indivisible picture must fit one page before paragraph fragmentation can help. */
-  private fitOversizedPictures(section: HTMLElement, dims: PageDimensions, sectionIndex: number): void {
+  private fitOversizedPictures(
+    section: HTMLElement, dims: PageDimensions, sectionIndex: number,
+    availableBodyHeight = this.smallestEffectiveContentHeight(dims, sectionIndex),
+  ): boolean {
+    let changed = false;
     const sectionLeft = section.getBoundingClientRect().left;
     const paperLeft = sectionLeft - ptToPx(dims.marginLeft);
     const paperRight = sectionLeft + ptToPx(dims.contentWidth + dims.marginRight);
-    const bodyHeight = ptToPx(this.smallestEffectiveContentHeight(dims, sectionIndex));
+    const bodyHeight = ptToPx(availableBodyHeight);
     for (const image of Array.from(section.querySelectorAll<HTMLImageElement>("img"))) {
       this.checkpoint();
       if (image.closest("#pagination-hf-registry, #pagination-footnote-registry, #pagination-comment-margin-registry, [data-docx-drawing-anchor]")) continue;
@@ -1938,6 +2093,8 @@ export class PaginationEngine {
       }
       if (!tooTall && rect.left >= paperLeft - 1 && rect.right <= paperRight + 1) continue;
       const ratio = Math.min(1, maximumWidth / rect.width, maximumHeight / rect.height);
+      if (ratio >= 1) continue;
+      changed = true;
       image.style.setProperty("width", `${rect.width * ratio}px`, "important");
       image.style.setProperty("height", `${rect.height * ratio}px`, "important");
       image.style.setProperty("min-width", "0", "important");
@@ -1951,6 +2108,24 @@ export class PaginationEngine {
         floating.style.setProperty("min-width", "0", "important");
         floating.style.setProperty("min-height", "0", "important");
       }
+    }
+    return changed;
+  }
+
+  /** A running field can shorten a later page after the section's initial picture fit. */
+  private fitBlockPicturesToPage(block: MeasuredBlock, dims: PageDimensions, bodyHeight: number): MeasuredBlock | null {
+    if (!block.element.querySelector("img")) return null;
+    const host = this.document.createElement("div");
+    host.style.cssText = `position:absolute;visibility:hidden;left:-9999px;width:${dims.contentWidth}pt`;
+    const clone = block.element.cloneNode(true) as HTMLElement;
+    host.appendChild(clone);
+    this.stagingElement.appendChild(host);
+    try {
+      return this.fitOversizedPictures(host, dims, block.sectionIndex, bodyHeight)
+        ? { ...block, ...this.measureElement(clone, dims, block.sectionIndex) } : null;
+    } finally {
+      clone.remove();
+      host.remove();
     }
   }
 
@@ -2158,6 +2333,7 @@ export class PaginationEngine {
 
     const makeContainer = (slice: HTMLElement[]): HTMLElement => {
       const container = this.document.createElement("div");
+      container.dataset.paginationColumns = "true";
       container.style.columnCount = String(columnCount);
       container.style.columnGap = `${columnGapPt}pt`;
       if (sequential) {
@@ -2263,39 +2439,44 @@ export class PaginationEngine {
   }
 
   /**
-   * Reflow a final continuous column section against the actual remaining body band.
+   * Reflow columns against the actual remaining body band.
    * A preceding title, running story or note reservation can make it shorter than the
    * fresh-page band used while collecting source blocks. Split at source-child boundaries
    * when the narrower band would create an extra horizontal column; the tail is reconsidered
    * normally on the following page. No source child is duplicated or discarded.
    */
-  private reflowSequentialColumns(
+  private reflowColumns(
     block: MeasuredBlock,
     dims: PageDimensions,
     availableHeightPt: number,
   ): MeasuredBlock[] | null {
-    if (block.element.dataset.paginationSequentialColumns !== "true"
-      || availableHeightPt <= 0) return null;
-    const maximumHeight = this.smallestEffectiveContentHeight(dims, block.sectionIndex);
+    const sequential = block.element.dataset.paginationSequentialColumns === "true";
+    const contextual = this.runningStyleSources.length > 0 && block.element.dataset.paginationColumns === "true";
+    if ((!sequential && !contextual) || availableHeightPt <= 0) return null;
+    const maximumHeight = contextual ? availableHeightPt : this.smallestEffectiveContentHeight(dims, block.sectionIndex);
     const height = Math.min(availableHeightPt, maximumHeight);
-    if (Math.abs(parseFloat(block.element.style.maxHeight) - height) < 0.01) return null;
+    if (sequential ? Math.abs(parseFloat(block.element.style.maxHeight) - height) < 0.01
+      : block.heightPt <= height) return null;
     const children = Array.from(block.element.children) as HTMLElement[];
     const make = (slice: HTMLElement[], limit: number): HTMLElement => {
       const container = block.element.cloneNode(false) as HTMLElement;
-      container.style.maxHeight = `${limit}pt`;
+      if (sequential) container.style.maxHeight = `${limit}pt`;
       for (const child of slice) container.appendChild(child.cloneNode(true));
-      this.liftColumnSpaceBefore(container, dims);
+      if (sequential) this.liftColumnSpaceBefore(container, dims);
       return container;
     };
+    const fits = (container: HTMLElement) => sequential
+      ? !this.columnContainerOverflows(container, dims)
+      : this.measureElement(container, dims, block.sectionIndex).heightPt <= height;
     const whole = make(children, height);
-    if (!this.columnContainerOverflows(whole, dims)) {
+    if (fits(whole)) {
       return [this.measureElement(whole, dims, block.sectionIndex)];
     }
     let end = 0;
     for (let count = 1; count < children.length; count++) {
       this.checkpoint();
       const candidate = make(children.slice(0, count), height);
-      if (this.columnContainerOverflows(candidate, dims)) break;
+      if (!fits(candidate)) break;
       if (children[count - 1].dataset.keepWithNext !== "true") end = count;
     }
     if (end === 0) return null;
@@ -4975,8 +5156,8 @@ export class PaginationEngine {
    * {@link createPage}, the body budget the flow loop spends, and the note area's anchor all
    * read it, so those three cannot disagree about where the body ends.
    *
-   * Deterministic: it depends only on the section's page setup and the registry's pre-measured
-   * story heights, never on the page's content, which is what keeps it lazy-loading compatible.
+   * Within a flow pass, story values and heights are fixed. STYLEREF documents reconcile page
+   * ownership between passes; placement and body budgeting consume the same prepared stories.
    */
   /** The body height a physical page may fill: its body band less any caller-requested reduction. */
   private bodyBudgetPt(bodyHeightPt: number, physicalPageNumber: number): number {
@@ -4989,6 +5170,8 @@ export class PaginationEngine {
     pageInSection: number,
     displayedPageNumber: number,
   ): PageBands {
+    const prepared = this.prepareRunningStories(dims, sectionIndex, pageInSection, displayedPageNumber);
+    if (prepared) return resolvePageBands(dims, prepared.headerHeight, prepared.footerHeight);
     const sectionHf = this.hfRegistry.get(sectionIndex);
     return resolvePageBands(
       dims,
@@ -5482,6 +5665,15 @@ export class PaginationEngine {
         }
       }
       const blockDimensions = dimensionsFor(block.sectionIndex);
+      if (this.fragmentParagraphs && this.runningStyleSources.length > 0 && currentContent.length === 0
+        && block.heightPt > effectiveContentHeight) {
+        const fitted = this.fitBlockPicturesToPage(block, blockDimensions, effectiveContentHeight);
+        if (fitted) {
+          blocks[i] = fitted;
+          i--;
+          continue;
+        }
+      }
       const nextBlockPageInSection = pageInSection(block.sectionIndex, pageNumber + 1);
       const freshBlockPageBodyHeight = this.getPageBands(
         blockDimensions,
@@ -5673,7 +5865,7 @@ export class PaginationEngine {
         isFirstOnPage,
         pageInSection(block.sectionIndex)
       );
-      const columnFragments = this.reflowSequentialColumns(
+      const columnFragments = this.reflowColumns(
         block,
         blockDimensions,
         remainingHeight - currentFootnoteHeight - additionalFootnoteHeight - effectiveMarginTop,
@@ -6665,13 +6857,14 @@ export class PaginationEngine {
     // first page, not from the document's.
     pageBox.dataset.pageInSection = String(pageInSection);
 
-    // Where the three bands sit on this page (no re-measurement needed)
+    // Band measurement and cloning use the same prepared running stories.
     const bands = this.getPageBands(dims, sectionIndex, pageInSection, displayedPageNumber);
+    const prepared = this.prepareRunningStories(dims, sectionIndex, pageInSection, displayedPageNumber);
 
     // Add header if available for this section/page
     const headerSource = isSectionFiller
       ? undefined
-      : this.selectHeader(sectionIndex, pageInSection, displayedPageNumber);
+      : prepared ? prepared.header : this.selectHeader(sectionIndex, pageInSection, displayedPageNumber);
 
     if (headerSource) {
       const headerDiv = this.document.createElement("div");
@@ -6745,7 +6938,7 @@ export class PaginationEngine {
     // as its balloon does (issue #1310). The footer is placed below, so read it from its source.
     const footerSource = isSectionFiller
       ? undefined
-      : this.selectFooter(sectionIndex, pageInSection, displayedPageNumber);
+      : prepared ? prepared.footer : this.selectFooter(sectionIndex, pageInSection, displayedPageNumber);
     const pageCommentIds: string[] = [];
     for (const marker of [pageBox, footerSource].flatMap((story) =>
       Array.from(story?.querySelectorAll<HTMLElement>("[data-comment-id]") ?? []))) {
