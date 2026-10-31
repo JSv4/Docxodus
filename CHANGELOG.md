@@ -95,6 +95,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Inline paragraph frames preserve their flow and page space instead of overprinting the next
+  paragraph. Text-anchored wrapping frames exclude their actual occupied area, including separate
+  frames and header overhangs; `notBeside` frames place following text below. Grouped paragraphs,
+  running stories and ordinary table-cell flow retain their source identities. Horizontal text
+  distance expands wrapping clearance. Unsupported two-sided wrapping and vertical clearance
+  preserve complete text with explicit approximation diagnostics; strict export refuses them (#1487).
+
 - Fixed DrawingML text boxes at the paper edge no longer cause a false missing-paragraph
   export error when their original text is wholly off paper (#1492). Fit mode follows local
   properties and theme defaults; verification binds original text geometry and authored

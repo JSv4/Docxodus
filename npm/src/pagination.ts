@@ -94,6 +94,8 @@ interface PreparedRunningStories {
   footerHeight: number;
 }
 
+type FrameExclusion = { top: number; bottom: number; right: number };
+
 /**
  * A measured content block with metadata for pagination decisions.
  */
@@ -104,6 +106,10 @@ export interface MeasuredBlock {
   sectionIndex: number;
   /** Measured height in points (content + padding + border, excluding margins) */
   heightPt: number;
+  /** Inline frame paint's furthest bottom from this block's top, independent of its flow height. */
+  frameExtentPt?: number;
+  /** Extra source-flow gap imposed by preceding floats, after ordinary margin collapse. */
+  clearancePt?: number;
   /** Top margin in points */
   marginTopPt: number;
   /** Bottom margin in points */
@@ -913,6 +919,7 @@ export class PaginationEngine {
   private runningStyleContexts = new Map<string, RunningStyleContext>();
   private runningStyleDefaults: RunningStyleContext = new Map();
   private preparedRunningStories = new Map<string, PreparedRunningStories>();
+  private storyFrameExclusions = new WeakMap<HTMLElement, FrameExclusion[]>();
   private runningStylePageCount = 1;
 
   /**
@@ -2674,13 +2681,31 @@ export class PaginationEngine {
       [...preceding.map(previous => previous.cloneNode(true) as HTMLElement), measuredElement], dims);
     this.stagingElement.appendChild(measurementHost);
 
+    this.prepareFrameExclusions(measurementHost);
     const rect = measuredElement.getBoundingClientRect();
     const margins = collapsedBlockMarginsPx(this.view, measuredElement);
+    let clearancePt = 0;
+    if (this.hasFlowExclusion(preceding)) {
+      // A table/formatting context can move below a float without growing its own box.
+      // Replace it briefly with an ordinary block to measure the un-cleared position;
+      // inserting a sibling instead would count the table's top margin twice.
+      const flowPosition = this.document.createElement('div');
+      flowPosition.style.cssText = `height:1px;margin-top:${margins.topPx}px`;
+      measuredElement.replaceWith(flowPosition);
+      clearancePt = pxToPt(Math.max(0, rect.top - flowPosition.getBoundingClientRect().top));
+      flowPosition.replaceWith(measuredElement);
+    }
+    const frameBottoms = Array.from(measurementHost.querySelectorAll<HTMLElement>('[data-docx-frame-exclusion]'))
+      .filter(frame => !frame.closest('[data-docx-textbox]'))
+      .map(frame => frame.getBoundingClientRect().bottom - rect.top);
+    const heightPt = pxToPt(Math.max(rect.height, ...this.floatingPictureCarriers(measuredElement)
+      .map(picture => picture.getBoundingClientRect().bottom - rect.top)));
     const measured: MeasuredBlock = {
       element,
       sectionIndex,
-      heightPt: pxToPt(Math.max(rect.height, ...this.floatingPictureCarriers(measuredElement)
-        .map(picture => picture.getBoundingClientRect().bottom - rect.top))),
+      heightPt,
+      clearancePt,
+      frameExtentPt: frameBottoms.length ? Math.max(0, pxToPt(Math.max(...frameBottoms))) : undefined,
       marginTopPt: pxToPt(margins.topPx),
       marginBottomPt: pxToPt(margins.bottomPx),
       keepWithNext: element.dataset.keepWithNext === "true",
@@ -2728,14 +2753,14 @@ export class PaginationEngine {
    * collapsed-margin rules as normal block placement. The trailing margin is
    * intentionally excluded, matching the individual block fit check.
    */
-  private measureKeepWithNextChainBodyHeight(
+  private measureKeepWithNextChainHeight(
     chain: MeasuredBlock[],
     previousMarginBottomPt: number,
     isFirstOnPage: boolean,
     pageInSection: number
-  ): number {
+  ): { flowHeight: number; frameBottom: number } {
     const firstBlock = chain[0];
-    if (!firstBlock) return 0;
+    if (!firstBlock) return { flowHeight: 0, frameBottom: 0 };
 
     const firstMarginTop = this.effectiveBlockMarginTop(
       firstBlock,
@@ -2744,14 +2769,17 @@ export class PaginationEngine {
       pageInSection
     );
     let bodyHeight = firstMarginTop + firstBlock.heightPt;
+    let frameBottom = firstMarginTop + (firstBlock.frameExtentPt ?? 0);
 
     for (let index = 1; index < chain.length; index++) {
       const previousBlock = chain[index - 1];
       const block = chain[index];
-      bodyHeight += Math.max(previousBlock.marginBottomPt, block.marginTopPt) + block.heightPt;
+      bodyHeight += Math.max(previousBlock.marginBottomPt, block.marginTopPt) + (block.clearancePt ?? 0);
+      frameBottom = Math.max(frameBottom, bodyHeight + (block.frameExtentPt ?? 0));
+      bodyHeight += block.heightPt;
     }
 
-    return bodyHeight;
+    return { flowHeight: bodyHeight, frameBottom };
   }
 
   /** Word paragraphs render as `p`, or as `h1`–`h6` when their style has an outline level. */
@@ -2781,12 +2809,10 @@ export class PaginationEngine {
     isFirstOnPage: boolean,
     pageInSection: number
   ): number {
-    if (this.shouldSuppressPageTopSpacing(block, isFirstOnPage, pageInSection)) {
-      return 0;
-    }
-    return isFirstOnPage
-      ? block.marginTopPt
-      : Math.max(block.marginTopPt, previousMarginBottomPt) - previousMarginBottomPt;
+    const margin = this.shouldSuppressPageTopSpacing(block, isFirstOnPage, pageInSection) ? 0
+      : isFirstOnPage ? block.marginTopPt
+        : Math.max(block.marginTopPt, previousMarginBottomPt) - previousMarginBottomPt;
+    return margin + (block.clearancePt ?? 0);
   }
 
   /** Clone a source block with the same page-top spacing decision used by the height budget. */
@@ -2833,7 +2859,7 @@ export class PaginationEngine {
   }
 
   private hasFlowExclusion(content: readonly HTMLElement[]): boolean {
-    const selector = '[data-docx-edge-picture],[data-docx-shape-exclusion],[data-docx-shape-clearance]';
+    const selector = '[data-docx-edge-picture],[data-docx-shape-exclusion],[data-docx-shape-clearance],[data-docx-frame-exclusion],[data-docx-header-exclusion]';
     return content.some(element => element.matches(selector) || element.querySelector(selector));
   }
 
@@ -4229,6 +4255,7 @@ export class PaginationEngine {
         [...prefix.map(previous => previous.cloneNode(true) as HTMLElement), paragraph], dims);
       this.stagingElement.appendChild(host);
     }
+    if (host) this.prepareFrameExclusions(host);
     let split: ParagraphSplitAttempt;
     try {
       if (!this.canFragmentParagraph({ ...block, element: paragraph }, relaxKeepLines)) return null;
@@ -5444,6 +5471,112 @@ export class PaginationEngine {
     return fallback ?? 0;
   }
 
+  /** Carry the selected header's overhanging frame exclusion into body layout, without its text. */
+  private headerFramePrefix(dims: PageDimensions, section: number, page: number, displayed: number): HTMLElement[] {
+    const prepared = this.prepareRunningStories(dims, section, page, displayed);
+    const source = prepared ? prepared.header : this.selectHeader(section, page, displayed);
+    const measured = source ? this.storyFrameExclusions.get(source) ?? [] : [];
+    if (measured.length === 0) return [];
+    const bands = this.getPageBands(dims, section, page, displayed);
+    const offset = bands.headerTop - bands.bodyTop;
+    const rectangles = measured
+      .map(rect => ({ top: Math.max(0, rect.top + offset), bottom: rect.bottom + offset, right: rect.right }))
+      .filter(rect => rect.bottom > rect.top && rect.right > 0);
+    if (rectangles.length === 0) return [];
+    const exclusion = this.document.createElement('div');
+    exclusion.dataset.docxHeaderExclusion = JSON.stringify(rectangles);
+    exclusion.setAttribute('aria-hidden', 'true');
+    exclusion.style.cssText = `float:left;width:${Math.max(...rectangles.map(rect => rect.right))}pt;height:${Math.max(...rectangles.map(rect => rect.bottom))}pt;shape-outside:${this.frameExclusionPolygon(rectangles)}`;
+    return [exclusion];
+  }
+
+  private frameExclusionRectangles(host: HTMLElement): FrameExclusion[] {
+    const origin = host.getBoundingClientRect();
+    return Array.from(host.querySelectorAll<HTMLElement>('[data-docx-frame-exclusion] > [data-docx-text-frame]'))
+      .filter(frame => !frame.closest('[data-docx-textbox]'))
+      .map(frame => {
+        const rect = frame.getBoundingClientRect();
+        const distance = parseFloat(this.view.getComputedStyle(frame).marginRight) || 0;
+        return { top: pxToPt(rect.top - origin.top), bottom: pxToPt(rect.bottom - origin.top), right: pxToPt(rect.right - origin.left + distance) };
+      });
+  }
+
+  private frameExclusionPolygon(rectangles: FrameExclusion[]): string {
+    // One float describes the right edge of the union. Separate floats would add their widths
+    // where frames overlap, and one bounding rectangle would fill gaps between their heights.
+    const width = Math.max(...rectangles.map(rect => rect.right));
+    const height = Math.max(...rectangles.map(rect => rect.bottom));
+    if (!(width > 0 && height > 0)) return 'none';
+    const levels = [...new Set([0, ...rectangles.flatMap(rect => [rect.top, rect.bottom])])].sort((a, b) => a - b);
+    const point = (x: number, y: number) => `${x / width * 100}% ${y / height * 100}%`;
+    const points = [point(0, 0)];
+    for (let i = 1; i < levels.length; i++) {
+      const top = levels[i - 1], bottom = levels[i];
+      const right = Math.max(0, ...rectangles.filter(rect => rect.top < bottom && rect.bottom > top).map(rect => rect.right));
+      points.push(point(right, top), point(right, bottom));
+    }
+    points.push(point(0, height));
+    return `polygon(${points.join(',')})`;
+  }
+
+  private prepareFrameExclusions(host: HTMLElement): void {
+    for (const proxy of Array.from(host.querySelectorAll('[data-docx-frame-exclusion-segment]'))) proxy.remove();
+    const carriers = Array.from(host.querySelectorAll<HTMLElement>('[data-docx-header-exclusion],[data-docx-frame-exclusion]'))
+      .filter(carrier => !carrier.closest('[data-docx-textbox]'));
+    for (const carrier of carriers) if (carrier.hasAttribute('data-docx-frame-exclusion')) {
+      // Float packing must not move a frame away from its own authored source anchor.
+      carrier.style.float = 'none';
+      carrier.style.position = 'absolute';
+      carrier.style.left = carrier.style.top = '0';
+    }
+    type Segment = { proxy: HTMLElement; origin: DOMRect; scale: number; rectangles: FrameExclusion[] };
+    const previous = new Map<HTMLElement, Segment>();
+    const render = (segment: Segment, end = Infinity) => {
+      const { proxy, origin, scale } = segment;
+      const rectangles = segment.rectangles.map(rect => ({
+        top: Math.max(0, rect.top - origin.top),
+        bottom: Math.min(end, rect.bottom) - origin.top,
+        right: rect.right - origin.left,
+      })).filter(rect => rect.bottom > rect.top && rect.right > 0);
+      proxy.style.width = `${Math.max(0, ...rectangles.map(rect => rect.right)) / scale}px`;
+      proxy.style.height = `${Math.max(0, ...rectangles.map(rect => rect.bottom)) / scale}px`;
+      proxy.style.shapeOutside = this.frameExclusionPolygon(rectangles);
+    };
+    for (const carrier of carriers) {
+      const context = carrier.closest<HTMLElement>(`[data-docx-frame-story],.${this.cssPrefix}content`) ?? host;
+      const preceding = previous.get(context);
+      const header = carrier.dataset.docxHeaderExclusion;
+      const anchor = header ? carrier : carrier.parentElement!;
+      // End each float at the next source anchor. The following segment carries surviving
+      // exclusions, but cannot widen an earlier table's float margin box retroactively.
+      if (preceding) render(preceding, anchor.getBoundingClientRect().top);
+      const proxy = header ? carrier : this.document.createElement('div');
+      if (!header) {
+        proxy.dataset.docxFrameExclusionSegment = 'true';
+        proxy.setAttribute('aria-hidden', 'true');
+        anchor.prepend(proxy);
+      }
+      // A one-pixel probe also supplies the zoom/transform scale without rounded offsetWidth.
+      proxy.style.cssText = 'float:left;width:1px;height:0';
+      const origin = proxy.getBoundingClientRect(), scale = origin.width;
+      const rectangles = (preceding?.rectangles ?? []).filter(rect => rect.bottom > origin.top);
+      if (header) {
+        for (const rect of JSON.parse(header) as FrameExclusion[]) rectangles.push({
+          top: origin.top + ptToPx(rect.top) * scale,
+          bottom: origin.top + ptToPx(rect.bottom) * scale,
+          right: origin.left + ptToPx(rect.right) * scale,
+        });
+      } else for (const frame of Array.from(carrier.children) as HTMLElement[]) {
+        const rect = frame.getBoundingClientRect();
+        const distance = parseFloat(this.view.getComputedStyle(frame).marginRight) || 0;
+        rectangles.push({ top: rect.top, bottom: rect.bottom, right: rect.right + distance * scale });
+      }
+      const segment = { proxy, origin, scale, rectangles };
+      render(segment);
+      previous.set(context, segment);
+    }
+  }
+
   /**
    * Measures the content height of a header or footer element.
    *
@@ -5475,7 +5608,39 @@ export class PaginationEngine {
     // Append to staging for measurement
     this.stagingElement.appendChild(measureContainer);
 
+    // Inline frames and following paragraphs share an ordinary block context. Keep each
+    // frame's anchor after the preceding paragraph's after-space while collapsing the gap
+    // between ordinary paragraphs; zero-height frames do not consume that pending margin.
+    if (measureContainer.querySelector('[data-docx-frame-exclusion],[data-docx-frame-flow]')
+      && !measureContainer.querySelector('[data-docx-frame-story]')) {
+      const flow = this.document.createElement('div');
+      flow.dataset.docxFrameStory = 'true';
+      let previousAfter = 0;
+      for (const child of Array.from(measureContainer.children) as HTMLElement[]) {
+        const margins = this.view.getComputedStyle(child);
+        const slot = this.document.createElement('div');
+        slot.style.paddingTop = `${Math.max(previousAfter, parseFloat(margins.marginTop) || 0) - previousAfter}px`;
+        slot.style.paddingBottom = margins.marginBottom;
+        if (child.dataset.docxFrameContainer !== 'true' || child.dataset.docxFrameFlow === 'true') {
+          previousAfter = parseFloat(margins.marginBottom) || 0;
+        }
+        child.style.marginTop = child.style.marginBottom = '0';
+        slot.appendChild(child);
+        flow.appendChild(slot);
+      }
+      measureContainer.appendChild(flow);
+    }
+
+    const frameStory = measureContainer.querySelector<HTMLElement>('[data-docx-frame-story]');
+    if (frameStory) frameStory.style.height = '';
     if (this.fragmentParagraphs) this.fitOverwideTables(measureContainer, dims);
+    this.prepareFrameExclusions(measureContainer);
+    if (frameStory) {
+      // Flex items contain descendant floats. Count ordinary flow after every field refresh
+      // and table fit; frame paint may overhang that band without freezing later story heights.
+      const top = frameStory.getBoundingClientRect().top;
+      frameStory.style.height = `${(frameStory.lastElementChild?.getBoundingClientRect().bottom ?? top) - top}px`;
+    }
 
     // This pristine source story is attached only for measurement. Capture authored clipping
     // now; page clones inherit its box identity, while later band/placement changes cannot
@@ -5486,6 +5651,7 @@ export class PaginationEngine {
     // Measure
     const rect = measureContainer.getBoundingClientRect();
     const heightPt = pxToPt(rect.height);
+    this.storyFrameExclusions.set(source, this.frameExclusionRectangles(measureContainer));
 
     // Clean up
     source.replaceChildren(...Array.from(measureContainer.childNodes));
@@ -5522,16 +5688,16 @@ export class PaginationEngine {
     // and the source block identities are also the keep-chain retry guards.
     const hasExclusions = this.hasFlowExclusion(blocks.map(block => block.element));
     const measureOnPage = (chain: MeasuredBlock[], page: PageDimensions,
-      preceding: readonly HTMLElement[] = []): MeasuredBlock[] => {
-      if (!hasExclusions) return chain;
-      const prefix = this.hasFlowExclusion(preceding) ? [...preceding] : [];
+      preceding: readonly HTMLElement[] = [], owner = pageSectionIndex, physical = pageNumber): MeasuredBlock[] => {
+      const prefix = pagePrefix(preceding, owner, physical);
+      if (!hasExclusions && prefix.length === 0) return chain;
       return chain.map(source => {
         const element = source.element.cloneNode(true) as HTMLElement;
         this.prepareShapeClearance(element, page);
-        const { heightPt, marginTopPt, marginBottomPt } =
+        const { heightPt, frameExtentPt, clearancePt, marginTopPt, marginBottomPt } =
           this.measureElement(element, page, source.sectionIndex, prefix);
         prefix.push(element);
-        return { ...source, element, heightPt, marginTopPt, marginBottomPt };
+        return { ...source, element, heightPt, frameExtentPt, clearancePt, marginTopPt, marginBottomPt };
       });
     };
     const markSectionPlaced = (owner: number) => {
@@ -5558,6 +5724,12 @@ export class PaginationEngine {
         ? ownerNumbering.start + pageInSection(pageSectionIndex) - 1
         : precedingDisplayedPageNumber + 1;
       return currentPhysicalNumber + physicalPage - pageNumber;
+    };
+    const pagePrefix = (preceding: readonly HTMLElement[], owner = pageSectionIndex, physical = pageNumber): HTMLElement[] => {
+      const page = pageInSection(owner, physical);
+      const prefix = [...this.headerFramePrefix(dimensionsFor(owner), owner, page,
+        displayedPageNumber(owner, page, physical)), ...preceding];
+      return this.hasFlowExclusion(prefix) ? prefix : [];
     };
 
     // Get effective content height for first page (accounts for header/footer sizes)
@@ -5937,8 +6109,9 @@ export class PaginationEngine {
         nextBlockPageInSection,
         displayedPageNumber(block.sectionIndex, nextBlockPageInSection, pageNumber + 1),
       ).bodyHeight;
-      const freshBlockHeight = measureOnPage([sourceBlock], blockDimensions)[0].heightPt
-        + this.effectiveBlockMarginTop(block, 0, true, nextBlockPageInSection);
+      const freshMeasured = measureOnPage([sourceBlock], blockDimensions, [], block.sectionIndex, pageNumber + 1)[0];
+      const freshBlockHeight = Math.max(freshMeasured.heightPt, freshMeasured.frameExtentPt ?? 0)
+        + this.effectiveBlockMarginTop(freshMeasured, 0, true, nextBlockPageInSection);
 
       // Handle explicit page breaks
       if (block.isPageBreak) {
@@ -5993,13 +6166,14 @@ export class PaginationEngine {
             ids.length === 0 || this.footnoteRegistry.size === 0
             || this.notesCanStartOnPage(ids, bandPt - bodyPt,
               width, payload, closed);
-          const currentChainHeight =
-            this.measureKeepWithNextChainBodyHeight(
+          const currentChain =
+            this.measureKeepWithNextChainHeight(
               keepChain,
               prevMarginBottomPt,
               currentContent.length === 0,
               pageInSection(block.sectionIndex)
             );
+          const currentChainHeight = Math.max(currentChain.flowHeight, currentChain.frameBottom);
           const currentAvailableHeight = remainingHeight - currentFootnoteHeight;
           // Once a note cited here has ended, Word may defer a later whole note while
           // keeping its short, kept citing chain here. A carried tail alone, or a note
@@ -6021,20 +6195,21 @@ export class PaginationEngine {
             const canRelaxChain = this.fragmentParagraphs && last.keepLines
               && this.isWordParagraphElement(last.element) && newChainFootnoteIds.length > 0;
             const precedingNoteIds = this.collectNewFootnoteIds(keepChain.slice(0, -1), currentFootnoteIds);
-            const fragmentLast = (chain: MeasuredBlock[], chainHeight: number, available: number, band: number,
+            const fragmentLast = (chain: MeasuredBlock[], measured: { flowHeight: number; frameBottom: number }, available: number, band: number,
               payload: FootnotePackingContext, closed: boolean, preceding: readonly HTMLElement[], width = noteWidth) => {
               const last = chain[chain.length - 1];
-              const beforeLastHeight = chainHeight - last.heightPt;
+              if (measured.frameBottom > available) return null;
+              const beforeLastHeight = measured.flowHeight - last.heightPt;
               return this.tryFragmentParagraph(last, dimensionsFor(last.sectionIndex), available - beforeLastHeight, 0,
-                (ids, headHeight) => chainNotesStart(beforeLastHeight + headHeight, band, payload, closed,
+                (ids, headHeight) => chainNotesStart(Math.max(beforeLastHeight + headHeight, measured.frameBottom), band, payload, closed,
                   [...new Set([...precedingNoteIds, ...ids])].filter(id => !currentFootnoteIds.includes(id)), width),
                 [...preceding, ...chain.slice(0, -1).map(item => item.element)]);
             };
-            const fragments = fragmentLast(keepChain, currentChainHeight, currentAvailableHeight, remainingHeight, {
+            const fragments = fragmentLast(keepChain, currentChain, currentAvailableHeight, remainingHeight, {
               footnoteIds: currentFootnoteIds,
               continuation: currentContinuation,
               partialFootnotes: currentPartialFootnotes,
-            }, laterNotesClosed(), currentContent);
+            }, laterNotesClosed(), pagePrefix(currentContent));
             if (fragments) {
               blocks.splice(i + keepChain.length - 1, 1, ...fragments);
               i--;
@@ -6051,13 +6226,14 @@ export class PaginationEngine {
                 pageNumber + 1,
               ),
             );
-            const freshChain = measureOnPage(sourceChain, blockDimensions);
-            const freshChainBodyHeight = this.measureKeepWithNextChainBodyHeight(
+            const freshChain = measureOnPage(sourceChain, blockDimensions, [], block.sectionIndex, pageNumber + 1);
+            const freshChainMeasurement = this.measureKeepWithNextChainHeight(
               freshChain,
               0,
               true,
               pageInSection(block.sectionIndex, pageNumber + 1)
             );
+            const freshChainBodyHeight = Math.max(freshChainMeasurement.flowHeight, freshChainMeasurement.frameBottom);
             // Whether the chain can fit a page at all, its notes started beside it. A carried note on
             // the next page does not count against it: Word reference PDFs show that note either
             // leaving the chain its room or keeping the page, the chain opening the page after
@@ -6068,8 +6244,9 @@ export class PaginationEngine {
                 && (canRelaxChain || chainNotesStart(freshChainBodyHeight, nextPageBands.bodyHeight,
                   { footnoteIds: [], continuation: null, partialFootnotes: [] }, false,
                   newChainFootnoteIds, blockDimensions.contentWidth)))
-              || fragmentLast(freshChain, freshChainBodyHeight, nextPageBands.bodyHeight, nextPageBands.bodyHeight,
-                { footnoteIds: [], continuation: null, partialFootnotes: [] }, false, [], blockDimensions.contentWidth) !== null
+              || fragmentLast(freshChain, freshChainMeasurement, nextPageBands.bodyHeight, nextPageBands.bodyHeight,
+                { footnoteIds: [], continuation: null, partialFootnotes: [] }, false,
+                pagePrefix([], block.sectionIndex, pageNumber + 1), blockDimensions.contentWidth) !== null
             ) {
               // Start the chain over on the fresh page, so that page's carried note is
               // partitioned first and the chain is judged again beside it.
@@ -6139,7 +6316,8 @@ export class PaginationEngine {
       // Note: bottom margin is NOT included in the fit check because the last block's
       // bottom margin extends beyond the content area and is clipped by overflow:hidden.
       // It is still tracked in remainingHeight for correct margin collapsing with the next block.
-      const blockSpace = effectiveMarginTop + block.heightPt + additionalFootnoteHeight;
+      const requiredHeight = Math.max(block.heightPt, block.frameExtentPt ?? 0);
+      const blockSpace = effectiveMarginTop + requiredHeight + additionalFootnoteHeight;
 
       // Effective remaining height (content area minus footnotes already on page)
       const effectiveRemainingHeight = remainingHeight - currentFootnoteHeight;
@@ -6157,7 +6335,8 @@ export class PaginationEngine {
         partialFootnotes: currentPartialFootnotes,
       };
       const noteBandWith = (bodyPt: number) => Math.min(
-        maxFootnoteArea, effectiveContentHeight - bodyContentUsed - bodyPt);
+        maxFootnoteArea, effectiveContentHeight - bodyContentUsed - Math.max(bodyPt,
+          effectiveMarginTop + (block.frameExtentPt ?? 0)));
       const noteStartMemo: NoteStartMemo = { packedHeights: new Map(), startsFrom: new Map(), failsUpTo: new Map() };
       const headNotesStart = (footnoteIds: string[], headHeightPt: number) => {
         const headIds = footnoteIds.filter((id) => !currentFootnoteIds.includes(id));
@@ -6178,7 +6357,7 @@ export class PaginationEngine {
           effectiveRemainingHeight,
           effectiveMarginTop,
           headNotesStart,
-          currentContent,
+          pagePrefix(currentContent),
           // A keep cannot be satisfied by a paragraph taller than a fresh page. Once it has
           // moved there, use the same line-safe split as a kept citation, retaining two lines
           // on either side when widow control applies. Unresolved notes still stay guarded.
@@ -6224,7 +6403,7 @@ export class PaginationEngine {
         currentPageHasFootnoteReference ||= allBlockFootnoteIds.length > 0;
       } else if (freshBlockHeight <= freshBlockPageBodyHeight) {
         // Block doesn't fit with current allocation - try expanding footnote area
-        const blockSpaceWithoutFootnotes = effectiveMarginTop + block.heightPt;
+        const blockSpaceWithoutFootnotes = effectiveMarginTop + requiredHeight;
 
         if (newFootnoteIds.length > 0 && blockSpaceWithoutFootnotes <= effectiveRemainingHeight) {
           // Keep a paragraph's earlier lines or a table's earlier row groups here, moving the
@@ -6243,7 +6422,7 @@ export class PaginationEngine {
               effectiveRemainingHeight,
               effectiveMarginTop,
               headNotesStart,
-              currentContent,
+              pagePrefix(currentContent),
               block.keepLines && isFirstOnPage && currentFootnoteHeight === 0 && !currentContinuation,
             ) ?? this.tryFragmentCitingTable(block, blockDimensions, effectiveRemainingHeight,
               effectiveMarginTop, headNotesStart);
@@ -6646,6 +6825,8 @@ export class PaginationEngine {
       const anchorRect = (paragraph ?? placeholder).getBoundingClientRect();
       const rect = frame.getBoundingClientRect();
       const computed = this.view.getComputedStyle(frame);
+      const inlineFlow = placeholder.dataset.docxFrameFlow === 'true';
+      const exclusion = frame.closest<HTMLElement>('[data-docx-frame-exclusion]');
       const context = {
         staticLeft: (anchorRect.left - pageRect.left) / pixelsPerPoint,
         staticTop: (anchorRect.top - pageRect.top) / pixelsPerPoint,
@@ -6666,10 +6847,19 @@ export class PaginationEngine {
       const xAlign = frame.getAttribute('data-docx-frame-xalign');
       const yAlign = frame.getAttribute('data-docx-frame-yalign');
       const left = this.resolveAnchorAxis(horizontal, rect.width / pixelsPerPoint, xAlign,
-        xAlign ? undefined : pxToPt(parseFloat(computed.left) || 0), pageNumber);
-      const top = this.resolveAnchorAxis(vertical, rect.height / pixelsPerPoint, yAlign,
-        yAlign ? undefined : pxToPt(parseFloat(computed.top) || 0), pageNumber);
+        xAlign ? undefined : pxToPt(parseFloat(exclusion ? computed.marginLeft : computed.left) || 0), pageNumber);
+      const top = inlineFlow || exclusion ? (rect.top - pageRect.top) / pixelsPerPoint
+        : this.resolveAnchorAxis(vertical, rect.height / pixelsPerPoint, yAlign,
+          yAlign ? undefined : pxToPt(parseFloat(computed.top) || 0), pageNumber);
+      const slot = exclusion ?? (inlineFlow ? placeholder : null);
+      if (slot) {
+        const reserved = slot.getBoundingClientRect();
+        slot.style.boxSizing = 'border-box';
+        slot.style.height = `${reserved.height / pixelsPerPoint}pt`;
+        slot.style.width = `${reserved.width / pixelsPerPoint}pt`;
+      }
       this.promoteSourceContent(frame, pageBox);
+      frame.style.position = 'absolute';
       frame.style.left = `${left}pt`;
       frame.style.top = `${top}pt`;
       frame.style.margin = '0';
@@ -7190,7 +7380,10 @@ export class PaginationEngine {
     contentArea.style.overflowY = "clip";
 
     // Add content
-    this.appendSectionContent(contentArea, content, dims);
+    this.appendSectionContent(contentArea, [
+      ...(!isSectionFiller ? this.headerFramePrefix(dims, sectionIndex, pageInSection, displayedPageNumber) : []),
+      ...content,
+    ], dims);
 
     pageBox.appendChild(contentArea);
 
@@ -7330,6 +7523,7 @@ export class PaginationEngine {
 
     // Floating objects need the final page and anchor-paragraph boxes. Resolve them only after
     // append, when getBoundingClientRect() is meaningful, and lift them out of content clipping.
+    this.prepareFrameExclusions(pageBox);
     this.positionTextFrames(pageBox, dims, pageNumber);
     // One page-wide pass includes running stories and compares all drawings in the same
     // stacking order, including those nested in a promoted paragraph frame.
