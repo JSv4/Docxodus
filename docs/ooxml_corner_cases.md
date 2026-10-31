@@ -1507,17 +1507,20 @@ pagination parity for vertical text distance.
 Native centered wrapping uses both sides of the same line. A 180 pt frame centered at x216 pt
 leaves text at x72 pt and x396 pt on each of its first two lines. Right alignment puts the frame
 at x360 pt and text on its left; a page-relative 12 pt offset puts the frame at x12 pt and text
-at x192 pt. The existing single-sided exclusion does not implement all these arrangements.
+at x192 pt. The paginator now subtracts full frame rectangles from each line and fills both
+available intervals with legal source fragments. Measurement and final frame placement share
+the horizontal anchor resolver. All source words and paragraph ownership survive fragmentation.
 
-Positive interior text offsets therefore retain conservative one-sided wrapping with an explicit
-approximation warning. Other unsupported horizontal wrapping and positive vertical text distance
-use complete below-frame flow, also with a warning; strict export refuses both approximations.
-Horizontal frame placement and source content survive. Exact two-sided wrapping and reflow of
-earlier lines remain separate limitations, recorded in
-[the converter architecture](architecture/docx_converter.md#paragraph-text-frames).
-Their native captures and completion criteria are retained in
-[#1509](https://github.com/JSv4/Docxodus/issues/1509) and
-[#1510](https://github.com/JSv4/Docxodus/issues/1510).
+Seven original Sorrel benchmark inputs were exported through Word Online on October 31, 2026.
+They reproduce those four placements and verify `notBeside`, `none` and ordinary-flow controls.
+Word substituted Times New Roman for Liberation Serif, so these captures establish behavioral
+regions rather than font-matched raster references. Their complete token inventories and layout
+checks pass; font substitution remains explicitly ineligible for reference scoring.
+
+Unsupported paragraph arrangements retain a warning and strict export refusal until their
+line layout is implemented; positive vertical distance still uses diagnosed ordinary flow.
+See [the capability boundary](architecture/docx_converter.md#paragraph-text-frames) and
+[#1510](https://github.com/JSv4/Docxodus/issues/1510) for preceding-line vertical reflow.
 
 ## Text frames: a partial direct `w:framePr` combines with the style's
 

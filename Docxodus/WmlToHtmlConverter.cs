@@ -10969,7 +10969,7 @@ namespace Docxodus
                 var leftWrap = ((string?)frame.Attribute(W.hAnchor) ?? "text") == "text" &&
                     (string?)frame.Attribute(W.xAlign) is null or "left";
                 var approximate = textWrap && (verticalDistance > 0 || wrap != "notBeside" && !leftWrap);
-                var inFlow = textWrap && (wrap == "notBeside" || approximate);
+                var inFlow = textWrap && (wrap == "notBeside" || verticalDistance > 0);
                 var excludes = textWrap && !inFlow;
                 var interior = excludes && frame.Attribute(W.xAlign) == null && horizontalOffset > 0;
                 var style = new Dictionary<string, string>
@@ -10994,10 +10994,12 @@ namespace Docxodus
                     new XAttribute("data-docx-frame-v-anchor", (string?)frame.Attribute(W.vAnchor) ?? "text"),
                     CreateBorderDivsCore(wordDoc, settings, group));
                 if (approximate || interior)
+                {
                     ReportShapeLayoutLoss(rendered, settings, verticalDistance > 0
                         ? "Paragraph frame clearance that reflows earlier text is approximated by ordinary flow"
-                        : interior ? "Paragraph frame wrapping on both sides is approximated by conservative one-sided clearance"
-                            : "Paragraph frame wrapping at this horizontal position is approximated by top/bottom clearance", "framePr");
+                        : "Paragraph frame wrapping at this horizontal position requires line-interval layout", "framePr");
+                    if (excludes) rendered.Add(new XAttribute("data-docx-frame-pending", "true"));
+                }
                 foreach (var name in new[] { W.x, W.y, W.xAlign, W.yAlign, W.wrap, W.hSpace, W.vSpace })
                     if (frame.Attribute(name) is XAttribute value)
                         rendered.Add(new XAttribute("data-docx-frame-" + name.LocalName.ToLowerInvariant(), value.Value));

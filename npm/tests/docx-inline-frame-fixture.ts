@@ -19,6 +19,7 @@ export function inlineFrameFixture(options: {
   separate?: boolean;
   heightRule?: 'exact' | 'atLeast' | 'auto';
   tailWords?: number;
+  tailPrefix?: string;
 } = {}): Uint8Array {
   const { story = 'body', wrap = 'notBeside', normal = false, floating = false, spill = false,
     fillerCount = spill ? 52 : 0, spaceBefore = 0, spaceAfter = 0, horizontalOffset = '240' } = options;
@@ -30,7 +31,7 @@ export function inlineFrameFixture(options: {
   const secondFrame = options.secondOffset === undefined ? frame : frame.replace(`w:x="${horizontalOffset}"`, `w:x="${options.secondOffset}"`);
   const content = (fillerCount ? Array.from({ length: fillerCount }, (_, i) => paragraph(`SageFiller${String(i).padStart(3, '0')}`)).join('') : paragraph('SageBefore'))
     + paragraph('SageFrameFirst', frame) + (options.separate ? paragraph('SageBetween') : '') + paragraph('SageFrameLast', secondFrame)
-    + paragraph(options.tailWords ? Array.from({ length: options.tailWords }, (_, i) => `SageTail${String(i).padStart(3, '0')}`).join(' ') : 'SageAfter');
+    + paragraph((options.tailPrefix ?? '') + (options.tailWords ? Array.from({ length: options.tailWords }, (_, i) => `SageTail${String(i).padStart(3, '0')}`).join(' ') : 'SageAfter'));
   const running = story === 'header' || story === 'footer';
   const part = story + '1';
   const names = ['document', 'styles', 'settings', ...(running ? [part] : [])];

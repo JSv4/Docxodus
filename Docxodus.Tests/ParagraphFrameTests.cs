@@ -172,7 +172,9 @@ public class ParagraphFrameTests
         var frame = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-docx-text-frame") == "true");
         Assert.Contains("CEDAR RECORD 731", frame.Value);
         Assert.Contains("CEDAR FRAME SECOND", frame.Value);
-        Assert.Contains(frame.Ancestors(), e => (string?)e.Attribute("data-docx-frame-flow") == "true");
+        var pending = wrap == "around" && !attributes.Contains("vSpace");
+        Assert.Contains(frame.Ancestors(), e => e.Attribute(pending ? "data-docx-frame-exclusion" : "data-docx-frame-flow") != null);
+        Assert.Equal(pending, frame.Attribute("data-docx-frame-pending") != null);
         Assert.Equal(approximate ? "partial" : null, (string?)frame.Attribute("data-docx-shape"));
         Assert.Equal(approximate ? "Other" : null, (string?)frame.Attribute("data-content-type"));
         Assert.Equal(approximate ? "framePr" : null, (string?)frame.Attribute("data-element-name"));

@@ -2384,12 +2384,13 @@ function sanitizeConvertedDocument(
   if (compatibility !== null) target.body.setAttribute("data-docx-compatibility-mode", compatibility);
 }
 
-function inventoryConvertedContent(
-  document: Document,
+function inventoryUnsupportedContent(
+  placeholders: HTMLElement[],
   state: ExecutionState,
   options: NormalizedOptions,
+  phase: 'docx_conversion' | 'pagination',
 ): void {
-  for (const placeholder of Array.from(document.querySelectorAll<HTMLElement>("[data-content-type]"))) {
+  for (const placeholder of placeholders) {
     const outcome: UnsupportedContentOutcome = {
       contentType: placeholder.dataset.contentType ?? "Other",
       ...(placeholder.dataset.elementName ? { elementName: placeholder.dataset.elementName } : {}),
@@ -2401,13 +2402,18 @@ function inventoryConvertedContent(
     addUnsupportedContent(state, outcome);
     policyWarning(state, options, {
       code: "unsupported_content_placeholder",
-      phase: "docx_conversion",
+      phase,
       message: `${outcome.contentType} is represented by a visible placeholder.`,
       remediation: "Replace it with a supported static representation for faithful export.",
       ...(outcome.anchorId ? { anchorId: outcome.anchorId } : {}),
     });
   }
+}
 
+function inventoryConvertedContent(document: Document, state: ExecutionState, options: NormalizedOptions): void {
+  inventoryUnsupportedContent(Array.from(document.querySelectorAll<HTMLElement>(
+    '[data-content-type]:not([data-docx-frame-pending])',
+  )), state, options, 'docx_conversion');
   for (const image of Array.from(document.querySelectorAll<HTMLImageElement>("img"))) {
     const source = image.getAttribute("src") ?? "";
     const metadata = /^data:([^;,]+)/i.exec(source);
@@ -3864,6 +3870,9 @@ export async function convertDocxToPaginatedHtml(
           },
         });
         const pagination = await runPhase(state, "pagination", ["page layout"], () => engine.paginate());
+        inventoryUnsupportedContent(Array.from(container.querySelectorAll<HTMLElement>(
+          '[data-docx-frame-pending][data-content-type]',
+        )), state, options, 'pagination');
         enforceLimit(pagination.totalPages, options.limits.finalPages, "finalPages", "pagination");
         const pages = pagination.pages.map((page) => page.element);
         if (pages.length === 0) {
