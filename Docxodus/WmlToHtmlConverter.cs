@@ -1209,6 +1209,7 @@ namespace Docxodus
 
             FormattingAssembler.AssembleFormatting(wordDoc, formattingAssemblerSettings);
 
+            NormalizeFormFields(wordDoc, htmlConverterSettings);
             InsertAppropriateNonbreakingSpaces(wordDoc);
             CalculateSpanWidthForTabs(wordDoc, htmlConverterSettings.RenderTrackedChanges && htmlConverterSettings.ShowDeletedContent);
             ReverseTableBordersForRtlTables(wordDoc);
@@ -3390,6 +3391,11 @@ namespace Docxodus
         {
             var element = node as XElement;
             if (element == null) return null;
+            if (element.Attribute(FormCheckboxAttribute) is { } checkboxState)
+                return RenderFormCheckbox(element, checkboxState.Value == "true");
+            if (element.Attribute(UnsupportedFormFieldAttribute) != null)
+                return CreateUnsupportedContentPlaceholder(settings, element.Element(W.ffData) ?? element,
+                    UnsupportedContentType.FormField, "[FORM FIELD]");
 
             // Transform the w:document element to the XHTML h:html element.
             // The h:head element is laid out based on the W3C's recommended layout, i.e.,
@@ -10422,8 +10428,12 @@ namespace Docxodus
             var bold = GetBoolProp(rPr, W.b) || GetBoolProp(rPr, W.bCs);
             var italic = GetBoolProp(rPr, W.i) || GetBoolProp(rPr, W.iCs);
 
-            var runText = r.DescendantsTrimmed(W.txbxContent)
+            var textElements = r.DescendantsTrimmed(W.txbxContent)
                 .Where(e => e.Name == W.t || e.Name == W.delText)
+                .ToList();
+            var checkboxWidth = textElements.Where(e => e.Attribute(FormCheckboxAttribute) != null)
+                .Sum(e => ((decimal?)e.Attribute(FormCheckboxSizeAttribute) ?? sz) * 10m);
+            var runText = textElements.Where(e => e.Attribute(FormCheckboxAttribute) == null)
                 .Select(t => (string) t)
                 .StringConcatenate();
 
@@ -10435,7 +10445,7 @@ namespace Docxodus
                 .Sum();
 
             if (runText.Length == 0 && tabLength == 0)
-                return 0;
+                return (int)checkboxWidth;
 
             int multiplier = 1;
             if (runText.Length <= 2)
@@ -10483,7 +10493,7 @@ namespace Docxodus
                 w = MetricsGetter.GetTextWidth(fontName, bold, italic, sz, runText);
             }
 
-            return (int)(w / 96m * 1440m / multiplier + tabLength * 1440m);
+            return (int)(w / 96m * 1440m / multiplier + tabLength * 1440m + checkboxWidth);
         }
 
         private static void InsertAppropriateNonbreakingSpaces(WordprocessingDocument wordDoc)
@@ -11623,6 +11633,179 @@ namespace Docxodus
             if (s == "1" || s == "true")
                 return true;
             return false;
+        }
+
+        private static readonly XName FormCheckboxAttribute = PtOpenXml.pt + "FormCheckbox";
+        private static readonly XName FormCheckboxSizeAttribute = PtOpenXml.pt + "FormCheckboxSize";
+        private static readonly XName FormFieldNameAttribute = PtOpenXml.pt + "FormFieldName";
+        private static readonly XName UnsupportedFormFieldAttribute = PtOpenXml.pt + "UnsupportedFormField";
+
+        private static bool HasFormFields(XElement root)
+        {
+            var prefix = new StringBuilder(4);
+            foreach (var element in root.Descendants())
+            {
+                if (element.Name == W.ffData) return true;
+                if (element.Name == W.fldChar) prefix.Clear();
+                if (element.Name != W.instrText && element.Name != W.delInstrText) continue;
+                foreach (var c in element.Value)
+                {
+                    if (prefix.Length == 4) break;
+                    if (prefix.Length == 0 && char.IsWhiteSpace(c)) continue;
+                    prefix.Append(char.ToUpperInvariant(c));
+                }
+                if (prefix.ToString() == "FORM") return true;
+            }
+            return false;
+        }
+
+        private static void NormalizeFormFields(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings)
+        {
+            foreach (var part in wordDoc.ContentParts())
+            {
+                if ((part is HeaderPart or FooterPart && !settings.RenderHeadersAndFooters)
+                    || (part is FootnotesPart or EndnotesPart && !settings.RenderFootnotesAndEndnotes))
+                    continue;
+                var root = part.GetXDocument().Root;
+                if (root == null || !HasFormFields(root)) continue;
+                FieldRetriever.AnnotateWithFieldInfo(part);
+                NormalizeFormFields(root, settings);
+            }
+        }
+
+        // Resolve each complete field by its own annotated id, then replace only its result
+        // leaves. Keeping the original runs and range markers preserves formatting and revisions,
+        // including nested fields and begin/separate/end characters sharing a run with body text.
+        // This precedes empty-paragraph and tab measurement, whose tree rewrites preserve XML
+        // attributes but not annotations. The checkbox's em placeholder reserves its actual width.
+        private static void NormalizeFormFields(XElement root, WmlToHtmlConverterSettings settings)
+        {
+            var begins = new Dictionary<int, XElement>();
+            var complete = new HashSet<int>();
+            var open = new Stack<int>();
+            var results = new Dictionary<int, List<XElement>>();
+            foreach (var element in root.Descendants())
+            {
+                var info = element.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()?.FirstOrDefault();
+                if (element.Name == W.fldChar)
+                {
+                    if ((string?)element.Attribute(W.fldCharType) == "begin" && info != null)
+                    {
+                        begins[info.Id] = element;
+                        open.Push(info.Id);
+                    }
+                    else if ((string?)element.Attribute(W.fldCharType) == "end" && open.TryPop(out var id))
+                        complete.Add(id);
+                }
+                if (info?.FieldElementType != FieldRetriever.FieldElementTypeEnum.Result
+                    || element.Parent?.Name != W.r || element.Name == W.rPr || element.Name == W.fldChar
+                    || element.Name == W.commentReference || element.Name == W.footnoteReference || element.Name == W.endnoteReference)
+                    continue;
+                if (!results.TryGetValue(info.Id, out var list))
+                    results[info.Id] = list = new List<XElement>();
+                list.Add(element);
+            }
+            foreach (var (id, begin) in begins)
+            {
+                if (begin.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()!.Skip(1).Any(info =>
+                    info.FieldElementType is FieldRetriever.FieldElementTypeEnum.Begin or FieldRetriever.FieldElementTypeEnum.InstrText))
+                    continue; // A nested instruction is input to the outer field, not displayed content.
+                var instruction = FieldRetriever.InstrText(root, id).Trim('{', '}', ' ', '\t', '\r', '\n')
+                    .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToUpperInvariant();
+                if (instruction?.StartsWith("FORM", StringComparison.Ordinal) != true)
+                    continue;
+                var deleted = FieldRetriever.IsDeletedField(root, id);
+                if (deleted && !settings.ShowDeletedContent)
+                    continue;
+                var allCached = results.GetValueOrDefault(id, new List<XElement>());
+                var cached = allCached
+                    .Where(e => e.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom) == deleted).ToList();
+                // A live field whose result was deleted must not synthesize a replacement outside
+                // that deletion. The existing revision renderer retains or hides its cached value.
+                if (allCached.Count > 0 && cached.Count == 0)
+                    continue;
+                var data = begin.Element(W.ffData);
+                if (instruction == "FORMTEXT" && cached.Any(e => e.Value.Length > 0))
+                    continue;
+                var value = complete.Contains(id) ? ResolveFormField(instruction, data) : null;
+                if (value == null)
+                {
+                    begin.SetAttributeValue(UnsupportedFormFieldAttribute, true);
+                    continue;
+                }
+                // Checkboxes use the field character's font size; dropdowns use the cached run's
+                // formatting when present. Metadata-only fields inherit their begin run's style.
+                var host = instruction == "FORMCHECKBOX" ? begin
+                    : cached.FirstOrDefault(e => e.Name == W.t || e.Name == W.delText) ?? begin;
+                foreach (var element in cached)
+                    if (element == host)
+                    {
+                        value.Name = element.Name;
+                        element.ReplaceWith(value);
+                    }
+                    else element.Remove();
+                if (host == begin)
+                {
+                    if (deleted) value.Name = W.delText;
+                    begin.AddAfterSelf(value);
+                }
+            }
+        }
+
+        private static XElement? ResolveFormField(string instruction, XElement? data)
+        {
+            if (instruction == "FORMDROPDOWN" && data?.Element(W.ddList) is { } dropdown)
+            {
+                var entries = dropdown.Elements(W.listEntry).Select(e => (string?)e.Attribute(W.val)).ToList();
+                foreach (var index in new[] { (string?)dropdown.Element(W.result)?.Attribute(W.val),
+                    (string?)dropdown.Element(W._default)?.Attribute(W.val), "0" })
+                    if (int.TryParse(index, NumberStyles.Integer, CultureInfo.InvariantCulture, out var selected)
+                        && selected >= 0 && selected < entries.Count && entries[selected] is { } text)
+                        return new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), text);
+            }
+            if (instruction != "FORMCHECKBOX" || data?.Element(W.checkBox) is not { } checkbox)
+                return null;
+            bool isChecked;
+            try
+            {
+                isChecked = IsOnOffPropertyEnabled(checkbox.Element(W._checked) ?? checkbox.Element(W._default));
+            }
+            catch (FormatException) { return null; }
+            decimal? size = null;
+            if (checkbox.Element(W.size) is { } fixedSize)
+            {
+                if (!decimal.TryParse((string?)fixedSize.Attribute(W.val), NumberStyles.Number,
+                    CultureInfo.InvariantCulture, out var halfPoints) || halfPoints <= 0)
+                    return null;
+                size = halfPoints;
+            }
+            return new XElement(W.t, new XAttribute(FormCheckboxAttribute, isChecked ? "true" : "false"),
+                new XAttribute(FormFieldNameAttribute, (string?)data.Element(W.name)?.Attribute(W.val) ?? "Checkbox"),
+                size == null ? null : new XAttribute(FormCheckboxSizeAttribute, size.Value), "\u2003");
+        }
+
+        private static XElement RenderFormCheckbox(XElement source, bool isChecked)
+        {
+            var size = (decimal?)source.Attribute(FormCheckboxSizeAttribute);
+            // Keep a font strut beside the graphic: an otherwise graphic-only run has a
+            // different top-aligned baseline under exact paragraph spacing. A zero-width space
+            // strut adds no advance or visible PDF text; the whole control stays nonbreaking.
+            var boxStyle = "display:inline-block;overflow:hidden;box-sizing:border-box;width:1em;height:1em;"
+                + "border:0.06em solid currentColor;vertical-align:-0.15em";
+            // Borders survive background-free printing and forced colors, unlike a gradient X.
+            var cross = isChecked ? new XElement(Xhtml.span,
+                new XAttribute("style", "display:grid;width:100%;height:100%"),
+                new[] { "45", "-45" }.Select(angle => new XElement(Xhtml.span, new XAttribute("style",
+                    "grid-area:1/1;align-self:center;border-top:0.06em solid currentColor;transform:rotate(" + angle + "deg)")))) : null;
+            return new XElement(Xhtml.span,
+                new XAttribute("role", "checkbox"), new XAttribute("aria-checked", isChecked ? "true" : "false"),
+                new XAttribute("aria-label", (string)source.Attribute(FormFieldNameAttribute)!),
+                new XAttribute("aria-readonly", "true"), new XAttribute("contenteditable", "false"),
+                new XAttribute("style", "white-space:nowrap" + (size == null ? "" :
+                    ";font-size:" + (size.Value / 2).ToString(CultureInfo.InvariantCulture) + "pt")),
+                new XElement(Xhtml.span, new XAttribute("aria-hidden", "true"),
+                    new XAttribute("style", "display:inline-block;width:0"), "\u00a0"),
+                new XElement(Xhtml.span, new XAttribute("aria-hidden", "true"), new XAttribute("style", boxStyle), cross));
         }
 
         private static object ConvertContentThatCanContainFields(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,

@@ -5304,3 +5304,65 @@ PDF text, column placement and the delivered HTML's merge span.
 An omitted-prefix row containing only matched continuations uses its first empty paragraph for
 the same minimum-height box. Leaving just a positive border sliver can pass a geometry guard
 while still losing the row's line pitch; the benchmark therefore also checks following-text placement.
+
+
+## Legacy form metadata lives inside the field's begin character (#1480)
+
+A valid legacy form stores `w:ffData` under `w:fldChar`, not beside it in a run. Its
+cached result may be absent or stale. For example, this checkbox is explicitly unchecked
+although its default is checked; its fixed size is 10 pt (20 half-points):
+
+```xml
+<w:r><w:fldChar w:fldCharType="begin"><w:ffData>
+  <w:name w:val="ExampleCheck"/>
+  <w:checkBox><w:size w:val="20"/><w:default w:val="1"/><w:checked w:val="0"/></w:checkBox>
+</w:ffData></w:fldChar></w:r>
+<w:r><w:instrText> FORMCHECKBOX </w:instrText></w:r>
+<w:r><w:fldChar w:fldCharType="separate"/></w:r>
+<w:r><w:fldChar w:fldCharType="end"/></w:r>
+```
+
+A dropdown uses the same field scaffolding with `FORMDROPDOWN` and, for example:
+
+```xml
+<w:ddList>
+  <w:result w:val="1"/><w:default w:val="0"/>
+  <w:listEntry w:val="Amber rack"/><w:listEntry w:val="Copper bin"/>
+</w:ddList>
+```
+
+The selected index is zero-based. An absent or out-of-range selection falls back to the
+default index, then the first entry. See the SDK's ISO descriptions of
+[selection](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.dropdownlistselection?view=openxml-3.0.1)
+and [default](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.defaultdropdownlistitemindex?view=openxml-3.0.1).
+[Fixed size](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.formfieldsize?view=openxml-3.0.1)
+is in half-points; automatic size uses the field character's font.
+
+| Case | Word | LibreOffice 25.8.7.3 | Docxodus before / after |
+|---|---|---|---|
+| Four checkbox defaults/explicit overrides | Not captured | Unchecked, checked, unchecked, checked | Missing / all four visible with read-only accessible state |
+| Automatic 11 pt, fixed 10/14 pt boxes | Not captured | All four painted outlines measured about 10.15 pt | Missing / honors declared fixed size and automatic font size |
+| Metadata-only dropdown in body/header/footer | Not captured | Selected/default text appears once | Missing / appears once |
+| Matching cached dropdown and complete FORMTEXT | Not captured | Cached content displayed | Unchanged; both benchmark controls retain identical HTML and page pixels |
+| Long selection before a left tab | Not captured | RouteTail begins at 360.1 pt | Metadata-only tail at 216 pt / 396 pt, matching the unchanged cached control |
+
+The last row preserves a pre-existing default-tab/provider difference: both Docxodus cached
+and synthesized results advance the tail to 396 pt. The benchmark requires the tail to remain
+after the selected text, not exact LibreOffice tab parity. The four original cases and their
+controls are `fields-legacy-*` in the paired fidelity bench. Its checkbox contract measures
+painted outlines, checked/unchecked interiors, fixed size and caption alignment in addition
+to accessibility state; PDF text cannot prove the presence of a non-text box.
+
+`WmlToHtmlConverter.NormalizeFormFields` resolves complete, independently annotated field IDs
+after formatting assembly and before empty-paragraph/tab processing. Only result leaves owned
+by that field are replaced, preserving styled runs and range/revision markers. Nested fields
+inside an outer instruction stay hidden, and a deleted result is not recreated outside its
+deletion. A bounded prescreen avoids annotating unrelated stories; disabled running stories
+are skipped. Complete FORMTEXT caches remain unchanged, and unsupported metadata uses the
+existing placeholder policy.
+
+Checkboxes use CSS borders, including both diagonals, rather than font glyphs unavailable in
+Liberation Serif. A zero-width whitespace strut keeps graphic-only runs on the text baseline
+under exact spacing. Borders survive background-free printing and forced-colors mode; the
+three Chromium PDF captures have identical decoded page pixels. This is static rendering,
+not an editable form control.

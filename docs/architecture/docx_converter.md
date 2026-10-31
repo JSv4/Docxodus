@@ -773,3 +773,14 @@ Both fixed and flexible tabs go through the run renderer, so a leading tab keeps
 colour and visibility. A complex HYPERLINK before or spanning a tab stays whole; converting its runs
 individually would leave its text and bookmark targets outside the link. The paragraph uses the shared
 field-context annotations to choose that path.
+
+
+### Legacy form results
+
+After formatting assembly, `NormalizeFormFields` resolves complete `FORMCHECKBOX` and
+`FORMDROPDOWN` fields from metadata on their begin character. This happens before paragraph
+emptiness and tab measurement, so metadata-only selections occupy the same space as cached
+text. Result leaves are replaced within their original run/revision boundaries; non-result
+instructions and reference/range markers are retained. Complete `FORMTEXT` caches pass through.
+Checkboxes are static read-only accessible spans with CSS borders; unsupported metadata uses
+the configured placeholder policy. See [the form-field corner case](../ooxml_corner_cases.md#legacy-form-metadata-lives-inside-the-fields-begin-character-1480).
