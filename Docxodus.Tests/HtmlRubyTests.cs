@@ -96,4 +96,17 @@ public class HtmlRubyTests
         Assert.Contains("CEDAR reading", html.Value);
         Assert.DoesNotContain(html.Descendants(), e => e.Name.LocalName is "ruby" or "rt");
     }
+
+    [Theory]
+    [InlineData(false, "11pt")]
+    [InlineData(true, "15pt")]
+    public void RubySizeOverridesAnnotationButOnlyDefaultsTheBase(bool explicitBaseSize, string baseSize)
+    {
+        var source = Ruby().Replace(Run("reading"), Run("reading", "<w:sz w:val=\"30\"/>"));
+        if (explicitBaseSize) source = source.Replace(Run("CEDAR"), Run("CEDAR", "<w:sz w:val=\"30\"/>"));
+        var ruby = Assert.Single(Render(source).Descendants(), e => e.Name.LocalName == "ruby");
+        var annotation = ruby.Elements().Single(e => e.Name.LocalName == "rt");
+        Assert.DoesNotContain(annotation.Descendants(), e => ((string?)e.Attribute("style"))?.Contains("font-size: 15pt", StringComparison.Ordinal) == true);
+        Assert.Contains(ruby.Descendants(), e => e.Value == "CEDAR" && ((string?)e.Attribute("style"))?.Contains($"font-size: {baseSize}", StringComparison.Ordinal) == true);
+    }
 }
