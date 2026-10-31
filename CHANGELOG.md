@@ -95,6 +95,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Resolve read-only `TITLE` / `DOCPROPERTY Title` fields from the package title and paragraph-style
+  `STYLEREF` fields from document text (#1481). Running style references follow each physical page,
+  including first/last matching headings and preceding-heading fallback. Header/footer measurement
+  and body flow converge together; unstable layouts fail explicitly. Locked caches remain unchanged.
+
 - Preserve endnote paragraph fonts when flattening them for pagination, keeping their glyph
   baselines and long-note continuations intact. The fidelity gate now allows candidates to repair
   unmapped failures on main while retaining all candidate checks and historical protections.

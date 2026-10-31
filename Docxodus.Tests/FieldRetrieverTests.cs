@@ -4,6 +4,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 using Xunit;
@@ -12,6 +13,33 @@ namespace Docxodus.Tests;
 
 public class FieldRetrieverTests
 {
+    [Fact]
+    public void ReannotationRefreshesIdsAndInstructionsAfterAFieldSubtreeChanges()
+    {
+        using var stream = new MemoryStream();
+        using var document = WordprocessingDocument.Create(stream,
+            DocumentFormat.OpenXml.WordprocessingDocumentType.Document);
+        var main = document.AddMainDocumentPart();
+        XElement Field(string instruction) => new XElement(W.p,
+            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"))),
+            new XElement(W.r, new XElement(W.instrText, instruction)),
+            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate"))),
+            new XElement(W.r, new XElement(W.t, "Stored result")),
+            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "end"))));
+        main.PutXDocument(new XDocument(new XElement(W.document, new XElement(W.body, Field("TITLE"), Field("DATE")))));
+        main.AddNewPart<StyleDefinitionsPart>().PutXDocument(new XDocument(new XElement(W.styles)));
+        main.AddNewPart<DocumentSettingsPart>().PutXDocument(new XDocument(new XElement(W.settings)));
+        FieldRetriever.AnnotateWithFieldInfo(main);
+        var root = main.GetXDocument().Root!;
+        root.Descendants(W.p).First().Remove();
+        root.Descendants(W.instrText).Single().ReplaceWith(new XElement(W.instrText, "SEQ Heading"));
+
+        FieldRetriever.AnnotateWithFieldInfo(main);
+
+        Assert.Equal("{SEQ Heading}", FieldRetriever.InstrText(root, 1));
+        Assert.True(FieldRetriever.IsFieldResult(root.Descendants(W.t).Single(), "SEQ"));
+    }
+
     [Fact]
     public void IsFieldResultTracksTocAcrossParagraphsWithoutLeakingPastEnd()
     {

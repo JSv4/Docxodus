@@ -666,3 +666,24 @@ This approach is designed for future lazy loading:
    - Documents with only headers (no footers)
    - Multi-section documents with different headers per section
    - First page different headers
+
+## Running style references
+
+For a running `STYLEREF`, the converter supplies an exact paragraph style ID and full source
+paragraph text. The paginator selects the first matching paragraph on the physical page, or the
+last for `\l`. Without an on-page match it uses the last preceding match, falling forward to the
+first document match only before any preceding match exists. Split heading fragments retain their
+complete source text. Textbox and note paragraphs do not enter the main-story search.
+
+These fields require a bounded layout reconciliation. The paginator saves pristine staging content,
+flows one pass, records the page ownership of headings and body content, and repeats from the
+pristine source with those running values. Each pass prepares and measures the selected header/footer
+variant with resolved STYLEREF, PAGE and NUMPAGES values. The same prepared content determines body
+space and the visible story. Section numbering restarts remain part of page identity. Balanced and
+sequential columns reflow against the actual remaining band; an oversized inline picture is fitted
+against the actual fresh-page band, never merely the remaining space on a partly occupied page.
+
+Only a stable pass finalizes fragment identities, baseline alignment, comments, balloons and PageMap.
+A repeated non-stable state or twelve-pass limit throws an explicit running-field stability error.
+The ordinary path without running style fields retains one flow pass. Character-style references,
+numbering switches, and unsupported stories retain their cached text with the configured diagnostic.
