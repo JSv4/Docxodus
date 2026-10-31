@@ -44,8 +44,12 @@ for (const header of ['wide-wmf', 'tall-wmf', 'group-wmf'].includes(format) ? [f
     const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
     try {
       const pdf = await task.promise; expect(pdf.numPages).toBe(1);
-      const page = await pdf.getPage(1), operators = (await page.getOperatorList()).fnArray;
-      expect(operators.filter(op => wmf ? op === OPS.stroke : op === OPS.paintImageXObject || op === OPS.paintInlineImageXObject).length)
+      const page = await pdf.getPage(1), operations = await page.getOperatorList();
+      // PDF.js folds a path's paint operation into constructPath's first argument.
+      const painted = operations.fnArray.filter((op, i) => wmf
+        ? op === OPS.constructPath && operations.argsArray[i][0] === OPS.stroke
+        : op === OPS.paintImageXObject || op === OPS.paintInlineImageXObject);
+      expect(painted.length)
         .toBeGreaterThanOrEqual(wmf ? format === 'anisotropic-wmf' ? 1 : 2 : 1);
       expect((await page.getTextContent()).items.filter(i => 'str' in i).map(i => i.str).join('')).toBe('CypressAfter');
     } finally { await task.destroy(); }
