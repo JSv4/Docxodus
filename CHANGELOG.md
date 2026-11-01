@@ -95,6 +95,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Delivery publication accepts the standard macOS `/tmp` and `/var` system aliases. Both the
+  alias and its `/private` spelling share one publication lock and physical staging path;
+  other symbolic links are still rejected, and the returned path keeps the caller's spelling.
+
 - Positive inline-frame vertical text distance now reflows preceding lines while preserving
   frame paint. Pagination counts the changed prefix and reserved notes before admitting the
   frame; deferral leaves the preceding page unchanged (#1510).
