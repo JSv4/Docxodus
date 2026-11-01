@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [15.0.0] - 2026-10-31
+
 ### Added
 
 - Read-only anchor locations expose a canonical anchor id, package part URI and element XPath
