@@ -546,7 +546,7 @@ async function yieldToMain(): Promise<void> {
 function getDefaultWasmBasePath(): string {
   try {
     // import.meta.url gives us the URL of this module
-    // e.g., "https://cdn.jsdelivr.net/npm/docxodus@14.0.0/dist/core.js"
+    // e.g., "https://cdn.jsdelivr.net/npm/docxodus@15.0.0/dist/core.js"
     // or "file:///path/to/node_modules/docxodus/dist/core.js"
     const moduleUrl = import.meta.url;
 
