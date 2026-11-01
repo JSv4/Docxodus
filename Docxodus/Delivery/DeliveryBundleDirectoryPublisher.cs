@@ -121,7 +121,7 @@ public static class DeliveryBundleDirectoryPublisher
     {
         ArgumentNullException.ThrowIfNull(bundle);
 
-        var target = ValidateTarget(targetDirectory);
+        var (target, requestedTarget) = ValidateTarget(targetDirectory);
         var parent = Path.GetDirectoryName(target)!;
         var snapshot = SnapshotAndValidate(bundle);
         var injector = faultInjector ?? NoDeliveryBundleDirectoryPublisherFaultInjector.Instance;
@@ -196,7 +196,7 @@ public static class DeliveryBundleDirectoryPublisher
             EnsureTargetStillAvailable(target, parent);
             Directory.Move(stage, target);
             stageOwned = false;
-            return target;
+            return requestedTarget;
         }
         catch (Exception publicationFailure)
         {
@@ -215,14 +215,15 @@ public static class DeliveryBundleDirectoryPublisher
         }
     }
 
-    private static string ValidateTarget(string targetDirectory)
+    private static (string Target, string RequestedTarget) ValidateTarget(string targetDirectory)
     {
         if (string.IsNullOrWhiteSpace(targetDirectory))
             throw new ArgumentException("An explicit target directory is required.", nameof(targetDirectory));
         if (!Path.IsPathFullyQualified(targetDirectory))
             throw new ArgumentException("The target directory must be a fully qualified path.", nameof(targetDirectory));
 
-        var target = Path.TrimEndingDirectorySeparator(Path.GetFullPath(targetDirectory));
+        var requestedTarget = Path.TrimEndingDirectorySeparator(Path.GetFullPath(targetDirectory));
+        var target = ResolveSystemTemporaryPath(requestedTarget);
         var parent = Path.GetDirectoryName(target);
         if (string.IsNullOrEmpty(parent) || string.Equals(target, Path.GetPathRoot(target),
                 StringComparison.Ordinal))
@@ -232,7 +233,30 @@ public static class DeliveryBundleDirectoryPublisher
 
         EnsureNoSymlinks(parent, includeLeaf: true);
         EnsureTargetDoesNotExist(target);
-        return target;
+        return (target, requestedTarget);
+    }
+
+    private static string ResolveSystemTemporaryPath(string path)
+    {
+        if (!OperatingSystem.IsMacOS())
+            return path;
+
+        var alias = path.StartsWith("/tmp/", StringComparison.Ordinal) ? "/tmp"
+            : path.StartsWith("/var/", StringComparison.Ordinal) ? "/var" : null;
+        if (alias is null)
+            return path;
+
+        var destination = "/private" + alias;
+        var link = new DirectoryInfo(alias).LinkTarget;
+        if (!string.Equals(link, destination, StringComparison.Ordinal)
+            && !string.Equals(link, destination[1..], StringComparison.Ordinal))
+            return path;
+
+        // Only the two standard link spellings are recognized. The normal validation below
+        // still checks every component of the physical path, including /private. Keep this
+        // path for the entire transaction so both spellings share a lease and no later I/O
+        // goes back through the alias. The caller's spelling is used only for the return value.
+        return destination + path[alias.Length..];
     }
 
     private static void EnsureTargetStillAvailable(string target, string parent)

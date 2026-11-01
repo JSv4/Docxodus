@@ -251,6 +251,16 @@ jobs:
           dotnet build tools/docx2html/docx2html.csproj -c Release --no-restore
           dotnet build tools/docx2oc/docx2oc.csproj -c Release --no-restore
 
+      - name: Test delivery directory publication on Windows and macOS
+        if: matrix.os != 'ubuntu-latest'
+        run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --filter "FullyQualifiedName~DeliveryBundleDirectoryPublisherTests|FullyQualifiedName~DeliveryBundleMacTempTests"
+
+      - name: Test delivery publication with the macOS /tmp alias
+        if: matrix.os == 'macos-latest'
+        env:
+          TMPDIR: /tmp
+        run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~DeliveryBundleDirectoryPublisherTests|FullyQualifiedName~DeliveryBundleMacTempTests"
+
       # The release publishes the CLIs trimmed (issue #903), and a trim analysis warning fails
       # that publish (the CLI projects build with TreatWarningsAsErrors). But publish.yml runs
       # only at release time, after NuGet has shipped, so run the same trimmed publish here on
