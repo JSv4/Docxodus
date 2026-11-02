@@ -12,7 +12,7 @@ import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExact
 import { prepareWordText, paintWordText } from "./word-text.js";
 import { preserveClippedExactRowText } from "./exact-row-text.js";
 import { prepareParagraphBorders, paintParagraphBorders } from "./paragraph-borders.js";
-import { prepareTableBorders, paintTableBorders } from "./table-borders.js";
+import { prepareTableBorders, paintTableBorders, refreshTableBorderLayout } from "./table-borders.js";
 import { measureRenderedSource, findOversizedExactRow, PaginationEngine, type PageMap } from "./pagination.js";
 import { scopeMarkupBalloons } from "./markup-balloons.js";
 export { renderedSourceMeasurerExpression } from "./pagination.js";
@@ -3839,6 +3839,7 @@ export async function convertDocxToPaginatedHtml(
           showPageNumbers: false,
           pageGap: 0,
           fragmentParagraphs: true,
+          prepareTableFragment: refreshTableBorderLayout,
           commentOverflow: "appendix",
           // Running-story placement below changes the visible fragment set, and this path always
           // restamps through normalizePageMapFragmentIdentities(); stamping inside paginate()

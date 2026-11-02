@@ -324,6 +324,8 @@ in `TestFiles/TableHorizontalPlacement`; vertical row padding includes the resol
 Exact rows recalculate their content clips, while an automatic height remains automatic.
 The paginator resolves each repeated header's new neighbor before fitting the fragment and
 reserves the visible outer edges at its top, bottom and aligned trailing side.
+Export supplies this refresh through the paginator's synchronous internal
+`prepareTableFragment` hook; editor/viewer bundles do not load the export-only border layout.
 
 Final edges paint as SVG rectangles beside their source table, preserving source stacking
 order, affine transforms and ancestor clips. Shared boundaries paint once by source segment

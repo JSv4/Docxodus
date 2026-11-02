@@ -18,7 +18,6 @@ import {
 } from "./page-geometry.js";
 import type { PageBands, PageDimensions } from "./page-geometry.js";
 import { EXACT_ROW_CELL } from "./exact-row-text.js";
-import { refreshTableBorderLayout } from "./table-borders.js";
 import { omitPaintedBorderSide, PAINT as PAINTED_BORDER } from "./paragraph-borders.js";
 import {
   layoutMarkupBalloons,
@@ -407,6 +406,8 @@ export interface PaginationOptions {
    * Export callers use this to enforce `finalPages` without constructing an over-limit DOM first.
    */
   checkPageCount?: (prospectivePageCount: number) => void;
+  /** @internal Export-only table layout, applied to each clone before its fit is measured. */
+  prepareTableFragment?: (table: HTMLTableElement) => void;
   /** Exact invalidation tokens used to materialize an authoritative PageMap with the result. */
   layoutToken?: { documentVersion: number; rendererFingerprint: string };
 }
@@ -890,6 +891,7 @@ export class PaginationEngine {
   private bodyBudgetReductionsPt: Readonly<Record<number, number>>;
   private cancellationCheckpoint?: () => void;
   private pageCountCheckpoint?: (prospectivePageCount: number) => void;
+  private prepareTableFragment?: (table: HTMLTableElement) => void;
   private createdPageCount = 0;
   private layoutToken?: { documentVersion: number; rendererFingerprint: string };
   private hfRegistry: HeaderFooterRegistry;
@@ -997,6 +999,7 @@ export class PaginationEngine {
     this.bodyBudgetReductionsPt = options.bodyBudgetReductionsPt ?? {};
     this.cancellationCheckpoint = options.checkCancellation;
     this.pageCountCheckpoint = options.checkPageCount;
+    this.prepareTableFragment = options.prepareTableFragment;
     this.layoutToken = options.layoutToken;
     this.hfRegistry = new Map();
     this.footnoteRegistry = new Map();
@@ -2996,7 +2999,7 @@ export class PaginationEngine {
       bodyClone.appendChild(row.cloneNode(true));
     }
     tableClone.appendChild(bodyClone);
-    refreshTableBorderLayout(tableClone);
+    this.prepareTableFragment?.(tableClone);
 
     if (!retainAnchor) {
       wrapperClone?.removeAttribute("data-anchor");

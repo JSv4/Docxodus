@@ -71,7 +71,7 @@ for (const alignment of ['start','end','rtl-end'] as const) test(`${alignment} c
     const api=(window as any).TableBorders;
     api.prepareTableBorders(document.getElementById('staging'));
     new (window as any).DocxodusPagination.PaginationEngine(document.getElementById('staging'),document.getElementById('container'),
-      {fragmentParagraphs:true,showPageNumbers:false}).paginate();
+      {fragmentParagraphs:true,showPageNumbers:false,prepareTableFragment:api.refreshTableBorderLayout}).paginate();
     api.paintTableBorders(document.getElementById('container'));
     return Array.from(document.querySelectorAll('#container .page-box'),page => {
       const y=page.getBoundingClientRect().top;
@@ -108,7 +108,7 @@ test('repeated headers resolve the new shared edge once and reserve its winning 
     const api=(window as any).TableBorders;
     api.prepareTableBorders(document.getElementById('staging'));
     new (window as any).DocxodusPagination.PaginationEngine(document.getElementById('staging'),document.getElementById('container'),
-      {fragmentParagraphs:true,showPageNumbers:false}).paginate();
+      {fragmentParagraphs:true,showPageNumbers:false,prepareTableFragment:api.refreshTableBorderLayout}).paginate();
     api.paintTableBorders(document.getElementById('container'));
     return Array.from(document.querySelectorAll('#container .page-box'),page=>{
       const rows=Array.from(page.querySelectorAll('tr')),boundary=rows[0].getBoundingClientRect().bottom;

@@ -46,6 +46,25 @@ for (const size of [2, 4, 8, 12]) for (const kind of ['ordinary', 'style', 'merg
   });
 }
 
+test('export reserves a repeated header\'s winning border before fitting each continuation',async ({browser,page})=>{
+  const result=await renderDocxArtifacts(tableBorderDocx(2,'repeated'),{
+    browser,outputs:['html','pdf'],reviewProfile:'final',commentProfile:'hidden',
+  });
+  expect(result.pageCount).toBe(2);
+  await page.setContent(result.html!);
+  const continuation=page.locator('tr[data-docx-repeated-header-row="true"] + tr').first();
+  expect(await continuation.locator('td').first().evaluate(cell=>parseFloat(getComputedStyle(cell).paddingTop)*.75)).toBe(6);
+  const task=getDocument({data:new Uint8Array(result.pdf!),verbosity:0});
+  try {
+    const pdf=await task.promise;
+    for(let i=1;i<=2;i++) {
+      const text=(await (await pdf.getPage(i)).getTextContent()).items.filter(item=>'str' in item).map(item=>item.str).join(' ');
+      expect(text.match(/CypressHeader/g)).toEqual(['CypressHeader']);
+      expect(text.match(/CypressRow\d+/g)).toEqual(Array.from({length:3},(_,row)=>`CypressRow${(i-1)*3+row+1}`));
+    }
+  } finally {await task.destroy();}
+});
+
 // Word's captured #1219 rule: margins are measured from the grid center, while zero
 // margins still keep text outside the border. Legacy text-aligned tables put text at indent.
 for (const [placement, margin, size, offset] of [

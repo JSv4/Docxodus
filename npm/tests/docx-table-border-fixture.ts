@@ -1,6 +1,6 @@
 import { storedZip, xml, W_NS as w, R_NS as r } from './docx-zip.js';
 
-export type TableBorderCase = 'ordinary' | 'style' | 'merged' | 'asymmetric' | 'none' | 'wrap' | 'exact' | 'auto';
+export type TableBorderCase = 'ordinary' | 'style' | 'merged' | 'asymmetric' | 'none' | 'wrap' | 'exact' | 'auto' | 'repeated';
 
 /** Authored two-column grid: widths are 120pt and margins are 4.5pt. */
 export function tableBorderDocx(size: number, kind: TableBorderCase = 'ordinary', margin = 90,
@@ -23,7 +23,11 @@ export function tableBorderDocx(size: number, kind: TableBorderCase = 'ordinary'
     + (placement.endsWith('end') ? '<w:jc w:val="right"/>' : '') + (placement === 'rtl-end' ? '<w:bidiVisual/>' : '')
     + '<w:tblLayout w:type="fixed"/></w:tblPr>'
     + '<w:tblGrid><w:gridCol w:w="2400"/><w:gridCol w:w="2400"/></w:tblGrid>'
-    + (kind === 'merged' ? `<w:tr>${cell('CypressMerged', size, 2)}</w:tr>` : '') + row + '</w:tbl>';
+    + (kind === 'repeated'
+      ? `<w:tr><w:trPr><w:tblHeader/></w:trPr>${cell('CypressHeader',24)}${cell('CypressLabel',24)}</w:tr>`
+        + Array.from({length:6},(_,i)=>`<w:tr><w:trPr><w:trHeight w:val="3200" w:hRule="atLeast"/></w:trPr>`
+          + cell(`CypressRow${i+1}`,size)+cell(`CypressValue${i+1}`,size)+'</w:tr>').join('')
+      : (kind === 'merged' ? `<w:tr>${cell('CypressMerged', size, 2)}</w:tr>` : '') + row) + '</w:tbl>';
   const parts = {
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
       + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
