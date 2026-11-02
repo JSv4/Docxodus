@@ -324,6 +324,9 @@ in `TestFiles/TableHorizontalPlacement`; vertical row padding includes the resol
 Exact rows recalculate their content clips, while an automatic height remains automatic.
 The paginator resolves each repeated header's new neighbor before fitting the fragment and
 reserves the visible outer edges at its top, bottom and aligned trailing side.
+Borderless cells use separate layout with zero spacing so the outer vertical halves can
+be table padding. This reservation cannot collapse into neighboring paragraph margins,
+and the alignment wrapper retains its existing float-clearance behavior.
 Export supplies this refresh through the paginator's synchronous internal
 `prepareTableFragment` hook; editor/viewer bundles do not load the export-only border layout.
 

@@ -20,6 +20,41 @@ const row = (top=3,bottom=3,label='Cypress') => `<tr data-docx-table-border-edge
 const table = (rows=row()) => '<table data-docx-exact-table-borders="0" style="border-collapse:collapse;table-layout:fixed;width:120pt">'
   + '<colgroup><col style="width:120pt"></colgroup><tbody>'+rows+'</tbody></table>';
 
+for (const nested of [false,true]) test(`${nested?'nested':'ordinary'} table border reservation cannot collapse into paragraph spacing`,async ({page})=>{
+  const inner=table(row(3,3,'CypressInner')).replace(/120pt/g,'60pt');
+  const rows=nested?row().replace('</td>',`<div align="left">${inner}</div><p style="margin:9pt 0 0;line-height:15pt">CypressAfterInner</p></td>`):row();
+  await page.setContent(`<style>body{margin:0}p{margin:0;font:12pt Arial}.page-box{position:relative}</style><div class="page-box">
+    <p style="margin-bottom:12pt">CypressBefore</p><div align="left">${table(rows)}</div>
+    <p style="margin-top:9pt">CypressAfter</p></div>`);
+  await page.addScriptTag({content:script});
+  // Whole-pixel native borders provide the independent layout control. Replacing their paint
+  // must keep the non-collapsing border reservation, including through a nested wrapper.
+  const measure=()=>page.locator('p').evaluateAll(paragraphs=>paragraphs.map(p=>{
+    const r=p.getBoundingClientRect();return [p.textContent,r.y,r.width,r.height];
+  }));
+  const native=await measure();
+  await page.evaluate(()=>{const api=(window as any).TableBorders;api.prepareTableBorders(document.body);api.paintTableBorders(document.body);});
+  expect(await measure()).toEqual(native);
+});
+
+for (const align of ['left','center','right']) for (const width of [160,550])
+test(`${align} ${width}px table preserves float clearance and outer border spacing`,async ({page})=>{
+  const markup=table().replace(/120pt/g,`${width}px`);
+  await page.setContent(`<style>body{margin:0}p{margin:0}.page-box{position:relative;width:600px}</style>
+    <div class="page-box"><div style="float:left;width:100px;height:150px"></div>
+    <div align="${align}">${markup}</div><p>CypressAfter</p></div>`);
+  await page.addScriptTag({content:script});
+  const measure=()=>page.locator('p').evaluateAll(paragraphs=>paragraphs.map(p=>{
+    const r=p.getBoundingClientRect();return [p.textContent,r.y,r.height];
+  }));
+  const native=await measure();
+  await page.evaluate(()=>{const api=(window as any).TableBorders;api.prepareTableBorders(document.body);api.paintTableBorders(document.body);});
+  expect(await measure()).toEqual(native);
+  const paintedTop=await page.locator('[data-docx-table-border-paint] g rect').evaluateAll(rects=>
+    Math.min(...rects.map(rect=>rect.getBoundingClientRect().top)));
+  expect(paintedTop).toBe(width===550?150:0);
+});
+
 for (const mode of ['ordinary','rotated','reflected','clipped','rotated-clip'] as const) {
   test(`${mode} borders keep local geometry, closed corners, and ancestor clips`, async ({page}) => {
     const transform = mode === 'rotated' || mode === 'rotated-clip' ? 'rotate(30deg)' : mode === 'reflected' ? 'scale(-1,1)' : 'none';

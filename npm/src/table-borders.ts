@@ -48,8 +48,7 @@ export function refreshTableBorderLayout(table: HTMLTableElement): void {
       row.style.height = `${height+(rule === 'exact' ? 0 : half(row,'top')+half(row,'bottom'))}px`;
   }
   for (const [side, row] of [['top', table.rows[0]], ['bottom', table.rows[table.rows.length-1]]] as const) {
-    const base = Number.parseFloat(table.style.getPropertyValue(`--docx-table-base-margin-${side}`)) || 0;
-    table.style.setProperty(`margin-${side}`, `${base+half(row,side)}px`);
+    table.style.setProperty(`padding-${side}`, `${half(row,side)}px`);
   }
 }
 
@@ -61,11 +60,15 @@ export function prepareTableBorders(root: HTMLElement): void {
     if (table.hasAttribute(PREPARED)) continue;
     const style = view.getComputedStyle(table);
     const points = (name: string) => (Number.parseFloat(style.getPropertyValue(name)) || 0)*PT;
-    const marginTop = Number.parseFloat(style.marginTop) || 0, marginBottom = Number.parseFloat(style.marginBottom) || 0;
     const side = table.getAttribute('data-docx-grid-margin-side');
     if (side) table.style.setProperty(`margin-${side}`, `${points('--docx-table-grid-margin')}px`);
-    table.style.setProperty('--docx-table-base-margin-top', `${marginTop}px`);
-    table.style.setProperty('--docx-table-base-margin-bottom', `${marginBottom}px`);
+    // Outer half-borders belong inside the table's box. Margins collapse through its
+    // alignment wrapper into neighboring paragraphs; containing that wrapper instead
+    // changes how wide tables clear floats. Borderless separate cells retain the grid
+    // while enabling table padding, which collapsed-border layout ignores.
+    table.style.borderCollapse = 'separate';
+    table.style.borderSpacing = '0';
+    table.style.padding = '0';
     for (const cell of Array.from(table.querySelectorAll<HTMLTableCellElement>(`td[${CELL}]`))) {
       if (cell.closest('table') !== table) continue;
       const cellStyle = view.getComputedStyle(cell);
