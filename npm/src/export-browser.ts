@@ -12,6 +12,7 @@ import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExact
 import { prepareWordText, paintWordText } from "./word-text.js";
 import { preserveClippedExactRowText } from "./exact-row-text.js";
 import { prepareParagraphBorders, paintParagraphBorders } from "./paragraph-borders.js";
+import { prepareTableBorders, paintTableBorders, refreshTableBorderLayout } from "./table-borders.js";
 import { measureRenderedSource, findOversizedExactRow, PaginationEngine, type PageMap } from "./pagination.js";
 import { scopeMarkupBalloons } from "./markup-balloons.js";
 export { renderedSourceMeasurerExpression } from "./pagination.js";
@@ -3828,6 +3829,7 @@ export async function convertDocxToPaginatedHtml(
           applyUnroundedNormalLineHeights(renderDocument.body);
           prepareWordText(renderDocument.body, () => checkpointWordText(state));
           prepareParagraphBorders(renderDocument.body);
+          prepareTableBorders(renderDocument.body);
         } finally {
           restoreTextMeasurement();
         }
@@ -3837,6 +3839,7 @@ export async function convertDocxToPaginatedHtml(
           showPageNumbers: false,
           pageGap: 0,
           fragmentParagraphs: true,
+          prepareTableFragment: refreshTableBorderLayout,
           commentOverflow: "appendix",
           // Running-story placement below changes the visible fragment set, and this path always
           // restamps through normalizePageMapFragmentIdentities(); stamping inside paginate()
@@ -3977,6 +3980,8 @@ export async function convertDocxToPaginatedHtml(
         () => checkpointWordText(state)));
     await runPhase(state, "output_verification", ["paragraph borders"], () =>
       paintParagraphBorders(renderDocument.getElementById("pagination-container") as HTMLElement));
+    await runPhase(state, "output_verification", ["table borders"], () =>
+      paintTableBorders(renderDocument.getElementById("pagination-container") as HTMLElement));
     // The markup area shrinks each page's content, so it comes after every pass that measures it.
     const balloons = await runPhase(state, "output_verification", ["markup balloons"], () => engine.layoutMarkupBalloons());
     // Pages the balloon appendix added come after the page tree was finalized and named for print.

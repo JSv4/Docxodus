@@ -1217,8 +1217,11 @@ namespace Docxodus
 
             NormalizeFieldResults(wordDoc, htmlConverterSettings);
             InsertAppropriateNonbreakingSpaces(wordDoc);
-            CalculateSpanWidthForTabs(wordDoc, htmlConverterSettings.RenderTrackedChanges && htmlConverterSettings.ShowDeletedContent);
             ReverseTableBordersForRtlTables(wordDoc);
+            foreach (var part in wordDoc.ContentParts())
+                foreach (var table in part.GetXDocument().Descendants(W.tbl).Where(t => t.Descendants(W.tab).Any()))
+                    PrepareExactTableBorders(table);
+            CalculateSpanWidthForTabs(wordDoc, htmlConverterSettings.RenderTrackedChanges && htmlConverterSettings.ShowDeletedContent);
             AdjustTableBorders(wordDoc);
             AnnotateOwningContentParts(wordDoc);
             XElement rootElement = wordDoc.MainDocumentPart!.GetXDocument().Root!;
@@ -1821,51 +1824,22 @@ namespace Docxodus
 
         private static void ReverseTableBordersForRtlTables(WordprocessingDocument wordDoc)
         {
-            XDocument xd = wordDoc.MainDocumentPart!.GetXDocument();
-            foreach (var tbl in xd.Descendants(W.tbl))
+            foreach (var part in wordDoc.ContentParts())
+            foreach (var tbl in part.GetXDocument().Descendants(W.tbl))
             {
                 if (!IsOnOffPropertyEnabled(tbl.Elements(W.tblPr).Elements(W.bidiVisual).FirstOrDefault()))
                     continue;
-
-                var tblBorders = tbl.Elements(W.tblPr).Elements(W.tblBorders).FirstOrDefault();
-                if (tblBorders != null)
+                // Visit only this table's cells, including transparent row/cell wrappers. Rename
+                // the physical sides without dropping inside/diagonal borders or their attributes.
+                var borders = tbl.Elements(W.tblPr).Elements(W.tblBorders).Concat(
+                    WordprocessingMLUtil.TableRows(tbl).SelectMany(WordprocessingMLUtil.RowCells)
+                        .Elements(W.tcPr).Elements(W.tcBorders));
+                foreach (var border in borders)
                 {
-                    var left = tblBorders.Element(W.left);
-                    if (left != null)
-                        left = new XElement(W.right, left.Attributes());
-
-                    var right = tblBorders.Element(W.right);
-                    if (right != null)
-                        right = new XElement(W.left, right.Attributes());
-
-                    var newTblBorders = new XElement(W.tblBorders,
-                        tblBorders.Element(W.top),
-                        left,
-                        tblBorders.Element(W.bottom),
-                        right);
-                    tblBorders.ReplaceWith(newTblBorders);
-                }
-
-                foreach (var tc in tbl.Elements(W.tr).Elements(W.tc))
-                {
-                    var tcBorders = tc.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault();
-                    if (tcBorders != null)
-                    {
-                        var left = tcBorders.Element(W.left);
-                        if (left != null)
-                            left = new XElement(W.right, left.Attributes());
-
-                        var right = tcBorders.Element(W.right);
-                        if (right != null)
-                            right = new XElement(W.left, right.Attributes());
-
-                        var newTcBorders = new XElement(W.tcBorders,
-                            tcBorders.Element(W.top),
-                            left,
-                            tcBorders.Element(W.bottom),
-                            right);
-                        tcBorders.ReplaceWith(newTcBorders);
-                    }
+                    var left = border.Element(W.left);
+                    var right = border.Element(W.right);
+                    if (left != null) left.Name = W.right;
+                    if (right != null) right.Name = W.left;
                 }
             }
         }
@@ -6514,6 +6488,7 @@ namespace Docxodus
             // but an empty table has no painted row and cannot supply a PageMap rectangle.
             if (!table.Descendants(Xhtml.tr).Any())
                 table.SetAttributeValue("data-page-map-exclude", "true");
+            RecordExactTableBorderMetadata(element, table, style, indent, jc, bidiVisual, tblpPr != null, leadingEdge);
             table.AddAnnotation(style);
 
             // Tracked table-property / grid revisions (issue #539).
@@ -6748,6 +6723,7 @@ namespace Docxodus
                     : null,
                 SourceAnchorIdentityAttribute(settings, element),
                 CreateBorderDivs(wordDoc, settings, element.Elements()));
+            RecordExactCellBorderMetadata(element, cell, style);
             cell.AddAnnotation(style);
 
             // Handle table cell revisions
@@ -6965,6 +6941,7 @@ namespace Docxodus
                 trHeight != null && heightRule != "auto"
                     ? new XAttribute("data-docx-row-height-rule", heightRule) : null,
                 cells);
+            RecordExactRowBorderMetadata(element, htmlRow, GetThemeColorScheme(wordDoc.MainDocumentPart!.GetXDocument().Root!));
             if (style.Any())
                 htmlRow.AddAnnotation(style);
 
@@ -9471,6 +9448,11 @@ namespace Docxodus
 
         private static void AdjustTableBorders(WordprocessingDocument wordDoc)
         {
+            // Tab measurement reconstructs the XML tree. Resolve metadata on the final nodes,
+            // before the legacy whole-side fallback can spread a merged edge's winning border.
+            foreach (var part in wordDoc.ContentParts())
+                foreach (var table in part.GetXDocument().Descendants(W.tbl))
+                    PrepareExactTableBorders(table);
             // Note: when implementing a paging version of the HTML transform, this needs to be done
             // for all content parts, not just the main document part.
 
@@ -10350,7 +10332,10 @@ namespace Docxodus
             else
                 return null;
 
-            return Math.Max(width - (int)(CellMarginTwips(tc, W.left) + CellMarginTwips(tc, W.right)), 0);
+            var borders = tc.Annotation<ExactTableCellBorders>();
+            var left = Math.Max(CellMarginTwips(tc, W.left), (borders?.Left ?? 0m) * 10m);
+            var right = Math.Max(CellMarginTwips(tc, W.right), (borders?.Right ?? 0m) * 10m);
+            return Math.Max(width - (int)decimal.Ceiling(left + right), 0);
         }
 
         /// <summary>

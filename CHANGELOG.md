@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Preserve declared fractional single-line borders in fixed-grid table exports, with consistent cell widths, merged edges, repeated headers and RTL running stories (#1522).
+
 - Preserve every text story in DrawingML groups, including nested header groups, mixed pictures and shapes, and reflected or upright text (#1527).
 
 - Widow control permits paragraph splitting while retaining two lines on each side, independently of explicit line keeps (#1520).
