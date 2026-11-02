@@ -33,6 +33,30 @@ before(async () => {
 }, { timeout: 120_000 });
 
 for (const status of ["complete", "failed"]) {
+  test(`v2 schema binds ${status} font observations and rejects invented file evidence`, () => {
+    const report = structuredClone(reports[status]);
+    report.fontObservation = { status: 'observed', method: 'chromium-cdp', media: 'print',
+      fileIdentity: 'unavailable', uses: [{ textDigest: 'a'.repeat(64), textCodePointCount: 1,
+        faces: [{ family: 'Actual Face', isCustomFont: false, glyphCount: 1 }] }] };
+    report.fontObservationDigest = 'b'.repeat(64);
+    assert.equal(validate(report), true, JSON.stringify(validate.errors));
+    for (const mutate of [
+      r => { delete r.fontObservationDigest; },
+      r => { delete r.fontObservation; },
+      r => { r.fontObservation.uses[0].faces[0].fileSha256 = 'c'.repeat(64); },
+      r => { r.fontObservation.uses[0].faces[0].glyphCount = 0; },
+      r => { r.fontObservation.uses[0].faces[0].family = '\u0000bad'; },
+    ]) {
+      const invalid = structuredClone(report); mutate(invalid);
+      assert.equal(validate(invalid), false);
+    }
+    report.fontObservation = { status: 'unavailable', reason: 'browser_api_unavailable' };
+    delete report.fontObservationDigest;
+    assert.equal(validate(report), true);
+    delete report.fontObservation;
+    assert.equal(validate(report), true, 'legacy reports remain valid');
+  });
+
   test(`published v2 schema accepts an actual ${status} report`, () => {
     assert.equal(reports[status].schema, "https://docxodus.dev/schemas/render/render-report/v2");
     assert.equal(reports[status].schemaVersion, 2);

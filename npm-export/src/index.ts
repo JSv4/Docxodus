@@ -994,10 +994,13 @@ async function renderOwned(
     verifyBrowserOutcome(browser, requested);
     const attestation = runtime.environmentAttestation;
     report = structuredClone(browser.materialization.renderReport);
+    report.fontObservation = browser.fontObservation;
+    report.fontObservationDigest = materialDigest("docxodus:font-observation:v1", browser.fontObservation);
     const environment = runtimeEnvironment(report, browser.runtime, attestation);
     const rendererFingerprint = materialDigest("docxodus:renderer-fingerprint:v1", {
       schemaVersion: 1,
       browserMaterializerFingerprint: browser.materialization.rendererFingerprint,
+      fontObservationDigest: report.fontObservationDigest,
       runtime: browser.runtime,
       environment: {
         verification: environment.verification,

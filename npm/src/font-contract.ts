@@ -163,6 +163,28 @@ export type FontResolver = (
   signal: AbortSignal,
 ) => Promise<FontResolverResponse>;
 
+/** Request provenance carried by text runs through pagination and vector painting. */
+export const FONT_REQUEST_ATTRIBUTE = "data-docx-font-request";
+
+/** Browser shaping evidence; names and glyph counts do not attest a font file or visible ink. */
+export type FontObservation =
+  | { status: "unavailable"; reason: "browser_api_unavailable" | "protocol_unavailable" | "not_requested" }
+  | {
+      status: "observed";
+      method: "chromium-cdp";
+      media: "screen" | "print";
+      fileIdentity: "unavailable";
+      uses: Array<{
+        requestId?: string;
+        anchorId?: string;
+        fragmentId?: string;
+        pageNumber?: number;
+        textDigest: string;
+        textCodePointCount: number;
+        faces: Array<{ family: string; postscriptName?: string; isCustomFont: boolean; glyphCount: number }>;
+      }>;
+    };
+
 /** Path- and byte-free evidence retained in render reports and fingerprints. */
 export interface FontResolution {
   requestId: string;

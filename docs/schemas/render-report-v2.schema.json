@@ -660,9 +660,15 @@
             "additionalProperties": false,
             "minProperties": 1,
             "properties": {
-              "formatting": { "const": false },
-              "insertionsAndDeletions": { "const": false },
-              "comments": { "const": false }
+              "formatting": {
+                "const": false
+              },
+              "insertionsAndDeletions": {
+                "const": false
+              },
+              "comments": {
+                "const": false
+              }
             }
           },
           "commentColumnPlacement": {
@@ -1028,6 +1034,13 @@
         "items": {
           "$ref": "#/$defs/warning"
         }
+      },
+      "fontObservation": {
+        "$ref": "#/$defs/fontObservation"
+      },
+      "fontObservationDigest": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
       }
     },
     "complete": {
@@ -1189,6 +1202,12 @@
         },
         "bindings": {
           "$ref": "#/$defs/bindings"
+        },
+        "fontObservation": {
+          "$ref": "#/$defs/baseProperties/fontObservation"
+        },
+        "fontObservationDigest": {
+          "$ref": "#/$defs/baseProperties/fontObservationDigest"
         }
       },
       "allOf": [
@@ -1275,8 +1294,37 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "fontObservation"
+            ],
+            "properties": {
+              "fontObservation": {
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "const": "observed"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "fontObservationDigest"
+            ]
+          }
         }
-      ]
+      ],
+      "dependentRequired": {
+        "fontObservationDigest": [
+          "fontObservation"
+        ]
+      }
     },
     "failed": {
       "type": "object",
@@ -1583,6 +1631,12 @@
               "maxContains": 1
             }
           ]
+        },
+        "fontObservation": {
+          "$ref": "#/$defs/baseProperties/fontObservation"
+        },
+        "fontObservationDigest": {
+          "$ref": "#/$defs/baseProperties/fontObservationDigest"
         }
       },
       "allOf": [
@@ -1621,6 +1675,168 @@
                   "properties": {
                     "status": {
                       "const": "failed"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "fontObservation"
+            ],
+            "properties": {
+              "fontObservation": {
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "const": "observed"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "fontObservationDigest"
+            ]
+          }
+        }
+      ],
+      "dependentRequired": {
+        "fontObservationDigest": [
+          "fontObservation"
+        ]
+      }
+    },
+    "fontObservation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "const": "unavailable"
+            },
+            "reason": {
+              "enum": [
+                "browser_api_unavailable",
+                "protocol_unavailable",
+                "not_requested"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "method",
+            "media",
+            "fileIdentity",
+            "uses"
+          ],
+          "properties": {
+            "status": {
+              "const": "observed"
+            },
+            "method": {
+              "const": "chromium-cdp"
+            },
+            "media": {
+              "enum": [
+                "screen",
+                "print"
+              ]
+            },
+            "fileIdentity": {
+              "const": "unavailable"
+            },
+            "uses": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "textDigest",
+                  "textCodePointCount",
+                  "faces"
+                ],
+                "properties": {
+                  "requestId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "anchorId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "fragmentId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "pageNumber": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "textDigest": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "textCodePointCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "faces": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "family",
+                        "isCustomFont",
+                        "glyphCount"
+                      ],
+                      "properties": {
+                        "family": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                        },
+                        "postscriptName": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                        },
+                        "isCustomFont": {
+                          "type": "boolean"
+                        },
+                        "glyphCount": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        }
+                      }
                     }
                   }
                 }

@@ -8,6 +8,8 @@
  * on the original elements. Complex flow still uses the existing HTML renderer.
  */
 
+import { FONT_REQUEST_ATTRIBUTE } from './font-contract.js';
+
 const PREPARED = 'data-docx-word-text-prepared';
 // A positive value carries fitted-line natural height; zero certifies unchanged line choices.
 const FITTED_RUN = 'data-docx-word-fit';
@@ -93,7 +95,7 @@ function plainRun(paragraph: HTMLElement, rightToLeft = false): HTMLElement | nu
   const text = run.textContent ?? '';
   // Other scripts need their own fallback-font metrics, shaping and bidi model.
   if (!text.trim() || /^\s/.test(text) || (!rightToLeft && !/^[\u0020-\u024f]*$/u.test(text))) return null;
-  if (Array.from(run.attributes).some(a => !['class', 'style', 'lang', 'dir',
+  if (Array.from(run.attributes).some(a => !['class', 'style', 'lang', 'dir', FONT_REQUEST_ATTRIBUTE,
     ...(fitted || run.getAttribute(FITTED_RUN) === '0' ? [FITTED_RUN] : [])].includes(a.name))) return null;
   const style = view.getComputedStyle(run);
   const parent = view.getComputedStyle(paragraph);
@@ -514,6 +516,8 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
       if (shortfall > 0 && shortfall < 1) drift.set(pageBox, lost + shortfall);
     }
     const svg = document.createElementNS(SVG_NS, 'svg');
+    const fontRequest = run.getAttribute(FONT_REQUEST_ATTRIBUTE);
+    if (fontRequest) svg.setAttribute(FONT_REQUEST_ATTRIBUTE, fontRequest);
     svg.setAttribute('width', String(band.width));
     svg.setAttribute('height', String(band.height));
     // A larger viewBox retains fractional glyph coordinates without increasing
