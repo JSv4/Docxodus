@@ -4108,21 +4108,33 @@ export class PaginationEngine {
 
     let endpoints = this.paragraphFragmentEndpoints(paragraph);
     let best = largestFit(endpoints);
+    const hasMultipleFragmentLines = (fragment: HTMLElement) => {
+      paragraph.replaceWith(fragment);
+      try {
+        const range = this.document.createRange();
+        range.selectNodeContents(fragment);
+        return this.rangeHasMultipleTextLines(range);
+      } finally {
+        fragment.replaceWith(paragraph);
+      }
+    };
     const legalBreak = (endpoint: ParagraphFragmentEndpoint) => {
-      if ((options.lineStartsOnly || options.preserveWidowLines)
-        && !this.startsVisualLine(paragraph, endpoint)) return false;
+      if (options.lineStartsOnly && !this.startsVisualLine(paragraph, endpoint)) return false;
       if (!options.preserveWidowLines) return true;
+      // A word boundary need not start a source line: hyphenated words can wrap within the
+      // word. Measure the actual fragments so a reflowed tail cannot collapse to one line,
+      // without rejecting ordinary word breaks and falling back to emergency character cuts.
       const range = this.document.createRange();
       range.selectNodeContents(paragraph);
       range.setEnd(endpoint.node, endpoint.offset);
-      if (!this.rangeHasMultipleTextLines(range)) return false;
+      const head = this.createParagraphFragment(paragraph, range, true, false);
       range.selectNodeContents(paragraph);
       range.setStart(endpoint.node, endpoint.offset + (endpoint.consumeBreak ? 1 : 0));
-      return this.rangeHasMultipleTextLines(range);
+      const tail = this.createParagraphFragment(paragraph, range, false, true);
+      return hasMultipleFragmentLines(head) && hasMultipleFragmentLines(tail);
     };
     if (best && !legalBreak(best.endpoint)) {
-      // Fit is monotone in the head's length, so the nearest earlier endpoint that ends a line
-      // fits as well: it is the head without the partly-filled last line.
+      // Search earlier endpoints for the largest fitting prefix with enough lines on each side.
       let index = endpoints.indexOf(best.endpoint) - 1;
       while (index >= 0 && !legalBreak(endpoints[index])) index--;
       if (index < 0) {

@@ -5929,8 +5929,9 @@ style. Before the fix, Docxodus moved all nine lines to page 2.
 | Explicit keep-lines, six lines fit | 0 + 9 | 0 + 9 |
 
 These are local LibreOffice observations; Word Online was unavailable. The shared
-paginator now enforces the two-line minimum at visual line boundaries instead of
-using widow control as a whole-paragraph keep. This also prevents bordered groups
-from choosing a midpoint that reflows into a one-line tail. Inline pictures do not
+paginator now checks the two-line minimum on reflowed fragments instead of using
+widow control as a whole-paragraph keep. This prevents bordered groups from choosing
+a midpoint that reflows into a one-line tail while retaining valid word boundaries
+when the source text wraps at hyphens. Inline pictures do not
 disable text-line widow control; an oversized picture paragraph can relax an
 impossible minimum only after trying a legal split on a fresh page.

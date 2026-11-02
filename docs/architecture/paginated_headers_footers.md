@@ -613,6 +613,8 @@ with it. A fresh-page feasibility check also admits a valid first fragment, so a
 does not strand its heading. Keep-lines, explicit breaks and disabled fragmentation retain their
 whole-paragraph behavior. Widow control instead requires at least two text lines on each side of
 a page split, independently of whether an impossible keep-lines constraint was relaxed (#1520).
+The fragmenter measures those lines after reflowing each fragment in the paragraph's layout
+context; a source range can span two lines yet become a one-line continuation after the split.
 
 ### Lazy Loading Compatibility
 
