@@ -12,8 +12,12 @@ namespace Docxodus;
 
 public static partial class WmlToHtmlConverter
 {
-    private sealed record TableBorderEdge(string Side, int Start, int End, XElement Border)
+    private sealed class TableBorderEdge(string side, int start, int end, XElement border)
     {
+        public string Side { get; } = side;
+        public int Start { get; } = start;
+        public int End { get; } = end;
+        public XElement Border { get; } = border;
         public decimal Width => Math.Clamp((int?)Border.Attribute(W.sz) ?? 0, 2, 96) / 8m;
     }
 
@@ -30,7 +34,13 @@ public static partial class WmlToHtmlConverter
         public decimal Bottom { get; set; }
     }
 
-    private sealed record TableBorderSlot(XElement Source, ExactTableCellBorders Owner, int Start, int End);
+    private sealed class TableBorderSlot(XElement source, ExactTableCellBorders owner, int start, int end)
+    {
+        public XElement Source { get; } = source;
+        public ExactTableCellBorders Owner { get; } = owner;
+        public int Start { get; } = start;
+        public int End { get; } = end;
+    }
 
     private sealed class ExactTableBorders
     {
@@ -89,7 +99,7 @@ public static partial class WmlToHtmlConverter
             var below = row < rows.Count ? slots[row] : new List<TableBorderSlot>();
             foreach (var (a, b, edge) in ResolveTableRowBoundary(above, below))
             {
-                if (a != null) model.Rows[rows[row - 1]].Add(edge with { Side = "bottom" });
+                if (a != null) model.Rows[rows[row - 1]].Add(new TableBorderEdge("bottom", edge.Start, edge.End, edge.Border));
                 if (b != null) model.Rows[rows[row]].Add(edge);
             }
         }
