@@ -1,10 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const module = readFileSync(join(here, '../dist/word-text.js'), 'utf8');
+import { wordTextScript } from './word-text-script.js';
 
 // Issue #1123: single-spaced documents with running stories or right-to-left paragraphs reach the
 // precision text path. Lines are already resolved to lengths here, as the export's unrounded
@@ -14,7 +9,7 @@ const plain = (text: string, extra = '') =>
 
 async function prepare(page: Page, body: string): Promise<{ prepared: number; marked: string[] }> {
   await page.setContent(`<div id="root">${body}</div>`);
-  await page.addScriptTag({ type: 'module', content: `${module}\nwindow.wordText = { prepareWordText, paintWordText };` });
+  await page.addScriptTag({ content: wordTextScript });
   await page.waitForFunction(() => (window as any).wordText);
   return page.evaluate(() => {
     const root = document.getElementById('root')!;
