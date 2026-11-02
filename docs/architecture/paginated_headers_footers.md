@@ -610,8 +610,11 @@ A keep-with-next chain uses the shared paragraph fragmenter for its final paragr
 the whole chain (#1182). Its prefix height uses the same collapsed margins as ordinary placement.
 Only citations in the retained prefix must start on that page; citations in the continuation move
 with it. A fresh-page feasibility check also admits a valid first fragment, so an oversized chain
-does not strand its heading. Existing keep-lines, explicit breaks, widow-control and disabled
-fragmentation retain their whole-paragraph behavior.
+does not strand its heading. Keep-lines, explicit breaks and disabled fragmentation retain their
+whole-paragraph behavior. Widow control instead requires at least two text lines on each side of
+a page split, independently of whether an impossible keep-lines constraint was relaxed (#1520).
+The fragmenter measures those lines after reflowing each fragment in the paragraph's layout
+context; a source range can span two lines yet become a one-line continuation after the split.
 
 ### Lazy Loading Compatibility
 

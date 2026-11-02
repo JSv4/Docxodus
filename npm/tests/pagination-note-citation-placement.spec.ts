@@ -177,17 +177,24 @@ test.describe('Paginated note placement beside its citation', () => {
     }
   }
 
-  test('the citing line moves to the page where its note begins', async ({ page }) => {
-    // The paragraph's four lines fit beneath the filler, but no line of the note does.
-    const layout = await paginate(page, citingLastLine());
+  for (const tag of ['p', 'h4']) {
+    for (const widowControl of [true, false]) {
+      test(`the citing line moves with its note: ${tag}, widow control ${widowControl}`, async ({ page }) => {
+        // The four lines fit beneath the filler, but no line of the note does. Default widow
+        // control moves two lines; explicitly disabling it allows only the citing line to move.
+        const layout = await paginate(page, citingLastLine(tag,
+          widowControl ? '' : 'data-widow-control="false"'));
 
-    expect(layout.referencePage['1']).toBe(layout.notePage['1']);
-    // Only the citing line moves: the three before it stay on the first page.
-    expect(layout.body[0].join(' ')).toContain('citing 3');
-    expect(layout.body[0].join(' ')).not.toContain('citing 4');
-    expect(layout.body[1].join(' ')).toContain('citing 4');
-    expect(layout.referenceCount['1']).toBe(1);
-  });
+        expect(layout.referencePage['1']).toBe(layout.notePage['1']);
+        expect(layout.body[0].join(' ')).toContain(widowControl ? 'citing 2' : 'citing 3');
+        expect(layout.body[0].join(' ')).not.toContain(widowControl ? 'citing 3' : 'citing 4');
+        expect(layout.body[1].join(' ')).toContain(widowControl ? 'citing 3' : 'citing 4');
+        expect(layout.body[1].join(' ')).toContain('citing 4');
+        expect(layout.referenceCount['1']).toBe(1);
+        expect(layout.overflowingNotePages).toEqual([]);
+      });
+    }
+  }
 
   test('a citing paragraph that cannot be split moves whole with its citation', async ({ page }) => {
     // Word moves a paragraph that keeps its lines together to the page where its note begins.
@@ -204,15 +211,6 @@ test.describe('Paginated note placement beside its citation', () => {
 
     expect(layout.body[0].join(' ')).toContain('citing 4');
     expect(layout.notePage['1']).toBe(2);
-  });
-
-  test('a heading-styled citing paragraph breaks like any other paragraph', async ({ page }) => {
-    // A Word paragraph with an outline level is written as h1-h6.
-    const layout = await paginate(page, citingLastLine('h4'));
-
-    expect(layout.referencePage['1']).toBe(layout.notePage['1']);
-    expect(layout.body[0].join(' ')).toContain('citing 3');
-    expect(layout.body[1].join(' ')).toContain('citing 4');
   });
 
   test('a numbered paragraph breaks across pages with its marker kept whole', async ({ page }) => {

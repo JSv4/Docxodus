@@ -1,8 +1,71 @@
 import { expect, test } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
+import { fittingTilePng } from './docx-page-fitting-fixture.js';
 
 const bundle = fileURLToPath(new URL('../dist/pagination.bundle.js', import.meta.url));
 const entries = Array.from({ length: 17 }, (_, index) => `Saffron${String(index + 1).padStart(2, '0')}`);
+
+for (const form of ['plain', 'bordered', 'image']) for (const widow of [false, true]) {
+  test(`three wrapped lines, ${form}, widow ${widow}`, async ({ page }) => {
+    const picture = form === 'image' ? `<img width="1" height="1" src="data:image/png;base64,${fittingTilePng().toString('base64')}">` : '';
+    const paragraph = `<p data-case="target" data-widow-control="${widow}">aaaa${picture} bbbb cccc dddd eeee</p>`;
+    await page.setContent(`<style>
+      #pagination-staging, #pagination-container { font: 12pt/16pt monospace; }
+      p { margin: 0; }
+    </style><div id="pagination-staging"><div data-section-index="0"
+      data-page-width="140" data-page-height="120" data-content-width="100" data-content-height="80"
+      data-margin-top="20" data-margin-right="20" data-margin-bottom="20" data-margin-left="20">
+      <p style="height:47pt">Opening.</p>
+      ${form === 'bordered' ? `<div style="border-left:1px solid">${paragraph}</div>` : paragraph}
+    </div></div><div id="pagination-container"></div>`);
+    await page.addScriptTag({ path: bundle });
+    const parts = await page.evaluate(() => {
+      const container = document.getElementById('pagination-container')!;
+      new (window as any).DocxodusPagination.PaginationEngine(document.getElementById('pagination-staging'),
+        container, { fragmentParagraphs: true, showPageNumbers: false }).paginate();
+      return Array.from(container.querySelectorAll('[data-case="target"]'), p => ({
+        page: p.closest<HTMLElement>('.page-box')!.dataset.pageNumber, text: p.textContent,
+      }));
+    });
+    expect(parts.map(p => p.page)).toEqual(widow ? ['2'] : ['1', '2']);
+    expect(parts.map(p => p.text).join('').replace(/\s+/g, ' ').trim()).toBe('aaaa bbbb cccc dddd eeee');
+    await expect(page.locator('#pagination-container img')).toHaveCount(form === 'image' ? 1 : 0);
+  });
+}
+
+for (const [name, preludeLines, widow, keep, expected] of [
+  ['six and three', 10, true, false, [6, 3]],
+  ['avoid an orphan', 15, true, false, [0, 9]],
+  ['avoid a widow', 8, true, false, [7, 2]],
+  ['widow off', 8, false, false, [8, 1]],
+  ['explicit keep', 10, true, true, [0, 9]],
+] as const) for (const hardBreaks of [false, true]) {
+  test(`widow control: ${name}, ${hardBreaks ? 'hard breaks' : 'wrapped text'}`, async ({ page }) => {
+    const labels = entries.slice(0, 9);
+    await page.setContent(`<style>
+      #pagination-staging, #pagination-container { font: 12pt/16pt monospace; }
+      p { margin: 0; }
+    </style><div id="pagination-staging"><div data-section-index="0"
+      data-page-width="220" data-page-height="296" data-content-width="180" data-content-height="256"
+      data-margin-top="20" data-margin-right="20" data-margin-bottom="20" data-margin-left="20">
+      <p style="height:${preludeLines * 16}pt">Opening receipt.</p>
+      <p data-case="target" data-widow-control="${widow}" data-keep-lines="${keep}">
+        ${labels.map(label => `<b>${label}</b> received.`).join(hardBreaks ? '<br>' : ' ')}
+      </p>
+    </div></div><div id="pagination-container"></div>`);
+    await page.addScriptTag({ path: bundle });
+    const pages = await page.evaluate(() => {
+      const container = document.getElementById('pagination-container')!;
+      const { PaginationEngine } = (window as any).DocxodusPagination;
+      new PaginationEngine(document.getElementById('pagination-staging'), container,
+        { fragmentParagraphs: true, showPageNumbers: false }).paginate();
+      return Array.from(container.querySelectorAll('.page-box'), page =>
+        Array.from(page.querySelectorAll('[data-case="target"] b'), b => b.textContent));
+    });
+    expect(pages.map(p => p.length)).toEqual(expected);
+    expect(pages.flat()).toEqual(labels);
+  });
+}
 
 for (const keep of ['keep-lines', 'widow-control'] as const) {
   test(`an oversized ${keep} paragraph continues without losing a line`, async ({ page }) => {

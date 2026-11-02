@@ -3670,7 +3670,6 @@ export class PaginationEngine {
       (block.keepLines && !relaxKeepLines && !block.relaxedKeepLines) ||
       block.pageBreakBefore ||
       block.isPageBreak ||
-      (paragraph.dataset.widowControl === "true" && !relaxKeepLines && !block.relaxedKeepLines) ||
       paragraph.hasAttribute("contenteditable")
     ) {
       return false;
@@ -3706,7 +3705,6 @@ export class PaginationEngine {
       (paragraph.dataset.keepWithNext === "true" && !terminalCellParagraph) ||
       (paragraph.dataset.keepLines === "true" && !relaxKeepLines) ||
       paragraph.dataset.pageBreakBefore === "true" ||
-      (paragraph.dataset.widowControl === "true" && !relaxKeepLines) ||
       paragraph.hasAttribute("contenteditable")
     ) {
       return false;
@@ -4060,7 +4058,7 @@ export class PaginationEngine {
       forceFirstOnNoFit?: boolean;
       /** Break only where a visual line starts, never within a line. */
       lineStartsOnly?: boolean;
-      /** Keep at least two text lines on each side when relaxing a kept paragraph. */
+      /** Keep at least two text lines on each side when widow control applies. */
       preserveWidowLines?: boolean;
     } = {},
   ): ParagraphSplitAttempt {
@@ -4110,20 +4108,33 @@ export class PaginationEngine {
 
     let endpoints = this.paragraphFragmentEndpoints(paragraph);
     let best = largestFit(endpoints);
+    const hasMultipleFragmentLines = (fragment: HTMLElement) => {
+      paragraph.replaceWith(fragment);
+      try {
+        const range = this.document.createRange();
+        range.selectNodeContents(fragment);
+        return this.rangeHasMultipleTextLines(range);
+      } finally {
+        fragment.replaceWith(paragraph);
+      }
+    };
     const legalBreak = (endpoint: ParagraphFragmentEndpoint) => {
       if (options.lineStartsOnly && !this.startsVisualLine(paragraph, endpoint)) return false;
       if (!options.preserveWidowLines) return true;
+      // A word boundary need not start a source line: hyphenated words can wrap within the
+      // word. Measure the actual fragments so a reflowed tail cannot collapse to one line,
+      // without rejecting ordinary word breaks and falling back to emergency character cuts.
       const range = this.document.createRange();
       range.selectNodeContents(paragraph);
       range.setEnd(endpoint.node, endpoint.offset);
-      if (!this.rangeHasMultipleTextLines(range)) return false;
+      const head = this.createParagraphFragment(paragraph, range, true, false);
       range.selectNodeContents(paragraph);
       range.setStart(endpoint.node, endpoint.offset + (endpoint.consumeBreak ? 1 : 0));
-      return this.rangeHasMultipleTextLines(range);
+      const tail = this.createParagraphFragment(paragraph, range, false, true);
+      return hasMultipleFragmentLines(head) && hasMultipleFragmentLines(tail);
     };
     if (best && !legalBreak(best.endpoint)) {
-      // Fit is monotone in the head's length, so the nearest earlier endpoint that ends a line
-      // fits as well: it is the head without the partly-filled last line.
+      // Search earlier endpoints for the largest fitting prefix with enough lines on each side.
       let index = endpoints.indexOf(best.endpoint) - 1;
       while (index >= 0 && !legalBreak(endpoints[index])) index--;
       if (index < 0) {
@@ -4261,7 +4272,7 @@ export class PaginationEngine {
       const split = this.splitParagraphAtLargestFit(next, candidate => fits([...clones(0, whole), candidate]), {
         emergencyGraphemeBreaks: options.forceProgress && whole === 0,
         forceFirstOnNoFit: options.forceProgress && whole === 0,
-        preserveWidowLines: relaxKeepLines && next.dataset.widowControl !== "false",
+        preserveWidowLines: next.dataset.widowControl !== "false",
       });
       if (split.kind === "split") {
         head.push(split.head);
@@ -4302,6 +4313,7 @@ export class PaginationEngine {
     notesStart?: (footnoteIds: string[], headHeightPt: number) => boolean,
     preceding: readonly HTMLElement[] = [],
     relaxKeepLines = false,
+    freshPage = false,
   ): MeasuredBlock[] | null {
     if (availableHeightPt <= effectiveMarginTopPt) return null;
     if (block.element.localName === "div" || block.element.dataset.paginationCommentGroup === "true") {
@@ -4354,15 +4366,21 @@ export class PaginationEngine {
       // Below the last citation, the head's own lines still compete with its notes for the page.
       // A head whose notes do not start may still fit by ending earlier on the citing line, so a
       // note-aware split breaks only where a line starts: the citing line moves whole.
-      split = this.splitParagraphAtLargestFit(paragraph, (head) => {
+      const fits = (head: HTMLElement) => {
         const measured = this.measureElement(head, dims, block.sectionIndex, prefix);
         return effectiveMarginTopPt + measured.heightPt <= headLimitPt
           && (!notesStart || notesStart(this.extractFootnoteRefs(head), measured.heightPt));
-      }, {
+      };
+      split = this.splitParagraphAtLargestFit(paragraph, fits, {
         lineStartsOnly: notesStart !== undefined,
-        preserveWidowLines: (relaxKeepLines || block.relaxedKeepLines === true)
-          && paragraph.dataset.widowControl !== "false" && !paragraph.querySelector("img"),
+        preserveWidowLines: paragraph.dataset.widowControl !== "false"
+          && this.hasVisibleText(paragraph.textContent ?? ""),
       });
+      // Tall inline pictures can make two text lines impossible even on a fresh page.
+      // First seek a legal widow split; only relax it when that empty page cannot fit one.
+      if (split.kind === "no-fit" && freshPage && paragraph.querySelector("img")) {
+        split = this.splitParagraphAtLargestFit(paragraph, fits, { lineStartsOnly: notesStart !== undefined });
+      }
     } finally {
       host?.remove();
     }
@@ -4939,7 +4957,7 @@ export class PaginationEngine {
           const terminal = freshBody && end === children.length;
           if (this.canRangeFragmentParagraph(child, false, false, relaxKeepLines, terminal)) {
             const paragraph = this.splitParagraphAtLargestFit(child, fitsChild, {
-              preserveWidowLines: relaxKeepLines && child.dataset.widowControl !== "false",
+              preserveWidowLines: child.dataset.widowControl !== "false",
             });
             if (paragraph.kind === "split") split = paragraph;
           } else {
@@ -5048,7 +5066,7 @@ export class PaginationEngine {
             // A continuation page owns the full note band. If even one legal
             // grapheme is taller than it, clip only that unit and keep draining.
             forceFirstOnNoFit: fitting.length === 0,
-            preserveWidowLines: relaxKeepLines && candidate.dataset.widowControl !== "false",
+            preserveWidowLines: candidate.dataset.widowControl !== "false",
           });
         }
         const wrappedSplit = split?.kind === "split" ? null : this.splitParagraphGroup(candidate, fitsCandidate, {
@@ -5295,7 +5313,7 @@ export class PaginationEngine {
             // start belongs intact in the next note band.
             emergencyGraphemeBreaks: fits.length === 0 && forceProgress,
             forceFirstOnNoFit: fits.length === 0 && forceProgress,
-            preserveWidowLines: relaxKeepLines && child.dataset.widowControl !== "false",
+            preserveWidowLines: child.dataset.widowControl !== "false",
           })
           : null;
         const wrappedSplit = split ? null : this.splitParagraphGroup(child, fitsCandidate, {
@@ -6635,6 +6653,8 @@ export class PaginationEngine {
           (block.keepLines || block.element.dataset.widowControl === "true")
             && isFirstOnPage && block.heightPt > freshBlockPageBodyHeight
             && allBlockFootnoteIds.every(id => this.footnoteRegistry.has(id)),
+          isFirstOnPage && currentFootnoteHeight === 0 && !currentContinuation
+            && block.heightPt > freshBlockPageBodyHeight,
         ) ?? (allBlockFootnoteIds.length > 0 && freshBlockHeight > freshBlockPageBodyHeight
           // A table taller than a fresh page also needs the note-aware row splitter. The
           // generic oversized-table fallback cannot reserve room beside its citations.

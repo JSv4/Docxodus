@@ -266,8 +266,8 @@ for (const story of ['header', 'footer'] as const) for (const framed of [false, 
   });
 }
 
-for (const framed of [false, true]) {
-  test(`a first-line note stays with its fragmented ${framed ? 'wrapped' : 'ordinary'} paragraph`, async ({ page }) => {
+for (const framed of [false, true]) for (const widowControl of [true, false]) {
+  test(`a first-line note stays with its fragmented ${framed ? 'wrapped' : 'ordinary'} paragraph, widow control ${widowControl}`, async ({ page }) => {
     const frame = framed ? `<div data-docx-frame-container="true" data-keep-with-next="true" style="position:relative;height:0">
       <div data-docx-frame-exclusion="true" style="float:left"><div data-docx-text-frame="true"
       data-docx-frame-h-anchor="text" data-docx-frame-v-anchor="text" data-docx-frame-yalign="inline"
@@ -277,7 +277,7 @@ for (const framed of [false, true]) {
       <div id="staging"><div id="pagination-footnote-registry" style="display:none"><div class="footnote-item" data-footnote-id="f1">
       <span class="footnote-number">1</span><div class="footnote-content"><p>NOTE0</p></div></div></div>
       <section data-section-index="0" data-page-width="240" data-page-height="240" data-content-width="180" data-content-height="180"
-      data-margin-top="30" data-margin-bottom="30" data-margin-left="30" data-margin-right="30">${frame}<p>${lines}</p><p>END</p></section>
+      data-margin-top="30" data-margin-bottom="30" data-margin-left="30" data-margin-right="30">${frame}<p ${widowControl ? '' : 'data-widow-control="false"'}>${lines}</p><p>END</p></section>
       </div><div id="output"></div>`);
     await page.addScriptTag({ path: bundle });
     const pages = await page.evaluate(() => {
@@ -292,9 +292,10 @@ for (const framed of [false, true]) {
     });
     expect(pages).toHaveLength(2);
     expect(pages[0].note).toContain('NOTE0');
-    expect(pages[0].body).toContain('ROW10');
-    expect(pages[0].body).not.toContain('ROW11');
+    expect(pages[0].body).toContain(widowControl ? 'ROW9' : 'ROW10');
+    expect(pages[0].body).not.toContain(widowControl ? 'ROW10' : 'ROW11');
     expect(pages[0].collision).toBe(false);
+    expect(pages[1].body).toContain(widowControl ? 'ROW10' : 'ROW11');
     expect(pages[1].body).toContain('ROW11');
     expect(pages[1].body).toContain('END');
   });

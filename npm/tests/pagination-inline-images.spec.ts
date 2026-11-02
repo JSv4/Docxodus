@@ -5,14 +5,14 @@ import { fittingTilePng } from './docx-page-fitting-fixture.js';
 const bundle = fileURLToPath(new URL('../dist/pagination.bundle.js', import.meta.url));
 const source = `data:image/png;base64,${fittingTilePng().toString('base64')}`;
 
-for (const segmenter of [true, false]) {
-  test(`inline picture boundaries preserve image identities with grapheme segmenter ${segmenter}`, async ({ page }) => {
+for (const segmenter of [true, false]) for (const labels of [true, false]) {
+  test(`inline picture boundaries preserve image identities with grapheme segmenter ${segmenter}, labels ${labels}`, async ({ page }) => {
     await page.setContent(`<style>body{font:11pt/15pt Arial}p{margin:0}</style><div id="staging">
       <section data-section-index="0" data-page-width="220" data-page-height="200"
       data-content-width="180" data-content-height="160" data-margin-top="20" data-margin-bottom="20"
       data-margin-left="20" data-margin-right="20"><p id="gallery" data-anchor="p:body:gallery">
       ${[1,2,3,4].map(index => `<span id="carrier${index}" style="position:relative;top:-0.5px"><img id="image${index}" data-anchor="img:body:tile${index}"
-        src="${source}" style="width:120pt;height:95pt"></span>`).join('')}</p><p>Orchid Å🙂 complete.</p>
+        src="${source}" style="width:120pt;height:95pt"></span>${labels ? `Label${index}` : ''}`).join('')}</p><p>Orchid Å🙂 complete.</p>
       </section></div><div id="container"></div>`);
     await page.locator('img').evaluateAll(images => Promise.all(images.map(image => (image as HTMLImageElement).decode())));
     await page.addScriptTag({ path: bundle });
@@ -36,5 +36,6 @@ for (const segmenter of [true, false]) {
       expect(image.height).toBeCloseTo(95, 1);
     }
     expect(result.text?.match(/Orchid Å🙂 complete\./g)).toHaveLength(1);
+    if (labels) expect(result.text?.match(/Label\d/g)).toEqual(['Label1', 'Label2', 'Label3', 'Label4']);
   });
 }

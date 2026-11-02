@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Widow control permits paragraph splitting while retaining two lines on each side, independently of explicit line keeps (#1520).
+
 - Preserve negative leading paragraph indents in HTML/PDF, including RTL paragraphs and border wrappers (#1519).
 
 - Comparison keeps weakly related paragraph replacements in coherent revision spans instead of
