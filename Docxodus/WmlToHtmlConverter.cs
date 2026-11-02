@@ -145,6 +145,15 @@ namespace Docxodus
         /// </summary>
         public bool RenderTrackedChanges;
 
+        /// <summary>Show formatting revision annotations, retaining current formatting either way.</summary>
+        public bool ShowFormattingChanges = true;
+
+        /// <summary>Show text and structural revision markup; false displays current text without accepting source revisions.</summary>
+        public bool ShowInsertionsAndDeletions = true;
+
+        internal bool ShowTextRevisionMarkup => RenderTrackedChanges && ShowInsertionsAndDeletions;
+        internal bool ShowDeletedRevisionContent => ShowTextRevisionMarkup && ShowDeletedContent;
+
         /// <summary>
         /// CSS class prefix for revision elements (default: "rev-")
         /// </summary>
@@ -417,6 +426,8 @@ namespace Docxodus
             ListItemImplementations = htmlConverterSettings.ListItemImplementations;
             ImageHandler = htmlConverterSettings.ImageHandler;
             RenderTrackedChanges = htmlConverterSettings.RenderTrackedChanges;
+            ShowFormattingChanges = htmlConverterSettings.ShowFormattingChanges;
+            ShowInsertionsAndDeletions = htmlConverterSettings.ShowInsertionsAndDeletions;
             RevisionCssClassPrefix = htmlConverterSettings.RevisionCssClassPrefix;
             IncludeRevisionMetadata = htmlConverterSettings.IncludeRevisionMetadata;
             ShowDeletedContent = htmlConverterSettings.ShowDeletedContent;
@@ -464,6 +475,12 @@ namespace Docxodus
         /// If false (default), accept all revisions before conversion.
         /// </summary>
         public bool RenderTrackedChanges;
+
+        /// <summary>Show formatting revision annotations, retaining current formatting either way.</summary>
+        public bool ShowFormattingChanges = true;
+
+        /// <summary>Show text and structural revision markup; false displays current text without accepting source revisions.</summary>
+        public bool ShowInsertionsAndDeletions = true;
 
         /// <summary>
         /// CSS class prefix for revision elements (default: "rev-")
@@ -1157,6 +1174,8 @@ namespace Docxodus
                 htmlConverterSettings.RevisionPresentation == RevisionPresentation.Word)
                 wordDoc.MainDocumentPart!.AddAnnotation(RevisionAuthorIndex.Of(wordDoc));
 
+            PrepareRevisionVisibility(wordDoc, htmlConverterSettings);
+
             SimplifyMarkupSettings simplifyMarkupSettings = new SimplifyMarkupSettings
             {
                 RemoveComments = !htmlConverterSettings.RenderComments,
@@ -1191,6 +1210,8 @@ namespace Docxodus
                     authors?.IndexOf(author) is { } number ? WordAuthorColor(htmlConverterSettings, author, number) : null);
             }
 
+            PrepareRevisionParagraphGroups(wordDoc, htmlConverterSettings);
+
             FormattingAssemblerSettings formattingAssemblerSettings = new FormattingAssemblerSettings
             {
                 RemoveStyleNamesFromParagraphAndRunProperties = false,
@@ -1201,6 +1222,7 @@ namespace Docxodus
                 OrderElementsPerStandard = false,
                 AnnotateListMembership = EmitsSemanticLists(htmlConverterSettings),
                 ResolveRevisionFormatting = htmlConverterSettings.RenderTrackedChanges,
+                RenderListRevisionMarkup = htmlConverterSettings.ShowTextRevisionMarkup,
                 ListItemRetrieverSettings =
                     htmlConverterSettings.ListItemImplementations == null ?
                     new ListItemRetrieverSettings()
@@ -1215,13 +1237,14 @@ namespace Docxodus
 
             FormattingAssembler.AssembleFormatting(wordDoc, formattingAssemblerSettings);
 
+            MergeRevisionParagraphGroups(wordDoc, htmlConverterSettings);
             NormalizeFieldResults(wordDoc, htmlConverterSettings);
             InsertAppropriateNonbreakingSpaces(wordDoc);
             ReverseTableBordersForRtlTables(wordDoc);
             foreach (var part in wordDoc.ContentParts())
                 foreach (var table in part.GetXDocument().Descendants(W.tbl).Where(t => t.Descendants(W.tab).Any()))
                     PrepareExactTableBorders(table);
-            CalculateSpanWidthForTabs(wordDoc, htmlConverterSettings.RenderTrackedChanges && htmlConverterSettings.ShowDeletedContent);
+            CalculateSpanWidthForTabs(wordDoc, htmlConverterSettings.ShowDeletedRevisionContent);
             AdjustTableBorders(wordDoc);
             AnnotateOwningContentParts(wordDoc);
             XElement rootElement = wordDoc.MainDocumentPart!.GetXDocument().Root!;
@@ -3377,6 +3400,19 @@ namespace Docxodus
             decimal currentMarginLeft,
             bool suppressLeadingWhiteSpace = false)
         {
+            var content = ConvertToHtmlContent(wordDoc, settings, node, suppressTrailingWhiteSpace,
+                currentMarginLeft, suppressLeadingWhiteSpace);
+            return node is XElement element
+                ? WithJoinedParagraphSource(wordDoc, settings, element, content)
+                : content;
+        }
+
+        private static object? ConvertToHtmlContent(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XNode node,
+            bool suppressTrailingWhiteSpace,
+            decimal currentMarginLeft,
+            bool suppressLeadingWhiteSpace)
+        {
             var element = node as XElement;
             if (element == null) return null;
             if (element.Attribute(HiddenFieldInstructionAttribute) != null) return null;
@@ -3718,7 +3754,7 @@ namespace Docxodus
             // Transform deleted text (w:delText) to text node when rendering tracked changes
             if (element.Name == W.delText)
             {
-                if (settings.RenderTrackedChanges && settings.ShowDeletedContent)
+                if (settings.ShowDeletedRevisionContent)
                 {
                     return new XText(element.Value);
                 }
@@ -3957,12 +3993,8 @@ namespace Docxodus
         private static object ProcessInsertion(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
         {
-            if (!settings.RenderTrackedChanges)
-            {
-                // When not rendering tracked changes, just process children normally
-                return element.Elements()
-                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
-            }
+            if (!settings.ShowTextRevisionMarkup)
+                return ConvertRevisionContent(wordDoc, settings, element, currentMarginLeft);
 
             var ins = new XElement(Xhtml.ins);
 
@@ -4025,7 +4057,7 @@ namespace Docxodus
         private static object? ProcessDeletion(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
         {
-            if (!settings.RenderTrackedChanges)
+            if (!settings.ShowTextRevisionMarkup)
             {
                 // When not rendering tracked changes, deletions are removed entirely
                 return null;
@@ -4075,7 +4107,7 @@ namespace Docxodus
         private static object? ProcessMoveFrom(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
         {
-            if (!settings.RenderTrackedChanges)
+            if (!settings.ShowTextRevisionMarkup)
             {
                 // When not rendering tracked changes, move sources are removed (content moved elsewhere)
                 return null;
@@ -4134,12 +4166,8 @@ namespace Docxodus
         private static object ProcessMoveTo(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
         {
-            if (!settings.RenderTrackedChanges)
-            {
-                // When not rendering tracked changes, just process children normally
-                return element.Elements()
-                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
-            }
+            if (!settings.ShowTextRevisionMarkup)
+                return ConvertRevisionContent(wordDoc, settings, element, currentMarginLeft);
 
             // If not rendering move operations separately, treat as insertion
             if (!settings.RenderMoveOperations)
@@ -5060,6 +5088,8 @@ namespace Docxodus
                 var author = (string?)comment.Attribute(W.author);
                 if (!authors.Contains(author ?? string.Empty))
                     authors.Add(author ?? string.Empty);
+                if (wordDoc.MainDocumentPart!.Annotation<HiddenRevisionComments>()?.Contains(id.Value) == true)
+                    continue;
                 tracker.Comments[id.Value] = new CommentInfo
                 {
                     Id = id.Value,
@@ -5245,7 +5275,7 @@ namespace Docxodus
         private static object? ProcessCustomXmlRevisionRange(
             WmlToHtmlConverterSettings settings, XElement element)
         {
-            if (!settings.RenderTrackedChanges)
+            if (!settings.ShowTextRevisionMarkup)
                 return null;
 
             var localName = element.Name.LocalName;
@@ -6042,6 +6072,8 @@ namespace Docxodus
             var isBidi = IsBidi(element);
             var paragraph = (XElement) ConvertParagraph(wordDoc, settings, element, elementName,
                 suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
+            if (element.Attribute(EmptyRevisionDisplayAttribute) != null)
+                paragraph.SetAttributeValue("data-docx-empty-review-display", "true");
 
             // The paragraph conversion might have created empty spans.
             // These can and should be removed because empty spans are
@@ -6056,6 +6088,7 @@ namespace Docxodus
             }
 
             ApplyParagraphRevisionMarkup(settings, element, paragraph);
+            ApplyUnplacedJoinedFormatting(wordDoc, settings, element, paragraph);
             var joinedElement = element;
             var hasOnlyHiddenParagraphs = IsUnpaintedHiddenParagraph(element);
             while (HasHiddenParagraphMark(joinedElement))
@@ -6117,7 +6150,9 @@ namespace Docxodus
                 // a reviewer's re-format, renumber, or section change leaves. Draw it as a
                 // kind-classed change bar the stylesheet styles, titled with what changed.
                 var pPrChange = pPr?.Element(W.pPrChange);
-                var numberingChange = pPr?.Element(W.numberingChange);
+                var numberingChange = element.Attribute(NumberingRevisionAttribute) is { } savedNumbering
+                    ? XElement.Parse(savedNumbering.Value)
+                    : pPr?.Element(W.numberingChange);
                 var inlineSectPrChange = pPr?.Element(W.sectPr)?.Element(W.sectPrChange);
                 if (pPrChange != null || numberingChange != null || inlineSectPrChange != null)
                 {
@@ -6143,7 +6178,8 @@ namespace Docxodus
                         existingClass != null ? existingClass + " " + combined : combined);
                     if (paragraph.Attribute("title") == null)
                         paragraph.Add(new XAttribute("title", string.Join("; ", described)));
-                    foreach (var balloon in pPrChange != null ? BalloonData(pPrChange) : Enumerable.Empty<XAttribute>())
+                    foreach (var balloon in (pPrChange ?? numberingChange) is { } balloonChange
+                        ? BalloonData(balloonChange) : Enumerable.Empty<XAttribute>())
                         paragraph.SetAttributeValue(balloon.Name, balloon.Value);
 
                     // Non-null: this block only runs when at least one of the three is set.
@@ -6159,7 +6195,7 @@ namespace Docxodus
                     }
                 }
 
-                if (paraIns != null)
+                if (settings.ShowInsertionsAndDeletions && paraIns != null)
                 {
                     // Paragraph mark was inserted (paragraph was split from another)
                     var existingClass = (string?)paragraph.Attribute("class");
@@ -6176,7 +6212,7 @@ namespace Docxodus
                             paragraph.Add(new XAttribute("data-date", date));
                     }
                 }
-                else if (paraDel != null)
+                else if (settings.ShowInsertionsAndDeletions && paraDel != null)
                 {
                     // Paragraph mark was deleted (paragraph was merged with next)
                     var existingClass = (string?)paragraph.Attribute("class");
@@ -6733,7 +6769,7 @@ namespace Docxodus
                 var cellDel = tcPr.Element(W.cellDel);
                 var cellMerge = tcPr.Element(W.cellMerge);
 
-                if (cellIns != null)
+                if (settings.ShowInsertionsAndDeletions && cellIns != null)
                 {
                     var className = (settings.RevisionCssClassPrefix ?? "rev-") + "cell-ins";
                     cell.Add(new XAttribute("class", className));
@@ -6748,7 +6784,7 @@ namespace Docxodus
                             cell.Add(new XAttribute("data-date", date));
                     }
                 }
-                else if (cellDel != null)
+                else if (settings.ShowInsertionsAndDeletions && cellDel != null)
                 {
                     var className = (settings.RevisionCssClassPrefix ?? "rev-") + "cell-del";
                     cell.Add(new XAttribute("class", className));
@@ -6763,7 +6799,7 @@ namespace Docxodus
                             cell.Add(new XAttribute("data-date", date));
                     }
                 }
-                else if (cellMerge != null)
+                else if (settings.ShowInsertionsAndDeletions && cellMerge != null)
                 {
                     var className = (settings.RevisionCssClassPrefix ?? "rev-") + "cell-merge";
                     cell.Add(new XAttribute("class", className));
@@ -6952,7 +6988,7 @@ namespace Docxodus
                 var rowIns = trPr?.Element(W.ins);
                 var rowDel = trPr?.Element(W.del);
 
-                if (rowIns != null)
+                if (settings.ShowInsertionsAndDeletions && rowIns != null)
                 {
                     var className = (settings.RevisionCssClassPrefix ?? "rev-") + "row-ins";
                     htmlRow.Add(new XAttribute("class", className));
@@ -6967,7 +7003,7 @@ namespace Docxodus
                             htmlRow.Add(new XAttribute("data-date", date));
                     }
                 }
-                else if (rowDel != null)
+                else if (settings.ShowInsertionsAndDeletions && rowDel != null)
                 {
                     var className = (settings.RevisionCssClassPrefix ?? "rev-") + "row-del";
                     htmlRow.Add(new XAttribute("class", className));
@@ -7042,8 +7078,9 @@ namespace Docxodus
         private static bool HasHiddenParagraphMark(XElement? element)
         {
             return element != null && !element.Elements(W.pPr).Elements(W.sectPr).Any() &&
-                element.Elements(W.pPr).Elements(W.rPr).Any(e =>
-                    GetBoolProp(e, W.specVanish) || GetBoolProp(e, W.vanish));
+                (element.Attribute(HiddenRevisionParagraphMarkAttribute) != null ||
+                    element.Elements(W.pPr).Elements(W.rPr).Any(e =>
+                        GetBoolProp(e, W.specVanish) || GetBoolProp(e, W.vanish)));
         }
 
         private static bool IsUnpaintedHiddenParagraph(XElement element) =>
@@ -7761,7 +7798,7 @@ namespace Docxodus
         {
             // Reuse the run renderer so font/color properties and presentation metadata survive.
             // The wrapper receives the flex space; its tab rule fills that wrapper's actual width.
-            var rendered = ConvertRun(wordDoc, settings, run);
+            var rendered = ConvertToHtmlTransform(wordDoc, settings, run, false, 0m);
             if (rendered == null) return null;
             if (rendered is not XElement wrapper)
                 return (XElement?)ProcessTab(run.Element(W.tab)!);
@@ -10584,28 +10621,7 @@ namespace Docxodus
                     // A floating (wp:anchor) drawing is not content either: it leaves the text flow, and
                     // the paginated view lifts it into the page box, so a paragraph holding nothing else
                     // lost its line. Word and LibreOffice keep the paragraph mark's line (issue #880).
-                    bool hasContent = element
-                        .Elements()
-                        .Where(e => e.Name != W.pPr)
-                        .SelectMany(child => InFlowDescendantsAndSelf(child))
-                        .Any(e =>
-                            e.Name == W.dayLong ||
-                            e.Name == W.dayShort ||
-                            e.Name == W.drawing ||
-                            e.Name == W.monthLong ||
-                            e.Name == W.monthShort ||
-                            e.Name == W.noBreakHyphen ||
-                            e.Name == W._object ||
-                            e.Name == W.pgNum ||
-                            e.Name == W.ptab ||
-                            e.Name == W.separator ||
-                            e.Name == W.softHyphen ||
-                            e.Name == W.sym ||
-                            (e.Name == W.t && e.Value.Length != 0) ||
-                            e.Name == W.tab ||
-                            e.Name == W.yearLong ||
-                            e.Name == W.yearShort
-                        );
+                    bool hasContent = ParagraphHasInFlowContent(element);
                     // Structural table-end paragraphs get a one-twip minimum box in ConvertParagraph.
                     // A full-size placeholder would extend beyond it and trip export clipping checks.
                     if (hasContent == false && (string?)element.Attribute(StructuralTableEndParagraphAttribute) != "true")
@@ -10625,12 +10641,20 @@ namespace Docxodus
             return node;
         }
 
+        private static bool ParagraphHasInFlowContent(XElement element) => element.Elements()
+            .Where(e => e.Name != W.pPr).SelectMany(child => InFlowDescendantsAndSelf(child))
+            .Any(e => e.Name == W.dayLong || e.Name == W.dayShort || e.Name == W.drawing ||
+                e.Name == W.monthLong || e.Name == W.monthShort || e.Name == W.noBreakHyphen ||
+                e.Name == W._object || e.Name == W.pgNum || e.Name == W.ptab || e.Name == W.separator ||
+                e.Name == W.softHyphen || e.Name == W.sym || (e.Name == W.t && e.Value.Length != 0) ||
+                e.Name == W.tab || e.Name == W.yearLong || e.Name == W.yearShort);
+
         /// <summary><paramref name="element"/> and its descendants, leaving out hidden runs and
         /// unselected compatibility branches. Floating drawings are excluded unless the caller
         /// inventories all rendered stories rather than just the host paragraph's line.</summary>
         private static IEnumerable<XElement> InFlowDescendantsAndSelf(XElement element, bool includeFloating = false)
         {
-            if (element.Attribute(HiddenFieldInstructionAttribute) != null)
+            if (element.Attribute(HiddenFieldInstructionAttribute) != null || element.Attribute(HiddenRevisionContentAttribute) != null)
                 yield break;
             if (!includeFloating && element.Name == W.drawing && element.Elements(WP.anchor).Any())
                 yield break;
@@ -11911,7 +11935,7 @@ namespace Docxodus
             var kind = field.Kind;
             var form = kind.StartsWith("FORM", StringComparison.Ordinal);
             var deleted = InDeletedContent(begin);
-            if (deleted && (!settings.ShowDeletedContent || !form) || !form && field.Locked) return;
+            if (deleted && (!settings.ShowDeletedRevisionContent || !form) || !form && field.Locked) return;
             var cached = field.Results.Where(e => InDeletedContent(e) == deleted).ToList();
             // A deleted-only cache stays inside its revision; do not resurrect it in live text.
             if (field.Results.Count > 0 && cached.Count == 0) return;
@@ -12033,7 +12057,7 @@ namespace Docxodus
                     && !e.AncestorsAndSelf().Any(a => a.Attribute(HiddenFieldInstructionAttribute) != null)
                     && !e.Ancestors(W.r).Any(r => r.Element(W.rPr) is { } properties
                         && GetBoolProp(properties, W.vanish) && !GetBoolProp(properties, W.specVanish))
-                    && (!InDeletedContent(e) || settings.RenderTrackedChanges && settings.ShowDeletedContent))
+                    && (!InDeletedContent(e) || settings.ShowDeletedRevisionContent))
                 .Select(e => e.Name == W.delText ? e.Value : DocxSession.TextOf(e)));
 
             internal void StampSources()
@@ -12144,14 +12168,14 @@ namespace Docxodus
                         var fieldContent = g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m));
                         // With deleted content hidden, a deleted field shows nothing, so there is
                         // no number for the paginator to fill in.
-                        if (!settings.ShowDeletedContent && FieldRetriever.IsDeletedField(g.First().Ancestors().Last(), (int)key))
+                        if (!settings.ShowDeletedRevisionContent && FieldRetriever.IsDeletedField(g.First().Ancestors().Last(), (int)key))
                             return fieldContent;
-                        return InsideRevision(new XElement(Xhtml.span,
+                        return PreserveJoinedFieldSources(InsideRevision(new XElement(Xhtml.span,
                             new XAttribute("data-field", pageField.Kind),
                             pageField.FormatSwitch is null
                                 ? null
                                 : new XAttribute("data-field-format", pageField.FormatSwitch),
-                            fieldContent));
+                            fieldContent)));
                     }
 
                     // A HYPERLINK field already inside a w:hyperlink renders as that link's content:

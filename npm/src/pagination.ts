@@ -1634,7 +1634,9 @@ export class PaginationEngine {
 
     const fragments: PageMapFragment[] = [];
     const requiredAnchorIds = new Set(this.expectedPageMapAnchorIds);
-    if (requiredAnchorIds.size === 0) {
+    // Hiding every source block is a legitimate blank review display. The converter emits
+    // this explicit, unaddressed line only for that case; ordinary missing inventories fail.
+    if (requiredAnchorIds.size === 0 && !this.stagingElement.querySelector('[data-docx-empty-review-display="true"]')) {
       throw new Error("cannot publish an available PageMap without canonical source inventory");
     }
     const measuredAnchorIds = new Set<string>();

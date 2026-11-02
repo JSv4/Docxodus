@@ -60,6 +60,8 @@ When manipulating the returned tree, preserve its stylesheet nodes rather than r
 | `ListItemImplementations` | `Dictionary<string, Func<...>>` | Default implementations | Custom list item text generators |
 | `ImageHandler` | `Func<ImageInfo, XElement>` | `null` | **Required for images** - callback to process embedded images |
 | `SemanticLists` | `bool` | `false` | Emit Word lists as `ol`/`ul`/`li` instead of paragraphs (see [Lists](#lists)); ignored by paginated output |
+| `ShowFormattingChanges` | `bool` | `true` | With `RenderTrackedChanges`, show formatting-change annotations; current formatting remains when false |
+| `ShowInsertionsAndDeletions` | `bool` | `true` | With `RenderTrackedChanges`, show text/structural revisions; false displays current text and structure without accepting revisions |
 
 ### ImageInfo Structure
 
@@ -90,6 +92,12 @@ The conversion happens in the following stages:
 
 Run coalescing visits nested containers from the leaves upward on one copy of the input tree.
 Each container, including textbox paragraphs, is consolidated once (#1410).
+
+Markup visibility is prepared on that owned copy after canonical source indexing and author
+palette collection, before simplification and formatting assembly. Hidden paragraph-mark
+revisions use the joined paragraph's current properties for inherited formatting and numbering;
+surviving source identities remain attached. Hidden-only comments are filtered before resource
+inventory. This path does not call revision acceptance or rewrite the caller's package (#1523).
 
 VML drawing containers project each independent member, with nested group coordinate maps
 preserving individual textbox and picture bounds (#1482). The ordinary textbox paragraph

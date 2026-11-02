@@ -27,6 +27,18 @@ internal static class TableGridModel
 
     internal static int GridAfter(XElement row) => ValOf(row.Element(W.trPr)?.Element(W.gridAfter));
 
+    // Compare can already supply revised spans beside historical deleted cells. Such a row
+    // must not absorb the deleted spans again when projecting its current geometry.
+    internal static bool RetainedCellsFillGrid(XElement row)
+    {
+        int columns = row.Ancestors(W.tbl).FirstOrDefault()?.Element(W.tblGrid)?.Elements(W.gridCol).Count() ?? 0;
+        int retained = WordprocessingMLUtil.RowCells(row).Where(tc => !tc.Elements(W.tcPr).Elements(W.cellDel).Any())
+            .Sum(tc => (int?)tc.Element(W.tcPr)?.Element(W.gridSpan)?.Attribute(W.val) ?? 1);
+        retained += (int?)row.Element(W.trPr)?.Element(W.gridBefore)?.Attribute(W.val) ?? 0;
+        retained += (int?)row.Element(W.trPr)?.Element(W.gridAfter)?.Attribute(W.val) ?? 0;
+        return columns > 0 && retained == columns;
+    }
+
     internal static List<TableGridCell> RowGrid(XElement row)
     {
         int column = GridBefore(row);

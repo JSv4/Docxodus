@@ -744,6 +744,8 @@ internal static partial class Dispatcher
             RenderFootnotesAndEndnotes = BoolOpt("renderFootnotesAndEndnotes", defaults.RenderFootnotesAndEndnotes),
             RenderHeadersAndFooters = BoolOpt("renderHeadersAndFooters", defaults.RenderHeadersAndFooters),
             RenderTrackedChanges = BoolOpt("renderTrackedChanges", defaults.RenderTrackedChanges),
+            ShowFormattingChanges = BoolOpt("showFormattingChanges", defaults.ShowFormattingChanges),
+            ShowInsertionsAndDeletions = BoolOpt("showInsertionsAndDeletions", defaults.ShowInsertionsAndDeletions),
             ShowDeletedContent = BoolOpt("showDeletedContent", defaults.ShowDeletedContent),
             RenderMoveOperations = BoolOpt("renderMoveOperations", defaults.RenderMoveOperations),
             RevisionPresentation = IntOpt("revisionPresentation", defaults.RevisionPresentation),

@@ -30,6 +30,7 @@ namespace Docxodus
         /// <summary>Resolve a run revision's previous properties in the same inherited style
         /// context as its current properties, for HTML formatting-change descriptions only.</summary>
         internal bool ResolveRevisionFormatting;
+        internal bool RenderListRevisionMarkup = true;
 
         public FormattingAssemblerSettings()
         {
@@ -682,6 +683,13 @@ namespace Docxodus
                             !string.IsNullOrEmpty(originalMarker) &&
                             !string.Equals(originalMarker, li, StringComparison.Ordinal);
 
+                        if (!settings.RenderListRevisionMarkup)
+                        {
+                            isDeleted = false;
+                            isInserted = false;
+                            hasVisibleNumberingChange = false;
+                        }
+
                         if (isDeleted && !string.IsNullOrEmpty(originalMarker))
                         {
                             listItemRun = CloneListItemRunWithMarker(listItemRun, originalMarker);
@@ -778,6 +786,9 @@ namespace Docxodus
                             element.Attribute(PtOpenXml.FontName),
                             element.Attribute(PtOpenXml.LanguageType),
                             element.Attribute(PtOpenXml.Unid),
+                            // Converter display annotations must survive list normalization:
+                            // a numbered paragraph can continue across a hidden paragraph mark.
+                            element.Attributes().Where(a => a.Name.NamespaceName == "urn:docxodus:rendering"),
                             // li (the retrieved list item text) and listItemInfo (the source of
                             // abstractNumId) come from the same earlier annotation pass, so
                             // li != null implies listItemInfo != null and abstractNumId was set.

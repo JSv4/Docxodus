@@ -94,7 +94,7 @@ import type {
 
 import { DocxSession, openDocxSession as openDocxSessionImpl } from "./session.js";
 import { serializeVerificationRequest } from "./verification-request.js";
-import { needsCompleteConversion } from "./conversion-options.js";
+import { hiddenRevisionKinds, needsCompleteConversion } from "./conversion-options.js";
 import {
   readExternalAnnotationSet,
   readExternalAnnotationValidation,
@@ -929,7 +929,8 @@ export async function convertDocxToHtml(
       options?.documentLanguage ?? null,
       options?.stampAnchors ?? false,
       options?.revisionPresentation ?? RevisionPresentation.Docxodus,
-      options?.semanticLists ?? false
+      options?.semanticLists ?? false,
+      hiddenRevisionKinds(options)
     );
   }
   // Use pagination-aware method when pagination is requested

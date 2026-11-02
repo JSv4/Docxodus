@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Independent export visibility for formatting revisions, insertions/deletions, and comments,
+  including comment balloons without formatting balloons. Hidden text revisions display current
+  text and structure without accepting revisions or changing the source package (#1523).
+
 ### Fixed
 
 - The published render-report v2 schema validates complete and failed v2 reports and rejects

@@ -3205,14 +3205,7 @@ namespace Docxodus
                     // If the surviving row already fills the accepted grid, removing those cells
                     // must not widen a survivor a second time. Native merge markup whose live
                     // cells still leave a grid gap retains the absorption behavior below.
-                    var grid = element.Ancestors(W.tbl).FirstOrDefault()?.Element(W.tblGrid);
-                    int gridColumns = grid?.Elements(W.gridCol).Count() ?? 0;
-                    int retainedColumns = element.Elements(W.tc)
-                        .Where(tc => !tc.Elements(W.tcPr).Elements(W.cellDel).Any())
-                        .Sum(tc => (int?)tc.Element(W.tcPr)?.Element(W.gridSpan)?.Attribute(W.val) ?? 1);
-                    retainedColumns += (int?)element.Element(W.trPr)?.Element(W.gridBefore)?.Attribute(W.val) ?? 0;
-                    retainedColumns += (int?)element.Element(W.trPr)?.Element(W.gridAfter)?.Attribute(W.val) ?? 0;
-                    if (gridColumns > 0 && retainedColumns == gridColumns &&
+                    if (Internal.TableGridModel.RetainedCellsFillGrid(element) &&
                         element.Elements(W.tc).Elements(W.tcPr).Elements(W.cellDel).Any())
                         return new XElement(W.tr, element.Attributes(),
                             element.Nodes().Where(n => n is not XElement tc || tc.Name != W.tc ||
