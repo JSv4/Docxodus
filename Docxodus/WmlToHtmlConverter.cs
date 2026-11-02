@@ -8161,12 +8161,12 @@ namespace Docxodus
 
             // Points at twip precision: a 0.01in quantum turned w:left="1417" (70.85pt) into
             // 70.56pt (issue #1128). currentMarginLeft is the enclosing border wrapper's indent in inches.
-            var left = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndLeadingAttribute(ind));
-            if (left != null && elementName != Xhtml.span)
+            var left = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndLeadingAttribute(ind)) ?? 0m;
+            if (elementName != Xhtml.span)
             {
-                var leftInPoints = (decimal) left/20m - currentMarginLeft*72m;
+                var leftInPoints = left/20m - currentMarginLeft*72m;
                 style.AddIfMissing(isBidi ? "margin-right" : "margin-left",
-                    leftInPoints > 0m ? PointsCss(leftInPoints) : "0");
+                    PointsCss(leftInPoints));
             }
 
             var right = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndTrailingAttribute(ind));
@@ -10916,7 +10916,7 @@ namespace Docxodus
             var leading = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndLeadingAttribute(ind)) ?? 0m;
             var hanging = WordprocessingMLUtil.AttributeToDecimalTwips(ind.Attribute(W.hanging)) ?? 0m;
             var trailing = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndTrailingAttribute(ind)) ?? 0m;
-            return Math.Max(0m, leading - hanging) == Math.Max(0m, trailing);
+            return leading - hanging == Math.Max(0m, trailing);
         }
 
         /// <summary>The element's markup with the projector's per-element Unid bookkeeping
@@ -11109,7 +11109,7 @@ namespace Docxodus
                     // w:space, so the borders sit outside the text and the text keeps its
                     // indentation (issue #1126). The group shares one w:ind (BorderGroupKey), so
                     // the trailing indent moves from its paragraphs onto the wrapper.
-                    style["margin-" + leadingSide.LocalName] = PointsCss(Math.Max(0m, currentMarginLeft) * 72m - ParagraphBorderOutsetInPoints(pBdr, leadingSide));
+                    style["margin-" + leadingSide.LocalName] = PointsCss(currentMarginLeft * 72m - ParagraphBorderOutsetInPoints(pBdr, leadingSide));
                     style["margin-" + trailingSide.LocalName] = PointsCss(trailingIndentInPoints - ParagraphBorderOutsetInPoints(pBdr, trailingSide));
 
                     // Materialize the (lazy) paragraph projections once, so the adjusted elements

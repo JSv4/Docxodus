@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Preserve negative leading paragraph indents in HTML/PDF, including RTL paragraphs and border wrappers (#1519).
+
 - Comparison keeps weakly related paragraph replacements in coherent revision spans instead of
   stranding their deleted suffix in another paragraph (#1526).
 

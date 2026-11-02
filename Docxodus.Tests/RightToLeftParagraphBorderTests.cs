@@ -93,6 +93,17 @@ public class RightToLeftParagraphBorderTests
     private const string Unequal = "<w:ind w:start=\"720\" w:end=\"1440\"/>";
 
     [Fact]
+    public void MixedDirectionsWithNegativeLeadingIndentsGetSeparateBoxes()
+    {
+        var indent = "<w:ind w:start=\"-540\"/>";
+        var html = Convert(Boxed("Eastward", indent, bidi: false), Boxed("Westward", indent, bidi: true));
+
+        Assert.Equal(2, Wrappers(html).Count);
+        Assert.Equal("-31.75pt", Style(WrapperOf(html, "Eastward"))["margin-left"]);
+        Assert.Equal("-31.75pt", Style(WrapperOf(html, "Westward"))["margin-right"]);
+    }
+
+    [Fact]
     public void MixedDirectionsWithUnequalIndentsGetMirroredBoxes()
     {
         var html = Convert(Boxed("Eastward", Unequal, bidi: false), Boxed("Westward", Unequal, bidi: true));
