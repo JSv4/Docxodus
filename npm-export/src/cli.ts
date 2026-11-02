@@ -33,6 +33,9 @@ Options:
   --markup-presentation <docxodus|word>
                                      How --review-profile markup draws tracked changes
                                      (default docxodus; word = Word's All Markup style)
+  --hide-formatting-changes           Hide formatting annotations; retain current formatting
+  --hide-insertions-and-deletions     Display current text without revision annotations
+  --hide-comments                    Hide comments independently of their placement
   --comment-column-placement <margin|balloons>
                                      Where margin comments go (default margin; balloons =
                                      Word's All Markup print layout, with formatting balloons)
@@ -158,6 +161,9 @@ export async function runCli(argv: readonly string[]): Promise<number> {
         output: { type: "string", short: "o" },
         "review-profile": { type: "string" },
         "markup-presentation": { type: "string" },
+        "hide-formatting-changes": { type: "boolean" },
+        "hide-insertions-and-deletions": { type: "boolean" },
+        "hide-comments": { type: "boolean" },
         "comment-column-placement": { type: "string" },
         "balloon-overflow": { type: "string" },
         comments: { type: "string" },
@@ -241,6 +247,11 @@ export async function runCli(argv: readonly string[]): Promise<number> {
           "--markup-presentation"),
       }),
       commentProfile,
+      markupVisibility: {
+        ...(parsed.values["hide-formatting-changes"] ? { formatting: false } : {}),
+        ...(parsed.values["hide-insertions-and-deletions"] ? { insertionsAndDeletions: false } : {}),
+        ...(parsed.values["hide-comments"] ? { comments: false } : {}),
+      },
       ...(parsed.values["comment-column-placement"] === undefined ? {} : {
         commentColumnPlacement: oneOf(parsed.values["comment-column-placement"], ["margin", "balloons"] as const,
           "--comment-column-placement"),

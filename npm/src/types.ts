@@ -290,6 +290,10 @@ export interface ConversionOptions {
   renderHeadersAndFooters?: boolean;
   /** Whether to render tracked changes visually (insertions/deletions) (default: false) */
   renderTrackedChanges?: boolean;
+  /** Show formatting revision annotations while keeping current formatting (default: true). */
+  showFormattingChanges?: boolean;
+  /** Show insertion/deletion and move markup; false displays current text (default: true). */
+  showInsertionsAndDeletions?: boolean;
   /** Whether to show deleted content with strikethrough (only when renderTrackedChanges=true, default: true) */
   showDeletedContent?: boolean;
   /** Whether to distinguish move operations from regular insert/delete (only when renderTrackedChanges=true, default: true) */
@@ -1565,7 +1569,8 @@ export interface DocxodusWasmExports {
       documentLanguage: string | null,
       stampAnchors: boolean,
       revisionPresentation: number,
-      semanticLists?: boolean
+      semanticLists?: boolean,
+      hiddenRevisionKinds?: number
     ) => string;
     GetAnnotations: (bytes: Uint8Array) => string;
     AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;

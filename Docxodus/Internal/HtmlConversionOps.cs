@@ -35,6 +35,8 @@ internal sealed record HtmlConversionOptions
     public bool RenderFootnotesAndEndnotes { get; init; }
     public bool RenderHeadersAndFooters { get; init; }
     public bool RenderTrackedChanges { get; init; }
+    public bool ShowFormattingChanges { get; init; } = true;
+    public bool ShowInsertionsAndDeletions { get; init; } = true;
     public bool ShowDeletedContent { get; init; } = true;
     public bool RenderMoveOperations { get; init; } = true;
 
@@ -165,6 +167,8 @@ internal static class HtmlConversionOps
             RenderFootnotesAndEndnotes = options.RenderFootnotesAndEndnotes,
             RenderHeadersAndFooters = options.RenderHeadersAndFooters,
             RenderTrackedChanges = options.RenderTrackedChanges,
+            ShowFormattingChanges = options.ShowFormattingChanges,
+            ShowInsertionsAndDeletions = options.ShowInsertionsAndDeletions,
             ShowDeletedContent = options.ShowDeletedContent,
             RenderMoveOperations = options.RenderMoveOperations,
             RevisionPresentation = (RevisionPresentation)options.RevisionPresentation,
@@ -1385,6 +1389,8 @@ internal static class HtmlConversionOps
             // These settings affect within-block output too. An incremental swap must not
             // accept revisions that the matching full render preserves.
             RenderTrackedChanges = options.RenderTrackedChanges,
+            ShowFormattingChanges = options.ShowFormattingChanges,
+            ShowInsertionsAndDeletions = options.ShowInsertionsAndDeletions,
             ShowDeletedContent = options.ShowDeletedContent,
             RenderMoveOperations = options.RenderMoveOperations,
             // Native comment markup follows the caller's profile exactly as the full render's

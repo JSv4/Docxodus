@@ -410,7 +410,8 @@ public partial class DocumentConverter
         string? documentLanguage = null,
         bool stampAnchors = false,
         int revisionPresentation = 0,
-        bool semanticLists = false)
+        bool semanticLists = false,
+        int hiddenRevisionKinds = 0)
     {
         if (docxBytes == null || docxBytes.Length == 0)
         {
@@ -439,6 +440,9 @@ public partial class DocumentConverter
                 RenderFootnotesAndEndnotes = renderFootnotesAndEndnotes,
                 RenderHeadersAndFooters = renderHeadersAndFooters,
                 RenderTrackedChanges = renderTrackedChanges,
+                // An omitted appended wire argument is zero: older callers keep every family visible.
+                ShowFormattingChanges = (hiddenRevisionKinds & 1) == 0,
+                ShowInsertionsAndDeletions = (hiddenRevisionKinds & 2) == 0,
                 ShowDeletedContent = showDeletedContent,
                 RenderMoveOperations = renderMoveOperations,
                 RenderUnsupportedContentPlaceholders = renderUnsupportedContentPlaceholders,

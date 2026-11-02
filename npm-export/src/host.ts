@@ -265,6 +265,7 @@ function validateRequest(value: unknown): HostRequest {
       "reviewProfile",
       "reviewProfileAlreadyApplied",
       "markupPresentation",
+      "markupVisibility",
       "commentProfile",
       "commentColumnPlacement",
       "balloonOverflow",

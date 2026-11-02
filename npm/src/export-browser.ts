@@ -171,6 +171,32 @@ export const HARD_EXPORT_RESOURCE_LIMITS: Readonly<ExportResourceLimits> =
 export const DEFAULT_EXPORT_TIMEOUT_MS = LIMITS_CONTRACT.timeoutMs.default;
 export const HARD_EXPORT_TIMEOUT_MS = LIMITS_CONTRACT.timeoutMs.hardCeiling;
 
+/** Display controls; omitted flags are visible. Revision flags affect only the markup profile. */
+export interface MarkupVisibility {
+  formatting?: boolean;
+  /** Hidden text revisions display current text without accepting revisions in the input. */
+  insertionsAndDeletions?: boolean;
+  /** Visible comments still honor commentProfile, including its hidden setting. */
+  comments?: boolean;
+}
+
+/** Shared browser/Node validation; keep only false flags so explicit defaults preserve digests. */
+export function normalizeMarkupVisibility(value: unknown): Readonly<MarkupVisibility> {
+  if (value === undefined) return Object.freeze({});
+  const keys = ['formatting','insertionsAndDeletions','comments'] as const;
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).some(key => !(keys as readonly string[]).includes(key)))
+    throw new TypeError('markupVisibility must contain only formatting, insertionsAndDeletions, and comments flags.');
+  const result: MarkupVisibility = {};
+  for (const key of keys) {
+    const flag = (value as MarkupVisibility)[key];
+    if (flag !== undefined && typeof flag !== 'boolean')
+      throw new TypeError(`markupVisibility.${key} must be boolean.`);
+    if (flag === false) result[key] = false;
+  }
+  return Object.freeze(result);
+}
+
 export interface PaginatedHtmlOptions {
   documentVersion?: number;
   expectedSourceDigest?: string;
@@ -178,6 +204,7 @@ export interface PaginatedHtmlOptions {
   reviewProfileAlreadyApplied?: boolean;
   /** Only with reviewProfile "markup"; default "docxodus". */
   markupPresentation?: MarkupPresentation;
+  markupVisibility?: MarkupVisibility;
   commentProfile: CommentProfile;
   /**
    * Default "margin". "balloons" takes any comment profile but inline (margin comments go in the
@@ -255,6 +282,8 @@ export interface RenderReportBase {
     reviewProfileAlreadyApplied: boolean;
     /** Present only when the markup profile used the Word presentation. */
     markupPresentation?: "word";
+    /** Present only for non-default visibility, with false flags in canonical order. */
+    markupVisibility?: MarkupVisibility;
     commentProfile: CommentProfile;
     /** Present only for the balloon layout. */
     commentColumnPlacement?: "balloons";
@@ -529,6 +558,7 @@ interface NormalizedOptions {
   reviewProfile: ReviewProfile;
   reviewProfileAlreadyApplied: boolean;
   markupPresentation: MarkupPresentation;
+  markupVisibility: Readonly<MarkupVisibility>;
   commentProfile: CommentProfile;
   commentColumnPlacement: CommentColumnPlacement;
   balloonOverflow: BalloonOverflow;
@@ -650,6 +680,12 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
   if (!options || typeof options !== "object") {
     fail("invalid_argument", "input_validation", "Export options are required.",
       "Supply explicit reviewProfile and commentProfile values.");
+  }
+  let markupVisibility: Readonly<MarkupVisibility>;
+  try { markupVisibility = normalizeMarkupVisibility(options.markupVisibility); }
+  catch (error) {
+    fail("invalid_argument", "input_validation", (error as Error).message,
+      "Supply boolean formatting, insertionsAndDeletions, and comments flags, or omit markupVisibility.");
   }
   const additionalCss = options.additionalCss === undefined ? "" : options.additionalCss;
   if (typeof additionalCss !== "string") {
@@ -808,6 +844,7 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     reviewProfile: options.reviewProfile,
     reviewProfileAlreadyApplied,
     markupPresentation,
+    markupVisibility,
     commentProfile: options.commentProfile,
     commentColumnPlacement,
     balloonOverflow,
@@ -1820,7 +1857,7 @@ function conversionOptions(options: NormalizedOptions) {
     inline: CommentRenderMode.Inline,
     endnotes: CommentRenderMode.EndnoteStyle,
     margin: CommentRenderMode.Margin,
-  }[options.commentProfile];
+  }[options.markupVisibility.comments === false ? 'hidden' : options.commentProfile];
   return {
     pageTitle: options.title,
     cssPrefix: "docx-",
@@ -1835,6 +1872,8 @@ function conversionOptions(options: NormalizedOptions) {
     renderFootnotesAndEndnotes: true,
     renderHeadersAndFooters: true,
     renderTrackedChanges: options.reviewProfile === "markup",
+    showFormattingChanges: options.markupVisibility.formatting !== false,
+    showInsertionsAndDeletions: options.markupVisibility.insertionsAndDeletions !== false,
     // The balloon layout reads what the Word presentation records for balloons, in every profile.
     revisionPresentation: options.markupPresentation === "word" || options.commentColumnPlacement === "balloons"
       ? RevisionPresentation.Word
@@ -3141,12 +3180,13 @@ function automaticResourceCount(document: Document): { count: number; bytes: num
 }
 
 type PresentationFields = Pick<RenderReportBase["options"],
-  "markupPresentation" | "commentColumnPlacement" | "balloonOverflow" | "additionalCss">;
+  "markupPresentation" | "markupVisibility" | "commentColumnPlacement" | "balloonOverflow" | "additionalCss">;
 
 /** Record non-default presentation settings in both the report and layout digest. */
 function presentationFields(options: NormalizedOptions): PresentationFields {
   return {
     ...(options.markupPresentation === "word" ? { markupPresentation: "word" as const } : {}),
+    ...(Object.keys(options.markupVisibility).length ? { markupVisibility: options.markupVisibility } : {}),
     ...(options.commentColumnPlacement === "balloons" ? { commentColumnPlacement: "balloons" as const } : {}),
     ...(options.balloonOverflow === "appendix" ? { balloonOverflow: "appendix" as const } : {}),
     ...(options.additionalCss ? { additionalCss: options.additionalCss } : {}),

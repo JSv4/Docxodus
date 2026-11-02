@@ -2,6 +2,7 @@ import {
   DEFAULT_EXPORT_RESOURCE_LIMITS,
   DEFAULT_EXPORT_TIMEOUT_MS,
   HARD_EXPORT_TIMEOUT_MS,
+  normalizeMarkupVisibility,
   type CompleteRenderReport,
   type ExportRuntimeAttestationEvidence,
   type ExportRuntimeObservedFacts,
@@ -427,6 +428,7 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
     "reviewProfile",
     "reviewProfileAlreadyApplied",
     "markupPresentation",
+    "markupVisibility",
     "commentProfile",
     "commentColumnPlacement",
     "balloonOverflow",
@@ -444,6 +446,11 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
     "environmentAttestation",
     ...(allowOutputs ? ["outputs"] : []),
   ], "Export options");
+  try { normalizeMarkupVisibility(options.markupVisibility); }
+  catch (error) {
+    exportError("invalid_argument", "input_validation", (error as Error).message,
+      "Supply boolean formatting, insertionsAndDeletions, and comments flags, or omit markupVisibility.");
+  }
   if (options.reviewProfile !== "final"
     && options.reviewProfile !== "original"
     && options.reviewProfile !== "markup") {
@@ -783,6 +790,7 @@ function browserOptions(options: NodeExportOptions): Omit<PaginatedHtmlOptions, 
     reviewProfile: options.reviewProfile,
     reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied,
     markupPresentation: options.markupPresentation,
+    markupVisibility: options.markupVisibility,
     commentColumnPlacement: options.commentColumnPlacement,
     balloonOverflow: options.balloonOverflow,
     commentProfile: options.commentProfile,

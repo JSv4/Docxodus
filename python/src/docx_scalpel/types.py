@@ -4268,6 +4268,8 @@ class HtmlOptions:
     render_unsupported_content_placeholders: bool = False
     document_language: str | None = None
     semantic_lists: bool = False
+    show_formatting_changes: bool = True
+    show_insertions_and_deletions: bool = True
 
     def to_wire(self) -> dict[str, Any]:
         """camelCase keys the host dispatcher's ``ParseHtmlOptions`` reads."""
@@ -4287,6 +4289,8 @@ class HtmlOptions:
             "renderFootnotesAndEndnotes": self.render_footnotes_and_endnotes,
             "renderHeadersAndFooters": self.render_headers_and_footers,
             "renderTrackedChanges": self.render_tracked_changes,
+            "showFormattingChanges": self.show_formatting_changes,
+            "showInsertionsAndDeletions": self.show_insertions_and_deletions,
             "showDeletedContent": self.show_deleted_content,
             "renderMoveOperations": self.render_move_operations,
             "revisionPresentation": self.revision_presentation,

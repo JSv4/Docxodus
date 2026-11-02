@@ -49,6 +49,7 @@ interface ExportOptions {
   reviewProfile: ReviewProfile;
   reviewProfileAlreadyApplied?: boolean;
   markupPresentation?: MarkupPresentation; // markup only; default "docxodus"
+  markupVisibility?: { formatting?: boolean; insertionsAndDeletions?: boolean; comments?: boolean };
   commentProfile: CommentProfile;
   commentColumnPlacement?: "margin" | "balloons"; // default "margin"
   balloonOverflow?: "truncate" | "appendix"; // balloons only; default "truncate"
@@ -791,6 +792,29 @@ Word's style. `word` with any profile other than `markup` is
 `invalid_argument`. The report's options name `markupPresentation` only when it is `word`, and
 only then does it enter the layout digest, so every default report and digest is unchanged.
 
+`markupVisibility` independently controls formatting-change annotations, text revisions, and
+comments (#1523). All three flags default to `true`. For comment balloons without formatting
+balloons, use `markupVisibility: { formatting: false }` with the Word markup presentation and
+balloon placement. Current bold, paragraph indents, and other authored formatting remain visible.
+A formatting-only document then uses the full text width and allocates no empty review area.
+
+`insertionsAndDeletions: false` displays current text and structure: inserted/moved-to content
+remains without revision decoration; deleted/moved-from content, rows, and cells disappear;
+deleted paragraph marks join the surviving paragraphs. This prepares the converter's owned
+display tree without accepting/rejecting revisions or producing a derived profile package.
+The source digest remains the caller's original bytes. Formatting annotations remain independently
+selectable. These two revision flags have no effect outside the `markup` profile.
+
+`comments: false` suppresses comments in every profile; `true` honors `commentProfile`, including
+`hidden`. When text revisions are hidden, a comment spanning surviving content retains its
+visible range. A comment attached only to hidden content is omitted; unaffected orphan comments
+keep the existing fallback behavior. Visibility does not change placement compatibility rules.
+
+The report records only flags set to `false`, in a canonical `options.markupVisibility` object,
+and includes that policy in layout identity. Omission, `{}`, and explicit all-`true` flags have
+the same default report and digest. The CLI exposes `--hide-formatting-changes`,
+`--hide-insertions-and-deletions`, and `--hide-comments`.
+
 `commentColumnPlacement: "balloons"` prints Word's All Markup layout (issue #1300, design in
 `all_markup_layout.md`): each page keeps its paper size and is shrunk beside a grey markup area whose
 balloons hold the margin comments and, with the Word presentation, the formatting changes in Word's
@@ -1209,6 +1233,7 @@ interface RenderReportBase {
   options: {
     reviewProfile: ReviewProfile;
     reviewProfileAlreadyApplied: boolean;
+    markupVisibility?: { formatting?: false; insertionsAndDeletions?: false; comments?: false };
     commentProfile: CommentProfile;
     title: string;
     outputs: readonly ("html" | "pdf")[];
