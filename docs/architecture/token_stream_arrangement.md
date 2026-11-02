@@ -45,6 +45,14 @@ it is worth paying.
 
 ### 2. Selection — settled by decode (#699), and the answer is that the gate is already right
 
+In a region containing established block pairs, two unpaired paragraphs cannot acquire
+stream correspondence from English function words alone (#1526). Such matches previously
+reintroduced evidence the block aligner had rejected and split a replaced paragraph's deleted
+suffix into a separate display paragraph. The segmenter excludes those anchors before pairing
+paragraph boundaries. Content-word matches, flow involving an established pair, and regions
+without block pairs retain their existing rules. This is an arrangement fix verified through
+exact accept/reject reconstruction; no new Word comparison result is claimed.
+
 This point was open when the note was first written; #699 decoded it against the reference compare
 corpus (803 base/next/reference triples), and the finding reversed the expected conclusion.
 

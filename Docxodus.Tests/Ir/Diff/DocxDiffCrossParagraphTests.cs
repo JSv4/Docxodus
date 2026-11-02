@@ -25,6 +25,64 @@ namespace Docxodus.Tests.Ir.Diff;
 [Trait("Category", "Markup")]
 public class DocxDiffCrossParagraphTests
 {
+    [Theory]
+    [InlineData(false, false, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(false, true, true, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(true, false, true, false)]
+    [InlineData(true, true, false, false)]
+    [InlineData(true, true, true, false)]
+    [InlineData(false, false, false, true)]
+    [InlineData(false, false, true, true)]
+    [InlineData(false, true, false, true)]
+    [InlineData(false, true, true, true)]
+    [InlineData(true, false, false, true)]
+    [InlineData(true, false, true, true)]
+    [InlineData(true, true, false, true)]
+    [InlineData(true, true, true, true)]
+    public void RewrittenParagraphs_KeepDeletedSuffixWithItsReplacement(bool reverse, bool interior, bool crossing, bool compound)
+    {
+        var before = new[]
+        {
+            "Morning crews polish the brass telescope before" + (compound ? "-" : " ") + "opening the dome.",
+            "The keeper records a quiet observation beside the northern window." + (crossing ? " Saffron cargo" : ""),
+            "At closing the shutters cover the lens and the ladder returns indoors.",
+        };
+        var after = new[]
+        {
+            "Evening volunteers arrange the ceramic bowls before lighting the kiln.",
+            "The potter records a blue glaze beside the southern doorway.",
+            (crossing ? "Saffron cargo " : "") + "At sunrise the baskets carry the tiles and the wagon leaves outside.",
+        };
+        if (reverse)
+            (before, after) = (after, before);
+        var tail = interior ? new[] { "An unchanged closing sentence." } : System.Array.Empty<string>();
+        var left = Docs.Para(before.Concat(tail).ToArray());
+        var right = Docs.Para(after.Concat(tail).ToArray());
+        var result = DocxCompare.Compare(left, right);
+        var body = XDocument.Parse(Docs.MainPartXml(result)).Root!.Element(W.body)!;
+        var paragraphs = body.Elements(W.p).ToList();
+
+        var deleted = Assert.Single(paragraphs.Where(p => p.Descendants(W.delText)
+            .Any(t => t.Value.Contains(before[0].Split(' ')[0]))));
+        Assert.Equal(before[0],
+            string.Concat(deleted.Descendants(W.delText).Select(t => t.Value)));
+        var inserted = Assert.Single(paragraphs.Where(p => p.Descendants(W.ins)
+            .Descendants(W.t).Any(t => t.Value.Contains(after[0].Split(' ')[0]))));
+        Assert.Equal(after[0],
+            string.Concat(inserted.Descendants(W.ins).Descendants(W.t).Select(t => t.Value)));
+        if (crossing && !reverse)
+        {
+            var retained = Assert.Single(body.Descendants(W.t).Where(t => t.Value.Contains("Saffron cargo")));
+            Assert.DoesNotContain(retained.Ancestors(), e => e.Name == W.ins || e.Name == W.del);
+            Assert.DoesNotContain(body.Descendants(W.delText), t => t.Value.Contains("Saffron cargo"));
+        }
+        Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(result)));
+        Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionProcessor.AcceptRevisions(result)));
+    }
+
     private static readonly IrReaderOptions ReadOpts =
         new() { RetainSources = false, RevisionView = RevisionView.Accept };
 

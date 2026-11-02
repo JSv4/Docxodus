@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Comparison keeps weakly related paragraph replacements in coherent revision spans instead of
+  stranding their deleted suffix in another paragraph (#1526).
+
 ## [15.0.0] - 2026-10-31
 
 ### Added

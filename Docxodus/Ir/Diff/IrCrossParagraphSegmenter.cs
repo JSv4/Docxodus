@@ -369,9 +369,12 @@ internal static class IrCrossParagraphSegmenter
                     // gap grammar — the aligner already declined to pair them). The story-final
                     // del+ins still FUSE into one cell structurally, and that cell's re-diff retains
                     // any shared tokens, so banning the stream-level match loses nothing there.
-                    // LEADING one-sided members are the fusion construct itself (decoded 2026-07-27)
-                    // and match freely.
-                    if (leftPairIdx[ml] < 0 && rightPairIdx[mr] < 0 && ml > lastPairL && mr > lastPairR)
+                    // LEADING unpaired members need content-word evidence: function words that
+                    // the block aligner rejected must not strand a rewrite's deleted suffix
+                    // after an inserted pilcrow (#1526).
+                    if (leftPairIdx[ml] < 0 && rightPairIdx[mr] < 0 &&
+                        ((ml > lastPairL && mr > lastPairR) ||
+                         IrBlockAligner.IsFunctionWordKey(unitsL[a].Key) || IrBlockAligner.IsFunctionWordKey(unitsR[b].Key)))
                         continue;
                 }
                 crossUnitMatches++;
