@@ -12285,6 +12285,8 @@ namespace Docxodus
         {
             if (element.Name == W.drawing)
             {
+                var group = ProcessDrawingTextGroup(wordDoc, element, imageHandler, settings);
+                if (group != null) return group;
                 var chart = ProcessChart(wordDoc, element);
                 if (chart != null)
                 {
@@ -12366,7 +12368,7 @@ namespace Docxodus
         /// pagination; other legacy placement keeps its established inline fallback.
         /// </summary>
         private static XElement? ProcessTextBox(WordprocessingDocument wordDoc, XElement element,
-            WmlToHtmlConverterSettings? settings, ShapeBox? groupFrame = null)
+            WmlToHtmlConverterSettings? settings, ShapeBox? groupFrame = null, ShapeBox? drawingFrame = null)
         {
             var textBoxContent = element.Descendants(W.txbxContent).FirstOrDefault();
             var continuation = element.Descendants(WPS.wps + "linkedTxbx").FirstOrDefault();
@@ -12405,7 +12407,7 @@ namespace Docxodus
             var drawingContainer = element.Elements()
                 .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
             var vmlShape = textBoxContent?.Ancestors().FirstOrDefault(IsVmlShape);
-            var bodyPr = textBoxContent?.Ancestors(WPS.wsp).FirstOrDefault()?.Element(WPS.bodyPr);
+            var bodyPr = (textBoxContent ?? continuation)?.Ancestors(WPS.wsp).FirstOrDefault()?.Element(WPS.bodyPr);
             var drawingFit = ResolveDrawingTextBoxFit(wordDoc, bodyPr);
             var autoFit = vmlShape != null ? HasVmlTextBoxAutoFit(vmlShape) : drawingFit == A.spAutoFit;
             // ProcessImage's settings parameter defaults to null for callers with no pagination
@@ -12415,6 +12417,18 @@ namespace Docxodus
             // been able to NRE downstream when a text box is actually present.
             if (drawingContainer != null)
                 AddDrawingTextBoxStyle(style, wrapper, element, drawingContainer, settings!, autoFit, bodyPr);
+            else if (drawingFrame is { } drawingBounds)
+            {
+                // Keep the original member attached to its owning part; only its frame is synthetic.
+                var frame = new XElement(WP.inline, new XElement(WP.extent,
+                    new XAttribute(NoNamespace.cx, (long)Math.Round(drawingBounds.Width)),
+                    new XAttribute(NoNamespace.cy, (long)Math.Round(drawingBounds.Height))));
+                AddDrawingTextBoxStyle(style, wrapper, element, frame,
+                    settings ?? new WmlToHtmlConverterSettings(), autoFit, bodyPr);
+                // The group's SVG member paints the actual geometry, theme fill and outline.
+                style.Remove("background-color");
+                style.Remove("border");
+            }
             else if (vmlShape != null)
             {
                 if (groupFrame == null && settings?.RenderPagination == PaginationMode.Paginated && CreateVmlDrawingAnchor(vmlShape) is XElement anchor)

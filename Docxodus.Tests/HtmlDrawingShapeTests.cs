@@ -575,7 +575,7 @@ public class HtmlDrawingShapeTests
     }
 
     [Fact]
-    public void A_floating_group_with_a_text_box_reports_its_undrawn_members()
+    public void A_floating_group_preserves_its_shape_and_textbox_geometry()
     {
         var textBox = Shape().Replace("<wps:bodyPr/>",
             "<wps:txbx><w:txbxContent><w:p><w:r><w:t>Group caption</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/>");
@@ -588,7 +588,8 @@ public class HtmlDrawingShapeTests
         });
         var document = XElement.Parse(html);
         Assert.Contains("Group caption", document.Value);
-        Assert.Contains(document.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+        Assert.Equal(2, document.Descendants().Count(e => e.Name.LocalName == "rect"));
+        Assert.DoesNotContain(document.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
     }
 
     [Fact]

@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Preserve every text story in DrawingML groups, including nested header groups, mixed pictures and shapes, and reflected or upright text (#1527).
+
 - Widow control permits paragraph splitting while retaining two lines on each side, independently of explicit line keeps (#1520).
 
 - Preserve negative leading paragraph indents in HTML/PDF, including RTL paragraphs and border wrappers (#1519).
