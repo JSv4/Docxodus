@@ -42,6 +42,7 @@
   "devDependencies": {
     "@types/fontkit": "2.0.9",
     "@types/node": "22.18.0",
+    "ajv": "8.20.0",
     "docxodus": "file:../npm",
     "pdfjs-dist": "6.2.108",
     "typescript": "5.9.3"
