@@ -5894,3 +5894,21 @@ in page limits and NUMPAGES; fitting columns, outside viewer panels and balloon 
 their existing behavior. `export-browser.ts` refuses any remaining physical-margin clipping.
 The existing converter projects comment bodies to plain text; this fix does not add rich comment
 formatting. Long `endnotes`-profile comments have a separate wrapper-fragmentation defect (#1505).
+
+## Signed leading paragraph indents (#1519)
+
+`<w:ind w:left="-540"/>` extends an LTR paragraph 27pt into the leading margin;
+`w:start` and RTL paragraphs retain the same signed leading-side arithmetic.
+The original Laurel fixtures in the companion fidelity-bench PR use 72pt page margins.
+
+| Input | LibreOffice PDF, LTR origin | Docxodus 15.0.0 | Fixed converter |
+| --- | ---: | ---: | ---: |
+| −540 twips | 45.1pt | 72pt | 45pt |
+| 0 twips | 72.1pt | 72pt | 72pt |
+| +540 twips | 99.1pt | 99pt | 99pt |
+
+Word Online was unavailable for this capture; no Word observation is claimed. The small
+LibreOffice glyph-origin residual is retained. `CreateStyleFromInd` and the border wrapper
+previously clamped the leading offset. Both now preserve its sign, and border grouping compares
+the resulting signed geometry. A hanging-only bordered paragraph still has an implicit zero
+leading indent: its inner paragraph compensates the wrapper before applying `text-indent`.
