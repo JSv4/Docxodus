@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docxodus.dev/schemas/render/render-report/v2",
-  "title": "Docxodus render report v1",
+  "title": "Docxodus render report v2",
   "oneOf": [
     {
       "$ref": "#/$defs/complete"
@@ -1040,10 +1040,10 @@
       ],
       "properties": {
         "schema": {
-          "const": "https://docxodus.dev/schemas/render/render-report/v1"
+          "$ref": "#/$defs/baseProperties/schema"
         },
         "schemaVersion": {
-          "const": 1
+          "$ref": "#/$defs/baseProperties/schemaVersion"
         },
         "source": {
           "$ref": "#/$defs/baseProperties/source"
@@ -1286,10 +1286,10 @@
       ],
       "properties": {
         "schema": {
-          "const": "https://docxodus.dev/schemas/render/render-report/v1"
+          "$ref": "#/$defs/baseProperties/schema"
         },
         "schemaVersion": {
-          "const": 1
+          "$ref": "#/$defs/baseProperties/schemaVersion"
         },
         "source": {
           "$ref": "#/$defs/baseProperties/source"

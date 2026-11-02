@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The published render-report v2 schema validates complete and failed v2 reports and rejects
+  v1 identities; both branches now share the declared v2 identity (#1538).
+
 - Preserve declared fractional single-line borders in fixed-grid table exports, with consistent cell widths, merged edges, repeated headers and RTL running stories (#1522).
 
 - Preserve every text story in DrawingML groups, including nested header groups, mixed pictures and shapes, and reflected or upright text (#1527).
