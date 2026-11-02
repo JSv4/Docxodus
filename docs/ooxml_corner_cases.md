@@ -1,5 +1,43 @@
 # OOXML Corner Cases
 
+## Independent stories in DrawingML groups (#1527)
+
+A group is not one textbox. Each `wps:txbx/w:txbxContent` is an independent story,
+including when the group belongs to a header or sits inside `w:ins`. For example,
+these child offsets place three 100pt frames 120pt apart (all coordinates are EMUs):
+
+```xml
+<wpg:wgp>
+  <wpg:cNvGrpSpPr/>
+  <wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="4318000" cy="381000"/>
+    <a:chOff x="0" y="0"/><a:chExt cx="4318000" cy="381000"/>
+  </a:xfrm></wpg:grpSpPr>
+  <!-- Three wps:wsp members: off.x = 0, 1524000, 3048000;
+       each ext = 1270000 by 381000 and each has its own wps:txbx. -->
+</wpg:wgp>
+```
+
+| Case | Word | LibreOffice | Docxodus before / after |
+| --- | --- | --- | --- |
+| Three header or body stories | Not captured | All three labels | First story only; PDF refused / all three labels and source anchors |
+| Nested child origin and nonuniform scale | Not captured | Mapped frames, unchanged type size | Missing stories / independent mapped frames |
+| Picture or ellipse beside the stories | Not captured | All members visible | Missing members / members painted in source order |
+| Rotated group text, `upright` omitted or false | Not captured | Text remains horizontal in the tested controls | First story / text follows the composed rotation |
+| Reflected text and `upright="1"` | Not captured | Readable horizontal text | First story / readable text; upright cancels accumulated rotation |
+
+`WmlToHtmlConverter.DrawingGroups.cs` visits the original member nodes, retaining owning-part
+relationships and canonical paragraph anchors. It maps child coordinates into physical frames,
+draws each shape beneath its HTML story, and places the group through one outer drawing anchor.
+The PDF completeness check remains unchanged. Unsupported geometry preserves text but reports
+layout loss and cannot claim verified source clipping. Canvas roots remain on the existing path.
+
+Rotation and reflection compose as orthogonal transforms. Reflections reposition frames without
+mirroring glyphs; upright text additionally cancels the composed rotation. Microsoft's
+[bodyPr upright documentation](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.bodyproperties.upright?view=openxml-3.0.1)
+defines true as independent of all transforms and omission as false. PDF matrix regressions check
+these semantics directly. The eight original Willow benchmark cases use axis-aligned frames that
+LibreOffice can validate; its observed rotated-text behavior is not used as an angle oracle.
+
 This document tracks edge cases and quirks in Open XML document processing where Word's behavior differs from a strict interpretation of the specification, or where the specification is ambiguous.
 
 ## Table of Contents

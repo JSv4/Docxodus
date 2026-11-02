@@ -358,9 +358,14 @@ reserves for them, pictures/charts/ink inside a group, and a canvas's own backgr
 (`wpc:bg`, `wpc:whole`). What cannot be drawn keeps its extent and is marked; see
 [Unsupported Content Placeholders](./unsupported_content_placeholders.md#inline-drawings).
 
-A DrawingML group that contains a text box is still rendered by the text-box path: the whole
-group becomes one box at the group's extent, styled with the first shape's fill and outline and holding
-only the text box's text; the group's other shapes are not drawn.
+DrawingML `wpg:wgp` groups containing text boxes project each member in source order
+(`WmlToHtmlConverter.DrawingGroups.cs`, #1527). Nested child offsets/extents map to physical
+frames without scaling fonts or strokes. Each shape combines its SVG geometry with an independent
+HTML textbox; pictures resolve relationships in the original owning part. One outer drawing anchor
+positions the group. Rotation/reflection composes through nested groups; text counteracts reflections
+to remain readable, and `bodyPr upright` also cancels the accumulated rotation. Linked continuation
+frames keep their own body properties. Unsupported geometry remains reported and invalidates source
+clipping provenance without deleting its text. Canvas (`wpc:wpc`) text handling is unchanged.
 
 VML groups project their independent shapes and text stories in order (#1482), including nested
 groups and picture siblings. Their child coordinate origins and extents map to physical frame

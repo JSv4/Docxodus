@@ -648,7 +648,7 @@ namespace Docxodus
         /// Other geometry, and the text of a text box inside a group, count as undrawn.
         /// </summary>
         private static void AddShapeElement(XElement target, XElement shape, ShapeBox frame, XElement? groupFill,
-            ShapeContext context)
+            ShapeContext context, bool textRendered = false, bool applyOrientation = true)
         {
             var properties = shape.Element(WPS.spPr);
             var shapeStyle = shape.Element(WPS.style);
@@ -668,7 +668,7 @@ namespace Docxodus
                     new XAttribute("y2", Format(frame.Y + frame.Height))),
                 _ => null,
             };
-            if (shape.Descendants(W.txbxContent).Any(text => text.Descendants(W.t).Any()))
+            if (!textRendered && shape.Descendants(W.txbxContent).Any(text => text.Descendants(W.t).Any()))
                 context.Undrawn++;
             if (element == null)
             {
@@ -690,7 +690,7 @@ namespace Docxodus
                 if (stroke.Value.Opacity is { } strokeOpacity)
                     element.Add(new XAttribute("stroke-opacity", Format(strokeOpacity)));
             }
-            var orientation = ShapeOrientation(properties?.Element(A.xfrm), frame);
+            var orientation = applyOrientation ? ShapeOrientation(properties?.Element(A.xfrm), frame) : null;
             if (orientation != null)
                 element.Add(new XAttribute("transform", orientation));
             target.Add(element);
