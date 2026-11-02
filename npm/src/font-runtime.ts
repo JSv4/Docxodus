@@ -1,5 +1,6 @@
 import { canonicalJson, isWellFormedUnicode } from "./canonical.js";
 import {
+  FONT_REQUEST_ATTRIBUTE,
   FONT_RESOLVER_CONTRACT_ID,
   FONT_RESOLVER_SCHEMA_VERSION,
   FONT_SUBSTITUTION_CONTRACT_MATERIAL,
@@ -64,6 +65,7 @@ interface TextFaceUse {
   element: HTMLElement;
   requestKey: string;
   originalStyle: string | null;
+  ownsText?: boolean;
 }
 
 interface MutableRequest {
@@ -395,7 +397,7 @@ function collectFontInventory(document: Document, limits: BrowserFontLimits): Fo
       }
       request.sampleCodePoints.add(point);
     }
-    uses.push({ element, requestKey: key, originalStyle: element.getAttribute("style") });
+    uses.push({ element, requestKey: key, originalStyle: element.getAttribute("style"), ownsText: true });
   }
   // An element with no text of its own still lays out with its font: a paragraph's strut, its own share of
   // every line box, is sized from the paragraph's font, and so are `lh` units and the auto line multiples
@@ -1356,7 +1358,11 @@ export function createBrowserFontTask(
   resolver: FontResolver | undefined,
   limits: BrowserFontLimits,
 ): BrowserFontTask {
+  for (const element of Array.from(document.querySelectorAll(`[${FONT_REQUEST_ATTRIBUTE}]`)))
+    element.removeAttribute(FONT_REQUEST_ATTRIBUTE);
   const inventory = collectFontInventory(document, limits);
+  for (const use of inventory.uses) if (use.ownsText)
+    use.element.setAttribute(FONT_REQUEST_ATTRIBUTE, use.requestKey);
   const pending = new Set(inventory.requests.map((request) => `request:${request.id}`));
   if (document.fonts) pending.add("document.fonts.ready");
   return {

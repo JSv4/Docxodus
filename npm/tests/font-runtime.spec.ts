@@ -299,6 +299,23 @@ async function convertWithAdversarialResolver(
 test.describe('browser configured font runtime', () => {
   test.beforeEach(async ({ page }) => ready(page));
 
+  test('the public font inventory does not stamp or rewrite the caller DOM', async ({ page }) => {
+    const unchanged = await page.evaluate(async () => {
+      const modulePath = '/export-browser.js';
+      const api = await import(modulePath);
+      const frame = document.createElement('iframe');
+      document.body.append(frame);
+      try {
+        const doc = frame.contentDocument!;
+        doc.body.innerHTML = '<p style="font-family:serif">Outer <b>inner</b></p>';
+        const before = doc.documentElement.outerHTML;
+        api.inventoryDocumentFontRequests(doc, { fontRequests: 100, fontSampleCodePoints: 1000 });
+        return before === doc.documentElement.outerHTML;
+      } finally { frame.remove(); }
+    });
+    expect(unchanged).toBe(true);
+  });
+
   test('parses CSS stacks and inventories every rendered text-node face canonically', async ({ page }) => {
     const parsed = await page.evaluate(() => (window as any).DocxodusStandalone.parseFontFamilies(
       '"Comma, Family", Escaped\\20 Name, serif',
@@ -441,6 +458,8 @@ test.describe('browser configured font runtime', () => {
 
   test('keeps an explicit resolver miss authoritative while measuring browser fallback', async ({ page }) => {
     const result = await convertWithResolver(page, fontPlan(validFont, { mode: 'missing' }));
+    expect(result.renderReport.fontObservation).toEqual({ status: 'unavailable', reason: 'browser_api_unavailable' });
+    expect(result.renderReport.fontObservationDigest).toBeUndefined();
     expect(result.renderReport.fonts.length).toBeGreaterThan(0);
     // The document requests fictional families ("Docxodus Requested A"/"B") that Chromium has
     // never heard of and that carry no substitution rule, so a genuine advance-width measurement

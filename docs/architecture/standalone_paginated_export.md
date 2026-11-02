@@ -455,6 +455,27 @@ reviewed fidelity baseline. An unavailable or unproven required Chromium capabil
 `unsupported_runtime`; documentation never converts "Playwright can launch there" into a fidelity
 claim.
 
+Node reports include `fontObservation` and a canonical `fontObservationDigest` (#1525).
+The observation reads Chromium’s platform-font usage for each final non-whitespace text node,
+including SVG text, from the immutable offline snapshot. It records family and PostScript names,
+custom-font status and glyph counts, together with the text digest, source/page identifiers and
+original font request when those identities survive layout. Generated text without an original
+request remains unattributed, including PAGE or STYLEREF replacements whose cached-result
+run was removed. No raw text, host paths or font bytes enter this evidence.
+
+The observation uses print media when PDF is requested, including HTML/PDF batches, and screen
+media for HTML-only export. It describes that snapshot and medium; it cannot attest how HTML
+will render on a future host. Browser-only exports explicitly report `browser_api_unavailable`;
+a recognized unsupported Chromium protocol reports `protocol_unavailable`. Observation work shares
+the export deadline and `renderDiagnostics` budget. Cancellation and resource limits remain errors.
+
+These are shaping observations, not visible-ink proof: Chromium can report fonts for clipped or
+transparent text, and glyph counts do not map one-to-one to Unicode characters. CSS pseudo-element
+text is outside the text-node scope. `fileIdentity: "unavailable"` is explicit because platform names
+cannot attest a font file. Resolver records, `fontIdentity.resolutionDigest`, missing-font warnings
+and `strictFonts` retain their existing meanings. The separate observation digest enters the Node
+renderer fingerprint before PageMap/report rebinding; inspection never mutates the finalized DOM.
+
 Each conversion gets a fresh primary BrowserContext, and every auxiliary verification/print context
 is fresh and batch-scoped. `docxodus/export-browser` is a public, UI-free
 subpath containing the materializer entry point. `docxodus/export-assets.json` is a versioned public
@@ -1254,6 +1275,8 @@ interface RenderReportBase {
   }>;
   fontIdentity?: FontConfigurationIdentity;
   fonts: readonly FontResolution[];
+  fontObservation?: FontObservation;
+  fontObservationDigest?: Sha256Hex;
   resources: readonly ResourceOutcome[];
   unsupportedContent: readonly UnsupportedContentOutcome[];
   warnings: readonly RenderWarning[];

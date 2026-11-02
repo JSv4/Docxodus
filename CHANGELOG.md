@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Export reports identify the actual Chromium font faces used for final text, including mixed-script fallback, while retaining missing-font warnings and explicit limits on font-file verification (#1525).
+
 - Independent export visibility for formatting revisions, insertions/deletions, and comments,
   including comment balloons without formatting balloons. Hidden text revisions display current
   text and structure without accepting revisions or changing the source package (#1523).

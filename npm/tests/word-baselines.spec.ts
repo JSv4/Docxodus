@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-const wordText = readFileSync(new URL('../dist/word-text.js', import.meta.url), 'utf8').replace(/^export /gm, '');
+import { wordTextScript as wordText } from './word-text-script.js';
 const lineMetrics = readFileSync(new URL('../dist/line-metrics.js', import.meta.url), 'utf8').replace(/^export /gm, '');
 const observations = JSON.parse(readFileSync(new URL('../../TestFiles/BaselineFlow/word-observations.json', import.meta.url), 'utf8'));
 const source = readFileSync(new URL(`../../TestFiles/BaselineFlow/${observations.sourceFile}`, import.meta.url));

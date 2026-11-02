@@ -37,6 +37,7 @@ import {
 } from "./font-runtime.js";
 import type {
   FontConfigurationIdentity,
+  FontObservation,
   FontResolution,
   FontResolver,
 } from "./font-contract.js";
@@ -49,10 +50,12 @@ export {
   FONT_SUBSTITUTION_CONTRACT_MATERIAL,
   FONT_SUBSTITUTION_CONTRACT_VERSION,
   normalizeFontFamilyName,
+  FONT_REQUEST_ATTRIBUTE,
 } from "./font-contract.js";
 export { inventoryDocumentFontRequests, parseCssFontFamily } from "./font-runtime.js";
 export type {
   FontConfigurationIdentity,
+  FontObservation,
   FontEmbeddingKind,
   FontFamilyKind,
   FontFaceMatch,
@@ -304,6 +307,8 @@ export interface RenderReportBase {
   };
   readiness: ReadinessOutcome[];
   fonts: FontResolution[];
+  fontObservation?: FontObservation;
+  fontObservationDigest?: string;
   resources: ResourceOutcome[];
   unsupportedContent: UnsupportedContentOutcome[];
   warnings: RenderWarning[];
@@ -3518,6 +3523,7 @@ function reportBase(
     },
     readiness: state.readiness.map((outcome) => ({ ...outcome, pending: [...outcome.pending] })),
     fonts: state.fonts.map((font) => ({ ...font })),
+    fontObservation: { status: "unavailable", reason: "browser_api_unavailable" },
     resources: state.resources.map((resource) => ({ ...resource })),
     unsupportedContent: state.unsupportedContent.map((outcome) => ({ ...outcome })),
     warnings: state.warnings.map((warning) => ({ ...warning })),

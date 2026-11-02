@@ -16,7 +16,7 @@ function xml(value) {
   return Buffer.from(value, "utf8");
 }
 
-function storedZip(entries) {
+export function storedZip(entries) {
   const localParts = [];
   const centralParts = [];
   let offset = 0;
