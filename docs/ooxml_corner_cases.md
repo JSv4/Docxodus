@@ -5912,3 +5912,25 @@ LibreOffice glyph-origin residual is retained. `CreateStyleFromInd` and the bord
 previously clamped the leading offset. Both now preserve its sign, and border grouping compares
 the resulting signed geometry. A hanging-only bordered paragraph still has an implicit zero
 leading indent: its inner paragraph compensates the wrapper before applying `text-indent`.
+
+## Widow control permits paragraph splitting (#1520)
+
+For a 256pt text band and 16pt exact line spacing, a ten-line prelude followed by
+nine lines with `<w:widowControl/>` leaves six target lines on page 1 and three on
+page 2 in LibreOffice. The property also works when inherited from a paragraph
+style. Before the fix, Docxodus moved all nine lines to page 2.
+
+| Target properties / space left | LibreOffice | Fixed Docxodus |
+| --- | --- | --- |
+| Widow control, six lines fit | 6 + 3 | 6 + 3 |
+| Widow control, eight lines fit | 7 + 2 | 7 + 2 |
+| Widow control disabled, eight lines fit | 8 + 1 | 8 + 1 |
+| Widow control, only one line fits | 0 + 9 | 0 + 9 |
+| Explicit keep-lines, six lines fit | 0 + 9 | 0 + 9 |
+
+These are local LibreOffice observations; Word Online was unavailable. The shared
+paginator now enforces the two-line minimum at visual line boundaries instead of
+using widow control as a whole-paragraph keep. This also prevents bordered groups
+from choosing a midpoint that reflows into a one-line tail. Inline pictures do not
+disable text-line widow control; an oversized picture paragraph can relax an
+impossible minimum only after trying a legal split on a fresh page.

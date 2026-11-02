@@ -1,6 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { fittingTilePng } from './docx-page-fitting-fixture.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -81,6 +82,26 @@ async function paginateWithFootnoteInfo(page: Page, fragmentParagraphs = false):
 }
 
 test.describe('Pagination keep-with-next chains', () => {
+  for (const image of [false, true]) {
+    test(`carried notes do not relax an oversized paragraph's widow minimum, image ${image}`, async ({ page }) => {
+      const picture = image ? `<img width="1" height="1" src="data:image/png;base64,${fittingTilePng().toString('base64')}">` : '';
+      const lines = Array.from({ length: 8 }, (_, i) => `Line${i + 1}`);
+      await page.setContent(`<style>#staging,#container{font:12px/12px Arial}p{margin:0;padding:0}</style>
+        <div id="staging"><div data-section-index="0" data-page-width="142" data-page-height="140"
+          data-content-width="100" data-content-height="100" data-margin-top="20" data-margin-bottom="20"
+          data-margin-left="21" data-margin-right="21">
+          <p style="height:20pt">lead<sup data-footnote-id="f1">1</sup></p>
+          <p data-widow-control="true" style="font:12pt/16pt monospace">${lines.map((line, i) => line + (i === 0 ? picture : '')).join('<br>')}</p>
+        </div>${registry(note('f1', '1', [30, 30, 30, 30]))}</div><div id="container"></div>`);
+      const result = await paginateWithFootnoteInfo(page, true);
+      expect(result.content.map(parts => parts.join('').match(/Line\d/g) ?? [])).toEqual([
+        [], [], lines.slice(0, 6), lines.slice(6),
+      ]);
+      expect(result.footnotePages).toEqual([true, true, false, false]);
+      await expect(page.locator('#container img')).toHaveCount(image ? 1 : 0);
+    });
+  }
+
   for (const mode of ['split', 'keep-lines', 'widow-control', 'page-break', 'fragmentation-disabled']) {
     test(`a heading keeps a valid first paragraph fragment: ${mode}`, async ({ page }) => {
       const lines = Array.from({ length: 6 }, (_, i) => `Cedar${i + 1}`);
@@ -92,7 +113,7 @@ test.describe('Pagination keep-with-next chains', () => {
            style="font: 10pt/10pt Arial">${lines.join('<br>')}</p>`));
 
       const pages = await paginate(page, mode !== 'fragmentation-disabled');
-      expect(pages).toEqual(mode === 'split'
+      expect(pages).toEqual(mode === 'split' || mode === 'widow-control'
         ? [['lead', 'heading', lines.slice(0, 4).join('')], [lines.slice(4).join('')]]
         : mode === 'page-break'
           ? [['lead', 'heading'], [lines.join('')]]
@@ -100,16 +121,17 @@ test.describe('Pagination keep-with-next chains', () => {
     });
   }
 
-  for (const [citationLine, leadHeight] of [[0, 15], [5, 15], [0, 30]]) {
-    test(`a kept paragraph fragment carries line ${citationLine + 1}'s note after ${leadHeight}pt`, async ({ page }) => {
+  for (const [citationLine, leadHeight] of [[0, 15], [5, 15], [0, 30]]) for (const widow of [true, false]) {
+    test(`a kept paragraph fragment carries line ${citationLine + 1}'s note after ${leadHeight}pt, widow ${widow}`, async ({ page }) => {
       const lines = Array.from({ length: 6 }, (_, i) => `Cedar${i + 1}`);
       const markup = lines.map((line, i) => line + (i === citationLine ? '<sup data-footnote-id="f1">1</sup>' : ''));
       await page.setContent(section(`<p style="height: ${leadHeight}pt">lead</p>
         <p data-keep-with-next="true" style="height: 20pt">heading</p>
-        <p style="font: 10pt/10pt Arial">${markup.join('<br>')}</p>`, registry(note('f1', '1', [10]))));
+        <p ${widow ? '' : 'data-widow-control="false"'} style="font: 10pt/10pt Arial">${markup.join('<br>')}</p>`, registry(note('f1', '1', [10]))));
       const result = await paginateWithFootnoteInfo(page, true);
       const text = lines.map((line, i) => line + (i === citationLine ? '1' : ''));
-      const firstLines = citationLine === 0 ? 2 : 5;
+      // The default widow constraint moves a second line with the final citation.
+      const firstLines = citationLine === 0 ? 2 : widow ? 4 : 5;
       expect(result.content).toEqual(leadHeight === 30
         ? [['lead'], ['heading', text.slice(0, 3).join('')], [text.slice(3).join('')]]
         : [['lead', 'heading', text.slice(0, firstLines).join('')], [text.slice(firstLines).join('')]]);
