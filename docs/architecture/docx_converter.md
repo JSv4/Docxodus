@@ -311,6 +311,27 @@ Run properties (`w:rPr`) map to CSS:
 
 ### Tables
 
+For fixed tables with positive grid widths and explicitly sized single-line borders,
+`WmlToHtmlConverter.TableBorders.cs` resolves physical edge segments before the legacy
+CSS adjustment. Shared segments keep one complete winning border, including its color;
+merged cells do not spread that winner over unrelated segments. RTL normalization visits
+all content parts and transparent row/cell wrappers. Ordinary HTML retains native CSS borders.
+
+Paginated export replaces those quantized CSS boxes before measuring. A cell's horizontal
+content width is its grid width less `max(margin, half-border)` on each side, using the same
+winning widths for native tab wrapping. This follows the existing Word placement captures
+in `TestFiles/TableHorizontalPlacement`; vertical row padding includes the resolved halves.
+Exact rows recalculate their content clips, while an automatic height remains automatic.
+The paginator resolves each repeated header's new neighbor before fitting the fragment and
+reserves the visible outer edges at its top, bottom and aligned trailing side.
+
+Final edges paint as SVG rectangles beside their source table, preserving source stacking
+order, affine transforms and ancestor clips. Shared boundaries paint once by source segment
+identity. A local SVG shares Chromium's existing transformed HTML paint-origin rounding;
+paired PDF controls verify alignment with neighboring HTML ink and the exact declared width.
+This does not claim a general correction of transformed HTML print origins. Tables with
+unsupported border styles or unresolved grids continue through the existing native renderer.
+
 Tables are wrapped in a `<div>` for alignment control:
 
 ```html

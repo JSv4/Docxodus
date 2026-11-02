@@ -39,12 +39,14 @@ for (const separated of [false, true]) {
         const geometry = await tables.evaluateAll(elements => elements.map(table => {
           const cell = table.querySelector('td')!;
           const style = getComputedStyle(cell);
+          const paint = table.previousElementSibling;
           return { width: table.getBoundingClientRect().width, padding: parseFloat(style.paddingLeft),
-            border: style.borderTopStyle, color: style.borderTopColor };
+            colors: paint?.matches('[data-docx-table-border-paint]')
+              ? [...new Set(Array.from(paint.querySelectorAll('g rect'),rect=>rect.getAttribute('fill')?.toLowerCase()))] : [] };
         }));
         expect(geometry[1].width).toBeGreaterThan(geometry[0].width + 50);
         expect(geometry[1].padding).toBeCloseTo(48, 1);
-        expect(geometry[1]).toMatchObject({ border: 'solid', color: 'rgb(36, 107, 125)' });
+        expect(geometry[1].colors).toEqual(['#246b7d']);
         const facts = await pdfFacts(actual.pdf!);
         expect(facts.count).toBe(1);
         expect(facts.drawing.length).toBeGreaterThan(0);

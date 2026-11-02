@@ -18,6 +18,7 @@ import {
 } from "./page-geometry.js";
 import type { PageBands, PageDimensions } from "./page-geometry.js";
 import { EXACT_ROW_CELL } from "./exact-row-text.js";
+import { refreshTableBorderLayout } from "./table-borders.js";
 import { omitPaintedBorderSide, PAINT as PAINTED_BORDER } from "./paragraph-borders.js";
 import {
   layoutMarkupBalloons,
@@ -2995,6 +2996,7 @@ export class PaginationEngine {
       bodyClone.appendChild(row.cloneNode(true));
     }
     tableClone.appendChild(bodyClone);
+    refreshTableBorderLayout(tableClone);
 
     if (!retainAnchor) {
       wrapperClone?.removeAttribute("data-anchor");
