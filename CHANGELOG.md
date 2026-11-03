@@ -14,6 +14,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Split long tracked paragraphs across pages while preserving revision metadata and change bars.
+  A leading non-wrapping drawing with fixed anchor coordinates stays whole on the first fragment (#1521).
+
 - Keep complete paragraph rewrites in coherent deleted and inserted blocks when their only shared words are articles or list numbers, including linked articles (#1535).
 
 - **Comparison preserves changed document defaults beside fields** (#1533). Simple, complex,

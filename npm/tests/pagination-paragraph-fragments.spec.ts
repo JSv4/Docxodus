@@ -39,6 +39,32 @@ async function addPaginationBundle(page: Page): Promise<void> {
 }
 
 test.describe('Pagination paragraph fragments', () => {
+  for (const kind of ['plain-host', 'shifted-host', 'leading-drawing', 'later-drawing', 'wrapped-drawing',
+    'aligned-drawing', 'empty-aligned-drawing', 'break-before-drawing', 'image-before-drawing']) {
+    test(`range fragmentation preserves the ${kind} eligibility boundary`, async ({ page }) => {
+      const drawing = `<span data-docx-drawing-anchor="true" data-docx-anchor-h-relative="column"
+        data-docx-anchor-v-relative="paragraph" data-docx-anchor-wrap="${kind === 'wrapped-drawing' ? 'wrapSquare' : 'wrapNone'}"
+        ${kind.includes('aligned-drawing') ? 'data-docx-anchor-v-align="bottom"' : ''}
+        style="position:absolute;width:12pt;height:12pt;left:100pt;top:0;background:blue"><span>${kind === 'empty-aligned-drawing' ? '' : 'Box'}</span></span>`;
+      const rows = Array.from({ length: 12 }, (_, i) => `<span>Row${i + 1}</span>`);
+      if (kind.includes('drawing')) rows[kind === 'later-drawing' ? 5 : 0] =
+        (kind === 'break-before-drawing' ? '<br>' : kind === 'image-before-drawing'
+          ? '<img style="width:60pt;height:120pt" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">' : '')
+        + drawing + rows[kind === 'later-drawing' ? 5 : 0];
+      await page.setContent(viewerHtml(`<p style="position:relative;margin:0;left:${kind === 'shifted-host' ? 1 : 0}px">${rows.join('<br>')}</p>`));
+      await addPaginationBundle(page);
+      const count = await page.evaluate(() => {
+        const { PaginationEngine } = (window as any).DocxodusPagination;
+        const container = document.getElementById('pagination-container')!;
+        new PaginationEngine(document.getElementById('pagination-staging'), container,
+          { showPageNumbers: false, fragmentParagraphs: true }).paginate();
+        return container.querySelectorAll('.page-content > p').length;
+      });
+      if (kind === 'plain-host' || kind === 'leading-drawing') expect(count).toBeGreaterThan(1);
+      else expect(count).toBe(1);
+    });
+  }
+
   test('read-only paginateHtml fragments simple paragraphs and preserves identity only on the head', async ({ page }) => {
     await page.setContent('<div id="viewer"></div>');
     await addPaginationBundle(page);

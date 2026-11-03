@@ -12839,6 +12839,8 @@ namespace Docxodus
 
             var verticalWrap = anchor.Element(WP.wrapTopAndBottom);
             var sideWrap = anchor.Elements().FirstOrDefault(e => e.Name == WP.wrapSquare || e.Name == WP.wrapTight || e.Name == WP.wrapThrough);
+            var wrap = verticalWrap ?? sideWrap ?? anchor.Element(WP.wrapNone);
+            if (wrap != null) wrapper.SetAttributeValue("data-docx-anchor-wrap", wrap.Name.LocalName);
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-top",
                 DrawingWrapDistance((long?)verticalWrap?.Attribute(NoNamespace.distT) ?? (long?)anchor.Attribute(NoNamespace.distT)));
             AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-right",
