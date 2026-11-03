@@ -8304,11 +8304,11 @@ internal static partial class IrMarkupRenderer
     {
         // This first style-level slice deliberately avoids shapes whose effective appearance includes a higher
         // precedence layer (table conditional styles and list labels), an independent package graph (drawing),
-        // or an envelope that needs its own structural revision. Later presentation-plan phases can support each
-        // explicitly.
+        // or an envelope that needs its own structural revision. Fields use the ordinary paragraph/run
+        // cascade; their structural revisions are handled independently of this formatting projection.
         var unsafeNames = new HashSet<string>(StringComparer.Ordinal)
         {
-            "tbl", "numPr", "drawing", "pict", "txbxContent", "fldSimple", "fldChar", "instrText", "delInstrText",
+            "tbl", "numPr", "drawing", "pict", "txbxContent",
             "sdt", "smartTag",
         };
         return document.Sources.Values.Any(source => source.Root?.DescendantsAndSelf().Any(element =>
