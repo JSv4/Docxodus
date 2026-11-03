@@ -1501,6 +1501,13 @@ boundaries, preserving inline structure, identities, ordering, and PageMap fragm
 indivisible note content retains the typed clipped-content failure rather than shipping a complete
 result with missing text.
 
+Body paragraph fragmentation retains unshifted revision change-bar hosts and their inline revision
+metadata on each continuation (#1521). A leading `wrapNone` drawing stays whole on the first
+fragment; its textbox text does not participate in the body's line or widow measurements. Existing
+anchor placement resolves its coordinates after pagination. Preceding flow content, wrapping,
+line/character bases and paragraph-height alignment remain excluded from this path. Source
+completeness and clipping checks still apply to both the body and the promoted drawing.
+
 For eligible uniform Latin paragraphs, `word-text.ts` fits lines from unrounded font advances
 in the declared section band before pagination measures block heights. Legacy compatibility modes
 use natural spaces. Modern justified lines choose the least gap strain, with condensation twice

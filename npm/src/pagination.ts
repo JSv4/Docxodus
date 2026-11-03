@@ -3412,8 +3412,12 @@ export class PaginationEngine {
     };
     const breaks: Array<{ element: HTMLElement; textOffset: number }> = [];
     const images: Array<{ element: HTMLElement; textOffset: number }> = [];
+    const drawings = new Set(this.leadingFragmentDrawings(paragraph));
     const walker = this.document.createTreeWalker(paragraph,
-      this.view.NodeFilter.SHOW_TEXT | this.view.NodeFilter.SHOW_ELEMENT);
+      this.view.NodeFilter.SHOW_TEXT | this.view.NodeFilter.SHOW_ELEMENT, {
+        acceptNode: node => drawings.has(node as HTMLElement)
+          ? this.view.NodeFilter.FILTER_REJECT : this.view.NodeFilter.FILTER_ACCEPT,
+      });
     const flattenedChunks: string[] = [];
     let flattenedLength = 0;
     let node: Node | null;
@@ -3751,13 +3755,16 @@ export class PaginationEngine {
       ...(bodyParagraph ? [] : ["[data-footnote-id]"]),
       "[contenteditable]",
     ].join(", ");
-    if (paragraph.querySelector(unsupportedDescendants)) {
+    const drawings = this.leadingFragmentDrawings(paragraph);
+    if (Array.from(paragraph.querySelectorAll(unsupportedDescendants))
+      .some(element => !drawings.some(drawing => drawing.contains(element)))) {
       return false;
     }
 
     // Range endpoints keep images whole, but floats and positioned picture carriers have their
     // own placement rules. Do not mistake an empty-text leading wrapper for a safe inline atom.
     for (const image of Array.from(paragraph.querySelectorAll<HTMLElement>("img"))) {
+      if (drawings.some(drawing => drawing.contains(image))) continue;
       if (image.closest("[data-field], [data-list-marker], a[data-comment-id]")) return false;
       if (!(image.getBoundingClientRect().width > 0 && image.getBoundingClientRect().height > 0)) return false;
       for (let carrier: HTMLElement | null = image; carrier && carrier !== paragraph; carrier = carrier.parentElement) {
@@ -3781,6 +3788,30 @@ export class PaginationEngine {
       && (automaticBaseline || imageCarrier)
       && (style.left === "auto" || parseFloat(style.left) === 0)
       && (style.right === "auto" || parseFloat(style.right) === 0));
+  }
+
+  /** Leading, non-wrapping drawings belong wholly to the first fragment. Their fixed bases
+   * survive that split; line/character bases and paragraph-height alignment need a line model. */
+  private leadingFragmentDrawings(paragraph: HTMLElement): HTMLElement[] {
+    return Array.from(paragraph.querySelectorAll<HTMLElement>('[data-docx-drawing-anchor="true"]'))
+      .filter(drawing => {
+        if (drawing.dataset.docxAnchorWrap !== 'wrapNone'
+          || drawing.dataset.docxAnchorHRelative === 'character'
+          || drawing.dataset.docxAnchorVRelative === 'line'
+          || (drawing.dataset.docxAnchorVRelative === 'paragraph' && drawing.hasAttribute('data-docx-anchor-v-align')))
+          return false;
+        const style = this.view.getComputedStyle(drawing);
+        if (style.position !== 'absolute' || style.float !== 'none') return false;
+        // Only ancestor shells may precede the drawing. Even a textless image,
+        // break or tab could otherwise put its anchor on a later fragment.
+        for (let node: Node = drawing; node !== paragraph; node = node.parentNode!) {
+          for (let sibling = node.previousSibling; sibling; sibling = sibling.previousSibling) {
+            if (sibling.nodeType === this.view.Node.ELEMENT_NODE
+              || (sibling.nodeType === this.view.Node.TEXT_NODE && sibling.textContent !== '')) return false;
+          }
+        }
+        return true;
+      });
   }
 
   /** Converter shapes, tabs and ruby pairs can move as complete inline boxes. */
@@ -3826,10 +3857,15 @@ export class PaginationEngine {
     relaxKeepLines = false,
   ): boolean {
     const paragraphStyle = this.view.getComputedStyle(paragraph);
+    const unshiftedHost = paragraphStyle.position === 'relative'
+      && paragraphStyle.transform === 'none' && paragraphStyle.translate === 'none'
+      && paragraphStyle.rotate === 'none' && paragraphStyle.scale === 'none'
+      && ['top', 'right', 'bottom', 'left'].every(side =>
+        paragraphStyle.getPropertyValue(side) === 'auto' || parseFloat(paragraphStyle.getPropertyValue(side)) === 0);
     if (
       (paragraphStyle.display !== "block" &&
         !(allowInlineRoot && paragraphStyle.display === "inline")) ||
-      paragraphStyle.position !== "static" ||
+      (paragraphStyle.position !== "static" && !unshiftedHost) ||
       paragraphStyle.float !== "none" ||
       (paragraphStyle.whiteSpace !== "normal" && paragraphStyle.whiteSpace !== "pre-wrap") ||
       paragraphStyle.breakBefore !== "auto" ||
@@ -3844,7 +3880,10 @@ export class PaginationEngine {
 
     // List markers stay with the first fragment. Known converter layout boxes also have
     // no internal endpoints, so moving a complete box preserves its inner layout.
-    const leading = new Set([...this.leadingAtomicBoxes(paragraph), ...this.rangeAtomicInlineBoxes(paragraph)]);
+    const drawings = this.leadingFragmentDrawings(paragraph);
+    if (Array.from(paragraph.querySelectorAll<HTMLElement>('[data-docx-drawing-anchor]'))
+      .some(drawing => !drawings.includes(drawing))) return false;
+    const leading = new Set([...this.leadingAtomicBoxes(paragraph), ...this.rangeAtomicInlineBoxes(paragraph), ...drawings]);
     for (const descendant of Array.from(paragraph.querySelectorAll<HTMLElement>("*"))) {
       let carrier: HTMLElement | null = descendant;
       while (carrier && carrier !== paragraph && !leading.has(carrier)) carrier = carrier.parentElement;
@@ -3906,6 +3945,8 @@ export class PaginationEngine {
       // The reading shares its base's line. Its raised glyphs must not manufacture a line
       // boundary for keep-lines or widow decisions; ordinary fit measurement still sees them.
       if (text.parentElement?.closest('[data-docx-ruby="true"] rt, [data-docx-ruby="true"] rp')) continue;
+      const drawing = text.parentElement?.closest('[data-docx-drawing-anchor]');
+      if (drawing && drawing !== root && root.contains(drawing)) continue;
       const start = text === range.startContainer ? range.startOffset : 0;
       const end = text === range.endContainer ? range.endOffset : text.data.length;
       for (let k = 0; k < end - start; k++) {
