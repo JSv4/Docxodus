@@ -98,6 +98,155 @@ public class DocxDiffHeaderFooterReferenceTests
         Assert.Contains("<w:ins ", ReferencedStoryXml(output, isHeader, section));
     }
 
+    [Theory]
+    [InlineData(true, "default", false)]
+    [InlineData(true, "default", true)]
+    [InlineData(false, "default", false)]
+    [InlineData(false, "default", true)]
+    [InlineData(true, "first", false)]
+    [InlineData(true, "first", true)]
+    [InlineData(false, "first", false)]
+    [InlineData(false, "first", true)]
+    [InlineData(true, "even", false)]
+    [InlineData(true, "even", true)]
+    [InlineData(false, "even", false)]
+    [InlineData(false, "even", true)]
+    public void AddedOrRemovedOpeningSection_KeepsItsOwnStory(bool header, string kind, bool reverse)
+    {
+        Section Section(string[] text, string id) => new(text,
+            Headers: header ? new[] { (kind, id) } : null,
+            Footers: header ? null : new[] { (kind, id) });
+        WmlDocument Document(Section[] sections, Dictionary<string, string[]> stories) =>
+            HeaderFooterFixtures.Build(sections, header ? stories : null, header ? null : stories,
+                titlePg: kind == "first", evenAndOddHeaders: kind == "even");
+        var retained = new[] { "The maintenance summary stays in this section." };
+        var original = Document(new[] { Section(retained, "old") },
+            new() { ["old"] = new[] { "MAINTENANCE COPY" } });
+        var revised = Document(new[] {
+                Section(new[] { "Arrange the welcome badges by arrival time.", "Move spare chairs into the east alcove." }, "empty"),
+                Section(retained, "kept") },
+            new() { ["empty"] = new[] { "" }, ["kept"] = new[] { "MAINTENANCE COPY" } });
+
+        if (reverse)
+            (original, revised) = (revised, original);
+        var result = DocxCompare.Compare(original, revised);
+        var insertedStory = XDocument.Parse(ReferencedStoryXml(result, header, 0, kind)!);
+        Assert.Equal("", string.Concat(insertedStory.Descendants(W + "delText").Select(t => t.Value)));
+        Assert.Equal("", string.Concat(insertedStory.Descendants(W + "t").Select(t => t.Value)));
+        Assert.Equal("MAINTENANCE COPY", string.Concat(XDocument.Parse(
+            ReferencedStoryXml(result, header, 1, kind)!).Descendants(W + "t").Select(t => t.Value)));
+        AssertStoryEndpoints(original, revised, result, header, kind);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void AddedMiddleSection_PreservesLinkedAndEditedStories(bool reverse, bool edit)
+    {
+        var first = new Section(new[] { "The maintenance summary stays in this section." }, Footers: new[] { ("default", "a") });
+        var retained = new Section(new[] { "The inspection ledger remains with the archivist." }, Footers: new[] { ("default", "b") });
+        var linked = new Section(new[] { "The dispatch checklist follows the inspection ledger." });
+        var added = new Section(new[] { "Arrange the welcome badges by arrival time.", "Move spare chairs into the east alcove." },
+            Footers: new[] { ("default", "empty") });
+        var original = HeaderFooterFixtures.Build(new[] { first, retained, linked }, footerParts:
+            new Dictionary<string, string[]> { ["a"] = new[] { "MAINTENANCE COPY" }, ["b"] = new[] { "INSPECTION COPY" } });
+        var revised = HeaderFooterFixtures.Build(new[] { first, added, retained, linked }, footerParts:
+            new Dictionary<string, string[]> { ["a"] = new[] { "MAINTENANCE COPY" },
+                ["b"] = new[] { edit ? "INSPECTION REVISED" : "INSPECTION COPY" }, ["empty"] = new[] { "" } });
+        if (reverse)
+            (original, revised) = (revised, original);
+        var result = DocxCompare.Compare(original, revised);
+        Assert.Equal("", XDocument.Parse(ReferencedStoryXml(result, false, 1)!).Root!.Value);
+        Assert.Equal("MAINTENANCE COPY", ReferencedStoryText(result, false, 0));
+        Assert.Equal(ReferencedStoryXml(result, false, 2), ReferencedStoryXml(result, false, 3));
+        AssertStoryEndpoints(original, revised, result, false, "default");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void AddedBoundaryAfterRetainedText_DoesNotInventStoryRevisions(bool merge, bool reverse)
+    {
+        const string first = "The northern station records the morning temperature.";
+        const string second = "The southern station records the evening temperature.";
+        const string last = "The final receipt stays with the archivist.";
+        var original = HeaderFooterFixtures.Build(new[] {
+            new Section(merge ? new[] { first, second, last } : new[] { first, last },
+                Footers: new[] { ("default", "a") }) }, footerParts: new Dictionary<string, string[]> { ["a"] = new[] { "MAINTENANCE COPY" } });
+        var revised = HeaderFooterFixtures.Build(new[] {
+            new Section(new[] { merge ? first + " " + second : first, "Arrange the welcome badges by arrival time." },
+                Footers: new[] { ("default", "a") }),
+            new Section(new[] { last }, Footers: new[] { ("default", "a") }) },
+            footerParts: new Dictionary<string, string[]> { ["a"] = new[] { "MAINTENANCE COPY" } });
+        if (reverse)
+            (original, revised) = (revised, original);
+        var result = DocxCompare.Compare(original, revised);
+        var story = XDocument.Parse(ReferencedStoryXml(result, false, 0)!);
+        Assert.Equal("", string.Concat(story.Descendants(W + "delText").Select(t => t.Value)));
+        Assert.DoesNotContain(story.Descendants(W + "ins"),
+            insertion => insertion.Descendants(W + "t").Any(t => t.Value.Length > 0));
+        AssertStoryEndpoints(original, revised, result, false, "default");
+    }
+
+    [Fact]
+    public void SectionBoundaryInsideControl_DoesNotSuppressLaterStoryEdits()
+    {
+        WmlDocument Document(string footer)
+        {
+            var input = HeaderFooterFixtures.Build(new[] {
+                new Section(new[] { "The maintenance summary stays here." }, Footers: new[] { ("default", "a") }),
+                new Section(new[] { "The inspection ledger remains with the archivist." }, Footers: new[] { ("default", "b") }) },
+                footerParts: new Dictionary<string, string[]> { ["a"] = new[] { "MAINTENANCE COPY" }, ["b"] = new[] { footer } });
+            using var stream = new OpenXmlMemoryStreamDocument(input);
+            using (var package = stream.GetWordprocessingDocument())
+            {
+                var main = package.MainDocumentPart!;
+                var first = main.GetXDocument().Root!.Element(W + "body")!.Element(W + "p")!;
+                first.ReplaceWith(new XElement(W + "sdt", new XElement(W + "sdtPr"), new XElement(W + "sdtContent", new XElement(first))));
+                main.PutXDocument();
+            }
+            return stream.GetModifiedWmlDocument();
+        }
+        var original = Document("INSPECTION COPY");
+        var revised = Document("INSPECTION REVISED");
+        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), false, "default");
+    }
+
+    private static void AssertStoryEndpoints(WmlDocument original, WmlDocument revised, WmlDocument result, bool header, string kind)
+    {
+        foreach (var (expected, resolved) in new[] {
+            (original, RevisionProcessor.RejectRevisions(result)),
+            (revised, RevisionProcessor.AcceptRevisions(result)) })
+        {
+            Assert.Equal(SectionCount(expected), SectionCount(resolved));
+            for (int i = 0; i < SectionCount(expected); i++)
+                Assert.Equal(XDocument.Parse(ReferencedStoryXml(expected, header, i, kind)!).Root!.Value,
+                    XDocument.Parse(ReferencedStoryXml(resolved, header, i, kind)!).Root!.Value);
+            AssertEveryReferenceResolves(resolved);
+            Assert.Equal(BodyTexts(expected), BodyTexts(resolved));
+        }
+        foreach (var document in new[] { original, revised, result,
+            RevisionProcessor.AcceptRevisions(result), RevisionProcessor.RejectRevisions(result) })
+        {
+            using var stream = new MemoryStream(document.DocumentByteArray);
+            using var package = WordprocessingDocument.Open(stream, false);
+            Assert.Empty(new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
+                DocumentFormat.OpenXml.FileFormatVersions.Office2019).Validate(package));
+        }
+    }
+
+    private static string[] BodyTexts(WmlDocument document)
+    {
+        using var stream = new MemoryStream(document.DocumentByteArray);
+        using var package = WordprocessingDocument.Open(stream, false);
+        return package.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!.Elements(W + "p")
+            .Select(p => string.Concat(p.Descendants(W + "t").Select(t => t.Value))).ToArray();
+    }
+
     [Fact]
     public void OriginalReferencesMissingRelationshipIds_OutputKeepsRevisedStoriesAsInsertions()
     {
