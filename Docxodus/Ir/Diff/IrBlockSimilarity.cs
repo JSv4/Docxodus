@@ -149,6 +149,18 @@ internal sealed class IrBlockSimilarity
     /// </summary>
     public IReadOnlyDictionary<string, int> PairingWordKeys(IrParagraph paragraph) => Bag(paragraph).PairingWordCounts;
 
+    internal static bool ContainsLetter(string value)
+    {
+        for (int i = 0; i < value.Length; i++)
+            if (char.IsLetter(value, i))
+                return true;
+        return false;
+    }
+
+    // Correspondence may survive a capitalization edit; token equality still uses MatchKey.
+    public bool HasSharedContentWordIgnoringCase(IrParagraph left, IrParagraph right) =>
+        Bag(left).ContentWordTexts.Overlaps(Bag(right).ContentWordTexts);
+
     /// <summary>Number of lexical word tokens used by the weak junction-pairing evidence gate.</summary>
     public int PairingWordCount(IrParagraph paragraph) => Bag(paragraph).PairingWordCount;
 
@@ -443,6 +455,7 @@ internal sealed class IrBlockSimilarity
         public IReadOnlyList<IrDiffToken> Tokens { get; }
         public HashSet<string> CalendarYears { get; }
         public HashSet<string> TrimmedWords { get; }        // raw word texts, punct-trimmed + case-folded
+        public HashSet<string> ContentWordTexts { get; } = new(System.StringComparer.OrdinalIgnoreCase);
         public int Total { get; }      // sum of all multiplicities (every token kind)
         public int WordCount { get; }  // Word-kind tokens only
         public int PairingWordCount { get; } // Word-kind tokens carrying lexical (not ordinal-only) content
@@ -465,6 +478,10 @@ internal sealed class IrBlockSimilarity
             WordCount = wordCount;
             PairingWordCount = pairingWordCount;
             JunctionWordCount = junctionWordCount;
+            foreach (var token in tokens)
+                if (token.Kind == IrDiffTokenKind.Word && ContainsLetter(token.Text) &&
+                    !IrBlockAligner.IsFunctionWordKey(token.MatchKey))
+                    ContentWordTexts.Add(token.Text);
         }
 
         public static MatchKeyBag Build(IrParagraph paragraph, IrDiffSettings settings)
@@ -505,14 +522,6 @@ internal sealed class IrBlockSimilarity
             return new MatchKeyBag(
                 counts, wordCounts, pairingWordCounts, junctionWordCounts, tokens, calendarYears, trimmedWords, tokens.Count,
                 wordCount, pairingWordCount, junctionWordCount, contentCounts);
-        }
-
-        private static bool ContainsLetter(string value)
-        {
-            foreach (char c in value)
-                if (char.IsLetter(c))
-                    return true;
-            return false;
         }
 
         private static bool IsCalendarYear(string value)

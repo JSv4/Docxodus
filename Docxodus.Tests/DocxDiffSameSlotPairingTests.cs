@@ -208,6 +208,42 @@ public class DocxDiffSameSlotPairingTests
 
     // ---------------------------------------------------------------- similarity-pass evidence discipline
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SimilarityPair_UsesConfiguredCultureForContentEvidence(bool reverse)
+    {
+        var left = Doc("head anchor",
+            "IRMAK that gargle mumble tumble quince zonk.",
+            "Winter evenings stay quiet mostly.",
+            "Emerald baskets cover brass ladders.",
+            "Scarlet meadows frame narrow streams.", "tail anchor");
+        var right = Doc("head anchor",
+            "Summer mornings ring loud always.",
+            "ırmak that granite marble cobalt fizz quartz.",
+            "Silver lanterns mark frozen harbors.",
+            "Teal ribbons decorate linen collars.", "tail anchor");
+        if (reverse)
+            (left, right) = (right, left);
+        // Shift the correspondence off the same-slot diagonal. Disable streaming so it cannot
+        // repair a fuzzy pairing lost by ignoring the configured Turkish I/ı normalization.
+        var result = DocxDiff.Compare(left, right, new DocxDiffSettings
+        {
+            CaseInsensitive = true,
+            Culture = System.Globalization.CultureInfo.GetCultureInfo("tr-TR"),
+            CrossParagraphTokenDiff = false,
+        });
+
+        var modified = Assert.Single(BodyParas(result), p =>
+            InsertedText(p).Length > 0 && DeletedText(p).Length > 0);
+        Assert.Contains(reverse ? "granite" : "gargle", DeletedText(modified));
+        Assert.Contains(reverse ? "gargle" : "granite", InsertedText(modified));
+        Assert.Equal(BodyParas(left).Select(RetainedText),
+            BodyParas(RevisionProcessor.RejectRevisions(result)).Select(RetainedText));
+        Assert.Equal(BodyParas(right).Select(RetainedText),
+            BodyParas(RevisionProcessor.AcceptRevisions(result)).Select(RetainedText));
+    }
+
     [Fact]
     public void SimilarityPair_SeparatorSkeletonOverlap_DoesNotPair_BesideContentPair()
     {
@@ -236,12 +272,10 @@ public class DocxDiffSameSlotPairingTests
     }
 
     [Fact]
-    public void SimilarityPair_FunctionGradeOverlap_StillPairs_WhenGapHasNoContentCorrespondence()
+    public void SimilarityPair_RejectsFunctionGradeOverlapWithoutContentCorrespondence()
     {
-        // The counterpart law: in a gap where NO candidate pairing carries content-word evidence,
-        // whatever weak overlap exists is what Word's flat matcher pairs on (decoded: a lone shared
-        // "and" is retained inside an otherwise zero-overlap rewrite). The similarity pass falls
-        // back to its lexical-overlap grain there rather than dissolving the whole region.
+        // No candidate carries content-word correspondence: the only shared word is "This".
+        // Keep these complete rewrites in separate inserted and deleted blocks (#1535).
         var left = Doc(
             "head anchor",
             "This text will be indented soon.",
@@ -254,10 +288,8 @@ public class DocxDiffSameSlotPairingTests
             "tail anchor");
         var result = DocxDiff.Compare(left, right);
 
-        // The first sentence pair interleaves (shared "This" + separator skeleton clears the
-        // score); the second stays below the similarity floor and falls out as delete + insert.
         var shape = BodyShape(result);
-        Assert.Equal(new[] { "RET", "MIXED:-", "INS:INS", "DEL:DEL", "RET" }, shape);
+        Assert.Equal(new[] { "RET", "INS:INS", "INS:INS", "DEL:DEL", "DEL:DEL", "RET" }, shape);
         AssertRoundTrip(result, left, right);
     }
 
