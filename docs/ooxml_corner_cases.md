@@ -63,7 +63,8 @@ This document tracks edge cases and quirks in Open XML document processing where
 6. [Tracked Drawings](#tracked-drawings)
    - [LibreOffice fails on tracked anchored header groups with text boxes](#libreoffice-fails-on-tracked-anchored-header-groups-with-text-boxes)
    - [TIFF and WMF need browser image normalization](#tiff-and-wmf-need-browser-image-normalization)
-7. [Contributing](#contributing)
+7. [Section Breaks](#section-breaks)
+8. [Contributing](#contributing)
 
 ---
 
@@ -4585,6 +4586,39 @@ warnings. Benchmark metadata retains each SDK finding verbatim. Design:
 `StoryCommentRenderingTests`, `HtmlConversionEditorRenderTests.HER007`,
 `npm/tests/export-story-comments.spec.ts`. The paired fidelity-bench story cases use the range-only
 form, because the LibreOffice reference track cannot open the other.
+
+## Section Breaks
+
+### Rejecting an inserted paragraph does not necessarily remove its section boundary
+
+During #1534 verification (2026-11-03), an independently authored opening section used
+paragraph insertion markers on its text and boundary carrier:
+
+```xml
+<w:p>
+  <w:pPr><w:rPr><w:ins w:id="1" w:author="Bench"/></w:rPr>
+    <w:sectPr><!-- empty running-story reference and page geometry --></w:sectPr>
+  </w:pPr>
+  <w:ins w:id="2" w:author="Bench"><w:r><w:t>Close the preparation checklist.</w:t></w:r></w:ins>
+</w:p>
+```
+
+The input ends with a retained section. This schema-valid markup produces different rejection results:
+
+| Resolver | Observed result |
+| --- | --- |
+| Docxodus `RevisionProcessor.RejectRevisions` | Removes the inserted paragraph and its boundary; one section remains. |
+| LibreOffice 25.8.7.3 | Keeps an empty boundary paragraph and two sections, with extra running-story bindings. |
+| Word Online, Playwright UI Reject All Changes | Keeps an empty first section and blank first PDF page. The downloaded DOCX has two sections and no insertion/deletion markers. |
+
+This is evidence about the authored markup, not native Word Compare output. An inserted
+paragraph mark is insufficient to claim native section-boundary reversibility. The #1534
+story-alignment fix does not change that representation: `IrMarkupRenderer` carries the
+section properties with their paragraph, while `RevisionProcessor` removes the inserted
+paragraph on rejection. No native-boundary fix is claimed here. The independent benchmark
+keeps exact package endpoints and review-story text mandatory, and explicitly excludes the
+two LibreOffice rejection measurements that fail authored calibration. See the
+[authored fixtures and native capture evidence](https://github.com/JSv4/docx-fidelity-bench/tree/main/docs/results/inserted-section-stories).
 
 ## Contributing
 

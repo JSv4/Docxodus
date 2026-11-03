@@ -73,7 +73,7 @@ internal static class IrEditScriptBuilder
         var bodyOps = ProjectAlignment(left.Body.Blocks, alignment, settings, allowCrossParagraph: true,
             fusedAnchors: settings.CrossParagraphTokenDiff ? null : markupFusedAnchors);
         var noteOps = BuildNoteOps(left, right, settings, KeptNoteReferences(left, right, bodyOps, settings));
-        var headerFooterOps = BuildHeaderFooterOps(left, right, settings);
+        var headerFooterOps = BuildHeaderFooterOps(left, right, settings, alignment);
         return UniqueMoveGroupIds.Apply(new IrEditScript(IrNodeList.From(bodyOps),
             noteOps.Count == 0 ? null : IrNodeList.From(noteOps),
             headerFooterOps));
@@ -184,15 +184,79 @@ internal static class IrEditScriptBuilder
     /// ascending, kind Default&lt;First&lt;Even), then footers.</para>
     /// </summary>
     private static IrNodeList<IrHeaderFooterDiff>? BuildHeaderFooterOps(
-        IrDocument left, IrDocument right, IrDiffSettings settings)
+        IrDocument left, IrDocument right, IrDiffSettings settings, IrBlockAlignment alignment)
     {
         if (!settings.CompareHeadersFooters)
             return null;
 
+        var sections = MatchSectionBoundaries(left, right, alignment);
         var diffs = new List<IrHeaderFooterDiff>();
-        BuildOneHeaderFooterScope(left, right, left.Headers, right.Headers, isHeader: true, settings, diffs);
-        BuildOneHeaderFooterScope(left, right, left.Footers, right.Footers, isHeader: false, settings, diffs);
+        BuildOneHeaderFooterScope(left, right, left.Headers, right.Headers, isHeader: true, settings, diffs, sections);
+        BuildOneHeaderFooterScope(left, right, left.Footers, right.Footers, isHeader: false, settings, diffs, sections);
         return diffs.Count == 0 ? null : IrNodeList.From(diffs);
+    }
+
+    // Boundary carriers delimit physical review sections. Any retained content before a new
+    // boundary still belongs to its source section; a wholly inserted section has no left story.
+    private static List<(int Left, int Right)>? MatchSectionBoundaries(
+        IrDocument left, IrDocument right, IrBlockAlignment alignment)
+    {
+        Dictionary<string, (int Section, bool Ends)> SourceSections(IrDocument document)
+        {
+            var result = new Dictionary<string, (int, bool)>();
+            int section = 0;
+            foreach (var block in document.Body.Blocks)
+            {
+                bool ends = block is IrParagraph { InlineSectionBreakAnchor: not null };
+                result.Add(block.Anchor.ToString(), (section, ends));
+                if (ends) section++;
+            }
+            return result;
+        }
+        var leftSections = SourceSections(left);
+        var rightSections = SourceSections(right);
+        int leftCount = leftSections.Values.Count(s => s.Ends), rightCount = rightSections.Values.Count(s => s.Ends);
+        // Nested carriers are not entries of this alignment. Preserve their existing grid instead
+        // of projecting a partial inventory (and silently dropping later stories).
+        bool Complete(IrDocument document, int count) => document.Body.PartUri is not { } uri ||
+            !document.Sources.TryGetValue(uri, out var source) || source.Root is null ||
+            Internal.BlockMetadataOps.SectionBreaks(source.Root).Count(s => s.Parent?.Name == W.pPr) == count;
+        if (!Complete(left, leftCount) || !Complete(right, rightCount))
+            return null;
+        var sections = new List<(int, int)>();
+        int currentLeft = -1, currentRight = -1, seenLeft = 0, seenRight = 0;
+        bool insertedBoundary = false, deletedBoundary = false;
+        foreach (var entry in alignment.Entries)
+        {
+            bool hasLeft = leftSections.TryGetValue(entry.Left?.Anchor.ToString() ?? "", out var l);
+            bool hasRight = rightSections.TryGetValue(entry.Right?.Anchor.ToString() ?? "", out var r);
+            if (hasLeft) currentLeft = l.Section;
+            if (hasRight) currentRight = r.Section;
+            if (entry.MultiBlocks is { Count: > 0 } members)
+            {
+                string last = members[members.Count - 1].Anchor.ToString();
+                if (entry.Kind == IrAlignmentKind.Merge) currentLeft = leftSections[last].Section;
+                if (entry.Kind == IrAlignmentKind.Split) currentRight = rightSections[last].Section;
+            }
+            if (!l.Ends && !r.Ends)
+                continue;
+            insertedBoundary |= entry.Kind == IrAlignmentKind.Inserted;
+            deletedBoundary |= entry.Kind == IrAlignmentKind.Deleted;
+            // Replacement gaps reorder insertions before deletions during rendering. Retain the
+            // existing grid for those, moved boundaries, and changes on a retained carrier.
+            if (insertedBoundary && deletedBoundary ||
+                entry.Kind is IrAlignmentKind.Moved or IrAlignmentKind.MovedModified ||
+                hasLeft && hasRight && l.Ends != r.Ends)
+                return null;
+            sections.Add((currentLeft, currentRight));
+            currentLeft = currentRight = -1;
+            if (l.Ends) seenLeft++;
+            if (r.Ends) seenRight++;
+        }
+        if (seenLeft != leftCount || seenRight != rightCount)
+            return null;
+        sections.Add((leftCount, rightCount));
+        return sections;
     }
 
     private static readonly IrHeaderFooterKind[] HeaderFooterKinds =
@@ -201,7 +265,8 @@ internal static class IrEditScriptBuilder
     private static void BuildOneHeaderFooterScope(
         IrDocument leftDocument, IrDocument rightDocument,
         IrNodeList<IrHeaderFooter> leftParts, IrNodeList<IrHeaderFooter> rightParts,
-        bool isHeader, IrDiffSettings settings, List<IrHeaderFooterDiff> diffs)
+        bool isHeader, IrDiffSettings settings, List<IrHeaderFooterDiff> diffs,
+        List<(int Left, int Right)>? sections)
     {
         // Pair stories on the effective section × kind grid, but retain the explicit-left grid too: a static
         // rebind must compensate for an explicit left reference that would otherwise override a preceding clone.
@@ -215,6 +280,27 @@ internal static class IrEditScriptBuilder
         var rightExplicit = ExplicitStoryGrid(rightParts);
         var leftGrid = EffectiveStoryGrid(leftExplicit, sectionCount);
         var rightGrid = EffectiveStoryGrid(rightExplicit, sectionCount);
+
+        // Inheritance belongs to each source document. Only then project its section identities
+        // into the review document, whose inserted/deleted boundary paragraphs both remain visible.
+        if (sections is not null)
+        {
+            Dictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter> Project(
+                Dictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter> source, bool left)
+            {
+                var result = new Dictionary<(int, IrHeaderFooterKind), IrHeaderFooter>();
+                for (int i = 0; i < sections.Count; i++)
+                    foreach (var kind in HeaderFooterKinds)
+                        if (source.TryGetValue((left ? sections[i].Left : sections[i].Right, kind), out var story))
+                            result[(i, kind)] = story;
+                return result;
+            }
+            leftGrid = Project(leftGrid, true);
+            rightGrid = Project(rightGrid, false);
+            leftExplicit = Project(leftExplicit, true);
+            rightExplicit = Project(rightExplicit, false);
+            sectionCount = sections.Count;
+        }
 
         // Distinct physical story pairs are rendered once. Unlike the former "first pairing wins" rule, retain
         // every pair: a later pair of the same LEFT part receives a cloned left part, letting its redline reject

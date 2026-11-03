@@ -20,6 +20,8 @@ All notable changes to this project will be documented in this file.
   and paragraph-spanning fields no longer suppress revised paragraph spacing and run formatting;
   accepting and rejecting changes retain each input's effective formatting and field structure.
 
+- Match header and footer stories through retained body sections when whole sections are inserted or removed, preserving empty stories and linked continuations (#1534).
+
 - The published render-report v2 schema validates complete and failed v2 reports and rejects
   v1 identities; both branches now share the declared v2 identity (#1538).
 
