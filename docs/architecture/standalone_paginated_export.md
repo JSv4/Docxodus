@@ -1509,6 +1509,15 @@ mixed-prose transition at a 0.05pt boundary and cover both font sizes, repeated 
 indents and final lines. See `TestFiles/JustificationFlow/word-observations.json` for the immutable
 input/output hashes and native line inventories.
 
+The same line selector handles plain exact-spaced justified text in compatibility mode 15 or later
+(#1524), while keeping HTML paint and the established baseline at 80% of each declared line height.
+Only ordinary spaces change advance, per selected line; a naturally fitting final line keeps its
+spaces. Each continuation retains the full exact pitch. Admission requires the font's ascent and
+descent to fit that line's 80%/20% bands, so overlapping ink keeps the existing inline overflow path.
+Hard breaks, tabs, bidi, mixed runs, pictures and columns retain their existing layout. Mixing exact
+and automatic spacing does not opt previously excluded automatic paragraphs into vector paint.
+`TestFiles/ExactJustificationFlow/word-observations.json` pins the native legacy/modern boundary.
+
 Auto-spacing retains the resolved font height's precision through the spacing multiple. The
 shared font-height probe uses the same large-font scale as the vector painter, avoiding the
 per-component rounding that a smaller probe retains. `TestFiles/BaselineFlow/word-observations.json`

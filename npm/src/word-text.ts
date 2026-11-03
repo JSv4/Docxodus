@@ -17,7 +17,7 @@ const FITTED_LINE = 'data-docx-word-line';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PARAGRAPHS = 'p, h1, h2, h3, h4, h5, h6';
 
-function plainDocument(root: HTMLElement): boolean {
+function plainDocument(root: HTMLElement, allowExact = false): boolean {
   if (root.querySelector('table, svg, math, canvas, video, audio, iframe, object, a, ol, ul, aside, template, section.footnotes, section.endnotes'))
     return false;
   if (Array.from(root.querySelectorAll('img')).some(img => !img.closest(PARAGRAPHS))) return false;
@@ -31,8 +31,9 @@ function plainDocument(root: HTMLElement): boolean {
   const view = root.ownerDocument.defaultView;
   return Array.from(root.querySelectorAll<HTMLElement>(PARAGRAPHS)).every(p => {
     const style = view?.getComputedStyle(p);
-    const run = plainRun(p, style?.direction === 'rtl');
-    return run !== null && Number(style?.getPropertyValue('--docx-auto-line-spacing')) > 0;
+    const run = plainRun(p, style?.direction === 'rtl', allowExact);
+    return run !== null && (Number(style?.getPropertyValue('--docx-auto-line-spacing')) > 0 ||
+      (allowExact && Number.parseFloat(style?.getPropertyValue('--docx-exact-line-height') ?? '') > 0));
   });
 }
 
@@ -56,7 +57,7 @@ function pictureSibling(element: Element, view: Window & typeof globalThis): boo
  * whose structure is otherwise plain, for the document guard only: such a paragraph keeps the
  * HTML line layout, so its direction and script need no precision line model.
  */
-function plainRun(paragraph: HTMLElement, rightToLeft = false): HTMLElement | null {
+function plainRun(paragraph: HTMLElement, rightToLeft = false, allowExact = false): HTMLElement | null {
   const view = paragraph.ownerDocument.defaultView;
   if (!view) return null;
   const children = Array.from(paragraph.children);
@@ -96,9 +97,12 @@ function plainRun(paragraph: HTMLElement, rightToLeft = false): HTMLElement | nu
   // Other scripts need their own fallback-font metrics, shaping and bidi model.
   if (!text.trim() || /^\s/.test(text) || (!rightToLeft && !/^[\u0020-\u024f]*$/u.test(text))) return null;
   if (Array.from(run.attributes).some(a => !['class', 'style', 'lang', 'dir', FONT_REQUEST_ATTRIBUTE,
+    ...(allowExact ? ['data-docx-exact-run'] : []),
     ...(fitted || run.getAttribute(FITTED_RUN) === '0' ? [FITTED_RUN] : [])].includes(a.name))) return null;
   const style = view.getComputedStyle(run);
   const parent = view.getComputedStyle(paragraph);
+  if (allowExact && run.hasAttribute('data-docx-exact-run') && style.position === 'relative' &&
+    ['top', 'bottom'].some(side => !['auto', '0px'].includes(style.getPropertyValue(side)))) return null;
   if (['Top', 'Right', 'Bottom', 'Left'].some(side =>
     parent.getPropertyValue(`padding-${side.toLowerCase()}`) !== '0px' ||
     parent.getPropertyValue(`border-${side.toLowerCase()}-width`) !== '0px')) return null;
@@ -109,7 +113,8 @@ function plainRun(paragraph: HTMLElement, rightToLeft = false): HTMLElement | nu
       style.textDecorationLine !== 'none' || !['normal', '0px'].includes(style.letterSpacing) ||
       !['normal', '100%'].includes(style.fontStretch) ||
       style.backgroundColor !== 'rgba(0, 0, 0, 0)' || style.textShadow !== 'none' ||
-      style.transform !== 'none' || style.opacity !== '1' || style.verticalAlign !== 'baseline') return null;
+      style.transform !== 'none' || style.opacity !== '1' ||
+      (style.verticalAlign !== 'baseline' && !(allowExact && run.hasAttribute('data-docx-exact-run') && style.verticalAlign === 'top'))) return null;
   return run;
 }
 
@@ -196,7 +201,7 @@ function contourRows(image: HTMLImageElement, paragraph: HTMLElement, run: HTMLE
 }
 
 /** Measure advances at a large em to avoid CSS-pixel font hinting in line positions. */
-function wordMeasure(run: HTMLElement): ((text: string) => number) | null {
+function wordMeasure(run: HTMLElement, exactHeight = 0): ((text: string) => number) | null {
   const style = run.ownerDocument.defaultView!.getComputedStyle(run);
   const context = run.ownerDocument.createElement('canvas').getContext('2d');
   if (!context) return null;
@@ -204,12 +209,19 @@ function wordMeasure(run: HTMLElement): ((text: string) => number) | null {
   context.fontKerning = style.fontKerning as CanvasFontKerning;
   if (!context.font.includes('10000px')) return null;
   const scale = Number.parseFloat(style.fontSize) / 10000;
+  // Owned block lines cannot use the inline-only exact-ink overflow path. Keep
+  // overlapping/tight exact text there until its ink has a fitted-line model.
+  if (exactHeight > 0) {
+    const metrics = context.measureText('Hg');
+    if (metrics.fontBoundingBoxAscent * scale > exactHeight * .8 ||
+      metrics.fontBoundingBoxDescent * scale > exactHeight * .2) return null;
+  }
   return text => context.measureText(text).width * scale;
 }
 
 /** Resolve plain line contents before pagination, using unrounded font advances. */
 function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustification: boolean,
-  checkpoint?: () => void): boolean {
+  checkpoint?: () => void, exact = false): boolean {
   const view = run.ownerDocument.defaultView!;
   const style = view.getComputedStyle(paragraph);
   const runStyle = view.getComputedStyle(run);
@@ -220,7 +232,7 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
       !/^-?[\d.]+px$/.test(style.textIndent) || style.wordBreak !== 'normal' ||
       (!['normal', '0px'].includes(runStyle.wordSpacing) &&
        !run.style.getPropertyValue('--docx-word-space-compression'))) return false;
-  const measure = wordMeasure(run);
+  const measure = wordMeasure(run, exact ? Number.parseFloat(runStyle.lineHeight) : 0);
   const width = paragraph.getBoundingClientRect().width;
   const indent = Number.parseFloat(style.textIndent) || 0;
   if (!measure || !(width > 0) || !(width - indent > 0)) return false;
@@ -292,6 +304,7 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
     const line = run.ownerDocument.createElement('span');
     line.setAttribute(FITTED_LINE, 'true');
     line.style.cssText = 'display:block;white-space:pre;word-spacing:0px;text-indent:0';
+    if (exact) line.style.textAlignLast = 'start';
     if (!index && indent) line.style.marginLeft = `${indent}px`;
     line.textContent = row.text;
     fragment.append(line);
@@ -307,8 +320,9 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
     range.setStart(lines[index].firstChild!, 0);
     range.setEnd(lines[index].firstChild!, rows[index].text.trimEnd().length);
     const excess = range.getBoundingClientRect().width - rows[index].available;
-    if (excess <= 0) continue;
-    if (!rows[index].spaces) {
+    const justify = exact && index < lines.length - 1;
+    if (excess <= 0 && !justify) continue;
+    if (!rows[index].spaces || (exact && excess / rows[index].spaces > space / 4 + 1 / 64)) {
       run.replaceChildren(run.ownerDocument.createTextNode(text));
       run.removeAttribute(FITTED_RUN);
       if (previousStyle === null) run.removeAttribute('style'); else run.setAttribute('style', previousStyle);
@@ -320,7 +334,8 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
   }
   // Carry the measured natural height with the owned line boxes, including
   // Range clones, so pagination need not resolve their font metrics again.
-  run.setAttribute(FITTED_RUN, String(Number.parseFloat(run.style.getPropertyValue('--docx-word-native-height'))));
+  run.setAttribute(FITTED_RUN, String(exact ? Number.parseFloat(runStyle.lineHeight) :
+    Number.parseFloat(run.style.getPropertyValue('--docx-word-native-height'))));
   if (modernJustification) run.style.setProperty('--docx-word-space-compression', `${-space / 4}px`);
   return true;
 }
@@ -372,7 +387,10 @@ function positionWords(paragraph: HTMLElement, run: HTMLElement,
 
 /** Run after fonts and natural line heights resolve, before pagination measures them. */
 export function prepareWordText(root: HTMLElement, checkpoint?: () => void): number {
-  if (!plainDocument(root)) return 0;
+  const mode = Number(root.closest('[data-docx-compatibility-mode]')?.getAttribute('data-docx-compatibility-mode') ??
+    root.ownerDocument.body.getAttribute('data-docx-compatibility-mode') ?? 14);
+  const precision = plainDocument(root);
+  if (!precision && (mode < 15 || !plainDocument(root, true))) return 0;
   const view = root.ownerDocument.defaultView;
   if (!view) return 0;
   // Pagination measures each section at this declared width. Line fitting must
@@ -384,26 +402,33 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
   let prepared = 0;
   for (const paragraph of Array.from(root.querySelectorAll<HTMLElement>(PARAGRAPHS))) {
     checkpoint?.();
-    const run = plainRun(paragraph);
+    const run = plainRun(paragraph, false, !precision);
     if (!run) continue;
     const style = view.getComputedStyle(paragraph);
     const multiple = Number(style.getPropertyValue('--docx-auto-line-spacing'));
+    const exact = !precision && Number.parseFloat(style.getPropertyValue('--docx-exact-line-height')) > 0;
     const runStyle = view.getComputedStyle(run);
     const kerning = runStyle.getPropertyValue('--docx-font-kerning').trim() || 'none';
     // A unit multiple leaves the run at `line-height: normal`; the export's unrounded
     // normal-line pass (line-metrics.ts) has already resolved it to a length.
     const height = Number.parseFloat(runStyle.lineHeight);
-    if (!(multiple > 0) || !(height > 0) || !['none', 'normal'].includes(kerning)) continue;
+    if ((!precision && !exact) || (!(multiple > 0) && !exact) || !(height > 0) || !['none', 'normal'].includes(kerning)) continue;
     // Keep the resolved font height's precision through the spacing multiple.
     // Rounding the natural height to twips and flooring the product shortens
     // every line; native Word controls show the loss accumulating down a page.
     const nativeHeight = height / multiple;
-    run.style.fontKerning = kerning;
-    const mode = Number(root.closest('[data-docx-compatibility-mode]')?.getAttribute('data-docx-compatibility-mode') ??
-      root.ownerDocument.body.getAttribute('data-docx-compatibility-mode') ?? 14);
     let column = false;
     for (let ancestor = paragraph.parentElement; ancestor && ancestor !== root; ancestor = ancestor.parentElement)
       if (Number(view.getComputedStyle(ancestor).columnCount) > 1) column = true;
+    if (exact && (style.textAlign !== 'justify' || !['auto', 'start', 'left'].includes(style.textAlignLast) ||
+      column || root.querySelector('img'))) continue;
+    // Exact lines keep their HTML baseline/ink handling and full declared pitch.
+    // Mixed auto/exact documents do not opt their auto paragraphs into vector paint.
+    if (exact) {
+      if (fitWordLines(paragraph, run, true, checkpoint, true)) prepared++;
+      continue;
+    }
+    run.style.fontKerning = kerning;
     run.style.lineHeight = `${height}px`;
     run.style.setProperty('--docx-word-native-height', `${nativeHeight}px`);
     if (!column && !root.querySelector('img'))
