@@ -236,12 +236,10 @@ public class DocxDiffSameSlotPairingTests
     }
 
     [Fact]
-    public void SimilarityPair_FunctionGradeOverlap_StillPairs_WhenGapHasNoContentCorrespondence()
+    public void SimilarityPair_RejectsFunctionGradeOverlapWithoutContentCorrespondence()
     {
-        // The counterpart law: in a gap where NO candidate pairing carries content-word evidence,
-        // whatever weak overlap exists is what Word's flat matcher pairs on (decoded: a lone shared
-        // "and" is retained inside an otherwise zero-overlap rewrite). The similarity pass falls
-        // back to its lexical-overlap grain there rather than dissolving the whole region.
+        // No candidate carries content-word correspondence: the only shared word is "This".
+        // Keep these complete rewrites in separate inserted and deleted blocks (#1535).
         var left = Doc(
             "head anchor",
             "This text will be indented soon.",
@@ -254,10 +252,8 @@ public class DocxDiffSameSlotPairingTests
             "tail anchor");
         var result = DocxDiff.Compare(left, right);
 
-        // The first sentence pair interleaves (shared "This" + separator skeleton clears the
-        // score); the second stays below the similarity floor and falls out as delete + insert.
         var shape = BodyShape(result);
-        Assert.Equal(new[] { "RET", "MIXED:-", "INS:INS", "DEL:DEL", "RET" }, shape);
+        Assert.Equal(new[] { "RET", "INS:INS", "INS:INS", "DEL:DEL", "DEL:DEL", "RET" }, shape);
         AssertRoundTrip(result, left, right);
     }
 
