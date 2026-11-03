@@ -216,6 +216,17 @@ public class DocxDiffHeaderFooterReferenceTests
         AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), false, "default");
     }
 
+    [Theory]
+    [InlineData("whole-paragraph-replace")]
+    [InlineData("body-delete-paragraph")]
+    public void ReplacementBoundaryGaps_PreserveBothStoryEndpoints(string scenario)
+    {
+        var (left, right) = DocxodusDiffParityFixtures.DocxDiffScenarioFixtures.Build(scenario);
+        var result = DocxCompare.Compare(left, right);
+        AssertStoryEndpoints(left, right, result, true, "default");
+        AssertStoryEndpoints(left, right, result, false, "default");
+    }
+
     private static void AssertStoryEndpoints(WmlDocument original, WmlDocument revised, WmlDocument result, bool header, string kind)
     {
         foreach (var (expected, resolved) in new[] {

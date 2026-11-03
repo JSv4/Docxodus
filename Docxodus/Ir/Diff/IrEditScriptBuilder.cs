@@ -225,6 +225,7 @@ internal static class IrEditScriptBuilder
             return null;
         var sections = new List<(int, int)>();
         int currentLeft = -1, currentRight = -1, seenLeft = 0, seenRight = 0;
+        bool insertedBoundary = false, deletedBoundary = false;
         foreach (var entry in alignment.Entries)
         {
             bool hasLeft = leftSections.TryGetValue(entry.Left?.Anchor.ToString() ?? "", out var l);
@@ -239,9 +240,12 @@ internal static class IrEditScriptBuilder
             }
             if (!l.Ends && !r.Ends)
                 continue;
-            // Moving a boundary or changing one on a retained paragraph needs structural history,
-            // not the inserted/deleted carrier projection implemented here.
-            if (entry.Kind is IrAlignmentKind.Moved or IrAlignmentKind.MovedModified ||
+            insertedBoundary |= entry.Kind == IrAlignmentKind.Inserted;
+            deletedBoundary |= entry.Kind == IrAlignmentKind.Deleted;
+            // Replacement gaps reorder insertions before deletions during rendering. Retain the
+            // existing grid for those, moved boundaries, and changes on a retained carrier.
+            if (insertedBoundary && deletedBoundary ||
+                entry.Kind is IrAlignmentKind.Moved or IrAlignmentKind.MovedModified ||
                 hasLeft && hasRight && l.Ends != r.Ends)
                 return null;
             sections.Add((currentLeft, currentRight));
