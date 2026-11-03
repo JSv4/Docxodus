@@ -806,7 +806,9 @@ internal static class IrBlockAligner
                     // having the same separator skeleton (especially numbered lists).  Weak
                     // in-gap pairing needs actual lexical evidence; the dedicated 1×1 residue
                     // rule below still handles unambiguous labels and atomic-only paragraphs.
-                    if (!similarity.HasSharedContentWordIgnoringCase(leftParagraph, rightParagraph))
+                    // MatchKey evidence honors culture; raw text also admits capitalization edits.
+                    if (SharedContentWordCount(leftParagraph, rightParagraph, similarity) == 0 &&
+                        !similarity.HasSharedContentWordIgnoringCase(leftParagraph, rightParagraph))
                         continue;
                 }
                 double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
