@@ -394,6 +394,12 @@ internal static class IrCrossParagraphSegmenter
         CrossWindow(prevL, totalL, prevR, totalR);
         if (bail)
             return null;
+        // With no established paragraph pair, only real content can justify streaming across
+        // paragraph boundaries. A complete rewrite sharing just articles stays in coherent blocks.
+        if (pairs.Count == 0 && !all.Exists(match => flatL[match.Lf].Kind == IrDiffTokenKind.Word &&
+                IrBlockSimilarity.ContainsLetter(flatL[match.Lf].Text) &&
+                !IrBlockAligner.IsFunctionWordKey(flatL[match.Lf].MatchKey)))
+            return null;
         // `all` is sorted by left AND right flat index: pass-1 anchors are monotone, and every pass-2
         // window is a disjoint interval on both sides between two consecutive pass-1 anchors.
 

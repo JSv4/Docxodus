@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Keep complete paragraph rewrites in coherent deleted and inserted blocks when their only shared words are articles or list numbers, including linked articles (#1535).
+
 - The published render-report v2 schema validates complete and failed v2 reports and rejects
   v1 identities; both branches now share the declared v2 identity (#1538).
 

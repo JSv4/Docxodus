@@ -26,6 +26,74 @@ namespace Docxodus.Tests.Ir.Diff;
 public class DocxDiffCrossParagraphTests
 {
     [Theory]
+    [InlineData("distinct", false)]
+    [InlineData("distinct", true)]
+    [InlineData("articles", false)]
+    [InlineData("articles", true)]
+    [InlineData("numbered", false)]
+    [InlineData("numbered", true)]
+    [InlineData("linked", false)]
+    [InlineData("linked", true)]
+    public void CompleteRewrite_KeepsInsertedAndDeletedBlocksCoherent(string shape, bool reverse)
+    {
+        bool articles = shape != "distinct";
+        var before = articles
+            ? new[] { "A walnut lever lifts the brass hatch.", "The scarlet pouch rests beside a birch shelf.",
+                "Two slate markers indicate the inlet.", "A narrow hook steadies the woven basket." }
+            : new[] { "Walnut levers lift brass hatches.", "Scarlet pouches rest beside birch shelves.",
+                "Slate markers indicate narrow inlets.", "Hooks steady woven baskets." };
+        var after = articles
+            ? new[] { "The cobalt pennant crosses a broad meadow.", "A silent carriage circles the frozen pond.",
+                "The silver key unlocks a round cabinet.", "Three amber beads adorn the linen collar." }
+            : new[] { "Cobalt pennants cross broad meadows.", "Silent carriages circle frozen ponds.",
+                "Silver keys unlock round cabinets.", "Amber beads adorn linen collars." };
+        if (reverse)
+            (before, after) = (after, before);
+        WmlDocument Make(string[] texts) => IrTestDocuments.FromBodyXml(string.Concat(texts.Select((text, i) =>
+        {
+            if (shape == "numbered")
+                text = $"{i + 1}. {text}";
+            var runs = System.Text.RegularExpressions.Regex.Split(text, @"(\b(?:A|a|The|the)\b)")
+                .Where(part => part.Length > 0).Select(part =>
+                {
+                    var run = new XElement(W.r, new XElement(W.t,
+                        new XAttribute(XNamespace.Xml + "space", "preserve"), part));
+                    return shape == "linked" && part is "A" or "a" or "The" or "the"
+                        ? new XElement(W.hyperlink, new XAttribute(W.anchor, "shared"), run) : run;
+                });
+            return new XElement(W.p, runs).ToString(SaveOptions.DisableFormatting);
+        })));
+        var left = Make(before);
+        var right = Make(after);
+        var result = DocxCompare.Compare(left, right);
+        Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(result)));
+        Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionProcessor.AcceptRevisions(result)));
+
+        var paragraphs = XDocument.Parse(Docs.MainPartXml(result)).Root!.Element(W.body)!
+            .Elements(W.p).ToArray();
+        var sides = paragraphs.SelectMany(p => p.Descendants())
+            .Where(e => e.Name == W.delText || e.Name == W.t && e.Ancestors(W.ins).Any())
+            .Where(e => !string.IsNullOrWhiteSpace(e.Value))
+            .Select(e => e.Name == W.delText).ToArray();
+        // Exactly two text-side runs: one boundary paragraph may contain the end of one
+        // block and start of the other, but must not interleave their individual words.
+        Assert.Equal(1, sides.Zip(sides.Skip(1)).Count(pair => pair.First != pair.Second));
+    }
+
+    [Fact]
+    public void CapitalizationAndSpellingEdit_RetainsSharedFunctionWord()
+    {
+        var left = Docs.Para("designs that compleme");
+        var right = Docs.Para("Designs that complement.");
+        var result = DocxCompare.Compare(left, right);
+        var xml = XDocument.Parse(Docs.MainPartXml(result));
+        Assert.Contains("that", string.Concat(xml.Descendants(W.t)
+            .Where(t => !t.Ancestors(W.ins).Any()).Select(t => t.Value)));
+        Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(result)));
+        Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionProcessor.AcceptRevisions(result)));
+    }
+
+    [Theory]
     [InlineData(false, false, false, false)]
     [InlineData(false, false, true, false)]
     [InlineData(false, true, false, false)]
