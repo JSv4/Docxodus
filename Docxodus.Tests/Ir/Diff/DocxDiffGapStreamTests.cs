@@ -94,14 +94,16 @@ public class DocxDiffGapStreamTests
     /// the ¶INS-terminated paragraph, and the story-final pilcrow pairs — four body paragraphs, the
     /// shape no per-paragraph or gap-grammar model reproduces.
     /// </summary>
-    [Fact]
-    public void GapStream_zero_pair_story_final_region_streams_shared_words()
+    [Theory]
+    [InlineData("vexed")]
+    [InlineData("\U0002F800")]
+    public void GapStream_zero_pair_story_final_region_streams_shared_words(string sharedWord)
     {
         var left = Docs.Para("HEAD",
             "gargle mumble tumble quince",
-            "vexed zonk is trimmed in cyan boxes");
+            $"{sharedWord} zonk is trimmed in cyan boxes");
         var right = Docs.Para("HEAD",
-            "vexed cursor shows granite marble with cobalt fizz styles",
+            $"{sharedWord} cursor shows granite marble with cobalt fizz styles",
             "granite fizz is standard for formal quartz sessions");
 
         var script = BuildScript(left, right);
@@ -113,7 +115,7 @@ public class DocxDiffGapStreamTests
         var body = Body(RenderMarkup(left, right));
         var ns = (XNamespace)IrTestDocuments.W;
         Assert.Equal(4, body.Elements(ns + "p").Count()); // HEAD + 3 stream paragraphs
-        AssertRetainedOnce(body, "vexed", "zero-pair region");
+        AssertRetainedOnce(body, sharedWord, "zero-pair region");
         var (insMarks, delMarks) = PilcrowMarks(body);
         Assert.Equal(1, insMarks);
         Assert.Equal(1, delMarks);

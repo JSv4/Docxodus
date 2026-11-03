@@ -49,8 +49,10 @@ In a region containing established block pairs, two unpaired paragraphs cannot a
 stream correspondence from English function words alone (#1526). Such matches previously
 reintroduced evidence the block aligner had rejected and split a replaced paragraph's deleted
 suffix into a separate display paragraph. The segmenter excludes those anchors before pairing
-paragraph boundaries. Content-word matches, flow involving an established pair, and regions
-without block pairs retain their existing rules. This is an arrangement fix verified through
+paragraph boundaries. A region without established pairs also needs a matched lexical content word (#1535);
+articles and numeric ordinals alone keep complete rewrites in separate blocks. Link metadata
+does not change a word’s function-word classification. Content-word matches and flow involving
+an established pair retain their existing rules. This is an arrangement fix verified through
 exact accept/reject reconstruction; no new Word comparison result is claimed.
 
 This point was open when the note was first written; #699 decoded it against the reference compare

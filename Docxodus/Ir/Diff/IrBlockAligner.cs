@@ -551,10 +551,8 @@ internal static class IrBlockAligner
         // paragraph Word would have paired with its same-slot counterpart — without it, a
         // greedy tail pair or an added-text merge eats the k-th base paragraph and every later
         // pairing lands one slot displaced from Word's assignment.
-        int freeLeftBeforeSameSlot = freeLeft.Count;
         SameSlotPair(leftBlocks, rightBlocks, leftFrom, leftTo,
             freeLeft, freeRight, leftKind, rightKind, leftMatch, rightMatch, similarity);
-        bool gapHasContentEvidencedPair = freeLeft.Count != freeLeftBeforeSameSlot;
 
         // Similarity pairing of the remainder → Modified; leftovers → Deleted / Inserted.
         //
@@ -566,8 +564,7 @@ internal static class IrBlockAligner
         // bound the in-order refinement documents — and the per-call tokenization cache means every block
         // in the gap is tokenized at most once regardless of how many candidate pairs reference it.
         SimilarityPair(leftBlocks, rightBlocks, freeLeft, freeRight, leftKind, rightKind,
-            leftMatch, rightMatch, similarity, settings.BlockSimilarityThreshold,
-            gapHasContentEvidencedPair);
+            leftMatch, rightMatch, similarity, settings.BlockSimilarityThreshold);
 
         // Collect what the similarity pass left unpaired (still in ascending index order).
         var leftoverLeft = new List<int>();
@@ -757,22 +754,15 @@ internal static class IrBlockAligner
     /// consume both, repeat until no qualifying pair remains. Leaves the unpaired blocks for the caller to
     /// classify Deleted/Inserted. Deterministic: the pick is a pure function of the score grid + index
     /// tie-break, and scoring is cached so the grid is cheap to rescan each round.
-    /// <para>Evidence discipline (decoded from Word's compare output): a paragraph pair needs at
-    /// least one shared NON-FUNCTION content word — two same-length sentences sharing only a
-    /// scaffolding word ("This …" vs "This …") clear the separator-inflated score, yet Word treats
-    /// them as a full rewrite beside any real content-word pairing. But in a gap where NO
-    /// correspondence carries content evidence at all (neither the same-slot pass nor this pass
-    /// found one), whatever weak lexical overlap exists is what Word's flat matcher pairs on (a
-    /// lone shared "and" is retained inside an otherwise zero-overlap rewrite), so the pass reruns
-    /// at its historical any-shared-word grain.</para>
+    /// <para>A fuzzy paragraph pair needs a shared non-function content word. Articles and
+    /// punctuation alone must not scatter complete replacement blocks across unrelated text.</para>
     /// </summary>
     private static void SimilarityPair(
         IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
         List<int> freeLeft, List<int> freeRight,
         IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
         int[] leftMatch, int[] rightMatch,
-        IrBlockSimilarity similarity, double threshold,
-        bool gapHasContentEvidencedPair)
+        IrBlockSimilarity similarity, double threshold)
     {
         // Locality prior (calibrated against Word's compare output): Word's stream diff
         // anchors an insertion next to its matched neighbors and deletes distant old content
@@ -791,65 +781,53 @@ internal static class IrBlockAligner
         // then smallest right), and taking each pair whose two blocks are both still free. Rescanning the whole
         // grid once per pair formed was quadratic in the pairs times the grid, minutes for two long unrelated
         // documents (issue #863).
-        int GreedyRounds(bool requireContentWord)
+        var candidates = new List<(double Effective, int Left, int Right)>();
+        foreach (int li in freeLeft)
         {
-            var candidates = new List<(double Effective, int Left, int Right)>();
-            foreach (int li in freeLeft)
+            if (leftMatch[li] != -1)
+                continue;
+            foreach (int rj in freeRight)
             {
-                if (leftMatch[li] != -1)
+                if (rightMatch[rj] != -1)
                     continue;
-                foreach (int rj in freeRight)
+                // Empty-vs-empty paragraphs score a vacuous 1.0 ("identical content") that
+                // defeats the locality prior at any displacement — an empty freed elsewhere in
+                // the gap would relocate here as a Modified pair. Word never fuzzy-pairs
+                // empties; they belong to the in-order passes (which pair them monotonically)
+                // or fall out as plain delete/insert.
+                if (leftBlocks[li] is IrParagraph leftParagraph && rightBlocks[rj] is IrParagraph rightParagraph)
                 {
-                    if (rightMatch[rj] != -1)
+                    if (similarity.WordCount(leftParagraph) == 0 && similarity.WordCount(rightParagraph) == 0)
                         continue;
-                    // Empty-vs-empty paragraphs score a vacuous 1.0 ("identical content") that
-                    // defeats the locality prior at any displacement — an empty freed elsewhere in
-                    // the gap would relocate here as a Modified pair. Word never fuzzy-pairs
-                    // empties; they belong to the in-order passes (which pair them monotonically)
-                    // or fall out as plain delete/insert.
-                    if (leftBlocks[li] is IrParagraph leftParagraph && rightBlocks[rj] is IrParagraph rightParagraph)
-                    {
-                        if (similarity.WordCount(leftParagraph) == 0 && similarity.WordCount(rightParagraph) == 0)
-                            continue;
 
-                        // The general score includes spaces and punctuation because it deliberately
-                        // shares the downstream token model.  At the lowered similarity threshold,
-                        // two unrelated prose paragraphs can therefore clear the score merely by
-                        // having the same separator skeleton (especially numbered lists).  Weak
-                        // in-gap pairing needs actual lexical evidence; the dedicated 1×1 residue
-                        // rule below still handles unambiguous labels and atomic-only paragraphs.
-                        if (requireContentWord
-                            ? SharedContentWordCount(leftParagraph, rightParagraph, similarity) == 0
-                            : similarity.PairingWordOverlap(leftParagraph, rightParagraph).SharedWords == 0)
-                            continue;
-                    }
-                    double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
-                    double displacement = Math.Abs(positions.Left[li] - positions.Right[rj]);
-                    if (score < threshold + PairLocalityPenalty * displacement)
+                    // The general score includes spaces and punctuation because it deliberately
+                    // shares the downstream token model.  At the lowered similarity threshold,
+                    // two unrelated prose paragraphs can therefore clear the score merely by
+                    // having the same separator skeleton (especially numbered lists).  Weak
+                    // in-gap pairing needs actual lexical evidence; the dedicated 1×1 residue
+                    // rule below still handles unambiguous labels and atomic-only paragraphs.
+                    if (!similarity.HasSharedContentWordIgnoringCase(leftParagraph, rightParagraph))
                         continue;
-                    candidates.Add((score - PairLocalityPenalty * displacement, li, rj));
                 }
-            }
-
-            int formed = 0;
-            // OrderByDescending is stable, so equal scores keep scan order: the first seen wins a tie, exactly
-            // as the strictly-greater argmax did (freeLeft / freeRight are in ascending index order).
-            foreach (var (_, bestLeft, bestRight) in candidates.OrderByDescending(c => c.Effective))
-            {
-                if (leftMatch[bestLeft] != -1 || rightMatch[bestRight] != -1)
+                double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
+                double displacement = Math.Abs(positions.Left[li] - positions.Right[rj]);
+                if (score < threshold + PairLocalityPenalty * displacement)
                     continue;
-                leftKind[bestLeft] = IrAlignmentKind.Modified;
-                rightKind[bestRight] = IrAlignmentKind.Modified;
-                leftMatch[bestLeft] = bestRight;
-                rightMatch[bestRight] = bestLeft;
-                formed++;
+                candidates.Add((score - PairLocalityPenalty * displacement, li, rj));
             }
-            return formed;
         }
 
-        int contentPairs = GreedyRounds(requireContentWord: true);
-        if (contentPairs == 0 && !gapHasContentEvidencedPair)
-            GreedyRounds(requireContentWord: false);
+        // OrderByDescending is stable, so equal scores keep scan order: the first seen wins a tie, exactly
+        // as the strictly-greater argmax did (freeLeft / freeRight are in ascending index order).
+        foreach (var (_, bestLeft, bestRight) in candidates.OrderByDescending(c => c.Effective))
+        {
+            if (leftMatch[bestLeft] != -1 || rightMatch[bestRight] != -1)
+                continue;
+            leftKind[bestLeft] = IrAlignmentKind.Modified;
+            rightKind[bestRight] = IrAlignmentKind.Modified;
+            leftMatch[bestLeft] = bestRight;
+            rightMatch[bestRight] = bestLeft;
+        }
     }
 
     private static bool AnyWrapper(List<int> indexes, IReadOnlyList<IrBlock> blocks)
@@ -1100,7 +1078,7 @@ internal static class IrBlockAligner
                 int count = 0;
                 foreach (var key in similarity.PairingWordKeys((IrParagraph)blocks[index]).Keys)
                 {
-                    if (FunctionWords.Contains(key))
+                    if (IsFunctionWordKey(key))
                         continue;
                     count++;
                     if (!_postings.TryGetValue(key, out var list))
@@ -1129,7 +1107,7 @@ internal static class IrBlockAligner
             var postings = new List<List<int>>();
             foreach (var key in similarity.PairingWordKeys(target).Keys)
             {
-                if (FunctionWords.Contains(key))
+                if (IsFunctionWordKey(key))
                     continue;
                 words++;
                 if (_postings.TryGetValue(key, out var list))
@@ -1167,7 +1145,7 @@ internal static class IrBlockAligner
                 return false;
             var postings = new List<List<int>>();
             foreach (var key in similarity.PairingWordKeys(target).Keys)
-                if (!FunctionWords.Contains(key) && _postings.TryGetValue(key, out var list))
+                if (!IsFunctionWordKey(key) && _postings.TryGetValue(key, out var list))
                     postings.Add(list);
             int probe = postings.Count - evidence + 1;
             if (probe <= 0)
@@ -1207,7 +1185,7 @@ internal static class IrBlockAligner
         var (small, large) = a.Count <= b.Count ? (a, b) : (b, a);
         int shared = 0;
         foreach (var kv in small)
-            if (large.ContainsKey(kv.Key) && !FunctionWords.Contains(kv.Key))
+            if (large.ContainsKey(kv.Key) && !IsFunctionWordKey(kv.Key))
                 shared++;
         return shared;
     }
@@ -1398,7 +1376,7 @@ internal static class IrBlockAligner
             if (njMatched[i])
                 continue;
             string key = njWords[i].Key;
-            if (!FunctionWords.Contains(key) && bk1Free.Contains(key))
+            if (!IsFunctionWordKey(key) && bk1Free.Contains(key))
                 return true;
         }
         return false;
@@ -1576,7 +1554,7 @@ internal static class IrBlockAligner
             var b = similarity.PairingWordKeys(rp);
             var (small, large) = a.Count <= b.Count ? (a, b) : (b, a);
             foreach (var kv in small)
-                if (large.ContainsKey(kv.Key) && !FunctionWords.Contains(kv.Key))
+                if (large.ContainsKey(kv.Key) && !IsFunctionWordKey(kv.Key))
                     return true;
             return false;
         }
@@ -1751,7 +1729,12 @@ internal static class IrBlockAligner
     /// </summary>
     /// <summary>Closed-class function-word test shared with the cross-paragraph segmenter's
     /// count-equal construct gate (a lone same-ordinal function-word match never forms one).</summary>
-    internal static bool IsFunctionWordKey(string key) => FunctionWords.Contains(key);
+    internal static bool IsFunctionWordKey(string key)
+    {
+        // Link/interruption metadata is sentinel-framed and is not part of the visible word.
+        int suffix = key.IndexOf('\u0001');
+        return FunctionWords.Contains(suffix < 0 ? key : key[..suffix]);
+    }
 
     private static readonly HashSet<string> FunctionWords = new(StringComparer.OrdinalIgnoreCase)
     {

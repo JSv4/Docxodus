@@ -14,11 +14,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Match header and footer stories through retained body sections when whole sections are inserted or removed, preserving empty stories and linked continuations (#1534).
+- Keep complete paragraph rewrites in coherent deleted and inserted blocks when their only shared words are articles or list numbers, including linked articles (#1535).
 
 - **Comparison preserves changed document defaults beside fields** (#1533). Simple, complex,
   and paragraph-spanning fields no longer suppress revised paragraph spacing and run formatting;
   accepting and rejecting changes retain each input's effective formatting and field structure.
+
+- Match header and footer stories through retained body sections when whole sections are inserted or removed, preserving empty stories and linked continuations (#1534).
 
 - The published render-report v2 schema validates complete and failed v2 reports and rejects
   v1 identities; both branches now share the declared v2 identity (#1538).
