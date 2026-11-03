@@ -6007,3 +6007,30 @@ a midpoint that reflows into a one-line tail while retaining valid word boundari
 when the source text wraps at hyphens. Inline pictures do not
 disable text-line widow control; an oversized picture paragraph can relax an
 impossible minimum only after trying a legal split on a fresh page.
+
+### Exact line spacing and bounded justified spaces (#1524)
+
+The authored sentence “Soft amber lamps guide seven quiet boats toward shore.” has a natural
+advance slightly above a 298pt column at 12pt. The minimal paragraph uses
+`<w:jc w:val="both"/><w:spacing w:line="300" w:lineRule="exact"/>`; the modern variant adds
+`<w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/>`.
+
+| Renderer / policy | First line | Baseline pitch |
+| --- | --- | --- |
+| Word for the web, omitted mode (14) | Ends with “toward” | 15pt |
+| Word for the web, mode 15 | Ends with “shore.” | 15pt |
+| LibreOffice 25.8.7.3, modes 14 / 15 | Matches the corresponding Word line | 15pt |
+| Docxodus before #1524, either mode | Ends with “toward” | 15pt |
+| Docxodus after #1524 | Matches the mode-specific Word line | 15pt |
+
+Word substituted ArialMT for the original Liberation Sans request. Four separately authored
+Arial benchmark captures confirm both modes with justified and left alignment; only modern
+justification fits “shore.” on the first line. These are line-choice observations, not font-outline
+or raster-parity claims. The original input and native output hashes are retained in
+`TestFiles/ExactJustificationFlow/word-observations.json`.
+
+The existing selector in `npm/src/word-text.ts` already applies the bounded-space policy to
+automatic spacing. Exact paragraphs had been excluded with other contexts lacking a precision
+paint model. They now reuse that selector with per-line HTML space advances, retaining their
+exact baseline and full pitch. Tight ink, rich runs and other unsupported flow remain on their
+existing path; no document-wide negative spacing is applied.

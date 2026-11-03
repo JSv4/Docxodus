@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "product": "Signed-in Microsoft Word for the web",
+  "sourceMethod": "Original authored OOXML exported through Word UI before implementation. The second input changes only compatibilityMode to 15.",
+  "qualification": "Word substituted ArialMT for Liberation Sans; line choices and 15pt baseline pitch are the observations, not identical font outlines or raster parity.",
+  "cases": [
+    {
+      "compatibilityMode": 14,
+      "file": "exact-justification-mode-14.docx",
+      "inputSha256": "48ba23ac858027b5aad5996a1c736edc819f929bda468f42a581ed63d464631a",
+      "wordPdfSha256": "1842390857da56fa00672f03b04a0655f703b8211bb2d506449a0add856eb784",
+      "wordDocxSha256": "48ba23ac858027b5aad5996a1c736edc819f929bda468f42a581ed63d464631a",
+      "nativePageCount": 1,
+      "nativeLines": [
+        "Soft amber lamps guide seven quiet boats toward",
+        "shore. The dock stays open until dawn."
+      ]
+    },
+    {
+      "compatibilityMode": 15,
+      "file": "exact-justification-mode-15.docx",
+      "inputSha256": "da8cdc3fc79613577e0497b598af88cf9b721485faec06cc7b05c13b5d104e9a",
+      "wordPdfSha256": "97a8fe0b452817e888a4327b26e3b93507f5444b8f6c09fc0ed618e361010124",
+      "wordDocxSha256": "da8cdc3fc79613577e0497b598af88cf9b721485faec06cc7b05c13b5d104e9a",
+      "nativePageCount": 1,
+      "nativeLines": [
+        "Soft amber lamps guide seven quiet boats toward shore.",
+        "The dock stays open until dawn."
+      ]
+    }
+  ]
+}

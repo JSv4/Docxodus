@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Exact-spaced, uniform justified paragraphs use bounded ordinary-space compression before pagination in compatibility mode 15 or later. Legacy modes and unsupported inline flow retain their existing line choices (#1524).
+
 - Export reports identify the actual Chromium font faces used for final text, including mixed-script fallback, while retaining missing-font warnings and explicit limits on font-file verification (#1525).
 
 - Independent export visibility for formatting revisions, insertions/deletions, and comments,
