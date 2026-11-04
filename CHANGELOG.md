@@ -16,6 +16,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Deliverable verification now identifies LibreOffice's known import failure for tracked anchored DrawingML header groups with text boxes, reports the affected part and location, and recommends preserving the DOCX and using a verified renderer (#1045).
+
 - Split long tracked paragraphs across pages while preserving revision metadata and change bars.
   A leading non-wrapping drawing with fixed anchor coordinates stays whole on the first fragment (#1521).
 
