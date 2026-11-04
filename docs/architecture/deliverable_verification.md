@@ -84,6 +84,12 @@ that preflight read safely; SDK exceptions become structured unavailable-evidenc
   legacy form fields, and vector media) are warnings. Actual missing fonts, font substitutions,
   unsupported content, and renderer warnings must be supplied by the renderer that observed them;
   verification does not read process-global font-warning state.
+  `render.libreoffice_tracked_header_group` identifies the known LibreOffice import risk of a
+  revision-wrapped anchored DrawingML group containing text boxes in a header. Inspect the actual
+  comparison output with `DeliverableVerifier.VerifyDeliverable(redline)`, or the corresponding
+  session/transport operation, before sending it to LibreOffice. The finding gives the part,
+  XPath and preservation guidance; it does not claim a render was attempted. Standard reports
+  the warning and Strict blocks on it. See [the measured controls](../ooxml_corner_cases.md#libreoffice-fails-on-tracked-anchored-header-groups-with-text-boxes).
 - **Semantic and package deltas:** `SemanticDiff` supplies modeled changes. A separate manifest
   comparator retains every changed part and relationship, so an unmodeled change cannot be hidden
   merely because another change in the same XML part was modeled.

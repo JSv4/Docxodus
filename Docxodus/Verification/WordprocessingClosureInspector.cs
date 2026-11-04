@@ -865,6 +865,53 @@ internal static class WordprocessingClosureInspector
                 $"Vector media part '{entry.Uri}' needs renderer-specific verification.", entry.Uri,
                 "Render the document with the delivery renderer and attach its diagnostics.",
                 new ChangeLocation { EntryUri = entry.Uri }, subject: entry.Uri);
+
+        // Inspect the actual delivered header, including revisions created from clean inputs.
+        // Keep every part of the trigger in the same drawing; independent drawings or
+        // AlternateContent branches must not contribute separate pieces of a false match.
+        foreach (var part in parts.Where(part => IsElement(part.Xml!.Root!, "hdr")))
+        foreach (var anchor in part.Xml!.Descendants().Where(element =>
+                     element.Name.LocalName == "anchor" && element.Name.NamespaceName is
+                         "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" or
+                         "http://purl.oclc.org/ooxml/drawingml/wordprocessingDrawing"))
+        {
+            if (sink.Stopped || !sink.ChargeStep()) return;
+            if (!anchor.Ancestors().TakeWhile(_ => sink.ChargeStep()).Any(element => IsWord(element)
+                    && element.Name.LocalName is "ins" or "del")) continue;
+            XNamespace drawing = anchor.Name.Namespace == WP.wp ? A.a
+                : "http://purl.oclc.org/ooxml/drawingml/main";
+            var groups = DrawingPayloadChildren(anchor, sink).Where(element => element.Name == drawing + "graphic")
+                .SelectMany(element => DrawingPayloadChildren(element, sink))
+                .Where(element => element.Name == drawing + "graphicData")
+                .SelectMany(element => DrawingPayloadChildren(element, sink))
+                .Where(element => element.Name == WPG.wpg + "wgp");
+            if (!groups.Any(group => group.Descendants().TakeWhile(_ => sink.ChargeStep())
+                    .Any(element => element.Name == WPS.txbx))) continue;
+            AddElementFinding(sink, part, anchor, "render.libreoffice_tracked_header_group",
+                VerificationFindingSeverity.Warning,
+                "This header contains a tracked anchored DrawingML group with text boxes. "
+                + "LibreOffice has a known import failure for this shape; compatibility branches "
+                + "are at risk when the renderer selects this drawing.",
+                "Preserve the original DOCX and its revisions. Use another renderer verified "
+                + "for this document; do not flatten revisions to obtain a PDF.",
+                "libreoffice", DeliverableFindingCategory.Render);
+        }
+    }
+
+    private static IEnumerable<XElement> DrawingPayloadChildren(XElement parent, FindingSink sink)
+    {
+        var pending = new Stack<XElement>(parent.Elements());
+        while (pending.TryPop(out var element))
+        {
+            if (!sink.ChargeStep()) yield break;
+            if (element.Name.Namespace == MC.mc
+                && element.Name.LocalName is "AlternateContent" or "Choice" or "Fallback")
+            {
+                foreach (var child in element.Elements()) pending.Push(child);
+            }
+            else
+                yield return element;
+        }
     }
 
     private sealed record FieldState(XElement Begin, bool Separated, bool HasInstruction);

@@ -3588,7 +3588,7 @@ of the authored exact-spacing exception.
 
 ### LibreOffice fails on tracked anchored header groups with text boxes
 
-**Status:** Renderer limitation reproduced; explicit failure handling added (#1045).
+**Status:** Renderer limitation persists; shipped deliverable verification reports the specific risk (#1045).
 **Measured:** 2026-10-10, Linux, LibreOffice 24.2.7.2 and 25.8.7.3.
 
 The smallest failing combination in this investigation is a `w:ins` or `w:del` around a run
@@ -3657,6 +3657,26 @@ a supported import path; it does not establish a general lossless conversion of 
 group. No equivalent safe revision encoding was identified by these experiments. The core
 comparison output therefore retains the native DrawingML and its revision wrappers.
 
+The harness added in #1048 did not protect shipped consumers: it only recorded the conversion
+failure, and v15 output still triggers it. Inspect the **actual output**, since a comparison of
+two clean inputs can introduce the failing revision wrapper:
+
+```csharp
+var redline = DocxCompare.Compare(original, revised);
+var report = DeliverableVerifier.VerifyDeliverable(redline); // Docxodus.Verification
+var risks = report.Findings.Where(f => f.Code == "render.libreoffice_tracked_header_group");
+```
+
+The finding identifies the affected header part and XPath and recommends preserving the original
+DOCX and its revisions while selecting another renderer verified for that document. It is a
+static compatibility warning, not a claim that a conversion was attempted or that the DOCX is
+invalid. Standard verification reports it; Strict verification blocks delivery on the warning.
+The same finding travels through session verification, the shared verification JSON, and delivery
+validation reports. Compatibility branches are reported conditionally on the renderer selecting
+the implicated drawing. The detector never combines geometry or text boxes from different
+drawings or branches. Direct invocation of LibreOffice can still fail; verification does not
+rewrite the native package or replace the renderer.
+
 `tools/diffharness/lo/lo_render.py` provides explicit conversion handling for Linux harness callers:
 
 - It converts a byte copy using an isolated LibreOffice profile and temporary output directory.
@@ -3690,9 +3710,11 @@ changed measured behavior exit 1. An unmeasured version exits 2 unless a control
 observations remain available for investigation. The older version was the official 24.2.7.2
 Linux archive, extracted locally without changing the system installation.
 
-Relevant core paths are `DocxCompare.Compare`, `IrMarkupRenderer`'s header markup and
-`RevisionProcessor.AcceptRevisions` / `RejectRevisions`. This change adds harness handling and
-interoperability evidence without changing those core paths. Unit tests cover failure reporting,
+Relevant core paths are `DocxCompare.Compare`, `IrMarkupRenderer`'s header markup,
+`RevisionProcessor.AcceptRevisions` / `RejectRevisions`, and
+`WordprocessingClosureInspector.InspectStaticRenderRisks`. The detector leaves comparison and
+resolution unchanged. Unit tests cover public verification of comparison output, native drawing
+content and geometry after accept/reject, and controls. Harness tests cover failure reporting,
 artifact freshness, process cleanup and source preservation, and run in CI without requiring a
 LibreOffice installation.
 
