@@ -47,5 +47,11 @@ and retry only the missing package from the release tag. Re-running the entire
 npm job will encounter the existing version. An already validated tarball can
 be submitted with `npm stage publish ./package.tgz --access public --tag latest`.
 
+When only `@docxodus/export` is missing, approve `docxodus` first, then dispatch
+the Publish workflow from `main` with the release version and `export_only`
+enabled. The retry builds from the original `vX.Y.Z` tag and resolves
+`docxodus@X.Y.Z` from the public registry, so it fails until that version is
+public. It stages only the companion, and its stage ID is in the run summary.
+
 See npm's [staged publishing guide](https://docs.npmjs.com/staged-publishing/)
 and [trusted publisher configuration](https://docs.npmjs.com/trusted-publishers/).
