@@ -69,6 +69,158 @@ public class DocxDiffRowAndOneSidedBookmarkTests
     }
 
     [Theory]
+    [InlineData(false, "none")]
+    [InlineData(true, "none")]
+    [InlineData(false, "unchanged")]
+    [InlineData(true, "unchanged")]
+    [InlineData(false, "edited")]
+    [InlineData(true, "edited")]
+    public void Consolidate_OneSidedInlineBookmarkDeltaBesideIndependentEdits(bool addition, string math)
+    {
+        WmlDocument Input(bool mark, string prefix, string tail, string equation = "n") =>
+            IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>" + prefix + "</w:t></w:r>"
+                + (mark ? "<w:bookmarkStart w:id=\"5\" w:name=\"tab\"/>" : "")
+                + "<w:r><w:tab/></w:r>" + (mark ? "<w:bookmarkEnd w:id=\"5\"/>" : "")
+                + (math == "none" ? "" : "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\">"
+                    + "<m:r><m:t>" + equation + "</m:t></m:r></m:oMath>")
+                + "<w:r><w:t xml:space=\"preserve\"> shared tail " + tail + "</w:t></w:r></w:p>");
+        var original = Input(!addition, "III.", "original");
+        var alice = Input(addition, math == "edited" ? "III." : "IIIA.", "original", math == "edited" ? "k" : "n");
+        var bob = Input(!addition, "III.", "updated");
+        var expected = Input(addition, math == "edited" ? "III." : "IIIA.", "updated", math == "edited" ? "k" : "n");
+        foreach (bool reversed in new[] { false, true })
+        {
+            var reviewers = new[]
+            {
+                new DocxDiffReviewer { Author = "Alice", Document = alice },
+                new DocxDiffReviewer { Author = "Bob", Document = bob },
+            };
+            var redline = DocxDiff.Consolidate(original, reversed ? reviewers.Reverse().ToArray() : reviewers);
+            var accepted = RevisionProcessor.AcceptRevisions(redline);
+            var rejected = RevisionProcessor.RejectRevisions(redline);
+            Assert.Equal(InlineOrder(expected), InlineOrder(accepted));
+            Assert.Equal(InlineOrder(original), InlineOrder(rejected));
+            NoNewValidationErrors(original.DocumentByteArray, redline.DocumentByteArray);
+            NoNewValidationErrors(expected.DocumentByteArray, accepted.DocumentByteArray);
+            NoNewValidationErrors(original.DocumentByteArray, rejected.DocumentByteArray);
+            var markers = Body(redline).Descendants().Where(e => e.Name == W + "bookmarkStart" || e.Name == W + "bookmarkEnd").ToList();
+            Assert.Equal(2, markers.Count);
+            Assert.All(markers, marker => Assert.Contains(marker.Ancestors(addition ? W + "ins" : W + "del"),
+                revision => (string?)revision.Attribute(W + "author") == "Alice"));
+            Assert.Contains(Body(redline).Descendants(W + "ins"), revision =>
+                (string?)revision.Attribute(W + "author") == "Bob" && revision.Value.Contains("updated"));
+        }
+    }
+
+    [Theory]
+    [InlineData("add", "word")]
+    [InlineData("remove", "word")]
+    [InlineData("unchanged", "word")]
+    [InlineData("add", "interior")]
+    [InlineData("remove", "interior")]
+    [InlineData("unchanged", "interior")]
+    [InlineData("add", "coincident")]
+    [InlineData("remove", "coincident")]
+    [InlineData("unchanged", "coincident")]
+    [InlineData("add", "math")]
+    [InlineData("remove", "math")]
+    [InlineData("unchanged", "math")]
+    public void Consolidate_InlineBookmarkDeltaKeepsSourceOrder(string change, string span)
+    {
+        WmlDocument Input(bool marked, string prefix, string tail)
+        {
+            string content = span == "math"
+                ? "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:r><m:t>x</m:t></m:r></m:oMath>"
+                : "<w:r><w:t>constant</w:t></w:r>";
+            if (span == "coincident") content = "<w:bookmarkStart w:id=\"9\" w:name=\"shared\"/>" + content + "<w:bookmarkEnd w:id=\"9\"/>";
+            if (marked) content = "<w:bookmarkStart w:id=\"7\" w:name=\"edited\"/>" + content + "<w:bookmarkEnd w:id=\"7\"/>";
+            if (span == "interior") content = "<w:r><w:t>pre</w:t></w:r>" + content + "<w:r><w:t>post</w:t></w:r>";
+            return IrTestDocuments.FromBodyXml("<w:p><w:r><w:t xml:space=\"preserve\">" + prefix + " </w:t></w:r>" + content
+                + "<w:r><w:t xml:space=\"preserve\"> " + tail + "</w:t></w:r></w:p>");
+        }
+        bool before = change != "add", after = change != "remove";
+        var original = Input(before, "Alder", "ledger");
+        var alice = Input(after, "Birch", "ledger");
+        var bob = Input(before, "Alder", "schedule");
+        var expected = Input(after, "Birch", "schedule");
+        foreach (bool reverse in new[] { false, true })
+        {
+            var reviewers = new[] { new DocxDiffReviewer { Author = "Alice", Document = alice },
+                new DocxDiffReviewer { Author = "Bob", Document = bob } };
+            var redline = DocxDiff.Consolidate(original, reverse ? reviewers.Reverse().ToArray() : reviewers);
+            Assert.Equal(InlineOrder(expected), InlineOrder(RevisionProcessor.AcceptRevisions(redline)));
+            Assert.Equal(InlineOrder(original), InlineOrder(RevisionProcessor.RejectRevisions(redline)));
+            NoNewValidationErrors(original.DocumentByteArray, redline.DocumentByteArray);
+            var markers = Body(redline).Descendants().Where(e => e.Name == W + "bookmarkStart" || e.Name == W + "bookmarkEnd").ToList();
+            if (change == "unchanged") Assert.All(markers, marker => Assert.DoesNotContain(marker.Ancestors(), e => e.Name == W + "ins" || e.Name == W + "del"));
+            else
+            {
+                var edited = markers.Single(e => e.Name == W + "bookmarkStart" && (string?)e.Attribute(W + "name") == "edited");
+                var id = (string?)edited.Attribute(W + "id");
+                var endpoints = markers.Where(e => (string?)e.Attribute(W + "id") == id).ToList();
+                Assert.Equal(2, endpoints.Count);
+                Assert.All(endpoints, marker =>
+                    Assert.Contains(marker.Ancestors(change == "add" ? W + "ins" : W + "del"), revision => (string?)revision.Attribute(W + "author") == "Alice"));
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(false, "replace")]
+    [InlineData(true, "replace")]
+    [InlineData(false, "insert")]
+    [InlineData(false, "delete-middle")]
+    [InlineData(true, "delete-middle")]
+    public void Consolidate_OneSidedBookmarkSpanningIndependentReplacements(bool addition, string otherEdit)
+    {
+        WmlDocument Input(bool marked, bool prefix, bool tail, int start, int end)
+        {
+            string Run(string value) => "<w:r><w:t xml:space=\"preserve\">" + value + "</w:t></w:r>";
+            var chunks = new[] { Run(prefix ? "IIIA." : "III."), "<w:r><w:tab/></w:r>",
+                Run(" shared "), Run(tail && otherEdit == "delete-middle" ? "" : "middle "), Run("tail "),
+                Run(tail && otherEdit != "delete-middle" ? (otherEdit == "insert" ? "original updated" : "updated") : "original") };
+            string body = "<w:p>";
+            for (int index = 0; index <= chunks.Length; index++)
+            {
+                if (marked && index == start) body += "<w:bookmarkStart w:id=\"5\" w:name=\"range\"/>";
+                if (marked && index == end) body += "<w:bookmarkEnd w:id=\"5\"/>";
+                if (index < chunks.Length) body += chunks[index];
+            }
+            return IrTestDocuments.FromBodyXml(body + "</w:p>");
+        }
+        for (int start = 0; start <= 6; start++)
+        for (int end = start; end <= 6; end++)
+        foreach (bool reverse in new[] { false, true })
+        {
+            var original = Input(!addition, false, false, start, end);
+            var alice = Input(addition, true, false, start, end);
+            var bob = Input(!addition, false, true, start, end);
+            var expected = Input(addition, true, true, start, end);
+            var reviewers = new[] { new DocxDiffReviewer { Author = "Alice", Document = alice },
+                new DocxDiffReviewer { Author = "Bob", Document = bob } };
+            var redline = DocxDiff.Consolidate(original, reverse ? reviewers.Reverse().ToArray() : reviewers);
+            Assert.Equal(InlineOrder(expected), InlineOrder(RevisionProcessor.AcceptRevisions(redline)));
+            Assert.Equal(InlineOrder(original), InlineOrder(RevisionProcessor.RejectRevisions(redline)));
+            NoNewValidationErrors(original.DocumentByteArray, redline.DocumentByteArray);
+            var markers = Body(redline).Descendants().Where(e => e.Name == W + "bookmarkStart" || e.Name == W + "bookmarkEnd").ToList();
+            Assert.Equal(2, markers.Count);
+            Assert.All(markers, marker => Assert.Contains(marker.Ancestors(addition ? W + "ins" : W + "del"),
+                revision => (string?)revision.Attribute(W + "author") == "Alice"));
+        }
+    }
+
+    private static string InlineOrder(WmlDocument document)
+    {
+        var body = Body(document);
+        var names = body.Descendants(W + "bookmarkStart").ToDictionary(e => (string)e.Attribute(W + "id")!, e => (string)e.Attribute(W + "name")!);
+        return string.Concat(body.Descendants().Select(e => e.Name == W + "t" ? e.Value
+            : e.Name == W + "tab" ? "[tab]"
+            : e.Name == W + "bookmarkStart" ? "[start:" + (string?)e.Attribute(W + "name") + "]"
+            : e.Name == W + "bookmarkEnd" ? "[end:" + names.GetValueOrDefault((string)e.Attribute(W + "id")!, "orphan") + "]"
+            : e.Name.LocalName == "oMath" ? "[math:" + e.Value + "]" : ""));
+    }
+
+    [Theory]
     [InlineData("Alder study", "paragraph")]
     [InlineData("Birch survey", "paragraph")]
     [InlineData("Alder ridge survey", "paragraph")]

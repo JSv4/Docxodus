@@ -138,7 +138,12 @@ namespace Docxodus
             return null;
         }
 
-        public static XDocument GetXDocument(this OpenXmlPart? part)
+        public static XDocument GetXDocument(this OpenXmlPart? part) => GetXDocument(part, maxDepth: null);
+
+        /// <summary><see cref="GetXDocument(OpenXmlPart)"/>, loading a part not yet loaded through a reader
+        /// that refuses nesting past <paramref name="maxDepth"/>, so the load is its own depth measurement
+        /// (issue #1389).</summary>
+        internal static XDocument GetXDocument(this OpenXmlPart? part, int? maxDepth)
         {
             if (part == null) throw new ArgumentNullException("part");
 
@@ -154,7 +159,9 @@ namespace Docxodus
                 }
                 else
                 {
-                    using (XmlReader partXmlReader = XmlReader.Create(partStream))
+                    using (XmlReader partXmlReader = maxDepth is { } limit
+                        ? new Internal.DepthLimitedXmlReader(XmlReader.Create(partStream), limit)
+                        : XmlReader.Create(partStream))
                         partXDocument = XDocument.Load(partXmlReader);
                 }
             }
@@ -456,9 +463,12 @@ namespace Docxodus
 
             if (part.ContentType.EndsWith("xml"))
             {
+                // Every part is dumped, referenced or not, so each is held to the general depth limit
+                // here rather than by the read step's door (issue #1389).
                 using (Stream str = part.GetStream())
                 using (StreamReader streamReader = new StreamReader(str))
-                using (XmlReader xr = XmlReader.Create(streamReader))
+                using (XmlReader xr = new Internal.DepthLimitedXmlReader(XmlReader.Create(streamReader),
+                    Verification.XmlSemanticNormalizer.MaxElementDepth))
                     return new XElement(pkg + "part",
                         new XAttribute(pkg + "name", part.Uri),
                         new XAttribute(pkg + "contentType", part.ContentType),
@@ -910,16 +920,8 @@ namespace Docxodus
             return false;
         }
 
-        public static int StringToTwips(string twipsOrPoints)
-        {
-            // if the pos value is in points, not twips
-            if (twipsOrPoints.EndsWith("pt"))
-            {
-                decimal decimalValue = decimal.Parse(twipsOrPoints.Substring(0, twipsOrPoints.Length - 2));
-                return (int)(decimalValue * 20);
-            }
-            return int.Parse(twipsOrPoints);
-        }
+        public static int StringToTwips(string twipsOrPoints) =>
+            (int)StringToDecimalTwips(twipsOrPoints);
 
         /// <summary>
         /// The leading edge of a <c>w:ind</c>. The strict schema spells it <c>w:start</c>; the
@@ -949,7 +951,11 @@ namespace Docxodus
         internal static decimal? AttributeToDecimalTwips(XAttribute? attribute)
         {
             if (attribute == null) return null;
-            var value = attribute.Value;
+            return StringToDecimalTwips(attribute.Value);
+        }
+
+        private static decimal StringToDecimalTwips(string value)
+        {
             var unit = value.Length >= 2 ? value.Substring(value.Length - 2) : string.Empty;
             var hasUnit = unit is "cm" or "mm" or "in" or "pt" or "pc" or "pi";
             var number = decimal.Parse(hasUnit ? value.Substring(0, value.Length - 2) : value,
@@ -6195,6 +6201,7 @@ listSeparator
         public static XName HtmlStructure = pt + "HtmlStructure";
         public static XName HtmlStyle = pt + "HtmlStyle";
         public static XName StyleName = pt + "StyleName";
+        internal static readonly XName InheritedFrame = pt + "InheritedFrame";
         public static XName TabWidth = pt + "TabWidth";
         public static XName Leader = pt + "Leader";
         public static XName TabAlignment = pt + "TabAlignment";

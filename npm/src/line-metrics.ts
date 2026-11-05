@@ -12,6 +12,24 @@
 
 /** Large-font probe reduces per-component pixel rounding before scaling back to the run's size. */
 const PROBE_FONT_SIZE_PX = 10000;
+const probeSizes = new WeakMap<Document, number>();
+
+/** Firefox clamps large rendered fonts without changing their computed size (#1424). */
+function fontProbeSize(document: Document): number {
+  let size = probeSizes.get(document);
+  if (size !== undefined) return size;
+  const probe = document.createElement("span");
+  probe.style.cssText = "position:absolute;left:-100000px;top:0;visibility:hidden;display:inline-block;"
+    + `font:${PROBE_FONT_SIZE_PX / 2}px/normal serif;margin:0;padding:0;border:0;`;
+  probe.textContent = "Hg";
+  (document.body ?? document.documentElement).appendChild(probe);
+  const height = probe.getBoundingClientRect().height;
+  probe.style.fontSize = `${PROBE_FONT_SIZE_PX}px`;
+  size = height > 0 && probe.getBoundingClientRect().height === height ? 1000 : PROBE_FONT_SIZE_PX;
+  probe.remove();
+  if (height > 0) probeSizes.set(document, size);
+  return size;
+}
 
 /** Probe text for an element whose own text the primary font covers (Latin, through U+024F). */
 const LATIN_PROBE = "Hg";
@@ -52,6 +70,7 @@ type ProbeFont = Pick<CSSStyleDeclaration, "fontStyle" | "fontWeight" | "fontStr
  * {@link PROBE_FONT_SIZE_PX} with the given text.
  */
 function naturalLineHeightRatios(document: Document): (style: ProbeFont, text: string) => number {
+  const probeSize = fontProbeSize(document);
   const ratios = new Map<string, number>();
   const ratio = (style: ProbeFont, text: string): number => {
     const key = `${style.fontStyle}|${style.fontWeight}|${style.fontStretch}|${style.fontFamily}|${text}`;
@@ -65,10 +84,10 @@ function naturalLineHeightRatios(document: Document): (style: ProbeFont, text: s
       probe.style.fontStyle = style.fontStyle;
       probe.style.fontWeight = style.fontWeight;
       probe.style.fontStretch = style.fontStretch;
-      probe.style.fontSize = `${PROBE_FONT_SIZE_PX}px`;
+      probe.style.fontSize = `${probeSize}px`;
       probe.textContent = text;
       (document.body ?? document.documentElement).appendChild(probe);
-      ratio = probe.getBoundingClientRect().height / PROBE_FONT_SIZE_PX;
+      ratio = probe.getBoundingClientRect().height / probeSize;
       probe.remove();
       ratios.set(key, ratio);
     }
@@ -117,7 +136,51 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
   for (const { element, lineHeight } of targets) {
     element.style.setProperty("line-height", `${lineHeight.toFixed(4)}px`);
   }
+  positionRubyAnnotations(root);
   return targets.length;
+}
+
+/** Word's ruby raise is a baseline distance. Keep native horizontal ruby layout, moving only
+ * its annotation and reserving the same signed change in the surrounding line's height. */
+function positionRubyAnnotations(root: Element): void {
+  const document = root.ownerDocument, view = document.defaultView!;
+  for (const wrapper of Array.from(root.querySelectorAll<HTMLElement>('[data-docx-ruby="true"]'))) {
+    if (wrapper.dataset.docxRubyPositioned === "true") continue;
+    const raise = Number(wrapper.dataset.docxRubyRaise);
+    const annotation = wrapper.querySelector<HTMLElement>("ruby > rt");
+    if (!annotation || !Number.isFinite(raise) || raise < 0) continue;
+    // Notes can still be in a hidden registry. Copy resolved presentation into a measurable
+    // clone, including every styled run, rather than reading their zero-sized rectangles.
+    const clone = wrapper.cloneNode(true) as HTMLElement;
+    const originals = [wrapper, ...Array.from(wrapper.querySelectorAll<HTMLElement>("*"))];
+    const copies = [clone, ...Array.from(clone.querySelectorAll<HTMLElement>("*"))];
+    originals.forEach((element, index) => {
+      const style = view.getComputedStyle(element);
+      for (const property of ["font-family", "font-size", "font-style", "font-weight", "font-stretch",
+        "line-height", "letter-spacing", "word-spacing", "white-space", "direction"])
+        copies[index].style.setProperty(property, style.getPropertyValue(property));
+    });
+    const base = clone.querySelector<HTMLElement>("[data-docx-ruby-base]");
+    const rt = clone.querySelector<HTMLElement>("ruby > rt");
+    if (!base || !rt) continue;
+    const host = document.createElement("div");
+    host.style.cssText = "position:absolute;left:-100000px;top:0;visibility:hidden;width:max-content;";
+    host.append(clone);
+    (document.body ?? document.documentElement).append(host);
+    const marker = () => {
+      const span = document.createElement("span");
+      span.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline;margin:0;padding:0;border:0";
+      return span;
+    };
+    const baseMarker = marker(), annotationMarker = marker();
+    base.append(baseMarker); rt.append(annotationMarker);
+    const shift = baseMarker.getBoundingClientRect().top - annotationMarker.getBoundingClientRect().top - raise * 96 / 72;
+    host.remove();
+    annotation.style.position = "relative";
+    annotation.style.top = `${shift}px`;
+    wrapper.style.marginTop = `${-shift}px`;
+    wrapper.dataset.docxRubyPositioned = "true";
+  }
 }
 
 /** The elements the converter writes a Word paragraph as. */
@@ -269,22 +332,40 @@ export function isPreservedExactLineInk(element: HTMLElement, content: HTMLEleme
 const REPLACED_ELEMENTS = new Set(["img", "svg", "canvas", "video", "object", "embed", "iframe", "input", "textarea", "select"]);
 
 /**
- * How far down a page band an element's laid-out content reaches, in viewport pixels (issue #1271).
- *
- * This is its border box, except for an inline box, whose bottom padding and border are left out: CSS paints
- * them below the box's text without making its line any taller, so they are decoration — the dotted rule under
- * a formatting revision, a comment or annotation highlight's underline. A band that cuts them hides no text,
- * though the decoration itself is cut at the band's edge. The box's text is still measured where it is (a
- * lowered run moves its content box too), and so is a replaced element, whose padding and border are laid out.
+ * Measure each descendant's content bottom once for this layout snapshot (#1271, #1493).
+ * Inline padding/borders can paint beyond a fitting line, including through zero-height
+ * wrappers. Measure nested text/children without those decorations; atomic boxes keep
+ * their full bounds. Unboxed generated content conservatively uses its boxed ancestor.
  */
-export function laidOutBottom(element: Element, band: HTMLElement): number {
-  const bottom = element.getBoundingClientRect().bottom;
-  const view = element.ownerDocument.defaultView;
-  if (!view || REPLACED_ELEMENTS.has(element.localName)) return bottom;
-  const style = view.getComputedStyle(element);
-  if (style.display !== "inline") return bottom;
+export function measureLaidOutBottoms(band: HTMLElement): Map<Element, number> {
+  const bottoms = new Map<Element, number>();
+  const view = band.ownerDocument.defaultView;
   const scale = band.getBoundingClientRect().width / band.offsetWidth || 1;
-  return bottom - (Number.parseFloat(style.paddingBottom) + Number.parseFloat(style.borderBottomWidth)) * scale;
+  const range = band.ownerDocument.createRange();
+  const visit = (element: Element, ancestorBottom: number): number => {
+    const style = view?.getComputedStyle(element);
+    const transparent = style?.display === "contents";
+    const inline = style?.display === "inline" && !REPLACED_ELEMENTS.has(element.localName);
+    const boxBottom = transparent ? ancestorBottom : element.getBoundingClientRect().bottom
+      - (inline ? (Number.parseFloat(style.paddingBottom) + Number.parseFloat(style.borderBottomWidth)) * scale : 0);
+    const measureChildren = transparent || (inline && element.children.length > 0);
+    const generated = measureChildren && ["::before", "::after"].some(pseudo =>
+      !["none", "normal"].includes(view!.getComputedStyle(element, pseudo).content));
+    let contentBottom = -Infinity;
+    for (const child of Array.from(element.childNodes)) {
+      if (child.nodeType === 1) contentBottom = Math.max(contentBottom, visit(child as Element, boxBottom));
+      else if (measureChildren && child.nodeType === 3) {
+        range.selectNodeContents(child);
+        for (const rect of Array.from(range.getClientRects())) contentBottom = Math.max(contentBottom, rect.bottom);
+      }
+    }
+    const bottom = measureChildren && !generated && Number.isFinite(contentBottom) ? contentBottom : boxBottom;
+    bottoms.set(element, bottom);
+    return bottom;
+  };
+  const boundary = band.getBoundingClientRect().bottom;
+  for (const element of Array.from(band.children)) visit(element, boundary);
+  return bottoms;
 }
 
 /**
@@ -309,6 +390,7 @@ export function alignBaselinesToWord(root: Element): number {
   const view = document.defaultView;
   if (!view) return 0;
   const descents = new Map<string, number>();
+  const probeSize = fontProbeSize(document);
   const ratioFor = naturalLineHeightRatios(document);
   const chromiumOffset = baselineOffsets(document);
 
@@ -316,15 +398,15 @@ export function alignBaselinesToWord(root: Element): number {
   const descentRatio = (style: CSSStyleDeclaration): number => {
     // The canvas font shorthand takes no percentage stretch (computed styles give one), and ignores a value it
     // cannot parse, so the stretch is left out and an assignment that did not take counts as unmeasurable.
-    const font = `${style.fontStyle} ${style.fontWeight} ${PROBE_FONT_SIZE_PX}px ${style.fontFamily}`;
+    const font = `${style.fontStyle} ${style.fontWeight} ${probeSize}px ${style.fontFamily}`;
     let ratio = descents.get(font);
     if (ratio === undefined) {
       const context = document.createElement("canvas").getContext("2d");
       ratio = Number.NaN;
       if (context) {
         context.font = font;
-        if (context.font.includes(`${PROBE_FONT_SIZE_PX}px`))
-          ratio = context.measureText(LATIN_PROBE).fontBoundingBoxDescent / PROBE_FONT_SIZE_PX;
+        if (context.font.includes(`${probeSize}px`))
+          ratio = context.measureText(LATIN_PROBE).fontBoundingBoxDescent / probeSize;
       }
       descents.set(font, ratio);
     }

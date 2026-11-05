@@ -15,7 +15,7 @@ export const STORY_COMMENTS = [
  * its text in a comment, so a header or footer comment has two pages to repeat on. With `bodyOnly`
  * only the body comment remains: the control.
  */
-export function storyCommentsFixture(bodyOnly = false): Uint8Array {
+export function storyCommentsFixture(bodyOnly = false, commentWords = 0): Uint8Array {
   const commented = (id: number, text: string) => !bodyOnly || id === 0
     ? `<w:commentRangeStart w:id="${id}"/><w:r><w:t>${text}</w:t></w:r><w:commentRangeEnd w:id="${id}"/>` +
       `<w:r><w:commentReference w:id="${id}"/></w:r>`
@@ -43,7 +43,7 @@ export function storyCommentsFixture(bodyOnly = false): Uint8Array {
       `<w:r><w:endnoteRef/></w:r>${commented(4, 'ENDTEXT')}</w:p></w:endnote></w:endnotes>`,
     'word/comments.xml': `<w:comments xmlns:w="${W_NS}">${comments.map(({ id, comment }) =>
       `<w:comment w:id="${id}" w:author="Reviewer" w:initials="R" w:date="2026-10-01T00:00:00Z">` +
-      `<w:p><w:r><w:t>${comment}</w:t></w:r></w:p></w:comment>`).join('')}</w:comments>`,
+      `<w:p><w:r><w:t>${commentWords ? Array.from({ length: commentWords }, (_, i) => `${comment}${i}`).join(' ') : comment}</w:t></w:r></w:p></w:comment>`).join('')}</w:comments>`,
   };
   const types: Record<string, string> = {
     document: 'document.main', styles: 'styles', settings: 'settings', header1: 'header', footer1: 'footer',

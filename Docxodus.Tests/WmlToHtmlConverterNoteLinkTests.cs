@@ -53,6 +53,70 @@ namespace Docxodus.Tests
                 .Where(a => ((string?)a.Attribute("href"))?.StartsWith(hrefPrefix, StringComparison.Ordinal) == true)
                 .ToList();
 
+        [Theory]
+        [InlineData("footnote", PaginationMode.None)]
+        [InlineData("footnote", PaginationMode.Paginated)]
+        [InlineData("endnote", PaginationMode.None)]
+        [InlineData("endnote", PaginationMode.Paginated)]
+        public void ReservedNotesNeverBecomeNumberedItems(string kind, PaginationMode mode)
+        {
+            foreach (var type in new[] { "separator", "continuationSeparator", "continuationNotice" })
+            {
+                var html = ConvertNote(kind, type, mode, cited: false);
+                Assert.DoesNotContain(html.Descendants(), e =>
+                    (string?)e.Attribute("id") == (kind == "footnote" ? "fn-2" : "en-2") ||
+                    (string?)e.Attribute("data-footnote-id") == "2");
+                // Paginated footnote separators remain reusable templates, never ordinary notes.
+                if (kind == "endnote" || mode == PaginationMode.None || type == "continuationNotice")
+                    Assert.DoesNotContain("Cedar note content", html.Value);
+                Assert.Empty(DanglingFragmentTargets(html));
+            }
+        }
+
+        [Theory]
+        [InlineData(null, false, PaginationMode.None)]
+        [InlineData("normal", false, PaginationMode.None)]
+        [InlineData(null, true, PaginationMode.None)]
+        [InlineData("normal", true, PaginationMode.None)]
+        [InlineData(null, false, PaginationMode.Paginated)]
+        [InlineData("normal", false, PaginationMode.Paginated)]
+        [InlineData(null, true, PaginationMode.Paginated)]
+        [InlineData("normal", true, PaginationMode.Paginated)]
+        public void OrdinaryEndnotesKeepContentAndCitationLinks(string? type, bool cited, PaginationMode mode)
+        {
+            var html = ConvertNote("endnote", type, mode, cited);
+            Assert.Contains("Cedar note content", html.Value);
+            Assert.Single(html.Descendants(Xh + "li"), e => (string?)e.Attribute("id") == "en-2");
+            Assert.Equal(cited && mode == PaginationMode.None ? 1 : 0, LinksTargeting(html, "#en-ref-").Count);
+            if (cited)
+                Assert.Equal("i", html.Descendants(Xh + "a").Single(e => (string?)e.Attribute("id") == "en-ref-2").Value);
+            Assert.Empty(DanglingFragmentTargets(html));
+        }
+
+        private static XElement ConvertNote(string kind, string? type, PaginationMode mode, bool cited)
+        {
+            using var stream = new MemoryStream();
+            stream.Write(DocxSession.CreateBlankDocxBytes());
+            using var doc = WordprocessingDocument.Open(stream, true);
+            var main = doc.MainDocumentPart!;
+            var paragraph = main.GetXDocument().Descendants(W.p).First();
+            paragraph.Add(new XElement(W.r, new XElement(W.t, "Cedar body")));
+            if (cited)
+                paragraph.Add(new XElement(W.r, new XElement(W.w + kind + "Reference", new XAttribute(W.id, "2"))));
+            main.PutXDocument();
+            OpenXmlPart notes = kind == "footnote" ? main.AddNewPart<FootnotesPart>() : main.AddNewPart<EndnotesPart>();
+            notes.PutXDocument(new XDocument(new XElement(W.w + kind + "s",
+                new XElement(W.w + kind, new XAttribute(W.id, "2"),
+                    type == null ? null : new XAttribute(W.type, type),
+                    new XElement(W.p, new XElement(W.r, new XElement(W.t, "Cedar note content")))))));
+            Assert.Empty(new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(doc));
+            return WmlToHtmlConverter.ConvertToHtml(doc, new WmlToHtmlConverterSettings
+            {
+                RenderFootnotesAndEndnotes = true,
+                RenderPagination = mode,
+            });
+        }
+
         /// <summary>
         /// Rewrites one note-definition part of the NVCA fixture, so a test can construct the
         /// uncited-footnote and missing-definition shapes from a real document rather than from a
@@ -91,31 +155,32 @@ namespace Docxodus.Tests
         }
 
         [Fact]
-        public void NvcaFixtureCarriesAnUncitedEndnoteDefinition()
+        public void NvcaFixtureCarriesOnlyReservedEndnoteDefinitions()
         {
-            // Guards the premise of the tests below: if the fixture ever stops carrying an
-            // orphaned endnote, they would pass without exercising anything.
+            // A positive id does not make the continuation notice an ordinary orphan.
             var bytes = File.ReadAllBytes(NvcaPath);
             using var ms = new MemoryStream(bytes);
             using var wordDoc = WordprocessingDocument.Open(ms, false);
 
             var definedIds = wordDoc.MainDocumentPart!.EndnotesPart!.GetXDocument().Root!
                 .Elements(W.endnote)
-                .Where(en => (string?)en.Attribute(W.type) is not ("separator" or "continuationSeparator"))
+                .Where(en => !WmlToMarkdownConverter.IsBoilerplateNote(en))
                 .Select(en => (string)en.Attribute(W.id)!)
                 .ToList();
             var citedIds = wordDoc.MainDocumentPart.GetXDocument().Descendants(W.endnoteReference)
                 .Select(r => (string)r.Attribute(W.id)!)
                 .ToList();
 
-            Assert.NotEmpty(definedIds);
+            Assert.Empty(definedIds);
             Assert.Empty(citedIds);
         }
 
         [Fact]
         public void UncitedEndnoteDefinitionIsRenderedButCarriesNoReturnArrow()
         {
-            var html = Convert(File.ReadAllBytes(NvcaPath));
+            var html = Convert(WithRewrittenNotesPart("endnotes", xdoc =>
+                xdoc.Root!.Elements(W.endnote).Single(en => (string?)en.Attribute(W.id) == "1")
+                    .SetAttributeValue(W.type, "normal")));
 
             // The definition is still rendered — an orphan is retained for package fidelity.
             var endnoteItem = html.Descendants(Xh + "li")
@@ -149,9 +214,9 @@ namespace Docxodus.Tests
         }
 
         [Fact]
-        public void AnUncitedFootnoteAndAnUncitedEndnoteProduceNoDanglingLinks()
+        public void AnUncitedFootnoteAndReservedEndnotesProduceNoDanglingLinks()
         {
-            // The fixture's endnote is already uncited; add an uncited footnote alongside it by
+            // The fixture's endnotes are reserved; add an uncited ordinary footnote by
             // defining a note id that no w:footnoteReference in any story mentions.
             var docx = WithRewrittenNotesPart("footnotes", xdoc =>
             {

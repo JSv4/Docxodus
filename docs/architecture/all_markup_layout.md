@@ -15,6 +15,13 @@ It is available in the paginated view (`paginateHtml`, `PaginationEngine`, the R
 `@docxodus/export` HTML and PDF (`commentColumnPlacement`, or `--comment-column-placement balloons` in
 the CLI). With the option off, output does not change.
 
+Standalone export also accepts `markupVisibility` (#1523), independently of placement.
+`{ formatting: false }` keeps current authored formatting but removes formatting-change
+annotations before layout. Margin comments still become balloons. If no visible comments or
+formatting annotations remain, the existing no-balloon path uses the full text width without a
+review area. Text and comment visibility have separate flags; see
+[`standalone_paginated_export.md`](standalone_paginated_export.md) for their display semantics.
+
 ## Option
 
 `commentColumnPlacement` already decides where a page's comment column goes: `"margin"` inside the

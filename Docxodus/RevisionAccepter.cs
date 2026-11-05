@@ -15,7 +15,7 @@ namespace Docxodus
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(document))
             {
-                using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument doc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     AcceptRevisions(doc);
                 }

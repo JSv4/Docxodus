@@ -24,8 +24,8 @@ internal static partial class IrMarkupRenderer
 
         using var leftStream = new OpenXmlMemoryStreamDocument(left);
         using var rightStream = new OpenXmlMemoryStreamDocument(right);
-        using var leftDoc = leftStream.GetWordprocessingDocument();
-        using var rightDoc = rightStream.GetWordprocessingDocument();
+        using var leftDoc = leftStream.GetMeasuredWordprocessingDocument();
+        using var rightDoc = rightStream.GetMeasuredWordprocessingDocument();
         var lm = leftDoc.MainDocumentPart;
         var rm = rightDoc.MainDocumentPart;
         var ls = lm?.StyleDefinitionsPart?.GetXDocument().Root;
@@ -132,7 +132,7 @@ internal static partial class IrMarkupRenderer
         Action<XElement>? configureStyles = null)
     {
         using var stream = new OpenXmlMemoryStreamDocument(right);
-        using var doc = stream.GetWordprocessingDocument();
+        using var doc = stream.GetMeasuredWordprocessingDocument();
         foreach (var part in doc.ContentParts())
             if (ir.Sources.TryGetValue(part.Uri, out var source))
                 part.GetXDocument().Root!.ReplaceWith(new XElement(source.Root!));

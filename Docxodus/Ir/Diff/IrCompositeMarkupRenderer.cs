@@ -120,7 +120,7 @@ internal static class IrCompositeMarkupRenderer
         var result = new WmlDocument(baseDoc);
         using (var streamDoc = new OpenXmlMemoryStreamDocument(result))
         {
-            using (var wDoc = streamDoc.GetWordprocessingDocument())
+            using (var wDoc = streamDoc.GetMeasuredWordprocessingDocument())
             {
                 var main = wDoc.MainDocumentPart
                     ?? throw new DocxodusException("Base document has no MainDocumentPart.");
@@ -153,7 +153,7 @@ internal static class IrCompositeMarkupRenderer
                     if (sourceId < 0 || sourceId >= reviewers.Count || clones.Count == 0)
                         continue;   // base-sourced (-1) clones reference base parts already present; nothing to import.
                     using var revStream = new OpenXmlMemoryStreamDocument(reviewers[sourceId].Doc);
-                    using var wDocRev = revStream.GetWordprocessingDocument();
+                    using var wDocRev = revStream.GetMeasuredWordprocessingDocument();
                     IrMarkupRenderer.ImportRightSourcedMedia(clones, main, wDocRev.MainDocumentPart, streamDoc, revStream);
                 }
 
@@ -185,7 +185,7 @@ internal static class IrCompositeMarkupRenderer
                 foreach (var reviewer in reviewers)
                 {
                     using var revStream = new OpenXmlMemoryStreamDocument(reviewer.Doc);
-                    using var wDocRev = revStream.GetWordprocessingDocument();
+                    using var wDocRev = revStream.GetMeasuredWordprocessingDocument();
                     if (main.StyleDefinitionsPart != null &&
                         wDocRev.MainDocumentPart?.StyleDefinitionsPart != null)
                         PackageMerge.CopyMissingStylesFromOneDocToAnother(wDocRev, wDoc, styleIdRemap);

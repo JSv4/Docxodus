@@ -166,7 +166,10 @@ public class DocxSessionInlineTextTests
         Assert.Empty(session.Grep("ABBoxed"));
         var projection = session.Project();
         Assert.DoesNotContain("} ABBoxed", projection.Markdown);
-        Assert.Equal(projection.Markdown, IrMarkdownEmitter.Emit(IrReader.Read(new WmlDocument(doc)), new()).Markdown);
+        // Keep source identity across the IR's revision normalization; removing an insertion
+        // wrapper before assigning IDs otherwise changes the nested textbox paragraph's anchor.
+        var anchored = new WmlDocument("anchored.docx", session.Save(persistAnchorIds: true));
+        Assert.Equal(projection.Markdown, IrMarkdownEmitter.Emit(IrReader.Read(anchored), new()).Markdown);
         Assert.True(session.ReplaceMatch(box, "Changed note").Success);
         Assert.Single(session.Grep("^AB$"));
         Assert.True(session.ReplaceMatch(host, "CD").Success);

@@ -413,6 +413,7 @@ public static class OpenContractExporter
     public static OpenContractDocExport Export(WordprocessingDocument wordDoc)
     {
         if (wordDoc == null) throw new ArgumentNullException(nameof(wordDoc));
+        using var depthScope = Internal.PartDepthGuard.Enter(wordDoc, preferLoadedSdkRoots: true);
 
         var result = new OpenContractDocExport();
 
@@ -501,16 +502,23 @@ public static class OpenContractExporter
 
     #region Content Extraction
 
+    // Preserve the caller's unsaved SDK edits, as the exporter historically did. Enter measured
+    // every loaded SDK root before its recursive serialization here. Without a loaded SDK root,
+    // keep using the measured LINQ tree: loading the SDK DOM could instead parse a different,
+    // unchecked stream behind the caller's cached tree. Do not replace that separate LINQ cache.
+    private static XElement? ContentRoot(OpenXmlPart part) =>
+        part.IsRootElementLoaded && part.RootElement is { } root
+            ? XElement.Parse(root.OuterXml)
+            : part.GetXDocument().Root;
+
     private static void ExtractContent(
         WordprocessingDocument wordDoc,
         StringBuilder contentBuilder,
         List<ExtractedTextBlock> textBlocks,
         List<ExtractedSection> sections)
     {
-        var mainPart = wordDoc.MainDocumentPart;
-        if (mainPart?.Document?.Body == null) return;
-
-        var body = XElement.Parse(mainPart.Document.Body.OuterXml);
+        var body = wordDoc.MainDocumentPart is { } main ? ContentRoot(main)?.Element(W + "body") : null;
+        if (body == null) return;
 
         // Get section properties for page dimensions
         var sectionProps = ExtractSectionProperties(body);
@@ -864,10 +872,8 @@ public static class OpenContractExporter
         {
             try
             {
-                var headerXml = headerPart.Header?.OuterXml;
-                if (string.IsNullOrEmpty(headerXml)) continue;
-
-                var header = XElement.Parse(headerXml);
+                var header = ContentRoot(headerPart);
+                if (header == null) continue;
                 var startOffset = contentBuilder.Length;
 
                 foreach (var para in header.Descendants(W + "p"))
@@ -897,10 +903,8 @@ public static class OpenContractExporter
         {
             try
             {
-                var footerXml = footerPart.Footer?.OuterXml;
-                if (string.IsNullOrEmpty(footerXml)) continue;
-
-                var footer = XElement.Parse(footerXml);
+                var footer = ContentRoot(footerPart);
+                if (footer == null) continue;
                 var startOffset = contentBuilder.Length;
 
                 foreach (var para in footer.Descendants(W + "p"))
@@ -934,12 +938,12 @@ public static class OpenContractExporter
     {
         var mainPart = wordDoc.MainDocumentPart;
         var footnotesPart = mainPart?.FootnotesPart;
-        if (footnotesPart?.Footnotes == null) return;
+        if (footnotesPart == null) return;
 
         try
         {
-            var footnotesXml = footnotesPart.Footnotes.OuterXml;
-            var footnotes = XElement.Parse(footnotesXml);
+            var footnotes = ContentRoot(footnotesPart);
+            if (footnotes == null) return;
 
             foreach (var footnote in footnotes.Elements(W + "footnote"))
             {
@@ -981,12 +985,12 @@ public static class OpenContractExporter
     {
         var mainPart = wordDoc.MainDocumentPart;
         var endnotesPart = mainPart?.EndnotesPart;
-        if (endnotesPart?.Endnotes == null) return;
+        if (endnotesPart == null) return;
 
         try
         {
-            var endnotesXml = endnotesPart.Endnotes.OuterXml;
-            var endnotes = XElement.Parse(endnotesXml);
+            var endnotes = ContentRoot(endnotesPart);
+            if (endnotes == null) return;
 
             foreach (var endnote in endnotes.Elements(W + "endnote"))
             {

@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-const wordText = readFileSync(new URL('../dist/word-text.js', import.meta.url), 'utf8').replace(/^export /gm, '');
+import { wordTextScript as wordText } from './word-text-script.js';
 const lineMetrics = readFileSync(new URL('../dist/line-metrics.js', import.meta.url), 'utf8').replace(/^export /gm, '');
 const nativeAdvances = JSON.parse(readFileSync(new URL('../../TestFiles/WordAdvanceFlow/word-observations.json', import.meta.url), 'utf8'));
 const geometry = `data-section-index="0" data-page-width="444" data-page-height="700"

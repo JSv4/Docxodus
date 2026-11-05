@@ -186,7 +186,7 @@ namespace Docxodus.HtmlToWml
 
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(emptyDocument))
             {
-                using (WordprocessingDocument wDoc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument wDoc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     AnnotateOlUl(wDoc, html);
                     UpdateMainDocumentPart(wDoc, html, settings);

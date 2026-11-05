@@ -80,9 +80,22 @@ for (const { name, options, pages } of cases) {
   });
 }
 
-test('a merge group taller than a page still fails the clipping guard', async ({ browser }) => {
+for (const profile of [
+  { reviewProfile: 'markup', commentProfile: 'margin' },
+  { reviewProfile: 'final', commentProfile: 'hidden' },
+] as const) test(`a merge group taller than a page retains complete text in ${profile.reviewProfile}/${profile.commentProfile}`, async ({ browser }) => {
   test.setTimeout(120_000);
-  await expect(renderDocxArtifacts(generateVerticalMergeDocx({ mergeSpan: 18 }), {
-    browser, outputs: ['pdf'], reviewProfile: 'markup', commentProfile: 'margin', timeoutMs: 120_000,
-  })).rejects.toMatchObject({ code: 'pagination_failure', phase: 'running_story_placement' });
+  const result = await renderDocxArtifacts(generateVerticalMergeDocx({ mergeSpan: 18 }), {
+    browser, outputs: ['pdf'], ...profile, limits: { finalPages: 2 }, timeoutMs: 120_000,
+  });
+  const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
+  try {
+    const pdf = await task.promise, text: string[] = [];
+    expect(pdf.numPages).toBe(2);
+    for (let index = 1; index <= pdf.numPages; index++)
+      text.push((await (await pdf.getPage(index)).getTextContent()).items.filter(item => 'str' in item).map(item => item.str).join(' '));
+    const paragraphs = text.join(' ').replace(/\s+/g, ' ').match(/(?:Left|Right)\d{2} (?:Cedar tray|Archive register)\./g);
+    expect(paragraphs).toEqual(['Left01 Cedar tray.',
+      ...Array.from({ length: 18 }, (_, index) => `Right${String(index + 1).padStart(2, '0')} Archive register.`)]);
+  } finally { await task.destroy(); }
 });

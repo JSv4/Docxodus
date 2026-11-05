@@ -1,5 +1,43 @@
 # OOXML Corner Cases
 
+## Independent stories in DrawingML groups (#1527)
+
+A group is not one textbox. Each `wps:txbx/w:txbxContent` is an independent story,
+including when the group belongs to a header or sits inside `w:ins`. For example,
+these child offsets place three 100pt frames 120pt apart (all coordinates are EMUs):
+
+```xml
+<wpg:wgp>
+  <wpg:cNvGrpSpPr/>
+  <wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="4318000" cy="381000"/>
+    <a:chOff x="0" y="0"/><a:chExt cx="4318000" cy="381000"/>
+  </a:xfrm></wpg:grpSpPr>
+  <!-- Three wps:wsp members: off.x = 0, 1524000, 3048000;
+       each ext = 1270000 by 381000 and each has its own wps:txbx. -->
+</wpg:wgp>
+```
+
+| Case | Word | LibreOffice | Docxodus before / after |
+| --- | --- | --- | --- |
+| Three header or body stories | Not captured | All three labels | First story only; PDF refused / all three labels and source anchors |
+| Nested child origin and nonuniform scale | Not captured | Mapped frames, unchanged type size | Missing stories / independent mapped frames |
+| Picture or ellipse beside the stories | Not captured | All members visible | Missing members / members painted in source order |
+| Rotated group text, `upright` omitted or false | Not captured | Text remains horizontal in the tested controls | First story / text follows the composed rotation |
+| Reflected text and `upright="1"` | Not captured | Readable horizontal text | First story / readable text; upright cancels accumulated rotation |
+
+`WmlToHtmlConverter.DrawingGroups.cs` visits the original member nodes, retaining owning-part
+relationships and canonical paragraph anchors. It maps child coordinates into physical frames,
+draws each shape beneath its HTML story, and places the group through one outer drawing anchor.
+The PDF completeness check remains unchanged. Unsupported geometry preserves text but reports
+layout loss and cannot claim verified source clipping. Canvas roots remain on the existing path.
+
+Rotation and reflection compose as orthogonal transforms. Reflections reposition frames without
+mirroring glyphs; upright text additionally cancels the composed rotation. Microsoft's
+[bodyPr upright documentation](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.bodyproperties.upright?view=openxml-3.0.1)
+defines true as independent of all transforms and omission as false. PDF matrix regressions check
+these semantics directly. The eight original Willow benchmark cases use axis-aligned frames that
+LibreOffice can validate; its observed rotated-text behavior is not used as an angle oracle.
+
 This document tracks edge cases and quirks in Open XML document processing where Word's behavior differs from a strict interpretation of the specification, or where the specification is ambiguous.
 
 ## Table of Contents
@@ -24,7 +62,9 @@ This document tracks edge cases and quirks in Open XML document processing where
    - [`w:color`/`w:fill` are a CACHE; `w:themeColor`/`w:themeFill` are the authority](#wcolorwfill-are-a-cache-wthemecolorwthemefill-are-the-authority)
 6. [Tracked Drawings](#tracked-drawings)
    - [LibreOffice fails on tracked anchored header groups with text boxes](#libreoffice-fails-on-tracked-anchored-header-groups-with-text-boxes)
-7. [Contributing](#contributing)
+   - [TIFF and WMF need browser image normalization](#tiff-and-wmf-need-browser-image-normalization)
+7. [Section Breaks](#section-breaks)
+8. [Contributing](#contributing)
 
 ---
 
@@ -392,6 +432,58 @@ unaffected.
 
 ## Footnotes
 
+### A source marker's inherited formatting revision can look like clipped note text (#1493)
+
+A 10 pt Times New Roman note inherits a font revision from its paragraph style, including
+the source `w:footnoteRef` run. An 11 pt Arial separator makes the final band fractional:
+
+```xml
+<!-- styles.xml -->
+<w:style w:type="paragraph" w:styleId="Note">
+  <w:name w:val="Note"/>
+  <w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>
+    <w:sz w:val="20"/>
+    <w:rPrChange w:id="41" w:author="Example"><w:rPr>
+      <w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>
+    </w:rPr></w:rPrChange>
+  </w:rPr>
+</w:style>
+<!-- footnotes.xml; ordinary body citation and continuation separator omitted -->
+<w:footnote w:type="separator" w:id="-1"><w:p>
+  <w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>
+    <w:sz w:val="22"/></w:rPr></w:pPr>
+  <w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>
+    <w:sz w:val="22"/></w:rPr><w:separator/></w:r>
+</w:p></w:footnote>
+<w:footnote w:id="1"><w:p><w:pPr><w:pStyle w:val="Note"/>
+  <w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>
+  <w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteRef/></w:r>
+  <w:r><w:t>A short note.</w:t></w:r>
+</w:p></w:footnote>
+```
+
+| Renderer | Observed result |
+|---|---|
+| Word | No fresh capture for this case; no native Word equivalence claim. |
+| LibreOffice 25.8.7.3 | All six original benchmark notes fit on one page with complete text. |
+| Docxodus before the fix | Refuses the 11, 11.5 and 12.5 pt separator cases as clipped; the 12 pt, unrevised and generated-marker controls export. |
+| Docxodus after the fix | All six public HTML/PDF exports retain complete note text and pass the declared PDF checks. |
+
+The marker wrapper has zero line height. Its rectangle includes the nested revision's dotted
+border even though the wrapper has no border of its own, so subtracting only its own padding and
+border misses the decoration. In the original 11 pt reproduction, a 32.1875 px band has 34 px
+scroll height and 32 px client height. The wrapper appears 1.671875 px below the band, while the
+superscript text is 5.921875 px above its bottom. Changing the separator can bypass the integer
+scroll-height precheck without changing which glyphs fit.
+
+`measureLaidOutBottoms` in `npm/src/line-metrics.ts` measures nested inline text and child content
+in one walk, shared by the body and note guards in `export-browser.ts`. Atomic boxes retain their
+borders; lowered text and `display: contents` descendants remain measurable. Unboxed generated
+content uses its boxed ancestor conservatively. The one-pixel tolerance and overflow precheck
+are unchanged, and decorative ink may still be clipped at the band edge. Tests pair the actual
+public export with fractional zoom/device scales, genuinely clipped text and images, and linear
+traversal with fresh measurements after a layout change.
+
 ### Footnote Numbering Uses Raw XML IDs Instead of Sequential Display Numbers
 
 **Status:** Fixed (December 2024)
@@ -472,6 +564,15 @@ The reserved boilerplate footnotes are commonly assumed to occupy non-positive i
 ```
 
 Any code that (a) treats a typed note as reserved/kept-verbatim and (b) renumbers *content* notes from 1 will re-mint id 1 for the first content note → a **duplicate `w:id`** colliding with `continuationNotice`. In `DocxDiff` this corrupted **every** edit of the contract (even body/format-only edits that never touch a footnote), because the post-render renumber pass (`IrMarkupRenderer.RenumberNoteIds`) walks body references and re-sequences ids in reference order.
+
+The same classification applies to endnotes and HTML projection (#1485). An uncited
+`<w:endnote w:type="continuationNotice" w:id="2"><w:p><w:r><w:t>Notice</w:t></w:r></w:p></w:endnote>`
+must not become an ordinary numbered note. LibreOffice renders only the body; Docxodus
+previously appended the notice. No fresh Word capture is claimed for this case.
+`RenderEndnotesSection` and flow-mode `RenderFootnotesSection` now use the shared
+`IsBoilerplateNote` classifier, as the paginated footnote registry already did. Explicit
+`normal` and omitted types retain their existing cited/uncited behavior; paginated
+footnote separator templates remain available to continuation layout.
 
 #### Renderer comparison
 
@@ -1392,6 +1493,78 @@ taken, and the schema finding survives on both sides.
 
 ---
 
+## Inline paragraph frames: wrapping determines flow height (#1487)
+
+Two paragraphs with the same inline frame properties share one frame. The next ordinary
+paragraph's placement depends on `w:wrap`, even though the frame uses `w:yAlign="inline"`:
+
+```xml
+<w:p><w:r><w:t>Before</w:t></w:r></w:p>
+<w:p><w:pPr><w:framePr w:w="3600" w:x="240" w:hAnchor="text"
+  w:vAnchor="text" w:yAlign="inline" w:wrap="around"/></w:pPr>
+  <w:r><w:t>Frame first</w:t></w:r></w:p>
+<w:p><w:pPr><w:framePr w:w="3600" w:x="240" w:hAnchor="text"
+  w:vAnchor="text" w:yAlign="inline" w:wrap="around"/></w:pPr>
+  <w:r><w:t>Frame last</w:t></w:r></w:p>
+<w:p><w:r><w:t>After</w:t></w:r></w:p>
+```
+
+The original Sage probes use 12 pt exact lines and no paragraph before/after spacing. The
+frame is 180 pt wide and offset 12 pt from the text edge. Native Word for the web substituted
+Times New Roman for the requested Liberation Serif, so these captures establish behavior,
+not font-matched raster parity.
+
+| Placement | Word for the web | LibreOffice 25.8.7.3 | Docxodus before | Docxodus after |
+|---|---|---|---|---|
+| Body, inline `around` | After beside the first frame line, 192 pt from the text edge | Ignores inline frame positioning; four ordinary lines | After overprints the first frame line | After beside the frame |
+| Body, inline `notBeside` | After below both frame lines | Ordinary paragraph flow | After overprints the first frame line | Frame height precedes After |
+| Header/footer, inline `around` | Following story text wraps beside the frame; paint may extend past the normal story flow | Ordinary paragraph flow | Following text overprints frame text | Story wrapping and header-to-body exclusion retained |
+| Inline frame in a table cell | Frame properties ignored; ordinary text edge and flow | Ordinary paragraph flow | Frame offsets and overlap retained | Ordinary paragraph flow |
+
+With 52 preceding 12 pt lines on Letter paper with 72 pt margins, Word keeps the two-line
+frame on page 1. `around` keeps After beside it; `notBeside` moves only After to page 2.
+With 53 preceding lines the frame itself moves as a whole. Exact/minimum frame heights keep
+their stored size, while `hRule="auto"` uses the text's natural height.
+
+`CreateBorderDivs` in `WmlToHtmlConverter.cs` owns paragraph grouping and the flow/wrapping
+contract. The paginator measures the resulting frame rectangles, shares their exclusions with
+paragraph fragmentation and running stories, and promotes the frame text to the page without
+losing source anchors. Exclusion segments end at each following frame anchor so later frames
+cannot widen earlier tables' float boxes. A frame's required painted extent is separate from
+ordinary flow height; a table's clearance below a frame is additive after margin collapse.
+
+Four isolated native captures distinguish text distances. `hSpace="120"` adds 6 pt beside an
+`around` frame without moving the frame or preceding paragraph; `notBeside` ignores it.
+`vSpace="80"` leaves frame paint fixed but reflows preceding text: `around` puts Before beside
+the frame, while `notBeside` moves Before below it and then lays out After. With a long preceding
+paragraph, Word can move only its final line below the frame. Adding placeholder margins cannot
+reproduce that behavior.
+At a page edge, Word can move the frame to page 2 while leaving the preceding paragraph on page 1.
+The previous diagnosed ordinary-flow fallback fit that probe on one page. The paginator now
+expands the exclusion by the normalized vertical distance while keeping the painted anchor fixed.
+It replays pristine source paragraphs against all admitted rectangles, measures the extra prefix
+height on clones, and charges that height alongside frame extent and notes. Deferral discards the
+speculative replay. Adjacent frames capture their anchors together; separated frames capture
+theirs after the earlier frame has reflowed its prefix (#1510).
+
+Native centered wrapping uses both sides of the same line. A 180 pt frame centered at x216 pt
+leaves text at x72 pt and x396 pt on each of its first two lines. Right alignment puts the frame
+at x360 pt and text on its left; a page-relative 12 pt offset puts the frame at x12 pt and text
+at x192 pt. The paginator now subtracts full frame rectangles from each line and fills both
+available intervals with legal source fragments. Measurement and final frame placement share
+the horizontal anchor resolver. All source words and paragraph ownership survive fragmentation.
+
+Seven original Sorrel benchmark inputs were exported through Word Online on October 31, 2026.
+They reproduce those four placements and verify `notBeside`, `none` and ordinary-flow controls.
+Word substituted Times New Roman for Liberation Serif, so these captures establish behavioral
+regions rather than font-matched raster references. Their complete token inventories and layout
+checks pass; font substitution remains explicitly ineligible for reference scoring.
+
+Unsupported paragraph arrangements retain a warning and strict export refusal until their
+line layout is implemented; positive vertical distance still uses diagnosed ordinary flow.
+See [the capability boundary](architecture/docx_converter.md#paragraph-text-frames) and
+[#1510](https://github.com/JSv4/Docxodus/issues/1510) for preceding-line vertical reflow.
+
 ## Text frames: a partial direct `w:framePr` combines with the style's
 
 A paragraph style can define a text frame, and a paragraph that uses the style can carry its own
@@ -1640,6 +1813,36 @@ this shape).
 settings-part `notePr` → spec default), `FormatNoteNumber` renders the glyph via
 `ListItemTextGetter_Default.GetListItemText`, and the footnotes/endnotes section `<ol>` carries
 the matching CSS `list-style-type` (`NoteListStyleType`).
+
+### Pagination must preserve an endnote paragraph's computed font
+
+The `notes-endnote` benchmark inherits this paragraph formatting from its defaults:
+
+```xml
+<w:docDefaults>
+  <w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="22"/></w:rPr></w:rPrDefault>
+  <w:pPrDefault><w:pPr><w:spacing w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>
+</w:docDefaults>
+```
+
+Flattening `section.endnotes > ol > li > p` lets a long note continue across pages.
+Its paragraph can get its font from a CSS class or a list ancestor, so an empty
+inline `style.fontSize` does not mean the section's font applies. Copy the attached
+paragraph's computed presentation before detaching it, using the same helper as
+promoted drawings. Substituting the section's 12 pt font for an 11 pt paragraph
+also disables natural-line baseline correction: the original `notes-endnote`
+benchmark moved its text upward by 0.75 pt while leaving its marker unchanged.
+Preserving the paragraph font restores its historical baseline and retains
+automatic-spacing fragmentation. Browser tests compare glyph placement with an
+equivalent body paragraph and verify every word of a continued note.
+
+| Renderer | `NoteText` top, pt |
+|---|---:|
+| LibreOffice 25.8.7.3 | 165.899 |
+| Historical Docxodus | 165.702203 |
+| Docxodus before repair | 164.952203 |
+| Docxodus after repair | 165.702203 |
+| Word | No fresh capture for this case |
 
 ## Layout: Word's line breaking and table sizing have no matching CSS default
 
@@ -2257,7 +2460,11 @@ with one decimal, so `w:line="253"` (12.65 pt) rendered as 12.7 pt. They now kee
 point (`{0:0.0#}pt`). The paginated export now runs `applyUnroundedNormalLineHeights`
 (`npm/src/line-metrics.ts`) before pagination. It gives every element whose computed line height is
 `normal` an explicit height for its own font, measured at 10000 px to reduce rounding of its
-ascent, descent and line gap.
+ascent, descent and line gap. Firefox caps rendered fonts at 2000 px while retaining the requested
+computed size: a 10000 px probe therefore produced roughly one fifth of the correct line height
+and overlapping paginated text (#1424). A once-per-document capability probe detects when doubling
+the font size leaves its rendered height unchanged. In that browser both natural-height and descent
+probes use 1000 px; Chromium retains the 10000 px precision required by the long-line controls below.
 The converter's output is unchanged. Since issue #1151 the paginator itself runs the same pass on its
 staging tree, so the paginated view and the paginated editor lay single-spaced lines out at the same
 unrounded pitch as the export; after the export's earlier pass no line height is `normal`, so the
@@ -2925,6 +3132,47 @@ which the bidi algorithm placed by the surrounding RLM marks.
   `ReverseTableBordersForRtlTables`, all reading through `IsOnOffPropertyEnabled`.
 - Tests: `Docxodus.Tests/WmlToHtmlOnOffDirectionTests.cs`.
 
+## Long text after a right tab must remain wrappable (#1488)
+
+With 12 pt Liberation Serif, a Letter page and one-inch margins, this paragraph loses
+most of its following text on main `b3d6de06`. Expand the final `w:t` to eighteen
+numbered sentences, ending in `TAIL COMPLETE`:
+
+```xml
+<w:p>
+  <w:pPr><w:tabs><w:tab w:val="right" w:pos="8640"/></w:tabs></w:pPr>
+  <w:r><w:t>Item</w:t></w:r><w:r><w:tab/></w:r>
+  <w:r><w:t>Wren01 The eastern store keeps every copper token beside the window.
+    ... Wren18 The eastern store keeps every copper token beside the window. TAIL COMPLETE</w:t></w:r>
+</w:p>
+```
+
+The input packages are original, SDK-valid fixtures. The comparison uses LibreOffice
+25.8.7.3 and the public `renderDocxArtifacts` HTML/PDF API, with installed Liberation
+Serif; no fresh Word capture or exact visual equivalence is claimed.
+
+| Case | LibreOffice | Docxodus before |
+|---|---|---|
+| Long right-tab tail, separate or mixed run | All words wrap within the page | A roughly 12,080 px atomic segment loses the tail while reporting complete export |
+| Larger following font or expanded character spacing | Complete, wrapped text | The width reservation ignores following-run font properties or character spacing |
+| Short wide-glyph tail | Complete text | Estimated glyph widths can leave words beyond the text column |
+| Same tail in a VML rectangle textbox | Complete text inside the box | The width lookup recognizes `v:shape` but misses the supported `v:rect` alias |
+| Wrapped title followed by a nearly full-width tail | Complete text on one page | The clipped prefix collapses to a few pixels; its resulting height makes export fail |
+| Left/center, short-tail, long-prefix and long-both controls | Complete text | Complete text |
+
+`CalculateSpanWidthTransform` now measures the following runs' own resolved fonts and
+properties. `CalcWidthOfRunInTwips` includes character spacing. If a following stretch
+exceeds both the text column and its authored stop, the existing run-aware path keeps
+the paragraph fragmentable instead of building an unbounded atomic row. Deliberate
+overhanging stops retain their existing treatment.
+
+The browser remains the authority on actual glyph width: a short following flex item
+can shrink and wrap. In `WrappedSegment`, the title keeps its minimum word width and
+the row can wrap, so an underestimated tail cannot squeeze the clipped title to zero.
+The textbox width helper uses the same `IsVmlShape` predicate as textbox rendering.
+Regression coverage includes text extraction, actual word bounds, a multi-page tail,
+and the fitting title/page-number controls.
+
 ## A right tab stop inside the right indent: the page number reaches the stop
 
 Table-of-contents and index entries often set a right indent, so long titles wrap short of the
@@ -3340,7 +3588,7 @@ of the authored exact-spacing exception.
 
 ### LibreOffice fails on tracked anchored header groups with text boxes
 
-**Status:** Renderer limitation reproduced; explicit failure handling added (#1045).
+**Status:** Renderer limitation persists; shipped deliverable verification reports the specific risk (#1045).
 **Measured:** 2026-10-10, Linux, LibreOffice 24.2.7.2 and 25.8.7.3.
 
 The smallest failing combination in this investigation is a `w:ins` or `w:del` around a run
@@ -3409,6 +3657,26 @@ a supported import path; it does not establish a general lossless conversion of 
 group. No equivalent safe revision encoding was identified by these experiments. The core
 comparison output therefore retains the native DrawingML and its revision wrappers.
 
+The harness added in #1048 did not protect shipped consumers: it only recorded the conversion
+failure, and v15 output still triggers it. Inspect the **actual output**, since a comparison of
+two clean inputs can introduce the failing revision wrapper:
+
+```csharp
+var redline = DocxCompare.Compare(original, revised);
+var report = DeliverableVerifier.VerifyDeliverable(redline); // Docxodus.Verification
+var risks = report.Findings.Where(f => f.Code == "render.libreoffice_tracked_header_group");
+```
+
+The finding identifies the affected header part and XPath and recommends preserving the original
+DOCX and its revisions while selecting another renderer verified for that document. It is a
+static compatibility warning, not a claim that a conversion was attempted or that the DOCX is
+invalid. Standard verification reports it; Strict verification blocks delivery on the warning.
+The same finding travels through session verification, the shared verification JSON, and delivery
+validation reports. Compatibility branches are reported conditionally on the renderer selecting
+the implicated drawing. The detector never combines geometry or text boxes from different
+drawings or branches. Direct invocation of LibreOffice can still fail; verification does not
+rewrite the native package or replace the renderer.
+
 `tools/diffharness/lo/lo_render.py` provides explicit conversion handling for Linux harness callers:
 
 - It converts a byte copy using an isolated LibreOffice profile and temporary output directory.
@@ -3442,9 +3710,11 @@ changed measured behavior exit 1. An unmeasured version exits 2 unless a control
 observations remain available for investigation. The older version was the official 24.2.7.2
 Linux archive, extracted locally without changing the system installation.
 
-Relevant core paths are `DocxCompare.Compare`, `IrMarkupRenderer`'s header markup and
-`RevisionProcessor.AcceptRevisions` / `RejectRevisions`. This change adds harness handling and
-interoperability evidence without changing those core paths. Unit tests cover failure reporting,
+Relevant core paths are `DocxCompare.Compare`, `IrMarkupRenderer`'s header markup,
+`RevisionProcessor.AcceptRevisions` / `RejectRevisions`, and
+`WordprocessingClosureInspector.InspectStaticRenderRisks`. The detector leaves comparison and
+resolution unchanged. Unit tests cover public verification of comparison output, native drawing
+content and geometry after accept/reject, and controls. Harness tests cover failure reporting,
 artifact freshness, process cleanup and source preservation, and run in CI without requiring a
 LibreOffice installation.
 
@@ -4339,6 +4609,39 @@ warnings. Benchmark metadata retains each SDK finding verbatim. Design:
 `npm/tests/export-story-comments.spec.ts`. The paired fidelity-bench story cases use the range-only
 form, because the LibreOffice reference track cannot open the other.
 
+## Section Breaks
+
+### Rejecting an inserted paragraph does not necessarily remove its section boundary
+
+During #1534 verification (2026-11-03), an independently authored opening section used
+paragraph insertion markers on its text and boundary carrier:
+
+```xml
+<w:p>
+  <w:pPr><w:rPr><w:ins w:id="1" w:author="Bench"/></w:rPr>
+    <w:sectPr><!-- empty running-story reference and page geometry --></w:sectPr>
+  </w:pPr>
+  <w:ins w:id="2" w:author="Bench"><w:r><w:t>Close the preparation checklist.</w:t></w:r></w:ins>
+</w:p>
+```
+
+The input ends with a retained section. This schema-valid markup produces different rejection results:
+
+| Resolver | Observed result |
+| --- | --- |
+| Docxodus `RevisionProcessor.RejectRevisions` | Removes the inserted paragraph and its boundary; one section remains. |
+| LibreOffice 25.8.7.3 | Keeps an empty boundary paragraph and two sections, with extra running-story bindings. |
+| Word Online, Playwright UI Reject All Changes | Keeps an empty first section and blank first PDF page. The downloaded DOCX has two sections and no insertion/deletion markers. |
+
+This is evidence about the authored markup, not native Word Compare output. An inserted
+paragraph mark is insufficient to claim native section-boundary reversibility. The #1534
+story-alignment fix does not change that representation: `IrMarkupRenderer` carries the
+section properties with their paragraph, while `RevisionProcessor` removes the inserted
+paragraph on rejection. No native-boundary fix is claimed here. The independent benchmark
+keeps exact package endpoints and review-story text mandatory, and explicitly excludes the
+two LibreOffice rejection measurements that fail authored calibration. See the
+[authored fixtures and native capture evidence](https://github.com/JSv4/docx-fidelity-bench/tree/main/docs/results/inserted-section-stories).
+
 ## Contributing
 
 When adding new corner cases to this document:
@@ -4890,6 +5193,49 @@ that the resulting column has exactly zero width. Tests: `ZeroWidthColumnTests` 
 
 ## Blocks taller than a page: exact rows, header rows, nested tables and border groups (#1202)
 
+### Bordered footnotes must use the group fragmenter too (#1491)
+
+An ordinary footnote paragraph containing seventy 16pt lines fits across two Letter pages.
+Adding a paragraph border makes `CreateBorderDivs` wrap it in a `div`; previously both note
+splitters recognized only paragraphs and tables, so they carried the entire wrapper and the
+final export correctly rejected its clipped text. A hundred-line control additionally exposes
+the later-continuation path after the first page has split successfully.
+
+```xml
+<w:footnote w:id="1">
+  <w:p><w:pPr><w:widowControl w:val="0"/>
+    <w:pBdr><w:bottom w:val="single" w:sz="8" w:space="2" w:color="2060A0"/></w:pBdr>
+    <w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="exact"/>
+  </w:pPr><w:r><w:footnoteRef/></w:r>
+  <w:r><w:t>Ash001 The archive entry is complete.</w:t><w:br/>
+    <!-- repeat uniquely labeled lines through Ash070 -->
+    <w:t>Ash070 The archive entry is complete.</w:t></w:r></w:p>
+</w:footnote>
+```
+
+| Original Ash probe | LibreOffice 25.8.7.3 | Main before fix | Fixed Docxodus |
+| --- | --- | --- | --- |
+| 70 lines, box or bottom border | Two pages, all 70 labels | Clipping refusal | Two pages, all 70 labels |
+| 70 lines, no border or separate paragraphs | Two pages, all 70 labels | Complete | Complete |
+| Three lines, box border | One page, all three labels | Complete | Complete |
+
+No fresh Word footnote capture is claimed. The shared group's existing open-border convention
+comes from the registered body-border observations below: preserve side borders, omit the bottom
+on a head and top on its continuation. `splitFootnoteToFit` and `splitContinuationForPage` now
+both call `splitBorderGroup`, passing their exact payload measurement. Source paragraphs and
+painted-border metadata survive the same Range split used in the body. The clipping guard is
+unchanged; this does not make arbitrary oversized objects splittable.
+Table-cell splitting calls the same group helper. The note's existing fresh-band policy controls
+line-keep relaxation, and a heading that keeps with its successor remains with that successor's
+first nonempty fragment instead of preventing every split of the group.
+
+Placing the same 100-line paragraph in a single-cell footnote table exposes a separate native
+reference limitation. With a leading note-marker paragraph and required trailing paragraph,
+LibreOffice 25.8.7.3 retains only one of the 100 labels, with or without the border; fixed
+Docxodus retains all 100 across three pages. The paired benchmark preserves both complete
+source contracts but marks these two LibreOffice references ineligible and unscored pending
+valid native references. The other eleven authored comparisons have complete references.
+
 Native Word for the web exports of the exact inputs are recorded in
 `TestFiles/OversizedPageBlocks/word-observations.json`. All twenty-three inputs have zero Open XML SDK
 Microsoft365 findings. The browser regression checks compare the complete word multiset on every
@@ -5136,3 +5482,577 @@ host line, as it does for a text box in a run outside any control.)
 Code: `WmlToMarkdownConverter.GroupInlineRuns` (inline `w:sdt`/`w:smartTag` walk), and the HTML
 render's control removal `MarkupSimplifier.RemoveCustomXmlAndContentControlsTransform`. Fix: none needed for #1386;
 evaluating bindings would be a separate feature.
+
+### Move-source text and Word opening (#1420)
+
+A paragraph moved by comparison can contain either carrier under its source wrapper:
+
+```xml
+<w:moveFrom w:id="1" w:author="Reviewer"><w:r><w:delText>Moved text</w:delText></w:r></w:moveFrom>
+<!-- Word's Compare uses w:t in the same position. -->
+<w:moveFrom w:id="1" w:author="Reviewer"><w:r><w:t>Moved text</w:t></w:r></w:moveFrom>
+```
+
+| Consumer | Observed behavior |
+|---|---|
+| Word for Microsoft 365 desktop | The issue reporter observed that the first form failed to open, while replacing `w:delText` with `w:t` opened and showed a move. |
+| Word Online | Both current-main and corrected comparison and consolidation outputs opened and displayed the move in the authored benchmark case; this did not reproduce the reported desktop failure. |
+| LibreOffice | The reporter observed that it opened the first form; the corrected case also opens and renders. |
+| Docxodus | Compare, Consolidate and tracked `MoveBlock` previously converted source-move text and field instructions to deletion carriers. `IrMarkupRenderer.WrapRunLevel` and `DocxSession.MarkParagraphContentAndMark` now reserve that conversion for `w:del`, retaining `w:t` and `w:instrText` in `w:moveFrom`. |
+
+The source move is still removed on accept and restored on reject. The desktop observation is
+reported in the issue; the Word Online check is not evidence that the desktop behavior was reproduced.
+
+### Equation edits following tabs (#1421)
+
+The equation is opaque to word-level comparison. Its source carrier must still belong to the equation's
+own edit, even though both it and a preceding tab have zero width in public diff character offsets:
+
+```xml
+<w:r><w:t>III.</w:t><w:tab/></w:r>
+<m:oMath><m:r><m:t>old</m:t></m:r></m:oMath>
+<!-- Revision changes only old to new. -->
+```
+
+| Consumer | Observed behavior |
+|---|---|
+| Word for Microsoft 365 desktop | The issue reporter expected the inserted equation to have revision ownership, as in the space-separated control. No desktop verification was available in this session. |
+| Word Online | On October 29, 2026, both the original output and the space-separated control retained both equations after Reject All. Correcting the missing insertion wrapper did not change that web behavior. This is a limitation of this Word Online check, not proof of desktop round-trip behavior. |
+| LibreOffice 25.8.7.3 | Authored n-ary equation redlines retained both alternatives after accept and reject, including the space control. Those specific consumer checks are declared unsupported in the fidelity benchmark; independent XML resolution and schema validation remain mandatory. |
+| Docxodus | The original renderer assigned both atoms to the same character boundary, leaving the new equation bare. Reader-owned rendering positions now keep the tab stable, put the old/new equations under deletion/insertion ownership, and restore the respective input on reject/accept. |
+
+`IrReader` retains final source contributions in `IrSourceContent`; `IrMarkupRenderer` converts tokens and
+source slices to the same private coordinate. The public text-offset contract remains unchanged.
+The regression suite checks simple and n-ary equations, Compare and Consolidate, source content order,
+range endpoints, paragraph splitting/merging, and Open XML validity. Word Online is not used as a desktop
+Word oracle for this behavior.
+
+### Behind-text placement and explicit picture wrapping (#1444)
+
+The drawing's text-wrapping instruction remains meaningful when `behindDoc="1"`:
+
+```xml
+<wp:anchor behindDoc="1" simplePos="0" relativeHeight="1"
+           locked="0" layoutInCell="1" allowOverlap="1">
+  <!-- Required position, extent and graphic children omitted here. -->
+  <wp:wrapSquare wrapText="right"/>
+</wp:anchor>
+```
+
+| Consumer | Behavior and evidence |
+|---|---|
+| Word, documented | Microsoft's Open Specifications support clarification says explicit top/bottom wrapping takes precedence over `behindDoc`. Desktop Word was not run for these examples. |
+| LibreOffice | An original 140pt-wide rectangle with square wrapping and `behindDoc="1"` shifts the first word from x=36.1pt to x=185.2pt. Changing the wrapping to `wrapNone` leaves it at x=36.1pt. |
+| Docxodus | `ApplyAnchorTextWrap` uses shared absolute placement only for `wrapNone`; explicitly wrapping pictures retain their existing exclusion, including behind-text pictures. Native and public PDF controls cover both z-orders. |
+
+Treating every behind-text picture as nonwrapping incorrectly bypassed that exclusion.
+The page-background fix therefore tests the wrap element, rather than using z-order as a
+substitute. [Microsoft's clarification](https://learn.microsoft.com/en-us/answers/questions/195851/behinddoc-%28wp-wraptopandbottom%29-%28w10-wrap%29-style-m)
+also distinguishes DrawingML choice content from its legacy VML fallback; the two are alternative
+representations, not competing instructions to combine.
+## Raised inline text boxes can paint above the body margin
+
+An inline DrawingML text box inside a run with `<w:position w:val="48"/>`
+can paint above the body text band while remaining inside the paper. An independently
+authored 180×36pt box on a 432×576pt page with 36pt margins demonstrates this with one
+label and a following body paragraph. The box has explicit zero insets and `a:noAutofit`.
+
+| Output | Ordinary label y | Raised label y | Following paragraph y |
+| --- | ---: | ---: | ---: |
+| LibreOffice reference | 36.508pt | 8.908pt | 72.490pt |
+| Docxodus after placement fix | 35.807pt | 11.807pt | 72.091pt |
+| Docxodus before fix | visible | rejected as missing source text | visible |
+
+These are extracted glyph bounds, not a claim of exact reference parity; Word was not
+measured. Both successful renderers retain the following paragraph's position. The shared
+paginator now preserves the inline flow slot and promotes the raised box into page coordinates,
+using the same source ownership and inherited presentation handling as floating objects.
+The box's internal clipping and the paper boundary remain active. An intervening authored
+clip or unsupported transform keeps the existing completeness failure instead of escaping it.
+
+## Vertical merges follow grid columns, not physical cell positions (#1489)
+
+These two rows merge the same third grid column even though its physical cell index changes
+(paragraphs, widths and the three-column `tblGrid` are omitted for brevity):
+
+```xml
+<w:tr>
+  <w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><!-- TopLeft TopRight --></w:tc>
+  <w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><!-- MergedLabel --></w:tc>
+</w:tr>
+<w:tr>
+  <w:tc><!-- BottomLeft --></w:tc><w:tc><!-- BottomRight --></w:tc>
+  <w:tc><w:tcPr><w:vMerge/></w:tcPr><!-- empty paragraph --></w:tc>
+</w:tr>
+```
+
+| Consumer | Observed behavior |
+|---|---|
+| Word | No fresh capture claimed. |
+| LibreOffice 25.8.7.3 | Preserves the merged third column across both rows, including multi-column and `gridBefore` variants. |
+| Docxodus before fix | Matches physical cell indexes, emits `rowspan="1"`, and discards the continuation. |
+| Docxodus after fix | Matches the shared logical interval and emits `rowspan="2"`; omitted starter columns retain their positions. |
+
+`TableGridModel.VerticalMergeSpans` follows adjacent rows in one pass, reusing the wrapper-aware
+row/cell traversal. `ProcessTableCell` suppresses only matched continuations; orphan or mismatched
+continuations retain their text as ordinary cells. `ProcessTableRow` emits empty cells for omitted
+columns beyond the table's common omitted prefix. When every visible cell in that row spans later
+rows, an invisible first-line box preserves its minimum height using the first starter's font,
+spacing and cell padding. Later, larger starters do not enlarge that box: independent mixed-font
+LibreOffice controls show that source order matters. The box neither widens the table nor enters
+PageMap. A standalone row or cell fragment has no table
+grid context and retains its ordinary content. The paired benchmark independently checks full
+PDF text, column placement and the delivered HTML's merge span.
+
+An omitted-prefix row containing only matched continuations uses its first empty paragraph for
+the same minimum-height box. Leaving just a positive border sliver can pass a geometry guard
+while still losing the row's line pitch; the benchmark therefore also checks following-text placement.
+
+
+## Legacy form metadata lives inside the field's begin character (#1480)
+
+A valid legacy form stores `w:ffData` under `w:fldChar`, not beside it in a run. Its
+cached result may be absent or stale. For example, this checkbox is explicitly unchecked
+although its default is checked; its fixed size is 10 pt (20 half-points):
+
+```xml
+<w:r><w:fldChar w:fldCharType="begin"><w:ffData>
+  <w:name w:val="ExampleCheck"/>
+  <w:checkBox><w:size w:val="20"/><w:default w:val="1"/><w:checked w:val="0"/></w:checkBox>
+</w:ffData></w:fldChar></w:r>
+<w:r><w:instrText> FORMCHECKBOX </w:instrText></w:r>
+<w:r><w:fldChar w:fldCharType="separate"/></w:r>
+<w:r><w:fldChar w:fldCharType="end"/></w:r>
+```
+
+A dropdown uses the same field scaffolding with `FORMDROPDOWN` and, for example:
+
+```xml
+<w:ddList>
+  <w:result w:val="1"/><w:default w:val="0"/>
+  <w:listEntry w:val="Amber rack"/><w:listEntry w:val="Copper bin"/>
+</w:ddList>
+```
+
+The selected index is zero-based. An absent or out-of-range selection falls back to the
+default index, then the first entry. See the SDK's ISO descriptions of
+[selection](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.dropdownlistselection?view=openxml-3.0.1)
+and [default](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.defaultdropdownlistitemindex?view=openxml-3.0.1).
+[Fixed size](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.formfieldsize?view=openxml-3.0.1)
+is in half-points; automatic size uses the field character's font.
+
+| Case | Word | LibreOffice 25.8.7.3 | Docxodus before / after |
+|---|---|---|---|
+| Four checkbox defaults/explicit overrides | Not captured | Unchecked, checked, unchecked, checked | Missing / all four visible with read-only accessible state |
+| Automatic 11 pt, fixed 10/14 pt boxes | Not captured | All four painted outlines measured about 10.15 pt | Missing / honors declared fixed size and automatic font size |
+| Metadata-only dropdown in body/header/footer | Not captured | Selected/default text appears once | Missing / appears once |
+| Matching cached dropdown and complete FORMTEXT | Not captured | Cached content displayed | Unchanged; both benchmark controls retain identical HTML and page pixels |
+| Long selection before a left tab | Not captured | RouteTail begins at 360.1 pt | Metadata-only tail at 216 pt / 396 pt, matching the unchanged cached control |
+
+The last row preserves a pre-existing default-tab/provider difference: both Docxodus cached
+and synthesized results advance the tail to 396 pt. The benchmark requires the tail to remain
+after the selected text, not exact LibreOffice tab parity. The four original cases and their
+controls are `fields-legacy-*` in the paired fidelity bench. Its checkbox contract measures
+painted outlines, checked/unchecked interiors, fixed size and caption alignment in addition
+to accessibility state; PDF text cannot prove the presence of a non-text box.
+
+`WmlToHtmlConverter.NormalizeFieldResults` resolves complete, independently annotated field IDs
+after formatting assembly and before empty-paragraph/tab processing. Only result leaves owned
+by that field are replaced, preserving styled runs and range/revision markers. Nested fields
+inside an outer instruction stay hidden, and a deleted result is not recreated outside its
+deletion. A bounded prescreen avoids annotating unrelated stories; disabled running stories
+are skipped. Complete FORMTEXT caches remain unchanged, and unsupported metadata uses the
+existing placeholder policy.
+
+Checkboxes use CSS borders, including both diagonals, rather than font glyphs unavailable in
+Liberation Serif. A zero-width whitespace strut keeps graphic-only runs on the text baseline
+under exact spacing. Borders survive background-free printing and forced-colors mode; the
+three Chromium PDF captures have identical decoded page pixels. This is static rendering,
+not an editable form control.
+
+
+## Property fields and page-dependent running headings (#1481)
+
+A simple field may have no cached result, while a complex field's cache may itself contain another
+field. These represent the same read-only title lookup when `docProps/core.xml` contains a title:
+
+```xml
+<w:fldSimple w:instr="DOCPROPERTY Title"/>
+<w:r><w:fldChar w:fldCharType="begin"/></w:r>
+<w:r><w:instrText>TITLE</w:instrText></w:r>
+<w:r><w:fldChar w:fldCharType="separate"/></w:r>
+<w:r><w:t>Stale title</w:t></w:r>
+<w:r><w:fldChar w:fldCharType="end"/></w:r>
+```
+
+An explicit empty title differs from an absent property. Docxodus clears the former and preserves
+and diagnoses the latter. `w:fldLock="true"` keeps a stored property/style result, even when marked
+dirty. Nested fields inside an outer instruction contribute neither visible text nor note ordinals.
+Microsoft documents [TITLE](https://support.microsoft.com/en-us/word/field-codes-title-field) and
+[DOCPROPERTY](https://support.microsoft.com/en-us/word/field-codes-docproperty-field); TITLE's
+property-writing argument is deliberately outside the read-only resolver.
+
+A header can reference a paragraph style shared by headings on different pages:
+
+```xml
+<w:style w:type="paragraph" w:styleId="Chapter">
+  <w:name w:val="Juniper Chapter"/>
+</w:style>
+<!-- Main document paragraph -->
+<w:p><w:pPr><w:pStyle w:val="Chapter"/></w:pPr><w:r><w:t>BIRCH SECTION</w:t></w:r></w:p>
+<!-- Header paragraph -->
+<w:p><w:fldSimple w:instr='STYLEREF "Juniper Chapter"'>
+  <w:r><w:t>ALDER SECTION</w:t></w:r>
+</w:fldSimple></w:p>
+```
+
+The shared header cache cannot answer both pages. Resolution must follow the page's source headings,
+then measure the resulting header before assigning body space. A long heading can move its own
+source to another page, so substitution after pagination is insufficient. A genuine oscillation
+(for example a kept heading that alternately fits and does not fit under its own expanded header)
+is refused explicitly. Splittable column groups and oversized pictures first use their existing
+reflow/fitting policies against the actual page band.
+
+| Original two-page fixture | Word | LibreOffice 25.8.7.3 | Docxodus before / after |
+|---|---|---|---|
+| Uncached STYLEREF in header/footer | Not captured | ALDER then BIRCH | Blank / ALDER then BIRCH |
+| Both caches contain ALDER | Not captured | ALDER then BIRCH | ALDER on both pages / ALDER then BIRCH |
+| Locked cache contains LOCKED REGISTER | Not captured | Updates to ALDER then BIRCH despite lock | LOCKED REGISTER on both pages / unchanged |
+
+The locked case is a diagnostic/control, not a LibreOffice parity claim. The three original packages
+pass Open XML SDK 3.5.1 validation. Browser regressions cover first/last matching paragraphs,
+forward/preceding fallback, style scope, split headings, story variants, numbering restarts,
+actual page-band geometry and explicit nonconvergence. No fresh Word rendering is claimed.
+
+## Independent text stories in VML groups (#1482)
+
+A `w:pict` can contain several textboxes. Each owns its own `w:txbxContent`; taking the first
+descendant loses later labels before pagination can see them. In this minimal group, the physical
+frame is 300 × 100 pt and the child space is 600 × 200 units, beginning at (100, 200):
+
+```xml
+<w:pict><v:group style="width:300pt;height:100pt" coordorigin="100,200" coordsize="600,200">
+  <v:shape style="left:100;top:200;width:240;height:56">
+    <v:textbox inset="0,0,0,0"><w:txbxContent><w:p><w:r><w:t>ALDER</w:t></w:r></w:p></w:txbxContent></v:textbox>
+  </v:shape>
+  <v:shape style="left:400;top:300;width:240;height:56">
+    <v:textbox inset="0,0,0,0"><w:txbxContent><w:p><w:r><w:t>BIRCH</w:t></w:r></w:p></w:txbxContent></v:textbox>
+  </v:shape>
+</v:group></w:pict>
+```
+
+The boxes are 120 × 28 pt, at offsets (0, 0) and (150, 50). Nested groups compose their own
+origin and scale. LibreOffice treats point-suffixed child coordinates like unitless coordinates
+within this space. An omitted group `coordsize` is 1000 × 1000, as specified by the group template
+in the [VML submission](https://www.w3.org/TR/1998/NOTE-VML-19980513); the shape element's
+different default does not apply.
+
+| Original one-page fixtures | Word | LibreOffice 25.8.7.3 | Docxodus before / after |
+|---|---|---|---|
+| Body or header group with ALDER and BIRCH | Not captured | Both labels at their separate positions | ALDER only / both labels at their separate positions |
+| Separate page-anchored boxes control | Not captured | Both labels, with its default text inset | Both labels; complete page rasters unchanged |
+| Omitted versus explicit 1000-unit group size | Not captured | Identical positions | Wrong default / identical positions |
+| Group rotated 90 degrees | Not captured | Rotated placement | Silently unrotated / explicit unsupported-layout diagnostic |
+
+The native separate-box control applies a roughly 4.4 pt text inset despite `inset="0,0,0,0"`;
+Docxodus continues to honor the zero inset. This existing difference is not a group regression.
+Rotation, flips and center-coordinate overrides remain unsupported, including at nested levels.
+Their descendants cannot claim authored clipping or off-page placement exemptions from approximate
+geometry. DrawingML group text handling is unchanged.
+
+`ProcessVmlMembers` traverses the selected compatibility branch and sends each member through
+the shared image/textbox paths. A source inventory on the host paragraph independently names
+the selected textbox paragraphs. Actual successful image representations suppress alternative
+text inventories; a missing image or null image callback keeps the text fallback. The paginator
+requires these source identities even when conversion omitted their HTML. Unused running-story
+variants remain outside the current page's completeness check.
+
+## Ruby keeps two text layers and reserves the annotation raise (#1483)
+
+```xml
+<w:r><w:ruby><w:rubyPr><w:rubyAlign w:val="center"/><w:hps w:val="12"/>
+  <w:hpsRaise w:val="22"/><w:hpsBaseText w:val="22"/><w:lid w:val="en-US"/></w:rubyPr>
+  <w:rt><w:r><w:t>reading</w:t></w:r></w:rt>
+  <w:rubyBase><w:r><w:t>CEDAR</w:t></w:r></w:rubyBase>
+</w:ruby></w:r>
+```
+
+| Original fixture | Word for the web | LibreOffice 25.8.7.3 | Docxodus before / after |
+|---|---|---|---|
+| 11pt base, 6pt guide, raise 11pt | Both strings; baselines 11pt apart | Both strings above/below | Annotation lost / both strings, baselines 11pt apart |
+| Same source with raise 0pt | Both strings on the same baseline | Same geometry as its 11pt-raise rendering | Annotation lost / baseline distance zero |
+| Plain-run control | Not captured | Both strings | Both strings; local complete-page rasters unchanged |
+| Multiple formatted base runs | Not captured | Both layers, with base formatting | Annotation lost / both layers, with run formatting |
+
+Word exports were captured through the web UI from original authored inputs on 2026-10-31.
+Word substituted Times New Roman for requested Liberation Serif, so these establish raise behavior,
+not a font-matched fidelity reference. Word's PDF export failed for the 22pt-raise variant.
+LibreOffice ignores the tested raise values (0, 6, 11, 22pt), so it cannot adjudicate that property.
+It also ignores `hps` when the annotation run has no explicit size, and retains only the last
+annotation run in the tested multi-run guide. The independent benchmark therefore uses an explicit
+guide size and multiple base runs; public-export regressions separately cover multi-run guides.
+For the independently authored `ruby-multiple-base` benchmark, Word centers `needle` over the
+combined bold/plain `LARCH` base (guide center 115.30pt, base center 115.18pt). Docxodus agrees;
+LibreOffice puts the guide at the first run's left edge. This Word capture also substituted Times
+New Roman. The benchmark gates the shared base geometry and complete text, and treats
+LibreOffice's multi-run guide x-position as diagnostic rather than an oracle.
+
+The converter previously read only `rubyBase.Value`, losing `rt` entirely. `ProcessRuby` now
+projects both layers through ordinary run conversion. OOXML gives `hps` precedence over reading
+run sizes, including complex-script sizes; explicit base sizes take precedence over `hpsBaseText`.
+Size resolution precedes formatting assembly so those distinctions survive.
+
+Native HTML ruby is wrapped as an atomic inline pair. Its measured baseline distance is adjusted
+once before pagination, and its signed height contribution follows the authored raise. Long body
+and note paragraphs can split around the pair. Table coverage is continuation between short rows,
+not splitting a single oversized cell paragraph. Exact-spaced, tabbed, bidi, shifted/scripted and
+vertical-alignment variants retain complete readable fallback text and a diagnostic. Nested
+fallback runs do not independently correct the exact-line baseline or enlarge its line boxes.
+
+Tagged PDF preserves the pair's association and semantic order: Chromium 143 uses a `NonStruct`
+subtree for the pair, while Chrome 155 emits `Ruby`/`RT` roles for the same HTML. Raw PDF
+paint/operator order may place annotation text later; consumers should use the structure tree
+or geometric reading order rather than assuming paint order is reading order.
+
+Chromium 143 prints relative-positioned glyph baselines at whole CSS pixels even when the DOM
+retains fractional positioning. The 11pt fixture measures 10.992pt in the DOM and 10.5pt in its
+PDF; public-export tests allow one CSS pixel (0.75pt) in PDF baseline distance while retaining
+0.05pt DOM tolerance. Zero/22pt cases reject an omitted correction. This is a documented print
+precision limit, not a claim of exact Word geometry.
+
+### TIFF and WMF need browser image normalization
+
+Issue #1484 used original Cypress rectangle/ellipse graphics. A TIFF can be a valid image
+part yet remain undecodable by Chromium; an accepted package MIME type does not establish
+browser support. The same DrawingML relationship can point to either TIFF or WMF:
+
+```xml
+<!-- image part content type: image/tiff or image/x-wmf -->
+<wp:inline>
+  <wp:extent cx="914400" cy="609600"/>
+  <wp:docPr id="1" name="CypressGeometry"/>
+  <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+    <pic:pic><pic:blipFill><a:blip r:embed="picture"/>
+      <a:stretch><a:fillRect/></a:stretch></pic:blipFill></pic:pic>
+  </a:graphicData></a:graphic>
+</wp:inline>
+```
+
+The equivalent legacy carrier is `<w:pict><v:shape style="width:72pt;height:48pt">`
+with `<v:imagedata r:id="picture"/>`. The related part belongs to its body/header story.
+
+| Case | Word for the web | LibreOffice 25.8.7.3 | Docxodus |
+| --- | --- | --- | --- |
+| Original placeable WMF rectangle/ellipse | Fresh PDF capture paints both outlines | Paints both outlines | Previously `[WMF IMAGE]`; now static SVG |
+| Identical PNG/TIFF pixels | Fresh PDF capture paints the graphic | Both paint the same graphic | PNG unchanged; TIFF normalized to PNG with identical rendered pixels |
+| WMF picture stretched to twice its height | Fresh DrawingML capture stretches the complete outline: 3pt vertical edges, 6pt horizontal edges | Keeps a uniform 3pt outline | SVG transforms the complete painted graphic, matching Word's scaling |
+| WMF window x scales 0.5, 1 and 2 | Fresh captures exclude 2, 1 and 0 logical units from right bounds; pen scales on both axes | Uses different ellipse center rounding and uniform pen scaling | Resolves device-pixel exclusion before transforming logical shapes and paint |
+| Visible zero-width WMF pen | Fresh PDF uses a printer-device hairline (about 0.14pt before picture scaling) | Device-dependent | Explicit unsupported-content diagnostic; no assumed printer resolution |
+| Grouped VML image sizing | Not measured; the diagnostic VML carrier printed a linked-image error | Uniform pen width follows horizontal scale | Uses the same transformed image as DrawingML; carrier placement is tested separately |
+| Unsupported TIFF colorimetry or WMF records | Not measured | Provider-dependent | Explicit placeholder/warning; strict export refuses it |
+
+Word substituted Times New Roman for requested Liberation Serif in these captures; this is
+image-behavior evidence, not a font-matched whole-page oracle. Source and capture hashes are
+retained with the issue evidence outside version control.
+
+`WmlToHtmlConverter.Images.cs` handles both image carriers and delegates to the bounded
+`Internal/TiffImage.cs` and `Internal/WmfImage.cs` decoders. TIFF normalization applies the
+orientation and unpremultiplies associated alpha before encoding PNG. Unknown colorimetry is
+reported rather than silently treating calibrated samples as sRGB. For a WMF window scale
+`sx`, Word excludes `truncate(1 / sx)` logical units from the right edge; the y rule is
+equivalent. A five-image native diagnostic pinned both rectangle endpoint parities, ellipse
+bounds, solid brushes and pen widths. For example, rectangle `(8,8)-(42,24)` ends at x=40,
+41 and 42 at x scales 0.5, 1 and 2. An SVG transform maps both logical geometry and paint;
+later picture stretching also stretches the outline. LibreOffice instead shifts a thick-pen
+ellipse's integer center and keeps its pen uniform, so it is not the geometry oracle here.
+
+The SVG viewBox retains the unrounded physical size. Only its width/height attributes round
+up to positive intrinsic dimensions. Bounds that collapse after device-pixel exclusion and
+visible zero-width pens reject the whole image, including previously decoded shapes. Null
+pens remain supported. This prevents a printer-specific hairline from silently becoming a
+different CSS-pixel stroke.
+
+The supported subsets and bounds follow [TIFF 6.0](https://www.itu.int/itudoc/itu-t/com16/tiff-fx/docs/tiff6.pdf)
+and Microsoft's [WMF format](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wmf/).
+The converter's image contract documents remaining format exclusions. Native facade tests,
+CLI embedded/extracted output tests, and public HTML/PDF export tests cover these paths.
+
+## Continuous sections can change margins on a shared page (#1486)
+
+The section properties ending the first paragraph describe the preceding section; the final
+`sectPr` below starts a continuous section with a different left margin:
+
+```xml
+<w:p><w:pPr><w:sectPr>
+  <w:pgSz w:w="12240" w:h="15840"/>
+  <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>
+</w:sectPr></w:pPr><w:r><w:t>SequoiaBefore</w:t></w:r></w:p>
+<w:p><w:r><w:t>SequoiaAfter</w:t></w:r></w:p>
+<w:sectPr><w:type w:val="continuous"/>
+  <w:pgSz w:w="12240" w:h="15840"/>
+  <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="2880"/>
+</w:sectPr>
+```
+
+| Original diagnostic | Word for the web | LibreOffice 25.8.7.3 | Docxodus |
+| --- | --- | --- | --- |
+| Short left-margin change, 72→144pt | One page; second paragraph starts at x144pt | One page; retains x72pt | Previously two pages; now one with section-specific x144pt |
+| Top margin 72→144pt with spilling text | Shared page starts at y72pt; next body page starts at y144pt | Continuous flow | Previously forced a fresh page; now retains the shared page's body band |
+| Bottom margin 72→144pt with long text | Shared page fills to its old bottom; later pages use the higher bottom boundary | Continuous flow | Same page-ownership distinction as the top margin |
+| Explicit `nextPage` or changed paper width | Two pages | `nextPage`: two; paper-width probe: one | Both remain page boundaries |
+| Later-section margin/column image anchors | Margin-relative x72pt; column-relative x144pt | Not captured for this diagnostic | Resolves page margins and the section column independently |
+| A 600pt inline image following a top-margin change | One page; image stays 600pt high | Not captured for this diagnostic | Retains the authored image when it fits the shared page |
+| Note cited only after the left-margin change | Note stays at page x72pt but wraps more narrowly | Not captured for this diagnostic | Note shell carries the citing section width, capped by the page band |
+
+Fresh Word PDFs bind the original inputs and output hashes in the issue evidence. Word
+substituted Times New Roman for Liberation Serif, so these captures establish section and
+image behavior rather than font-matched page fidelity. The 750-label left/right probes have
+three Word pages; the top-margin probe has two. The longer bottom-margin probe fills the
+first page to ink y717.10pt, then the next page to y641.33pt. Those absolute text baselines
+depend on the captured font; the section ownership rule does not.
+
+The paired 100-label note captures differ only in the later left margin. Narrowing the body
+changes the note from 17 lines to 20, while its left origin and final bottom stay fixed.
+Widening the body to a zero left margin leaves every note word coordinate identical to the
+same-margin control. This supports a note width bounded by both the citing section and the
+physical page's note band. A 500-label continuation retains that narrow wrapping and the
+original page origin across all three note pages; trailing note-only pages keep their owner.
+
+`npm/src/pagination.ts` previously required all margins to agree before joining a continuous
+page run. Runs now compare paper dimensions. Body blocks retain their source section through
+cloning and fragmentation. One append helper supplies ordinary block containers with the
+section width and horizontal offset in both physical pages and measurement hosts; it preserves
+authored indents, collapsed spacing and float exclusion. Blocks following floats are measured
+in the actual page prefix before admission, including when a later section widens the column.
+Page ownership still selects vertical bands, running stories and numbering. Notes clone their
+width from the registry shell in whole, partial and continuation forms; current-page note
+measurement uses the owner's outer width, while fresh-page probes use the prospective owner.
+
+## Omitted DrawingML fit at the paper edge (#1492)
+
+On Letter paper, place a 160pt by 80pt box at x=60pt, y=750pt. Give it three
+12pt lines followed by an empty deleted paragraph with 12pt space before it, and render
+revision markup. The visible labels fit; the final paragraph marker is already off paper.
+The minimal fit distinction is `<wps:bodyPr/>` versus
+`<wps:bodyPr><a:noAutofit/></wps:bodyPr>`.
+
+| Original probe | Word | LibreOffice 25.8.7.3 | Docxodus PDF |
+| --- | --- | --- | --- |
+| Omitted fit, paper edge | Not captured | All three labels on one page | Previously refused for the off-paper paragraph; now complete |
+| Explicit fixed fit, paper edge | Not captured | All three labels on one page | Complete before and after |
+| Omitted fit, y=60pt control | Not captured | All three labels on one page | Complete before and after |
+
+Office resolves omitted fit through the [text-style hierarchy](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/2ba5f0a2-4823-4128-b168-0fd1e9997939),
+as specified by its [noAutofit implementation note](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/c2e15906-2b97-4d4a-9cfa-96ca41635a6f).
+Fixed fit alone does not establish internal clipping: omitted
+[vertical overflow defaults to overflow](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.bodyproperties.verticaloverflow?view=openxml-3.0.1).
+`ResolveDrawingTextBoxFit` therefore supplies one effective mode to geometry and placement
+metadata, while `PaginationEngine` separately verifies that the original ink was off paper
+and stayed at its authored position. Missing or ambiguous fit context cannot certify an
+omission. Original geometry remains binding through viewer zoom and running-story copies.
+
+## Physical-margin comments in a static PDF (#1490)
+
+A margin column can scroll interactively, but its off-viewport text cannot be recovered from
+an already printed PDF. This original repro uses Letter paper, 72pt margins, 12pt Liberation
+Serif, and one body reference to a comment. Repeat the comment sentence with unique labels:
+
+```xml
+<w:p><w:commentRangeStart w:id="0"/><w:r><w:t>Maple inventory anchor.</w:t></w:r>
+  <w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>
+<!-- word/comments.xml -->
+<w:comment w:id="0" w:author="Maple Reviewer" w:date="2026-10-31T12:00:00Z">
+  <w:p><w:r><w:t>Maple0001 The cabinet keeps one blue folder for each route.
+    ... Maple0900 The cabinet keeps one blue folder for each route. COMMENT END SENTINEL</w:t></w:r></w:p>
+</w:comment>
+```
+
+| Original probe | Word | LibreOffice 25.8.7.3, PDF comments in margin | Docxodus physical-margin export |
+| --- | --- | --- | --- |
+| One paragraph, 30 labeled sentences | Not captured | One page, all 30 labels and tail | Previously one page with nine labels and no tail; now complete in an appendix |
+| One paragraph, 900 labeled sentences | Not captured | One page, 38 labels and no tail | Previously one page with nine labels and no tail; now 11 pages with all 900 labels and tail |
+| 30 separate comment paragraphs | Not captured | One page, 29 labels and no tail | Previously refused for a missing source anchor; now two pages with all 30 labels and tail |
+| Hidden comments | Not captured | Default PDF omits comments | One unchanged body page |
+
+LibreOffice captures explicitly use `ExportNotesInMargin=true`; its documented policy scales
+the document to make room for comments ([PDF export options](https://help.libreoffice.org/latest/en-US/text/shared/01/ref_pdf_export_general.html)).
+They are diagnostic comparisons, not an oracle for complete overflowing comments. The paired
+benchmark therefore compares body layout with comments hidden and separately checks every
+source word in an actual margin-profile PDF, without claiming native comment-layout parity.
+
+The shared `PaginationEngine` now projects an overflowing column's complete threads into ordinary
+flow on appended pages. Paragraph fragments retain paragraph, comment and ancestor-thread source
+identities. Reply headers preserve flex layout, and source-only wrappers preserve whitespace.
+Appended pages use the last paper dimensions without repeating running stories. They participate
+in page limits and NUMPAGES; fitting columns, outside viewer panels and balloon policies retain
+their existing behavior. `export-browser.ts` refuses any remaining physical-margin clipping.
+The existing converter projects comment bodies to plain text; this fix does not add rich comment
+formatting. Long `endnotes`-profile comments have a separate wrapper-fragmentation defect (#1505).
+
+## Signed leading paragraph indents (#1519)
+
+`<w:ind w:left="-540"/>` extends an LTR paragraph 27pt into the leading margin;
+`w:start` and RTL paragraphs retain the same signed leading-side arithmetic.
+The original Laurel fixtures in the companion fidelity-bench PR use 72pt page margins.
+
+| Input | LibreOffice PDF, LTR origin | Docxodus 15.0.0 | Fixed converter |
+| --- | ---: | ---: | ---: |
+| −540 twips | 45.1pt | 72pt | 45pt |
+| 0 twips | 72.1pt | 72pt | 72pt |
+| +540 twips | 99.1pt | 99pt | 99pt |
+
+Word Online was unavailable for this capture; no Word observation is claimed. The small
+LibreOffice glyph-origin residual is retained. `CreateStyleFromInd` and the border wrapper
+previously clamped the leading offset. Both now preserve its sign, and border grouping compares
+the resulting signed geometry. A hanging-only bordered paragraph still has an implicit zero
+leading indent: its inner paragraph compensates the wrapper before applying `text-indent`.
+
+## Widow control permits paragraph splitting (#1520)
+
+For a 256pt text band and 16pt exact line spacing, a ten-line prelude followed by
+nine lines with `<w:widowControl/>` leaves six target lines on page 1 and three on
+page 2 in LibreOffice. The property also works when inherited from a paragraph
+style. Before the fix, Docxodus moved all nine lines to page 2.
+
+| Target properties / space left | LibreOffice | Fixed Docxodus |
+| --- | --- | --- |
+| Widow control, six lines fit | 6 + 3 | 6 + 3 |
+| Widow control, eight lines fit | 7 + 2 | 7 + 2 |
+| Widow control disabled, eight lines fit | 8 + 1 | 8 + 1 |
+| Widow control, only one line fits | 0 + 9 | 0 + 9 |
+| Explicit keep-lines, six lines fit | 0 + 9 | 0 + 9 |
+
+These are local LibreOffice observations; Word Online was unavailable. The shared
+paginator now checks the two-line minimum on reflowed fragments instead of using
+widow control as a whole-paragraph keep. This prevents bordered groups from choosing
+a midpoint that reflows into a one-line tail while retaining valid word boundaries
+when the source text wraps at hyphens. Inline pictures do not
+disable text-line widow control; an oversized picture paragraph can relax an
+impossible minimum only after trying a legal split on a fresh page.
+
+### Exact line spacing and bounded justified spaces (#1524)
+
+The authored sentence “Soft amber lamps guide seven quiet boats toward shore.” has a natural
+advance slightly above a 298pt column at 12pt. The minimal paragraph uses
+`<w:jc w:val="both"/><w:spacing w:line="300" w:lineRule="exact"/>`; the modern variant adds
+`<w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/>`.
+
+| Renderer / policy | First line | Baseline pitch |
+| --- | --- | --- |
+| Word for the web, omitted mode (14) | Ends with “toward” | 15pt |
+| Word for the web, mode 15 | Ends with “shore.” | 15pt |
+| LibreOffice 25.8.7.3, modes 14 / 15 | Matches the corresponding Word line | 15pt |
+| Docxodus before #1524, either mode | Ends with “toward” | 15pt |
+| Docxodus after #1524 | Matches the mode-specific Word line | 15pt |
+
+Word substituted ArialMT for the original Liberation Sans request. Four separately authored
+Arial benchmark captures confirm both modes with justified and left alignment; only modern
+justification fits “shore.” on the first line. These are line-choice observations, not font-outline
+or raster-parity claims. The original input and native output hashes are retained in
+`TestFiles/ExactJustificationFlow/word-observations.json`.
+
+The existing selector in `npm/src/word-text.ts` already applies the bounded-space policy to
+automatic spacing. Exact paragraphs had been excluded with other contexts lacking a precision
+paint model. They now reuse that selector with per-line HTML space advances, retaining their
+exact baseline and full pitch. Tight ink, rich runs and other unsupported flow remain on their
+existing path; no document-wide negative spacing is applied.

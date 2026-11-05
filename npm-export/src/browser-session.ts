@@ -8,6 +8,7 @@ import {
   DEFAULT_EXPORT_RESOURCE_LIMITS,
   renderedSourceMeasurerExpression,
   type PaginatedHtmlOptions,
+  type FontObservation,
 } from "docxodus/export-browser";
 import { loadVerifiedAssetGraph } from "./assets.js";
 import type {
@@ -26,12 +27,16 @@ import {
   fromBrowserFailure,
 } from "./contracts.js";
 import { errorMessages } from "./diagnostics.js";
+import { observeFonts } from "./font-observation.js";
 
 const PLAYWRIGHT_VERSION = "1.57.0";
 const EXECUTABLE_BYTES_MAX = 1024 * 1024 * 1024;
 const FILE_READ_CHUNK_BYTES = 64 * 1024;
 const PDF_STREAM_CHUNK_BYTES = 64 * 1024;
 const CLEANUP_TIMEOUT_MS = 10_000;
+// Pinned Playwright waits 30 seconds before force-killing its owned browser process group.
+// Let that complete, with the ordinary cleanup allowance for process exit and file removal.
+const OWNED_BROWSER_CLEANUP_TIMEOUT_MS = 30_000 + CLEANUP_TIMEOUT_MS;
 const DENIED_REQUEST_DETAILS_MAX = 64;
 const LAUNCH_FLAGS = Object.freeze([
   "--disable-background-networking",
@@ -68,6 +73,7 @@ export interface BrowserRuntimeIdentity {
 export interface BrowserRenderOutcome {
   materialization: BrowserMaterializationSuccess;
   pdf?: Uint8Array;
+  fontObservation: FontObservation;
   runtime: BrowserRuntimeIdentity;
   requestLog: RequestLogEntry[];
 }
@@ -126,7 +132,7 @@ export function chromiumSandboxUnavailable(cause: unknown): boolean {
   );
 }
 
-function timeoutError(phase: "browser_launch" | "wasm_initialization" | "pdf_print", pending: string) {
+function timeoutError(phase: "browser_launch" | "wasm_initialization" | "pdf_print" | "output_verification", pending: string) {
   return new DocxodusExportError(
     "readiness_timeout",
     phase,
@@ -137,7 +143,7 @@ function timeoutError(phase: "browser_launch" | "wasm_initialization" | "pdf_pri
 }
 
 function cancellationError(
-  phase: "browser_launch" | "wasm_initialization" | "pdf_print",
+  phase: "browser_launch" | "wasm_initialization" | "pdf_print" | "output_verification",
   pending: string,
 ): DocxodusExportError {
   return new DocxodusExportError(
@@ -149,7 +155,7 @@ function cancellationError(
   );
 }
 
-function remaining(deadline: number, phase: "browser_launch" | "wasm_initialization" | "pdf_print"): number {
+function remaining(deadline: number, phase: "browser_launch" | "wasm_initialization" | "pdf_print" | "output_verification"): number {
   const value = deadline - Date.now();
   if (value <= 0) throw timeoutError(phase, phase);
   return value;
@@ -214,7 +220,7 @@ async function withReadiness<T>(
 async function bounded<T>(
   context: BrowserContext | undefined,
   deadline: number,
-  phase: "browser_launch" | "wasm_initialization" | "pdf_print",
+  phase: "browser_launch" | "wasm_initialization" | "pdf_print" | "output_verification",
   pending: string,
   signal: AbortSignal | undefined,
   operation: () => Promise<T>,
@@ -493,15 +499,19 @@ async function launchBrowser(
   }
 }
 
-async function cleanupStep(label: string, operation: () => Promise<void>): Promise<unknown | undefined> {
+async function cleanupStep(
+  label: string,
+  operation: () => Promise<void>,
+  timeoutMs = CLEANUP_TIMEOUT_MS,
+): Promise<unknown | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
       operation(),
       new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`${label} exceeded the ${CLEANUP_TIMEOUT_MS}ms cleanup limit.`)),
-          CLEANUP_TIMEOUT_MS,
+          () => reject(new Error(`${label} exceeded the ${timeoutMs}ms cleanup limit.`)),
+          timeoutMs,
         );
       }),
     ]);
@@ -540,7 +550,8 @@ export async function openOwnedExportBrowserSession(
       closed = true;
       HOST_OWNED_BROWSERS.delete(launch.browser);
       const failures: unknown[] = [];
-      const browserFailure = await cleanupStep("Owned Chromium shutdown", () => launch.browser.close());
+      const browserFailure = await cleanupStep("Owned Chromium shutdown", () => launch.browser.close(),
+        OWNED_BROWSER_CLEANUP_TIMEOUT_MS);
       if (browserFailure !== undefined) failures.push(browserFailure);
       const directoryFailure = await cleanupStep("Chromium temporary-directory removal", () =>
         removeOwnedTemporaryDirectory(launch.temporaryDirectory!, launch.temporaryIdentity!));
@@ -572,6 +583,7 @@ function safeDiagnosticUrl(value: string): string {
 async function validatePrintDocument(
   page: Page,
   expectedPageMap: BrowserMaterializationSuccess["pageMap"],
+  phase: "pdf_print" | "output_verification",
 ): Promise<void> {
   const auditDocument = async (measureRenderedSource: (
     view: Window, element: HTMLElement, page: HTMLElement, pageRect: DOMRect,
@@ -665,7 +677,7 @@ async function validatePrintDocument(
     || audit.fragments.length !== expectedPageMap.fragments.length) {
     exportError(
       "output_verification_failure",
-      "pdf_print",
+      phase,
       "The finalized print document changed before PDF capture.",
       "Retry with the verified standalone materializer and pinned Chromium runtime.",
     );
@@ -680,7 +692,7 @@ async function validatePrintDocument(
       || Math.abs(actual.height - expected.height) > 0.1) {
       exportError(
         "output_verification_failure",
-        "pdf_print",
+        phase,
         `The finalized print geometry changed on page ${index + 1}.`,
         "Preserve the finalized page boxes unchanged across print media activation.",
       );
@@ -700,7 +712,7 @@ async function validatePrintDocument(
       || Math.abs(actual.geometry.height - expected.geometry.height) > 0.1) {
       exportError(
         "output_verification_failure",
-        "pdf_print",
+        phase,
         `The finalized print PageMap changed at fragment ${index}.`,
         "Preserve the exact serialized page tree across print media activation.",
       );
@@ -1066,8 +1078,11 @@ export async function renderInBrowser(
     if (!includeHtml) delete materialization.renderReport.bindings.htmlDigest;
 
     let pdf: Uint8Array | undefined;
-    if (includePdf) {
-      currentPhase = "pdf_print";
+    let fontObservation: FontObservation = { status: "unavailable", reason: "not_requested" };
+    if (includePdf || includeHtml) {
+      currentPhase = includePdf ? "pdf_print" : "output_verification";
+      const snapshotPhase = currentPhase;
+      const snapshotHtml = includePdf ? pdfHtml! : materialization.html!;
       const printStarted = performance.now();
       try {
         const printOrigin = `https://${randomUUID().replaceAll("-", "")}.docxodus.invalid`;
@@ -1087,7 +1102,7 @@ export async function renderInBrowser(
         printContext = await bounded(
           undefined,
           deadline,
-          "pdf_print",
+          snapshotPhase,
           "isolated PDF context creation",
           signal,
           () => printContextPromise,
@@ -1129,7 +1144,7 @@ export async function renderInBrowser(
           });
           await route.fulfill({
             status: 200,
-            body: pdfHtml!,
+            body: snapshotHtml,
             contentType: "text/html; charset=utf-8",
             headers: {
               "Cache-Control": "no-store",
@@ -1141,7 +1156,7 @@ export async function renderInBrowser(
         const printPage = await bounded(
           printContext,
           deadline,
-          "pdf_print",
+          snapshotPhase,
           "isolated PDF page creation",
           signal,
           () => printContext!.newPage(),
@@ -1154,11 +1169,11 @@ export async function renderInBrowser(
           recordDenied(download.url(), "GET", "download");
           void download.cancel();
         });
-        printPage.setDefaultTimeout(remaining(deadline, "pdf_print"));
+        printPage.setDefaultTimeout(remaining(deadline, snapshotPhase));
         pdf = await bounded(
           printContext,
           deadline,
-          "pdf_print",
+          snapshotPhase,
           "Chromium PDF printing",
           signal,
           async () => {
@@ -1169,35 +1184,37 @@ export async function renderInBrowser(
                 && document.documentElement.dataset.docxodusStandalone === "v1"
                 && document.querySelectorAll(".page-box").length > 0);
               await printPage.emulateMedia({
-                media: "print",
+                media: includePdf ? "print" : "screen",
                 colorScheme: "light",
                 reducedMotion: "reduce",
               });
-              await validatePrintDocument(printPage, materialization!.pageMap);
+              await validatePrintDocument(printPage, materialization!.pageMap, snapshotPhase);
               if (printReads !== 1) {
                 exportError(
                   "resource_policy_failure",
-                  "pdf_print",
+                  snapshotPhase,
                   `The finalized PDF snapshot was loaded ${printReads} times.`,
                   "Use the single-read closed print context.",
                 );
               }
-              return await printPdfStream(printContext!, printPage, pdfMaximumBytes);
+              fontObservation = await observeFonts(printContext!, printPage, materialization!.renderReport,
+                includePdf ? "print" : "screen");
+              return includePdf ? await printPdfStream(printContext!, printPage, pdfMaximumBytes) : undefined;
             } catch (cause) {
               if (cause instanceof DocxodusExportError) throw cause;
               throw new DocxodusExportError(
-                "pdf_write_failure",
-                "pdf_print",
-                "Chromium failed to produce PDF bytes.",
+                includePdf ? "pdf_write_failure" : "conversion_failure",
+                snapshotPhase,
+                "Chromium failed to inspect or print the finalized snapshot.",
                 "Retry with the pinned Chromium runtime and inspect browser diagnostics.",
                 { cause },
               );
             }
           },
         );
-        recordReadiness(completedPhase("pdf_print", printStarted));
+        recordReadiness(completedPhase(snapshotPhase, printStarted));
       } catch (error) {
-        recordReadiness(failedPhase("pdf_print", printStarted, error,
+        recordReadiness(failedPhase(snapshotPhase, printStarted, error,
           ["offline finalized HTML and Chromium PDF printing"]));
         throw error;
       }
@@ -1233,6 +1250,7 @@ export async function renderInBrowser(
     outcome = {
       materialization: bridgeResponse.result,
       pdf,
+      fontObservation,
       requestLog,
       runtime: {
         browserVersion: launch.browser.version(),
@@ -1276,7 +1294,8 @@ export async function renderInBrowser(
       if (failure !== undefined) cleanupFailures.push(failure);
     }
     if (launch?.owned) {
-      const failure = await cleanupStep("Owned Chromium shutdown", () => launch!.browser.close());
+      const failure = await cleanupStep("Owned Chromium shutdown", () => launch!.browser.close(),
+        OWNED_BROWSER_CLEANUP_TIMEOUT_MS);
       if (failure !== undefined) cleanupFailures.push(failure);
     }
     if (launch?.temporaryDirectory && launch.temporaryIdentity) {

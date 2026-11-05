@@ -267,6 +267,44 @@ public class RightTabLeaderLineTests
 
     private const string LongTitle = "Culvert Inspection, Annual Load Ratings and Scour Monitoring for the Northern Spillway Approach";
 
+    [Theory]
+    [InlineData(72, 0)]
+    [InlineData(24, 120)]
+    public void WiderFollowingRun_StillUsesWrappingWhenItsTextExceedsTheLine(int size, int spacing)
+    {
+        var html = Html(Package("<w:p><w:pPr><w:tabs><w:tab w:val=\"right\" w:pos=\"8640\"/></w:tabs>" +
+            "</w:pPr><w:r><w:t>Item</w:t></w:r><w:r><w:tab/></w:r>" +
+            $"<w:r><w:rPr><w:spacing w:val=\"{spacing}\"/><w:sz w:val=\"{size}\"/></w:rPr><w:t>Sizing words must remain visible through TAIL COMPLETE</w:t></w:r></w:p>"));
+        Assert.DoesNotContain(html.Descendants(), element =>
+            Style(element, "display") == "inline-flex" && element.Value.Contains("TAIL COMPLETE"));
+    }
+
+    [Theory]
+    [InlineData("right", false, false, "")]
+    [InlineData("right", true, false, "")]
+    [InlineData("right", false, true, "")]
+    [InlineData("left", false, false, "")]
+    [InlineData("center", false, false, "")]
+    [InlineData("right", false, false, "shape")]
+    [InlineData("right", false, false, "rect")]
+    public void LongTabTail_RetainsOrdinaryWrapping(string alignment, bool longPrefix, bool mixedRun, string box)
+    {
+        var tail = string.Join(" ", Enumerable.Range(1, 18).Select(i =>
+            $"Wren{i:00} The eastern store keeps every copper token beside the window.")) + " TAIL COMPLETE";
+        var prefix = longPrefix ? tail : "Item";
+        var content = $"<w:r><w:t>{prefix}</w:t></w:r><w:r><w:tab/>" +
+            (mixedRun ? "" : "</w:r><w:r>") + $"<w:t>{tail}</w:t></w:r>";
+        var body = $"<w:p><w:pPr><w:tabs><w:tab w:val=\"{alignment}\" w:pos=\"8640\"/>" +
+            $"</w:tabs></w:pPr>{content}</w:p>";
+        if (box != "") body = $"<w:p><w:r><w:pict><v:{box} xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+            "id=\"WrenBox\" style=\"width:468pt;height:500pt\"><v:textbox inset=\"0,0,0,0\"><w:txbxContent>" +
+            body + $"</w:txbxContent></v:textbox></v:{box}></w:pict></w:r></w:p>";
+        var html = Html(Package(body));
+        Assert.Contains("TAIL COMPLETE", html.Value);
+        Assert.DoesNotContain(html.Descendants(), element =>
+            Style(element, "display") == "inline-flex" && element.Value.Contains("Wren18"));
+    }
+
     [Fact]
     public void WrappedTitle_WrapsInsideItsSegmentAndKeepsTheNumberOnTheStop()
     {

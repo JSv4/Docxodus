@@ -1,4 +1,5 @@
 import { expect, Page, test } from '@playwright/test';
+import { fileURLToPath } from 'node:url';
 import { storedZip, xml, R_NS, W_NS } from './docx-zip.js';
 
 /**
@@ -138,9 +139,9 @@ test('split tables keep their indent, merged rows, and visible margin overhangs 
   }
 });
 
-test('overhangs clip at the paper edges and body bottom, including PageMap geometry', async ({ page }) => {
+test('editor overhangs clip at the paper edges and body bottom, including PageMap geometry', async ({ page }) => {
   await page.setContent('<main id="fixture"></main>');
-  await page.addScriptTag({ url: 'http://localhost:8082/pagination.bundle.js' });
+  await page.addScriptTag({ path: fileURLToPath(new URL('../dist/pagination.bundle.js', import.meta.url)) });
   const result = await page.evaluate(() => {
     const html = `<div id="pagination-staging"><div data-section-index="0"
       data-page-width="200" data-page-height="120" data-content-width="160" data-content-height="80"
@@ -152,6 +153,7 @@ test('overhangs clip at the paper edges and body bottom, including PageMap geome
     const pagination = (window as any).DocxodusPagination.paginateHtml(html, 'fixture', {
       showPageNumbers: false,
       layoutToken: { documentVersion: 0, rendererFingerprint: 'negative-indent-clipping' },
+      fragmentParagraphs: false,
     });
     const table = document.querySelector('#fixture .page-content table')!;
     const paper = table.closest('.page-box')!.getBoundingClientRect();

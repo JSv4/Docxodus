@@ -502,37 +502,37 @@ internal static class IrMarkdownEmitter
     /// walk would: <c>w:t</c> text, which in the IR is the text carried by <see cref="IrTextRun"/>
     /// (including field cached-result runs and hyperlink interiors), and <c>'\t'</c> for a tab (issue
     /// #1387). Breaks/notes/images contribute nothing.</summary>
-    private static void AppendFlatText(object node, StringBuilder sb)
+    private static void AppendFlatText(object node, StringBuilder sb, bool includeTextboxes = true)
     {
         switch (node)
         {
             case IrParagraph p:
-                AppendInlineText(DisplayInlines(p), sb);
+                AppendInlineText(DisplayInlines(p), sb, includeTextboxes);
                 break;
             case IrSdtBlock sdt:
                 foreach (var b in sdt.Blocks)
-                    AppendFlatText(b, sb);
+                    AppendFlatText(b, sb, includeTextboxes);
                 break;
             case IrTable t:
                 foreach (var row in t.Rows)
                     foreach (var cell in row.Cells)
                         foreach (var b in cell.Blocks)
-                            AppendFlatText(b, sb);
+                            AppendFlatText(b, sb, includeTextboxes);
                 break;
             case IrRow r:
                 foreach (var cell in r.Cells)
                     foreach (var b in cell.Blocks)
-                        AppendFlatText(b, sb);
+                        AppendFlatText(b, sb, includeTextboxes);
                 break;
             case IrCell c:
                 foreach (var b in c.Blocks)
-                    AppendFlatText(b, sb);
+                    AppendFlatText(b, sb, includeTextboxes);
                 break;
             // IrSectionBreak / IrOpaqueBlock contribute no w:t text.
         }
     }
 
-    private static void AppendInlineText(IrNodeList<IrInline> inlines, StringBuilder sb)
+    private static void AppendInlineText(IrNodeList<IrInline> inlines, StringBuilder sb, bool includeTextboxes = true)
     {
         foreach (var inline in inlines)
         {
@@ -548,22 +548,22 @@ internal static class IrMarkdownEmitter
                     sb.Append('\n');
                     break;
                 case IrOpaqueInline { ProjectedInlines: { } projected }:
-                    AppendInlineText(projected, sb);
+                    AppendInlineText(projected, sb, includeTextboxes);
                     break;
                 case IrHyperlink h:
-                    AppendInlineText(h.Inlines, sb);
+                    AppendInlineText(h.Inlines, sb, includeTextboxes);
                     break;
                 case IrFieldRun f:
-                    AppendInlineText(f.CachedResult, sb);
+                    AppendInlineText(f.CachedResult, sb, includeTextboxes);
                     break;
-                case IrTextbox tb:
+                case IrTextbox tb when includeTextboxes:
                     // Textbox w:t text IS visible to the oracle's Descendants(w:t) — it flows into the
                     // containing paragraph's TextPreview, into ScopeHasContent (so header/footer
                     // detection sees textbox-only content), and into table cell text. Append the inner
                     // blocks' flat text at the textbox's document position. Nested textboxes recurse
                     // through this same path (an inner paragraph's IrTextbox hits this case again).
                     foreach (var b in tb.Blocks)
-                        AppendFlatText(b, sb);
+                        AppendFlatText(b, sb, includeTextboxes);
                     break;
                 // break/note-ref/image/opaque: no text.
             }
@@ -733,6 +733,7 @@ internal static class IrMarkdownEmitter
             }
             sb.AppendLine();
             sb.AppendLine();
+            EmitTextboxes(noteScope.Blocks, sb, ctx);
         }
         return true;
     }
@@ -765,6 +766,7 @@ internal static class IrMarkdownEmitter
                 sb.Append(' ');
             }
             sb.AppendLine();
+            EmitTextboxes(c.Blocks, sb, ctx);
         }
         sb.AppendLine();
         return true;
@@ -810,15 +812,32 @@ internal static class IrMarkdownEmitter
                 EmitParagraph(p, sb, ctx);
                 if (IsListItemForBlankRule(p) && !nextIsListItem)
                     sb.AppendLine();
+                EmitTextboxes(new[] { p }, sb, ctx);
             }
             else if (b is IrTable t)
             {
                 EmitTable(t, sb, ctx);
+                EmitTextboxes(t.Rows.SelectMany(r => r.Cells).SelectMany(c => c.Blocks), sb, ctx);
             }
             // IrSectionBreak (standalone/trailing body sectPr): the oracle's EmitBlocks treats a
             // top-level w:sectPr as a no-op (it is last-section metadata, not a transition). Match it.
             // IrOpaqueBlock: the oracle's EmitBlocks only dispatches w:p/w:tbl/w:sectPr — any other
             // top-level element is silently skipped. Match that too (no markdown, no index entry).
+        }
+    }
+
+    private static void EmitTextboxes(IEnumerable<IrBlock> blocks, StringBuilder sb, EmitCtx ctx)
+    {
+        foreach (var block in ExpandBlockWrappers(blocks))
+        {
+            if (block is IrTable table)
+                EmitTextboxes(table.Rows.SelectMany(r => r.Cells).SelectMany(c => c.Blocks), sb, ctx);
+            if (block is not IrParagraph p) continue;
+            foreach (var textbox in Textboxes(DisplayInlines(p)).Where(t => t.IsSelectedForProjection))
+            {
+                WmlToMarkdownConverter.EnsureBlankLine(sb);
+                EmitBlocks(textbox.Blocks, sb, ctx);
+            }
         }
     }
 
@@ -1064,10 +1083,7 @@ internal static class IrMarkdownEmitter
                     Add(inline, default);
                     break;
                 case IrTextbox:
-                    // DROPPED from the rendered markdown: the oracle's GroupInlineRuns walks only
-                    // w:r/w:hyperlink/w:ins/w:del and never descends into a w:drawing/w:pict, so textbox
-                    // content produces no markdown. Its text still counts toward TextPreview/cell text
-                    // (AppendInlineText) and its inner blocks are still indexed (WalkTextboxAnchors).
+                    // Textboxes render as anchored blocks after their host, not inside its run formatting.
                     break;
                 // IrInlineImage / IrOpaqueInline: TODO(M1.4-T2). Skipped here.
             }
@@ -1238,44 +1254,28 @@ internal static class IrMarkdownEmitter
                 if (cell.GridSpan > 1) return false;
                 if (cell.VMerge != IrVMerge.None) return false;
             }
-        // Nested-table and per-cell length checks mirror tbl.Elements(w:tr).Elements(w:tc)[.Elements(w:tbl)]
-        // — direct rows AND direct cells only — so a nested table or over-long cell that an SDT delivers
-        // does NOT disqualify GFM. Restrict to the oracle-visible rows/cells.
-        foreach (var row in OracleVisibleRows(tbl))
-            foreach (var cell in OracleVisibleCells(row))
+        // SDT-delivered rows, cells and blocks participate in the same shape/length checks.
+        foreach (var row in tbl.Rows)
+            foreach (var cell in row.Cells)
             {
-                if (cell.Blocks.Any(b => b is IrTable)) return false;
+                if (ExpandBlockWrappers(cell.Blocks).Any(b => b is IrTable)) return false;
                 if (CellTextRaw(cell).Length > max) return false;
             }
         return true;
     }
 
-    /// <summary>The rows the oracle's table walk SEES — direct <c>w:tr</c> children only
-    /// (<c>tbl.Elements(w:tr)</c>). Excludes rows a table-level <c>w:sdt</c> delivered
-    /// (<see cref="IrRow.FromTableSdt"/>), which the IR keeps + indexes for fidelity but the oracle's
-    /// table markdown never renders.</summary>
-    private static IEnumerable<IrRow> OracleVisibleRows(IrTable tbl) =>
-        tbl.Rows.Where(r => !r.FromTableSdt);
-
-    /// <summary>The cells of a row the oracle's table walk SEES — direct <c>w:tc</c> children only
-    /// (<c>Elements(w:tr).Elements(w:tc)</c>). Excludes cells a row-level <c>w:sdt</c> delivered
-    /// (<see cref="IrCell.FromRowSdt"/>), which the IR keeps for content fidelity but the oracle's
-    /// table markdown never renders.</summary>
-    private static IEnumerable<IrCell> OracleVisibleCells(IrRow row) =>
-        row.Cells.Where(c => !c.FromRowSdt);
-
     private static void EmitGfmTable(IrTable tbl, string anchor, StringBuilder sb, EmitCtx ctx)
     {
         if (anchor.Length > 0) { sb.Append(anchor); sb.AppendLine(); }
-        var rows = OracleVisibleRows(tbl).ToList();
+        var rows = tbl.Rows.ToList();
         if (rows.Count == 0) return;
 
-        var headerCells = OracleVisibleCells(rows[0]).Select(CellTextForGfm).ToList();
+        var headerCells = rows[0].Cells.Select(CellTextForGfm).ToList();
         sb.Append("| ").Append(string.Join(" | ", headerCells)).AppendLine(" |");
         sb.Append('|').Append(string.Concat(Enumerable.Repeat(" --- |", headerCells.Count))).AppendLine();
         foreach (var r in rows.Skip(1))
         {
-            var cells = OracleVisibleCells(r).Select(CellTextForGfm);
+            var cells = r.Cells.Select(CellTextForGfm);
             sb.Append("| ").Append(string.Join(" | ", cells)).AppendLine(" |");
         }
         sb.AppendLine();
@@ -1283,12 +1283,11 @@ internal static class IrMarkdownEmitter
 
     private static void EmitOpaqueTable(IrTable tbl, string anchor, StringBuilder sb)
     {
-        // rows/cols mirror the oracle's tbl.Elements(w:tr).Count() and its widest row's grid
-        // extent (sum of w:gridSpan) — SDT-delivered rows/cells are excluded from both.
-        var visibleRows = OracleVisibleRows(tbl).ToList();
+        // Include wrapped rows/cells and count the widest row's grid extent, not its cell count.
+        var visibleRows = tbl.Rows.ToList();
         var rows = visibleRows.Count;
         var cols = visibleRows
-            .Select(r => OracleVisibleCells(r).Sum(c => Math.Max(1, c.GridSpan)))
+            .Select(r => r.Cells.Sum(c => Math.Max(1, c.GridSpan)))
             .DefaultIfEmpty(0).Max();
         if (anchor.Length > 0) { sb.Append(anchor); sb.AppendLine(); }
         sb.AppendLine("```table");
@@ -1298,12 +1297,11 @@ internal static class IrMarkdownEmitter
         sb.AppendLine();
     }
 
-    /// <summary>Raw flat cell text — the <c>w:t</c> concat, mirroring the oracle's <c>CellTextRaw</c>
-    /// (which is <c>Descendants(W.t)</c>). In the IR that is the cell's flat inline text.</summary>
+    /// <summary>The cell's flat text, excluding textboxes emitted as separate anchored blocks.</summary>
     private static string CellTextRaw(IrCell cell)
     {
         var sb = new StringBuilder();
-        foreach (var b in cell.Blocks) AppendFlatText(b, sb);
+        foreach (var b in cell.Blocks) AppendFlatText(b, sb, includeTextboxes: false);
         return sb.ToString();
     }
 

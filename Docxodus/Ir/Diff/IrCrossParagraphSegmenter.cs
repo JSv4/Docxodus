@@ -369,9 +369,12 @@ internal static class IrCrossParagraphSegmenter
                     // gap grammar — the aligner already declined to pair them). The story-final
                     // del+ins still FUSE into one cell structurally, and that cell's re-diff retains
                     // any shared tokens, so banning the stream-level match loses nothing there.
-                    // LEADING one-sided members are the fusion construct itself (decoded 2026-07-27)
-                    // and match freely.
-                    if (leftPairIdx[ml] < 0 && rightPairIdx[mr] < 0 && ml > lastPairL && mr > lastPairR)
+                    // LEADING unpaired members need content-word evidence: function words that
+                    // the block aligner rejected must not strand a rewrite's deleted suffix
+                    // after an inserted pilcrow (#1526).
+                    if (leftPairIdx[ml] < 0 && rightPairIdx[mr] < 0 &&
+                        ((ml > lastPairL && mr > lastPairR) ||
+                         IrBlockAligner.IsFunctionWordKey(unitsL[a].Key) || IrBlockAligner.IsFunctionWordKey(unitsR[b].Key)))
                         continue;
                 }
                 crossUnitMatches++;
@@ -390,6 +393,12 @@ internal static class IrCrossParagraphSegmenter
         }
         CrossWindow(prevL, totalL, prevR, totalR);
         if (bail)
+            return null;
+        // With no established paragraph pair, only real content can justify streaming across
+        // paragraph boundaries. A complete rewrite sharing just articles stays in coherent blocks.
+        if (pairs.Count == 0 && !all.Exists(match => flatL[match.Lf].Kind == IrDiffTokenKind.Word &&
+                IrBlockSimilarity.ContainsLetter(flatL[match.Lf].Text) &&
+                !IrBlockAligner.IsFunctionWordKey(flatL[match.Lf].MatchKey)))
             return null;
         // `all` is sorted by left AND right flat index: pass-1 anchors are monotone, and every pass-2
         // window is a disjoint interval on both sides between two consecutive pass-1 anchors.

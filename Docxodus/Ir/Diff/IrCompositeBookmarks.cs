@@ -7,6 +7,119 @@ namespace Docxodus.Ir.Diff;
 
 internal static partial class IrMarkupRenderer
 {
+    // Equal spans of a composed paragraph read the base. Carry each reviewer's marker changes
+    // separately, in the base's rendering coordinates, so unchanged text retains those edits too.
+    private sealed class ComposedMarkerPlan(IrDocument original, IReadOnlyList<IrDocument> reviewers)
+    {
+        public List<(int Position, List<SourceBoundaryStep> Steps)> Pending { get; } = new();
+
+        public List<XElement> Slice(int start, int end, SourceRunModel runs, RenderState state)
+        {
+            var result = new List<XElement>();
+            int cursor = start;
+            foreach (var gap in Pending.Where(e => e.Position >= start && e.Position <= end)
+                         .OrderBy(e => e.Position).ToList())
+            {
+                if (cursor < gap.Position) result.AddRange(runs.Slice(cursor, gap.Position));
+                result.AddRange(EmitSourceBoundaries(new() { gap.Steps }, runs, runs, state, reviewers, original));
+                cursor = gap.Position;
+                Pending.Remove(gap);
+            }
+            result.AddRange(runs.Slice(cursor, end));
+            return result;
+        }
+    }
+
+    private static ComposedMarkerPlan? PlanComposedMarkers(IrCompositeOp op,
+        IReadOnlyList<IrAuthoredTokenOp> authored, IReadOnlyList<IrDiffToken> leftTokens,
+        IReadOnlyDictionary<int, SourceBoundarySource> sources, IrDocument original,
+        IReadOnlyList<IrDocument> reviewers, RenderState state,
+        ref List<List<SourceBoundaryStep>>[]? emitBefore)
+    {
+        if (!sources.Values.Any(source => source.Runs.HasRangeMarkers)) return null;
+        var plan = new ComposedMarkerPlan(original, reviewers);
+        var left = sources[-1].Runs;
+        var leftKeys = left.MarkerKeysBetween(0, int.MaxValue);
+        var anchors = (op.SourceRightAnchors ?? IrNodeList.Empty<IrSourceRightAnchor>()).ToDictionary(s => s.Reviewer);
+        var copies = sources.ToDictionary(pair => pair.Key, pair =>
+        {
+            var available = pair.Value.Runs.UnrepresentedMarkers(0, int.MaxValue, new HashSet<string>())
+                .SelectMany(group => group).ToHashSet();
+            return pair.Value.Runs.StandaloneMarkers(Array.Empty<SourceRunModel.SourceBoundary>())
+                .Where(boundary => available.Contains(boundary.Primary!)).ToList();
+        });
+        int? Map(int reviewer, int position, bool fromLeft)
+        {
+            if (reviewer < 0) return position;
+            if (anchors[reviewer].TokenDiff is not { } diff) return null;
+            foreach (var tokenOp in diff.Ops.Where(tokenOp => KeepsTextUnchanged(tokenOp, leftTokens, sources[reviewer].Tokens)))
+            {
+                var (ls, le) = LeftSpanPositions(leftTokens, tokenOp);
+                var (rs, re) = RightSpanPositions(sources[reviewer].Tokens, tokenOp);
+                if (fromLeft ? position >= ls && position <= le : position >= rs && position <= re)
+                    return fromLeft ? rs + position - ls : ls + position - rs;
+            }
+            // Paragraph edges remain gaps even when the first or last word was replaced.
+            int leftEnd = leftTokens.LastOrDefault()?.EndChar ?? 0;
+            int rightEnd = sources[reviewer].Tokens.LastOrDefault()?.EndChar ?? 0;
+            if (position == 0) return 0;
+            if (position == (fromLeft ? leftEnd : rightEnd)) return fromLeft ? rightEnd : leftEnd;
+            return null;
+        }
+        var positions = new SortedSet<int>();
+        foreach (var (reviewer, source) in sources.Where(pair => pair.Key >= 0))
+        {
+            foreach (var group in left.UnrepresentedMarkers(0, int.MaxValue, source.Runs.MarkerKeysBetween(0, int.MaxValue)))
+                positions.Add(group.Key);
+            foreach (var group in source.Runs.UnrepresentedMarkers(0, int.MaxValue, leftKeys))
+                if (Map(reviewer, group.Key, false) is { } position) positions.Add(position);
+        }
+        foreach (int position in positions)
+        {
+            var points = sources.Keys.ToDictionary(reviewer => reviewer, reviewer => Map(reviewer, position, true));
+            // A changed endpoint inside text another reviewer replaced has no common source gap.
+            // Leave such content to its owning revision; do not invent a location within the replacement.
+            if (points.Values.Any(point => point is null)) continue;
+            var baseTypes = copies[-1].Where(marker => marker.Position == position).Select(marker => marker.Type).ToHashSet();
+            var allBaseTypes = copies[-1].Select(marker => marker.Type).ToHashSet();
+            var boundaries = sources.ToDictionary(pair => pair.Key, pair =>
+                new SourceRunModel.SourceBoundary("markers", points[pair.Key]!.Value,
+                    copies[pair.Key].Where(boundary =>
+                        (baseTypes.Contains(boundary.Type) || !allBaseTypes.Contains(boundary.Type) &&
+                            boundary.Position == points[pair.Key] && Map(pair.Key, boundary.Position, false) == position) &&
+                        (pair.Key < 0 || state.CompositeBookmarks?.Allows(pair.Key, boundary.Primary!) != false))
+                        .SelectMany(boundary => boundary.Items).Select(item => item with { IsCore = false }).ToList(), -2, false));
+            var steps = PlaceComposedSourceBoundary(boundaries[-1], left, boundaries, sources);
+            if (!steps.Any(step => step.Kind is not null)) continue;
+            var changedMembers = steps.Where(step => step.Kind is not null).SelectMany(step => step.Members).ToHashSet();
+            var changedTypes = copies.Values.SelectMany(markers => markers)
+                .Where(marker => marker.Members.Any(changedMembers.Contains)).Select(marker => marker.Type).ToHashSet();
+            foreach (var (reviewer, boundary) in boundaries)
+                sources[reviewer].Runs.WithholdSourceBoundary(boundary.Members.Concat(copies[reviewer]
+                    .Where(marker => changedTypes.Contains(marker.Type)).SelectMany(marker => marker.Members)));
+            // Inside a retained word, split its source slice at the exact character. At a token gap,
+            // emit after every preceding deletion/insertion, including a replaced final word.
+            int inside = -1, before = 0;
+            for (int index = 0; index < authored.Count; index++)
+            {
+                var entry = authored[index];
+                var (start, end) = entry.Op.Kind == IrTokenOpKind.Insert
+                    ? RightSpanPositions(sources[entry.SourceReviewer].Tokens, entry.Op)
+                    : LeftSpanPositions(leftTokens, entry.Op);
+                int point = entry.Op.Kind == IrTokenOpKind.Insert ? points[entry.SourceReviewer]!.Value : position;
+                if (end <= point) before = index + 1;
+                if (entry.SourceReviewer < 0 && start < point && point < end) inside = index;
+            }
+            if (inside >= 0) plan.Pending.Add((position, steps));
+            else
+            {
+                emitBefore ??= new List<List<SourceBoundaryStep>>[authored.Count + 1];
+                (emitBefore[before] ??= new()).Add(steps);
+            }
+        }
+        return plan.Pending.Count == 0 ? null : plan;
+    }
+
     /// <summary>One main-story choice for a name added by several reviewers. Both block and inline
     /// emission consult it; choosing endpoints separately could splice two reviewers' ranges together.</summary>
     internal sealed class CompositeBookmarkPlan

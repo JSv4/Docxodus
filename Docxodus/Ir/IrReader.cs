@@ -93,7 +93,7 @@ internal static class IrReader
         try
         {
             stream = new OpenXmlMemoryStreamDocument(working);
-            wdoc = stream.GetWordprocessingDocument();
+            wdoc = stream.GetMeasuredWordprocessingDocument();
 
             var transformed = ApplyRevisionView(working, wdoc, options.RevisionView);
             if (transformed is not null)
@@ -104,7 +104,7 @@ internal static class IrReader
                 stream = null;
                 working = transformed;
                 stream = new OpenXmlMemoryStreamDocument(working);
-                wdoc = stream.GetWordprocessingDocument();
+                wdoc = stream.GetMeasuredWordprocessingDocument();
             }
 
             return ReadOpenPackage(working, wdoc, options);
@@ -331,6 +331,10 @@ internal static class IrReader
         // the scope level regardless of this flag.
         public bool RetainSources { get; }
 
+        private IrSourceContent.Builder? _sourceContent;
+        public IrSourceContent.Builder SourceContent => _sourceContent ??= new();
+        public void ResetSourceContent() => _sourceContent = null;
+
         // How many w:txbxContent bodies deep this context is. Bounds textbox nesting recursion
         // (textboxes can legally nest) the same way MaxSdtDepth bounds content-control nesting.
         // A textbox walked at the cap is preserved opaquely instead of recursing further.
@@ -352,6 +356,7 @@ internal static class IrReader
                 drawingGraphFallbackDocumentHash: DrawingGraphFallbackDocumentHash)
             {
                 ProjectCustomXml = ProjectCustomXml || projectCustomXml,
+                _sourceContent = !ProjectCustomXml && !projectCustomXml ? SourceContent : null,
             };
             // Preserve laziness while sharing per-story resolver/hash caches when one has already been created.
             child._relResolver = _relResolver;
@@ -409,9 +414,14 @@ internal static class IrReader
         // Retained mode pins the source element + part URI on a fresh provenance; retention-off mode
         // hands back the shared empty instance (no element, no part URI — those facts live at the scope
         // level now) so the parsed XDocument becomes collectible after Read.
-        public IrProvenance Provenance(XElement element) =>
-            RetainSources
-                ? new IrProvenance { Element = element, PartUri = PartUri }
+        public IrProvenance Provenance(XElement element, IrNodeList<IrSourceContent.CarrierSpan>? carriers = null) =>
+            RetainSources || carriers is { Count: > 0 }
+                ? new IrProvenance
+                {
+                    Element = RetainSources ? element : null,
+                    PartUri = RetainSources ? PartUri : null,
+                    SharedCarriers = carriers ?? IrNodeList.Empty<IrSourceContent.CarrierSpan>(),
+                }
                 : IrProvenance.Empty;
     }
 
@@ -744,7 +754,7 @@ internal static class IrReader
     /// Textboxes can legally nest (a shape inside a textbox can itself carry a textbox); the cap
     /// bounds recursion against adversarial/corrupt input, mirroring <see cref="MaxSdtDepth"/>.
     /// </summary>
-    private const int MaxTextboxDepth = 16;
+    internal const int MaxTextboxDepth = 16;
 
     private static IrBlock BuildBlock(XElement el, ReadContext ctx)
     {
@@ -843,6 +853,7 @@ internal static class IrReader
 
     private static IrParagraph BuildParagraph(XElement p, ReadContext ctx)
     {
+        ctx.ResetSourceContent();
         var kindToken = WmlToMarkdownConverter.KindFor(p);
         var kind = kindToken is null ? IrAnchorKind.P : IrAnchor.KindFromToken(kindToken);
 
@@ -899,6 +910,11 @@ internal static class IrReader
         // non-list-items (malformed numbering included); it is the exact string the markdown projection consumes.
         string? resolvedMarker = ResolveListMarkerText(p, ctx);
 
+        var sourceContent = ctx.ProjectCustomXml ? null : ctx.SourceContent.Build(processed, includeText: ctx.RetainSources);
+        if (ctx.RetainSources && sourceContent is not null) p.AddAnnotation(sourceContent);
+        var sharedCarriers = sourceContent?.SharedCarriers() ?? IrNodeList.Empty<IrSourceContent.CarrierSpan>();
+        ctx.ResetSourceContent();
+
         return new IrParagraph
         {
             Anchor = anchor,
@@ -921,7 +937,7 @@ internal static class IrReader
             IsListItemForLayout = WmlToMarkdownConverter.IsListItem(p),
             ContentHash = contentHash,
             FormatFingerprint = formatFingerprint,
-            Source = ctx.Provenance(p),
+            Source = ctx.Provenance(p, sharedCarriers),
         };
     }
 
@@ -1066,6 +1082,8 @@ internal static class IrReader
         }
     }
 
+    private sealed record UnseparatedField(IrHash Digest);
+
     /// <summary>
     /// Hash the non-hyperlink field carriers embedded in one modeled inline tree. Field instructions are excluded
     /// from ordinary content/token identity on purpose, and run-based field plumbing is zero-width; recording
@@ -1078,6 +1096,10 @@ internal static class IrReader
     {
         var fields = new List<XElement>();
         AppendFieldEnvelopeEntries(inlines, "", fields);
+        foreach (var element in paragraph.Descendants().Where(e => e.Ancestors(W + "p").FirstOrDefault() == paragraph))
+            if (element.Annotation<UnseparatedField>() is { } field)
+                fields.Add(new XElement("unseparatedField", new XAttribute("path", InlineElementPath(paragraph, element)),
+                    new XAttribute("digest", field.Digest.ToHex())));
         if (UnmatchedFieldCharacterTypes(paragraph).Any())
             fields.Add(new XElement("spanningField",
                 new XAttribute("unmatched", string.Join(" ", UnmatchedFieldCharacters(paragraph)))));
@@ -1320,7 +1342,7 @@ internal static class IrReader
         foreach (var child in children)
             walker.Feed(child);
         var emitted = walker.Finish();
-        return CoalesceRuns(DropEmptyTextRuns(emitted));
+        return CoalesceRuns(DropEmptyTextRuns(emitted), ctx);
     }
 
     /// <summary>
@@ -1486,8 +1508,11 @@ internal static class IrReader
                         // Pre-separate: accumulate instruction text (w:instrText / w:delInstrText).
                         if (child.Name == W + "instrText" || child.Name == W + "delInstrText")
                             _instruction.Append(child.Value);
-                        // Other pre-separate content is field plumbing; ignore for the instruction
-                        // string but keep captured for the unterminated-field fallback.
+                        // Content omitted from the visible result still belongs to the field scaffold. This
+                        // includes the cached text of a field nested in the outer instruction; changes to it
+                        // must not leak through a stable visible-result token span.
+                        else if (child.Name != W + "fldSimple" && child.Name != W + "lastRenderedPageBreak")
+                            _fieldScaffold.Add(new XElement(child));
                         continue;
                     }
                     // Post-separate: divert run content into the field result.
@@ -1621,8 +1646,19 @@ internal static class IrReader
                 {
                     // Instruction-only unterminated field: re-emit captured plumbing opaquely so no
                     // content is lost (each captured element is canonical-hashed into an opaque inline).
+                    // These atoms are still one field instruction scaffold. Fine revisions within it would be
+                    // lifted bare by field normalization (there is no result to own them). Record its identity
+                    // in the existing structural digest so changes replace the paragraph before composition.
+                    if (_captured.Count > 0)
+                        _captured[0].AddAnnotation(new UnseparatedField(IrHasher.CanonicalHash(
+                            new XElement("field", _fieldScaffold.Select(e => new XElement(e)),
+                                _captured.Select(e => new XElement(e))), _ctx.RelResolver)));
                     foreach (var el in _captured)
-                        _output.Add(new IrOpaqueInline(el.Name, IrHasher.CanonicalHash(el, _ctx.RelResolver)));
+                    {
+                        var inline = new IrOpaqueInline(el.Name, IrHasher.CanonicalHash(el, _ctx.RelResolver));
+                        _output.Add(inline);
+                        if (!_ctx.ProjectCustomXml) _ctx.SourceContent.Register(inline, el);
+                    }
                     _fieldDepth = 0;
                 }
                 _inResult = false;
@@ -1670,12 +1706,17 @@ internal static class IrReader
         /// </summary>
         private void EmitInline(IrInline inline, XElement? source = null)
         {
+            if (!_ctx.ProjectCustomXml && source is not null && (_ctx.RetainSources || inline is not IrTextRun))
+                _ctx.SourceContent.Register(inline, source);
             if (_fieldDepth == 0)
                 _output.Add(inline);
             else if (_inResult)
                 _result.Add(inline);
             else if (source is not null)
+            {
                 _captured.Add(source);
+                _fieldScaffold.Add(new XElement(source));
+            }
         }
 
         /// <summary>
@@ -1695,11 +1736,15 @@ internal static class IrReader
             MarkInlineSdt(_result, resBefore);
         }
 
-        private static void MarkInlineSdt(List<IrInline> sink, int from)
+        private void MarkInlineSdt(List<IrInline> sink, int from)
         {
             for (int i = from; i < sink.Count; i++)
                 if (sink[i] is IrTextRun tr && !tr.FromInlineSdt)
-                    sink[i] = tr with { FromInlineSdt = true };
+                {
+                    var marked = tr with { FromInlineSdt = true };
+                    if (_ctx.RetainSources && !_ctx.ProjectCustomXml) _ctx.SourceContent.Transfer(tr, marked);
+                    sink[i] = marked;
+                }
         }
     }
 
@@ -1710,6 +1755,7 @@ internal static class IrReader
     /// </summary>
     private static void EmitRunChild(XElement child, XElement? rPr, IrRunFormat runFormat, ReadContext ctx, List<IrInline> sink)
     {
+        int before = sink.Count;
         if (child.Name == W + "t")
             sink.Add(new IrTextRun(child.Value, runFormat));
         else if (child.Name == W + "tab")
@@ -1761,6 +1807,10 @@ internal static class IrReader
             sink.Add(new IrOpaqueInline(child.Name, ctx.DrawingGraphHasher.Hash(child)));
         else
             sink.Add(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child, ctx.RelResolver)));
+
+        if (!ctx.ProjectCustomXml)
+            for (int i = before; i < sink.Count; i++)
+                if (ctx.RetainSources || sink[i] is not IrTextRun) ctx.SourceContent.Register(sink[i], child);
     }
 
     private static bool IsShapetypeOnlyPicture(XElement child) =>
@@ -1785,6 +1835,7 @@ internal static class IrReader
     /// </summary>
     private static void AppendTextboxes(XElement carrier, ReadContext ctx, List<IrInline> sink)
     {
+        IrHash? carrierDigest = null;
         foreach (var txbx in OutermostTextboxBodies(carrier))
         {
             if (ctx.TextboxDepth >= MaxTextboxDepth)
@@ -1793,11 +1844,21 @@ internal static class IrReader
                 continue;
             }
 
+            if (carrierDigest is null)
+            {
+                var shell = new XElement(carrier);
+                foreach (var body in shell.DescendantsAndSelf(WTxbxContent)) body.RemoveNodes();
+                carrierDigest = ctx.DrawingGraphHasher.Hash(shell);
+            }
             var innerCtx = ctx.IntoTextbox();
             var blocks = new List<IrBlock>();
             foreach (var child in txbx.Elements())
                 AppendBlocks(child, innerCtx, blocks);
-            sink.Add(new IrTextbox(IrNodeList.From(blocks)));
+            sink.Add(new IrTextbox(IrNodeList.From(blocks))
+            {
+                IsSelectedForProjection = WmlToMarkdownConverter.IsSelectedMarkup(txbx),
+                CarrierDigest = carrierDigest.Value,
+            });
         }
     }
 
@@ -2329,7 +2390,7 @@ internal static class IrReader
     private static List<IrInline> DropEmptyTextRuns(List<IrInline> inlines) =>
         inlines.Where(i => i is not IrTextRun { Text: "" }).ToList();
 
-    private static List<IrInline> CoalesceRuns(List<IrInline> inlines)
+    private static List<IrInline> CoalesceRuns(List<IrInline> inlines, ReadContext ctx)
     {
         var result = new List<IrInline>(inlines.Count);
         foreach (var inline in inlines)
@@ -2342,7 +2403,9 @@ internal static class IrReader
                 // absorbed into) an unflagged neighbor.
                 && prev.FromInlineSdt == run.FromInlineSdt)
             {
-                result[^1] = prev with { Text = prev.Text + run.Text };
+                var merged = prev with { Text = prev.Text + run.Text };
+                if (ctx.RetainSources && !ctx.ProjectCustomXml) ctx.SourceContent.Merge(prev, run, merged);
+                result[^1] = merged;
             }
             else
             {
@@ -2792,7 +2855,7 @@ internal static class IrReader
         // those rows, but its anchor index (Descendants) keeps them — and the IR must not lose the
         // row's content. Unwrap table-level SDTs to their w:tr children, flag the delivered rows
         // FromTableSdt, and let the emitter narrow back to the oracle's direct-row view for parity.
-        foreach (var (tr, fromSdt) in EnumerateTableRows(tbl))
+        foreach (var (tr, fromSdt) in TableChildren(tbl, W + "tr"))
         {
             var (row, cellFingerprintsForRow) = BuildRow(tr, ctx);
             if (fromSdt)
@@ -2854,7 +2917,7 @@ internal static class IrReader
         // the ContentHash), so we unwrap row-level SDTs to their w:tc children here, reusing the
         // established SDT-unwrap discipline + depth cap. Each SDT-delivered cell is flagged
         // FromRowSdt so the markdown emitter can mirror the oracle's narrower view for byte parity.
-        foreach (var (tc, fromSdt) in EnumerateRowCells(tr))
+        foreach (var (tc, fromSdt) in TableChildren(tr, W + "tc"))
         {
             var (cell, fingerprints) = BuildCell(tc, ctx);
             if (fromSdt)
@@ -2894,43 +2957,17 @@ internal static class IrReader
         return (row, cellFingerprints);
     }
 
-    /// <summary>
-    /// Yield the rows of a table in document order, unwrapping any table-level <c>w:sdt</c> to its
-    /// <c>w:sdtContent</c>'s <c>w:tr</c> children (recursively, depth-capped). A direct <c>w:tr</c>
-    /// yields <c>fromSdt=false</c>; an SDT-delivered row yields <c>fromSdt=true</c>. Non-tr, non-sdt
-    /// table children (<c>w:tblPr</c>/<c>w:tblGrid</c>) are skipped here (folded into the unmodeled
-    /// digest by <see cref="BuildTable"/>).
-    /// </summary>
-    private static IEnumerable<(XElement Tr, bool FromSdt)> EnumerateTableRows(XElement tbl)
+    /// <summary>Rows or cells in source order, including those carried by bounded SDT wrappers.
+    /// Shared by the IR and Markdown projection so their table geometry agrees.</summary>
+    internal static IEnumerable<(XElement Element, bool FromSdt)> TableChildren(XElement parent, XName name)
     {
-        foreach (var child in tbl.Elements())
+        foreach (var child in parent.Elements())
         {
-            if (child.Name == W + "tr")
+            if (child.Name == name)
                 yield return (child, false);
             else if (child.Name == W + "sdt")
-                foreach (var tr in UnwrapSdtChildren(child, W + "tr", depth: 0))
-                    yield return (tr, true);
-        }
-    }
-
-    /// <summary>
-    /// Yield the cells of a row in document order, unwrapping any row-level <c>w:sdt</c> to its
-    /// <c>w:sdtContent</c>'s <c>w:tc</c> children (recursively, depth-capped by <see cref="MaxSdtDepth"/>).
-    /// A direct <c>w:tc</c> yields <c>fromSdt=false</c>; a cell delivered by an SDT yields
-    /// <c>fromSdt=true</c>. Non-tc, non-sdt row children (e.g. <c>w:trPr</c>) are skipped — they are
-    /// folded into the table's unmodeled-props digest by <see cref="BuildTable"/>. A pathologically
-    /// deep SDT nest stops unwrapping at the cap (any deeper <c>w:tc</c> is simply not surfaced — the
-    /// same bound the block walker uses), preserving totality.
-    /// </summary>
-    private static IEnumerable<(XElement Tc, bool FromSdt)> EnumerateRowCells(XElement tr)
-    {
-        foreach (var child in tr.Elements())
-        {
-            if (child.Name == W + "tc")
-                yield return (child, false);
-            else if (child.Name == W + "sdt")
-                foreach (var tc in UnwrapSdtChildren(child, W + "tc", depth: 0))
-                    yield return (tc, true);
+                foreach (var nested in UnwrapSdtChildren(child, name, depth: 0))
+                    yield return (nested, true);
         }
     }
 

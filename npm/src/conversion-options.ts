@@ -12,6 +12,8 @@ export const COMPLETE_ONLY_CONVERSION_OPTIONS = [
   "renderFootnotesAndEndnotes",
   "renderHeadersAndFooters",
   "renderTrackedChanges",
+  "showFormattingChanges",
+  "showInsertionsAndDeletions",
   "showDeletedContent",
   "renderMoveOperations",
   "renderUnsupportedContentPlaceholders",
@@ -20,6 +22,12 @@ export const COMPLETE_ONLY_CONVERSION_OPTIONS = [
   "revisionPresentation",
   "semanticLists",
 ] as const satisfies readonly (keyof ConversionOptions)[];
+
+/** Appended WASM mask: zero keeps the default display, including for older callers. */
+export function hiddenRevisionKinds(options: ConversionOptions | undefined): number {
+  return (options?.showFormattingChanges === false ? 1 : 0)
+    | (options?.showInsertionsAndDeletions === false ? 2 : 0);
+}
 
 /**
  * Whether a conversion must use the complete entry point: any complete-only option is set,

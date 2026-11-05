@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
+
 from docx_scalpel import HtmlOptions, convert_docx_to_html, docx_diff_compare, open_session
 
 
@@ -86,3 +88,37 @@ def test_th006_semantic_lists_emit_list_markup(test_files_dir) -> None:
 def test_th007_semantic_lists_on_the_wire() -> None:
     assert HtmlOptions().to_wire()["semanticLists"] is False
     assert HtmlOptions(semantic_lists=True).to_wire()["semanticLists"] is True
+
+
+def test_th008_revision_visibility_wire_defaults() -> None:
+    defaults = HtmlOptions().to_wire()
+    assert defaults["showFormattingChanges"] is True
+    assert defaults["showInsertionsAndDeletions"] is True
+    hidden = HtmlOptions(show_formatting_changes=False, show_insertions_and_deletions=False).to_wire()
+    assert hidden["showFormattingChanges"] is False
+    assert hidden["showInsertionsAndDeletions"] is False
+
+
+def test_th009_hidden_text_revisions_cross_the_stdio_boundary(test_files_dir) -> None:
+    original = (test_files_dir / "CA" / "CA001-Plain.docx").read_bytes()
+    modified = (test_files_dir / "CA" / "CA001-Plain-Mod.docx").read_bytes()
+    redline = docx_diff_compare(original, modified)
+    shown = ET.fromstring(convert_docx_to_html(redline, HtmlOptions(render_tracked_changes=True)))
+    hidden = ET.fromstring(convert_docx_to_html(redline, HtmlOptions(
+        render_tracked_changes=True, show_insertions_and_deletions=False)))
+    tags = {"{http://www.w3.org/1999/xhtml}ins", "{http://www.w3.org/1999/xhtml}del"}
+    assert any(node.tag in tags for node in shown.iter())
+    assert not any(node.tag in tags for node in hidden.iter())
+
+
+def test_th010_existing_positional_html_options_keep_their_meaning() -> None:
+    options = HtmlOptions("Legacy", "zz-", False, ".legacy{}", 1, "c-", 1, .75, "p-",
+                          True, 2, "a-", True, True, True, False, False, 1, True, "fr", True)
+    wire = options.to_wire()
+    assert wire["showDeletedContent"] is False
+    assert wire["renderMoveOperations"] is False
+    assert wire["revisionPresentation"] == 1
+    assert wire["documentLanguage"] == "fr"
+    assert wire["semanticLists"] is True
+    assert wire["showFormattingChanges"] is True
+    assert wire["showInsertionsAndDeletions"] is True

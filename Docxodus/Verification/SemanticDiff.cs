@@ -592,7 +592,8 @@ internal static class SemanticDiffEngine
                             ? MoveId("block", partUri, leftAnchor, op.RightAnchor, group)
                             : null,
                         BlockValue(leftBlock), BlockValue(rightBlock));
-                    if (op.Kind == IrEditOpKind.MoveModifyBlock && leftBlock is not null && rightBlock is not null)
+                    if ((op.Kind == IrEditOpKind.MoveModifyBlock || op.RequiresWholeParagraphReplace) &&
+                        leftBlock is not null && rightBlock is not null)
                         CompareBlocks(leftBlock, rightBlock, op, partUri, leftScope, rightScope);
                     continue;
                 }
@@ -1359,7 +1360,8 @@ internal static class SemanticDiffEngine
                 // aligner classifies equal-content/changed-format blocks FormatOnlyBlock,
                 // which ProjectOps descends into.
                 if (blockOps is null
-                    && (lc.ContentHash != rc.ContentHash || lc.FormatFingerprint != rc.FormatFingerprint))
+                    && (lc.ContentHash != rc.ContentHash || lc.FormatFingerprint != rc.FormatFingerprint ||
+                        IrEditScriptBuilder.BlockCarriersDiffer(lc.Blocks, rc.Blocks)))
                 {
                     var alignment = IrBlockAligner.AlignBlocks(lc.Blocks, rc.Blocks, _settings);
                     blockOps = IrNodeList.From(
@@ -1782,6 +1784,8 @@ internal static class SemanticDiffEngine
                 case IrTextbox textbox:
                     yield return new InlineFeature(SemanticChangeFamily.BlockStructure, "textbox",
                         SemanticValue.Array(textbox.Blocks.Select(BlockValue)));
+                    yield return new InlineFeature(SemanticChangeFamily.BlockStructure, "textbox_carrier",
+                        Digest(textbox.CarrierDigest, "docxodus-ir-textbox-carrier-v1"));
                     break;
             }
         }

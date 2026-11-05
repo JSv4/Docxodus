@@ -69,6 +69,74 @@ namespace Docxodus.Tests
             Assert.Equal("70.85pt", Css(paragraph, "margin-left"));
         }
 
+        [Theory]
+        [InlineData("left", false)]
+        [InlineData("start", false)]
+        [InlineData("left", true)]
+        [InlineData("start", true)]
+        public void Negative_leading_indent_preserves_the_signed_offset(string spelling, bool rightToLeft)
+        {
+            var properties = (rightToLeft ? "<w:bidi/>" : "") + $"<w:ind w:{spelling}=\"-540\"/>";
+            var paragraph = Block(ToHtml(Para(properties, "Outdent")), "p", "Outdent");
+            Assert.Equal("-27pt", Css(paragraph, rightToLeft ? "margin-right" : "margin-left"));
+        }
+
+        [Theory]
+        [InlineData(false, -540, "-27pt")]
+        [InlineData(true, -540, "-27pt")]
+        [InlineData(false, 0, "0")]
+        [InlineData(true, 540, "27pt")]
+        public void Bordered_leading_indent_is_carried_once_by_the_wrapper(bool rightToLeft, int indent, string expected)
+        {
+            var properties = (rightToLeft ? "<w:bidi/>" : "") +
+                "<w:pBdr><w:top w:val=\"single\" w:sz=\"8\"/></w:pBdr>" + $"<w:ind w:left=\"{indent}\"/>";
+            var paragraph = Block(ToHtml(Para(properties, "Boxed")), "p", "Boxed");
+            var side = rightToLeft ? "margin-right" : "margin-left";
+            Assert.Equal(expected, Css(paragraph.Parent!, side));
+            Assert.Equal("0", Css(paragraph, side));
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void Bordered_hanging_indent_compensates_the_wrapper_when_leading_is_omitted(bool rightToLeft)
+        {
+            var properties = (rightToLeft ? "<w:bidi/>" : "") +
+                "<w:pBdr><w:top w:val=\"single\" w:sz=\"8\"/></w:pBdr><w:ind w:hanging=\"180\"/>";
+            var paragraph = Block(ToHtml(Para(properties, "Hanging")), "p", "Hanging");
+            var side = rightToLeft ? "margin-right" : "margin-left";
+            Assert.Equal("-9pt", Css(paragraph.Parent!, side));
+            Assert.Equal("9pt", Css(paragraph, side));
+            Assert.Equal("-9pt", Css(paragraph, "text-indent"));
+        }
+
+        [Theory]
+        [InlineData("firstLine", "9pt")]
+        [InlineData("hanging", "-9pt")]
+        public void Outdent_keeps_its_independent_first_line_offset(string attribute, string expected)
+        {
+            var paragraph = Block(ToHtml(Para($"<w:ind w:left=\"-540\" w:{attribute}=\"180\"/>", "First")), "p", "First");
+            Assert.Equal("-27pt", Css(paragraph, "margin-left"));
+            Assert.Equal(expected, Css(paragraph, "text-indent"));
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void Outdent_is_preserved_inside_cells_and_frames(bool cell)
+        {
+            var frame = cell ? "" : "<w:framePr w:w=\"3600\" w:x=\"720\" w:yAlign=\"inline\" w:wrap=\"notBeside\"/>";
+            var body = Para(frame + "<w:ind w:left=\"-540\"/>", "Nested");
+            if (cell)
+                body = "<w:tbl><w:tblPr><w:tblW w:w=\"3600\" w:type=\"dxa\"/></w:tblPr>" +
+                    "<w:tblGrid><w:gridCol w:w=\"3600\"/></w:tblGrid><w:tr><w:tc>" +
+                    "<w:tcPr><w:tcW w:w=\"3600\" w:type=\"dxa\"/></w:tcPr>" + body + "</w:tc></w:tr></w:tbl>";
+            var paragraph = Block(ToHtml(body), "p", "Nested");
+            Assert.Equal("-27pt", Css(paragraph, "margin-left"));
+            if (!cell)
+                Assert.Equal("36pt", Css(paragraph.Ancestors().Single(e => e.Attribute("data-docx-text-frame") != null), "left"));
+        }
+
         [Fact]
         public void Trailing_indent_keeps_twip_precision()
         {

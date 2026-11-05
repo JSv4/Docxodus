@@ -110,13 +110,16 @@ public sealed partial class DocxSession
         ArgumentNullException.ThrowIfNull(anchorIds);
         _ = Project(); // See GetAnchorInfo — enrichment required, index-only entries won't do.
 
-        var result = new Dictionary<string, AnchorInfo?>(StringComparer.Ordinal);
+        var targets = new Dictionary<string, AnchorTarget?>(StringComparer.Ordinal);
         foreach (var id in anchorIds)
+            if (id is not null) targets.TryAdd(id, FindAnchor(id));
+        var elements = AnchorTarget.ResolveAll(_doc!, targets.Values.OfType<AnchorTarget>());
+
+        var result = new Dictionary<string, AnchorInfo?>(StringComparer.Ordinal);
+        foreach (var (id, target) in targets)
         {
-            if (id is null) continue;
-            if (result.ContainsKey(id)) continue;
-            var target = FindAnchor(id);
-            var element = target?.Resolve(_doc!);
+            XElement? element = null;
+            if (target is not null) elements.TryGetValue(target, out element);
             result[id] = target is null || element is null
                 ? null
                 : new AnchorInfo(target.Anchor.Id, target.Anchor.Kind, target.Anchor.Scope, target.TextPreview)
@@ -286,14 +289,16 @@ public sealed partial class DocxSession
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(anchorIds);
 
-        var result = new Dictionary<string, BlockMetadata?>(StringComparer.Ordinal);
+        var targets = new Dictionary<string, AnchorTarget?>(StringComparer.Ordinal);
         foreach (var id in anchorIds)
-        {
-            if (id is null) continue;
-            if (result.ContainsKey(id)) continue;
-            var target = FindAnchor(id);
-            result[id] = target is null ? null : Internal.BlockMetadataOps.GetBlockMetadata(_doc!, target);
-        }
+            if (id is not null) targets.TryAdd(id, FindAnchor(id));
+        var elements = AnchorTarget.ResolveAll(_doc!, targets.Values.OfType<AnchorTarget>());
+
+        var result = new Dictionary<string, BlockMetadata?>(StringComparer.Ordinal);
+        foreach (var (id, target) in targets)
+            result[id] = target is not null && elements.TryGetValue(target, out var element)
+                ? Internal.BlockMetadataOps.GetBlockMetadata(_doc!, target, element)
+                : null;
         return result;
     }
 
@@ -399,13 +404,13 @@ public sealed partial class DocxSession
         // don't contain text directly (tbl, tr, sec) or live in non-body scopes
         // we filter explicitly below.
         var index = Project().AnchorIndex;
+        var elements = AnchorTarget.ResolveAll(_doc!, index.Values);
         foreach (var target in index.Values)
         {
             if (!ScopeMatches(target.Anchor.Scope, scope)) continue;
             if (target.Anchor.Kind is not ("p" or "h" or "li" or "tc")) continue;
 
-            var element = target.Resolve(_doc!);
-            if (element is null) continue;
+            if (!elements.TryGetValue(target, out var element)) continue;
 
             // Table cells contain paragraphs; recurse so a Grep over the body
             // also hits cell text. Other kinds operate on the element directly.
@@ -520,6 +525,7 @@ public sealed partial class DocxSession
         // body paragraph. Any non-eligible anchor (kind != p/h/li, or out of scope,
         // or unresolved) breaks the run.
         var index = Project().AnchorIndex;
+        var elements = AnchorTarget.ResolveAll(_doc!, index.Values);
         var groups = new List<List<(AnchorTarget Target, XElement Element)>>();
         List<(AnchorTarget, XElement)>? current = null;
         XElement? currentParent = null;
@@ -529,8 +535,7 @@ public sealed partial class DocxSession
             if (!ScopeMatches(target.Anchor.Scope, scope)) { current = null; continue; }
             if (target.Anchor.Kind is not ("p" or "h" or "li")) { current = null; continue; }
 
-            var element = target.Resolve(_doc!);
-            if (element is null) { current = null; continue; }
+            if (!elements.TryGetValue(target, out var element)) { current = null; continue; }
 
             if (current is not null && ReferenceEquals(element.Parent, currentParent))
             {

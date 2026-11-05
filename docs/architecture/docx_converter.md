@@ -60,6 +60,8 @@ When manipulating the returned tree, preserve its stylesheet nodes rather than r
 | `ListItemImplementations` | `Dictionary<string, Func<...>>` | Default implementations | Custom list item text generators |
 | `ImageHandler` | `Func<ImageInfo, XElement>` | `null` | **Required for images** - callback to process embedded images |
 | `SemanticLists` | `bool` | `false` | Emit Word lists as `ol`/`ul`/`li` instead of paragraphs (see [Lists](#lists)); ignored by paginated output |
+| `ShowFormattingChanges` | `bool` | `true` | With `RenderTrackedChanges`, show formatting-change annotations; current formatting remains when false |
+| `ShowInsertionsAndDeletions` | `bool` | `true` | With `RenderTrackedChanges`, show text/structural revisions; false displays current text and structure without accepting revisions |
 
 ### ImageInfo Structure
 
@@ -69,7 +71,7 @@ When `ImageHandler` is invoked, it receives an `ImageInfo` object:
 public class ImageInfo
 {
     public SKBitmap? Bitmap;           // Decoded image (SkiaSharp)
-    public byte[]? ImageBytes;         // Raw image bytes
+    public byte[]? ImageBytes;         // Encoded output bytes; TIFF/WMF may be normalized
     public XAttribute? ImgStyleAttribute; // Pre-computed style attribute with dimensions
     public string? ContentType;        // MIME type (e.g., "image/png")
     public XElement? DrawingElement;   // Original Word XML element
@@ -90,6 +92,19 @@ The conversion happens in the following stages:
 
 Run coalescing visits nested containers from the leaves upward on one copy of the input tree.
 Each container, including textbox paragraphs, is consolidated once (#1410).
+
+Markup visibility is prepared on that owned copy after canonical source indexing and author
+palette collection, before simplification and formatting assembly. Hidden paragraph-mark
+revisions use the joined paragraph's current properties for inherited formatting and numbering;
+surviving source identities remain attached. Hidden-only comments are filtered before resource
+inventory. This path does not call revision acceptance or rewrite the caller's package (#1523).
+
+VML drawing containers project each independent member, with nested group coordinate maps
+preserving individual textbox and picture bounds (#1482). The ordinary textbox paragraph
+converter still owns formatting, contextual spacing, source identities and fixed-box clipping.
+The host records expected textbox identities from selected source OOXML; the image/chart paths
+record only their actual selected alternatives so a missing image can still fall back to text.
+This makes conversion-time loss observable to the paginator's existing completeness check.
 
 ```
 WordprocessingDocument
@@ -212,19 +227,73 @@ still apply to the number.
 `w:framePr` identifies a floating paragraph frame. Adjacent paragraphs with identical frame
 attributes share one frame, anchored to the next ordinary paragraph, as specified by
 [OOXML FrameProperties](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.frameproperties?view=openxml-3.0.1).
-The converter groups their ordinary paragraph HTML inside one absolutely positioned
-`data-docx-text-frame` wrapper. A zero-height placeholder keeps the frame with its following
-anchor without adding a line to the body, header or footer. Drop-cap properties retain their
+The converter groups their ordinary paragraph HTML inside one `data-docx-text-frame` wrapper.
+A placeholder keeps the frame with its following anchor. Drop-cap properties retain their
 existing conversion path. Explicit automatic height ignores the stored height; exact and minimum
 heights retain their declared size. Omitted anchors use Word's text-relative defaults
 ([MS-OE376](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/6ff920ba-f035-407d-aa15-c4e2ad916cb6)).
+
+For `w:yAlign="inline"`, `w:wrap="notBeside"` gives the placeholder the frame's flow height.
+Text-anchored `around`, `auto`, `tight` and `through` frames with left-edge placement or explicit
+offsets instead leave a zero-height source slot and exclude their occupied area, including
+`hSpace`, from following lines. Separate frames keep their own
+source positions. `prepareFrameExclusions` represents the active rectangles with a float whose
+right edge follows their union, ending each float at the next frame's source slot. That next
+slot carries any surviving rectangles into a new exclusion. This prevents CSS float packing
+from shifting frames sideways and prevents a later, wider frame from moving an earlier table.
+Adjacent distinct frames share one slot; paragraphs with identical properties share one frame.
+`wrap="none"` retains overlap. Inline frames directly in a table cell become ordinary paragraphs,
+as in Word; a nested text-box story is a separate frame context.
+
+Body admission counts a wrapping frame's painted extent separately from normal flow height.
+Header overhangs narrow body lines without consuming that height a second time. Tables and other
+formatting contexts that must move below an exclusion contribute their measured clearance after
+margin collapse. Running stories use the same wrapping geometry when their fields are refreshed.
 
 The paginator resolves page, margin and text anchors after the ordinary content has flowed.
 It then places the frame directly in its page so body and running-story clipping cannot crop
 its overhang. Inherited presentation, canonical source identities and table-cell ownership
 survive placement; the PageMap measures the positioned source paragraphs. Ordinary running-story
-paragraphs retain their existing conversion. Frame geometry supports explicit offsets and
-horizontal/vertical alignment; surrounding-body text exclusion around frames remains unsupported.
+paragraphs retain their existing conversion. Floating-frame geometry supports explicit offsets and
+horizontal/vertical alignment.
+
+Inline wrapping uses the same horizontal anchor resolver during measurement and final placement.
+A union touching the left text edge keeps native CSS float wrapping. Interior or right-side
+rectangles instead divide each line into available intervals; the existing legal DOM Range
+splitter fills those intervals while preserving runs and source ownership. Derived line boxes
+are disposable: fragment tails and page-specific running stories recompute them at their new
+positions. An unbreakable word advances below the exclusion when neither interval can hold it.
+
+The converter retains a pending diagnostic until pagination verifies the affected layout.
+Simple left-to-right Latin paragraphs with measurable line heights are supported. Complex scripts,
+bidi runs, hard breaks, inline objects and affected tables or other independent formatting
+contexts keep the conservative fallback and warning; strict export refuses those arrangements.
+Positive `vSpace` expands the exclusion above and below the fixed painted rectangle. The
+paginator replays affected preceding paragraphs from their source content and measures the
+change in ordinary flow before admitting a frame. That extra height participates in keep-chain,
+fragment and note budgets; a deferred frame leaves the earlier page unchanged. The same replay
+runs for running stories and final pages. Zero-distance `notBeside`, `none` and non-inline frames keep
+their existing behavior. Running-story measurement includes physical page parity, independently
+of displayed page-number restarts.
+
+### Linked DrawingML text boxes
+
+A `wps:txbx` start and matching `wps:linkedTxbx` continuations form a story within their
+owning document part. The converter retains empty continuation frames and records the story,
+sequence and linked membership on their wrappers. Membership is recomputed for each conversion,
+so editing a document and rendering it again cannot leave stale clipping eligibility. Linked
+stories are excluded from fixed-box clipping exemptions.
+
+With read-only paragraph fragmentation enabled, the paginator flows the story through the
+frames in sequence using the shared paragraph fragmenter. Frame sizes and inherited typography
+are retained; text and inline pictures move as complete supported fragments. Fitting keep groups
+move together, while keeps that cannot fit any available frame may relax. Repeated header/footer
+chains are resolved separately on each physical page. Source identities continue across frames
+and pages through the ordinary PageMap path.
+
+Fit checks include all four content bounds, including the upper edge of vertically aligned
+frames. Invalid chains, indivisible content that fits no frame, and exhausted story capacity
+report an export error instead of discarding the remaining content.
 
 ### Runs (Text Formatting)
 
@@ -249,6 +318,32 @@ Run properties (`w:rPr`) map to CSS:
 | `w:bdr` | `border: solid windowtext 1pt` | |
 
 ### Tables
+
+For fixed tables with positive grid widths and explicitly sized single-line borders,
+`WmlToHtmlConverter.TableBorders.cs` resolves physical edge segments before the legacy
+CSS adjustment. Shared segments keep one complete winning border, including its color;
+merged cells do not spread that winner over unrelated segments. RTL normalization visits
+all content parts and transparent row/cell wrappers. Ordinary HTML retains native CSS borders.
+
+Paginated export replaces those quantized CSS boxes before measuring. A cell's horizontal
+content width is its grid width less `max(margin, half-border)` on each side, using the same
+winning widths for native tab wrapping. This follows the existing Word placement captures
+in `TestFiles/TableHorizontalPlacement`; vertical row padding includes the resolved halves.
+Exact rows recalculate their content clips, while an automatic height remains automatic.
+The paginator resolves each repeated header's new neighbor before fitting the fragment and
+reserves the visible outer edges at its top, bottom and aligned trailing side.
+Borderless cells use separate layout with zero spacing so the outer vertical halves can
+be table padding. This reservation cannot collapse into neighboring paragraph margins,
+and the alignment wrapper retains its existing float-clearance behavior.
+Export supplies this refresh through the paginator's synchronous internal
+`prepareTableFragment` hook; editor/viewer bundles do not load the export-only border layout.
+
+Final edges paint as SVG rectangles beside their source table, preserving source stacking
+order, affine transforms and ancestor clips. Shared boundaries paint once by source segment
+identity. A local SVG shares Chromium's existing transformed HTML paint-origin rounding;
+paired PDF controls verify alignment with neighboring HTML ink and the exact declared width.
+This does not claim a general correction of transformed HTML print origins. Tables with
+unsupported border styles or unresolved grids continue through the existing native renderer.
 
 Tables are wrapped in a `<div>` for alignment control:
 
@@ -301,6 +396,25 @@ result. Removing rather than replacing them exposes the document's underlying TO
 <a href="url-from-field">field content</a>
 ```
 
+### Ruby annotations
+
+`WmlToHtmlConverter.Ruby.cs` resolves ruby size precedence before formatting assembly: `w:hps`
+overrides annotation run sizes, while an explicit base run size wins over `w:hpsBaseText`.
+Direct horizontal text runs use `ruby` / `rt` / `rp`, retaining run formatting and annotation
+language. A marked inline-block wrapper keeps the pair atomic. The shared line-metrics pass
+measures native ruby baselines after font preparation, shifts the annotation to the authored
+baseline distance, and reserves the corresponding signed change in line height, including
+hidden note registries. Fragment endpoints never enter the pair; line-boundary decisions use
+the base, while annotation ink remains part of layout measurement.
+Chromium's PDF paint path can round the measured baseline distance to CSS pixels; its tagged
+output retains pair association, with role names depending on the Chromium version. See the
+Ruby corner case for the measured bounds.
+
+Vertical ruby alignment, bidi paragraphs, tabs, exact-spaced paragraphs and shifted/scripted
+runs use a complete readable fallback. Its diagnostic participates in the existing strict
+export policy. With placeholders disabled, both text layers still render. Exact fallback
+runs share the enclosing run's baseline correction and use their own natural line heights.
+
 ### Tabs
 
 Before revision acceptance, simplification and formatting, `ExpandLiteralTextTabs` replaces literal
@@ -331,6 +445,11 @@ second right or left stop inside the indent then lands on its own stop (issue #1
 end only because a right-aligned stretch ended on such a stop does not count as wrapped text.
 If text after the final left tab would exceed the column edge, the paragraph keeps the ordinary wrapping
 path. Forcing that text into the same nowrap box would send it past the page and lose visible words.
+Likewise, a right tab whose following text exceeds both the column and its authored stop keeps
+ordinary, fragmentable flow (#1488). Its following width is the sum of the actual runs' resolved
+fonts and sizes, with letter spacing included by the shared run measurement. A short tail whose
+browser glyphs are wider than that estimate can shrink and wrap within its segment; fitting tails
+still end on their stop. Deliberate overhanging stops retain their existing treatment.
 
 Complex fields stay on the flex path: their begin, instruction, separator and end runs draw nothing, so a
 table-of-contents page number held in a `PAGEREF` field ends on the stop like plain text (issue #1285).
@@ -344,6 +463,9 @@ segment instead starts at the left indent and reaches the stop. The text wraps i
 and the segment aligns its last line with the following text (`align-items: last baseline`), so the page
 number ends on the stop beside the last title line. The tab takes no room after the title's last word;
 its leader is as wide as the segment and is clipped (`overflow-x: clip`) where the number begins.
+The prefix keeps its minimum word width, and the segment can wrap onto another flex line if
+the following text leaves less room than that. This prevents an underestimated tail from
+collapsing the clipped title to zero width; fitting page-number lines retain their geometry.
 
 Bidirectional paragraphs, breaks, active comment/annotation ranges (including a bookmark
 that opens a rendered annotation) and tab runs with visibility, revision or exceptional geometry retain
@@ -372,28 +494,34 @@ the run-aware path and its conservative following-text reservations. Leader rule
 
 ### Images
 
-Images require a custom `ImageHandler` callback. Supported formats:
-- PNG (`image/png`)
-- GIF (`image/gif`)
-- TIFF (`image/tiff`)
-- JPEG (`image/jpeg`)
+Images require an `ImageHandler` callback. PNG, GIF and JPEG retain their encoded bytes.
+The shared DrawingML/VML path in `WmlToHtmlConverter.Images.cs` normalizes two bounded subsets
+before invoking that callback, identically in native and WASM builds:
 
-**Not supported:**
-- WMF (`image/x-wmf`) - Excluded due to memory issues
-- EMF - Not processed
-- SVG - Not processed
+- Classic, single-page TIFF: chunky unsigned 8-bit RGB/RGBA, uncompressed or PackBits strips,
+  either byte order, orientations 1–8 and associated/unassociated alpha. Output is RGBA PNG.
+  LZW/Deflate, tiles, palette/grayscale, custom colorimetry/profiles and multi-page files retain
+  an unsupported-content diagnostic.
+- Placeable WMF (`image/x-wmf` or `image/wmf`): positive anisotropic windows, rectangle/ellipse
+  records and positive-width solid/null pens and solid/null brushes. Output is static SVG with
+  a bounded object table and record count. Word's device-pixel endpoint exclusion is resolved
+  in logical coordinates; window mapping and later picture sizing stretch the complete painted
+  graphic, including its outline. Visible zero-width device pens, collapsed bounds and unknown
+  records reject the whole image; text, bitmaps, clipping and other map modes remain unsupported.
+
+Input is limited to 64 MiB; normalized dimensions are limited to 32,768 per axis and
+16 megapixels. Source EMF and SVG image parts retain their existing placeholders. Generated
+WMF SVG contains only numeric geometry and paint attributes, with no external resources.
+`ImageInfo.ContentType` names the output encoding and `ImageBytes` holds those encoded bytes;
+`Bitmap` can be null for vector output. Handlers should preserve the encoded resource.
 
 **Example ImageHandler:**
 
 ```csharp
 settings.ImageHandler = imageInfo =>
 {
-    // Save image to file
-    var filename = $"image_{Guid.NewGuid()}.png";
-    imageInfo.SaveImage(filename, SKEncodedImageFormat.Png);
-
     return new XElement(Xhtml.img,
-        new XAttribute("src", filename),
+        new XAttribute("src", $"data:{imageInfo.ContentType};base64,{Convert.ToBase64String(imageInfo.ImageBytes!)}"),
         new XAttribute("alt", imageInfo.AltText ?? ""),
         imageInfo.ImgStyleAttribute);
 };
@@ -624,7 +752,7 @@ Only **HYPERLINK** fields are converted to `<a>` elements. All other field types
 
 ### Image Limitations
 
-- **WMF files excluded** - Known to cause memory issues
+- **TIFF/WMF subsets only** - Unsupported encodings or records produce explicit diagnostics
 - **EMF not supported** - Not in allowed content types
 - **SVG not supported** - Not in allowed content types
 - **Requires ImageHandler** - Returns `null` without callback
@@ -754,3 +882,33 @@ Both fixed and flexible tabs go through the run renderer, so a leading tab keeps
 colour and visibility. A complex HYPERLINK before or spanning a tab stays whole; converting its runs
 individually would leave its text and bookmark targets outside the link. The paragraph uses the shared
 field-context annotations to choose that path.
+
+
+### Legacy form results
+
+After formatting assembly, `NormalizeFieldResults` resolves complete `FORMCHECKBOX` and
+`FORMDROPDOWN` fields from metadata on their begin character. This happens before paragraph
+emptiness and tab measurement, so metadata-only selections occupy the same space as cached
+text. Result leaves are replaced within their original run/revision boundaries; non-result
+instructions and reference/range markers are retained. Complete `FORMTEXT` caches pass through.
+Checkboxes are static read-only accessible spans with CSS borders; unsupported metadata uses
+the configured placeholder policy. See [the form-field corner case](../ooxml_corner_cases.md#legacy-form-metadata-lives-inside-the-fields-begin-character-1480).
+
+### Property and paragraph-style fields
+
+`NormalizeFieldResults` shares result ownership for simple and complex fields. It first resolves
+legacy forms and read-only `TITLE` / `DOCPROPERTY Title`, then rebuilds field annotations before
+resolving `STYLEREF`. An outer result can replace nested cached fields; instruction input stays
+hidden, including its note references. Replacement retains visible result formatting and range
+anchors. Locked property/style fields retain their caches. An absent title preserves the cache and
+uses the configured unsupported-field diagnostic; an explicitly empty title clears the result.
+Write-form TITLE arguments and unsupported properties/switches preserve their caches and report
+through the same placeholder policy.
+
+Style references match an exact paragraph style's friendly name, then its ID; numeric 1–9 selects
+Heading 1–9. Body fields search preceding text, then following text if no preceding match exists.
+Textboxes and character styles are outside this resolver. Visible text uses the existing text
+extraction helper, including special hyphens and symbols; deleted/hidden instruction text does not
+become the heading. Running stories emit `data-field="STYLEREF"` with the canonical style ID and
+optional last-on-page flag. Source paragraphs carry the full heading text through fragmentation.
+See [paginated headers and footers](paginated_headers_footers.md#running-style-references).

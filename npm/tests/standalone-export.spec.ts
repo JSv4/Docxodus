@@ -1137,10 +1137,56 @@ test.describe('standalone paginated HTML', () => {
     ]);
   });
 
-  test('fails closed with a report when an indivisible vertical-merge group would clip', async ({ page }, testInfo) => {
-    // Word-style clipping of one oversized exact row is supported (#1202). An unsplittable
-    // group of minimum-height merged rows still exceeds the body band and must fail closed.
+  test('continues an oversized minimum-height merged group within the page limit', async ({ page, context }) => {
     const source = generateVerticalMergeDocx({ mergeSpan: 18 });
+    const result = await convert(page, source, false, { commentProfile: 'hidden', limits: { finalPages: 2 } });
+    expect(result.renderReport.status).toBe('complete');
+    expect(result.pageCount).toBe(2);
+    expect(result.renderReport.options.policy.limits.finalPages).toBe(2);
+    const offline = await context.newPage();
+    await offline.setContent(result.html);
+    await offline.evaluate(() => document.fonts.ready);
+    const audit = await offline.locator('.page-content table').evaluateAll(tables => tables.map(table => {
+      const rect = table.getBoundingClientRect(), band = table.closest('.page-content')!.getBoundingClientRect();
+      return {
+        source: table.getAttribute('data-source-anchor-id'),
+        paragraphs: Array.from(table.querySelectorAll('p'), p => p.textContent?.trim()),
+        paragraphSources: Array.from(table.querySelectorAll('p[data-source-anchor-id]'), p => p.getAttribute('data-source-anchor-id')),
+        rows: table.querySelectorAll('tr').length,
+        fits: rect.top >= band.top - 1 && rect.bottom <= band.bottom + 1
+          && rect.left >= band.left - 1 && rect.right <= band.right + 1,
+      };
+    }));
+    await offline.close();
+    expect(audit).toHaveLength(2);
+    expect(audit.every(table => table.fits)).toBe(true);
+    expect(audit.reduce((rows, table) => rows + table.rows, 0)).toBe(18);
+    expect(audit.flatMap(table => table.paragraphs)).toEqual(['Left01 Cedar tray.',
+      ...Array.from({ length: 18 }, (_, index) => `Right${String(index + 1).padStart(2, '0')} Archive register.`)]);
+    const paragraphSources = audit.flatMap(table => table.paragraphSources);
+    expect(paragraphSources).toHaveLength(19);
+    expect(new Set(paragraphSources).size).toBe(19);
+    expect(audit[0].source).toMatch(/^tbl:body:/);
+    expect(audit[1].source).toBe(audit[0].source);
+    const fragments = result.pageMap.fragments as Array<{ anchorId: string; fragmentId: string; pageNumber: number }>;
+    const tableFragments = fragments.filter(fragment => fragment.anchorId === audit[0].source);
+    expect(tableFragments.map(fragment => fragment.pageNumber)).toEqual([1, 2]);
+    expect(new Set(tableFragments.map(fragment => fragment.fragmentId)).size).toBe(2);
+    for (const anchorId of paragraphSources)
+      expect(fragments.filter(fragment => fragment.anchorId === anchorId)).toHaveLength(1);
+
+    const limited = await page.evaluate(async bytes => (window as any).DocxodusStandalone.convertFailure(bytes,
+      { reviewProfile: 'final', commentProfile: 'hidden', limits: { finalPages: 1 } }), Array.from(source));
+    expect(limited.unexpectedSuccess).toBeUndefined();
+    expect(limited.code).toBe('resource_limit');
+    expect(limited.report.status).toBe('failed');
+    expect(limited.report.options.policy.limits.finalPages).toBe(1);
+  });
+
+  test('fails closed with a report when an exact-height vertical-merge group would clip', async ({ page }, testInfo) => {
+    // Recovery preserves authored exact-height merge groups; unlike minimum-height rows,
+    // this group remains indivisible and must not publish clipped source paragraphs.
+    const source = generateVerticalMergeDocx({ mergeSpan: 18, rowHeightRule: 'exact' });
     const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone.convertFailure(
       bytes,
       { reviewProfile: 'final', commentProfile: 'hidden' },

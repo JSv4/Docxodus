@@ -25,6 +25,132 @@ namespace Docxodus.Tests.Ir.Diff;
 [Trait("Category", "Markup")]
 public class DocxDiffCrossParagraphTests
 {
+    [Theory]
+    [InlineData("distinct", false)]
+    [InlineData("distinct", true)]
+    [InlineData("articles", false)]
+    [InlineData("articles", true)]
+    [InlineData("numbered", false)]
+    [InlineData("numbered", true)]
+    [InlineData("linked", false)]
+    [InlineData("linked", true)]
+    public void CompleteRewrite_KeepsInsertedAndDeletedBlocksCoherent(string shape, bool reverse)
+    {
+        bool articles = shape != "distinct";
+        var before = articles
+            ? new[] { "A walnut lever lifts the brass hatch.", "The scarlet pouch rests beside a birch shelf.",
+                "Two slate markers indicate the inlet.", "A narrow hook steadies the woven basket." }
+            : new[] { "Walnut levers lift brass hatches.", "Scarlet pouches rest beside birch shelves.",
+                "Slate markers indicate narrow inlets.", "Hooks steady woven baskets." };
+        var after = articles
+            ? new[] { "The cobalt pennant crosses a broad meadow.", "A silent carriage circles the frozen pond.",
+                "The silver key unlocks a round cabinet.", "Three amber beads adorn the linen collar." }
+            : new[] { "Cobalt pennants cross broad meadows.", "Silent carriages circle frozen ponds.",
+                "Silver keys unlock round cabinets.", "Amber beads adorn linen collars." };
+        if (reverse)
+            (before, after) = (after, before);
+        WmlDocument Make(string[] texts) => IrTestDocuments.FromBodyXml(string.Concat(texts.Select((text, i) =>
+        {
+            if (shape == "numbered")
+                text = $"{i + 1}. {text}";
+            var runs = System.Text.RegularExpressions.Regex.Split(text, @"(\b(?:A|a|The|the)\b)")
+                .Where(part => part.Length > 0).Select(part =>
+                {
+                    var run = new XElement(W.r, new XElement(W.t,
+                        new XAttribute(XNamespace.Xml + "space", "preserve"), part));
+                    return shape == "linked" && part is "A" or "a" or "The" or "the"
+                        ? new XElement(W.hyperlink, new XAttribute(W.anchor, "shared"), run) : run;
+                });
+            return new XElement(W.p, runs).ToString(SaveOptions.DisableFormatting);
+        })));
+        var left = Make(before);
+        var right = Make(after);
+        var result = DocxCompare.Compare(left, right);
+        Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(result)));
+        Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionProcessor.AcceptRevisions(result)));
+
+        var paragraphs = XDocument.Parse(Docs.MainPartXml(result)).Root!.Element(W.body)!
+            .Elements(W.p).ToArray();
+        var sides = paragraphs.SelectMany(p => p.Descendants())
+            .Where(e => e.Name == W.delText || e.Name == W.t && e.Ancestors(W.ins).Any())
+            .Where(e => !string.IsNullOrWhiteSpace(e.Value))
+            .Select(e => e.Name == W.delText).ToArray();
+        // Exactly two text-side runs: one boundary paragraph may contain the end of one
+        // block and start of the other, but must not interleave their individual words.
+        Assert.Equal(1, sides.Zip(sides.Skip(1)).Count(pair => pair.First != pair.Second));
+    }
+
+    [Fact]
+    public void CapitalizationAndSpellingEdit_RetainsSharedFunctionWord()
+    {
+        var left = Docs.Para("designs that compleme");
+        var right = Docs.Para("Designs that complement.");
+        var result = DocxCompare.Compare(left, right);
+        var xml = XDocument.Parse(Docs.MainPartXml(result));
+        Assert.Contains("that", string.Concat(xml.Descendants(W.t)
+            .Where(t => !t.Ancestors(W.ins).Any()).Select(t => t.Value)));
+        Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(result)));
+        Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionProcessor.AcceptRevisions(result)));
+    }
+
+    [Theory]
+    [InlineData(false, false, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(false, true, true, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(true, false, true, false)]
+    [InlineData(true, true, false, false)]
+    [InlineData(true, true, true, false)]
+    [InlineData(false, false, false, true)]
+    [InlineData(false, false, true, true)]
+    [InlineData(false, true, false, true)]
+    [InlineData(false, true, true, true)]
+    [InlineData(true, false, false, true)]
+    [InlineData(true, false, true, true)]
+    [InlineData(true, true, false, true)]
+    [InlineData(true, true, true, true)]
+    public void RewrittenParagraphs_KeepDeletedSuffixWithItsReplacement(bool reverse, bool interior, bool crossing, bool compound)
+    {
+        var before = new[]
+        {
+            "Morning crews polish the brass telescope before" + (compound ? "-" : " ") + "opening the dome.",
+            "The keeper records a quiet observation beside the northern window." + (crossing ? " Saffron cargo" : ""),
+            "At closing the shutters cover the lens and the ladder returns indoors.",
+        };
+        var after = new[]
+        {
+            "Evening volunteers arrange the ceramic bowls before lighting the kiln.",
+            "The potter records a blue glaze beside the southern doorway.",
+            (crossing ? "Saffron cargo " : "") + "At sunrise the baskets carry the tiles and the wagon leaves outside.",
+        };
+        if (reverse)
+            (before, after) = (after, before);
+        var tail = interior ? new[] { "An unchanged closing sentence." } : System.Array.Empty<string>();
+        var left = Docs.Para(before.Concat(tail).ToArray());
+        var right = Docs.Para(after.Concat(tail).ToArray());
+        var result = DocxCompare.Compare(left, right);
+        var body = XDocument.Parse(Docs.MainPartXml(result)).Root!.Element(W.body)!;
+        var paragraphs = body.Elements(W.p).ToList();
+
+        var deleted = Assert.Single(paragraphs.Where(p => p.Descendants(W.delText)
+            .Any(t => t.Value.Contains(before[0].Split(' ')[0]))));
+        Assert.Equal(before[0],
+            string.Concat(deleted.Descendants(W.delText).Select(t => t.Value)));
+        var inserted = Assert.Single(paragraphs.Where(p => p.Descendants(W.ins)
+            .Descendants(W.t).Any(t => t.Value.Contains(after[0].Split(' ')[0]))));
+        Assert.Equal(after[0],
+            string.Concat(inserted.Descendants(W.ins).Descendants(W.t).Select(t => t.Value)));
+        if (crossing && !reverse)
+        {
+            var retained = Assert.Single(body.Descendants(W.t).Where(t => t.Value.Contains("Saffron cargo")));
+            Assert.DoesNotContain(retained.Ancestors(), e => e.Name == W.ins || e.Name == W.del);
+            Assert.DoesNotContain(body.Descendants(W.delText), t => t.Value.Contains("Saffron cargo"));
+        }
+        Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(result)));
+        Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionProcessor.AcceptRevisions(result)));
+    }
+
     private static readonly IrReaderOptions ReadOpts =
         new() { RetainSources = false, RevisionView = RevisionView.Accept };
 

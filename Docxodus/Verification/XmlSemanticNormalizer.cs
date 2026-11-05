@@ -16,6 +16,13 @@ internal sealed class XmlDepthLimitException : XmlException
     public XmlDepthLimitException(string message) : base(message)
     {
     }
+
+    /// <summary>The package part the read step's depth door refused, when it was one (issue #1389).</summary>
+    public string? PartUri { get; init; }
+
+    /// <summary>The door refused because measuring would pass the package's raw-boundary limits,
+    /// not because the part nests too deep.</summary>
+    public bool IsBudgetRefusal { get; init; }
 }
 
 /// <summary>
@@ -37,6 +44,12 @@ internal static class XmlSemanticNormalizer
     // byte/character ceilings. 256 is far above normal OPC/OOXML nesting while keeping hostile
     // documents comfortably below the runtime stack limit.
     internal const int MaxElementDepth = 256;
+
+    // The WordprocessingML story and definition parts are walked recursively by every pipeline
+    // (Unid assignment, projection, revisions, the HTML render, comparison), whose deepest measured
+    // recursion — the HTML render of nested tables — overflows a 1 MB stack at about 150 levels.
+    // Real documents nest a few dozen levels at most (the test corpus peaks at 25). Issue #1389.
+    internal const int MaxStoryDepth = 128;
 
     private const string ContentTypesUri = "/[Content_Types].xml";
     private const string XmlSchemaInstanceNamespace =
@@ -116,25 +129,31 @@ internal static class XmlSemanticNormalizer
         };
     }
 
-    private static void EnsureBoundedDepth(XContainer container)
+    /// <summary>Throws <see cref="XmlDepthLimitException"/> when an element under
+    /// <paramref name="container"/> would nest deeper than <paramref name="max"/> below
+    /// <paramref name="depthAbove"/> ancestors — the depth of the place a payload is about to be
+    /// inserted (issue #1389).</summary>
+    internal static void EnsureBoundedDepth(XContainer container, int depthAbove = 0, int max = MaxElementDepth)
     {
         var pending = new Stack<(XElement Element, int Depth)>();
         if (container is XElement element)
-            pending.Push((element, 1));
+            pending.Push((element, depthAbove + 1));
         else
             foreach (var root in container.Elements())
-                pending.Push((root, 1));
+                pending.Push((root, depthAbove + 1));
 
         while (pending.Count > 0)
         {
             var (current, depth) = pending.Pop();
-            if (depth > MaxElementDepth)
-                throw new XmlDepthLimitException(
-                    $"XML element nesting exceeds the {MaxElementDepth} level safety limit.");
+            if (depth > max)
+                ThrowDepthLimit(max);
             foreach (var child in current.Elements())
                 pending.Push((child, depth + 1));
         }
     }
+
+    internal static void ThrowDepthLimit(int limit) => throw new XmlDepthLimitException(
+        $"xml_depth_limit_exceeded: XML element nesting exceeds the {limit} level safety limit.");
 
     private static void WriteNode(
         IncrementalHash hash,

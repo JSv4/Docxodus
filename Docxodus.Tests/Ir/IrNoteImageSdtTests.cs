@@ -502,15 +502,18 @@ public class IrNoteImageSdtTests
     [Fact]
     public void Read_PathologicallyDeepSdt_FallsBackToOpaque()
     {
-        // 70-deep nested block SDTs exceed the MaxSdtDepth (64) recursion cap: the reader must not
+        // 70-deep nested block wrappers exceed the MaxSdtDepth (64) recursion cap: the reader must not
         // throw and must preserve the subtree as an opaque block rather than unwrapping forever.
+        // w:customXml wrappers nest one element a level, so the chain stays inside the XML depth
+        // limit every part load enforces (issue #1389); 70 nested w:sdt (two elements a level) are
+        // refused at load before the cap is reached.
         var sb = new System.Text.StringBuilder();
         const int depth = 70;
         for (int i = 0; i < depth; i++)
-            sb.Append("<w:sdt><w:sdtContent>");
+            sb.Append("<w:customXml w:element=\"wrapper\">");
         sb.Append("<w:p><w:r><w:t>buried</w:t></w:r></w:p>");
         for (int i = 0; i < depth; i++)
-            sb.Append("</w:sdtContent></w:sdt>");
+            sb.Append("</w:customXml>");
 
         var doc = Read(sb.ToString());
 

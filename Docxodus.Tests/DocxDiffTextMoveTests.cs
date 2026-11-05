@@ -65,7 +65,7 @@ public class DocxDiffTextMoveTests
         var from = Assert.Single(body.Descendants(W.moveFromRangeStart));
         var to = Assert.Single(body.Descendants(W.moveToRangeStart));
         Assert.Equal((string?)from.Attribute(W.name), (string?)to.Attribute(W.name));
-        Assert.Equal(moved, Normalize(body.Descendants(W.moveFrom).SelectMany(m => m.Descendants(W.delText))));
+        Assert.Equal(moved, Normalize(body.Descendants(W.moveFrom).SelectMany(m => m.Descendants(W.t))));
         Assert.Equal(moved, Normalize(body.Descendants(W.moveTo).SelectMany(m => m.Descendants(W.t))));
         // The moved text is not also drawn as a plain deletion or insertion.
         Assert.DoesNotContain(body.Descendants(W.del), d => d.Value.Contains("sentence explains") || d.Value.Contains("wandering"));

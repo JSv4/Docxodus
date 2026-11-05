@@ -30,6 +30,7 @@ namespace Docxodus
         /// <summary>Resolve a run revision's previous properties in the same inherited style
         /// context as its current properties, for HTML formatting-change descriptions only.</summary>
         internal bool ResolveRevisionFormatting;
+        internal bool RenderListRevisionMarkup = true;
 
         public FormattingAssemblerSettings()
         {
@@ -49,7 +50,7 @@ namespace Docxodus
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(document))
             {
-                using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument doc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     AssembleFormatting(doc, settings);
                 }
@@ -59,6 +60,7 @@ namespace Docxodus
 
         public static void AssembleFormatting(WordprocessingDocument wDoc, FormattingAssemblerSettings settings)
         {
+            using var depthScope = Internal.PartDepthGuard.Enter(wDoc);
             // word/styles.xml is optional in OOXML, but the assembler reads StyleDefinitionsPart
             // throughout (and ClearStyles writes it), so ensure it exists up front — a styles-less
             // package then resolves everything to built-in defaults instead of throwing. The
@@ -681,6 +683,13 @@ namespace Docxodus
                             !string.IsNullOrEmpty(originalMarker) &&
                             !string.Equals(originalMarker, li, StringComparison.Ordinal);
 
+                        if (!settings.RenderListRevisionMarkup)
+                        {
+                            isDeleted = false;
+                            isInserted = false;
+                            hasVisibleNumberingChange = false;
+                        }
+
                         if (isDeleted && !string.IsNullOrEmpty(originalMarker))
                         {
                             listItemRun = CloneListItemRunWithMarker(listItemRun, originalMarker);
@@ -777,6 +786,9 @@ namespace Docxodus
                             element.Attribute(PtOpenXml.FontName),
                             element.Attribute(PtOpenXml.LanguageType),
                             element.Attribute(PtOpenXml.Unid),
+                            // Converter display annotations must survive list normalization:
+                            // a numbered paragraph can continue across a hidden paragraph mark.
+                            element.Attributes().Where(a => a.Name.NamespaceName == "urn:docxodus:rendering"),
                             // li (the retrieved list item text) and listItemInfo (the source of
                             // abstractNumId) come from the same earlier annotation pass, so
                             // li != null implies listItemInfo != null and abstractNumId was set.
@@ -903,6 +915,7 @@ namespace Docxodus
             PtOpenXml.ListValue,
             PtOpenXml.ListFormat,
             PtOpenXml.StyleName,
+            PtOpenXml.InheritedFrame,
             PtOpenXml.LanguageType,
             PtOpenXml.ListItemRun,
             PtOpenXml.Unid,
@@ -2543,6 +2556,13 @@ namespace Docxodus
 
             XElement? accumulatedParaProps = para.Element(PtOpenXml.pt + "pPr");
             XElement newAccumulatedParaProps = MergeStyleElement(mergedParaProps, accumulatedParaProps)!;
+
+            // Keep source provenance for HTML layout without removing inherited properties
+            // from the effective-formatting cascade. A later render of assembled markup must
+            // retain this marker even though the merged frame is now in the paragraph's pPr.
+            if (settings.CreateHtmlConverterAnnotationAttributes &&
+                localParaProps.Element(W.framePr) == null && newAccumulatedParaProps.Element(W.framePr) != null)
+                para.SetAttributeValue(PtOpenXml.InheritedFrame, true);
 
             AdjustFontAttributes(wDoc, para, newAccumulatedParaProps, newAccumulatedParaProps.Element(W.rPr), settings);
             newAccumulatedParaProps.Name = PtOpenXml.pt + "pPr";

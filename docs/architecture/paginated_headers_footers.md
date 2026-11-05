@@ -610,8 +610,11 @@ A keep-with-next chain uses the shared paragraph fragmenter for its final paragr
 the whole chain (#1182). Its prefix height uses the same collapsed margins as ordinary placement.
 Only citations in the retained prefix must start on that page; citations in the continuation move
 with it. A fresh-page feasibility check also admits a valid first fragment, so an oversized chain
-does not strand its heading. Existing keep-lines, explicit breaks, widow-control and disabled
-fragmentation retain their whole-paragraph behavior.
+does not strand its heading. Keep-lines, explicit breaks and disabled fragmentation retain their
+whole-paragraph behavior. Widow control instead requires at least two text lines on each side of
+a page split, independently of whether an impossible keep-lines constraint was relaxed (#1520).
+The fragmenter measures those lines after reflowing each fragment in the paragraph's layout
+context; a source range can span two lines yet become a one-line continuation after the split.
 
 ### Lazy Loading Compatibility
 
@@ -666,3 +669,50 @@ This approach is designed for future lazy loading:
    - Documents with only headers (no footers)
    - Multi-section documents with different headers per section
    - First page different headers
+
+## Running style references
+
+For a running `STYLEREF`, the converter supplies an exact paragraph style ID and full source
+paragraph text. The paginator selects the first matching paragraph on the physical page, or the
+last for `\l`. Without an on-page match it uses the last preceding match, falling forward to the
+first document match only before any preceding match exists. Split heading fragments retain their
+complete source text. Textbox and note paragraphs do not enter the main-story search.
+
+These fields require a bounded layout reconciliation. The paginator saves pristine staging content,
+flows one pass, records the page ownership of headings and body content, and repeats from the
+pristine source with those running values. Each pass prepares and measures the selected header/footer
+variant with resolved STYLEREF, PAGE and NUMPAGES values. The same prepared content determines body
+space and the visible story. Section numbering restarts remain part of page identity. Balanced and
+sequential columns reflow against the actual remaining band; an oversized inline picture is fitted
+against the actual fresh-page band, never merely the remaining space on a partly occupied page.
+
+Only a stable pass finalizes fragment identities, baseline alignment, comments, balloons and PageMap.
+A repeated non-stable state or twelve-pass limit throws an explicit running-field stability error.
+The ordinary path without running style fields retains one flow pass. Character-style references,
+numbering switches, and unsupported stories retain their cached text with the configured diagnostic.
+
+## Continuous sections with different margins
+
+Continuous sections share a page run when their paper dimensions agree. The leading section
+owns the existing page's vertical bands, running stories and numbering; a body spill gives the
+new page to the section supplying its content. A changed top or bottom margin therefore takes
+effect on later body pages. Explicit page breaks and changed paper dimensions remain boundaries.
+
+Horizontal body layout is section-owned even on a shared page. Source blocks retain a section
+marker through cloning and fragmentation. One append helper supplies ordinary block containers
+with the source width and an offset relative to the containing page or measurement host. It does
+not create a new formatting context, overwrite paragraph/table indents, or suppress collapsed
+margins. Fragment probes and normal admission beside floats use the same positioned prefix.
+Whole keep chains are measured in sequence against that prefix; fresh-page probes start again
+without it. These measurements remain local so retries retain source identity and cannot reuse
+an earlier page's float height. Shape sizing and clearance use the destination page's margins
+before measurement, matching the final drawing's relative size and vertical clearance.
+Column-relative drawings follow that section context; page-margin-relative drawings retain the
+page owner's geometry, and promotion preserves the source section marker.
+
+A cited note carries its section width on the registry shell, capped by the physical page band.
+Whole notes, partial notes and continuations clone that shell. Their outer band keeps the page
+owner's origin and bottom; current-page measurements use that width, while fresh-page probes
+use the prospective owner. Trailing note-only continuations retain the existing page owner.
+The native Word observations and minimal XML are recorded in
+[the continuous-margin corner case](../ooxml_corner_cases.md#continuous-sections-can-change-margins-on-a-shared-page-1486).

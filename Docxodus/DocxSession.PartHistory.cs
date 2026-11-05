@@ -72,5 +72,7 @@ public sealed partial class DocxSession
         _doc.Dispose();
         _stream!.Position = 0;
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
+        // The session's own package: the door measured what it opened and its edits are watched (issue #1389).
+        Internal.PartDepthGuard.MarkMeasured(_doc, watched: true);
     }
 }

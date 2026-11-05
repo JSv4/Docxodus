@@ -8,10 +8,11 @@
 
 import limitsContractJson from "./export-resource-limits-v1.json";
 import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
-import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExactLineInk, laidOutBottom } from "./line-metrics.js";
+import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExactLineInk, measureLaidOutBottoms } from "./line-metrics.js";
 import { prepareWordText, paintWordText } from "./word-text.js";
 import { preserveClippedExactRowText } from "./exact-row-text.js";
 import { prepareParagraphBorders, paintParagraphBorders } from "./paragraph-borders.js";
+import { prepareTableBorders, paintTableBorders, refreshTableBorderLayout } from "./table-borders.js";
 import { measureRenderedSource, findOversizedExactRow, PaginationEngine, type PageMap } from "./pagination.js";
 import { scopeMarkupBalloons } from "./markup-balloons.js";
 export { renderedSourceMeasurerExpression } from "./pagination.js";
@@ -26,6 +27,7 @@ import {
   RevisionPresentation,
   type PackageManifest,
   type PackageManifestInspectionLimits,
+  type VerificationFinding,
   type VersionInfo,
 } from "./types.js";
 import {
@@ -35,6 +37,7 @@ import {
 } from "./font-runtime.js";
 import type {
   FontConfigurationIdentity,
+  FontObservation,
   FontResolution,
   FontResolver,
 } from "./font-contract.js";
@@ -47,10 +50,12 @@ export {
   FONT_SUBSTITUTION_CONTRACT_MATERIAL,
   FONT_SUBSTITUTION_CONTRACT_VERSION,
   normalizeFontFamilyName,
+  FONT_REQUEST_ATTRIBUTE,
 } from "./font-contract.js";
 export { inventoryDocumentFontRequests, parseCssFontFamily } from "./font-runtime.js";
 export type {
   FontConfigurationIdentity,
+  FontObservation,
   FontEmbeddingKind,
   FontFamilyKind,
   FontFaceMatch,
@@ -169,6 +174,32 @@ export const HARD_EXPORT_RESOURCE_LIMITS: Readonly<ExportResourceLimits> =
 export const DEFAULT_EXPORT_TIMEOUT_MS = LIMITS_CONTRACT.timeoutMs.default;
 export const HARD_EXPORT_TIMEOUT_MS = LIMITS_CONTRACT.timeoutMs.hardCeiling;
 
+/** Display controls; omitted flags are visible. Revision flags affect only the markup profile. */
+export interface MarkupVisibility {
+  formatting?: boolean;
+  /** Hidden text revisions display current text without accepting revisions in the input. */
+  insertionsAndDeletions?: boolean;
+  /** Visible comments still honor commentProfile, including its hidden setting. */
+  comments?: boolean;
+}
+
+/** Shared browser/Node validation; keep only false flags so explicit defaults preserve digests. */
+export function normalizeMarkupVisibility(value: unknown): Readonly<MarkupVisibility> {
+  if (value === undefined) return Object.freeze({});
+  const keys = ['formatting','insertionsAndDeletions','comments'] as const;
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).some(key => !(keys as readonly string[]).includes(key)))
+    throw new TypeError('markupVisibility must contain only formatting, insertionsAndDeletions, and comments flags.');
+  const result: MarkupVisibility = {};
+  for (const key of keys) {
+    const flag = (value as MarkupVisibility)[key];
+    if (flag !== undefined && typeof flag !== 'boolean')
+      throw new TypeError(`markupVisibility.${key} must be boolean.`);
+    if (flag === false) result[key] = false;
+  }
+  return Object.freeze(result);
+}
+
 export interface PaginatedHtmlOptions {
   documentVersion?: number;
   expectedSourceDigest?: string;
@@ -176,6 +207,7 @@ export interface PaginatedHtmlOptions {
   reviewProfileAlreadyApplied?: boolean;
   /** Only with reviewProfile "markup"; default "docxodus". */
   markupPresentation?: MarkupPresentation;
+  markupVisibility?: MarkupVisibility;
   commentProfile: CommentProfile;
   /**
    * Default "margin". "balloons" takes any comment profile but inline (margin comments go in the
@@ -253,6 +285,8 @@ export interface RenderReportBase {
     reviewProfileAlreadyApplied: boolean;
     /** Present only when the markup profile used the Word presentation. */
     markupPresentation?: "word";
+    /** Present only for non-default visibility, with false flags in canonical order. */
+    markupVisibility?: MarkupVisibility;
     commentProfile: CommentProfile;
     /** Present only for the balloon layout. */
     commentColumnPlacement?: "balloons";
@@ -273,6 +307,8 @@ export interface RenderReportBase {
   };
   readiness: ReadinessOutcome[];
   fonts: FontResolution[];
+  fontObservation?: FontObservation;
+  fontObservationDigest?: string;
   resources: ResourceOutcome[];
   unsupportedContent: UnsupportedContentOutcome[];
   warnings: RenderWarning[];
@@ -527,6 +563,7 @@ interface NormalizedOptions {
   reviewProfile: ReviewProfile;
   reviewProfileAlreadyApplied: boolean;
   markupPresentation: MarkupPresentation;
+  markupVisibility: Readonly<MarkupVisibility>;
   commentProfile: CommentProfile;
   commentColumnPlacement: CommentColumnPlacement;
   balloonOverflow: BalloonOverflow;
@@ -551,6 +588,7 @@ interface ExecutionState {
   fonts: FontResolution[];
   fontIdentity?: FontConfigurationIdentity;
   resources: ResourceOutcome[];
+  omittedVisualResourceIds: string[];
   unsupportedContent: UnsupportedContentOutcome[];
   limits: ExportResourceLimits;
   signal?: AbortSignal;
@@ -568,6 +606,7 @@ interface AttemptStateCheckpoint {
   warnings: number;
   fonts: number;
   resources: number;
+  omittedVisualResourceIds: number;
   unsupportedContent: number;
 }
 
@@ -646,6 +685,12 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
   if (!options || typeof options !== "object") {
     fail("invalid_argument", "input_validation", "Export options are required.",
       "Supply explicit reviewProfile and commentProfile values.");
+  }
+  let markupVisibility: Readonly<MarkupVisibility>;
+  try { markupVisibility = normalizeMarkupVisibility(options.markupVisibility); }
+  catch (error) {
+    fail("invalid_argument", "input_validation", (error as Error).message,
+      "Supply boolean formatting, insertionsAndDeletions, and comments flags, or omit markupVisibility.");
   }
   const additionalCss = options.additionalCss === undefined ? "" : options.additionalCss;
   if (typeof additionalCss !== "string") {
@@ -804,6 +849,7 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     reviewProfile: options.reviewProfile,
     reviewProfileAlreadyApplied,
     markupPresentation,
+    markupVisibility,
     commentProfile: options.commentProfile,
     commentColumnPlacement,
     balloonOverflow,
@@ -1622,6 +1668,32 @@ function inspectionLimits(options: NormalizedOptions): PackageManifestInspection
   };
 }
 
+/** Ignore only defects in parts the renderer cannot reach or never reads. */
+function isUnrenderedPackageFinding(manifest: PackageManifest, finding: VerificationFinding): boolean {
+  const thumbnail = finding.code === "missing_target";
+  if (!thumbnail && finding.code !== "malformed_xml") return false;
+  const uri = thumbnail ? finding.location?.targetUri : finding.location?.entryUri;
+  if (!uri) return false;
+  const references = manifest.relationships.filter(relationship =>
+    relationship.targetMode === "Internal" && relationship.resolvedTargetUri === uri);
+  if (!thumbnail) {
+    const entry = manifest.entries.find(entry => entry.uri === uri);
+    if (!entry || uri === "/[Content_Types].xml" || uri.endsWith(".rels")
+      || entry.contentType === "application/vnd.openxmlformats-package.relationships+xml") return false;
+    // Orphan content parts have no relationship through which conversion could read them.
+    if (references.length === 0) return uri !== manifest.facts.mainDocumentUri;
+    if (entry.contentType !== "application/vnd.openxmlformats-officedocument.custom-properties+xml") return false;
+  }
+  if (thumbnail && !references.some(relationship => relationship.ownerUri === finding.location?.ownerUri
+    && relationship.id === finding.location?.relationshipId)) return false;
+  // A shared target must not also be a style, image, or other rendered document part.
+  return references.length > 0 && references.every(relationship => relationship.ownerUri === "/"
+    && (thumbnail
+      ? relationship.type === "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"
+      : relationship.type === "http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties"
+        || relationship.type === "http://purl.oclc.org/ooxml/officeDocument/relationships/custom-properties"));
+}
+
 async function preflightManifest(
   manifest: PackageManifest,
   bytes: Uint8Array,
@@ -1698,8 +1770,11 @@ async function preflightManifest(
     }
   }
 
-  if (manifest.packageKind !== "opc" || !manifest.isValid || !manifest.facts.mainDocumentUri) {
-    const finding = manifest.findings.find(finding => finding.severity === "error");
+  const errors = manifest.findings.filter(finding => finding.severity === "error");
+  const finding = errors.find(finding => options.unsupportedContent === "strict"
+    || !isUnrenderedPackageFinding(manifest, finding));
+  const renderable = manifest.isValid || (errors.length > 0 && !finding);
+  if (manifest.packageKind !== "opc" || !renderable || !manifest.facts.mainDocumentUri) {
     fail("invalid_document", "package_preflight",
       `The input is not a valid DOCX OPC package (${manifest.packageKind}).`,
       "Repair or decrypt the document before export.", {
@@ -1787,7 +1862,7 @@ function conversionOptions(options: NormalizedOptions) {
     inline: CommentRenderMode.Inline,
     endnotes: CommentRenderMode.EndnoteStyle,
     margin: CommentRenderMode.Margin,
-  }[options.commentProfile];
+  }[options.markupVisibility.comments === false ? 'hidden' : options.commentProfile];
   return {
     pageTitle: options.title,
     cssPrefix: "docx-",
@@ -1802,6 +1877,8 @@ function conversionOptions(options: NormalizedOptions) {
     renderFootnotesAndEndnotes: true,
     renderHeadersAndFooters: true,
     renderTrackedChanges: options.reviewProfile === "markup",
+    showFormattingChanges: options.markupVisibility.formatting !== false,
+    showInsertionsAndDeletions: options.markupVisibility.insertionsAndDeletions !== false,
     // The balloon layout reads what the Word presentation records for balloons, in every profile.
     revisionPresentation: options.markupPresentation === "word" || options.commentColumnPlacement === "balloons"
       ? RevisionPresentation.Word
@@ -1864,7 +1941,7 @@ async function createIsolatedFrame(
 
 const STANDALONE_DATA_MEDIA_TYPES = new Set([
   "image/png", "image/jpeg", "image/gif", "image/bmp", "image/webp", "image/tiff",
-  "image/x-icon", "font/woff", "font/woff2", "font/ttf", "font/otf",
+  "image/x-icon", "image/svg+xml", "font/woff", "font/woff2", "font/ttf", "font/otf",
   "application/font-woff", "application/vnd.ms-fontobject",
 ]);
 
@@ -2352,12 +2429,13 @@ function sanitizeConvertedDocument(
   if (compatibility !== null) target.body.setAttribute("data-docx-compatibility-mode", compatibility);
 }
 
-function inventoryConvertedContent(
-  document: Document,
+function inventoryUnsupportedContent(
+  placeholders: HTMLElement[],
   state: ExecutionState,
   options: NormalizedOptions,
+  phase: 'docx_conversion' | 'pagination',
 ): void {
-  for (const placeholder of Array.from(document.querySelectorAll<HTMLElement>("[data-content-type]"))) {
+  for (const placeholder of placeholders) {
     const outcome: UnsupportedContentOutcome = {
       contentType: placeholder.dataset.contentType ?? "Other",
       ...(placeholder.dataset.elementName ? { elementName: placeholder.dataset.elementName } : {}),
@@ -2369,13 +2447,18 @@ function inventoryConvertedContent(
     addUnsupportedContent(state, outcome);
     policyWarning(state, options, {
       code: "unsupported_content_placeholder",
-      phase: "docx_conversion",
+      phase,
       message: `${outcome.contentType} is represented by a visible placeholder.`,
       remediation: "Replace it with a supported static representation for faithful export.",
       ...(outcome.anchorId ? { anchorId: outcome.anchorId } : {}),
     });
   }
+}
 
+function inventoryConvertedContent(document: Document, state: ExecutionState, options: NormalizedOptions): void {
+  inventoryUnsupportedContent(Array.from(document.querySelectorAll<HTMLElement>(
+    '[data-content-type]:not([data-docx-frame-pending])',
+  )), state, options, 'docx_conversion');
   for (const image of Array.from(document.querySelectorAll<HTMLImageElement>("img"))) {
     const source = image.getAttribute("src") ?? "";
     const metadata = /^data:([^;,]+)/i.exec(source);
@@ -2588,7 +2671,7 @@ function rethrowBrowserFontError(error: unknown): never {
 }
 
 // A src can be a multi-megabyte data URL, so it is never the label. Anchors and alt text
-// are bounded, stable across renders, and enough to find the element in the source.
+// are bounded diagnostic labels; the separate identity survives pagination and cloning.
 function visualResourceLabel(element: Element, kind: string, index: number): string {
   const anchor = element.closest("[data-source-anchor-id]")?.getAttribute("data-source-anchor-id");
   if (anchor) return `${kind}:${boundedText(anchor)}`;
@@ -2603,6 +2686,7 @@ function boundedText(value: string, maximum = 80): string {
 }
 
 interface VisualResourceFailure {
+  identity: string | null;
   resource: string;
   anchorId?: string;
 }
@@ -2610,7 +2694,15 @@ interface VisualResourceFailure {
 function visualResourceFailure(element: Element, kind: string, index: number): VisualResourceFailure {
   const anchorId = element.closest("[data-source-anchor-id]")
     ?.getAttribute("data-source-anchor-id") ?? undefined;
-  return { resource: visualResourceLabel(element, kind, index), ...(anchorId ? { anchorId } : {}) };
+  return { identity: element.getAttribute("data-docx-visual-resource-id"),
+    resource: visualResourceLabel(element, kind, index), ...(anchorId ? { anchorId } : {}) };
+}
+
+// Pagination promotes drawings and clones running stories. Their human-readable labels can
+// change or coincide, so give each source resource its own identity before either operation.
+function identifyVisualResources(document: Document): void {
+  document.querySelectorAll("img, svg").forEach((element, index) =>
+    element.setAttribute("data-docx-visual-resource-id", String(index + 1)));
 }
 
 // Probes report; they do not decide. Materialization routes their findings through the
@@ -2649,8 +2741,10 @@ function admitVisualResourceFailures(
   warning: { code: string; phase: ExportPhase; message: string; remediation: string },
 ): void {
   for (const failure of failures) {
+    const { identity, ...diagnostic } = failure;
+    if (identity !== null) state.omittedVisualResourceIds.push(identity);
     addResource(state, { kind, status: "omitted", resource: failure.resource });
-    policyWarning(state, options, { ...warning, ...failure });
+    policyWarning(state, options, { ...warning, ...diagnostic });
   }
 }
 
@@ -2668,18 +2762,12 @@ function assertVisualResourcesIntact(
   alreadyOmitted: ReadonlySet<string>,
   what: string,
 ): void {
-  const regressions = failures.filter((failure) => !alreadyOmitted.has(failure.resource));
+  const regressions = failures.filter((failure) => failure.identity === null || !alreadyOmitted.has(failure.identity));
   if (regressions.length === 0) return;
   throw new Error(
     `${regressions.length} ${what} that materialized successfully did not survive serialization: `
     + `${regressions.slice(0, 8).map((failure) => failure.resource).join(", ")}`,
   );
-}
-
-function omittedVisualResources(state: ExecutionState, kind: "image" | "svg"): ReadonlySet<string> {
-  return new Set(state.resources
-    .filter((resource) => resource.kind === kind && resource.status === "omitted" && resource.resource)
-    .map((resource) => resource.resource!));
 }
 
 function normalizeFragmentTargets(
@@ -2811,6 +2899,26 @@ function releasePageBox(page: HTMLElement): void {
   ]) page.style.removeProperty(property);
 }
 
+/** Keep promoted objects clipped to their paper without contributing off-paper print fragments. */
+function clipPositionedPageContent(page: HTMLElement): void {
+  const positioned = Array.from(page.children).filter((element): element is HTMLElement =>
+    element instanceof page.ownerDocument.defaultView!.HTMLElement
+    && element.matches('[data-docx-drawing-anchor="true"], [data-docx-text-frame="true"], [data-docx-raised-inline-textbox="true"]'));
+  if (positioned.length === 0) return;
+  const layer = page.ownerDocument.createElement("div");
+  layer.className = "page-drawing-layer";
+  // An in-flow page box's overflow clip still lets Chromium paginate an absolute child beyond
+  // the paper. An out-of-flow clip contains that layout overflow as well as its visible paint.
+  // No z-index: the objects retain their existing positions relative to the page's text.
+  layer.style.cssText = "position:absolute;inset:0;overflow:hidden;pointer-events:none";
+  for (const element of positioned) {
+    const pointerEvents = page.ownerDocument.defaultView!.getComputedStyle(element).pointerEvents;
+    element.style.pointerEvents = pointerEvents;
+    layer.append(element);
+  }
+  page.append(layer);
+}
+
 function finalizePageTree(
   document: Document,
   pages: HTMLElement[],
@@ -2826,7 +2934,10 @@ function finalizePageTree(
     element.style.removeProperty("will-change");
     element.style.removeProperty("contain");
   }
-  for (const page of pages) releasePageBox(page);
+  for (const page of pages) {
+    releasePageBox(page);
+    clipPositionedPageContent(page);
+  }
   normalizeFragmentTargets(document, pages, state, options);
   document.documentElement.dataset.docxodusStandalone = "v1";
   const policy = document.querySelector<HTMLMetaElement>(
@@ -2857,11 +2968,17 @@ interface ClippedBodyPage {
  * with a smaller budget for the page (issue #848).
  */
 function findClippedContent(document: Document): ClippedBodyPage[] {
+  for (const column of Array.from(document.querySelectorAll<HTMLElement>(".page-comment-margin"))) {
+    if (column.scrollHeight > column.clientHeight + 1) {
+      fail("pagination_failure", "running_story_placement", "A margin comment is clipped in the final page tree.",
+        "Report the unsupported comment structure; overflowing threads must continue after the document.");
+    }
+  }
   for (const footnotes of Array.from(document.querySelectorAll<HTMLElement>(".page-footnotes"))) {
     if (footnotes.scrollHeight <= footnotes.clientHeight + 1) continue;
     const boundary = footnotes.getBoundingClientRect().bottom;
-    const hasVisibleOverflow = Array.from(footnotes.querySelectorAll<HTMLElement>("*"))
-      .some((element) => laidOutBottom(element, footnotes) > boundary + 1);
+    const hasVisibleOverflow = Array.from(measureLaidOutBottoms(footnotes).values())
+      .some(bottom => bottom > boundary + 1);
     if (hasVisibleOverflow) {
       fail("pagination_failure", "running_story_placement",
         "A footnote continuation is clipped in the final page tree.",
@@ -2873,11 +2990,9 @@ function findClippedContent(document: Document): ClippedBodyPage[] {
     if (content.scrollHeight > content.clientHeight + 1) {
       const pageNumber = content.closest<HTMLElement>(".page-box")?.dataset.pageNumber ?? "unknown";
       const boundary = content.getBoundingClientRect().bottom;
-      const overflowing = Array.from(content.querySelectorAll<HTMLElement>("*"))
-        .map((element) => ({
-          element,
-          bottom: laidOutBottom(element, content),
-        }))
+      const overflowing = Array.from(measureLaidOutBottoms(content), ([element, bottom]) => ({
+        element: element as HTMLElement, bottom,
+      }))
         .filter(({ element, bottom }) => bottom > boundary + 1 && !isPreservedExactLineInk(element, content)
           && !findOversizedExactRow(element))
         .sort((left, right) => right.bottom - left.bottom);
@@ -3012,6 +3127,7 @@ function checkpointAttemptState(state: ExecutionState): AttemptStateCheckpoint {
     warnings: state.warnings.length,
     fonts: state.fonts.length,
     resources: state.resources.length,
+    omittedVisualResourceIds: state.omittedVisualResourceIds.length,
     unsupportedContent: state.unsupportedContent.length,
   };
 }
@@ -3021,6 +3137,7 @@ function restoreAttemptState(state: ExecutionState, checkpoint: AttemptStateChec
   state.warnings.length = checkpoint.warnings;
   state.fonts.length = checkpoint.fonts;
   state.resources.length = checkpoint.resources;
+  state.omittedVisualResourceIds.length = checkpoint.omittedVisualResourceIds;
   state.unsupportedContent.length = checkpoint.unsupportedContent;
 }
 
@@ -3068,12 +3185,13 @@ function automaticResourceCount(document: Document): { count: number; bytes: num
 }
 
 type PresentationFields = Pick<RenderReportBase["options"],
-  "markupPresentation" | "commentColumnPlacement" | "balloonOverflow" | "additionalCss">;
+  "markupPresentation" | "markupVisibility" | "commentColumnPlacement" | "balloonOverflow" | "additionalCss">;
 
 /** Record non-default presentation settings in both the report and layout digest. */
 function presentationFields(options: NormalizedOptions): PresentationFields {
   return {
     ...(options.markupPresentation === "word" ? { markupPresentation: "word" as const } : {}),
+    ...(Object.keys(options.markupVisibility).length ? { markupVisibility: options.markupVisibility } : {}),
     ...(options.commentColumnPlacement === "balloons" ? { commentColumnPlacement: "balloons" as const } : {}),
     ...(options.balloonOverflow === "appendix" ? { balloonOverflow: "appendix" as const } : {}),
     ...(options.additionalCss ? { additionalCss: options.additionalCss } : {}),
@@ -3267,10 +3385,11 @@ async function verifyOfflineReopen(
     const reopened = frame.contentDocument!;
     const pages = Array.from(reopened.querySelectorAll<HTMLElement>(".page-box"));
     await awaitFonts(reopened);
+    const omitted = new Set(state.omittedVisualResourceIds);
     assertVisualResourcesIntact(
-      await decodeImages(reopened), omittedVisualResources(state, "image"), "embedded images");
+      await decodeImages(reopened), omitted, "embedded images");
     assertVisualResourcesIntact(
-      validateInlineSvg(reopened), omittedVisualResources(state, "svg"), "inline SVG elements");
+      validateInlineSvg(reopened), omitted, "inline SVG elements");
     await awaitStableTree(reopened, pages);
     countDomNodes(reopened, state.limits.domNodes, "output_verification");
     const resources = automaticResourceCount(reopened);
@@ -3404,6 +3523,7 @@ function reportBase(
     },
     readiness: state.readiness.map((outcome) => ({ ...outcome, pending: [...outcome.pending] })),
     fonts: state.fonts.map((font) => ({ ...font })),
+    fontObservation: { status: "unavailable", reason: "browser_api_unavailable" },
     resources: state.resources.map((resource) => ({ ...resource })),
     unsupportedContent: state.unsupportedContent.map((outcome) => ({ ...outcome })),
     warnings: state.warnings.map((warning) => ({ ...warning })),
@@ -3546,6 +3666,7 @@ export async function convertDocxToPaginatedHtml(
     warnings: [],
     fonts: [],
     resources: [],
+    omittedVisualResourceIds: [],
     unsupportedContent: [],
     limits: options.limits,
     signal: options.signal,
@@ -3718,6 +3839,7 @@ export async function convertDocxToPaginatedHtml(
           restoreStaging();
         }
         await runPhase(state, "image_decoding", ["embedded images"], async () => {
+          identifyVisualResources(renderDocument);
           admitVisualResourceFailures(
             state, options, await decodeImages(renderDocument), "image", {
               code: "image_decode_failed",
@@ -3753,6 +3875,7 @@ export async function convertDocxToPaginatedHtml(
           applyUnroundedNormalLineHeights(renderDocument.body);
           prepareWordText(renderDocument.body, () => checkpointWordText(state));
           prepareParagraphBorders(renderDocument.body);
+          prepareTableBorders(renderDocument.body);
         } finally {
           restoreTextMeasurement();
         }
@@ -3762,6 +3885,8 @@ export async function convertDocxToPaginatedHtml(
           showPageNumbers: false,
           pageGap: 0,
           fragmentParagraphs: true,
+          prepareTableFragment: refreshTableBorderLayout,
+          commentOverflow: "appendix",
           // Running-story placement below changes the visible fragment set, and this path always
           // restamps through normalizePageMapFragmentIdentities(); stamping inside paginate()
           // would be a second full forced-layout pass whose result is immediately overwritten.
@@ -3794,6 +3919,9 @@ export async function convertDocxToPaginatedHtml(
           },
         });
         const pagination = await runPhase(state, "pagination", ["page layout"], () => engine.paginate());
+        inventoryUnsupportedContent(Array.from(container.querySelectorAll<HTMLElement>(
+          '[data-docx-frame-pending][data-content-type]',
+        )), state, options, 'pagination');
         enforceLimit(pagination.totalPages, options.limits.finalPages, "finalPages", "pagination");
         const pages = pagination.pages.map((page) => page.element);
         if (pages.length === 0) {
@@ -3877,6 +4005,15 @@ export async function convertDocxToPaginatedHtml(
     }
     frame = finalized.frame;
     const { document: renderDocument, engine, pages } = finalized;
+    for (const spacer of Array.from(renderDocument.querySelectorAll<HTMLElement>('#pagination-container [data-docx-relaxed-clearance]'))) {
+      policyWarning(state, options, {
+        code: "drawing_clearance_relaxed",
+        phase: "output_verification",
+        anchorId: spacer.closest<HTMLElement>('[data-source-anchor-id]')?.dataset.sourceAnchorId,
+        message: "A drawing's top/bottom text clearance cannot fit a page and was relaxed; its authored size and placement are retained.",
+        remediation: "Reduce the drawing's extent or wrapping distance to reserve text clearance on a page.",
+      });
+    }
     // Chromium also puts each baseline up to a pixel off Word's (issue #942). Relative offsets take that back
     // without changing a line box. They run on the final page tree, after the clipping check: a glyph moved
     // down stays inside its line, but its inline box can pass a page band's edge by a pixel.
@@ -3889,6 +4026,8 @@ export async function convertDocxToPaginatedHtml(
         () => checkpointWordText(state)));
     await runPhase(state, "output_verification", ["paragraph borders"], () =>
       paintParagraphBorders(renderDocument.getElementById("pagination-container") as HTMLElement));
+    await runPhase(state, "output_verification", ["table borders"], () =>
+      paintTableBorders(renderDocument.getElementById("pagination-container") as HTMLElement));
     // The markup area shrinks each page's content, so it comes after every pass that measures it.
     const balloons = await runPhase(state, "output_verification", ["markup balloons"], () => engine.layoutMarkupBalloons());
     // Pages the balloon appendix added come after the page tree was finalized and named for print.
@@ -3936,6 +4075,15 @@ export async function convertDocxToPaginatedHtml(
     fontIdentity = renderer.fontIdentity;
     const pageMap = await runPhase(state, "output_verification", ["PageMap geometry"], () =>
       engine.materializePageMap(options.documentVersion, rendererFingerprint!));
+    for (const anchorId of engine.getSourceClippedTextAnchors()) {
+      policyWarning(state, options, {
+        code: "source_text_clipped",
+        phase: "output_verification",
+        anchorId,
+        message: "A source paragraph is wholly outside its authored text-box clip or paper placement and is not painted.",
+        remediation: "Enlarge or reposition the source text box, or enable auto-fit, to include this paragraph in the rendered output.",
+      });
+    }
     pageMapWasMaterialized = true;
     if (pageMap.documentVersion !== options.documentVersion
       || pageMap.rendererFingerprint !== rendererFingerprint

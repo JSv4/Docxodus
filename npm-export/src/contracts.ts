@@ -20,6 +20,8 @@ import type {
 } from "docxodus/export-browser";
 
 export type {
+  FontObservation,
+  MarkupVisibility,
   CommentProfile,
   CompleteRenderReport,
   DocxodusExportErrorCode,

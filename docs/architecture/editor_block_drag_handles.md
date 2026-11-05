@@ -486,8 +486,8 @@ definition, for any resolved comment, and Word ignores an unanchored one.
 
 ### Whole-block revisions mark content, not just structure
 
-`w:moveFrom` is a deletion, so its runs carry `w:delText`/`w:delInstrText` — as Word writes
-them and as `RevisionProcessor`'s reject path swaps back. The whole-table lowering marks
+`w:moveFrom` is removed on accept like a deletion, but its runs retain `w:t`/`w:instrText`,
+as Word's comparison writes them (#1420). The whole-table lowering marks
 **every cell paragraph's content and mark**, not only `w:trPr`; row marks alone left a
 moved-away table's text rendering as ordinary body text inside a row Word believes is
 deleted. Both go through one owner, `DocxSession.MarkParagraphContentAndMark`.

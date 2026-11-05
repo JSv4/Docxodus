@@ -27,11 +27,23 @@ internal static class TableGridModel
 
     internal static int GridAfter(XElement row) => ValOf(row.Element(W.trPr)?.Element(W.gridAfter));
 
+    // Compare can already supply revised spans beside historical deleted cells. Such a row
+    // must not absorb the deleted spans again when projecting its current geometry.
+    internal static bool RetainedCellsFillGrid(XElement row)
+    {
+        int columns = row.Ancestors(W.tbl).FirstOrDefault()?.Element(W.tblGrid)?.Elements(W.gridCol).Count() ?? 0;
+        int retained = WordprocessingMLUtil.RowCells(row).Where(tc => !tc.Elements(W.tcPr).Elements(W.cellDel).Any())
+            .Sum(tc => (int?)tc.Element(W.tcPr)?.Element(W.gridSpan)?.Attribute(W.val) ?? 1);
+        retained += (int?)row.Element(W.trPr)?.Element(W.gridBefore)?.Attribute(W.val) ?? 0;
+        retained += (int?)row.Element(W.trPr)?.Element(W.gridAfter)?.Attribute(W.val) ?? 0;
+        return columns > 0 && retained == columns;
+    }
+
     internal static List<TableGridCell> RowGrid(XElement row)
     {
         int column = GridBefore(row);
         var cells = new List<TableGridCell>();
-        foreach (var cell in row.Elements(W.tc))
+        foreach (var cell in WordprocessingMLUtil.RowCells(row))
         {
             int span = Math.Max(1, (int?)cell.Element(W.tcPr)?.Element(W.gridSpan)?.Attribute(W.val) ?? 1);
             cells.Add(new TableGridCell(cell, column, span));
@@ -68,7 +80,7 @@ internal static class TableGridModel
     internal static int GridColumnCount(XElement table)
     {
         int explicitCount = table.Element(W.tblGrid)?.Elements(W.gridCol).Count() ?? 0;
-        int rowCount = table.Elements(W.tr)
+        int rowCount = WordprocessingMLUtil.TableRows(table)
             .Select(row =>
             {
                 var grid = RowGrid(row);
@@ -84,7 +96,8 @@ internal static class TableGridModel
     {
         var tableAnchor = anchorForElement(table)
             ?? throw new InvalidOperationException("table has no canonical anchor");
-        var rowElements = table.Elements(W.tr).ToList();
+        var rowElements = WordprocessingMLUtil.TableRows(table).ToList();
+        var verticalSpans = VerticalMergeSpans(table);
         var rows = new List<TableRowMetadata>(rowElements.Count);
 
         for (int rowIndex = 0; rowIndex < rowElements.Count; rowIndex++)
@@ -101,7 +114,7 @@ internal static class TableGridModel
                 int rowSpan = role == TableVerticalMergeRole.Continue
                     ? 0
                     : role == TableVerticalMergeRole.Restart
-                        ? VerticalSpan(rowElements, rowIndex, geometry)
+                        ? verticalSpans[geometry.Cell]
                         : 1;
                 cells.Add(new TableCellMetadata
                 {
@@ -229,15 +242,31 @@ internal static class TableGridModel
         };
     }
 
-    private static int VerticalSpan(IReadOnlyList<XElement> rows, int rowIndex, TableGridCell restart)
+    internal static Dictionary<XElement, int> VerticalMergeSpans(XElement table)
     {
-        int span = 1;
-        for (int index = rowIndex + 1; index < rows.Count; index++)
+        var spans = new Dictionary<XElement, int>();
+        var previous = new Dictionary<(int Start, int Span), XElement>();
+        foreach (var row in WordprocessingMLUtil.TableRows(table))
         {
-            var aligned = AlignedCell(rows[index], restart);
-            if (aligned is null || VerticalMergeRole(aligned) != TableVerticalMergeRole.Continue) break;
-            span++;
+            var current = new Dictionary<(int Start, int Span), XElement>();
+            foreach (var cell in RowGrid(row))
+            {
+                var interval = (cell.Start, cell.Span);
+                if (VerticalMergeRole(cell.Cell) == TableVerticalMergeRole.Restart)
+                {
+                    current[interval] = cell.Cell;
+                    spans[cell.Cell] = 1;
+                }
+                else if (VerticalMergeRole(cell.Cell) == TableVerticalMergeRole.Continue
+                    && previous.TryGetValue(interval, out var restart))
+                {
+                    current[interval] = restart;
+                    spans[restart]++;
+                    spans[cell.Cell] = 0;
+                }
+            }
+            previous = current;
         }
-        return span;
+        return spans;
     }
 }

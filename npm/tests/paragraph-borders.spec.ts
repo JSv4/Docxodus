@@ -77,3 +77,24 @@ test('a dashed quarter-point border keeps the dash rhythm of its one-pixel CSS b
   // Only the width changes: the dash and gap stay those of the 1px border CSS drew (3px / 2px).
   expect(top['stroke-dasharray'].split(' ').map(Number)).toEqual([3, 2]);
 });
+
+for (const border of ['solid', 'dashed']) {
+  test(`${border} prepared border spacing survives HTML serialization`, async ({ page }) => {
+    await page.setContent(`<style>body { margin:0; font:12px serif; }</style>${
+      Array.from({ length: 12 }, (_, index) => `<div data-docx-exact-border="true"
+        style="--docx-border-top-width:1.25pt; --docx-border-bottom-width:1.25pt;
+          border-top:${border} 1.25pt teal; border-bottom:${border} 1.25pt teal; padding:1pt">
+        <p style="margin:0">Kestrel card ${index + 1}.</p></div>`).join('')}`);
+    await page.addScriptTag({ type: 'module', content: `${module}\nwindow.borders = { prepareParagraphBorders };` });
+    await page.waitForFunction(() => (window as any).borders);
+    const before = await page.evaluate(() => {
+      (window as any).borders.prepareParagraphBorders(document.body);
+      document.querySelectorAll('script').forEach(script => script.remove());
+      return { html: document.documentElement.outerHTML,
+        geometry: Array.from(document.querySelectorAll('p'), p => p.getBoundingClientRect().toJSON()) };
+    });
+    await page.setContent(before.html);
+    expect(await page.locator('p').evaluateAll(paragraphs => paragraphs.map(p =>
+      p.getBoundingClientRect().toJSON()))).toEqual(before.geometry);
+  });
+}

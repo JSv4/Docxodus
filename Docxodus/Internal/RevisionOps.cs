@@ -2249,8 +2249,7 @@ internal static class RevisionOps
                             includeDeleted: u.Element.Name == W.moveFrom);
                     break;
                 case UnitKind.Content:
-                    // A move source's text is spelled w:delText by Word and by the session's
-                    // own move writer, and w:t by some other producers; an insertion's text
+                    // A move source can contain w:t or legacy w:delText; an insertion's text
                     // stays its text after another author deletes it inside the envelope
                     // (w:ins > w:del > w:delText, Word's own shape). Read both spellings there.
                     if (!AppendVisibleText(
@@ -2297,14 +2296,19 @@ internal static class RevisionOps
     }
 
     private static bool AppendVisibleText(
-        XElement el, XName textName, StringBuilder sb, int maximumCharacters, bool includeDeleted = false)
+        XElement el, XName textName, StringBuilder sb, int maximumCharacters, bool includeDeleted = false,
+        XElement? textOwner = null)
     {
+        textOwner ??= el;
         foreach (var child in el.Elements())
         {
             var n = child.Name;
             if (n == W.pPr || n == W.rPr || n == W.trPr || n == W.tcPr || n == W.tblPr) continue;
-            // Math text is never renamed for deletion, so it reads the same in either state.
-            if (n == textName || n == M.t || (includeDeleted && n == W.delText))
+            // Math and textbox text can keep their ordinary spelling inside a deletion.
+            if (n == textName || n == M.t || (includeDeleted && n == W.delText) ||
+                (textName == W.delText && n == W.t && child.Ancestors(W.txbxContent).Any() &&
+                 ReferenceEquals(child.Ancestors().FirstOrDefault(a => a.Name == W.ins || a.Name == W.del ||
+                     a.Name == W.moveFrom || a.Name == W.moveTo), textOwner)))
             {
                 var value = child.Value;
                 if (sb.Length > maximumCharacters - value.Length) return false;
@@ -2318,7 +2322,7 @@ internal static class RevisionOps
                 continue;
             }
             if (child.HasElements
-                && !AppendVisibleText(child, textName, sb, maximumCharacters, includeDeleted))
+                && !AppendVisibleText(child, textName, sb, maximumCharacters, includeDeleted, textOwner))
                 return false;
         }
         return true;
@@ -2377,11 +2381,8 @@ internal static class RevisionOps
                 continue;
             }
             if (ContentSurvives(u.Element.Name, accept))
-                // A surviving w:del OR w:moveFrom un-deletes its payload: the comparison
-                // engine serializes move-source text as w:delText (delete-grade), so a
-                // rejected move must restore it exactly like a rejected deletion — the
-                // reject-all transform converts every delText unconditionally, and leaving
-                // it strands the text as orphaned w:delText once the wrapper is gone.
+                // A surviving w:del OR w:moveFrom un-deletes its payload. Older producers
+                // can put delText in a move source; leaving it would strand orphaned text.
                 UnwrapWrapper(u.Element, restoreDeleted:
                     u.Element.Name == W.del || u.Element.Name == W.moveFrom);
             else

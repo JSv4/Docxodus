@@ -157,11 +157,15 @@ public sealed partial class DocxSession : IDisposable
             sharedPayloadsOf: static snapshot => snapshot.SharedPayloads);
         // Every op matches transitional W.* names, so a STRICT package is opened as its transitional
         // conversion (issue #1268). The caller's exact bytes stay the retained opening package below.
-        var packageBytes = StrictOoxmlNormalizer.NormalizeForReading(docxBytes);
+        // Only a shadow of this session's own checkpoint skips the capture; it is the session's own
+        // output, so it is not measured by the read step's depth door again (issue #1389).
+        var packageBytes = StrictOoxmlNormalizer.NormalizeForReading(docxBytes, trusted: skipInitialProjectionCapture);
         _stream = new MemoryStream();
         _stream.Write(packageBytes, 0, packageBytes.Length);
         _stream.Position = 0;
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
+        // The session's own package: the door measured what it opened and its edits are watched (issue #1389).
+        Internal.PartDepthGuard.MarkMeasured(_doc, watched: true);
         SetRevisionIdentities(_settings.RevisionIdentities);
         // Stamp list numbering's inputs before anything counts a list, so the first edit can tell
         // whether the counts it finds are still current (see ResetProjectionCache).
@@ -212,6 +216,8 @@ public sealed partial class DocxSession : IDisposable
         if (!portable.Success)
             return portable;
 
+        var elements = AnchorTarget.ResolveAll(_doc!,
+            pageMap.Fragments.Select(fragment => FindAnchor(fragment.AnchorId)).OfType<AnchorTarget>());
         foreach (var fragment in pageMap.Fragments)
         {
             var target = FindAnchor(fragment.AnchorId);
@@ -223,7 +229,7 @@ public sealed partial class DocxSession : IDisposable
                 return Fail(PageMapRegistrationError.InvalidMap,
                     $"PageMap story does not match anchor scope: {fragment.AnchorId}");
 
-            var element = target.Resolve(_doc!);
+            var element = elements.GetValueOrDefault(target);
             var actuallyInTableCell = target.Anchor.Kind == "tc"
                 || (element?.AncestorsAndSelf(W.tc).Any() ?? false);
             // A comment's canonical source lives in comments.xml, while its inline presentation
@@ -1396,7 +1402,12 @@ public sealed partial class DocxSession : IDisposable
         // and shell unchanged since the previous snapshot of the same tree (issue #1022).
         var parts = new System.Collections.Generic.List<PartSnapshot>();
         foreach (var part in EnumerateProjectedPartsForSnapshot())
+        {
             parts.Add(PartSnapshotCache.Take(part));
+            // Every op snapshots before it mutates, so its edits are measured (issue #1389). After
+            // Take, which attaches the part's change tracker first.
+            Internal.PartDepthWatch.Attach(part);
+        }
 
         var hyperlinkRelationships = new System.Collections.Generic.List<(string, string, string, bool)>();
         var imageParts = new System.Collections.Generic.List<(string, string, byte[])>();
@@ -1641,16 +1652,20 @@ public sealed partial class DocxSession : IDisposable
 
     private void RestorePackage(byte[] packageBytes)
     {
+        // A checkpoint is package output (relationship targets restored to their spelling), so it is
+        // read back through the same funnel the constructor reads the caller's bytes through — but
+        // not through its depth door: the checkpoint is the session's own output, and an edit may have
+        // nested it past the limit a caller's bytes are held to (issue #1389). Read it before
+        // discarding the live package, so a failure leaves the session as it was.
+        packageBytes = StrictOoxmlNormalizer.NormalizeForReading(packageBytes, trusted: true);
         DisposeRenderShell();
         DiscardPackage(_doc, _stream);
-
-        // A checkpoint is package output (relationship targets restored to their spelling), so it is
-        // read back through the same funnel the constructor reads the caller's bytes through.
-        packageBytes = StrictOoxmlNormalizer.NormalizeForReading(packageBytes);
         _stream = new MemoryStream(packageBytes.Length);
         _stream.Write(packageBytes, 0, packageBytes.Length);
         _stream.Position = 0;
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
+        // The session's own package: the door measured what it opened and its edits are watched (issue #1389).
+        Internal.PartDepthGuard.MarkMeasured(_doc, watched: true);
         _raw = null;
         // As in RestoreSnapshot: restored package bytes ARE the intended topology.
         ResetProjectionCache();
@@ -2739,9 +2754,8 @@ public sealed partial class DocxSession : IDisposable
     // w:ins and w:moveTo are transparent for the same reason: an insertion's text is
     // present in the document as ordinary w:t and is exactly what a reader sees, so it
     // belongs in the flat text every offset-addressed op works over. Their deleting
-    // counterparts w:del and w:moveFrom deliberately are NOT here — that content is
-    // w:delText, which RunText does not read, so deleted text stays out of the visible
-    // string and offsets keep addressing what the document actually shows. The same holds
+    // counterparts w:del and w:moveFrom deliberately are NOT here, so removed text stays
+    // out of the visible string and offsets address what the document actually shows. The same holds
     // for a w:del or w:moveFrom nested inside one of these containers, whatever its runs
     // hold: Word writes a move source's text as w:t, so it is skipped by element, not by
     // text name (issue #1282).

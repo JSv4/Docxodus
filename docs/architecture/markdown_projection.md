@@ -93,6 +93,24 @@ Anything not in the table above renders as a single line:
 {#unk:body:…} [unsupported: w:smartTag]
 ```
 
+### Textboxes and wrapped table structure
+
+Textboxes in DrawingML, VML and group shapes project as ordinary anchored paragraphs or tables
+immediately after their host paragraph, before the following source block. The host paragraph stays
+intact, including text before and after the shape. In a table cell, textbox text appears after the host
+table instead of being duplicated in the pipe cell. Notes and comments likewise place textbox blocks
+after their definition. Nested shapes use the same rules, up to the IR's textbox and wrapper depth limits.
+
+Only the first supported `mc:Choice` branch is rendered; otherwise the `mc:Fallback` is rendered.
+Markdown shares HTML's supported namespace selection. Both representations remain in the anchor index
+for source addressing and in the comparison IR; branch selection changes only displayed Markdown.
+
+Row-level and cell-level content controls are transparent to table geometry and GFM eligibility.
+Merged and nested tables retain the existing opaque-table contract. Custom-XML wrappers at row/cell
+level remain outside that model. Documents with textboxes use full-document Markdown patches: a single
+source host contributes several independently addressable blocks, including when the host is deleted
+or an ordinary paragraph after it changes.
+
 ## Multipart Namespacing
 
 A DOCX has many "documents" — the body is one part, but headers, footers, footnotes, endnotes, and comments live in sibling parts. The projection emits them as named sections so a single Markdown stream covers the whole package:

@@ -178,7 +178,7 @@ namespace Docxodus
         {
             using (OpenXmlMemoryStreamDocument streamDoc = OpenXmlMemoryStreamDocument.CreateWordprocessingDocument())
             {
-                using (WordprocessingDocument output = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument output = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     BuildDocument(sources, output, new DocumentBuilderSettings());
                 }
@@ -190,7 +190,7 @@ namespace Docxodus
         {
             using (OpenXmlMemoryStreamDocument streamDoc = OpenXmlMemoryStreamDocument.CreateWordprocessingDocument())
             {
-                using (WordprocessingDocument output = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument output = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     BuildDocument(sources, output, settings);
                 }
@@ -202,7 +202,7 @@ namespace Docxodus
         {
             using (OpenXmlMemoryStreamDocument streamDoc = OpenXmlMemoryStreamDocument.CreateWordprocessingDocument())
             {
-                using (WordprocessingDocument output = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument output = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     BuildDocument(sources, output, new DocumentBuilderSettings());
                 }
@@ -214,7 +214,7 @@ namespace Docxodus
         {
             using (OpenXmlMemoryStreamDocument streamDoc = OpenXmlMemoryStreamDocument.CreateWordprocessingDocument())
             {
-                using (WordprocessingDocument output = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument output = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     BuildDocument(sources, output, settings);
                 }
@@ -251,7 +251,7 @@ namespace Docxodus
         {
             List<TempSource> tempSourceList;
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
-            using (WordprocessingDocument document = streamDoc.GetWordprocessingDocument())
+            using (WordprocessingDocument document = streamDoc.GetMeasuredWordprocessingDocument())
             {
                 XDocument mainDocument = document.MainDocumentPart!.GetXDocument();
                 var divs = mainDocument
@@ -314,7 +314,7 @@ namespace Docxodus
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
             {
-                using (WordprocessingDocument document = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument document = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     XDocument mainXDoc = document.MainDocumentPart!.GetXDocument();
                     XElement? lastElement = mainXDoc.Root!
@@ -365,7 +365,7 @@ namespace Docxodus
                     sources = NormalizeStyleNamesAndIds(sources);
 
                 using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(sources[0].WmlDocument))
-                using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
+                using (WordprocessingDocument doc = streamDoc.GetMeasuredWordprocessingDocument())
                 {
                     CopyStartingParts(doc, output, images);
                     CopySpecifiedCustomXmlParts(doc, output, settings);
@@ -391,7 +391,7 @@ namespace Docxodus
                             if (foundInMainDocPart)
                             {
                                 using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(source.WmlDocument))
-                                using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
+                                using (WordprocessingDocument doc = streamDoc.GetMeasuredWordprocessingDocument())
                                 {
 #if TestForUnsupportedDocuments
                                     // throws exceptions if a document contains unsupported content
@@ -433,7 +433,7 @@ namespace Docxodus
                     else
                     {
                         using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(source.WmlDocument))
-                        using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
+                        using (WordprocessingDocument doc = streamDoc.GetMeasuredWordprocessingDocument())
                         {
 #if TestForUnsupportedDocuments
                             // throws exceptions if a document contains unsupported content
@@ -475,7 +475,7 @@ namespace Docxodus
                 if (!sources.Any(s => s.KeepSections))
                 {
                     using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(sources[0].WmlDocument))
-                    using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
+                    using (WordprocessingDocument doc = streamDoc.GetMeasuredWordprocessingDocument())
                     {
                         var body = doc.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
 
@@ -568,7 +568,7 @@ namespace Docxodus
                             if (foundInHeadersFooters)
                             {
                                 using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(source.WmlDocument))
-                                using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
+                                using (WordprocessingDocument doc = streamDoc.GetMeasuredWordprocessingDocument())
                                 {
 #if TestForUnsupportedDocuments
                                     // throws exceptions if a document contains unsupported content
@@ -611,7 +611,7 @@ namespace Docxodus
                 if (sources.Any(s => s.KeepSections) && !output.MainDocumentPart!.GetXDocument().Root!.Descendants(W.sectPr).Any())
                 {
                     using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(sources[0].WmlDocument))
-                    using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
+                    using (WordprocessingDocument doc = streamDoc.GetMeasuredWordprocessingDocument())
                     {
                         var sectPr = doc.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!
                             .Elements().LastOrDefault();

@@ -22,8 +22,8 @@ internal static partial class IrMarkupRenderer
             return state.RightSource;
         using var leftStream = new OpenXmlMemoryStreamDocument(left);
         using var rightStream = new OpenXmlMemoryStreamDocument(right);
-        using var leftDoc = leftStream.GetWordprocessingDocument();
-        using var rightDoc = rightStream.GetWordprocessingDocument();
+        using var leftDoc = leftStream.GetMeasuredWordprocessingDocument();
+        using var rightDoc = rightStream.GetMeasuredWordprocessingDocument();
         var ls = leftDoc.MainDocumentPart?.StyleDefinitionsPart?.GetXDocument().Root;
         var rs = rightDoc.MainDocumentPart?.StyleDefinitionsPart?.GetXDocument().Root;
         if (ls is null || rs is null || XNode.DeepEquals(MarginDefinitions(ls), MarginDefinitions(rs)))

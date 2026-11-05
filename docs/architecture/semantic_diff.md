@@ -33,7 +33,7 @@ supplement by default, and exposes its shared `PackageManifestOptions` as
 so the semantic surface and `GetPackageManifest` on the same session can never
 disagree about what a safe package is: 10,000 ZIP entries, 1 GiB of decompressed
 data per entry and in aggregate, 32 MiB per parsed XML part, a 1,000:1 maximum
-compression ratio, and 2,048 decoded characters per canonical package URI. XML nesting is capped at 256 elements before
+compression ratio, and 2,048 decoded characters per canonical package URI. XML nesting is capped at 256 elements, and at 128 for WordprocessingML story and definition parts by the manifest's depth-door finding (issue #1389), before
 recursive normalization. Integer and byte bounds must be positive; the
 ratio must also be finite. Entry
 names reject backslashes, control characters, malformed escaping, traversal, and

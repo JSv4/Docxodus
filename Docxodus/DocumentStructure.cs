@@ -398,7 +398,7 @@ public static class DocumentStructureAnalyzer
         var columnCells = new Dictionary<int, List<string>>();
 
         int rowIndex = 0;
-        foreach (var tr in table.Elements(W + "tr"))
+        foreach (var tr in WordprocessingMLUtil.TableRows(table))
         {
             var rowElement = AnalyzeTableRow(tr, id, rowIndex, metadata.Rows[rowIndex],
                 elementsById, tableColumns, columnCells);
@@ -452,7 +452,7 @@ public static class DocumentStructureAnalyzer
 
         int cellIndex = 0;
 
-        foreach (var tc in tr.Elements(W + "tc"))
+        foreach (var tc in WordprocessingMLUtil.RowCells(tr))
         {
             var cellMetadata = rowMetadata.Cells[cellIndex];
             var cellElement = AnalyzeTableCell(tc, id, cellIndex, cellMetadata, elementsById, tableColumns);

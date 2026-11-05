@@ -28,6 +28,13 @@ public class DocxSessionMoveBlockTests
                     new XElement(W.tcPr),
                     P(text))));
 
+    private static byte[] TextboxDocument(params object[] content)
+    {
+        XNamespace v = "urn:schemas-microsoft-com:vml";
+        return Document(new XElement(W.p, new XElement(W.r, new XElement(W.pict,
+            new XElement(v + "shape", new XElement(v + "textbox", new XElement(W.txbxContent, new XElement(W.p, content))))))));
+    }
+
     private static byte[] Document(params object[] bodyChildren)
     {
         using var stream = new MemoryStream();
@@ -335,14 +342,13 @@ public class DocxSessionMoveBlockTests
         Assert.False(tracked.MoveBlock(trackedAnchors[0], trackedAnchors[2], Position.After).Success);
     }
 
-    // Deleted content is w:delText, not w:t — that is what Word writes, what the IR renderer's
-    // ConvertTextToDelText produces, and what RevisionProcessor's reject path swaps back. A
-    // w:moveFrom IS a deletion, so its runs must follow the same rule.
+    // A move source uses ordinary text, even though accepting removes it like a deletion.
     [Fact]
-    public void MoveBlock_TrackedParagraph_MarksMovedFromTextAsDeleted()
+    public void MoveBlock_TrackedParagraph_KeepsOrdinaryTextInMoveSource()
     {
+        const string text = "MovedUniquePhrase";
         using var session = new DocxSession(
-            Document(P("A"), P("B"), P("C")),
+            Document(P(text), P("B"), P("C")),
             new DocxSessionSettings
             {
                 TrackedChanges = TrackedChangeMode.RenderInline,
@@ -359,13 +365,85 @@ public class DocxSessionMoveBlockTests
         {
             var moveFrom = document.MainDocumentPart!.GetXDocument()
                 .Descendants(W.moveFrom).Single(e => e.Elements(W.r).Any());
-            Assert.NotEmpty(moveFrom.Descendants(W.delText));
-            Assert.Empty(moveFrom.Descendants(W.t));
+            Assert.NotEmpty(moveFrom.Descendants(W.t));
+            Assert.Empty(moveFrom.Descendants(W.delText));
         }
 
-        // …and the text still comes back intact on reject (delText → t).
-        Assert.Equal(new[] { "A", "B", "C" }, BodyLabels(Reject(saved)));
-        Assert.Equal(new[] { "B", "C", "A" }, BodyLabels(Accept(saved)));
+        // …and the text still comes back intact on reject.
+        Assert.Equal(new[] { text, "B", "C" }, BodyLabels(Reject(saved)));
+        Assert.Equal(new[] { "B", "C", text }, BodyLabels(Accept(saved)));
+        Assert.Single(session.Grep(text));
+        Assert.Equal(2, session.Project().Markdown.Split(text).Length);
+        Assert.Equal(text + "¶", Assert.Single(session.ListRevisions(), r => r.Type == "move").Text);
+    }
+
+    [Fact]
+    public void MoveBlock_TrackedField_KeepsItsInstructionAndRoundTrips()
+    {
+        var field = new XElement(W.p,
+            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"))),
+            new XElement(W.r, new XElement(W.instrText, new XAttribute(Xml + "space", "preserve"), " PAGE ")),
+            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate"))),
+            new XElement(W.r, new XElement(W.t, "1")),
+            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "end"))));
+        using var session = new DocxSession(Document(field, P("B"), P("C")),
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+        var anchors = ParagraphAnchors(session);
+        Assert.True(session.MoveBlock(anchors[0], anchors[2], Position.After).Success);
+        var saved = session.Save();
+        AssertValid(saved);
+
+        string[] FieldParts(byte[] bytes)
+        {
+            using var document = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+            return document.MainDocumentPart!.GetXDocument().Descendants()
+                .Where(e => e.Name == W.fldChar || e.Name == W.instrText)
+                .Select(e => e.Name == W.fldChar ? (string?)e.Attribute(W.fldCharType) ?? "" : e.Value).ToArray();
+        }
+        using var redline = WordprocessingDocument.Open(new MemoryStream(saved), false);
+        var moved = redline.MainDocumentPart!.GetXDocument().Descendants(W.moveFrom).ToList();
+        Assert.Contains(moved, e => e.Descendants(W.instrText).Any());
+        Assert.DoesNotContain(moved, e => e.Descendants(W.delInstrText).Any());
+        var expected = new[] { "begin", " PAGE ", "separate", "end" };
+        Assert.Equal(expected, FieldParts(Accept(saved)));
+        Assert.Equal(expected, FieldParts(Reject(saved)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TextboxDeletionWithOrdinaryText_IsListedAndResolves(bool accept)
+    {
+        var deletion = new XElement(W.del, new XAttribute(W.id, "1"), new XAttribute(W.author, "Alice"),
+            new XElement(W.r, new XElement(W.t, "Textbox unique text")));
+        using var session = new DocxSession(TextboxDocument(deletion));
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.Equal("Textbox unique text", revision.Text);
+        Assert.True((accept ? session.AcceptRevision(revision.Id) : session.RejectRevision(revision.Id)).Success);
+        Assert.Equal(accept ? "" : "Textbox unique text", string.Concat(BodyLabels(session.Save())));
+    }
+
+    [Fact]
+    public void TextboxDeletion_DoesNotClaimNestedInsertionText()
+    {
+        var insertion = new XElement(W.ins, new XAttribute(W.id, "2"), new XAttribute(W.author, "Bob"),
+            new XElement(W.r, new XElement(W.t, "nested")));
+        var deletion = new XElement(W.del, new XAttribute(W.id, "1"), new XAttribute(W.author, "Alice"),
+            new XElement(W.r, new XElement(W.t, "deleted")), insertion);
+        using var session = new DocxSession(TextboxDocument(deletion));
+        Assert.Equal("deleted", Assert.Single(session.ListRevisions(), r => r.Type == "delete").Text);
+    }
+
+    [Fact]
+    public void TextboxDeletion_DoesNotClaimAnotherAuthorsNestedDeletion()
+    {
+        var inner = new XElement(W.del, new XAttribute(W.id, "2"), new XAttribute(W.author, "Bob"),
+            new XElement(W.r, new XElement(W.t, "inner")));
+        var outer = new XElement(W.del, new XAttribute(W.id, "1"), new XAttribute(W.author, "Alice"),
+            new XElement(W.r, new XElement(W.t, "outer")), inner);
+        using var session = new DocxSession(TextboxDocument(outer));
+        Assert.Equal("outer", Assert.Single(session.ListRevisions(), r => r.Author == "Alice").Text);
+        Assert.Equal("inner", Assert.Single(session.ListRevisions(), r => r.Author == "Bob").Text);
     }
 
     // The design doc's whole-table lowering is "every source row AND ITS CONTENT is deleted, and

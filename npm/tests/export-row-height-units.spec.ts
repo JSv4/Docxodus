@@ -57,8 +57,8 @@ for (const [name, rows, rule, pages] of [['exact', 3, 'exact', 1], ['multipage',
   });
 }
 
-test('a bare fractional height fails with a property-specific conversion diagnostic', async ({ browser }) => {
-  await expect(renderDocxArtifacts(generateRowHeightUnitDocx('501.5'), { browser, ...options }))
+test('a malformed height fails with a property-specific conversion diagnostic', async ({ browser }) => {
+  await expect(renderDocxArtifacts(generateRowHeightUnitDocx('687,25'), { browser, ...options }))
     .rejects.toMatchObject({ code: 'conversion_failure', phase: 'docx_conversion',
       message: expect.stringContaining('w:trHeight/@w:val') });
 });

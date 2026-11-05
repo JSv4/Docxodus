@@ -35,6 +35,8 @@ internal sealed record HtmlConversionOptions
     public bool RenderFootnotesAndEndnotes { get; init; }
     public bool RenderHeadersAndFooters { get; init; }
     public bool RenderTrackedChanges { get; init; }
+    public bool ShowFormattingChanges { get; init; } = true;
+    public bool ShowInsertionsAndDeletions { get; init; } = true;
     public bool ShowDeletedContent { get; init; } = true;
     public bool RenderMoveOperations { get; init; } = true;
 
@@ -122,6 +124,8 @@ internal static class HtmlConversionOps
         memoryStream.Write(docxBytes, 0, docxBytes.Length);
         memoryStream.Position = 0;
         using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
+        // Opened from bytes the read step's depth door measured (issue #1389).
+        PartDepthGuard.MarkMeasured(wordDoc);
 
         var renderComments = options.CommentRenderMode >= 0;
         bool renderPagination = options.PaginationMode == (int)PaginationMode.Paginated;
@@ -163,6 +167,8 @@ internal static class HtmlConversionOps
             RenderFootnotesAndEndnotes = options.RenderFootnotesAndEndnotes,
             RenderHeadersAndFooters = options.RenderHeadersAndFooters,
             RenderTrackedChanges = options.RenderTrackedChanges,
+            ShowFormattingChanges = options.ShowFormattingChanges,
+            ShowInsertionsAndDeletions = options.ShowInsertionsAndDeletions,
             ShowDeletedContent = options.ShowDeletedContent,
             RenderMoveOperations = options.RenderMoveOperations,
             RevisionPresentation = (RevisionPresentation)options.RevisionPresentation,
@@ -611,6 +617,8 @@ internal static class HtmlConversionOps
             shellStream.Position = 0;
             session.RenderShellStream = shellStream;
             session.RenderShellDoc = WordprocessingDocument.Open(shellStream, true);
+            // Built from the session's own package, which the door and the edit watch bound (issue #1389).
+            PartDepthGuard.MarkMeasured(session.RenderShellDoc);
             session.RenderShellSignature = sig;
         }
 
@@ -1064,11 +1072,9 @@ internal static class HtmlConversionOps
         {
             if (!enabled) return null;
             var liveIdByElement = new Dictionary<XElement, string>();
+            var sources = AnchorTarget.ResolveAll(doc, index.Values);
             foreach (var target in index.Values)
-            {
-                var source = target.Resolve(doc);
-                if (source is not null) liveIdByElement[source] = target.Anchor.Id;
-            }
+                if (sources.TryGetValue(target, out var source)) liveIdByElement[source] = target.Anchor.Id;
             return new BlockSourceIdentity(liveIdByElement);
         }
 
@@ -1181,6 +1187,8 @@ internal static class HtmlConversionOps
         }
         blockStream.Position = 0;
         using var renderDoc = WordprocessingDocument.Open(blockStream, true);
+        // Built from a block of bytes the read step's depth door measured (issue #1389).
+        PartDepthGuard.MarkMeasured(renderDoc);
         var blockSettings = BuildBlockConverterSettings(options);
         if (identity is not null) blockSettings.SourceAnchorIdentityProvider = identity.Resolve;
         else if (options.CommentRenderMode >= 0) blockSettings.SourceAnchorIdentityProvider = CommentStoryIdentity;
@@ -1381,6 +1389,8 @@ internal static class HtmlConversionOps
             // These settings affect within-block output too. An incremental swap must not
             // accept revisions that the matching full render preserves.
             RenderTrackedChanges = options.RenderTrackedChanges,
+            ShowFormattingChanges = options.ShowFormattingChanges,
+            ShowInsertionsAndDeletions = options.ShowInsertionsAndDeletions,
             ShowDeletedContent = options.ShowDeletedContent,
             RenderMoveOperations = options.RenderMoveOperations,
             // Native comment markup follows the caller's profile exactly as the full render's

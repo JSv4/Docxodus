@@ -33,13 +33,19 @@ def decide(lo_before, lo_after, lo_main, word_before, word_after, policy):
     compare(lo_main, lo_after, 0)  # Validate the original-input main run's shared contract.
     word_findings = compare(word_before, word_after, 0)
     failures = []
-    for label, result in [('LibreOffice candidate', lo_after), ('original-input main', lo_main),
+    for label, result in [('LibreOffice candidate', lo_after),
                           ('Word main', word_before), ('Word candidate', word_after)]:
         bad = mandatory_failures(result)
         if bad:
             failures.append(label + ' mandatory failures: ' + ', '.join(bad))
     mappings = policy['cases']
     originals = [m['originalCase'] for m in mappings]
+    baseline_failures = mandatory_failures(lo_main)
+    # A candidate may repair an unmapped main failure. Mapped inputs must still
+    # pass on main to establish Word authority for the original/capture pair.
+    mapped_baseline_failures = [cid for cid in baseline_failures if cid in originals]
+    if mapped_baseline_failures:
+        failures.append('original-input main mandatory failures: ' + ', '.join(mapped_baseline_failures))
     proxies = [m['wordCase'] for m in mappings]
     if len(set(originals)) != len(originals) or len(set(proxies)) != len(proxies):
         raise ValueError('Duplicate provider authority mapping')
@@ -82,6 +88,7 @@ def decide(lo_before, lo_after, lo_main, word_before, word_after, policy):
                                               'baselineSummary': lo_before['summary'], 'candidateSummary': lo_after['summary']},
                                 'word-online': {'allFindings': word_findings, 'baselineSummary': word_before['summary'],
                                                 'candidateSummary': word_after['summary']}},
+            'baselineMandatoryFailures': baseline_failures,
             'inputRasterEquivalence': equivalence, 'wordAuthoritativeCases': sorted(accepted),
             'reviewedLibreOfficeProviderDifferences': {cid: findings_by_case.get(cid, []) for cid in sorted(accepted)},
             'failures': failures, 'passed': not failures}

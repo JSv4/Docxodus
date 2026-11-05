@@ -59,11 +59,59 @@ public class DocxDiffMoveDetectionTests
     private static void AssertMoved(WmlDocument redline, string text, string? arrivedAs = null)
     {
         var body = Body(redline.DocumentByteArray);
-        Assert.Contains(body.Descendants(W.moveFrom), m => string.Concat(m.Descendants(W.delText).Select(t => t.Value)) == text);
+        Assert.Contains(body.Descendants(W.moveFrom), m => string.Concat(m.Descendants(W.t).Select(t => t.Value)) == text);
         Assert.Contains(body.Descendants(W.moveTo), m => string.Concat(m.Descendants(W.t).Select(t => t.Value)) == (arrivedAs ?? text));
     }
 
     // ---- paragraphs ------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MovedFromText_UsesOrdinaryTextInCompareAndConsolidate(bool consolidate)
+    {
+        var left = Paragraphs(A, B, C);
+        var right = Paragraphs(A, C, B);
+        var redline = consolidate
+            ? DocxDiff.Consolidate(left, new[] { new DocxDiffReviewer { Author = "Reviewer", Document = right } })
+            : DocxCompare.Compare(left, right);
+
+        var moved = Body(redline.DocumentByteArray).Descendants(W.moveFrom).Where(e => e.Descendants(W.r).Any()).ToList();
+        Assert.NotEmpty(moved);
+        Assert.All(moved, move =>
+        {
+            Assert.NotEmpty(move.Descendants(W.t));
+            Assert.Empty(move.Descendants(W.delText));
+        });
+        AssertRoundTrip(left, right, redline);
+        NoNewValidationErrors(left.DocumentByteArray, redline.DocumentByteArray);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void MovedFieldInstructions_UseMoveOrDeletionText(bool detectMoves)
+    {
+        const string field = "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>" +
+            "<w:r><w:instrText xml:space=\"preserve\"> PAGE </w:instrText></w:r>" +
+            "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>1</w:t></w:r>" +
+            "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+        var paragraph = "<w:p><w:r><w:t>Page number: </w:t></w:r>" + field + "</w:p>";
+        var left = Doc(paragraph + P(B) + P(C));
+        var right = Doc(P(B) + P(C) + paragraph);
+        var redline = DocxCompare.Compare(left, right, new DocxDiffSettings { DetectMoves = detectMoves });
+        var source = Body(redline.DocumentByteArray).Descendants(detectMoves ? W.moveFrom : W.del).ToList();
+
+        Assert.Contains(source, e => e.Descendants(detectMoves ? W.instrText : W.delInstrText).Any());
+        Assert.DoesNotContain(source, e => e.Descendants(detectMoves ? W.delInstrText : W.instrText).Any());
+        AssertRoundTrip(left, right, redline);
+        string[] FieldParts(byte[] bytes) => Body(bytes).Descendants()
+            .Where(e => e.Name == W.fldChar || e.Name == W.instrText)
+            .Select(e => e.Name == W.fldChar ? (string?)e.Attribute(W.fldCharType) ?? "" : e.Value).ToArray();
+        Assert.Equal(FieldParts(right.DocumentByteArray), FieldParts(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray)));
+        Assert.Equal(FieldParts(left.DocumentByteArray), FieldParts(DocxDiffOps.RejectRevisions(redline.DocumentByteArray)));
+        NoNewValidationErrors(left.DocumentByteArray, redline.DocumentByteArray);
+    }
 
     public static TheoryData<string, string[], string[], string> RelocatedParagraphs => new()
     {
@@ -132,8 +180,8 @@ public class DocxDiffMoveDetectionTests
         var (source, destination) = (tables[0], tables[1]);
         Assert.All(source.Elements(W.tr), row => Assert.NotNull(row.Element(W.trPr)?.Element(W.del)));
         Assert.All(destination.Elements(W.tr), row => Assert.NotNull(row.Element(W.trPr)?.Element(W.ins)));
-        Assert.Empty(source.Descendants(W.t));
-        Assert.Equal(new[] { A, B }, source.Descendants(W.moveFrom).Select(m => string.Concat(m.Descendants(W.delText).Select(t => t.Value))));
+        Assert.Empty(source.Descendants(W.delText));
+        Assert.Equal(new[] { A, B }, source.Descendants(W.moveFrom).Select(m => string.Concat(m.Descendants(W.t).Select(t => t.Value))));
         Assert.Equal(new[] { A, B }, destination.Descendants(W.moveTo).Select(m => string.Concat(m.Descendants(W.t).Select(t => t.Value))));
         // One move range per half, inside the table, both halves under the same name.
         var from = Assert.Single(source.Elements(W.moveFromRangeStart));
@@ -262,8 +310,8 @@ public class DocxDiffMoveDetectionTests
         var source = Assert.Single(rows, r => r.Element(W.trPr)?.Element(W.del) != null);
         var destination = Assert.Single(rows, r => r.Element(W.trPr)?.Element(W.ins) != null);
         Assert.True(rows.IndexOf(source) < rows.IndexOf(destination));
-        Assert.Empty(source.Descendants(W.t));
-        Assert.Equal(new[] { A }, source.Descendants(W.moveFrom).Select(m => string.Concat(m.Descendants(W.delText).Select(t => t.Value))));
+        Assert.Empty(source.Descendants(W.delText));
+        Assert.Equal(new[] { A }, source.Descendants(W.moveFrom).Select(m => string.Concat(m.Descendants(W.t).Select(t => t.Value))));
         Assert.Equal(new[] { A }, destination.Descendants(W.moveTo).Select(m => string.Concat(m.Descendants(W.t).Select(t => t.Value))));
         // Each half sits in its own move range, among the table's rows, and both share one name.
         var from = Assert.Single(table.Elements(W.moveFromRangeStart));
@@ -324,7 +372,7 @@ public class DocxDiffMoveDetectionTests
 
         var tables = Body(redline.DocumentByteArray).Elements(W.tbl).ToList();
         Assert.Equal(2, tables.Count);
-        Assert.Equal(new[] { A, B }, tables[0].Descendants(W.moveFrom).Select(m => string.Concat(m.Descendants(W.delText).Select(t => t.Value))));
+        Assert.Equal(new[] { A, B }, tables[0].Descendants(W.moveFrom).Select(m => string.Concat(m.Descendants(W.t).Select(t => t.Value))));
         Assert.Equal(new[] { A, edited }, tables[1].Descendants(W.moveTo).Select(m => string.Concat(m.Descendants(W.t).Select(t => t.Value))));
         Assert.Equal((string?)tables[0].Element(W.moveFromRangeStart)?.Attribute(W.name),
             (string?)tables[1].Element(W.moveToRangeStart)?.Attribute(W.name));

@@ -310,7 +310,9 @@ Unsupported run properties:
 **Location:** Lines 2508-2555
 
 Unimplemented paragraph properties:
-- `framePr` (frames)
+- `framePr` is partly implemented: floating placement, inline flow and left-edge wrapping are
+  covered. Interior wrapping and preceding-line clearance have explicit approximation diagnostics;
+  see [Paragraph text frames](docx_converter.md#paragraph-text-frames).
 - `keepLines`, `keepNext` (pagination control)
 - `mirrorIndents`
 - `pageBreakBefore`
@@ -356,9 +358,21 @@ reserves for them, pictures/charts/ink inside a group, and a canvas's own backgr
 (`wpc:bg`, `wpc:whole`). What cannot be drawn keeps its extent and is marked; see
 [Unsupported Content Placeholders](./unsupported_content_placeholders.md#inline-drawings).
 
-A group that contains a text box is still rendered by the text-box path, unchanged by #1270: the whole
-group becomes one box at the group's extent, styled with the first shape's fill and outline and holding
-only the text box's text; the group's other shapes are not drawn.
+DrawingML `wpg:wgp` groups containing text boxes project each member in source order
+(`WmlToHtmlConverter.DrawingGroups.cs`, #1527). Nested child offsets/extents map to physical
+frames without scaling fonts or strokes. Each shape combines its SVG geometry with an independent
+HTML textbox; pictures resolve relationships in the original owning part. One outer drawing anchor
+positions the group. Rotation/reflection composes through nested groups; text counteracts reflections
+to remain readable, and `bodyPr upright` also cancels the accumulated rotation. Linked continuation
+frames keep their own body properties. Unsupported geometry remains reported and invalidates source
+clipping provenance without deleting its text. Canvas (`wpc:wpc`) text handling is unchanged.
+
+VML groups project their independent shapes and text stories in order (#1482), including nested
+groups and picture siblings. Their child coordinate origins and extents map to physical frame
+bounds without scaling the text font or outline width. Group `coordsize` defaults to `1000,1000`.
+Compatibility selection applies at both the drawing and member boundaries. The textbox host's
+independent source inventory makes omitted paragraphs fail PageMap publication instead of
+disappearing from the completeness check; see `page_map.md`.
 
 Floating (`wp:anchor`) shapes and groups reuse the SVG renderer (#1346). The paginator resolves their
 stored anchor geometry and promotes them into the page. `behindDoc` separates background drawings

@@ -124,6 +124,6 @@ for(const story of ['header','footer'] as const) test(`${story} drawings retain 
       const ink=anchor.querySelector('svg')!.getBoundingClientRect();
       return {top:(ink.top-paper.top)*.75,height:ink.height*.75,parent:anchor.parentElement?.className};
     });
-    expect(f.top).toBeCloseTo(top,0);expect(f.height).toBeCloseTo(72,0);expect(f.parent).toBe('page-box');
+    expect(f.top).toBeCloseTo(top,0);expect(f.height).toBeCloseTo(72,0);expect(f.parent).toBe('page-drawing-layer');
   } finally {await page.close();}
 });

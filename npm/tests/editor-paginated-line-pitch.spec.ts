@@ -5,6 +5,22 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+test('the shipped demo keeps heading and table lines apart in page view', async ({ page }) => {
+  await page.goto('/demo-index.html?demo=editor&engine=./embed.bundle.js&doc=./docxodus-demo-guide.docx');
+  await expect(page.locator('.dxr')).toHaveAttribute('data-state', 'ready', { timeout: 90000 });
+  await page.evaluate(() => (window as any).__ribbon.selectTab('layout'));
+  await page.locator('#paginated').check();
+  await expect(page.locator('#editor #pagination-container')).toBeVisible();
+  const lines = await page.locator('#editor #pagination-container p').evaluateAll(paragraphs =>
+    paragraphs.filter(p => p.textContent?.trim()).map(p => {
+      const style = getComputedStyle(p);
+      return { text: p.textContent, fontSize: parseFloat(style.fontSize), lineHeight: parseFloat(style.lineHeight) };
+    }));
+  expect(lines.some(p => p.text?.includes('Edit this document'))).toBe(true);
+  expect(lines.length).toBeGreaterThan(30);
+  for (const line of lines) expect(line.lineHeight, line.text ?? '').toBeGreaterThanOrEqual(line.fontSize);
+});
+
 /**
  * Issue #1151: the paginator gives every single-spaced line its font's unrounded height before it
  * lays pages out. A block the paginated editor renders afresh after an edit gets the same pass, so

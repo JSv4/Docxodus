@@ -6,12 +6,101 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Exact-spaced, uniform justified paragraphs use bounded ordinary-space compression before pagination in compatibility mode 15 or later. Legacy modes and unsupported inline flow retain their existing line choices (#1524).
+
+- Export reports identify the actual Chromium font faces used for final text, including mixed-script fallback, while retaining missing-font warnings and explicit limits on font-file verification (#1525).
+
+- Independent export visibility for formatting revisions, insertions/deletions, and comments,
+  including comment balloons without formatting balloons. Hidden text revisions display current
+  text and structure without accepting revisions or changing the source package (#1523).
+
+### Fixed
+
+- Deliverable verification now identifies LibreOffice's known import failure for tracked anchored DrawingML header groups with text boxes, reports the affected part and location, and recommends preserving the DOCX and using a verified renderer (#1045).
+
+- Split long tracked paragraphs across pages while preserving revision metadata and change bars.
+  A leading non-wrapping drawing with fixed anchor coordinates stays whole on the first fragment (#1521).
+
+- Keep complete paragraph rewrites in coherent deleted and inserted blocks when their only shared words are articles or list numbers, including linked articles (#1535).
+
+- **Comparison preserves changed document defaults beside fields** (#1533). Simple, complex,
+  and paragraph-spanning fields no longer suppress revised paragraph spacing and run formatting;
+  accepting and rejecting changes retain each input's effective formatting and field structure.
+
+- Match header and footer stories through retained body sections when whole sections are inserted or removed, preserving empty stories and linked continuations (#1534).
+
+- The published render-report v2 schema validates complete and failed v2 reports and rejects
+  v1 identities; both branches now share the declared v2 identity (#1538).
+
+- Preserve declared fractional single-line borders in fixed-grid table exports, with consistent cell widths, merged edges, repeated headers and RTL running stories (#1522).
+
+- Preserve every text story in DrawingML groups, including nested header groups, mixed pictures and shapes, and reflected or upright text (#1527).
+
+- Widow control permits paragraph splitting while retaining two lines on each side, independently of explicit line keeps (#1520).
+
+- Preserve negative leading paragraph indents in HTML/PDF, including RTL paragraphs and border wrappers (#1519).
+
+- Comparison keeps weakly related paragraph replacements in coherent revision spans instead of
+  stranding their deleted suffix in another paragraph (#1526).
+
+## [15.0.0] - 2026-10-31
+
+### Added
+
 - Read-only anchor locations expose a canonical anchor id, package part URI and element XPath
   without saving or stamping live XML (#1396). All/subset queries include the document version
   and work across .NET, WASM, npm/worker, Python/stdio and MCP. Version-zero paths address the
   caller's original XML; paths should be refreshed after edits.
 
 ### Changed
+
+- A package with XML nested deeper than its part's limit is now refused when it is read, instead of
+  crashing the process with a stack overflow in whichever recursive walk reached it first (undo
+  snapshots, the SDK's typed DOM, the strict-conformance conversion, the HTML render, comparison,
+  revisions). The refusal is an exception whose message starts `xml_depth_limit_exceeded:` (an
+  `XmlException`, or the `PowerToolsDocumentException` that `WmlDocument`-based APIs wrap package
+  errors in). The shared read step — which sessions, the HTML render from bytes or a `WmlDocument`,
+  comparison, the OpenContracts export of a `WmlDocument`, metrics, the DocxDiff compatibility probe
+  and the WASM profiling exports go through — measures every part the package relationships reach, as
+  the packaging layer assembles it (interleaved pieces joined), after the strict conversion and again
+  after open-time repair, streaming each once before any tree is built; the two steps that parse
+  package entries themselves, referenced or not (the strict conversion and DocxDiff's
+  markup-compatibility pass), parse them depth-limited and leave a deeper entry untouched. Main applied no limit when
+  reading a package, so these packages, which main opened, are now refused:
+  - a story or definition part (reached by a story relationship — main document, header, footer,
+    notes, comments, styles, numbering, glossary — or declared one of their content types) nested
+    more than 128 elements deep; real documents nest a few dozen levels at most (the test corpus
+    peaks at 25);
+  - any other reachable part nested more than 256 deep;
+  - a package where measuring would pass the package manifest's limits: two reachable parts that
+    carry a DTD (`xml_size_limit_exceeded`), or a reachable part past the manifest's per-entry size,
+    total size or 1,000× compression-ratio limits.
+  Parts nothing references are not read, as on main. Package manifests keep their 256 limit for every
+  entry and now also report a story part past 128 (or a joined interleaved part past its limit) as
+  `xml_depth_limit_exceeded`, so `GetSemanticChanges` (an `InvalidDataException` from its manifest
+  preflight) and deliverable verification (which now stops on that finding before the Open XML
+  validator) refuse such packages too. A session's own checkpoints and preview shadows are not
+  measured again. On the stdio and MCP hosts a refusal surfaces as `internal_error` with the message.
+  - A session edit — any typed op or raw-XML edit — that would nest its part past that part's limit
+    (inserting a table into the innermost cell of tables already nested to the limit, say) is refused
+    with `ValidationFailed` and an `xml_depth_limit_exceeded:` message, and changes nothing: the
+    version, the document and the undo history are as before. Main accepted such edits, and the
+    session's next render could crash the process.
+  - The public APIs that take a `WordprocessingDocument` the caller opened — `ConvertToHtml`,
+    `RevisionProcessor`/`RevisionAccepter` accept and reject, `WmlToMarkdownConverter.Convert`,
+    `MarkupSimplifier.SimplifyMarkup` and `TransformToSingleCharacterRuns`,
+    `FormattingAssembler.AssembleFormatting` and `OpenContractExporter.Export` — measure the package
+    the same way once per call (a part's loaded LINQ tree, if the caller has one, otherwise its stream,
+    plus any loaded SDK tree),
+    so the `docx2html` CLI now exits with `Error: xml_depth_limit_exceeded: …` instead of aborting.
+    `GetDocumentMetadata` measures only the main story, the one part it walks recursively, as it loads
+    it. An open package exposes no entry sizes, so the size and ratio limits do not apply to it.
+    `OpenContractExporter.Export` preserves unsaved edits in the caller's loaded SDK trees, measuring
+    them before exporting them. Other parts use their measured LINQ trees without forcing an SDK
+    load from a stream that could differ from the caller's cached tree.
+  - `ExternalAnnotationProjector`'s HTML input and the Flat OPC dumps (`FlatOpc.OpcToXmlDocument`,
+    `OpcToXDocument`, `OpcToText`, which read every part, referenced or not) are parsed refusing
+    nesting past 256 (#1389).
 
 - **Breaking: visible run atoms share the session's text coordinates (#1409).** `w:br` and
   `w:cr` occupy one `\n`, positional tabs (`w:ptab`) one `\t`, special hyphens their Unicode
@@ -47,6 +136,234 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Delivery publication accepts the standard macOS `/tmp` and `/var` system aliases. Both the
+  alias and its `/private` spelling share one publication lock and physical staging path;
+  other symbolic links are still rejected, and the returned path keeps the caller's spelling.
+
+- Positive inline-frame vertical text distance now reflows preceding lines while preserving
+  frame paint. Pagination counts the changed prefix and reserved notes before admitting the
+  frame; deferral leaves the preceding page unchanged (#1510).
+
+- Inline paragraph frames now wrap supported text through both available line intervals at
+  centered and interior positions, and honor right/page-relative placement during measurement
+  and painting. Fragmented paragraphs retain source ownership; unsupported arrangements keep
+  explicit diagnostics and strict export refusal (#1509).
+
+- Long endnote-style comments now split across pages while retaining their metadata, reply
+  nesting, return links, and comment/paragraph PageMap ownership (#1505).
+
+- Inline paragraph frames preserve their flow and page space instead of overprinting the next
+  paragraph. Text-anchored wrapping frames exclude their actual occupied area, including separate
+  frames and header overhangs; `notBeside` frames place following text below. Grouped paragraphs,
+  running stories and ordinary table-cell flow retain their source identities. Horizontal text
+  distance expands wrapping clearance. Unsupported two-sided wrapping and vertical clearance
+  preserve complete text with explicit approximation diagnostics; strict export refuses them (#1487).
+
+- Fixed DrawingML text boxes at the paper edge no longer cause a false missing-paragraph
+  export error when their original text is wholly off paper (#1492). Fit mode follows local
+  properties and theme defaults; verification binds original text geometry and authored
+  placement so newly hidden text still fails.
+
+- Long bordered footnotes continue across every required page instead of failing PDF export
+  with clipped content. Continuations retain side borders and leave horizontal borders open
+  at page breaks; fitting notes and the clipping guard are unchanged (#1491).
+
+- Standalone margin-comment export prints complete overflowing threads on appended pages instead
+  of silently printing only a scroll viewport or refusing later comment paragraphs (#1490).
+  Replies and running-story comments retain their source identities and return links; fitting
+  margin comments, hidden comments and balloon overflow keep their existing behavior.
+
+- Long text after a right tab wraps instead of becoming a single atomic row that loses words
+  beyond the page (#1488). Tab measurement uses the following runs' fonts and letter spacing;
+  short tails can also wrap when browser glyph widths exceed the estimate.
+
+- A fitting footnote with an inherited font revision on its source marker exports without a
+  false clipping error (#1493). Body and note checks measure nested inline content once per band,
+  excluding decorative borders while retaining real text, generated content and image overflow.
+- Continuous sections can change margins without forcing a page break (#1486).
+  Body widths and column-relative anchors follow their section on a shared page, while
+  its vertical bands and page-margin anchors keep the page owner's geometry. Fragment
+  measurement preserves those widths beside floats; notes retain their section width
+  within the page's note band, and pictures that fit the shared page remain unscaled.
+- Embedded TIFF and simple placeable WMF images now render in browser HTML/PDF, including
+  body and header pictures (#1484). The shared converter normalizes bounded RGB(A) TIFF strips
+  to PNG and supported WMF rectangle/ellipse records to static SVG. Orientation, alpha and
+  Word's mapped shape bounds and scaled outlines survive image sizing; device hairlines,
+  collapsed bounds and unsupported formats retain explicit diagnostics.
+  `docx2html` preserves the normalized resources in embedded and extracted-image modes.
+- Ruby annotations retain both their base and reading. Ordinary horizontal ruby uses semantic
+  HTML with authored sizes, alignment, language and baseline raise; pagination keeps each pair
+  together while splitting surrounding prose. Unsupported layouts retain both text layers with
+  an explicit diagnostic and continue to honor strict export policy (#1483).
+
+- Preserve every independent VML group textbox in body and running stories, including nested
+  coordinate spaces (#1482). PageMap completeness now checks textbox paragraphs inventoried
+  from the selected source markup, so conversion-time omissions fail explicitly. Unsupported
+  group transforms are diagnosed and cannot establish source-clipping exemptions.
+
+- Resolve read-only `TITLE` / `DOCPROPERTY Title` fields from the package title and paragraph-style
+  `STYLEREF` fields from document text (#1481). Running style references follow each physical page,
+  including first/last matching headings and preceding-heading fallback. Header/footer measurement
+  and body flow converge together; unstable layouts fail explicitly. Locked caches remain unchanged.
+
+- Preserve endnote paragraph fonts when flattening them for pagination, keeping their glyph
+  baselines and long-note continuations intact. The fidelity gate now allows candidates to repair
+  unmapped failures on main while retaining all candidate checks and historical protections.
+
+- Follow vertical table merges by logical grid interval, including preceding spans and omitted leading columns; preserve unmatched continuation cells instead of silently dropping their text (#1489).
+
+- Keep reserved continuation notices out of ordinary footnote and endnote lists, including positive-id definitions with no citations (#1485).
+
+- Legacy checkbox and dropdown form fields now display their metadata state in body and running
+  stories, even without cached text (#1480). Values are resolved before tab measurement; styled
+  caches, revision boundaries and existing text fields are preserved. Unsupported form metadata
+  uses the existing diagnostic placeholder. Checkboxes retain their size and baseline in print.
+
+- Consolidation preserves a reviewer’s inline bookmark additions and removals beside independent
+  text or equation edits, keeping endpoint order and reviewer ownership through accept/reject (#1426).
+
+- Keep paginated text from overlapping in Firefox by measuring natural line heights below its rendered-font size limit (#1424).
+- **Textbox geometry survives comparison rejection** (#1425, #1428): include the outer textbox carrier's geometry and relationships in comparison identity while keeping textbox bodies independently diffable. Reject All restores the original shape dimensions and bookmark gaps between regrouped textboxes; unchanged carriers retain native paragraph split/merge behavior.
+
+- Markdown projection includes textbox and group-shape text once from the supported compatibility
+  branch, with anchored blocks after their host. Tables include rows and cells wrapped in content
+  controls, and textbox edits return complete projection patches (#1445).
+- Preserve raised inline text boxes above the body margin without changing their flow space, typography, internal clipping, or paper boundary.
+- Position supported floating VML shape placeholders through the existing anchor adapter instead of consuming body space.
+- Preserve oversized floating drawings and report relaxed top/bottom clearance when no page can contain their exclusion and anchor text.
+
+- Recognize wholly off-paper text boxes with horizontal margin alignment and vertical paragraph placement, retaining the existing source geometry and visible-content guards.
+
+- Export wholly clipped paragraphs from proven fixed, unlinked text boxes or authored off-paper placements with source warnings; strict content policy rejects them, and newly lost text still fails verification.
+
+
+- Flow linked DrawingML text-box stories through their declared continuation frames, preserving text, inline images, typography and source fragments across different frame widths or pages. Exhausted or malformed chains report an error instead of silently clipping their remaining text.
+
+- Blank lines inside fixed floating text boxes placed outside the paper no longer fail
+  source coverage. Unmarked text and ordinary flow clipping retain the completeness guard.
+
+- Continue long paragraphs around complete converter tab segments and unsupported-shape placeholders, retaining every inline box and its content.
+
+- Interpret wrapped signed DrawingML text-clearance distances consistently for anchored shapes and floating pictures, preventing enormous page bands from encoded tiny negative clearances.
+
+- Legacy VML text boxes with supported page or margin coordinates use their authored placement
+  without accumulating their heights in the containing paragraph.
+
+- Preserve inherited typography when floating drawings move onto the page, including the visible fallback text of images that cannot decode.
+- Preserve embedded image and SVG identities when pagination promotes or repeats drawings, so an already-reported decoding failure does not become a false serialization error. Newly damaged resources still fail verification.
+
+- Refit header and footer grids that extend beyond the paper with the shared table column
+  sizing path, retaining all repeated labels and preserving widths that already fit.
+
+- DrawingML and VML text boxes now apply contextual paragraph spacing consistently with body
+  text, including implicit default styles, keeping later lines inside their authored fixed bounds.
+
+- Preserve supported nonwrapping VML image positions in paginated export. Explicit page/margin
+  alignments and point offsets use the shared drawing-anchor layout, keeping backgrounds out of
+  header/body flow while retaining their size and stacking order. Inline, continuous, and explicitly
+  wrapping images retain their established fallbacks regardless of z-order.
+
+- Paginated DrawingML pictures without wrapping use the shared drawing-anchor
+  placement, including page-relative sizing. Full-page header backgrounds no longer consume the
+  body area; linked images retain their contents and explicitly wrapping pictures keep their flow,
+  including pictures placed behind the text.
+- Prevent off-paper floating drawings from adding blank PDF pages. A page-sized drawing layer
+  keeps their original geometry and stacking while clipping print overflow to the paper, including
+  partially visible drawings and repeated header/footer objects.
+
+- Fixed-height text boxes can contain a wholly clipped blank trailing paragraph without failing
+  PageMap completeness; visible text hidden by the same clip remains an export error.
+
+- Empty zero-font paragraphs with no line height no longer fail PageMap completeness. Visible
+  text runs and blank lines with authored height keep their measured fragments.
+
+- Rowless tables and paragraphs whose text and paragraph marks are hidden retain their source
+  identities without requiring painted PageMap fragments, including joined and section-ending paragraphs.
+
+- Keep paragraph-border spacing consistent when standalone HTML reopens and prints. Prepared
+  border styles use their serialized values before pagination, preventing accumulated subpixel
+  shifts from invalidating the PageMap.
+
+- Header and footer tables can extend into the page side margins without losing cells or failing
+  PDF export; running stories retain vertical clipping and the paper edge remains the horizontal boundary.
+- Recover read-only tables whose vertical merge groups exceed a fresh page by continuing their row grid while retaining each source cell’s content once. Fitting merges and authored exact-height/header groups remain unchanged.
+
+- Paginate tables carrying leading bookmark targets while preserving each target on the first table fragment.
+
+- Continue long read-only paragraphs containing empty inline tab advances, preserving their widths and leaders across pages.
+
+- Paragraphs with automatic Word line spacing can continue across pages while retaining the
+  converter’s vertical baseline adjustment. The shared fragmenter recognizes this measured
+  inline layout and still rejects unsupported relative-positioned content.
+
+- Wrapped floating pictures that exceed a physical page use the same proportional fitting
+  as inline pictures. Tight-wrap frames follow the fitted bitmap, while fitting pictures
+  and intentionally clipped content retain their original geometry.
+
+- Page fitting includes a wrapped floating picture’s visible height even when its paragraph
+  is shorter. Each floating-picture block is measured independently so a preceding float
+  cannot distort its size on a fresh page.
+
+- Inline pictures that cannot fit on a fresh page are proportionally reduced into the body
+  band before pagination. The bitmap and aspect ratio are retained, and pictures that already
+  fit keep their original size.
+
+- Read-only pagination can continue a paragraph containing inline images across pages. Each
+  image remains whole at its original dimensions, including baseline-adjusted image runs,
+  while text, image order and fragment identities are preserved.
+
+- Read-only pagination proportionally refits body table columns that extend outside the paper,
+  preserving font sizes and all cells across continuations. Tables that only extend into a
+  visible page margin retain their original widths.
+
+- HTML and PDF conversion accept fractional twips in style tab stops and table row heights.
+  Tab measures use the shared invariant unit parser and retain integer truncation; row heights
+  retain fractional precision, their range checks, and property-specific malformed-value errors.
+
+
+- Continue table-cell paragraphs when line or row keeps cannot fit a fresh page, preserving widow lines and fitting kept rows.
+
+- Oversized body tables with footnote citations split at complete row groups while reserving
+  room for each cited note, keeping the note with its citation instead of clipping the table.
+
+- Header and footer measurement now uses the same column layout as the printed story, so spacing
+  between paragraphs is fully reserved. Widely spaced running-story paragraphs no longer disappear
+  behind the story's clipping edge or fail PDF export with a missing PageMap fragment.
+
+
+- Keep floating paragraph frames and drawings linked to their original source cells and tables
+  after placement, so visible labels remain measurable in exported HTML and PDF.
+
+- PDF and HTML exports wait for the owned browser's built-in forced shutdown before reporting a
+  cleanup failure. Slow Chromium exits no longer discard a verified artifact after 10 seconds;
+  browser shutdown remains bounded, and context and temporary-directory cleanup keep their limits.
+- PDF export continues text paragraphs whose keep-lines or widow-control setting cannot fit
+  on a fresh page, preserving their text and legal line boundaries instead of refusing the
+  document. Paragraphs that fit a page still retain their keep settings.
+
+- Read-only pagination continues long paragraphs and nested tables inside ordinary body table
+  cells across pages, reusing the measured note-table fragmenter and preserving each cell
+  content once instead of leaving the whole cell clipped below the page.
+
+- Standalone export tolerates malformed unused XML or package-level custom properties and
+  missing preview thumbnails under the default warning policy. Diagnostics and source bytes are preserved;
+  strict exports and defects in required document parts still fail preflight.
+- Text boxes keep their own line heights and inline placement when the containing paragraph
+  uses automatic line spacing, preserving text within fixed DrawingML and VML boxes.
+- Empty or automatic frame defaults inherited from a style keep ordinary paragraphs in page
+  flow, while directly declared frames retain their geometry and inherited settings.
+
+- Measure tabs in fixed-width DrawingML and VML text boxes against their own content width, so long prefixes wrap within the frame before the tab. Active relative-width frames keep their existing unknown-width path.
+
+- Normalize mixed text and tab runs inside text boxes, preserving tab columns and visible lines regardless of run boundaries.
+
+- Comparison and consolidation give adjacent tabs, breaks, equations and other atomic content
+  distinct rendering positions, so an equation edit after a tab is tracked and rejecting it restores
+  the original (#1421). Source positions follow the reader's retained text and atoms through fields,
+  hyperlinks and text-run merging; shared range endpoints keep their place in both resolved views.
+  Changes to indivisible image/textbox carriers and unfinished field scaffolding use structural replacement.
+- Comparison, consolidation and tracked block moves write moved-from text and field instructions as ordinary text,
+  matching Word's move markup instead of using deletion-only elements that Word can reject (#1420).
 - HTML rendering coalesces deeply nested inline containers once, avoiding exponential work
   on nested hyperlinks, simple fields and content-control/custom-XML wrappers (#1410).
 - **Editor review and tab interactions (#1408).** Empty move/wrapper markers no longer count
@@ -158,6 +475,12 @@ All notable changes to this project will be documented in this file.
   cannot carry. A target that starts with `x-docxodus-verbatim:` followed by a canonical
   percent-escaped string is reserved: it is read as the library's own encoding and written back
   decoded.
+
+- Operations that look up many anchors at once no longer slow down quadratically with document
+  size: `Grep`, `GrepCrossBlock`, `GetAnchorInfos`, `GetBlockMetadatas`, `RegisterPageMap` and the
+  anchor-stamped HTML renders (the editor's full and single-block renders) found each block by
+  walking its whole part, so a grep over a 16,000-paragraph document took over two minutes; each
+  part is now read once per call, and that grep takes about two seconds (#1389).
 
 - Packages the Open XML SDK rejects are repaired as they are read where the package says what the
   repair is, so a session, a comparison, HTML conversion and the DocxDiff compatibility probe open

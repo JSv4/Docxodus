@@ -126,6 +126,12 @@ namespace Docxodus
             XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
             XElement root = part.GetXDocument().Root!;
+            // A field result can be normalized between reads. Refresh the complete annotation
+            // set so removed nested fields cannot leave stale ids or instruction-cache entries.
+            root.RemoveAnnotations<Dictionary<int, List<XElement>>>();
+            root.RemoveAnnotations<DeletedFieldIds>();
+            foreach (var element in root.DescendantsAndSelf())
+                element.RemoveAnnotations<Stack<FieldElementTypeInfo>>();
             var r = root.DescendantsAndSelf()
                 .Rollup(
                     new FieldElementTypeStack

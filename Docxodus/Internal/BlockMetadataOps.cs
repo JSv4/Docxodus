@@ -19,10 +19,13 @@ namespace Docxodus.Internal;
 internal static class BlockMetadataOps
 {
     /// <summary>Resolve <see cref="BlockMetadata"/> for the given anchor target.</summary>
-    public static BlockMetadata? GetBlockMetadata(WordprocessingDocument doc, AnchorTarget target)
+    public static BlockMetadata? GetBlockMetadata(WordprocessingDocument doc, AnchorTarget target) =>
+        target.Resolve(doc) is { } element ? GetBlockMetadata(doc, target, element) : null;
+
+    /// <summary><see cref="GetBlockMetadata(WordprocessingDocument, AnchorTarget)"/> for an already
+    /// resolved <paramref name="element"/>.</summary>
+    public static BlockMetadata GetBlockMetadata(WordprocessingDocument doc, AnchorTarget target, XElement element)
     {
-        var element = target.Resolve(doc);
-        if (element is null) return null;
 
         var styleId = ResolveStyleId(element);
         var styleName = styleId is null ? null : ResolveStyleName(doc, styleId);

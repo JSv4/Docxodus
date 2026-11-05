@@ -469,8 +469,9 @@ public class IrReaderTests
     {
         // Build a textbox nested far beyond the textbox depth cap (16): a chain of w:pict/v:textbox/
         // w:txbxContent wrapping a w:p with text at the bottom. The reader must not throw (totality);
-        // beyond the cap the deepest body is preserved opaquely rather than recursing further.
-        const int depth = 40;
+        // beyond the cap the deepest body is preserved opaquely rather than recursing further. Four
+        // elements per level keep 20 levels inside the load-time XML depth limit (issue #1389).
+        const int depth = 20;
         var inner = "<w:p><w:r><w:t>Bottom</w:t></w:r></w:p>";
         var sb = new System.Text.StringBuilder();
         for (int i = 0; i < depth; i++)

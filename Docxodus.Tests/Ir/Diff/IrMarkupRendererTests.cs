@@ -1492,7 +1492,59 @@ public class IrMarkupRendererTests
         Assert.Empty(body.Descendants(W.moveToRangeStart));
         Assert.True(body.Descendants(W.del).Any(), "simplified moveFrom → del");
         Assert.True(body.Descendants(W.ins).Any(), "simplified moveTo → ins");
+        Assert.Contains(body.Descendants(W.delText), e => e.Value.Contains("paragraph"));
+        using var session = new DocxSession(rendered.DocumentByteArray);
+        Assert.Contains(session.ListRevisions(), r => r.Type == "delete" && r.Text.Contains("paragraph"));
         AssertRoundTrip(left, right, settings, label: "move-simplified");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Lower_move_source_converts_its_own_text_but_keeps_nested_revisions(bool simplify)
+    {
+        var paragraph = new XElement(W.p,
+            new XElement(W.moveFromRangeStart, new XAttribute(W.id, "1"), new XAttribute(W.name, "move1")),
+            new XElement(W.moveFrom,
+                new XElement(W.r, new XElement(W.t, "moved"), new XElement(W.instrText, " PAGE ")),
+                new XElement(W.r, new XElement(W.drawing, new XElement(W.txbxContent,
+                    new XElement(W.p, new XElement(W.r, new XElement(W.t, "textbox"), new XElement(W.instrText, " REF item ")))))),
+                new XElement(W.ins, new XElement(W.r, new XElement(W.t, "nested")))),
+            new XElement(W.moveFromRangeEnd, new XAttribute(W.id, "1")));
+        if (simplify)
+            IrMarkupRenderer.SimplifyMoveMarkup(paragraph);
+        else
+            IrMarkupRenderer.LowerUnpairedMoveRanges(new List<XElement> { paragraph }, new HashSet<string> { "move1" });
+
+        var deletion = Assert.Single(paragraph.Elements(W.del));
+        Assert.Equal("moved", Assert.Single(deletion.Descendants(W.delText)).Value);
+        Assert.Equal(" PAGE ", Assert.Single(deletion.Descendants(W.delInstrText)).Value);
+        Assert.Equal("nested", Assert.Single(deletion.Descendants(W.ins).Descendants(W.t)).Value);
+        var textbox = Assert.Single(deletion.Descendants(W.txbxContent));
+        Assert.Equal("textbox", Assert.Single(textbox.Descendants(W.t)).Value);
+        Assert.Equal(" REF item ", Assert.Single(textbox.Descendants(W.instrText)).Value);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Lower_move_source_inside_textbox_keeps_textbox_carriers(bool simplify)
+    {
+        var paragraph = new XElement(W.p,
+            new XElement(W.moveFromRangeStart, new XAttribute(W.id, "1"), new XAttribute(W.name, "move1")),
+            new XElement(W.moveFrom, new XElement(W.r, new XElement(W.t, "inside"), new XElement(W.instrText, " REF item "))),
+            new XElement(W.moveFromRangeEnd, new XAttribute(W.id, "1")));
+        var textbox = new XElement(W.txbxContent, paragraph);
+        if (simplify)
+            IrMarkupRenderer.SimplifyMoveMarkup(paragraph);
+        else
+            IrMarkupRenderer.LowerUnpairedMoveRanges(new List<XElement> { paragraph }, new HashSet<string> { "move1" });
+
+        var deletion = Assert.Single(textbox.Descendants(W.del));
+        Assert.Equal("inside", Assert.Single(deletion.Descendants(W.t)).Value);
+        Assert.Equal(" REF item ", Assert.Single(deletion.Descendants(W.instrText)).Value);
+        Assert.Empty(deletion.Descendants(W.delText));
+        Assert.Empty(deletion.Descendants(W.delInstrText));
     }
 
     /// <summary>

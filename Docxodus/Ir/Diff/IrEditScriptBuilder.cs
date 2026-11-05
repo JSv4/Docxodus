@@ -73,7 +73,7 @@ internal static class IrEditScriptBuilder
         var bodyOps = ProjectAlignment(left.Body.Blocks, alignment, settings, allowCrossParagraph: true,
             fusedAnchors: settings.CrossParagraphTokenDiff ? null : markupFusedAnchors);
         var noteOps = BuildNoteOps(left, right, settings, KeptNoteReferences(left, right, bodyOps, settings));
-        var headerFooterOps = BuildHeaderFooterOps(left, right, settings);
+        var headerFooterOps = BuildHeaderFooterOps(left, right, settings, alignment);
         return UniqueMoveGroupIds.Apply(new IrEditScript(IrNodeList.From(bodyOps),
             noteOps.Count == 0 ? null : IrNodeList.From(noteOps),
             headerFooterOps));
@@ -184,15 +184,79 @@ internal static class IrEditScriptBuilder
     /// ascending, kind Default&lt;First&lt;Even), then footers.</para>
     /// </summary>
     private static IrNodeList<IrHeaderFooterDiff>? BuildHeaderFooterOps(
-        IrDocument left, IrDocument right, IrDiffSettings settings)
+        IrDocument left, IrDocument right, IrDiffSettings settings, IrBlockAlignment alignment)
     {
         if (!settings.CompareHeadersFooters)
             return null;
 
+        var sections = MatchSectionBoundaries(left, right, alignment);
         var diffs = new List<IrHeaderFooterDiff>();
-        BuildOneHeaderFooterScope(left, right, left.Headers, right.Headers, isHeader: true, settings, diffs);
-        BuildOneHeaderFooterScope(left, right, left.Footers, right.Footers, isHeader: false, settings, diffs);
+        BuildOneHeaderFooterScope(left, right, left.Headers, right.Headers, isHeader: true, settings, diffs, sections);
+        BuildOneHeaderFooterScope(left, right, left.Footers, right.Footers, isHeader: false, settings, diffs, sections);
         return diffs.Count == 0 ? null : IrNodeList.From(diffs);
+    }
+
+    // Boundary carriers delimit physical review sections. Any retained content before a new
+    // boundary still belongs to its source section; a wholly inserted section has no left story.
+    private static List<(int Left, int Right)>? MatchSectionBoundaries(
+        IrDocument left, IrDocument right, IrBlockAlignment alignment)
+    {
+        Dictionary<string, (int Section, bool Ends)> SourceSections(IrDocument document)
+        {
+            var result = new Dictionary<string, (int, bool)>();
+            int section = 0;
+            foreach (var block in document.Body.Blocks)
+            {
+                bool ends = block is IrParagraph { InlineSectionBreakAnchor: not null };
+                result.Add(block.Anchor.ToString(), (section, ends));
+                if (ends) section++;
+            }
+            return result;
+        }
+        var leftSections = SourceSections(left);
+        var rightSections = SourceSections(right);
+        int leftCount = leftSections.Values.Count(s => s.Ends), rightCount = rightSections.Values.Count(s => s.Ends);
+        // Nested carriers are not entries of this alignment. Preserve their existing grid instead
+        // of projecting a partial inventory (and silently dropping later stories).
+        bool Complete(IrDocument document, int count) => document.Body.PartUri is not { } uri ||
+            !document.Sources.TryGetValue(uri, out var source) || source.Root is null ||
+            Internal.BlockMetadataOps.SectionBreaks(source.Root).Count(s => s.Parent?.Name == W.pPr) == count;
+        if (!Complete(left, leftCount) || !Complete(right, rightCount))
+            return null;
+        var sections = new List<(int, int)>();
+        int currentLeft = -1, currentRight = -1, seenLeft = 0, seenRight = 0;
+        bool insertedBoundary = false, deletedBoundary = false;
+        foreach (var entry in alignment.Entries)
+        {
+            bool hasLeft = leftSections.TryGetValue(entry.Left?.Anchor.ToString() ?? "", out var l);
+            bool hasRight = rightSections.TryGetValue(entry.Right?.Anchor.ToString() ?? "", out var r);
+            if (hasLeft) currentLeft = l.Section;
+            if (hasRight) currentRight = r.Section;
+            if (entry.MultiBlocks is { Count: > 0 } members)
+            {
+                string last = members[members.Count - 1].Anchor.ToString();
+                if (entry.Kind == IrAlignmentKind.Merge) currentLeft = leftSections[last].Section;
+                if (entry.Kind == IrAlignmentKind.Split) currentRight = rightSections[last].Section;
+            }
+            if (!l.Ends && !r.Ends)
+                continue;
+            insertedBoundary |= entry.Kind == IrAlignmentKind.Inserted;
+            deletedBoundary |= entry.Kind == IrAlignmentKind.Deleted;
+            // Replacement gaps reorder insertions before deletions during rendering. Retain the
+            // existing grid for those, moved boundaries, and changes on a retained carrier.
+            if (insertedBoundary && deletedBoundary ||
+                entry.Kind is IrAlignmentKind.Moved or IrAlignmentKind.MovedModified ||
+                hasLeft && hasRight && l.Ends != r.Ends)
+                return null;
+            sections.Add((currentLeft, currentRight));
+            currentLeft = currentRight = -1;
+            if (l.Ends) seenLeft++;
+            if (r.Ends) seenRight++;
+        }
+        if (seenLeft != leftCount || seenRight != rightCount)
+            return null;
+        sections.Add((leftCount, rightCount));
+        return sections;
     }
 
     private static readonly IrHeaderFooterKind[] HeaderFooterKinds =
@@ -201,7 +265,8 @@ internal static class IrEditScriptBuilder
     private static void BuildOneHeaderFooterScope(
         IrDocument leftDocument, IrDocument rightDocument,
         IrNodeList<IrHeaderFooter> leftParts, IrNodeList<IrHeaderFooter> rightParts,
-        bool isHeader, IrDiffSettings settings, List<IrHeaderFooterDiff> diffs)
+        bool isHeader, IrDiffSettings settings, List<IrHeaderFooterDiff> diffs,
+        List<(int Left, int Right)>? sections)
     {
         // Pair stories on the effective section × kind grid, but retain the explicit-left grid too: a static
         // rebind must compensate for an explicit left reference that would otherwise override a preceding clone.
@@ -215,6 +280,27 @@ internal static class IrEditScriptBuilder
         var rightExplicit = ExplicitStoryGrid(rightParts);
         var leftGrid = EffectiveStoryGrid(leftExplicit, sectionCount);
         var rightGrid = EffectiveStoryGrid(rightExplicit, sectionCount);
+
+        // Inheritance belongs to each source document. Only then project its section identities
+        // into the review document, whose inserted/deleted boundary paragraphs both remain visible.
+        if (sections is not null)
+        {
+            Dictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter> Project(
+                Dictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter> source, bool left)
+            {
+                var result = new Dictionary<(int, IrHeaderFooterKind), IrHeaderFooter>();
+                for (int i = 0; i < sections.Count; i++)
+                    foreach (var kind in HeaderFooterKinds)
+                        if (source.TryGetValue((left ? sections[i].Left : sections[i].Right, kind), out var story))
+                            result[(i, kind)] = story;
+                return result;
+            }
+            leftGrid = Project(leftGrid, true);
+            rightGrid = Project(rightGrid, false);
+            leftExplicit = Project(leftExplicit, true);
+            rightExplicit = Project(rightExplicit, false);
+            sectionCount = sections.Count;
+        }
 
         // Distinct physical story pairs are rendered once. Unlike the former "first pairing wins" rule, retain
         // every pair: a later pair of the same LEFT part receives a cloned left part, letting its redline reject
@@ -1191,7 +1277,7 @@ internal static class IrEditScriptBuilder
             {
                 case IrAlignmentKind.Unchanged:
                     if (StructuralCarrierDiffers(entry.Left!, entry.Right!))
-                        ops.Add(MakeParagraphModifyOp((IrParagraph)entry.Left!, (IrParagraph)entry.Right!, settings));
+                        ops.Add(MakeModifyOp(entry.Left!, entry.Right!, settings));
                     else
                         ops.Add(new IrEditOp(IrEditOpKind.EqualBlock,
                             entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
@@ -1200,7 +1286,7 @@ internal static class IrEditScriptBuilder
 
                 case IrAlignmentKind.FormatOnly:
                     if (StructuralCarrierDiffers(entry.Left!, entry.Right!))
-                        ops.Add(MakeParagraphModifyOp((IrParagraph)entry.Left!, (IrParagraph)entry.Right!, settings));
+                        ops.Add(MakeModifyOp(entry.Left!, entry.Right!, settings));
                     else
                         ops.Add(new IrEditOp(IrEditOpKind.FormatOnlyBlock,
                             entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
@@ -1238,7 +1324,9 @@ internal static class IrEditScriptBuilder
                 {
                     var lp = (IrParagraph)entry.Left!;
                     var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
-                    if (HasStructuralCarrier(lp) || members.Any(HasStructuralCarrier))
+                    bool structural = HasFieldOrInlineCarrier(lp) || members.Any(HasFieldOrInlineCarrier);
+                    var diffs = structural ? null : IrSplitSegmenter.ComputeSegmentDiffs(lp, members, settings, singularIsLeft: true);
+                    if (structural || SplitMergeSplitsSourceCarrier(lp, members, diffs!, settings))
                     {
                         // A split has no one-to-one paragraph shell in which to place an atomic inline carrier
                         // or a non-tokenizable field carrier. Lower it to the existing whole-block pair.
@@ -1252,7 +1340,7 @@ internal static class IrEditScriptBuilder
                     ops.Add(new IrEditOp(IrEditOpKind.SplitBlock,
                         lp.Anchor.ToString(), null, null, null, null, null, null,
                         IrNodeList.From(members.Select(m => m.Anchor.ToString()).ToList()),
-                        IrSplitSegmenter.ComputeSegmentDiffs(lp, members, settings, singularIsLeft: true)));
+                        diffs!));
                     break;
                 }
 
@@ -1260,7 +1348,9 @@ internal static class IrEditScriptBuilder
                 {
                     var rp = (IrParagraph)entry.Right!;
                     var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
-                    if (HasStructuralCarrier(rp) || members.Any(HasStructuralCarrier))
+                    bool structural = HasFieldOrInlineCarrier(rp) || members.Any(HasFieldOrInlineCarrier);
+                    var sliced = structural ? null : IrSplitSegmenter.ComputeSegmentDiffs(rp, members, settings, singularIsLeft: false);
+                    if (structural || SplitMergeSplitsSourceCarrier(rp, members, sliced!, settings))
                     {
                         foreach (var member in members)
                             ops.Add(new IrEditOp(IrEditOpKind.DeleteBlock,
@@ -1272,11 +1362,10 @@ internal static class IrEditScriptBuilder
                     // Segment diffs are computed singular-vs-members (rp sliced against each left
                     // member) then MIRRORED so each stored diff reads left-member → right-slice,
                     // keeping the universal "left = left document" orientation for every consumer.
-                    var sliced = IrSplitSegmenter.ComputeSegmentDiffs(rp, members, settings, singularIsLeft: false);
                     ops.Add(new IrEditOp(IrEditOpKind.MergeBlock,
                         null, rp.Anchor.ToString(), null, null, null, null, null,
                         IrNodeList.From(members.Select(m => m.Anchor.ToString()).ToList()),
-                        IrNodeList.From(sliced.Select(IrSplitSegmenter.MirrorDiff).ToList())));
+                        IrNodeList.From(sliced!.Select(IrSplitSegmenter.MirrorDiff).ToList())));
                     break;
                 }
 
@@ -1858,20 +1947,115 @@ internal static class IrEditScriptBuilder
             tokenDiff, null, null, null,
             nest ? IrNodeList.From(textboxDiffs!) : null,
             RequiresWholeParagraphReplace: StructuralCarrierDiffers(lp, rp) ||
-                HasUnsliceableFieldCarrier(lp, rp));
+                HasUnsliceableFieldCarrier(lp, rp) ||
+                SplitsSourceCarrier(lp, leftTokens, tokenDiff, leftSide: true) ||
+                SplitsSourceCarrier(rp, rightTokens, tokenDiff, leftSide: false));
+    }
+
+    private static bool SplitsSourceCarrier(IrParagraph paragraph, IReadOnlyList<IrDiffToken> tokens,
+        IrTokenDiff diff, bool leftSide)
+        => SplitsSourceCarrier(paragraph, tokens, diff.Ops.Select(op => leftSide
+            ? (op.LeftStart, op.LeftEnd) : (op.RightStart, op.RightEnd)));
+
+    private static bool SplitsSourceCarrier(IrParagraph paragraph, IReadOnlyList<IrDiffToken> tokens,
+        IEnumerable<(int Start, int End)> ranges)
+    {
+        if (paragraph.Source.SharedCarriers.Count == 0) return false;
+        var ownership = ranges.Where(range => range.Start < range.End).ToArray();
+        var atomTokens = tokens.Select((token, index) => (token, index))
+            .Where(item => item.token.Kind is not (IrDiffTokenKind.Word or IrDiffTokenKind.Separator))
+            .Select(item => item.index).ToArray();
+        foreach (var carrier in paragraph.Source.SharedCarriers)
+        {
+            int start = atomTokens[carrier.Start], end = atomTokens[carrier.End - 1] + 1;
+            int owners = 0;
+            foreach (var range in ownership)
+                if (range.Start < end && range.End > start && ++owners > 1) return true;
+        }
+        return false;
+    }
+
+    // Segment diffs always use singular-left orientation here; merge diffs are mirrored only after preflight.
+    private static bool SplitMergeSplitsSourceCarrier(IrParagraph singular, IReadOnlyList<IrParagraph> members,
+        IReadOnlyList<IrTokenDiff> diffs, IrDiffSettings settings)
+    {
+        if (TextboxCarriersDiffer(CollectTextboxes(singular.Inlines),
+                members.SelectMany(p => CollectTextboxes(p.Inlines)).ToList()))
+            return true;
+        if (singular.Source.SharedCarriers.Count == 0 && members.All(p => p.Source.SharedCarriers.Count == 0))
+            return false;
+        var ranges = new List<(int Start, int End)>();
+        int offset = 0;
+        for (int i = 0; i < diffs.Count; i++)
+        {
+            if (SplitsSourceCarrier(members[i], IrDiffTokenizer.Tokenize(members[i], settings), diffs[i], leftSide: false))
+                return true;
+            foreach (var op in diffs[i].Ops) ranges.Add((offset + op.LeftStart, offset + op.LeftEnd));
+            offset += diffs[i].Ops.Sum(op => op.LeftEnd - op.LeftStart);
+        }
+        return SplitsSourceCarrier(singular, IrDiffTokenizer.Tokenize(singular, settings), ranges);
     }
 
     /// <summary>
-    /// Inline SDT/smartTag wrappers and non-hyperlink field code/state are deliberately transparent to ordinary
-    /// token alignment, but either carrier can be corrupted by slicing its source around a revision. Keep the
-    /// alignment stable and mark a differing paired paragraph for a reversible whole-paragraph replacement.
+    /// Structural carrier facts stay outside visible-content identity. Descend through equal containers so
+    /// textbox geometry changes are still compared, without making stable textbox shells unsliceable.
     /// </summary>
-    private static bool StructuralCarrierDiffers(IrBlock left, IrBlock right) =>
-        left is IrParagraph lp && right is IrParagraph rp &&
-        (lp.InlineEnvelopeDigest != rp.InlineEnvelopeDigest ||
-         lp.FieldEnvelopeDigest != rp.FieldEnvelopeDigest);
+    internal static bool StructuralCarrierDiffers(IrBlock left, IrBlock right)
+    {
+        if (left is IrParagraph lp && right is IrParagraph rp)
+            return lp.InlineEnvelopeDigest != rp.InlineEnvelopeDigest ||
+                lp.FieldEnvelopeDigest != rp.FieldEnvelopeDigest ||
+                ((ContainsTextbox(lp.Inlines) || ContainsTextbox(rp.Inlines)) &&
+                 TextboxCarriersDiffer(CollectTextboxes(lp.Inlines), CollectTextboxes(rp.Inlines)));
+        if (left is IrTable lt && right is IrTable rt)
+        {
+            for (int i = 0; i < Math.Min(lt.Rows.Count, rt.Rows.Count); i++)
+                if (RowCarriersDiffer(lt.Rows[i], rt.Rows[i])) return true;
+            return false;
+        }
+        return left is IrSdtBlock ls && right is IrSdtBlock rs && BlockCarriersDiffer(ls.Blocks, rs.Blocks);
+    }
+
+    internal static bool RowCarriersDiffer(IrRow left, IrRow right)
+    {
+        for (int i = 0; i < Math.Min(left.Cells.Count, right.Cells.Count); i++)
+            if (BlockCarriersDiffer(left.Cells[i].Blocks, right.Cells[i].Blocks)) return true;
+        return false;
+    }
+
+    internal static bool BlockCarriersDiffer(IReadOnlyList<IrBlock> left, IReadOnlyList<IrBlock> right)
+    {
+        for (int i = 0; i < Math.Min(left.Count, right.Count); i++)
+            if (StructuralCarrierDiffers(left[i], right[i])) return true;
+        return false;
+    }
+
+    private static bool TextboxCarriersDiffer(IReadOnlyList<IrTextbox> left, IReadOnlyList<IrTextbox> right)
+    {
+        // Surplus textboxes retain the existing nested insertion/deletion behavior. A changed paired
+        // shell is a separate structural edit, including geometry inside a nested textbox or table.
+        for (int i = 0; i < Math.Min(left.Count, right.Count); i++)
+            if (left[i].CarrierDigest != right[i].CarrierDigest ||
+                BlockCarriersDiffer(left[i].Blocks, right[i].Blocks)) return true;
+        return false;
+    }
+
+    private static bool ContainsTextbox(IReadOnlyList<IrInline> inlines)
+    {
+        for (int i = 0; i < inlines.Count; i++)
+        {
+            var inline = inlines[i];
+            if (inline is IrTextbox ||
+                (inline is IrFieldRun field && ContainsTextbox(field.CachedResult)) ||
+                (inline is IrHyperlink link && ContainsTextbox(link.Inlines))) return true;
+        }
+        return false;
+    }
 
     private static bool HasStructuralCarrier(IrParagraph paragraph) =>
+        paragraph.Source.SharedCarriers.Count > 0 || HasFieldOrInlineCarrier(paragraph);
+
+    private static bool HasFieldOrInlineCarrier(IrParagraph paragraph) =>
         paragraph.InlineEnvelopeDigest != default ||
         paragraph.FieldEnvelopeDigest != default ||
         ContainsFieldCarrier(paragraph.Inlines);

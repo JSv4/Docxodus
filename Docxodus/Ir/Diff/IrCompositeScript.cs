@@ -18,8 +18,10 @@ internal sealed record IrAuthoredTokenOp(IrTokenOp Op, string Author, int Source
 /// paragraph to source inserted runs: an <see cref="IrAuthoredTokenOp"/>'s Insert RightStart/RightEnd
 /// index THAT reviewer's right-token list. <see cref="IrCompositeOp.SourceRightAnchors"/> carries one
 /// entry per contributing reviewer so the renderer can resolve each right paragraph independently.
+/// The pairwise token diff and author also place marker changes on retained content; they are renderer-only.
 /// </summary>
-internal sealed record IrSourceRightAnchor(int Reviewer, string Anchor);
+internal sealed record IrSourceRightAnchor(int Reviewer, string Anchor,
+    IrTokenDiff? TokenDiff = null, string? Author = null);
 
 /// <summary>A reviewer's equal block carrying markers omitted from IR content equality. The renderer
 /// reconciles its comments and bookmarks against the emitted base copy.</summary>

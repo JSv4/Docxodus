@@ -13,6 +13,7 @@
   <a href="https://www.npmjs.com/package/docxodus"><img src="https://img.shields.io/npm/v/docxodus?label=npm" alt="npm"></a>
   <a href="https://pypi.org/project/docx-scalpel/"><img src="https://img.shields.io/pypi/v/docx-scalpel?label=pypi" alt="PyPI"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://jandira-tech.github.io/neurotic_docx_bench/"><img src="https://raw.githubusercontent.com/jandira-tech/neurotic_docx_bench/main/docs/badges/redline-11-chill-neurotic-benched.svg" alt="neurotic_docx_bench"></a>
 </p>
 
 ---

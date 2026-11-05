@@ -251,26 +251,56 @@ public sealed class AnchorTarget
     public XElement? Resolve(WordprocessingDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
+        return PartRoot(document, PartUri)?.DescendantsAndSelf()
+            .FirstOrDefault(e => (string?)e.Attribute(PtOpenXml.Unid) == Unid);
+    }
 
+    /// <summary>
+    /// Resolves every one of <paramref name="targets"/> as <see cref="Resolve"/> would — the first
+    /// element in its part carrying its Unid — reading each part once, where calling
+    /// <see cref="Resolve"/> per target walks the whole part every time: over a document's whole
+    /// index that is quadratic in its size (issue #1389). A target that does not resolve is absent.
+    /// Valid while the trees do not change.
+    /// </summary>
+    internal static Dictionary<AnchorTarget, XElement> ResolveAll(
+        WordprocessingDocument document, IEnumerable<AnchorTarget> targets)
+    {
+        var resolved = new Dictionary<AnchorTarget, XElement>(ReferenceEqualityComparer.Instance);
+        foreach (var part in targets.GroupBy(t => t.PartUri, StringComparer.Ordinal))
+        {
+            if (PartRoot(document, part.Key) is not { } root) continue;
+            var byUnid = part.GroupBy(t => t.Unid, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+            foreach (var element in root.DescendantsAndSelf())
+            {
+                if ((string?)element.Attribute(PtOpenXml.Unid) is not { } unid
+                    || !byUnid.Remove(unid, out var waiting)) continue;
+                foreach (var target in waiting) resolved[target] = element;
+                if (byUnid.Count == 0) break;
+            }
+        }
+        return resolved;
+    }
+
+    /// <summary>The root of the projected part at <paramref name="partUri"/>, or null.</summary>
+    private static XElement? PartRoot(WordprocessingDocument document, string partUri)
+    {
         var main = document.MainDocumentPart;
         if (main == null) return null;
 
         OpenXmlPart? part = null;
-        var targetUri = PartUri;
-        if (main.Uri.ToString() == targetUri) part = main;
+        if (main.Uri.ToString() == partUri) part = main;
         else
         {
-            foreach (var h in main.HeaderParts) if (h.Uri.ToString() == targetUri) { part = h; break; }
+            foreach (var h in main.HeaderParts) if (h.Uri.ToString() == partUri) { part = h; break; }
             if (part == null)
-                foreach (var f in main.FooterParts) if (f.Uri.ToString() == targetUri) { part = f; break; }
-            if (part == null && main.FootnotesPart?.Uri.ToString() == targetUri) part = main.FootnotesPart;
-            if (part == null && main.EndnotesPart?.Uri.ToString() == targetUri) part = main.EndnotesPart;
-            if (part == null && main.WordprocessingCommentsPart?.Uri.ToString() == targetUri) part = main.WordprocessingCommentsPart;
+                foreach (var f in main.FooterParts) if (f.Uri.ToString() == partUri) { part = f; break; }
+            if (part == null && main.FootnotesPart?.Uri.ToString() == partUri) part = main.FootnotesPart;
+            if (part == null && main.EndnotesPart?.Uri.ToString() == partUri) part = main.EndnotesPart;
+            if (part == null && main.WordprocessingCommentsPart?.Uri.ToString() == partUri) part = main.WordprocessingCommentsPart;
         }
 
-        var root = part?.GetXDocument().Root;
-        return root?.DescendantsAndSelf()
-            .FirstOrDefault(e => (string?)e.Attribute(PtOpenXml.Unid) == Unid);
+        return part?.GetXDocument().Root;
     }
 }
 
@@ -325,7 +355,7 @@ public static class WmlToMarkdownConverter
 
         using var stream = new OpenXmlMemoryStreamDocument(document);
         MarkdownProjection projection;
-        using (var wdoc = stream.GetWordprocessingDocument())
+        using (var wdoc = stream.GetMeasuredWordprocessingDocument())
         {
             projection = Convert(wdoc, settings);
         }
@@ -345,6 +375,7 @@ public static class WmlToMarkdownConverter
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(settings);
+        using var depthScope = Internal.PartDepthGuard.Enter(document);
 
         var (index, scopes, renderMap) = BuildAnchorIndex(document, settings);
         var markdown = EmitMarkdown(document, settings, scopes, renderMap);
@@ -713,6 +744,8 @@ public static class WmlToMarkdownConverter
         public string Scope { get; set; } = "body";
         public ListItemRetrieverSettings ListItemRetrieverSettings { get; } = new();
         public bool InsideListBlock { get; set; }
+        public int TextboxDepth { get; set; }
+        public Revision InheritedRevision { get; set; }
     }
 
     private static string EmitMarkdown(
@@ -860,6 +893,7 @@ public static class WmlToMarkdownConverter
         }
         ctx.Sb.AppendLine();
         ctx.Sb.AppendLine();
+        EmitTextboxes(note, ctx);
     }
 
     /// <summary>
@@ -910,6 +944,7 @@ public static class WmlToMarkdownConverter
             ctx.Sb.Append(' ');
         }
         ctx.Sb.AppendLine();
+        EmitTextboxes(c, ctx);
     }
 
     /// <summary>
@@ -1015,11 +1050,72 @@ public static class WmlToMarkdownConverter
                     // emitter intentionally omits.
                     ctx.Sb.AppendLine();
                 }
+                EmitTextboxes(b, ctx);
             }
-            else if (b.Name == W.tbl) EmitTable(b, ctx);
+            else if (b.Name == W.tbl)
+            {
+                EmitTable(b, ctx);
+                EmitTextboxes(b, ctx);
+            }
             else if (b.Name == W.sectPr) { /* phase 6: section breaks */ }
         }
     }
+
+    // A floating shape is anchored to its host paragraph. Keep that paragraph intact, then
+    // emit the shape's blocks before the next source block, with their own addressable anchors.
+    private static void EmitTextboxes(XElement host, EmitContext ctx)
+    {
+        if (ctx.TextboxDepth >= Ir.IrReader.MaxTextboxDepth || !host.Descendants(W.txbxContent).Any()) return;
+        foreach (var body in TextboxBodies(host))
+        {
+            var revision = ctx.InheritedRevision == Revision.Deleted || body.Ancestors().TakeWhile(a => a != host)
+                .Any(a => a.Name == W.del || a.Name == W.moveFrom) ? Revision.Deleted
+                : body.Ancestors().TakeWhile(a => a != host)
+                    .Any(a => a.Name == W.ins || a.Name == W.moveTo) ? Revision.Inserted : ctx.InheritedRevision;
+            if (revision == Revision.Deleted && ctx.Settings.TrackedChanges != TrackedChangeMode.RenderInline) continue;
+            var inherited = ctx.InheritedRevision;
+            ctx.InheritedRevision = revision;
+            ctx.TextboxDepth++;
+            // List hosts do not otherwise terminate their line group before the shape's first anchor.
+            EnsureBlankLine(ctx.Sb);
+            EmitBlocks(body.Elements(), ctx);
+            ctx.TextboxDepth--;
+            ctx.InheritedRevision = inherited;
+        }
+    }
+
+    internal static void EnsureBlankLine(StringBuilder sb)
+    {
+        if (sb.Length > 0 && (sb.Length < 2 * Environment.NewLine.Length
+            || sb[sb.Length - 1 - Environment.NewLine.Length] != '\n')) sb.AppendLine();
+    }
+
+    private static IEnumerable<XElement> TextboxBodies(XElement host)
+    {
+        IEnumerable<XElement> Children(XElement element) => element.Name == W.tbl ? TableChildren(element, W.tr)
+            : element.Name == W.tr ? TableChildren(element, W.tc)
+            : element.Name == W.tc || element.Name == W.footnote || element.Name == W.endnote || element.Name == W.comment
+                ? ExpandBlockWrappers(element.Elements()).Where(e => e.Name == W.p || e.Name == W.tbl)
+            : element.Name == MC.AlternateContent
+                ? WmlToHtmlConverter.SelectedMarkupBranch(element)?.Elements() ?? Enumerable.Empty<XElement>()
+            : element.Name == W.sdt ? element.Element(W.sdtContent)?.Elements() ?? Enumerable.Empty<XElement>()
+            : element.Elements();
+
+        var pending = new Stack<(XElement Element, int Depth)>(Children(host).Reverse().Select(e => (e, 0)));
+        while (pending.TryPop(out var item))
+        {
+            var element = item.Element;
+            if (element.Name == W.txbxContent) { yield return element; continue; }
+            bool wrapper = element.Name == W.sdt || element.Name == W.customXml || element.Name == W.smartTag;
+            if (wrapper && item.Depth >= Ir.IrReader.MaxSdtDepth) continue;
+            foreach (var child in Children(element).Reverse())
+                pending.Push((child, wrapper ? item.Depth + 1 : 0));
+        }
+    }
+
+    internal static bool IsSelectedMarkup(XElement element) =>
+        element.Ancestors().Where(a => a.Parent?.Name == MC.AlternateContent)
+            .All(branch => ReferenceEquals(branch, WmlToHtmlConverter.SelectedMarkupBranch(branch.Parent!)));
 
     /// <summary>
     /// Replace block-level custom-XML and content-control wrappers with their blocks recursively. Word
@@ -1122,7 +1218,7 @@ public static class WmlToMarkdownConverter
     /// to decide whether to skip a paragraph entirely.</summary>
     private static bool HasVisibleInlineContent(XElement p, EmitContext ctx)
     {
-        foreach (var (_, runs) in GroupInlineRuns(p))
+        foreach (var (_, runs) in GroupInlineRuns(p, ctx.InheritedRevision))
         {
             foreach (var r in runs)
             {
@@ -1190,7 +1286,7 @@ public static class WmlToMarkdownConverter
 
     private static void EmitInlineRuns(XElement p, EmitContext ctx)
     {
-        foreach (var (fmt, runs) in GroupInlineRuns(p))
+        foreach (var (fmt, runs) in GroupInlineRuns(p, ctx.InheritedRevision))
         {
             // Tracked-change mode shapes what we keep before any formatting is applied.
             switch (ctx.Settings.TrackedChanges)
@@ -1235,7 +1331,7 @@ public static class WmlToMarkdownConverter
     /// return groups of adjacent runs that share the same formatting. Hyperlinks always form
     /// their own group regardless of neighbours so delimiter merging never crosses a link.
     /// </summary>
-    private static List<(RunFormatting Fmt, List<XElement> Runs)> GroupInlineRuns(XElement p)
+    private static List<(RunFormatting Fmt, List<XElement> Runs)> GroupInlineRuns(XElement p, Revision inheritedRevision = Revision.None)
     {
         var groups = new List<(RunFormatting, List<XElement>)>();
         var buf = new List<XElement>();
@@ -1320,7 +1416,7 @@ public static class WmlToMarkdownConverter
             Flush();
         }
 
-        Walk(p, url: null, Revision.None);
+        Walk(p, url: null, inheritedRevision);
         Flush();
         return groups;
     }
@@ -1494,6 +1590,9 @@ public static class WmlToMarkdownConverter
     // contents addressable individually via {#tc:body:…} anchors in the index.
     // ------------------------------------------------------------------
 
+    private static IEnumerable<XElement> TableChildren(XElement parent, XName name) =>
+        Ir.IrReader.TableChildren(parent, name).Select(child => child.Element);
+
     private static void EmitTable(XElement tbl, EmitContext ctx)
     {
         var anchor = AnchorPrefix(tbl, ctx).TrimEnd();
@@ -1512,13 +1611,10 @@ public static class WmlToMarkdownConverter
         // Merged cells disqualify (Word's gridSpan val>1 or any vMerge).
         if (tbl.Descendants(W.gridSpan).Any(g => ((int?)g.Attribute(W.val) ?? 1) > 1)) return false;
         if (tbl.Descendants(W.vMerge).Any()) return false;
-        // Nested tables disqualify.
-        if (tbl.Elements(W.tr).Elements(W.tc).Elements(W.tbl).Any()) return false;
-        // Per-cell text length cap.
-        var max = ctx.Settings.TableInlineCellMax;
-        foreach (var tc in tbl.Elements(W.tr).Elements(W.tc))
+        foreach (var tc in TableChildren(tbl, W.tr).SelectMany(r => TableChildren(r, W.tc)))
         {
-            if (CellTextRaw(tc).Length > max) return false;
+            if (ExpandBlockWrappers(tc.Elements()).Any(e => e.Name == W.tbl)) return false;
+            if (CellTextRaw(tc).Length > ctx.Settings.TableInlineCellMax) return false;
         }
         return true;
     }
@@ -1526,15 +1622,15 @@ public static class WmlToMarkdownConverter
     private static void EmitGfmTable(XElement tbl, string anchor, EmitContext ctx)
     {
         if (anchor.Length > 0) { ctx.Sb.Append(anchor); ctx.Sb.AppendLine(); }
-        var rows = tbl.Elements(W.tr).ToList();
+        var rows = TableChildren(tbl, W.tr).ToList();
         if (rows.Count == 0) return;
 
-        var headerCells = rows[0].Elements(W.tc).Select(CellTextForGfm).ToList();
+        var headerCells = TableChildren(rows[0], W.tc).Select(CellTextForGfm).ToList();
         ctx.Sb.Append("| ").Append(string.Join(" | ", headerCells)).AppendLine(" |");
         ctx.Sb.Append('|').Append(string.Concat(Enumerable.Repeat(" --- |", headerCells.Count))).AppendLine();
         foreach (var r in rows.Skip(1))
         {
-            var cells = r.Elements(W.tc).Select(CellTextForGfm);
+            var cells = TableChildren(r, W.tc).Select(CellTextForGfm);
             ctx.Sb.Append("| ").Append(string.Join(" | ", cells)).AppendLine(" |");
         }
         ctx.Sb.AppendLine();
@@ -1542,11 +1638,11 @@ public static class WmlToMarkdownConverter
 
     private static void EmitOpaqueTable(XElement tbl, string anchor, EmitContext ctx)
     {
-        var rows = tbl.Elements(W.tr).Count();
+        var rows = TableChildren(tbl, W.tr).Count();
         // The table's WIDTH is its grid extent, not the first row's cell count — a merged header
         // row has fewer cells than columns, and a merge is precisely what lands a table here.
-        var cols = tbl.Elements(W.tr)
-            .Select(tr => tr.Elements(W.tc)
+        var cols = TableChildren(tbl, W.tr)
+            .Select(tr => TableChildren(tr, W.tc)
                 .Sum(tc => Math.Max(1, (int?)tc.Element(W.tcPr)?.Element(W.gridSpan)?.Attribute(W.val) ?? 1)))
             .DefaultIfEmpty(0).Max();
         if (anchor.Length > 0) { ctx.Sb.Append(anchor); ctx.Sb.AppendLine(); }
@@ -1558,7 +1654,8 @@ public static class WmlToMarkdownConverter
     }
 
     private static string CellTextRaw(XElement tc)
-        => DocxSession.VisibleText(tc); // the cell's visible text: a tab is '\t' (issue #1387)
+        => string.Concat(tc.Descendants().Where(e => DocxSession.IsVisibleText(e, tc)
+            && !e.Ancestors().TakeWhile(a => a != tc).Any(a => a.Name == W.txbxContent) && IsSelectedMarkup(e)).Select(DocxSession.TextOf));
 
     private static string CellTextForGfm(XElement tc)
     {

@@ -84,6 +84,24 @@ can also select it explicitly with `commentColumnPlacement: "margin"` when comme
 are required. Width and gap options affect the outside panel, and physical page dimensions remain
 unchanged.
 
+Standalone physical-margin export appends columns that cannot print in full (#1490). These
+comments remain ordinary PageMap sources: each projected paragraph retains its `p:cmt` identity,
+and inner spans carry its comment and ancestor-thread identities through every Range split.
+Hiding a metadata header therefore cannot hide the comment's owner from the map. The added
+presentation section has the last paper geometry and no running stories; it does not change the
+DOCX section model. Interactive scrolling remains the default `commentOverflow: "scroll"` policy;
+the exporter selects `"appendix"`. Appendix paragraphs always permit fragmentation, independently
+of the body paragraph policy. Projected reply headers retain ancestor owners around their flex
+layout, including when a header occupies a page by itself.
+
+Endnote-style comments use the same paragraph-group splitter as bordered paragraphs (#1505).
+The converter's section, list, item and body wrappers remain around each measured candidate,
+so reply indentation, metadata, links and ancestor comment identities survive continuation.
+The title and comment headers keep with the following content. Only the known converter shape
+in ordinary block layout is admitted; custom containers retain the whole-block fallback.
+Splits use the current section's actual body band, including continuous sections and tall headers,
+and obey the normal paragraph-fragmentation option and export resource limits.
+
 ## Source identity and clones
 
 `data-anchor` remains the bare Unid used by the editor, and an active bare value is unique across
@@ -93,14 +111,30 @@ PageMap keys.
 
 Every rendered addressable block instead carries `data-source-anchor-id="kind:scope:unid"`.
 Paragraphs, headings, lists, tables, rows, cells, note definitions and their paragraphs, and
-visible comment representations are covered. The converter rebuilds this identity map from its
-final preprocessed `XElement` trees immediately before HTML transformation.
+visible comment representations are covered. The converter indexes canonical identities before
+preprocessing and resolves rewritten elements by their retained part URI and Unid.
+
+Textbox hosts also carry `data-docx-required-source-anchors`, independently derived from the
+selected OOXML textbox paragraphs. Pagination includes those IDs even when HTML conversion
+omits a drawing member (#1482). Only the selected compatibility branch contributes. An image
+or chart alternative suppresses its own text story only when that representation actually
+renders; callback or missing-image fallbacks retain the text expectations. The source inventory
+is collected after projection selects representations, without deriving it from projected HTML.
+As with ordinary anchors, unselected running-story variants do not become required.
 
 Pagination clones retain `data-source-anchor-id` and receive `data-page-number`,
 `data-fragment-index`, and `data-page-fragment-id`. Continuations and repeated headers, footers,
 and notes are presentation fragments: they do not duplicate the active `data-anchor`. So are the
 copies of a table's header rows (`w:tblHeader`) that open each page a split table continues on
 (`data-docx-repeated-header-row`, issue #1171): the row has one fragment per page it opens.
+
+Bordered footnote paragraphs use the body's shared border-group fragmenter (#1491), with each
+candidate measured in the actual note payload. Both the citation page and later continuation
+pages and nested table cells use that path. Range fragments retain the paragraph's source identity; only the group's
+top/bottom border at an internal page break is omitted. The footnote path remains independent
+of the body paragraph-fragmentation option. Explicit line keeps retain the existing fresh-band
+retry policy; a kept heading stays with a nonempty prefix of the following paragraph. Indivisible
+overflow still fails export.
 
 Margin-note copies strip duplicate element IDs. Their generated return links are resolved only
 after all pages exist, against one actual rendered reading-content reference. Repeated notes can

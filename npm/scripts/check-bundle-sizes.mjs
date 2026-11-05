@@ -9,14 +9,53 @@ import { gzipSync } from 'node:zlib';
 // in the same change that needs it. export-browser.bundle.js is absent on purpose: it runs inside
 // @docxodus/export's pinned Chromium, where download size does not matter.
 const budgetsKiB = {
+  // Complete margin-comment flow adds 0.65–0.67 KiB over main 784c0335:
+  // embed/iife/editor/pagination 144.114/144.177/123.390/40.976 ->
+  // 144.779/144.839/124.060/41.630 KiB. Raise only exhausted gates to whole KiB.
+  // Continuous-section geometry and page-context float measurement exhaust these three gates.
+  // Raise only those budgets to the next whole KiB; the paginator still fits its 41 KiB gate.
+  // Page-owned STYLEREF measurement/reflow adds 1.15–1.20 KiB over parent 1f7dc8dd:
+  // embed/iife/editor/pagination 141.922/141.928/121.294/38.779 ->
+  // 143.116/143.126/122.441/39.978 KiB. Round only these exhausted gates to whole KiB.
+  // Authored-clipping proofs add 1.12–1.18 KiB on main a6996d45:
+  // embed/iife/editor/pagination 140.630/140.659/119.954/37.468 ->
+  // 141.770/141.777/121.128/38.611 KiB. Round only exhausted gates up to whole KiB.
+  // Linked-story flow with frame bounds and keep checks adds 1.02–1.07 KiB on main c84cf2ad:
+  // embed/iife/editor/pagination 139.258/139.293/118.623/36.097 ->
+  // 140.328/140.359/119.646/37.161 KiB. Raise only these exhausted gates by 1 KiB.
   // The balloon appendix (balloonOverflow) adds about 1.5 KiB to every bundle that carries the
   // paginator. Embed/iife/editor/pagination measured 133.3/133.4/112.8/31.8 KiB before it and
   // 135.0/135.1/114.5/33.4 KiB with it; each budget rose by 2 KiB.
-  'embed.bundle.js': 137,
-  'embed.iife.js': 137,
-  // Tab caret/clipboard handling adds ~1 KiB; leave ~1 KiB of headroom above its 116 KiB size.
-  'editor.bundle.js': 117,
-  'pagination.bundle.js': 34,
+  // Body-table fitting on current main measures 137.128/137.164 KiB; retain a 138 KiB gate.
+  // Zero-font source coverage brings the ESM bundle just above 138 KiB.
+  // Whole inline-layout continuation adds 0.25 KiB (138.947 -> 139.196 on main).
+  // Authored textbox ink verification adds 410/416/432 bytes to embed/IIFE/pagination
+  // (145.345/145.401/42.213 KiB). Raise only these exhausted gates by 0.5 KiB.
+  // Shared inline-frame flow/exclusions add about 1.55 KiB on main 97c304f7:
+  // embed/IIFE/editor/pagination 146.882/146.966/126.173/43.767 KiB.
+  // Raise only the four exhausted gates; the other bundles are unchanged.
+  // Recursive endnote-comment splitting adds 0.4–0.5 KiB over 647aee2d:
+  // embed/IIFE/editor/pagination 147.3/147.4/126.6/44.2 KiB. Raise these gates by 0.5 KiB.
+  // Frame line intervals add 1.72–1.79 KiB over bf76d0da:
+  // embed/IIFE/editor/pagination 149.133/149.151/128.362/45.982 KiB.
+  // Round only the four exhausted gates up to the next 0.5 KiB.
+  // Fixed-anchor frame clearance adds about 0.45 KiB over e3864e55.
+  // Raise only the four exhausted gates by 0.5 KiB.
+  // Tracked-paragraph fragmentation with leading drawings adds less than 0.4 KiB over 10531183.
+  // Round only the three exhausted gates up by 0.5 KiB; pagination remains below 47 KiB.
+  'embed.bundle.js': 150.5,
+  // Floating-picture height measurement brings this bundle just above 138 KiB.
+  // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
+  'embed.iife.js': 150.5,
+  // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
+  'editor.bundle.js': 129.5,
+  // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
+  // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
+  // Whole inline-layout continuation adds 0.24 KiB (35.801 -> 36.038 on main).
+  // Independent textbox source inventories add 45 compressed bytes (39.978 -> 40.021 KiB).
+  // Export-only table layout stays out of this bundle; its fragment callback brings the shared
+  // paginator to 47,629 bytes (46.513 KiB), 13 bytes over the old gate. Round only this gate up.
+  'pagination.bundle.js': 47,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,

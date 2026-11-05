@@ -22,8 +22,16 @@ async function facts(bytes: Uint8Array) {
 }
 
 for (const kind of ['mismatched', 'truncated', 'entity'] as const) {
-  test(`${kind} custom properties reject before PDF rendering`, async ({ browser }) => {
-    await expect(renderDocxArtifacts(generateCustomPropertiesDocx(kind), { browser, ...options }))
+  test(`${kind} custom properties warn while preserving the printed body`, async ({ browser }) => {
+    test.setTimeout(120_000);
+    const actual = await renderDocxArtifacts(generateCustomPropertiesDocx(kind), { browser, ...options });
+    const expected = await renderDocxArtifacts(generateCustomPropertiesDocx('none'), { browser, ...options });
+    expect(await facts(actual.pdf!)).toEqual(await facts(expected.pdf!));
+    expect(actual.renderReport.warnings.some(warning => warning.code === 'malformed_xml')).toBe(true);
+  });
+
+  test(`${kind} custom properties reject under strict policy`, async ({ browser }) => {
+    await expect(renderDocxArtifacts(generateCustomPropertiesDocx(kind), { browser, ...options, unsupportedContent: 'strict' }))
       .rejects.toMatchObject({ code: 'invalid_document', phase: 'package_preflight',
         message: 'The input is not a valid DOCX OPC package (opc).' });
   });

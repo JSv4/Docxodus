@@ -575,7 +575,7 @@ public class HtmlDrawingShapeTests
     }
 
     [Fact]
-    public void A_floating_group_with_a_text_box_reports_its_undrawn_members()
+    public void A_floating_group_preserves_its_shape_and_textbox_geometry()
     {
         var textBox = Shape().Replace("<wps:bodyPr/>",
             "<wps:txbx><w:txbxContent><w:p><w:r><w:t>Group caption</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/>");
@@ -588,7 +588,8 @@ public class HtmlDrawingShapeTests
         });
         var document = XElement.Parse(html);
         Assert.Contains("Group caption", document.Value);
-        Assert.Contains(document.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+        Assert.Equal(2, document.Descendants().Count(e => e.Name.LocalName == "rect"));
+        Assert.DoesNotContain(document.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
     }
 
     [Fact]
@@ -617,4 +618,25 @@ public class HtmlDrawingShapeTests
         Assert.NotEmpty(paragraph.Value);
         Assert.True(string.IsNullOrWhiteSpace(paragraph.Value));
     }
+    [Theory]
+    [InlineData(true, "oval")]
+    [InlineData(true, "rect")]
+    [InlineData(false, "oval")]
+    public void LegacyShapeFallbackUsesSupportedPageCoordinates(bool positioned, string kind)
+    {
+        var placement = positioned ? "position:absolute;margin-left:8pt;margin-top:12pt;mso-position-horizontal-relative:page;mso-position-vertical-relative:page;" : "";
+        var input = Docx("<w:r><w:pict><v:" + kind + " xmlns:v=\"urn:schemas-microsoft-com:vml\" style=\"" +
+            placement + "width:90pt;height:72pt;z-index:-1\"><v:fill color=\"#ddeedd\"/></v:" + kind + "></w:pict></w:r>");
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
+        var shape = paragraph.Descendants().Single(e => (string?)e.Attribute("data-docx-shape") == "unrendered");
+        Assert.Equal(positioned ? "true" : null, (string?)shape.Attribute("data-docx-drawing-anchor"));
+        Assert.Contains("[SHAPE]", shape.Value);
+        if (positioned)
+        {
+            Assert.Equal("8", (string?)shape.Attribute("data-docx-anchor-h-offset"));
+            Assert.Equal("12", (string?)shape.Attribute("data-docx-anchor-v-offset"));
+            Assert.Equal("true", (string?)shape.Attribute("data-docx-anchor-behind"));
+        }
+    }
+
 }

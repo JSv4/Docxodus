@@ -65,7 +65,7 @@ import type {
 } from "./types.js";
 import { AnnotationLabelMode } from "./types.js";
 import { requireRevisionIdentitySupport } from "./session.js";
-import { needsCompleteConversion } from "./conversion-options.js";
+import { hiddenRevisionKinds, needsCompleteConversion } from "./conversion-options.js";
 import {
   readExternalAnnotationSet,
   readExternalAnnotationValidation,
@@ -401,7 +401,8 @@ function handleConvert(
         options?.documentLanguage ?? null,
         options?.stampAnchors ?? false,
         options?.revisionPresentation ?? 0,
-        options?.semanticLists ?? false
+        options?.semanticLists ?? false,
+        hiddenRevisionKinds(options)
       );
     } else if (
       options?.paginationMode !== undefined &&

@@ -37,6 +37,32 @@ async function exportNotes(page: Page, source: Uint8Array, options: Record<strin
 }
 
 test.describe('a footnote with a formatting revision (#1271)', () => {
+  for (const [name, options] of [
+    ['decorated source marker', { separatorSize: 22 }],
+    ['eleven-and-a-half point separator', { separatorSize: 23 }],
+    ['twelve-and-a-half point separator', { separatorSize: 25 }],
+    ['plain marker control', { separatorSize: 22, formatRevision: false }],
+    ['generated marker control', { separatorSize: 22, sourceMarker: false }],
+    ['separator height control', { separatorSize: 24 }],
+  ] as const) {
+    test(`${name} retains every short-note glyph (#1493)`, async ({ browser, page }) => {
+      const settings = { formatRevision: true, inheritedRevision: true, sourceMarker: true, ...options };
+      const result = await renderDocxArtifacts(noteFormatRevisionDocx(settings), {
+        browser, outputs: ['html', 'pdf'], reviewProfile: 'markup', commentProfile: 'hidden', timeoutMs: 120_000,
+      });
+      const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
+      try {
+        const pdf = await task.promise;
+        expect(pdf.numPages).toBe(1);
+        const text = (await (await pdf.getPage(1)).getTextContent()).items
+          .filter(item => 'str' in item).map(item => item.str).join('');
+        expect(text.replace(/\s+/g, ' ')).toContain(NOTE_TEXT);
+      } finally { await task.destroy(); }
+      await page.setContent(result.html!);
+      expect(await page.locator('.page-footnotes .rev-format-change').count()).toBe(settings.formatRevision ? settings.sourceMarker ? 2 : 1 : 0);
+    });
+  }
+
   test('exports, with the whole note on its page', async ({ page }) => {
     const result = await exportNotes(page, noteFormatRevisionDocx());
     expect(result.failure).toBeUndefined();
@@ -81,7 +107,71 @@ test.describe('a footnote with a formatting revision (#1271)', () => {
 
 const lineMetrics = readFileSync(new URL('../dist/line-metrics.js', import.meta.url), 'utf8').replace(/^export /gm, '');
 
-test('laidOutBottom leaves out only an inline box\'s own bottom padding and border', async ({ page }) => {
+test('content bounds visit nested inlines once and refresh after layout changes', async ({ page }) => {
+  await page.setContent('<div id="band" style="width:400px;font:16px/20px Arial"><p style="margin:0"></p></div>');
+  await page.addScriptTag({ content: lineMetrics });
+  const results = await page.evaluate(() => {
+    const band = document.getElementById('band')!, paragraph = band.querySelector('p')!;
+    return [50, 100, 200].map(depth => {
+      paragraph.replaceChildren();
+      let leaf: HTMLElement = paragraph;
+      for (let i = 0; i < depth; i++) leaf = leaf.appendChild(document.createElement('span'));
+      leaf.textContent = 'Visible';
+      leaf.style.borderBottom = '6px solid';
+      const original = window.getComputedStyle;
+      let calls = 0;
+      window.getComputedStyle = (...args) => { calls++; return original.apply(window, args); };
+      try {
+        const first: Map<Element, number> = (window as any).measureLaidOutBottoms(band);
+        const measuredCalls = calls;
+        leaf.style.position = 'relative'; leaf.style.top = '20px';
+        const second: Map<Element, number> = (window as any).measureLaidOutBottoms(band);
+        return { depth, calls: measuredCalls, count: first.size,
+          moved: second.get(paragraph.firstElementChild!)! - first.get(paragraph.firstElementChild!)! };
+      } finally { window.getComputedStyle = original; }
+    });
+  });
+  for (const result of results) {
+    expect(result.count).toBe(result.depth + 1);
+    expect(result.calls).toBeLessThanOrEqual(4 * result.count);
+    expect(result.moved).toBeCloseTo(20, 3);
+  }
+});
+
+for (const deviceScaleFactor of [1, 1.25, 2]) {
+  test(`nested inline decoration preserves content bounds at device scale ${deviceScaleFactor}`, async ({ browser }) => {
+    const context = await browser.newContext({ deviceScaleFactor });
+    const page = await context.newPage();
+    try {
+      for (const zoom of [.75, 1, 1.5, 2]) {
+        await page.setContent(`<style>.generated::before{content:'low'}</style><div id="band" style="zoom:${zoom};width:400px;font:13.3333px/15.332px 'Times New Roman'">
+          <p><span id="plain" style="line-height:0"><span><sup>1</sup></span></span></p>
+          <p><span id="nested" style="line-height:0"><span style="border-bottom:6px dotted;padding-bottom:3px"><span><sup>1</sup></span></span></span></p>
+          <p><span id="mixed">Own text<span style="vertical-align:-14px">low</span></span></p>
+          <p><span id="image"><img alt="" style="width:10px;height:20px;border-bottom:6px solid"></span></p>
+          <p><span id="positioned"><span style="position:relative;top:20px">low</span></span></p>
+          <p><span id="contents" style="position:relative;top:20px"><span style="display:contents">low</span></span></p>
+          <p><span id="contentsPseudo" style="position:relative;top:20px"><span class="generated" style="display:contents"></span></span></p>
+        </div>`);
+        await page.addScriptTag({ content: lineMetrics });
+        const bounds = await page.evaluate(() => {
+          const band = document.getElementById('band')!;
+          return Object.fromEntries(['plain', 'nested', 'mixed', 'image', 'positioned', 'contents', 'contentsPseudo'].map(id => {
+            const element = document.getElementById(id)!, content = element.querySelector('sup,img,span')!;
+            const range = document.createRange(); range.selectNodeContents(content);
+            return [id, { bottom: (window as any).measureLaidOutBottoms(band).get(element),
+              content: id === 'contents' ? range.getBoundingClientRect().bottom : id === 'contentsPseudo' ? element.getBoundingClientRect().bottom : content.getBoundingClientRect().bottom,
+              paragraph: element.closest('p')!.getBoundingClientRect().bottom }];
+          }));
+        });
+        expect(bounds.nested.bottom - bounds.nested.paragraph).toBeCloseTo(bounds.plain.bottom - bounds.plain.paragraph, 3);
+        for (const id of ['mixed', 'image', 'positioned', 'contents', 'contentsPseudo']) expect(bounds[id].bottom, id).toBeGreaterThanOrEqual(bounds[id].content - .01);
+      }
+    } finally { await context.close(); }
+  });
+}
+
+test('content bounds leave out only an inline box\'s own bottom padding and border', async ({ page }) => {
   for (const zoom of [1, 2]) {
     await page.setContent(`<div id="band" style="zoom:${zoom};width:400px;font:16px/20px 'Liberation Sans'">
       <p style="margin:0"><span id="decorated" style="border-bottom:6px dotted orange;padding-bottom:3px">ruled</span>
@@ -96,7 +186,7 @@ test('laidOutBottom leaves out only an inline box\'s own bottom padding and bord
         const range = document.createRange();
         range.selectNodeContents(element);
         return { box: element.getBoundingClientRect().bottom, text: range.getBoundingClientRect().bottom,
-          laidOut: (window as any).laidOutBottom(element, band) };
+          laidOut: (window as any).measureLaidOutBottoms(band).get(element) };
       };
       return { scale: band.getBoundingClientRect().width / 400,
         decorated: measure('decorated'), lowered: measure('lowered'), image: measure('image'), block: measure('block') };

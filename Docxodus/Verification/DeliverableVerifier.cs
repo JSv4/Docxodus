@@ -514,6 +514,8 @@ public static class DeliverableVerifier
             "total_expansion_limit_exceeded",
             "compression_ratio_limit_exceeded",
             "xml_size_limit_exceeded",
+            // An over-deep part would overflow the stack in the SDK validator's recursive walk.
+            "xml_depth_limit_exceeded",
             "entry_uri_limit_exceeded",
             "unsafe_entry_path",
             "unsupported_ole_encryption",

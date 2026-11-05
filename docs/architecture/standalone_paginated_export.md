@@ -49,6 +49,7 @@ interface ExportOptions {
   reviewProfile: ReviewProfile;
   reviewProfileAlreadyApplied?: boolean;
   markupPresentation?: MarkupPresentation; // markup only; default "docxodus"
+  markupVisibility?: { formatting?: boolean; insertionsAndDeletions?: boolean; comments?: boolean };
   commentProfile: CommentProfile;
   commentColumnPlacement?: "margin" | "balloons"; // default "margin"
   balloonOverflow?: "truncate" | "appendix"; // balloons only; default "truncate"
@@ -109,6 +110,15 @@ not get a filename-derived or locale-derived title. The resolved title enters th
 layout/materialization options even though it does not affect page geometry, because it changes the
 exact standalone HTML bytes. `strictFonts` defaults to false and `timeoutMs` to 120,000. Resource
 limits use the shared defaults below and may only be lowered.
+
+Under `warn`, malformed unreferenced XML parts, package-level custom properties, and missing
+package preview thumbnails retain their manifest warnings but do not prevent rendering: none
+is read by the renderer. Content-type declarations and relationship files remain required.
+This requires every relationship to the affected part to identify that same optional metadata;
+a shared style or image target still fails. `strict` rejects these package defects. The package
+manifest remains invalid, all resource ceilings still apply, and export never repairs or rewrites
+the caller's source bytes to remove a finding. Cached document-property field text is rendered
+as supplied in the document body.
 
 `reviewProfileAlreadyApplied` defaults to false. It may be true only for `final` or `original` when
 the caller deliberately supplies the exact policy-derived bytes. Preflight then proves that no
@@ -171,11 +181,18 @@ staging tree. It has these invariants:
 - reopening offline must reproduce the same logical page count and section/page geometry without
   rerunning WASM or pagination.
 
-Margin-profile comment columns remain keyboard-focusable and scrollable in delivered HTML,
-including notes longer than the page's body band. Standalone export retains the physical-margin
-placement, independently of the read-only viewer's outside-panel default. A PDF shows a static
-margin viewport; use the endnotes comment profile when the complete comment must flow into printed
-pages. Interactive overflow is therefore checked in the delivered HTML alongside PDF page geometry.
+Standalone margin-profile export uses `PaginationOptions.commentOverflow: "appendix"` (#1490).
+A column that fits stays beside its original page. When a column exceeds its page band, its complete
+threads move to appended pages and the margin keeps a link to them. Repeated threads are appended
+once, including comments selected by body, running-story and note markers. HTML and PDF share this
+same complete page tree; a static PDF never relies on a scroll position to reveal a comment.
+
+The appendix uses the last page's paper geometry and a separate presentation section without
+running stories. Its existing rendered comment headers and paragraphs pass through ordinary
+paragraph pagination, retaining paragraph and ancestor-thread source identities on continuations.
+Appendix pages count toward export limits and NUMPAGES. Return links activate only after final
+clones exist. A final margin-overflow check rejects a remaining clipped column. The read-only
+viewer's outside panels retain scrolling, and balloon overflow keeps its independent policy.
 
 The finalization order is normative: paginate pristine converted content; clone/materialize the
 fixed page tree; remove staging, containment, viewer, selection, and other transient state; attach
@@ -438,6 +455,27 @@ reviewed fidelity baseline. An unavailable or unproven required Chromium capabil
 `unsupported_runtime`; documentation never converts "Playwright can launch there" into a fidelity
 claim.
 
+Node reports include `fontObservation` and a canonical `fontObservationDigest` (#1525).
+The observation reads Chromium’s platform-font usage for each final non-whitespace text node,
+including SVG text, from the immutable offline snapshot. It records family and PostScript names,
+custom-font status and glyph counts, together with the text digest, source/page identifiers and
+original font request when those identities survive layout. Generated text without an original
+request remains unattributed, including PAGE or STYLEREF replacements whose cached-result
+run was removed. No raw text, host paths or font bytes enter this evidence.
+
+The observation uses print media when PDF is requested, including HTML/PDF batches, and screen
+media for HTML-only export. It describes that snapshot and medium; it cannot attest how HTML
+will render on a future host. Browser-only exports explicitly report `browser_api_unavailable`;
+a recognized unsupported Chromium protocol reports `protocol_unavailable`. Observation work shares
+the export deadline and `renderDiagnostics` budget. Cancellation and resource limits remain errors.
+
+These are shaping observations, not visible-ink proof: Chromium can report fonts for clipped or
+transparent text, and glyph counts do not map one-to-one to Unicode characters. CSS pseudo-element
+text is outside the text-node scope. `fileIdentity: "unavailable"` is explicit because platform names
+cannot attest a font file. Resolver records, `fontIdentity.resolutionDigest`, missing-font warnings
+and `strictFonts` retain their existing meanings. The separate observation digest enters the Node
+renderer fingerprint before PageMap/report rebinding; inspection never mutates the finalized DOM.
+
 Each conversion gets a fresh primary BrowserContext, and every auxiliary verification/print context
 is fresh and batch-scoped. `docxodus/export-browser` is a public, UI-free
 subpath containing the materializer entry point. `docxodus/export-assets.json` is a versioned public
@@ -515,6 +553,36 @@ wholly outside it is not drawn: a border of content an exact row hides is hidden
 #1171). Only the row's height clips: Word draws left and right borders in the cell margin, beside
 the text, so the cell's horizontal overflow clip does not trim them. A paragraph no exact row cuts
 is painted exactly as before.
+
+### Paragraphs outside authored fixed text boxes
+
+A paragraph that the source text box already hides completely has no painted PageMap fragment.
+The converter identifies positive fixed DrawingML boxes with explicit `a:noAutofit`, and VML
+boxes without fit, shrink or linked-story directives. Explicit DrawingML overflow or ellipsis is
+not eligible for internal clipping. Pagination records the original box and non-whitespace text
+before moving source content; running stories use their pristine attached measurement. The final
+map permits an unmapped paragraph only when it remains present, unchanged and wholly clipped by
+that same box. Newly clipped or removed paragraphs still fail completeness. Linked stories,
+auto-fit boxes, partial geometry and active percentage sizing cannot use this allowance.
+
+A separate source-position marker admits a paragraph whose original ink is wholly off paper,
+even when part of its fixed box intersects the paper. DrawingML fit resolves from the selected
+shape's body properties through the theme's text, line and shape defaults; ambiguous contexts
+and shrinking or growing boxes cannot use this proof. Supported page/margin coordinates, or
+horizontal column/margin with vertical paragraph coordinates, retain their existing limits.
+Before pagination, the engine binds the box identity, anchor metadata, transforms and text
+geometry. Final placement must preserve those bounds; paragraph-relative placement also
+preserves the source host geometry. At viewer zoom, both original and current ink must be off
+paper, so glyph rounding cannot hide originally visible text. Both placement and final mapping
+also refuse this proof if any sibling ink crosses the paper edge. This does not admit internal
+clipping in implicit boxes or clipping by an ordinary flow band.
+
+Each newly admitted nonblank omission produces a `source_text_clipped` warning with its canonical
+anchor ID. `unsupportedContent: "strict"` rejects it at `output_verification`. Source text remains
+in the clipped HTML story, and its page citation is unavailable because it has no painted fragment.
+The print snapshot still verifies every visible fragment, so shrinking a box after finalization
+cannot silently hide another paragraph. This does not change the existing exact-row text-layer
+preservation below.
 
 ### Text clipped by exact-height rows (issue #1140)
 
@@ -745,6 +813,29 @@ Word's style. `word` with any profile other than `markup` is
 `invalid_argument`. The report's options name `markupPresentation` only when it is `word`, and
 only then does it enter the layout digest, so every default report and digest is unchanged.
 
+`markupVisibility` independently controls formatting-change annotations, text revisions, and
+comments (#1523). All three flags default to `true`. For comment balloons without formatting
+balloons, use `markupVisibility: { formatting: false }` with the Word markup presentation and
+balloon placement. Current bold, paragraph indents, and other authored formatting remain visible.
+A formatting-only document then uses the full text width and allocates no empty review area.
+
+`insertionsAndDeletions: false` displays current text and structure: inserted/moved-to content
+remains without revision decoration; deleted/moved-from content, rows, and cells disappear;
+deleted paragraph marks join the surviving paragraphs. This prepares the converter's owned
+display tree without accepting/rejecting revisions or producing a derived profile package.
+The source digest remains the caller's original bytes. Formatting annotations remain independently
+selectable. These two revision flags have no effect outside the `markup` profile.
+
+`comments: false` suppresses comments in every profile; `true` honors `commentProfile`, including
+`hidden`. When text revisions are hidden, a comment spanning surviving content retains its
+visible range. A comment attached only to hidden content is omitted; unaffected orphan comments
+keep the existing fallback behavior. Visibility does not change placement compatibility rules.
+
+The report records only flags set to `false`, in a canonical `options.markupVisibility` object,
+and includes that policy in layout identity. Omission, `{}`, and explicit all-`true` flags have
+the same default report and digest. The CLI exposes `--hide-formatting-changes`,
+`--hide-insertions-and-deletions`, and `--hide-comments`.
+
 `commentColumnPlacement: "balloons"` prints Word's All Markup layout (issue #1300, design in
 `all_markup_layout.md`): each page keeps its paper size and is shrunk beside a grey markup area whose
 balloons hold the margin comments and, with the Word presentation, the formatting changes in Word's
@@ -844,13 +935,18 @@ the font's height: CSS centres the glyph box on the line, so the last line's des
 pixels past the band (corrected by this pass).
 
 Both the body-band check and the footnote-band check measure an element down to what it lays out
-(`laidOutBottom` in `line-metrics.ts`, issue #1271). That is its border box, except that an inline
+(`measureLaidOutBottoms` in `line-metrics.ts`, issues #1271 and #1493). That is its border box, except that an inline
 box's own bottom padding and border are left out: CSS paints them below the text without making the
 line taller, so the dotted rule under a formatting revision (`rev-format-change`), a comment
 highlight's underline or a custom annotation's underline and padding could hang a pixel or two past
 a band whose text fits. Counted as clipped, they failed a one-line footnote outright (in a body
 band they would have asked for a needless correction round). Text, blocks, inline-blocks and
-replaced elements (images, SVG) are measured as before, so genuinely clipped content still fails.
+replaced elements (images, SVG) retain their content bounds, so genuinely clipped content still fails.
+Inline wrappers measure direct text ranges and child content separately: a zero-line-height note
+number can otherwise inherit a descendant's dotted border in its own rectangle. `display: contents`
+is transparent to this walk; generated content without its own box conservatively retains the
+nearest boxed ancestor's bound because DOM ranges cannot measure pseudo-elements. One traversal
+builds all descendant bounds for each band at its current layout; nothing is cached across reflow.
 The decoration itself is still cut at the band's edge: on a note's last line, which ends at the
 text's own bottom, the formatting-revision rule disappears entirely from the PDF, and on a body
 page's last line it may be partly cut, depending on the space left below it.
@@ -895,6 +991,12 @@ terminates owned work and produces `operation_cancelled`, while the caller-owned
 not closed. Cleanup is always attempted with a separate bounded cleanup allowance so an expired
 render deadline cannot skip it or turn a verified timeout into success. Timeout errors name the
 active phase and bounded pending resources.
+
+Owned-browser shutdown has a 40-second allowance: the pinned Playwright release gives Chromium
+30 seconds to exit gracefully before killing its process group, followed by the ordinary
+10-second cleanup allowance. Runtime-directory removal follows the owned-browser shutdown attempt. Context
+and directory cleanup retain their separate 10-second bounds, and a real cleanup failure still
+fails the export.
 
 Warnings use stable codes, severity, phase, source/part when known, message, and remediation. The
 render report records requested and resolved fonts, substitutions, missing fonts, image/chart/SVG
@@ -1152,6 +1254,7 @@ interface RenderReportBase {
   options: {
     reviewProfile: ReviewProfile;
     reviewProfileAlreadyApplied: boolean;
+    markupVisibility?: { formatting?: false; insertionsAndDeletions?: false; comments?: false };
     commentProfile: CommentProfile;
     title: string;
     outputs: readonly ("html" | "pdf")[];
@@ -1172,6 +1275,8 @@ interface RenderReportBase {
   }>;
   fontIdentity?: FontConfigurationIdentity;
   fonts: readonly FontResolution[];
+  fontObservation?: FontObservation;
+  fontObservationDigest?: Sha256Hex;
   resources: readonly ResourceOutcome[];
   unsupportedContent: readonly UnsupportedContentOutcome[];
   warnings: readonly RenderWarning[];
@@ -1378,16 +1483,30 @@ not mean arbitrary Word content is silently approximated.
 
 Explicitly unsupported in schema v1 are active content, macros, OLE activation, embedded video,
 external linked images/fonts/stylesheets, arbitrary HTML (`altChunk`), and any converter placeholder
-family not promoted by a follow-on issue. WMF/EMF, unsupported Office Math, form fields, and other
+family not promoted by a follow-on issue. EMF, unsupported WMF records, unsupported Office Math, form fields, and other
 opaque content remain visible placeholders with warnings when requested; they are never counted as
 faithful rendering. Native SVG image parts are not claimed until their current placeholder path is
 replaced and covered by readiness/vector tests. Password-protected/encrypted or malformed packages
 fail before rendering.
 
+The shared converter normalizes single-page 8-bit RGB(A) TIFF with uncompressed/PackBits
+strips to PNG and the bounded placeable WMF rectangle/ellipse subset to static SVG (#1484).
+These generated resources pass through the same decode readiness and image diagnostics as
+other supported images. The [converter image contract](docx_converter.md#images) lists exact
+format coverage and bounds. Generated WMF SVG is admitted as an embedded image resource;
+source SVG image parts still use the unsupported path.
+
 Eligible text-only footnote paragraphs continue within the paragraph at deterministic Unicode-safe
 boundaries, preserving inline structure, identities, ordering, and PageMap fragments. Structurally
 indivisible note content retains the typed clipped-content failure rather than shipping a complete
 result with missing text.
+
+Body paragraph fragmentation retains unshifted revision change-bar hosts and their inline revision
+metadata on each continuation (#1521). A leading `wrapNone` drawing stays whole on the first
+fragment; its textbox text does not participate in the body's line or widow measurements. Existing
+anchor placement resolves its coordinates after pagination. Preceding flow content, wrapping,
+line/character bases and paragraph-height alignment remain excluded from this path. Source
+completeness and clipping checks still apply to both the body and the promoted drawing.
 
 For eligible uniform Latin paragraphs, `word-text.ts` fits lines from unrounded font advances
 in the declared section band before pagination measures block heights. Legacy compatibility modes
@@ -1396,6 +1515,15 @@ as costly as expansion and a 75% minimum ordinary-space advance. Independent Wor
 mixed-prose transition at a 0.05pt boundary and cover both font sizes, repeated spaces, first-line
 indents and final lines. See `TestFiles/JustificationFlow/word-observations.json` for the immutable
 input/output hashes and native line inventories.
+
+The same line selector handles plain exact-spaced justified text in compatibility mode 15 or later
+(#1524), while keeping HTML paint and the established baseline at 80% of each declared line height.
+Only ordinary spaces change advance, per selected line; a naturally fitting final line keeps its
+spaces. Each continuation retains the full exact pitch. Admission requires the font's ascent and
+descent to fit that line's 80%/20% bands, so overlapping ink keeps the existing inline overflow path.
+Hard breaks, tabs, bidi, mixed runs, pictures and columns retain their existing layout. Mixing exact
+and automatic spacing does not opt previously excluded automatic paragraphs into vector paint.
+`TestFiles/ExactJustificationFlow/word-observations.json` pins the native legacy/modern boundary.
 
 Auto-spacing retains the resolved font height's precision through the spacing multiple. The
 shared font-height probe uses the same large-font scale as the vector painter, avoiding the

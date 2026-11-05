@@ -269,6 +269,9 @@ internal sealed class IncrementalAnchorIndex : IReadOnlyDictionary<string, Ancho
     /// <summary>Set when a change since the last patch can alter the markdown of a block it did
     /// not touch (a note gained, lost or renumbered changes the label of every reference to it).</summary>
     private bool _patchNeedsFullDocument;
+    // Textbox hosts emit several independently anchored blocks; this remains true after removal
+    // so both deletion and insertion after an unchanged host replace the client's whole projection.
+    private bool _hasProjectedTextboxes;
 
     private bool _trackPatchChanges;
 
@@ -287,7 +290,7 @@ internal sealed class IncrementalAnchorIndex : IReadOnlyDictionary<string, Ancho
         changed = new List<(string, XElement)>();
         removed = new List<string>();
         var seenRemoved = new HashSet<string>(StringComparer.Ordinal);
-        bool exact = !_patchNeedsFullDocument;
+        bool exact = !_patchNeedsFullDocument && !_hasProjectedTextboxes;
         _patchNeedsFullDocument = false;
         foreach (var scope in _scopes)
         {
@@ -337,6 +340,7 @@ internal sealed class IncrementalAnchorIndex : IReadOnlyDictionary<string, Ancho
         foreach (var el in block.DescendantsAndSelf())
         {
             if (el.Name == W.sdt) hasContentControl = true;
+            if (el.Name == W.txbxContent) _hasProjectedTextboxes = true;
             var id = WmlToMarkdownConverter.AnchorKeyFor(el, scope.Name, _settings, out var kind, out var unid);
             if (id is null) continue;
             entries ??= new List<AnchorTarget>();
