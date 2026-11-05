@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [15.1.0] - 2026-11-05
+
 ### Added
 
 - Exact-spaced, uniform justified paragraphs use bounded ordinary-space compression before pagination in compatibility mode 15 or later. Legacy modes and unsupported inline flow retain their existing line choices (#1524).
