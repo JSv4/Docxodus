@@ -10,6 +10,11 @@ on:
         description: 'Version to publish (e.g., 1.0.0)'
         required: true
         type: string
+      export_only:
+        description: 'Retry only the export companion from the matching release tag'
+        required: false
+        type: boolean
+        default: false
 
 env:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
@@ -17,6 +22,7 @@ env:
 
 jobs:
   build-test-publish:
+    if: ${{ !inputs.export_only }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -409,6 +415,66 @@ jobs:
             'Approve `docxodus` first, then `@docxodus/export`, with `npm stage approve <stage-id>` and your own 2FA.', '',
             'Update consumer CDN snippets only after approval and a successful CDN check. See `docs/npm-releases.md`.', '',
           ].join('\n'));
+          NODE
+
+  # Recover a partial npm release without touching an already-staged browser package.
+  # The workflow is dispatched from main for trusted publishing, but all package
+  # contents come from the immutable release tag that originally ran validation.
+  retry-export:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.export_only }}
+    runs-on: ubuntu-latest
+    environment:
+      name: Publisher
+      url: https://www.npmjs.com/package/@docxodus/export
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Validate release version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+      - name: Checkout original release tag
+        uses: actions/checkout@v7
+        with:
+          ref: v${{ inputs.version }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Pin npm for staged publishing
+        run: npm install -g npm@11.19.1
+      - name: Build and validate export package
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          cd npm-export
+          npm version "$RELEASE_VERSION" --no-git-tag-version
+          npm pkg set peerDependencies.docxodus="$RELEASE_VERSION"
+          npm pkg set devDependencies.docxodus="$RELEASE_VERSION"
+          npm install --package-lock-only --ignore-scripts
+          npm ci --ignore-scripts
+          npm run build
+          npm run test:package-boundary
+          npm pkg delete devDependencies.docxodus
+      - name: Stage export companion
+        run: |
+          cd npm-export
+          npm stage publish --access public --ignore-scripts --json > "$RUNNER_TEMP/export-stage.json"
+      - name: Report npm package awaiting approval
+        if: always()
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const receipt = path.join(process.env.RUNNER_TEMP, 'export-stage.json');
+          if (fs.existsSync(receipt) && fs.readFileSync(receipt, 'utf8').trim()) {
+            const stage = JSON.parse(fs.readFileSync(receipt, 'utf8'))['@docxodus/export'];
+            if (stage?.stageId) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+              `## npm package awaiting 2FA approval\n\n| Package | Stage ID |\n| --- | --- |\n| @docxodus/export@${stage.version} | \`${stage.stageId}\` |\n`);
+          }
           NODE
 
   # Attach the twelve CLI binaries and their SHA256SUMS to the tag's GitHub Release, so a
