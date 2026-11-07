@@ -7005,6 +7005,10 @@ namespace Docxodus
             throw new FormatException(diagnostic);
         }
 
+        private static decimal TableRowVerticalMarginsInPoints(XElement row) =>
+            new[] { W.top, W.bottom }.Sum(side =>
+                row.Elements(W.tc).Select(cell => CellMarginTwips(cell, side)).DefaultIfEmpty(0m).Max()) / 20m;
+
         private static object ProcessTableRow(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element,
             decimal currentMarginLeft)
         {
@@ -7025,7 +7029,7 @@ namespace Docxodus
             // A collapsed-border table row's CSS height includes half of each horizontal border.
             // w:hRule decides whether w:trHeight does too (issue #1122): an exact height is the
             // row's whole pitch and clips content that needs more, while a minimum height bounds
-            // the content and the borders are added to it. Twip precision: issue #1121.
+            // the content and the borders and cell margins are added to it. Twip precision: issue #1121.
             // Word treats an exact zero as unconstrained, as the native Word captures for
             // issue #1339 show. Only positive heights create a fixed/minimum row constraint.
             if (trHeight is > 0m && heightRule != "auto")
@@ -7038,7 +7042,7 @@ namespace Docxodus
                 if (heightRule == "exact")
                     ClipExactRowCells(cells, heightInPoints);
                 else
-                    heightInPoints += borderHalves;
+                    heightInPoints += borderHalves + TableRowVerticalMarginsInPoints(element);
                 style.AddIfMissing("height",
                     string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", heightInPoints));
             }
@@ -13202,9 +13206,29 @@ namespace Docxodus
                     "width: {0}in; height: {1}in", (float)extentCx / ImageInfo.EmusPerInch,
                     (float)extentCy / ImageInfo.EmusPerInch)) : null;
             var image = RenderImagePart(imagePart, element, imageHandler, settings, style, altText);
+            if (image != null && containerElement.Name == WP.inline)
+                AlignPictureOnlyParagraph(image, element);
             if (hyperlinkUri != null && image != null)
                 image = new XElement(XhtmlNoNamespace.a, new XAttribute(XhtmlNoNamespace.href, hyperlinkUri), image);
             return ApplyAnchorTextWrap(image, containerElement, settings);
+        }
+
+        private static void AlignPictureOnlyParagraph(XElement image, XElement drawing)
+        {
+            var paragraph = drawing.Ancestors(W.p).FirstOrDefault();
+            if (paragraph == null || paragraph.Descendants(W.drawing).Skip(1).Any() ||
+                paragraph.Descendants(W.r).SelectMany(run => run.Elements()).Any(e =>
+                    e.Name != W.rPr && e.Name != W.drawing && !(e.Name == W.t && e.Value.Length == 0)))
+                return;
+            var spacing = paragraph.Element(W.pPr)?.Element(W.spacing);
+            var line = WordprocessingMLUtil.AttributeToTwips(spacing?.Attribute(W.line)) ?? 240m;
+            if (((string?)spacing?.Attribute(W.lineRule) ?? "auto") != "auto" || line < 240m)
+                return;
+            // The picture occupies the whole line. Bottom alignment avoids a phantom text
+            // descent; an auto multiple adds only the extra natural text-line height below it.
+            var css = ";vertical-align:bottom" + (line > 240m
+                ? $";margin-bottom:calc(1lh * (1 - 1 / var({AutomaticLineSpacingMultiplierCssProperty})))" : "");
+            image.SetAttributeValue("style", ((string?)image.Attribute("style") ?? "") + css);
         }
 
         /// <summary>

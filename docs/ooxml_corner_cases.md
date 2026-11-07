@@ -6117,3 +6117,41 @@ A separate source-mapping limitation remains: joining a paragraph through a hidd
 break-only paragraph leaves an unmeasurable nested canonical source. Both the unchanged renderer
 and this change reject that export; this fix does not suppress the completeness check or claim
 support for that joined-source case.
+
+
+### Picture-only paragraphs and minimum row margins (#1568)
+
+The issue author's [Word print results](https://github.com/JSv4/Docxodus/issues/1568#issuecomment-6701329842)
+confirm a 113.8pt baseline step across a 100pt picture at single spacing, 127.55pt at double
+spacing, and a 42pt row pitch for a 30pt minimum with 6pt top and bottom cell margins. These
+are reported Word measurements; this change does not include new Word PDFs.
+
+Original Liberation Serif 12pt fixtures, with zero paragraph spacing, give these local results:
+
+| Case | LibreOffice 25.8.7.3 | Public export before |
+| --- | ---: | ---: |
+| 100pt picture, single spacing | 113.8pt | 117pt |
+| 100pt picture, 1.15 spacing | 115.85pt | 117.75pt |
+| 100pt picture, double spacing | 127.6pt | 123.75pt |
+| 30pt minimum row, no vertical margins | 30pt | 30pt |
+| 30pt minimum row, 6pt top margin | 36pt | 30pt |
+| 30pt minimum row, 6pt top and bottom margins | 42pt | 30pt |
+
+An 8pt or 20pt paragraph mark does not change the single-spaced picture result. Additional
+native controls keep a picture shorter than the natural font line within that minimum line;
+a multiple adds its extra font-line height. This is not a rule for lines that contain both
+pictures and text. Those lines retain their existing text descent. Exact and minimum line
+spacing, explicit breaks, multiple pictures and floating drawings retain their existing path.
+
+Bottom-aligning the sole inline picture removes the otherwise unused text descent. Its bottom
+margin under a multiple is the additional natural text-line height, derived from the inherited
+line height. Font preparation therefore continues to supply the same unrounded metrics used by
+ordinary text, without introducing another font-height estimate.
+
+A minimum table row bounds content before its vertical cell margins and collapsed borders.
+Native variants with opposing cell margins (12pt top in one cell, 12pt bottom in another)
+advance 54pt: the row uses the largest top and largest bottom separately. The converter records
+that resolved margin height so the shared border-layout refresh retains it after fragmentation.
+Rows whose content already exceeds the minimum continue to grow to fit. Exact/automatic row
+height behavior is a baseline control here, not a new native-parity claim: LibreOffice interprets
+some authored exact and automatic rows differently from the existing Word-validated paths.
