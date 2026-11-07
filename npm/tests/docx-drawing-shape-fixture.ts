@@ -17,11 +17,15 @@ const SHAPE = '<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:e
   + '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="19647E"/></a:solidFill></wps:spPr>'
   + '<wps:bodyPr/></wps:wsp>';
 
-export function shapeDocx({ grouped, deleted }: { grouped: boolean; deleted: boolean }): Uint8Array {
+export function shapeDocx({ grouped, deleted, geometry = 'rect', adjustments = '', transform = '', groupChildWidth = 1828800 }:
+  { grouped: boolean; deleted: boolean; geometry?: string; adjustments?: string; transform?: string; groupChildWidth?: number }): Uint8Array {
+  const shape = SHAPE.replace('prst="rect"', `prst="${geometry}"`)
+    .replace('<a:xfrm>', `<a:xfrm ${transform}>`)
+    .replace('<a:avLst/>', `<a:avLst>${adjustments}</a:avLst>`);
   const data = grouped
     ? '<wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/>'
-      + `<a:chOff x="0" y="0"/><a:chExt cx="1828800" cy="914400"/></a:xfrm></wpg:grpSpPr>${SHAPE}</wpg:wgp>`
-    : SHAPE;
+      + `<a:chOff x="0" y="0"/><a:chExt cx="${groupChildWidth}" cy="914400"/></a:xfrm></wpg:grpSpPr>${shape}</wpg:wgp>`
+    : shape;
   return inlineDrawingDocx(grouped ? WPG : WPS, data, deleted);
 }
 
@@ -42,7 +46,7 @@ const diagramPart = (id: string, relationship: string, contentType: string, root
  * keeps its extent, and the PDF export reports it as unsupported content.
  */
 export const UNDRAWABLE_DRAWINGS: Record<string, { uri: string; data: string; parts?: ExtraPart[] }> = {
-  triangle: { uri: WPS, data: SHAPE.replace('prst="rect"', 'prst="triangle"') },
+  cloud: { uri: WPS, data: SHAPE.replace('prst="rect"', 'prst="cloud"') },
   presetColorFill: { uri: WPS, data: SHAPE.replace('<a:srgbClr val="19647E"/>', '<a:prstClr val="red"/>') },
   pictureFill: { uri: WPS, data: SHAPE.replace('<a:solidFill><a:srgbClr val="19647E"/></a:solidFill>',
     '<a:blipFill><a:stretch><a:fillRect/></a:stretch></a:blipFill>') },
