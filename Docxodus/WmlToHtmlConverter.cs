@@ -1163,6 +1163,9 @@ namespace Docxodus
 
             NormalizeLiteralTextControls(wordDoc);
 
+            var spacingRoot = wordDoc.MainDocumentPart!.GetXDocument().Root!;
+            new Internal.AutomaticParagraphSpacing(wordDoc).Stamp(spacingRoot, spacingRoot);
+
             // Only accept revisions if NOT rendering tracked changes AND document has tracked changes
             // This optimization saves ~9% of conversion time for documents without revisions
             if (!htmlConverterSettings.RenderTrackedChanges && RevisionAccepter.HasTrackedRevisions(wordDoc))
@@ -1238,6 +1241,8 @@ namespace Docxodus
             };
 
             FormattingAssembler.AssembleFormatting(wordDoc, formattingAssemblerSettings);
+
+            Internal.AutomaticParagraphSpacing.Apply(wordDoc.MainDocumentPart!.GetXDocument().Root!);
 
             MergeRevisionParagraphGroups(wordDoc, htmlConverterSettings);
             NormalizeFieldResults(wordDoc, htmlConverterSettings);

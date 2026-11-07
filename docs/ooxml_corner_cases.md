@@ -3942,11 +3942,42 @@ no longer suppresses spacing. Restoring the spacing added two pages to the chart
 (measured before #1130),
 height LibreOffice also lays out.
 
-**Remaining gap.** LibreOffice also tightens list items whose spacing is `w:beforeAutospacing` /
-`w:afterAutospacing` (HTML-style automatic spacing). Docxodus does not model automatic spacing for
-list items; this predates #1151.
+**Automatic spacing.** The ordinary-body subset is now handled separately, as described below.
+List membership still never removes an explicit spacing value whose automatic flag is off.
 
 Tests: `Docxodus.Tests/NumberedParagraphSpacingTests.cs`.
+
+### Automatic spacing at ordinary body boundaries (#1553)
+
+```xml
+<w:p><w:pPr><w:spacing w:before="100" w:after="100"
+  w:beforeAutospacing="1" w:afterAutospacing="1"/></w:pPr>
+  <w:r><w:t>First</w:t></w:r></w:p>
+<w:p><w:pPr><w:spacing w:before="100" w:after="100"
+  w:beforeAutospacing="1" w:afterAutospacing="1"/></w:pPr>
+  <w:r><w:t>Second</w:t></w:r></w:p>
+```
+
+The [issue author's Word print](https://github.com/JSv4/Docxodus/issues/1553#issuecomment-6701328156)
+confirmed 14 pt automatic gaps, overriding explicit values, including entering and leaving a list.
+Two items in the same list instead had zero gap. Those files lacked default paragraph spacing;
+their approximately 16 pt natural line height is separate from the gap. The isolated regressions
+declare an exact 16 pt line so they do not depend on Word's default line-height choice.
+
+`Internal/AutomaticParagraphSpacing.cs` records each paragraph's original eligible body boundary
+and concrete list identity before markup rewrites. The resulting own-side gap survives cloning
+in the existing rendering namespace. After formatting assembly resolves inherited automatic flags,
+the gap replaces only enabled sides; contextual suppression and the neighbor's explicit space still
+apply. The stateless block API reuses the session renderer, including its real neighboring context.
+It no longer builds a single-paragraph shell that loses contextual spacing.
+
+This is deliberately partial: unmatched document/section boundaries, cells and other stories,
+frames/borders, revision-bearing documents, and enabled `doNotUseHTMLParagraphAutoSpacing` retain
+their previous behavior. The cited print did not measure first-document/first-cell suppression or
+that compatibility setting. They remain open rather than being assigned an unverified value.
+
+Tests: `HtmlAutomaticSpacingTests`, `DenseTextParagraphTests`, and
+`npm/tests/export-automatic-spacing.spec.ts`.
 
 ### Contextual spacing belongs to each paragraph (#1553)
 

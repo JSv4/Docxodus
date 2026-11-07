@@ -182,4 +182,25 @@ public class DenseTextParagraphTests
         _ = HtmlConversionOps.RenderBlockHtml(session, anchor, options);
         Assert.Empty(session.DenseTextRenderTemplates);
     }
+
+    [Fact]
+    public void AutomaticSpacingUsesOriginalNeighborsBeforeCachingDenseTemplates()
+    {
+        using var session = new DocxSession(DocxSession.CreateBlankDocxBytes());
+        var anchor = session.ListBlocks().Body.First().Id;
+        var frame = Frame();
+        frame.Element(W.pPr)!.Element(W.spacing)!.SetAttributeValue(W.afterAutospacing, "1");
+        frame.Element(W.pPr)!.Element(W.spacing)!.SetAttributeValue(W.after, "100");
+        frame.SetAttributeValue(PtOpenXml.Unid, anchor.Split(':').Last());
+        Assert.True(session.Raw.ReplaceXml(anchor, frame.ToString()).Success);
+        var options = new HtmlConversionOptions { FabricateCssClasses = false };
+        Assert.Contains("margin-bottom: 5pt;", HtmlConversionOps.RenderBlockHtml(session, anchor, options));
+        var source = session.LiveDocument.MainDocumentPart!.GetXDocument().Descendants(W.p).First();
+        source.AddAfterSelf(new XElement(W.p, new XElement(W.r, new XElement(W.t, "Neighbor"))));
+        Assert.Contains("margin-bottom: 14pt;", HtmlConversionOps.RenderBlockHtml(session, anchor, options));
+        Assert.Equal(2, session.DenseTextRenderTemplates.Count);
+        Assert.Contains("margin-bottom: 14pt;", HtmlConversionOps.RenderBlockHtml(session, anchor, options));
+        Assert.Equal(2, session.DenseTextRenderTemplates.Count);
+        Assert.DoesNotContain(source.Attributes(), a => a.Name.NamespaceName == "urn:docxodus:rendering");
+    }
 }
