@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Resizing DrawingML text boxes positioned beyond the right or bottom page edge report authored clipping instead of failing PageMap completeness. Direct main-body AutoFit and page-percentage boxes retain source text, strict-policy rejection and geometry-mutation guards (part of #1558).
+
 - Plain OMML fractions and square/indexed roots render as selectable MathML. Unsupported equation structures, run styling and document math properties retain whole-equation export diagnostics (part of #1554).
 
 - Complete short-document rewrites keep each old paragraph beside its positional replacement, preserving whole sentences and exact accept/reject results. Long rewrites and regions with established content correspondence retain their existing arrangement (#1556).

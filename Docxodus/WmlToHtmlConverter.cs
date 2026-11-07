@@ -12560,6 +12560,12 @@ namespace Docxodus
                     wrapper.SetAttributeValue("data-docx-textbox-source-position", "true");
             }
 
+            // Resizing changes the box dimensions, not an explicit page offset. This narrower
+            // provenance permits paper-placement proof only; it never certifies internal clipping.
+            if (!linked && owner is MainDocumentPart && (string?)wrapper.Attribute("data-docx-shape") != "partial"
+                && IsResizingPageOffsetTextBox(element, drawingContainer, bodyPr, drawingFit))
+                wrapper.SetAttributeValue("data-docx-textbox-source-position", "page-offset");
+
             var renderedBlocks = new List<object>();
             foreach (var group in (textBoxContent?.Elements() ?? Enumerable.Empty<XElement>()).GroupAdjacent(child => child.Name == W.p))
             {
@@ -12801,6 +12807,36 @@ namespace Docxodus
                 else
                     attribute.Remove();
             }
+        }
+
+        private static bool IsResizingPageOffsetTextBox(XElement drawing, XElement? anchor, XElement? bodyPr, XName? fit)
+        {
+            // Running stories can reuse one source identity on differently sized pages. Keep
+            // their existing fixed-box contract until placement proof is scoped per story clone.
+            if (anchor?.Name != WP.anchor || drawing.Ancestors(W.p).FirstOrDefault()?.Parent?.Name != W.body
+                || (fit != A.spAutoFit && fit != A.noAutofit) || IsTrueAttribute(anchor, "simplePos")
+                || anchor.Element(WP.wrapNone) == null) return false;
+            var shape = anchor.Element(A.graphic)?.Element(A.graphicData)?.Element(WPS.wsp);
+            if (shape == null || bodyPr == null || ((long?)bodyPr.Attribute("rot") ?? 0) != 0
+                || (string?)bodyPr.Attribute("vert") is not (null or "horz")) return false;
+            var transform = shape.Element(WPS.spPr)?.Element(A.xfrm);
+            if (((long?)transform?.Attribute("rot") ?? 0) != 0
+                || (transform != null && (IsTrueAttribute(transform, "flipH") || IsTrueAttribute(transform, "flipV")))) return false;
+            foreach (var axis in new[] { WP.positionH, WP.positionV })
+            {
+                var position = anchor.Element(axis);
+                if ((string?)position?.Attribute("relativeFrom") != "page" || position.Element(WP.align) != null
+                    || position.Element(WP.posOffset) == null) return false;
+            }
+            var resizing = fit == A.spAutoFit;
+            foreach (var (name, value) in new[] { (WP14.sizeRelH, WP14.pctWidth), (WP14.sizeRelV, WP14.pctHeight) })
+            {
+                if (anchor.Element(name) is not { } relative) continue;
+                if (DrawingRelativeSize(relative, value) is not { } size || size.Percentage < 0
+                    || (size.Percentage > 0 && size.RelativeFrom != "page")) return false;
+                resizing |= size.Percentage > 0;
+            }
+            return resizing;
         }
 
         private static void AddDrawingTextBoxStyle(Dictionary<string, string> style, XElement wrapper,

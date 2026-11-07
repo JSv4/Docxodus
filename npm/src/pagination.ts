@@ -678,10 +678,22 @@ function blankLineClippedByTextBox(view: Window, element: HTMLElement, rect: DOM
 }
 
 function eligibleSourceTextBox(box: HTMLElement, placement = false): boolean {
+  if (box.dataset.docxTextboxLinked === 'true' || box.dataset.docxShape === 'partial') return false;
+  if (placement && box.dataset.docxTextboxSourcePosition === 'page-offset') {
+    return box.dataset.docxDrawingAnchor === 'true'
+      && ['h', 'v'].every(axis => box.getAttribute(`data-docx-anchor-${axis}-relative`) === 'page'
+        && !box.hasAttribute(`data-docx-anchor-${axis}-align`)
+        && (box.getAttribute(`data-docx-anchor-${axis}-offset`) ?? '').trim() !== ''
+        && Number.isFinite(Number(box.getAttribute(`data-docx-anchor-${axis}-offset`))))
+      && ['width', 'height'].every(axis => {
+        const percent = Number(box.getAttribute(`data-docx-anchor-${axis}-percent`) ?? 0);
+        return Number.isFinite(percent) && percent >= 0
+          && (percent === 0 || box.getAttribute(`data-docx-anchor-${axis}-relative`) === 'page');
+      });
+  }
   return box.dataset.docxTextboxClip === 'true'
     && (placement ? box.dataset.docxTextboxSourcePosition === 'true' : box.dataset.docxTextboxSourceClip === 'true')
-    && box.dataset.docxTextboxLinked !== 'true' && box.dataset.docxAnchorAutofit !== 'true'
-    && box.dataset.docxShape !== 'partial'
+    && box.dataset.docxAnchorAutofit !== 'true'
     && ['width', 'height'].every(axis => {
       const percent = box.getAttribute(`data-docx-anchor-${axis}-percent`);
       return percent === null || (percent.trim() !== '' && Number(percent) === 0);
@@ -1198,6 +1210,7 @@ export class PaginationEngine {
     const referencedCommentIds = new Set<string>();
     for (const section of sectionsToProcess) {
       this.checkpoint();
+      this.prepareSourceTextBoxSizes(section, parseSectionDimensions(section));
       this.collectExpectedSourceAnchors(section, this.expectedPageMapAnchorIds, true);
       for (const reference of Array.from(section.querySelectorAll<HTMLElement>("[data-footnote-id]"))) {
         this.checkpoint();
@@ -1933,7 +1946,15 @@ export class PaginationEngine {
   private sourceTextPlacementBounds(owner: HTMLElement, rects: DOMRect[], frame: SourcePageFrame,
     partialInk?: Map<HTMLElement, boolean>): number[] | undefined {
     const { paper, scaleX, scaleY } = frame;
-    const bounds = sourcePlacementBounds(owner.getBoundingClientRect(), rects, paper, scaleX, scaleY);
+    const box = owner.getBoundingClientRect();
+    if (owner.dataset.docxTextboxSourcePosition === 'page-offset') {
+      const left = ptToPx(this.anchorNumber(owner, 'h-offset') ?? NaN);
+      const top = ptToPx(this.anchorNumber(owner, 'v-offset') ?? NaN);
+      if (!(left >= paper.width / scaleX || top >= paper.height / scaleY)
+        || Math.abs((box.left - paper.left) / scaleX - left) >= 0.1
+        || Math.abs((box.top - paper.top) / scaleY - top) >= 0.1) return;
+    }
+    const bounds = sourcePlacementBounds(box, rects, paper, scaleX, scaleY);
     if (!bounds) return;
     let partial = partialInk?.get(owner);
     if (partial === undefined) {
@@ -1954,7 +1975,7 @@ export class PaginationEngine {
       if (this.inspectedSourceText.has(element)) return;
       this.inspectedSourceText.add(element);
     }
-    const owner = element.parentElement?.closest<HTMLElement>('[data-docx-textbox-source-clip="true"], [data-docx-textbox-source-position="true"]');
+    const owner = element.parentElement?.closest<HTMLElement>('[data-docx-textbox-source-clip="true"], [data-docx-textbox-source-position]');
     if (!owner || (!eligibleSourceTextBox(owner) && !eligibleSourceTextBox(owner, true))) return;
     if (!this.sourceClipBoxes.has(owner) && !paper) {
       owner.dataset.docxSourceClipId = `textbox-${++this.sourceClipBoxSequence}`;
@@ -2033,7 +2054,7 @@ export class PaginationEngine {
         const bounds = textBounds(rect, [], frame.paper, frame.scaleX, frame.scaleY);
         if (bounds.some((value, index) => Math.abs(value - proof.host!.bounds[index]) >= 0.1)) return false;
       }
-      const owner = element.parentElement?.closest<HTMLElement>('[data-docx-textbox-source-position="true"]');
+      const owner = element.parentElement?.closest<HTMLElement>('[data-docx-textbox-source-position]');
       if (!owner || owner.dataset.docxSourceClipId !== proof.boxId || !eligibleSourceTextBox(owner, true)) return false;
       const bounds = this.sourceTextPlacementBounds(owner, rects, frame, partialInk);
       return bounds?.length === proof.placement.length
@@ -7582,6 +7603,16 @@ export class PaginationEngine {
       if (element.hasAttribute("data-docx-tab") && this.view.getComputedStyle(element).borderBottomStyle === "none") return false;
       return outside(element.getBoundingClientRect());
     });
+  }
+
+  private prepareSourceTextBoxSizes(section: HTMLElement, dims: PageDimensions): void {
+    const context = { staticLeft: 0, staticTop: 0, lineHeight: 0, paragraphLeft: 0,
+      paragraphTop: 0, paragraphWidth: 0, paragraphHeight: 0 };
+    for (const box of Array.from(section.querySelectorAll<HTMLElement>('[data-docx-textbox-source-position="page-offset"]'))) {
+      // Page percentages have no host or page-parity dependency. Resolve them before the
+      // pristine text/geometry snapshot, never after a placement has already lost content.
+      if (eligibleSourceTextBox(box, true)) this.sizeDrawingAnchor(box, dims, 1, context);
+    }
   }
 
   private sizeDrawingAnchor(anchor: HTMLElement, dims: PageDimensions, pageNumber: number,
