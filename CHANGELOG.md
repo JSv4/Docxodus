@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Browser CI and npm release preflight use Ubuntu 24.04, supported by the locked Playwright browsers (#1580).
+
 ## [15.1.0] - 2026-11-05
 
 ### Added
