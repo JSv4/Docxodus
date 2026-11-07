@@ -54,10 +54,14 @@ test('an implicit fixed box does not claim explicit no-autofit provenance', asyn
   })).rejects.toThrow(/has no measurable fragment/);
 });
 
-for (const paragraphRelative of [false, true]) test(`an implicit ${paragraphRelative ? 'paragraph-relative' : 'page-relative'} box wholly outside paper reports source placement without internal clipping eligibility`, async ({ browser }) => {
+for (const paragraphRelative of [false, true]) for (const right of [false, true]) for (const markup of [false, true])
+test(`an implicit ${paragraphRelative ? 'paragraph-relative' : 'page-relative'} box outside the ${right ? 'right' : 'left'} paper edge reports source placement, balloons ${markup}`, async ({ browser }, testInfo) => {
   test.setTimeout(120_000);
-  const result = await renderDocxArtifacts(sourceTextboxClipDocx('drawing', 'implicit', true, 'body', paragraphRelative), {
-    browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'hidden',
+  const bytes = sourceTextboxClipDocx('drawing', 'implicit', true, 'body', paragraphRelative, { markup, right });
+  writeFileSync(testInfo.outputPath('quail-placement.docx'), bytes);
+  const result = await renderDocxArtifacts(bytes, {
+    browser, outputs: ['html', 'pdf'], reviewProfile: markup ? 'markup' : 'final', commentProfile: markup ? 'margin' : 'hidden',
+    ...(markup ? { markupPresentation: 'word' as const, commentColumnPlacement: 'balloons' as const } : {}),
   });
   expect(result.renderReport.warnings.filter(w => w.code === 'source_text_clipped')).toHaveLength(3);
   expect(result.html).toContain('data-docx-textbox-source-position="true"');

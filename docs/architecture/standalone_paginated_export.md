@@ -581,6 +581,11 @@ paper, so glyph rounding cannot hide originally visible text. Both placement and
 also refuse this proof if any sibling ink crosses the paper edge. This does not admit internal
 clipping in implicit boxes or clipping by an ordinary flow band.
 
+Balloon layout keeps the original paper clip on its page-content holder. Placement proofs use
+that holder's origin and measured scale to compare authored coordinates before and after shrink,
+including viewer zoom. Visible PageMap fragments still use physical-sheet coordinates; the
+proof does not recapture changed text, boxes or paragraph hosts after balloon layout.
+
 Each newly admitted nonblank omission produces a `source_text_clipped` warning with its canonical
 anchor ID. `unsupportedContent: "strict"` rejects it at `output_verification`. Source text remains
 in the clipped HTML story, and its page citation is unavailable because it has no painted fragment.

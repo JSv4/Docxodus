@@ -409,6 +409,8 @@ class MarkupSheet {
     this.layer = placed(`${cssPrefix}markup-layer`, 0, paperHeight - this.layerHeight, this.width, this.layerHeight);
     this.layer.style.transformOrigin = "left bottom";
     const pageHolder = placed(`${cssPrefix}markup-page`, 0, this.pageTop, paperWidth, paperHeight);
+    // Reparenting must retain the original paper clip after the page shrinks beside balloons.
+    pageHolder.style.overflow = "hidden";
     pageHolder.append(...Array.from(page.element.childNodes));
     const area = placed(`${cssPrefix}markup-area`, this.columnRight + WORD.greyStart, this.pageTop,
       this.width - this.columnRight - WORD.greyStart, paperHeight);
