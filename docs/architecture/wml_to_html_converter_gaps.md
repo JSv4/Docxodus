@@ -338,18 +338,23 @@ Content inside DrawingML shapes (`a:txBody`, `wps:txbx`) may not be fully extrac
 
 Inline shapes that are not text boxes (`wps:wsp`, `wpg:wgp` groups, `wpc:wpc` canvases) render as
 SVG sized to their `wp:extent` (`WmlToHtmlConverter.Shapes.cs`, issue #1270). Preset `rect`,
-`roundRect`, `hexagon`, `ellipse`, `line` and `straightConnector1` geometry is drawn with its fill and outline,
+`roundRect`, `hexagon`, `triangle`, `star5`, `ellipse`, `line` and `straightConnector1` geometry is drawn with its fill and outline,
 from `wps:spPr` or the `wps:style` theme references, honouring `rot`/`flipH`/`flipV`. Colours may be
 sRGB, theme, system, scRGB or HSL, with luminance, shade, tint and alpha modifiers; a gradient is drawn
 as its first stop, a pattern as its foreground, and `a:grpFill` as the enclosing group's fill. A
 group's child coordinate space is mapped onto its frame in the geometry itself, not by an SVG
 transform, so outlines keep their width as Word and LibreOffice draw them; a rotated shape inside a
-non-uniformly scaled group is rotated in the scaled space (an approximation). Coordinates are EMUs
+non-uniformly scaled group is rotated in the scaled space. This approximation preserves paint and
+text, reports a partial drawing, and reaches strict unsupported-content policy in both SVG and
+textbox group paths. A root rotation, reflections, half-turns and cancelling nested scales do not
+trigger this diagnostic. Coordinates are EMUs
 under one root scale, with no viewBox for ordinary stored extents, so a zero-height line still draws.
 Positive relative dimensions use a responsive SVG viewport; outlines retain physical width rather
 than stretching with that viewport. Relative shape sizes are applied before block measurement so
 their text clearance participates in pagination. Hexagons evaluate the preset's `adj` and `vf`
-values in the source coordinate space before group scaling; unsupported adjustment formulas are
+values in the source coordinate space before group scaling. Triangles clamp `adj` to 0–100000
+(default 50000); five-point stars clamp `adj` to 0–50000 (default 19098), with `hf=105146` and
+`vf=110557` defaults. These presets accept numeric `val` adjustments; unsupported formulas are
 reported instead of silently replacing them with defaults.
 
 Not drawn: other preset and custom geometry, preset colours (`a:prstClr`), picture fills, line

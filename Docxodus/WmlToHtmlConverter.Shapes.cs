@@ -93,6 +93,9 @@ namespace Docxodus
             var style = new Dictionary<string, string> { { "display", "inline-block" } };
             AddEmuDimensions(style, width, height);
             wrapper.AddAnnotation(style);
+            if (HasUnrepresentedGroupRotation(content, frame))
+                ReportShapeLayoutLoss(wrapper, settings ?? new WmlToHtmlConverterSettings(),
+                    "Rotation within an unequally scaled group is approximated", content!.Name.LocalName);
             return PlaceDrawingShape(wrapper, container, settings);
         }
 
@@ -545,6 +548,39 @@ namespace Docxodus
                 new(box.X * ScaleX + OffsetX, box.Y * ScaleY + OffsetY, box.Width * ScaleX, box.Height * ScaleY);
         }
 
+        private static ShapeMap GroupChildMap(XElement? properties, ShapeBox frame)
+        {
+            var transform = properties?.Element(A.xfrm);
+            var offset = transform?.Element(A.chOff);
+            var extent = transform?.Element(A.chExt);
+            var childWidth = (long?)extent?.Attribute(NoNamespace.cx) ?? frame.Width;
+            var childHeight = (long?)extent?.Attribute(NoNamespace.cy) ?? frame.Height;
+            var scaleX = childWidth > 0 ? frame.Width / childWidth : 1;
+            var scaleY = childHeight > 0 ? frame.Height / childHeight : 1;
+            return new ShapeMap(scaleX, scaleY, frame.X - ((long?)offset?.Attribute(NoNamespace.x) ?? 0) * scaleX,
+                frame.Y - ((long?)offset?.Attribute(NoNamespace.y) ?? 0) * scaleY);
+        }
+
+        private static bool HasUnrepresentedGroupRotation(XElement? source, ShapeBox frame)
+        {
+            if (source == null || source.Name != WpgGroup && source.Name != WpgNestedGroup && source.Name != WpcCanvas)
+                return false;
+            var map = GroupChildMap(source.Element(WpgGroupProperties), frame);
+            foreach (var child in source.Elements())
+            {
+                var properties = child.Element(WPS.spPr) ?? child.Element(Pic.spPr) ?? child.Element(WpgGroupProperties);
+                var transform = properties?.Element(A.xfrm);
+                if (ChildFrame(transform) is not { } childFrame) continue;
+                // Child rotation precedes ancestor scaling in DrawingML. Mapping its frame
+                // then rotating cannot represent unequal scales, except for half turns.
+                if (Math.Abs(map.ScaleX - map.ScaleY) > 1e-10 * Math.Max(map.ScaleX, map.ScaleY)
+                    && ((long?)transform?.Attribute(NoNamespace.rot) ?? 0) % 10800000 != 0)
+                    return true;
+                if (HasUnrepresentedGroupRotation(child, map.Apply(childFrame))) return true;
+            }
+            return false;
+        }
+
         /// <summary>The document's theme, read once per drawing and only if a color names it.</summary>
         private sealed class ShapeContext
         {
@@ -575,16 +611,7 @@ namespace Docxodus
             XElement? inheritedFill, ShapeContext context)
         {
             var transform = groupProperties?.Element(A.xfrm);
-            var childOffset = transform?.Element(A.chOff);
-            var childExtent = transform?.Element(A.chExt);
-            var childX = (double?)(long?)childOffset?.Attribute(NoNamespace.x) ?? 0;
-            var childY = (double?)(long?)childOffset?.Attribute(NoNamespace.y) ?? 0;
-            var childWidth = (double?)(long?)childExtent?.Attribute(NoNamespace.cx) ?? frame.Width;
-            var childHeight = (double?)(long?)childExtent?.Attribute(NoNamespace.cy) ?? frame.Height;
-            // An axis with no child extent (a group of only horizontal lines, say) is not scaled.
-            var scaleX = childWidth > 0 ? frame.Width / childWidth : 1;
-            var scaleY = childHeight > 0 ? frame.Height / childHeight : 1;
-            var map = new ShapeMap(scaleX, scaleY, frame.X - childX * scaleX, frame.Y - childY * scaleY);
+            var map = GroupChildMap(groupProperties, frame);
 
             // A child with a:grpFill takes the nearest group fill that is not itself a:grpFill.
             var groupFill = groupProperties?.Elements().FirstOrDefault(IsFillChoice);
@@ -658,6 +685,8 @@ namespace Docxodus
                 "rect" => ShapeRectangle(frame),
                 "roundRect" => RoundedRectangle(properties!.Element(A.prstGeom)!, frame),
                 "hexagon" => Hexagon(properties!, frame),
+                "triangle" => Triangle(properties!.Element(A.prstGeom)!, frame),
+                "star5" => FivePointStar(properties!.Element(A.prstGeom)!, frame),
                 "ellipse" => new XElement(Svg + "ellipse",
                     new XAttribute("cx", Format(frame.X + frame.Width / 2)),
                     new XAttribute("cy", Format(frame.Y + frame.Height / 2)),
@@ -740,9 +769,53 @@ namespace Docxodus
             var points = new[] { (frame.X, centerY), (frame.X + inset, centerY - deltaY),
                 (frame.X + frame.Width - inset, centerY - deltaY), (frame.X + frame.Width, centerY),
                 (frame.X + frame.Width - inset, centerY + deltaY), (frame.X + inset, centerY + deltaY) };
-            return new XElement(Svg + "polygon", new XAttribute("points",
-                string.Join(" ", points.Select(point => Format(point.Item1) + "," + Format(point.Item2)))));
+            return ShapePolygon(points);
         }
+
+        private static XElement? Triangle(XElement preset, ShapeBox frame)
+        {
+            var adjustment = PresetAdjustment(preset, "adj", 50000);
+            return adjustment == null ? null : ShapePolygon(
+                (frame.X, frame.Y + frame.Height),
+                (frame.X + frame.Width * Math.Clamp(adjustment.Value, 0, 100000) / 100000, frame.Y),
+                (frame.X + frame.Width, frame.Y + frame.Height));
+        }
+
+        private static XElement? FivePointStar(XElement preset, ShapeBox frame)
+        {
+            var adjustment = PresetAdjustment(preset, "adj", 19098);
+            var horizontal = PresetAdjustment(preset, "hf", 105146);
+            var vertical = PresetAdjustment(preset, "vf", 110557);
+            if (adjustment == null || horizontal == null || vertical == null) return null;
+            // ECMA presetShapeDefinitions: scaled half-extents, a pinned inner radius, and
+            // 18/54 degree tip coordinates. The top tip stays at t even when vf is overridden.
+            var width = frame.Width / 2 * horizontal.Value / 100000;
+            var height = frame.Height / 2 * vertical.Value / 100000;
+            var inner = Math.Clamp(adjustment.Value, 0, 50000) / 50000;
+            var x = frame.X + frame.Width / 2;
+            var y = frame.Y + height;
+            var cos18 = Math.Cos(Math.PI / 10);
+            var sin18 = Math.Sin(Math.PI / 10);
+            var cos54 = Math.Cos(3 * Math.PI / 10);
+            var sin54 = Math.Sin(3 * Math.PI / 10);
+            return ShapePolygon(
+                (x - width * cos18, y - height * sin18),
+                (x - width * inner * cos54, y - height * inner * sin54),
+                (x, frame.Y),
+                (x + width * inner * cos54, y - height * inner * sin54),
+                (x + width * cos18, y - height * sin18),
+                (x + width * inner * cos18, y + height * inner * sin18),
+                (x + width * cos54, y + height * sin54),
+                (x, y + height * inner),
+                (x - width * cos54, y + height * sin54),
+                (x - width * inner * cos18, y + height * inner * sin18));
+        }
+
+        private static XElement? ShapePolygon(params (double X, double Y)[] points) =>
+            points.All(point => double.IsFinite(point.X) && double.IsFinite(point.Y))
+                ? new XElement(Svg + "polygon", new XAttribute("points",
+                    string.Join(" ", points.Select(point => Format(point.X) + "," + Format(point.Y)))))
+                : null;
 
         /// <summary>
         /// The SVG transform for an <c>a:xfrm</c>'s flips and rotation about the frame's center,

@@ -2,6 +2,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System.IO;
+using System.Globalization;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
@@ -167,6 +168,125 @@ public class HtmlDrawingShapeTests
         Assert.Equal("152403.048", (string?)rect.Attribute("rx"));
     }
 
+    [Theory]
+    [InlineData("triangle", 3, false)]
+    [InlineData("triangle", 3, true)]
+    [InlineData("star5", 10, false)]
+    [InlineData("star5", 10, true)]
+    public void PresetPolygon_IsDrawnAloneAndInsideAGroup(string preset, int vertices, bool grouped)
+    {
+        var shape = Shape(preset);
+        var drawing = grouped ? InlineDrawing(GroupUri, Group(shape)) : InlineDrawing(ShapeUri, shape);
+        var paragraph = MiddleParagraph(Docx(drawing), placeholders: true);
+        var polygon = Assert.Single(Drawn(OnlySvg(paragraph), "polygon"));
+        Assert.Equal(vertices, ((string)polygon.Attribute("points")!).Split(' ').Length);
+        Assert.Equal("#19647E", (string?)polygon.Attribute("fill"));
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-content-type") != null);
+        Assert.DoesNotContain("[SHAPE]", paragraph.Value);
+    }
+
+    [Theory]
+    [InlineData(-10000, 0)]
+    [InlineData(25000, 457200)]
+    [InlineData(75000, 1371600)]
+    [InlineData(150000, 1828800)]
+    public void TriangleApex_FollowsTheClampedAdjustment(int adjustment, int apex)
+    {
+        var shape = Shape("triangle").Replace("<a:avLst/>", $"<a:avLst><a:gd name=\"adj\" fmla=\"val {adjustment}\"/></a:avLst>");
+        var polygon = Assert.Single(Drawn(OnlySvg(MiddleParagraph(Docx(InlineDrawing(ShapeUri, shape)))), "polygon"));
+        Assert.Equal($"0,914400 {apex},0 1828800,914400", (string?)polygon.Attribute("points"));
+    }
+
+    [Fact]
+    public void StarWithZeroInnerRadius_ReturnsToItsDeclaredCenterBetweenTips()
+    {
+        var shape = Shape("star5").Replace("<a:avLst/>", "<a:avLst><a:gd name=\"adj\" fmla=\"val 0\"/>"
+            + "<a:gd name=\"hf\" fmla=\"val 100000\"/><a:gd name=\"vf\" fmla=\"val 100000\"/></a:avLst>");
+        var polygon = Assert.Single(Drawn(OnlySvg(MiddleParagraph(Docx(InlineDrawing(ShapeUri, shape)))), "polygon"));
+        var points = ((string)polygon.Attribute("points")!).Split(' ');
+        Assert.Equal(10, points.Length);
+        Assert.Equal("914400,0", points[2]);
+        Assert.All(new[] { 1, 3, 5, 7, 9 }, index => Assert.Equal("914400,457200", points[index]));
+        // Native preset definitions place the left upper outer tip at 18 degrees.
+        var left = points[0].Split(',').Select(v => double.Parse(v, CultureInfo.InvariantCulture)).ToArray();
+        Assert.Equal(44753.921, left[0], 3);
+        Assert.Equal(315917.43, left[1], 3);
+    }
+
+    [Theory]
+    [InlineData("triangle", "adj", "*/ w 1 2")]
+    [InlineData("star5", "adj", "val NaN")]
+    [InlineData("star5", "hf", "val 1e309")]
+    [InlineData("star5", "vf", "val 1e308")]
+    public void UnsupportedPresetAdjustments_KeepThePlaceholder(string preset, string guide, string formula)
+    {
+        var shape = Shape(preset).Replace("<a:avLst/>", $"<a:avLst><a:gd name=\"{guide}\" fmla=\"{formula}\"/></a:avLst>");
+        AssertUnrenderedBox(MiddleParagraph(Docx(InlineDrawing(ShapeUri, shape))));
+    }
+
+    [Fact]
+    public void DefaultStar_FollowsThePublishedPresetPath()
+    {
+        var polygon = Assert.Single(Drawn(OnlySvg(MiddleParagraph(Docx(InlineDrawing(ShapeUri, Shape("star5"))))), "polygon"));
+        // Independently evaluated from the published avLst/gdLst/pathLst, at a 1828800×914400 extent.
+        var expected = new[] { 1.934, 349268.833, 698543.295, 349271.291, 914400, 0,
+            1130256.705, 349271.291, 1828798.066, 349268.833, 1263663.485, 565127.905,
+            1479529.084, 914397.677, 914400, 698534.628, 349270.916, 914397.677, 565136.515, 565127.905 };
+        var actual = ((string)polygon.Attribute("points")!).Split(' ', ',')
+            .Select(value => double.Parse(value, CultureInfo.InvariantCulture)).ToArray();
+        Assert.Equal(expected.Length, actual.Length);
+        for (var index = 0; index < actual.Length; index++) Assert.Equal(expected[index], actual[index], 3);
+    }
+
+    [Fact]
+    public void AdjustedTriangle_UsesTheMappedGroupFrameForItsFlipAndRotation()
+    {
+        var shape = Shape("triangle", xfrm: " flipH=\"1\" rot=\"5400000\"", cx: 457200, cy: 228600)
+            .Replace("<a:off x=\"0\" y=\"0\"/>", "<a:off x=\"1000\" y=\"1000\"/>")
+            .Replace("<a:avLst/>", "<a:avLst><a:gd name=\"adj\" fmla=\"val 25000\"/></a:avLst>");
+        var group = Group(shape, "1000", 914400, 457200);
+        var polygon = Assert.Single(Drawn(OnlySvg(MiddleParagraph(Docx(InlineDrawing(GroupUri, group)))), "polygon"));
+        Assert.Equal("0,457200 228600,0 914400,457200", (string?)polygon.Attribute("points"));
+        Assert.Equal("rotate(90 457200 228600) matrix(-1 0 0 1 914400 0)", (string?)polygon.Attribute("transform"));
+    }
+
+    [Theory]
+    [InlineData("child", true, false)]
+    [InlineData("child", true, true)]
+    [InlineData("nested", true, false)]
+    [InlineData("cancelled", false, false)]
+    [InlineData("root", false, false)]
+    [InlineData("reflection", false, false)]
+    [InlineData("half-turn", false, false)]
+    public void UnequallyScaledGroupRotation_IsReportedWithoutDeletingPaint(string kind, bool partial, bool text)
+    {
+        var transform = kind == "reflection" ? " flipH=\"1\"" : kind == "half-turn" ? " rot=\"10800000\""
+            : kind is "root" or "nested" ? "" : " rot=\"5400000\"";
+        var child = Shape("star5", xfrm: transform);
+        if (text) child = child.Replace("<wps:bodyPr/>", "<wps:txbx><w:txbxContent><w:p><w:r>"
+            + "<w:t>Group label</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/>");
+        if (kind is "nested" or "cancelled")
+        {
+            child = Group(child, childCx: kind == "cancelled" ? 3657600 : 1828800)
+                .Replace("wpg:wgp", "wpg:grpSp");
+            if (kind == "nested") child = child.Replace("<a:xfrm>", "<a:xfrm rot=\"5400000\">");
+        }
+        var group = Group(child, childCx: 914400);
+        if (kind == "root") group = group.Replace("<wpg:grpSpPr><a:xfrm>", "<wpg:grpSpPr><a:xfrm rot=\"5400000\">");
+        var bytes = Docx(InlineDrawing(GroupUri, group));
+        using (var stream = new MemoryStream(bytes))
+        using (var document = WordprocessingDocument.Open(stream, false))
+            Assert.Empty(new OpenXmlValidator(DocumentFormat.OpenXml.FileFormatVersions.Microsoft365).Validate(document));
+        var html = XElement.Parse(HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions
+        {
+            FabricateCssClasses = false, RenderUnsupportedContentPlaceholders = true,
+        }));
+        Assert.Single(html.Descendants().Where(e => e.Name.LocalName == "polygon"));
+        Assert.Equal(partial, html.Descendants().Any(e => (string?)e.Attribute("data-docx-shape") == "partial"));
+        if (partial) Assert.Contains(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+        if (text) Assert.Contains("Group label", html.Value);
+    }
+
     [Fact]
     public void FlippedLine_RunsCornerToCornerWithItsOutline()
     {
@@ -239,18 +359,18 @@ public class HtmlDrawingShapeTests
 
     [Fact]
     public void UndrawnGeometry_ReservesItsExtentAsAnUnrenderedBox() =>
-        AssertUnrenderedBox(MiddleParagraph(Docx(InlineDrawing(ShapeUri, Shape("triangle")))));
+        AssertUnrenderedBox(MiddleParagraph(Docx(InlineDrawing(ShapeUri, Shape("cloud")))));
 
     [Fact]
     public void InlineDrawingWithUnrecognizedContent_ReservesItsExtentAsAnUnrenderedBox() =>
         AssertUnrenderedBox(MiddleParagraph(Docx(InlineDrawing("urn:example:unknown", "<unknown xmlns=\"urn:example:unknown\"/>"))));
 
     [Theory]
-    [InlineData("triangle", "[SHAPE]")]
+    [InlineData("cloud", "[SHAPE]")]
     [InlineData("missing-picture", "[UNSUPPORTED IMAGE]")]
     public void WithPlaceholdersOn_AnUndrawableDrawingIsTheStandardPlaceholderAtItsExtent(string kind, string label)
     {
-        var drawing = kind == "triangle" ? InlineDrawing(ShapeUri, Shape("triangle")) : MissingPicture;
+        var drawing = kind == "cloud" ? InlineDrawing(ShapeUri, Shape("cloud")) : MissingPicture;
         var placeholder = Assert.Single(MiddleParagraph(Docx(drawing), placeholders: true).Descendants(),
             e => (string?)e.Attribute("data-docx-shape") == "unrendered");
 
@@ -265,7 +385,7 @@ public class HtmlDrawingShapeTests
     [Fact]
     public void GroupWithAnUndrawableChild_DrawsTheRestAndIsMarkedPartial()
     {
-        var group = Group(Shape() + Shape("triangle"));
+        var group = Group(Shape() + Shape("cloud"));
         var plain = OnlySvg(MiddleParagraph(Docx(InlineDrawing(GroupUri, group)))).Parent!;
         var flagged = OnlySvg(MiddleParagraph(Docx(InlineDrawing(GroupUri, group)), placeholders: true)).Parent!;
 

@@ -5178,6 +5178,14 @@ benchmark records them rather than changing the source values to match LibreOffi
 Hexagon geometry follows the ECMA preset equations (`adj=25000`, `vf=115470` by default),
 including the shorter source side and subsequent group transform. The definitions were checked
 against [LibreOffice's published copy at 5044a9a](https://github.com/LibreOffice/core/blob/5044a9a5719bba9402184438e5d66586de01d20f/oox/source/drawingml/customshapes/presetShapeDefinitions.xml).
+Triangle and five-point-star paths use the same published preset definitions, including apex,
+inner-radius and horizontal/vertical factor adjustments. They are evaluated in the source frame
+before group scaling. Unequal parent scaling with a rotated child remains an approximation and
+now reports partial content in both geometry-only and textbox groups; strict export rejects it.
+This is partial coverage of #1554: OMML, custom paths, other presets, EMF/WMF and VML lines remain
+outside this change. Native LibreOffice references and independent formula evaluation support the
+new polygons; no new Word reference is claimed.
+
 Simple VML rectangles follow the declared fill/stroke flags and colours. Their default outline is
 one pixel ([Microsoft VML reference](https://learn.microsoft.com/en-us/windows/win32/vml/msdn-online-vml-strokeweight-attribute));
 unitless stroke weights are EMUs. Drawing these primitives avoids injecting a placeholder label
