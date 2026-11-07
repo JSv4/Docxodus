@@ -61,7 +61,7 @@ test(`wrapped grid paragraph, table=${entry.table}, arbitrary offset=${!!entry.s
   await page.setContent(`<style>p {font:12pt/normal 'Liberation Serif';margin:0;--docx-auto-line-spacing:1;--docx-line-grid:18pt}</style>
     <div id="staging"><div data-section-index="0" data-page-width="612" data-page-height="790"
       data-content-width="468" data-content-height="646" data-margin-top="72" data-margin-right="72"
-      data-margin-bottom="72" data-margin-left="72"><p><span>${Array.from({ length: 900 }, (_, i) => `Cedar${i}`).join(' ')}</span></p>
+      data-margin-bottom="72" data-margin-left="72"><p><span style="white-space:pre-wrap">${Array.from({ length: 900 }, (_, i) => `Cedar${i}`).join(' ')}</span></p>
       ${entry.table ? '<table><tr><td>Separate table</td></tr></table>' : ''}</div></div><div id="pages"></div>`);
   await page.addScriptTag({ path: fileURLToPath(new URL('../dist/pagination.bundle.js', import.meta.url)) });
   const result = await page.evaluate(async shifted => {
@@ -71,6 +71,7 @@ test(`wrapped grid paragraph, table=${entry.table}, arbitrary offset=${!!entry.s
     const { prepareWordText } = await import(textUrl);
     const staging = document.getElementById('staging')!, pages = document.getElementById('pages')!;
     applyUnroundedNormalLineHeights(staging); prepareWordText(staging);
+    const fitted = staging.querySelector('p > span')!.getAttribute('data-docx-word-fit');
     if (shifted) staging.querySelector<HTMLElement>('p > span')!.style.top = '-1px';
     new (window as any).DocxodusPagination.PaginationEngine(staging, pages,
       { scale: 1, showPageNumbers: false, fragmentParagraphs: true }).paginate();
@@ -81,8 +82,9 @@ test(`wrapped grid paragraph, table=${entry.table}, arbitrary offset=${!!entry.s
       const range = document.createRange(); range.setStart(node, match.index!); range.setEnd(node, match.index! + match[0].length);
       rows.add(Math.round(range.getBoundingClientRect().top * 4));
     }
-    return { rows: rows.size, text: Array.from(pages.querySelectorAll('.page-content p')).map(p => p.textContent).join(' ') };
+    return { fitted, rows: rows.size, text: Array.from(pages.querySelectorAll('.page-content p')).map(p => p.textContent).join(' ') };
   }, !!entry.shifted);
+  expect(result.fitted).toBe(entry.table ? null : '0');
   if (entry.shifted) expect(result.rows).toBeGreaterThan(35);
   else expect(result.rows).toBe(35);
   expect(result.text.match(/Cedar\d+/g)).toEqual(Array.from({ length: 900 }, (_, i) => `Cedar${i}`));
