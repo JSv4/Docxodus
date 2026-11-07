@@ -2369,7 +2369,7 @@ follow-up edit targets) works unchanged on a slice. Throws
 
 ## ReplaceTextRange — surgical text edits
 
-`session.ReplaceTextRange(anchorId, find, replace, options?)` finds every literal occurrence of `find` in one paragraph/heading/list-item's flat text and substitutes `replace` for each, returning an `EditResult` per attempted match. Built on `Grep` — same fragment walker, opposite direction.
+`session.ReplaceTextRange(anchorId, find, replace, options?)` finds every literal occurrence of `find` in one paragraph/heading/list-item's flat text and substitutes `replace` for each, returning an `EditResult` per attempted match. Uses the same visible run-text coordinates as `Grep`.
 
 Three entry points covering the natural workflows:
 
@@ -2382,6 +2382,14 @@ session.ReplaceTextAtSpan(anchor, spanStart, spanLength, repl) // exact-span var
 `ReplaceOptions`: `IgnoreCase` (case-insensitive find), `MaxReplacements` (cap on
 how many to apply), `ExpectedMatchCount` (require the exact live count before the
 cap), and `Preconditions` (the common optimistic guard object).
+
+Textboxes represented in both `mc:Choice` and `mc:Fallback` are searched only in the selected
+branch. `ReplaceMatch`, `ReplaceTextAtSpan`, `ReplaceTextRange` and `ReplaceTextAtSpanWithFormat`
+apply the same spans to corresponding paragraphs in every representation, preserving each
+branch's own runs, formatting and unique revision ids. They commit as one undo/version unit
+and emit one visible patch. An explicit fallback anchor follows the same synchronization.
+Correspondence requires matching textbox counts and complete paragraph text/ancestry sequences;
+divergent or nested alternatives return `UnsupportedInlineBoundary` before mutation.
 
 ### No-match contract
 

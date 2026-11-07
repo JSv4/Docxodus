@@ -100,9 +100,12 @@ public sealed partial class DocxSession
         var pattern = System.Text.RegularExpressions.Regex.Escape(find);
         replace = MaybeApplySmartQuotes(replace);
 
-        var matches = Grep(pattern, regexOpts)
-            .Where(m => m.EnclosingAnchor.Anchor.Id == target.Anchor.Id)
-            .ToList();
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return new[] { EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId) };
+        var matches = System.Text.RegularExpressions.Regex.Matches(
+                Internal.RunTextMap.Build(element).FlatText, pattern, regexOpts)
+            .Select(m => new CharSpan(m.Index, m.Length)).ToList();
         if (EvaluatePreconditions(guards, matches.Count) is { } countPreconditionError)
             return new[] { new EditResult { Success = false, Error = countPreconditionError } };
         if (matches.Count == 0)
@@ -118,45 +121,10 @@ public sealed partial class DocxSession
         if (opts.MaxReplacements is int cap) matches = matches.Take(cap).ToList();
         if (matches.Count == 0) return Array.Empty<EditResult>();
 
-        var element = target.Resolve(_doc!);
-        if (element is null)
-            return new[] { EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId) };
-        if (replace.Length > 0 && matches.Any(m => ReplacementLandsInMove(element, m)))
-            return new[] { MoveDestinationRefusal(anchorId) };
-
-        _history.RecordPreOp(TakeSnapshot());
-        try
-        {
-            var tracked = _trackedChanges == TrackedChangeMode.RenderInline;
-            var revisionAuthor = _revisionAuthor ?? "docxodus";
-            var revisionDate = tracked
-                ? RevisionDateNow()
-                : null;
-
-            // Reverse offset order so earlier-offset matches' SpanInElement stays valid
-            // after later-offset edits land — see DS112/DS115.
-            foreach (var match in matches.OrderByDescending(m => m.Span.Start))
-            {
-                if (tracked)
-                    ApplyFragmentReplacementTracked(
-                        element, match, replace, revisionAuthor, revisionDate!);
-                else
-                    ApplyFragmentReplacement(element, match, replace);
-            }
-
-            InvalidateProjectionCache();
-            var success = new EditResult
-            {
-                Success = true,
-                Modified = new[] { target.Anchor },
-                Patch = PatchFor(target),
-            };
-            return Enumerable.Repeat(success, matches.Count).ToArray();
-        }
-        catch (Exception ex)
-        {
-            return new[] { FailInternal(ex, anchorId) };
-        }
+        var result = ReplaceTextSpans(target, matches, replace, null);
+        return result.Success
+            ? Enumerable.Repeat(result, matches.Count).ToArray()
+            : new[] { result };
     }
 
     /// <summary>
@@ -197,29 +165,7 @@ public sealed partial class DocxSession
         if (format is null) return EditResult.Fail(EditErrorCode.MalformedMarkdown, "null format op", anchorId);
         if (XmlText.ValidatePayload(replace, anchorId) is { } textError) return EditResult.Fail(textError);
 
-        // These two operations touch only snapshot-scoped XML/styles and owned story images.
-        // Reuse transaction rollback/history handling without serializing the entire OPC package.
-        using var transaction = BeginTransaction(fullPackage: false);
-        // When a format step follows, its result (and patch) is the one returned: the text step's
-        // patch would be a whole-document projection that is computed and thrown away.
-        EditResult result;
-        if (replace.Length > 0) _patchSuppression++;
-        try
-        {
-            result = ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace, deletedTextSide);
-        }
-        finally
-        {
-            if (replace.Length > 0) _patchSuppression--;
-        }
-        if (!result.Success) return result;
-        if (replace.Length > 0)
-        {
-            result = ApplyFormat(anchorId, new CharSpan(spanStart, replace.Length), format);
-            if (!result.Success) return result;
-        }
-        transaction.Commit();
-        return result;
+        return ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace, deletedTextSide, format);
     }
 
     /// <summary>
@@ -271,7 +217,8 @@ public sealed partial class DocxSession
         ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace, (DeletedTextSide?)deletedTextSide);
 
     private EditResult ReplaceTextAtSpan(
-        string anchorId, int spanStart, int spanLength, string replace, DeletedTextSide? deletedTextSide)
+        string anchorId, int spanStart, int spanLength, string replace, DeletedTextSide? deletedTextSide,
+        FormatOp? format = null)
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (XmlText.ValidatePayload(replace, anchorId) is { } textError) return EditResult.Fail(textError);
@@ -282,69 +229,168 @@ public sealed partial class DocxSession
             return EditResult.Fail(EditErrorCode.AnchorWrongKind,
                 $"ReplaceTextAtSpan requires a paragraph/heading/list-item anchor; got kind={target.Anchor.Kind}", anchorId);
 
+        return ReplaceTextSpans(target, new[] { new CharSpan(spanStart, spanLength) },
+            MaybeApplySmartQuotes(replace), deletedTextSide, format);
+    }
+
+    private EditResult ReplaceTextSpans(
+        AnchorTarget target, IReadOnlyList<CharSpan> spans, string replace,
+        DeletedTextSide? deletedTextSide, FormatOp? format = null)
+    {
+        var targets = TextboxTextRepresentations(target);
+        if (targets is null)
+            return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
+                "textbox alternatives have different text or structure; reconcile them before editing", target.Anchor.Id);
+        var revisionDate = RevisionDateNow();
+        if (targets.Count == 1 && format is null)
+            return ReplaceTextSpansCore(target, spans, replace, deletedTextSide, revisionDate);
+
+        // Every physical branch keeps its own runs and revision ids. Roll back all branches
+        // if any existing text/format boundary check refuses, and publish only one patch.
+        using var transaction = BeginTransaction(fullPackage: false);
+        _patchSuppression++;
+        try
+        {
+            foreach (var alias in targets)
+            {
+                var result = ReplaceTextSpansCore(alias, spans, replace, deletedTextSide, revisionDate);
+                if (!result.Success) return result;
+                if (format is not null && replace.Length > 0)
+                {
+                    result = ApplyFormat(alias.Anchor.Id, new CharSpan(spans[0].Start, replace.Length), format);
+                    if (!result.Success) return result;
+                }
+            }
+        }
+        finally { _patchSuppression--; }
+        var success = new EditResult
+        {
+            Success = true,
+            Modified = targets.Select(t => t.Anchor).ToArray(),
+            Patch = PatchFor(targets[0]),
+        };
+        transaction.Commit();
+        return success;
+    }
+
+    private IReadOnlyList<AnchorTarget>? TextboxTextRepresentations(AnchorTarget target)
+    {
+        var element = target.Resolve(_doc!);
+        var textbox = element?.Ancestors(W.txbxContent).FirstOrDefault();
+        var alternate = textbox?.Ancestors(MC.AlternateContent).FirstOrDefault();
+        if (alternate is null) return new[] { target };
+        if (alternate.Ancestors(MC.AlternateContent).Any() || alternate.Descendants(MC.AlternateContent).Any())
+            return null; // A nested alternative has no unambiguous ordinal correspondence across every branch.
+
+        // Match only textboxes directly owned by this AlternateContent. Nested alternatives
+        // have their own correspondence; flattening them would pair unrelated shapes.
+        XElement[] Boxes(XElement branch) => branch.Descendants(W.txbxContent)
+            .Where(b => ReferenceEquals(b.Ancestors(MC.AlternateContent).FirstOrDefault(), alternate)).ToArray();
+        XElement[] Paragraphs(XElement box) => box.Descendants(W.p)
+            .Where(p => ReferenceEquals(p.Ancestors(W.txbxContent).FirstOrDefault(), box)).ToArray();
+        var branch = textbox!.Ancestors().First(e => ReferenceEquals(e.Parent, alternate));
+        var boxes = Boxes(branch);
+        var boxIndex = Array.IndexOf(boxes, textbox);
+        var paragraphs = Paragraphs(textbox);
+        var paragraphIndex = Array.IndexOf(paragraphs, element);
+        if (boxIndex < 0 || paragraphIndex < 0) return null;
+
+        var index = AnchorIndex().Values.Distinct().ToDictionary(t => (t.PartUri, t.Unid));
+        var aliases = new List<(AnchorTarget Target, bool Selected)>();
+        foreach (var other in alternate.Elements())
+        {
+            var otherBoxes = Boxes(other);
+            if (otherBoxes.Length != boxes.Length) return null;
+            var otherParagraphs = Paragraphs(otherBoxes[boxIndex]);
+            if (!paragraphs.Select(p => Internal.RunTextMap.Build(p).FlatText)
+                .SequenceEqual(otherParagraphs.Select(p => Internal.RunTextMap.Build(p).FlatText))) return null;
+            // Paragraphs in a table or block wrapper cannot be paired with ordinary siblings.
+            if (!paragraphs.Select(p => string.Join("/", p.Ancestors().TakeWhile(a => a != textbox).Select(a => a.Name)))
+                .SequenceEqual(otherParagraphs.Select(p => string.Join("/", p.Ancestors().TakeWhile(a => a != otherBoxes[boxIndex]).Select(a => a.Name)))))
+                return null;
+            var paragraph = otherParagraphs[paragraphIndex];
+            if (!index.TryGetValue((target.PartUri, (string?)paragraph.Attribute(PtOpenXml.Unid) ?? ""), out var alias))
+                return null;
+            aliases.Add((alias, WmlToMarkdownConverter.IsSelectedMarkup(paragraph)));
+        }
+        return aliases.OrderByDescending(a => a.Selected).Select(a => a.Target).ToArray();
+    }
+
+    private EditResult ReplaceTextSpansCore(
+        AnchorTarget target, IReadOnlyList<CharSpan> spans, string replace, DeletedTextSide? deletedTextSide, string revisionDate)
+    {
+        var anchorId = target.Anchor.Id;
         var element = target.Resolve(_doc!);
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
 
-        replace = MaybeApplySmartQuotes(replace);
-
         var map = Internal.RunTextMap.Build(element);
-        if (spanStart < 0 || spanLength < 0 || spanStart > map.FlatText.Length
-            || spanLength > map.FlatText.Length - spanStart)
-            return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
-                $"span {spanStart}+{spanLength} out of [0, {map.FlatText.Length}]", anchorId);
-        if (!XmlText.IsCharacterBoundary(map.FlatText, spanStart)
-            || !XmlText.IsCharacterBoundary(map.FlatText, spanStart + spanLength))
-            return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
-                "span boundaries must not split a UTF-16 surrogate pair", anchorId);
-
-        if (spanLength == 0)
-            return InsertTextAtBoundary(target, element, map, spanStart, replace, deletedTextSide);
-
-        var pieces = Internal.RunTextMap.ResolveRange(map, spanStart, spanLength);
-        if (pieces.Count == 0)
-            return EditResult.Fail(EditErrorCode.OffsetOutOfRange, "span resolved to no runs", anchorId);
-
-        // Synthesize fragments from the resolved pieces. The replacement helper only
-        // reads Unid + SpanInElement, so the other fields are placeholders.
-        var fragments = new List<RunFragment>(pieces.Count);
-        foreach (var (seg, offsetInRun, len) in pieces)
+        var matches = new List<TextMatch>(spans.Count);
+        foreach (var span in spans.OrderByDescending(s => s.Start))
         {
-            var runUnid = (string?)seg.Run.Attribute(PtOpenXml.Unid) ?? string.Empty;
-            fragments.Add(new RunFragment
+            var spanStart = span.Start;
+            var spanLength = span.Length;
+            if (spanStart < 0 || spanLength < 0 || spanStart > map.FlatText.Length
+                || spanLength > map.FlatText.Length - spanStart)
+                return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                    $"span {spanStart}+{spanLength} out of [0, {map.FlatText.Length}]", anchorId);
+            if (!XmlText.IsCharacterBoundary(map.FlatText, spanStart)
+                || !XmlText.IsCharacterBoundary(map.FlatText, spanStart + spanLength))
+                return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                    "span boundaries must not split a UTF-16 surrogate pair", anchorId);
+
+            if (spanLength == 0)
+                return InsertTextAtBoundary(target, element, map, spanStart, replace, deletedTextSide);
+
+            var pieces = Internal.RunTextMap.ResolveRange(map, spanStart, spanLength);
+            if (pieces.Count == 0)
+                return EditResult.Fail(EditErrorCode.OffsetOutOfRange, "span resolved to no runs", anchorId);
+
+            // Synthesize fragments from the resolved pieces. The replacement helper only
+            // reads Unid + SpanInElement, so the other fields are placeholders.
+            var fragments = new List<RunFragment>(pieces.Count);
+            foreach (var (seg, offsetInRun, len) in pieces)
             {
-                Unid = runUnid,
-                Text = string.Empty,
-                SpanInElement = new CharSpan(offsetInRun, len),
-                Formatting = new RunFormatting(),
-            });
+                var runUnid = (string?)seg.Run.Attribute(PtOpenXml.Unid) ?? string.Empty;
+                fragments.Add(new RunFragment
+                {
+                    Unid = runUnid,
+                    Text = string.Empty,
+                    SpanInElement = new CharSpan(offsetInRun, len),
+                    Formatting = new RunFormatting(),
+                });
+            }
+            var synthetic = new TextMatch
+            {
+                Text = map.FlatText.Substring(spanStart, spanLength),
+                EnclosingAnchor = target,
+                Span = new CharSpan(spanStart, spanLength),
+                Fragments = fragments,
+                ContextBefore = string.Empty,
+                ContextAfter = string.Empty,
+            };
+            if (replace.Length > 0 && ReplacementLandsInMove(element, synthetic))
+                return MoveDestinationRefusal(anchorId);
+            matches.Add(synthetic);
         }
-        var synthetic = new TextMatch
-        {
-            Text = map.FlatText.Substring(spanStart, spanLength),
-            EnclosingAnchor = target,
-            Span = new CharSpan(spanStart, spanLength),
-            Fragments = fragments,
-            ContextBefore = string.Empty,
-            ContextAfter = string.Empty,
-        };
-        if (replace.Length > 0 && ReplacementLandsInMove(element, synthetic))
-            return MoveDestinationRefusal(anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            if (_trackedChanges == TrackedChangeMode.RenderInline)
+            foreach (var match in matches)
             {
-                ApplyFragmentReplacementTracked(
-                    element,
-                    synthetic,
-                    replace,
-                    _revisionAuthor ?? "docxodus",
-                    RevisionDateNow());
-            }
-            else
-            {
-                ApplyFragmentReplacement(element, synthetic, replace);
+                if (_trackedChanges == TrackedChangeMode.RenderInline)
+                {
+                    ApplyFragmentReplacementTracked(
+                        element,
+                        match,
+                        replace,
+                        _revisionAuthor ?? "docxodus",
+                        revisionDate);
+                }
+                else
+                {
+                    ApplyFragmentReplacement(element, match, replace);
+                }
             }
             InvalidateProjectionCache();
             return new EditResult

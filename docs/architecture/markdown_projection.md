@@ -103,7 +103,7 @@ after their definition. Nested shapes use the same rules, up to the IR's textbox
 
 Only the first supported `mc:Choice` branch is rendered; otherwise the `mc:Fallback` is rendered.
 Markdown shares HTML's supported namespace selection. Both representations remain in the anchor index
-for source addressing and in the comparison IR; branch selection changes only displayed Markdown.
+for source addressing and in the comparison IR; branch selection controls displayed Markdown and visible text queries; source anchors remain addressable.
 
 Row-level and cell-level content controls are transparent to table geometry and GFM eligibility.
 Merged and nested tables retain the existing opaque-table contract. Custom-XML wrappers at row/cell
