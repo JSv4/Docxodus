@@ -762,6 +762,8 @@ function createRenderedSourceMeasurer(
     page: HTMLElement,
     pageRect: DOMRect,
     rect: DOMRect,
+    includeSelf = false,
+    paperClip?: HTMLElement,
   ): VisibleBox {
     let left = Math.max(rect.left, pageRect.left);
     let top = Math.max(rect.top, pageRect.top);
@@ -770,9 +772,10 @@ function createRenderedSourceMeasurer(
     const clips = (value: string) =>
       value === "hidden" || value === "clip" || value === "scroll" || value === "auto";
 
-    for (let ancestor = element.parentElement;
+    for (let ancestor = includeSelf ? element : element.parentElement;
       ancestor && ancestor !== page;
       ancestor = ancestor.parentElement) {
+      if (ancestor === paperClip) continue;
       const style = view.getComputedStyle(ancestor);
       const clipsX = clips(style.overflowX);
       const clipsY = clips(style.overflowY);
@@ -806,7 +809,11 @@ function createRenderedSourceMeasurer(
     element: HTMLElement,
     page: HTMLElement,
     pageRect: DOMRect = page.getBoundingClientRect(),
+    textRect?: DOMRect,
+    paperClip?: HTMLElement,
   ): { rect: DOMRect; visible: VisibleBox } {
+    // A text Range also obeys its immediate parent's clip, unlike that parent's border box.
+    if (textRect) return { rect: textRect, visible: visibleWithinPage(view, element, page, pageRect, textRect, true, paperClip) };
     const own = element.getBoundingClientRect();
     const ownResult = () => ({ rect: own, visible: visibleWithinPage(view, element, page, pageRect, own) });
     const ownMeasurable = own.width > 0 && own.height > 0;
@@ -917,6 +924,7 @@ export class PaginationEngine {
   private initiallyClippedText = new Map<string, { boxId: string; text: string; placement?: number[]; host?: { id: string; bounds: number[] } }>();
   private sourceTextPlacement = new Map<string, { identity: string; bounds: number[] }>();
   private lastClippedTextAnchors: string[] = [];
+  private lastClippedTableContentAnchors: string[] = [];
   private state: "ready" | "running" | "complete" | "failed" = "ready";
   private runningStyleSources: StyleReferenceSource[] = [];
   private runningStyleContexts = new Map<string, RunningStyleContext>();
@@ -1139,6 +1147,7 @@ export class PaginationEngine {
     this.initiallyClippedText.clear();
     this.sourceTextPlacement.clear();
     this.lastClippedTextAnchors = [];
+    this.lastClippedTableContentAnchors = [];
 
     // Parse the header/footer registry if present
     this.hfRegistry = this.parseHeaderFooterRegistry();
@@ -1622,6 +1631,7 @@ export class PaginationEngine {
    * or renderer fingerprint.
    */
   materializePageMap(documentVersion: number, rendererFingerprint: string): PageMap {
+    this.lastClippedTableContentAnchors = [];
     if (!Number.isSafeInteger(documentVersion) || documentVersion < 0) {
       throw new Error("documentVersion must be a non-negative safe integer");
     }
@@ -1647,6 +1657,7 @@ export class PaginationEngine {
     const measuredAnchorIds = new Set<string>();
     const unpaintedAnchorIds = new Set<string>();
     const clippedTextAnchorIds = new Set<string>();
+    const clippedTableTextAnchorIds = new Set<string>();
     const emittedFragmentCounts = new Map<string, number>();
     const partialTextBoxInk = new Map<HTMLElement, boolean>();
     for (const page of this.lastPages) {
@@ -1723,6 +1734,7 @@ export class PaginationEngine {
           inTableCell: element.matches("td,th") || element.closest('td,th,[data-docx-frame-in-table-cell="true"]') !== null,
         });
       }
+      this.collectClippedTableContent(page.element, pageRect, clippedTableTextAnchorIds);
     }
 
     const missingAnchor = Array.from(requiredAnchorIds)
@@ -1731,6 +1743,7 @@ export class PaginationEngine {
       throw new Error(`source anchor ${missingAnchor} has no measurable fragment in the paginated layout`);
     }
     this.lastClippedTextAnchors = Array.from(clippedTextAnchorIds).filter(id => !measuredAnchorIds.has(id));
+    this.lastClippedTableContentAnchors = Array.from(clippedTableTextAnchorIds);
 
     return {
       schemaVersion: 1,
@@ -1824,6 +1837,79 @@ export class PaginationEngine {
   /** Source paragraphs intentionally unpainted by their authored box or placement, after final mapping. */
   getSourceClippedTextAnchors(): readonly string[] {
     return [...this.lastClippedTextAnchors];
+  }
+
+  /** Source text or visuals cut by the paper edge in an authored fixed-width table. */
+  getClippedTableContentAnchors(): readonly string[] {
+    return [...this.lastClippedTableContentAnchors];
+  }
+
+  private collectClippedTableContent(page: HTMLElement, paper: DOMRect, anchors: Set<string>): void {
+    const selector = 'table[data-docx-fixed-width="true"]';
+    const tables = new Set(Array.from(page.querySelectorAll<HTMLElement>(selector)).filter(table => {
+      const box = table.getBoundingClientRect();
+      return box.left < paper.left || box.right > paper.right;
+    }));
+    if (!tables.size) return;
+    const tableAnchors = new Set<string>();
+    for (const table of tables) {
+      this.checkpoint();
+      for (const element of [table, ...Array.from(table.querySelectorAll<HTMLElement>('[data-source-anchor-id]'))])
+        if (element.dataset.sourceAnchorId) tableAnchors.add(element.dataset.sourceAnchorId);
+    }
+    const roots = new Set(tables);
+    for (const drawing of Array.from(page.querySelectorAll<HTMLElement>(`[${DRAWING_HOST_ATTRIBUTE}]`))) {
+      this.checkpoint();
+      if (drawing.getAttribute(DRAWING_HOST_ATTRIBUTE)!.split(' ').some(id => tableAnchors.has(id))) roots.add(drawing);
+    }
+    const isVisible = (element: HTMLElement) => {
+      const style = this.view.getComputedStyle(element);
+      return style.display !== 'none' && style.visibility === 'visible'
+        && !this.isDeliberatelyUnrenderedSource(element, page);
+    };
+    const inspect = (element: HTMLElement, rect: DOMRect, anchorId: string) => {
+      if (!(rect.width > 0 && rect.height > 0) || anchors.has(anchorId)) return;
+      // Apply authored row/text-box clips before asking whether paper cuts this content.
+      const left = Math.min(paper.left, rect.left), right = Math.max(paper.right, rect.right);
+      const horizontalOverflow = new this.view.DOMRect(left, paper.top, right - left, paper.height);
+      // Export's promoted-drawing layer repeats the paper clip; it is not an authored box.
+      const layer = element.closest<HTMLElement>('.page-drawing-layer');
+      const { visible } = measureRenderedSource(this.view, element, page, horizontalOverflow, rect,
+        layer?.parentElement === page ? layer : undefined);
+      if (visible.right > visible.left && visible.bottom > visible.top
+        && (visible.left < paper.left || visible.right > paper.right)) anchors.add(anchorId);
+    };
+    for (const root of roots) {
+      this.checkpoint();
+      // A nested table/drawing is already visited through its containing root.
+      let ancestor = root.parentElement;
+      while (ancestor && ancestor !== page && !roots.has(ancestor)) ancestor = ancestor.parentElement;
+      if (ancestor && roots.has(ancestor)) continue;
+      const walker = this.document.createTreeWalker(root, this.view.NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        this.checkpoint();
+        const parent = node.parentElement;
+        const anchorId = parent?.closest<HTMLElement>('[data-source-anchor-id]')?.dataset.sourceAnchorId;
+        if (!parent || !anchorId || anchors.has(anchorId) || !isVisible(parent)) continue;
+        // Range boxes include preserved trailing spaces. Only nonwhitespace text can lose ink.
+        for (const match of (node.textContent ?? '').matchAll(/\S+/gu)) {
+          this.checkpoint();
+          const range = this.document.createRange();
+          range.setStart(node, match.index);
+          range.setEnd(node, match.index + match[0].length);
+          for (const rect of Array.from(range.getClientRects())) inspect(parent, rect, anchorId);
+        }
+      }
+      // Source SVG identity excludes the later word-text and table-border paint viewports.
+      const visuals = 'img, svg[data-docx-visual-resource-id]';
+      for (const visual of [...(root.matches(visuals) ? [root] : []), ...Array.from(root.querySelectorAll<HTMLElement>(visuals))]) {
+        this.checkpoint();
+        const hosts = visual.closest(`[${DRAWING_HOST_ATTRIBUTE}]`)?.getAttribute(DRAWING_HOST_ATTRIBUTE)?.split(' ') ?? [];
+        const anchorId = visual.closest<HTMLElement>('[data-source-anchor-id]')?.dataset.sourceAnchorId
+          ?? hosts.find(id => id.startsWith('p:'));
+        if (anchorId && isVisible(visual)) inspect(visual, visual.getBoundingClientRect(), anchorId);
+      }
+    }
   }
 
   private sourceTextPlacementBounds(owner: HTMLElement, rects: DOMRect[], paper: DOMRect,
@@ -2369,6 +2455,7 @@ export class PaginationEngine {
     for (const table of Array.from(section.querySelectorAll<HTMLTableElement>("table"))) {
       this.checkpoint();
       if (table.closest("#pagination-hf-registry, #pagination-footnote-registry, #pagination-comment-margin-registry")) continue;
+      if (table.dataset.docxFixedWidth === "true") continue;
       const parent = table.parentElement;
       if (!parent) continue;
       const rect = table.getBoundingClientRect();

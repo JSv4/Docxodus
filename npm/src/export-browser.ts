@@ -4096,6 +4096,15 @@ export async function convertDocxToPaginatedHtml(
         remediation: "Enlarge or reposition the source text box, or enable auto-fit, to include this paragraph in the rendered output.",
       });
     }
+    for (const anchorId of engine.getClippedTableContentAnchors()) {
+      policyWarning(state, options, {
+        code: "source_table_content_clipped",
+        phase: "output_verification",
+        anchorId,
+        message: "Content in an authored fixed-width table extends beyond the paper edge and is clipped.",
+        remediation: "Reduce the source table width or adjust its placement or page size to keep its content on paper.",
+      });
+    }
     pageMapWasMaterialized = true;
     if (pageMap.documentVersion !== options.documentVersion
       || pageMap.rendererFingerprint !== rendererFingerprint

@@ -4402,8 +4402,8 @@ namespace Docxodus.Tests
         }
 
         /// <summary>
-        /// A word wider than its column must break rather than overflow, and a table must never
-        /// exceed the text column. CSS's defaults do the opposite of Word on both counts, so the
+        /// A word wider than its column must break rather than overflow, and automatic tables
+        /// fit the text column. CSS's defaults do the opposite of Word on both counts, so the
         /// converter emits the rules that restore Word's behavior in EVERY render mode.
         /// Mobile Chrome's text autosizer must also be opted out on every document element
         /// (text-size-adjust is non-inherited and Blink consults its own cluster roots), or the
@@ -4524,6 +4524,34 @@ namespace Docxodus.Tests
 
             Assert.DoesNotContain("table-layout: fixed", htmlString);
             Assert.Contains("<colgroup>", htmlString);
+        }
+
+        [Theory]
+        [InlineData("fixed", "dxa", "10000", false, true)]
+        [InlineData(null, "dxa", "10000", false, true)]
+        [InlineData("autofit", "dxa", "10000", false, false)]
+        [InlineData("fixed", "pct", "5000", false, false)]
+        [InlineData(null, "auto", "0", false, false)]
+        [InlineData("fixed", "dxa", "0", false, false)]
+        [InlineData("fixed", "dxa", "-1", false, false)]
+        [InlineData("fixed", "dxa", "invalid", false, false)]
+        [InlineData("fixed", "dxa", "10000", true, true)]
+        public void HC_AuthoredFixedWidth_PreservesWidthAndCentersOnlyNonfloatingTables(
+            string? layout, string type, string width, bool floating, bool authored)
+        {
+            var table = new DocumentFormat.OpenXml.Wordprocessing.Table($"""
+                <w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tblPr>
+                  {(floating ? "<w:tblpPr w:vertAnchor=\"text\" w:horzAnchor=\"margin\" w:tblpX=\"0\" w:tblpY=\"0\"/>" : "")}
+                  <w:tblW w:type="{type}" w:w="{width}"/><w:jc w:val="center"/>
+                  {(layout == null ? "" : $"<w:tblLayout w:type=\"{layout}\"/>")}
+                </w:tblPr><w:tblGrid><w:gridCol w:w="5000"/><w:gridCol w:w="5000"/></w:tblGrid>
+                <w:tr><w:tc><w:p><w:r><w:t>Quill A</w:t></w:r></w:p></w:tc>
+                  <w:tc><w:p><w:r><w:t>Quill B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+                """);
+            var html = ConvertLayoutFixture(table: table);
+            Assert.Equal(authored, html.Contains("data-docx-fixed-width=\"true\""));
+            Assert.Equal(authored, html.Contains("max-width: none"));
+            Assert.Equal(authored && !floating, html.Contains("justify-content: center"));
         }
 
         #endregion

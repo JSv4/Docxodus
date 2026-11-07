@@ -3225,13 +3225,11 @@ namespace Docxodus
         ///    break an over-long word at the column edge. CSS's initial <c>overflow-wrap: normal</c>
         ///    instead lets it run past the margin, which is what a reader sees as text escaping the
         ///    page — most visibly after enlarging a run's font size.
-        /// 2. <b>A table never exceeds the text column.</b> Word's layout — fixed or AutoFit —
-        ///    keeps the table inside the column, shrinking columns when it must. CSS's
-        ///    <c>table-layout: auto</c> does the opposite: a cell's widest unbreakable word sets a
-        ///    min-content floor the table is grown to satisfy, so an enlarged run pushes the whole
-        ///    table past its container. <c>max-width: 100%</c> plus <c>overflow-wrap: anywhere</c>
-        ///    on cells (which, unlike <c>break-word</c>, lowers min-content) restores Word's rule.
-        ///    Fixed-layout tables additionally get <c>table-layout: fixed</c> in <c>ProcessTable</c>.
+        /// 2. <b>Automatic tables fit their text column.</b> CSS auto layout lets a cell's widest
+        ///    unbreakable word grow the table. <c>max-width: 100%</c> plus
+        ///    <c>overflow-wrap: anywhere</c> on cells lowers that min-content floor. Authored fixed
+        ///    DXA widths instead retain their overhang into the margins, even beyond the paper;
+        ///    <c>ProcessTable</c> supplies fixed layout and removes the automatic width cap.
         /// 3. <b>A superscript or subscript does not make its line taller.</b> Word rides them
         ///    inside the existing line box; a paragraph does not open up because it happens to
         ///    carry a footnote reference. CSS instead counts the RAISED inline box when it sizes
@@ -6510,8 +6508,11 @@ namespace Docxodus
             // than the document's text column as soon as a run's font size is enlarged.
             // Only meaningful alongside a table width: fixed layout with width:auto degrades to
             // auto layout, so pairing them is what makes the declaration load-bearing.
-            if (IsFixedLayoutTable(element) && style.ContainsKey("width"))
+            var fixedLayout = IsFixedLayoutTable(element);
+            var authoredWidth = fixedLayout && (string?)tblW?.Attribute(W.type) == "dxa" && style.ContainsKey("width");
+            if (fixedLayout && style.ContainsKey("width"))
                 style.AddIfMissing("table-layout", "fixed");
+            if (authoredWidth) style.AddIfMissing("max-width", "none");
             var tblpPr = element.Elements(W.tblPr).Elements(W.tblpPr).FirstOrDefault();
             var tblInd = element.Elements(W.tblPr).Elements(W.tblInd).FirstOrDefault();
             var indent = (string?)tblInd?.Attribute(W.type) == "dxa"
@@ -6579,6 +6580,7 @@ namespace Docxodus
                 // new XAttribute("cellspacing", 0),
                 // new XAttribute("cellpadding", 0),
                 tableDirection,
+                authoredWidth ? new XAttribute("data-docx-fixed-width", "true") : null,
                 isBorderless ? new XAttribute("data-borderless", "true") : null,
                 settings.StampAnchors && (string?)element.Attribute(PtOpenXml.Unid) != null
                     ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid)!)
@@ -6648,6 +6650,14 @@ namespace Docxodus
                 dir,
                 jcToUse,
                 table);
+            // Auto margins clamp at zero when a table exceeds its text column. Flex centering
+            // places the resolved grid equally into both margins without reducing its width.
+            if (authoredWidth && jc == "center" && tblpPr == null)
+            {
+                style.AddIfMissing("flex-shrink", "0");
+                tableDiv.AddAnnotation(new Dictionary<string, string>
+                    { { "display", "flex" }, { "justify-content", "center" } });
+            }
             return tableDiv;
         }
 
