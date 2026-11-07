@@ -6127,8 +6127,17 @@ namespace Docxodus
                     paragraph.Annotation<Dictionary<string, string>>()!["break-inside"] = "avoid";
                 var splitMark = IsOnOffPropertyEnabled(wordDoc.MainDocumentPart?.DocumentSettingsPart?
                     .GetXDocument().Root?.Element(W.compat)?.Element(W.splitPgBreakAndParaMark));
-                return SplitBreakParagraph(paragraph, "page", splitMark)
-                    .SelectMany(fragment => SplitBreakParagraph(fragment, "column"));
+                var fragments = SplitBreakParagraph(paragraph, "page", splitMark)
+                    .SelectMany(fragment => SplitBreakParagraph(fragment, "column")).ToList();
+                // Editor block/range extraction needs one root for the complete source unit.
+                // Pagination unwraps it before measuring the individual paragraphs and breaks.
+                if (fragments.Count > 1 && paragraph.Attribute("data-anchor") is { } owner)
+                {
+                    foreach (var fragment in fragments.Where(f => f.Attribute("data-anchor") != null))
+                        fragment.SetAttributeValue("data-docx-split-paragraph", "true");
+                    return new XElement(Xhtml.div, new XAttribute("data-docx-break-paragraph", owner.Value), fragments);
+                }
+                return fragments;
             }
 
             return paragraph;
@@ -6306,6 +6315,8 @@ namespace Docxodus
                 var fragment = fragments[i];
                 foreach (var span in fragment.Descendants(Xhtml.span).Reverse().ToList())
                     if (IsDiscardableEmptySpan(span)) span.Remove();
+                // A discarded leading column carrier must not claim the surviving fragment's identity.
+                if (kind == "column" && i == 0 && !HasLineContent(fragment)) continue;
                 foreach (var descendant in fragment.DescendantsAndSelf())
                     foreach (var name in new[] { "id", "name", "data-anchor", "data-committed-text" })
                         if (descendant.Attribute(name) is { } identity && !identities.Add((identity.Name, identity.Value)))

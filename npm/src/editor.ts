@@ -3098,7 +3098,7 @@ export class DocxEditor {
       if (this.region && !this.isBandBlock(el)) this.syncRegionToBody(el);
       this.region?.noteFocus(el);
     });
-    el.addEventListener("blur", () => this.commitBlock(el));
+    el.addEventListener("blur", event => this.commitBlock(el, event.relatedTarget));
     el.addEventListener("input", (ev) => noteTypedSpace(el, ev));
     el.addEventListener("beforeinput", (ev) => {
       guardChromeDeletion(el, ev as InputEvent);
@@ -3145,7 +3145,7 @@ export class DocxEditor {
   }
 
   /** Commit a block edit on blur: diff → run-preserving session op → re-render only this block. */
-  private commitBlock(el: HTMLElement): void {
+  private commitBlock(el: HTMLElement, focusTarget: EventTarget | null): void {
     if (this.closed || this.replacing) return;
     const unid = el.getAttribute("data-anchor");
     if (!unid) return;
@@ -3161,6 +3161,10 @@ export class DocxEditor {
 
     const newAnchor = result.modified?.[0]?.id ?? fullId;
     const newUnid = result.modified?.[0]?.unid ?? unid;
+    if (this.remountSplitParagraph(el, undefined, focusTarget)) {
+      this.options.onEdit?.({ anchorId: newAnchor, unid: newUnid });
+      return;
+    }
 
     // List items: do NOT re-render on a text commit. Re-rendering replaces the node *during* the
     // blur, cancelling the browser's in-flight focus transfer when the user clicks straight to
@@ -3177,6 +3181,10 @@ export class DocxEditor {
     const html = this.renderBlockHtml(newAnchor);
     if (html.charCodeAt(0) !== 0x7b /* not an error object */) {
       const fresh = new DOMParser().parseFromString(html, "text/html").body.firstElementChild as HTMLElement | null;
+      if (fresh && this.remountSplitParagraph(el, fresh, focusTarget)) {
+        this.options.onEdit?.({ anchorId: newAnchor, unid: newUnid });
+        return;
+      }
       const inBand = this.isBandBlock(el);
       if (fresh && this.replaceNode(el, fresh)) {
         // Band blocks resolve through `data-hf-anchor`; their unid can collide with another
@@ -3366,7 +3374,7 @@ export class DocxEditor {
     // a horizontal rule) yields a new paragraph whose border status differs — both need a whole-
     // document re-render so numbering continues / border <div>s regroup correctly. An in-place node
     // swap would leave the new paragraph inside the old border div (the rule's line under its text).
-    if (this.affectsList(res) || wrappedInBorder) {
+    if (this.affectsList(res) || wrappedInBorder || el.dataset.docxSplitParagraph === "true") {
       this.refreshAfter(el, idx + 1, false);
       this.options.onEdit?.({ anchorId: second.id, unid: second.unid });
       return;
@@ -3422,7 +3430,8 @@ export class DocxEditor {
     // border grouping — both need a whole-document re-render (caret at the merge boundary). So does a
     // tracked merge, which removes nothing: both paragraphs stay until the deleted paragraph mark
     // is accepted, so the second must not be dropped from the page.
-    if (this.affectsList(res) || wrappedInBorder || !res.removed?.length) {
+    if (this.affectsList(res) || wrappedInBorder || !res.removed?.length
+      || prev.dataset.docxSplitParagraph === "true" || el.dataset.docxSplitParagraph === "true") {
       this.refreshAfter(el, prevIdx, true);
       this.options.onEdit?.({ anchorId: merged.id, unid: merged.unid });
       return;
@@ -3475,8 +3484,10 @@ export class DocxEditor {
     // A whitespace-only baseline means the paragraph was (or rendered as) empty, so the typed
     // text replaces it wholesale — unless it holds a field whose cached result is empty (a PAGE
     // field in a tool-generated footer): that is content, and the span path below keeps it
-    // while inserting the typed text beside it.
-    if (trimSpaces(old).length === 0 && !el.querySelector("[data-field]")) {
+    // while inserting the typed text beside it. An empty split head likewise needs a span
+    // insertion so the authored break and the content on later pages survive.
+    if (trimSpaces(old).length === 0 && !el.querySelector("[data-field]")
+      && el.dataset.docxSplitParagraph !== "true") {
       // A paragraph whose only text is deleted renders that placeholder too, and with the markup
       // hidden nothing on the page shows the deleted text. Tracked mode refuses the rewrite when
       // the paragraph holds a bookmark; an untracked rewrite would discard a shown deletion. The
@@ -3565,10 +3576,23 @@ export class DocxEditor {
    */
   private restoreBlock(el: HTMLElement, fullId: string): void {
     const fresh = this.renderInto(fullId);
+    if (fresh && this.remountSplitParagraph(el, fresh)) return;
     if (fresh && this.replaceNode(el, fresh)) {
       this.wireBlock(fresh);
       if (this.activeBlock === el) this.activeBlock = fresh;
     }
+  }
+
+  /** A split source owns pieces on several pages; replacing only its editable head leaves stale tails. */
+  private remountSplitParagraph(old: HTMLElement, fresh?: HTMLElement, focusTarget: EventTarget | null = old): boolean {
+    if (!this.options.paginated || (old.dataset.docxSplitParagraph !== "true"
+      && !fresh?.hasAttribute("data-docx-break-paragraph"))) return false;
+    const replacing = this.replacing;
+    this.replacing = true;
+    const target = focusTarget instanceof HTMLElement ? focusTarget.closest<HTMLElement>('[data-anchor]') : null;
+    try { this.refreshAfter(old, target ? this.blockIndex(target) : -1); }
+    finally { this.replacing = replacing; }
+    return true;
   }
 
   /** Render a block by anchor and parse it into a detached element (null on error). */
@@ -5358,6 +5382,10 @@ export class DocxEditor {
     const newUnid = ref?.unid ?? oldUnid;
     if (!anchorId) return null;
     const fresh = this.renderInto(anchorId);
+    if (fresh && this.remountSplitParagraph(oldEl, fresh)) {
+      this.options.onEdit?.({ anchorId, unid: newUnid });
+      return this.activeBlock;
+    }
     if (!fresh || !this.replaceNode(oldEl, fresh)) return null;
     // A band block resolves through its stamped `data-hf-anchor`, never the unid map — and its
     // unid can collide with another part's, so writing it here would corrupt that entry.

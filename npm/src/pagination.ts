@@ -1104,6 +1104,11 @@ export class PaginationEngine {
 
   /** One flow pass; field-dependent running bands are fixed for this pass. */
   private paginatePass(): PageInfo[] {
+    // Block rendering keeps the pieces of one editable paragraph together. Flow needs their
+    // individual boundaries, including page markers, before inventory and column measurement.
+    for (const wrapper of Array.from(this.stagingElement.querySelectorAll<HTMLElement>(
+      'div[data-docx-break-paragraph]',
+    )).reverse()) wrapper.replaceWith(...Array.from(wrapper.childNodes));
     this.createdPageCount = 0;
     this.commentReturnLinks = [];
     this.pendingFootnoteContinuation = null;

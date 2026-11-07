@@ -1,4 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
+import { pageBreakDocx } from './docx-page-break-fixture.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -107,6 +108,73 @@ test.describe('DocxEditor.openAsync: windowed, yielding mount (#776)', () => {
     expect(outcome.pages).toBeGreaterThan(1);
     expect(outcome.progress).toBeGreaterThanOrEqual(3);
     expect(outcome.ticks).toBeGreaterThanOrEqual(outcome.progress - 1);
+  });
+
+  for (const kind of ['own', 'end', 'mid', 'leading'] as const) {
+    test(`page-break ${kind} retains every fragment through windowed mounting`, async ({ page }) => {
+      const result = await page.evaluate<{ texts: string[]; diff: Diff | null }>(`(${MOUNT_BOTH})(${JSON.stringify({
+        bytes: Array.from(pageBreakDocx(kind)), options: { paginated: true }, windowSize: 1,
+      })}).then(r => {
+        const pages = Array.from(r.container.querySelectorAll('.page-box'));
+        const texts = pages.map(p => p.querySelector('.page-content').textContent.replace(/\\s/g, ''));
+        const diff = (${DIFF_AT})(r.syncHtml, r.asyncHtml);
+        r.editor.close(); return { texts, diff };
+      })`);
+      expect(result.diff).toBeNull();
+      expect(result.texts).toEqual(kind === 'leading' ? ['', 'Last']
+        : ['First', kind === 'mid' ? 'AfterLast' : 'Last']);
+    });
+  }
+
+  for (const kind of ['mid', 'leading'] as const) {
+    test(`editing a split paragraph ${kind} repaints its later pages without stale fragments`, async ({ page }) => {
+      const result = await page.evaluate(async bytes => {
+        const D = (window as any).Docxodus;
+        const exports = D.getWasmExports ? D.getWasmExports() : D;
+        const container = document.createElement('div'); document.body.appendChild(container);
+        let edits = 0;
+        const editor = await D.DocxEditor.openAsync(container, new Uint8Array(bytes), exports,
+          { paginated: true, windowSize: 1, onEdit: () => edits++ });
+        const texts = [];
+        for (const value of ['Changed', 'Again']) {
+          const block = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+          block.textContent = value;
+          block.dispatchEvent(new FocusEvent('blur'));
+          texts.push(Array.from(container.querySelectorAll('.page-box')).map(p => p.querySelector('.page-content')?.textContent?.replace(/\s/g, '')));
+        }
+        const saved = editor.save(); editor.close();
+        const reopened = D.DocxEditor.open(container, saved, exports, { paginated: true });
+        const final = Array.from(container.querySelectorAll('.page-box')).map(p => p.querySelector('.page-content')?.textContent?.replace(/\s/g, ''));
+        reopened.close(); return { texts, final, edits };
+      }, Array.from(pageBreakDocx(kind)));
+      const tail = kind === 'mid' ? 'AfterLast' : 'Last';
+      expect(result.texts).toEqual([['Changed', tail], ['Again', tail]]);
+      expect(result.final).toEqual(['Again', tail]);
+      expect(result.edits).toBe(2);
+    });
+  }
+
+  test('committing a split head preserves focus moving to another block or outside the editor', async ({ page }) => {
+    const result = await page.evaluate(async bytes => {
+      const D = (window as any).Docxodus, exports = D.getWasmExports ? D.getWasmExports() : D;
+      const container = document.createElement('div'), button = document.createElement('button');
+      document.body.append(container, button);
+      let edits = 0;
+      const editor = await D.DocxEditor.openAsync(container, new Uint8Array(bytes), exports,
+        { paginated: true, windowSize: 1, onEdit: () => edits++ });
+      const head = container.querySelector('p[data-docx-split-paragraph]') as HTMLElement;
+      const last = Array.from(container.querySelectorAll<HTMLElement>('p[contenteditable="true"]')).find(p => p.textContent === 'Last')!;
+      head.focus(); head.textContent = 'Changed'; last.focus();
+      const focused = document.activeElement as HTMLElement;
+      const destination = focused.textContent;
+      focused.textContent = 'End'; button.focus();
+      const outside = document.activeElement === button;
+      const saved = editor.save(); editor.close();
+      const reopened = D.DocxEditor.open(container, saved, exports, { paginated: true });
+      const texts = Array.from(container.querySelectorAll('.page-content')).map(p => p.textContent?.replace(/\s/g, ''));
+      reopened.close(); return { destination, outside, edits, texts };
+    }, Array.from(pageBreakDocx('mid')));
+    expect(result).toEqual({ destination: 'Last', outside: true, edits: 2, texts: ['Changed', 'AfterEnd'] });
   });
 
   test('a window never cuts through a border box, and a bundle without the renders mounts synchronously', async ({ page }) => {

@@ -441,6 +441,10 @@ event loop between windows (`onProgress` reports units mounted), then finishes e
 The DOM it lands is `open()`'s, byte for byte; `editor-open-async.spec.ts` holds both mounts to
 that, and `HtmlConversionWindowedMountTests` holds the engine side to the full render for
 windows of 24 and of 1. A bundle without the two renders falls back to the synchronous mount.
+Paginated hard-break paragraphs travel as one explicitly owned wrapper through block/range renders.
+The paginator unwraps their pieces before layout. The editable head keeps a split marker so edits,
+restores, paragraph splits and merges repaint all of its pages; repaint suppresses reentrant blur
+commits. An empty head inserts at offset zero rather than replacing the complete source paragraph.
 
 ### The move surface
 

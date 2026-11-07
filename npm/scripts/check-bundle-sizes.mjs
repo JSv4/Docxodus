@@ -45,10 +45,12 @@ const budgetsKiB = {
   // Round only the three exhausted gates up by 0.5 KiB; pagination remains below 47 KiB.
   // Shared column fragmentation adds 531–565 gzip bytes over 563a4c37.
   // Round the four exhausted paginator-carrying gates up to the next 0.5 KiB.
-  'embed.bundle.js': 151,
+  // Split-paragraph editor repaint/focus handling adds 194–195 gzip bytes.
+  // Round only the two exhausted embed gates up to the next 0.5 KiB.
+  'embed.bundle.js': 151.5,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
-  'embed.iife.js': 151,
+  'embed.iife.js': 151.5,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
   'editor.bundle.js': 130.5,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
