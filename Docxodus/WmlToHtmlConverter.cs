@@ -12808,6 +12808,8 @@ namespace Docxodus
             var shapeProperties = drawing.Descendants(WPS.spPr).FirstOrDefault();
             if (shapeProperties != null)
             {
+                if (shapeProperties.Element(A.custGeom) != null)
+                    ReportShapeLayoutLoss(wrapper, settings, "Custom textbox geometry and text region are approximated");
                 var fill = (string?)shapeProperties.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
                 if (IsHexColor(fill))
                     style.AddIfMissing("background-color", "#" + fill);

@@ -357,7 +357,22 @@ values in the source coordinate space before group scaling. Triangles clamp `adj
 `vf=110557` defaults. These presets accept numeric `val` adjustments; unsupported formulas are
 reported instead of silently replacing them with defaults.
 
-Not drawn: other preset and custom geometry, preset colours (`a:prstClr`), picture fills, line
+Custom geometry accepts literal integer `moveTo`, `lnTo`, `quadBezTo`, `cubicBezTo` and `close`
+commands, with positive explicit `w`/`h` on every path. Each path maps independently into the
+shape frame before the existing flips and rotation; negative coordinates are preserved. Paths
+retain source order, normal/disabled fill and enabled/disabled stroke, including intentionally
+invisible shapes. An unsupported command, guide coordinate or path dimension rejects the complete
+geometry rather than drawing a misleading subset. Custom textboxes preserve their text but report
+their unrepresented custom geometry/text region; they cannot certify source clipping. Custom
+shapes with theme styles, richer fills, effects, or unrepresented line styles retain a partial
+diagnostic even when their outline is drawable.
+
+Compound contours use explicit even/odd fill, calibrated against native LibreOffice output for
+both same- and opposite-winding holes. ECMA's path definition does not prescribe a winding rule;
+Apache POI uses nonzero winding. This is a native-calibrated rendering policy, not a claim of Word
+equivalence. The same-winding discriminator is retained for a future Word reference.
+
+Not drawn: other preset geometry, custom arcs and formula coordinates, preset colours (`a:prstClr`), picture fills, line
 arrowheads (`a:headEnd`/`a:tailEnd`), dash patterns, effects and the extra space `wp:effectExtent`
 reserves for them, pictures/charts/ink inside a group, and a canvas's own background and outline
 (`wpc:bg`, `wpc:whole`). What cannot be drawn keeps its extent and is marked; see
