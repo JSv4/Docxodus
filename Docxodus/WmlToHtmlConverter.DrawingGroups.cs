@@ -127,13 +127,17 @@ public static partial class WmlToHtmlConverter
         return group;
     }
 
-    private static bool HasCanvasFormatting(XElement properties) => properties.Elements().Any(property =>
+    private static bool HasCanvasFormatting(XElement properties)
     {
-        if (property.Name == A.noFill) return false;
-        if (property.Name == A.ln) return property.HasElements && property.Element(A.noFill) == null;
-        if (property.Name == A.effectLst) return property.HasElements;
-        return true;
-    });
+        foreach (var property in properties.Elements())
+        {
+            if (property.Name == A.noFill) continue;
+            if ((property.Name == A.ln || property.Name == A.effectLst) && !property.HasElements) continue;
+            if (property.Name == A.ln && property.Element(A.noFill) != null) continue;
+            return true;
+        }
+        return false;
+    }
 
     private readonly record struct DrawingTextOrientation(double Rotation, int FlipX, int FlipY)
     {
