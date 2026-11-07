@@ -380,7 +380,7 @@ export function measureLaidOutBottoms(band: HTMLElement): Map<Element, number> {
  * glyphs without changing any line box: pagination and line pitch are untouched.
  *
  * Each direct inline child of a paragraph is moved, composing with a `top` it already has. A child positioned
- * some other way, or holding an image, an SVG or an absolutely positioned element (for which a relative child
+ * some other way, or holding an image, SVG, MathML or an absolutely positioned element (for which a relative child
  * would become the containing block), is left alone. Run once the page tree is final: the moved boxes count
  * toward a page band's overflow, which the export's clipping check must not see.
  * Returns how many children moved.
@@ -461,7 +461,7 @@ function movable(element: HTMLElement, view: Window & typeof globalThis): boolea
   if (position !== "static" && position !== "relative") return false;
   // Inline boxes share the line's baseline; tab stops and leaders are inline-blocks on the same line.
   if (!["inline", "inline-block"].includes(view.getComputedStyle(element).display)) return false;
-  if (element.querySelector("img, svg")) return false;
+  if (element.querySelector("img, svg, math")) return false;
   for (const descendant of Array.from(element.querySelectorAll("*")))
     if (["absolute", "fixed"].includes(view.getComputedStyle(descendant).position)) return false;
   return true;

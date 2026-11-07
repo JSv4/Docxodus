@@ -14,11 +14,11 @@ export const MATH_FORMULAS = {
 export type MathLayout = 'inline' | 'display' | 'mixed' | 'edge' | 'long';
 
 export function mathDocx(kind: keyof typeof MATH_FORMULAS, layout: MathLayout,
-  mathProperties = '', options: { largeProse?: boolean; markSize?: number; paragraphSize?: number } = {}): Uint8Array {
+  mathProperties = '', options: { largeProse?: boolean; markSize?: number; paragraphSize?: number; repeats?: number } = {}): Uint8Array {
   const display = layout === 'display' || layout === 'edge';
   const formula = `<m:oMath>${MATH_FORMULAS[kind]}</m:oMath>`;
   const words = Array.from({ length: 100 }, (_, i) => `Birch${String(i).padStart(3, '0')}`);
-  const math = display ? `<m:oMathPara>${formula}</m:oMathPara>` : formula;
+  const math = display ? `<m:oMathPara>${formula}</m:oMathPara>` : formula.repeat(options.repeats ?? 1);
   const body = layout === 'long' ? run(words.slice(0, 35).join(' ') + ' ') + math + run(' ' + words.slice(35).join(' '))
     : layout === 'mixed' ? (options.largeProse ? '<w:r><w:rPr><w:sz w:val="48"/></w:rPr><w:t>MathAnchor </w:t></w:r>' : run('MathAnchor '))
       + math + run(' MathTail') : math;

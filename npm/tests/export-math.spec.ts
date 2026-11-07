@@ -25,13 +25,14 @@ for (const kind of ['fraction', 'root', 'indexed'] as const) {
         expect(await math.evaluate(element => element.closest('p')!.textContent)).not.toContain('\u00a0');
       if (layout === 'inline') {
         await page.evaluate(() => document.fonts.ready);
-        expect(await math.evaluate(element => {
+        const geometry = await math.evaluate(element => {
           const wrapper = element.parentElement!, paragraph = wrapper.closest('p')!;
           const box = (node: Element) => { const r = node.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; };
           const before = [box(element), box(paragraph)];
           wrapper.replaceWith(element);
-          return JSON.stringify(before) === JSON.stringify([box(element), box(paragraph)]);
-        })).toBe(true);
+          return { before, after: [box(element), box(paragraph)] };
+        });
+        expect(geometry.after).toEqual(geometry.before);
       }
       const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
       try {
@@ -60,6 +61,27 @@ for (const kind of ['fraction', 'root', 'indexed'] as const) {
     });
   }
 }
+
+test('adjacent equations without spaces split only between whole formulas', async ({ browser, page }) => {
+  const result = await renderDocxArtifacts(mathDocx('fraction', 'inline', '', { repeats: 200 }), {
+    browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'hidden', unsupportedContent: 'strict',
+  });
+  expect(result.pageCount).toBeGreaterThan(1);
+  await page.setContent(result.html!);
+  await expect(page.locator('.page-content math mfrac')).toHaveCount(200);
+  const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
+  try {
+    const pdf = await task.promise;
+    let count = 0;
+    for (let number = 1; number <= pdf.numPages; number++) {
+      const text = (await (await pdf.getPage(number)).getTextContent()).items.flatMap(item => 'str' in item ? [item.str] : []).join('');
+      const numerators = text.match(/𝑥/gu)?.length ?? 0;
+      expect(text.match(/31\.4/g)?.length ?? 0).toBe(numerators);
+      count += numerators;
+    }
+    expect(count).toBe(200);
+  } finally { await task.destroy(); }
+});
 
 for (const kind of ['accent', 'styled'] as const) {
   test(`${kind} keeps a whole-equation diagnostic and strict-policy refusal`, async ({ browser }) => {
@@ -97,19 +119,19 @@ test('strict font coverage rejects a body font missing the actual mathematical i
 
 for (const kind of ['fraction', 'root', 'indexed'] as const) {
   test(`${kind} uses the supplied math face for strict export and its layout containers`, async ({ browser, page }) => {
-    const result = await renderDocxArtifacts(mathDocx(kind, 'inline', '<m:mathFont m:val="DejaVu Math TeX Gyre"/>'), {
+    const result = await renderDocxArtifacts(mathDocx(kind, 'inline', '<m:mathFont m:val="DejaVu Serif"/>'), {
       browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'hidden', unsupportedContent: 'strict',
       fontDirectories: ['/usr/share/fonts/truetype/liberation', '/usr/share/fonts/truetype/dejavu'], strictFonts: true,
     });
-    expect(result.renderReport.fonts).toContainEqual(expect.objectContaining({ resolvedFamily: 'DejaVu Math TeX Gyre', verified: true }));
+    expect(result.renderReport.fonts).toContainEqual(expect.objectContaining({ resolvedFamily: 'DejaVu Serif', verified: true }));
     const observation = result.renderReport.fontObservation;
     expect(observation?.status).toBe('observed');
     if (observation?.status === 'observed') expect(observation.uses.some(use => use.faces.some(face =>
-      face.isCustomFont && face.family.includes('DejaVu Math')))).toBe(true);
+      face.isCustomFont && face.family.includes('DejaVu Serif')))).toBe(true);
     await page.setContent(result.html!);
     const families = await page.locator('.page-content math, .page-content msqrt, .page-content mroot').evaluateAll(elements =>
       elements.map(element => getComputedStyle(element).fontFamily));
     expect(new Set(families).size).toBe(1);
-    expect(families[0]).not.toContain('DejaVu Math'); // The digest-bound face alias owns the outer math layout too.
+    expect(families[0].split(',')[0]).toMatch(/^"?__DocxodusConfigured_/); // The digest-bound face alias owns the outer math layout too.
   });
 }

@@ -728,7 +728,8 @@ largest surrounding prose run. Table-style contexts and richer inherited run for
 diagnostics because this resolver does not model those equation properties.
 Inline equations use the paragraph fragmenter's existing atomic-box path, preserving the complete
 formula when surrounding prose continues onto another page. The wrapper is inline and adds no
-line strut. Font coverage includes the [MathML Core `math-auto` character mapping](https://www.w3.org/TR/mathml-core/#math-auto-transform)
+line strut; the prose-only baseline correction leaves MathML layout alone.
+Font coverage includes the [MathML Core `math-auto` character mapping](https://www.w3.org/TR/mathml-core/#math-auto-transform)
 and each radical's implicit U+221A glyph; resolved font aliases also cover MathML layout containers.
 
 Projection succeeds only for the complete equation. Unknown operators, properties, styled runs,
