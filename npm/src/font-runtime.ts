@@ -62,7 +62,7 @@ export class BrowserFontError extends Error {
 }
 
 interface TextFaceUse {
-  element: HTMLElement;
+  element: HTMLElement | MathMLElement;
   requestKey: string;
   originalStyle: string | null;
   ownsText?: boolean;
@@ -336,14 +336,46 @@ function requestKey(request: Omit<MutableRequest, "sampleCodePoints">): string {
  * `revealMeasurementStaging` in export-browser.ts) so this predicate keeps its meaning:
  * a descendant that the document itself hid still computes to hidden and stays out.
  */
-function participatesInRendering(element: HTMLElement, view: Window): boolean {
+function participatesInRendering(element: Element, view: Window): boolean {
   const leaf = view.getComputedStyle(element);
   if (leaf.visibility === "hidden" || leaf.visibility === "collapse") return false;
-  for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+  for (let current: Element | null = element; current; current = current.parentElement) {
     const computed = current === element ? leaf : view.getComputedStyle(current);
     if (computed.display === "none" || computed.contentVisibility === "hidden") return false;
   }
   return true;
+}
+
+const MATHML_NAMESPACE = "http://www.w3.org/1998/Math/MathML";
+
+/** MathML Core C.1: font coverage must check the glyph that math-auto actually paints. */
+function mathAutoText(text: string, transform: string): string {
+  if (transform !== "math-auto" || Array.from(text).length !== 1) return text;
+  const point = text.codePointAt(0)!;
+  const exceptions: Record<number, number> = {
+    0x68: 0x210e, 0x131: 0x1d6a4, 0x237: 0x1d6a5, 0x3f4: 0x1d6f3,
+    0x2207: 0x1d6fb, 0x2202: 0x1d715, 0x3f5: 0x1d716, 0x3d1: 0x1d717,
+    0x3f0: 0x1d718, 0x3d5: 0x1d719, 0x3f1: 0x1d71a, 0x3d6: 0x1d71b,
+  };
+  const mapped = exceptions[point] ?? (point >= 0x41 && point <= 0x5a ? point + 0x1d3f3
+    : point >= 0x61 && point <= 0x7a ? point + 0x1d3ed
+    : point >= 0x391 && point <= 0x3a9 && point !== 0x3a2 ? point + 0x1d351
+    : point >= 0x3b1 && point <= 0x3c9 ? point + 0x1d34b : point);
+  return String.fromCodePoint(mapped);
+}
+
+function* fontSamples(document: Document): Generator<{
+  element: HTMLElement | MathMLElement; text: string; generated?: boolean;
+}> {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.parentElement) yield { element: node.parentElement, text: node.nodeValue ?? "" };
+  }
+  // Radicals paint a glyph from their own font even though it has no source text node.
+  for (const element of Array.from(document.getElementsByTagNameNS(MATHML_NAMESPACE, "*"))) {
+    if (element.localName === "msqrt" || element.localName === "mroot")
+      yield { element: element as MathMLElement, text: "√", generated: true };
+  }
 }
 
 function collectFontInventory(document: Document, limits: BrowserFontLimits): FontInventory {
@@ -353,13 +385,10 @@ function collectFontInventory(document: Document, limits: BrowserFontLimits): Fo
   const uses: TextFaceUse[] = [];
   let sampledCodePoints = 0;
   let renderedTextNodeCount = 0;
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const text = node.nodeValue ?? "";
-    const element = node.parentElement;
-    if (!text || !element || /^(?:script|style|template|noscript)$/i.test(element.localName)) continue;
+  for (const { element, text, generated } of fontSamples(document)) {
+    if (!text || /^(?:script|style|template|noscript)$/i.test(element.localName)) continue;
     if (!participatesInRendering(element, view)) continue;
-    renderedTextNodeCount++;
+    if (!generated) renderedTextNodeCount++;
     const computed = view.getComputedStyle(element);
     const parsedFamilies = parseCssFontFamilyTokens(computed.fontFamily);
     if (parsedFamilies.length === 0) continue;
@@ -383,7 +412,7 @@ function collectFontInventory(document: Document, limits: BrowserFontLimits): Fo
       request = { ...descriptor, sampleCodePoints: new Set<number>() };
       requests.set(key, request);
     }
-    for (const character of text) {
+    for (const character of mathAutoText(text, computed.textTransform)) {
       const scalar = character.codePointAt(0)!;
       const point = scalar >= 0xd800 && scalar <= 0xdfff ? 0xfffd : scalar;
       if (request.sampleCodePoints.has(point)) continue;
@@ -429,7 +458,9 @@ function collectFontInventory(document: Document, limits: BrowserFontLimits): Fo
   };
   const used = new Set(uses.map((use) => use.element));
   for (const element of Array.from(document.body.querySelectorAll("*"))) {
-    if (!(element instanceof view.HTMLElement) || used.has(element)) continue;
+    if (!(element instanceof view.HTMLElement) && element.namespaceURI !== MATHML_NAMESPACE) continue;
+    const fontElement = element as HTMLElement | MathMLElement;
+    if (used.has(fontElement)) continue;
     if (/^(?:script|style|template|noscript)$/i.test(element.localName)) continue;
     if (!participatesInRendering(element, view)) continue;
     const computed = view.getComputedStyle(element);
@@ -445,7 +476,7 @@ function collectFontInventory(document: Document, limits: BrowserFontLimits): Fo
     const exactKey = requestKey(descriptor);
     const key = requests.has(exactKey) ? exactKey : closestRequestKey(descriptor);
     if (key === undefined) continue;
-    uses.push({ element, requestKey: key, originalStyle: element.getAttribute("style") });
+    uses.push({ element: fontElement, requestKey: key, originalStyle: element.getAttribute("style") });
   }
   const ordered = Array.from(requests, ([key, request]) => ({ key, request }))
     .sort((left, right) => compareText(left.key, right.key));

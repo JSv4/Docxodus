@@ -73,10 +73,12 @@ public static partial class WmlToHtmlConverter
         var size = MathFontSize(source, context);
         if (size == null) return null;
         var expression = MathExpression(display ? source.Element(M.oMath)! : source);
-        return expression == null || expression.Value.Length == 0 ? null : new XElement(MathMl + "math",
+        if (expression == null || expression.Value.Length == 0) return null;
+        var math = new XElement(MathMl + "math",
             new XAttribute("display", display ? "block" : "inline"),
             new XAttribute("style", "font-family: " + context.FontFamily + ";font-size: "
                 + size.Value.ToString(CultureInfo.InvariantCulture) + "pt;"), expression);
+        return display ? math : new XElement(Xhtml.span, new XAttribute("data-docx-math", "true"), math);
     }
 
     private static XElement? MathExpression(XElement source)

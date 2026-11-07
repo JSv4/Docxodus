@@ -299,6 +299,21 @@ async function convertWithAdversarialResolver(
 test.describe('browser configured font runtime', () => {
   test.beforeEach(async ({ page }) => ready(page));
 
+  test('MathML inventory covers rendered italic identifiers and implicit radical glyphs', async ({ page }) => {
+    const requests = await page.evaluate(() => (window as any).DocxodusStandalone.inventoryFontFixture(
+      '<math style="font-family:MathFace"><mi>x</mi><mi>h</mi><mi>Α</mi><mi>ϴ</mi><mi>α</mi><mi>ϵ</mi>'
+      + '<mi>𝑦</mi><mi>ab</mi><mi mathvariant="normal">z</mi><mi style="text-transform:none">y</mi>'
+      + '<mroot style="font-family:RootFace"><mn style="font-family:DigitsFace">2</mn>'
+      + '<mn style="font-family:DigitsFace">3</mn></mroot>'
+      + '<msqrt style="font-family:SquareRootFace"><mn style="font-family:DigitsFace">4</mn></msqrt></math>',
+    ));
+    const points = (family: string) => requests.find((request: any) => request.familyStack[0] === family)?.sampleCodePoints;
+    expect(points('MathFace')).toEqual(Array.from('𝑥ℎ𝛢𝛳𝛼𝜖𝑦abyz', c => c.codePointAt(0)!).sort((a, b) => a - b));
+    expect(points('DigitsFace')).toEqual([0x32, 0x33, 0x34]);
+    expect(points('RootFace')).toEqual([0x221a]);
+    expect(points('SquareRootFace')).toEqual([0x221a]);
+  });
+
   test('the public font inventory does not stamp or rewrite the caller DOM', async ({ page }) => {
     const unchanged = await page.evaluate(async () => {
       const modulePath = '/export-browser.js';
@@ -307,7 +322,7 @@ test.describe('browser configured font runtime', () => {
       document.body.append(frame);
       try {
         const doc = frame.contentDocument!;
-        doc.body.innerHTML = '<p style="font-family:serif">Outer <b>inner</b></p>';
+        doc.body.innerHTML = '<p style="font-family:serif">Outer <b>inner</b></p><math><msqrt><mi>x</mi></msqrt></math>';
         const before = doc.documentElement.outerHTML;
         api.inventoryDocumentFontRequests(doc, { fontRequests: 100, fontSampleCodePoints: 1000 });
         return before === doc.documentElement.outerHTML;

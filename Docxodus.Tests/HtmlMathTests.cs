@@ -33,7 +33,7 @@ public class HtmlMathTests
         var expression = Assert.Single(math.Descendants(MathMl + (shape == "fraction" ? "mfrac" : shape == "root" ? "msqrt" : "mroot")));
         Assert.Equal(shape == "root" ? "x" : "x2", expression.Value);
         Assert.DoesNotContain(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "MathEquation");
-        Assert.DoesNotContain("\u00a0", math.Parent!.Value);
+        Assert.DoesNotContain("\u00a0", math.Ancestors().First(e => e.Name.LocalName == "p").Value);
     }
 
     [Theory]
