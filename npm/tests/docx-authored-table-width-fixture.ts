@@ -2,7 +2,7 @@ import { fittingImageRun, fittingTilePng } from './docx-page-fitting-fixture.js'
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
 export function tableDocx(width: number, type: string, centered: boolean, rows = 1, indent = 0,
-  options: { layout?: 'fixed' | 'autofit' | 'inferred'; text?: string; imageWidth?: number; anchored?: boolean; textbox?: boolean } = {}): Uint8Array {
+  options: { layout?: 'fixed' | 'autofit' | 'inferred'; text?: string; imageWidth?: number; anchored?: boolean; textbox?: boolean; markup?: boolean } = {}): Uint8Array {
   const picture = (id: number) => {
     if (!options.imageWidth) return '';
     let image = fittingImageRun(id, options.imageWidth, options.textbox ? 48 : 24);
@@ -27,7 +27,7 @@ export function tableDocx(width: number, type: string, centered: boolean, rows =
       ${(options.layout ?? (type === 'dxa' ? 'fixed' : 'inferred')) === 'inferred' ? '' : `<w:tblLayout w:type="${options.layout ?? 'fixed'}"/>`}<w:tblCellMar><w:left w:type="dxa" w:w="0"/><w:right w:type="dxa" w:w="0"/></w:tblCellMar>
       </w:tblPr><w:tblGrid><w:gridCol w:w="${width * 10}"/><w:gridCol w:w="${width * 10}"/></w:tblGrid>
       ${Array.from({ length: rows }, (_, row) => `<w:tr><w:trPr><w:trHeight w:val="640" w:hRule="atLeast"/></w:trPr>${['A', 'B'].map(column => `<w:tc><w:tcPr><w:tcW w:type="dxa" w:w="${width * 10}"/></w:tcPr><w:p>${column === 'B' ? picture(row + 1) : ''}<w:r><w:t>${options.text ?? `Quill${row + 1}${column}`}</w:t></w:r></w:p></w:tc>`).join('')}</w:tr>`).join('')}</w:tbl>
-      <w:p><w:r><w:t>Finish</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/>
+      <w:p>${options.markup ? '<w:pPr><w:jc w:val="center"/><w:pPrChange w:id="7" w:author="Quill Editor" w:date="2026-09-17T08:00:00Z"><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange></w:pPr>' : ''}<w:r><w:t>Finish</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/>
       <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`,
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="0" w:line="300" w:lineRule="exact"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>`,
     'word/settings.xml': `<w:settings xmlns:w="${W_NS}"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`,

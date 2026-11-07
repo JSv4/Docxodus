@@ -8,6 +8,12 @@ All notable changes to this project will be documented in this file.
 
 - Complete short-document rewrites keep each old paragraph beside its positional replacement, preserving whole sentences and exact accept/reject results. Long rewrites and regions with established content correspondence retain their existing arrangement (#1556).
 
+- DrawingML custom paths render literal lines and quadratic/cubic curves in standalone and grouped shapes, preserving each path's coordinate space and paint switches. Unsupported commands, custom textbox regions and richer paint retain explicit export diagnostics (part of #1554).
+
+- Balloon layout retains the original paper clip and source-position evidence for off-paper textboxes, including zoomed viewers. Visible fragment coordinates remain relative to the physical sheet; changed text, geometry and newly clipped sibling ink still fail verification (part of #1558).
+
+- Picture-only paragraphs no longer reserve a text descent below an inline picture; automatic spacing adds the extra natural text-line height without lifting the picture into the preceding paragraph. Minimum table rows add their top and bottom cell margins outside the declared content height, including continued tables (#1568).
+
 - Oversized body paragraphs with direct or inherited keep-with-next settings split across fresh pages while preserving every line, source identity, and continuation. Fitting keep chains still move together; note, cell and textbox keep policies retain their existing behavior (part of #1558).
 
 - Plain inline VML lines render their endpoint geometry, stroke and Office default side spacing. Lines alone in a paragraph start at its top; grouped, positioned, zero-length and hairline forms retain unsupported-content diagnostics (part of #1554).

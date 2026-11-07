@@ -738,7 +738,7 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Draws one shape's preset geometry in <paramref name="frame"/>, in drawing coordinates.
+        /// Draws one shape's geometry in <paramref name="frame"/>, in drawing coordinates.
         /// Other geometry, and the text of a text box inside a group, count as undrawn.
         /// </summary>
         private static void AddShapeElement(XElement target, XElement shape, ShapeBox frame, XElement? groupFill,
@@ -746,6 +746,7 @@ namespace Docxodus
         {
             var properties = shape.Element(WPS.spPr);
             var shapeStyle = shape.Element(WPS.style);
+            var custom = properties?.Element(A.custGeom);
             var geometry = (string?)properties?.Element(A.prstGeom)?.Attribute(NoNamespace.prst);
             XElement? element = geometry switch
             {
@@ -762,7 +763,7 @@ namespace Docxodus
                     new XAttribute("x1", Format(frame.X)), new XAttribute("y1", Format(frame.Y)),
                     new XAttribute("x2", Format(frame.X + frame.Width)),
                     new XAttribute("y2", Format(frame.Y + frame.Height))),
-                _ => null,
+                _ => CustomShapePaths(custom, frame),
             };
             if (!textRendered && shape.Descendants(W.txbxContent).Any(text => text.Descendants(W.t).Any()))
                 context.Undrawn++;
@@ -771,6 +772,12 @@ namespace Docxodus
                 context.Undrawn++;
                 return;
             }
+
+            // Text regions and richer paint remain approximate even when their literal outline
+            // can be drawn. In particular, admitting a grouped textbox's path must not certify
+            // the full-frame text layout in place of its custom a:rect.
+            if (custom != null && (textRendered || CustomShapeHasUnrepresentedStyle(properties!, shapeStyle, groupFill)))
+                context.Undrawn++;
 
             context.Drawn++;
             var isLine = element.Name.LocalName == "line";
@@ -790,6 +797,87 @@ namespace Docxodus
             if (orientation != null)
                 element.Add(new XAttribute("transform", orientation));
             target.Add(element);
+        }
+
+        private static XElement? CustomShapePaths(XElement? geometry, ShapeBox frame)
+        {
+            var paths = geometry?.Element(A.pathLst)?.Elements().ToArray();
+            if (paths == null || paths.Length == 0) return null;
+            var group = new XElement(Svg + "g");
+            foreach (var path in paths)
+            {
+                if (path.Name != A.path || !LiteralPathCoordinate(path, "w", out var width) || width <= 0
+                    || !LiteralPathCoordinate(path, "h", out var height) || height <= 0
+                    || (string?)path.Attribute("fill") is not (null or "norm" or "none")
+                    || (string?)path.Attribute("stroke") is not (null or "true" or "false" or "1" or "0"))
+                    return null;
+                var commands = new List<string>();
+                var hasStart = false;
+                foreach (var command in path.Elements())
+                {
+                    var (operation, count) = command.Name == A.moveTo ? ("M", 1)
+                        : command.Name == A.lnTo ? ("L", 1)
+                        : command.Name == A.quadBezTo ? ("Q", 2)
+                        : command.Name == A.cubicBezTo ? ("C", 3)
+                        : command.Name == A.close ? ("Z", 0) : ("", -1);
+                    var points = command.Elements().ToArray();
+                    if (count < 0 || points.Length != count || (!hasStart && operation != "M")) return null;
+                    commands.Add(operation);
+                    foreach (var point in points)
+                    {
+                        if (point.Name != A.pt || !LiteralPathCoordinate(point, "x", out var x)
+                            || !LiteralPathCoordinate(point, "y", out var y)) return null;
+                        var mappedX = frame.X + x * (frame.Width / width);
+                        var mappedY = frame.Y + y * (frame.Height / height);
+                        if (!double.IsFinite(mappedX) || !double.IsFinite(mappedY)) return null;
+                        commands.Add(Format(mappedX));
+                        commands.Add(Format(mappedY));
+                    }
+                    hasStart = operation != "Z";
+                }
+                if (commands.Count == 0) return null;
+                // Native calibration uses even/odd fill for compound contours, independent of
+                // their winding. Keep this explicit rather than inheriting SVG's nonzero rule.
+                var element = new XElement(Svg + "path", new XAttribute("d", string.Join(" ", commands)),
+                    new XAttribute("fill-rule", "evenodd"));
+                if ((string?)path.Attribute("fill") == "none") element.Add(new XAttribute("fill", "none"));
+                if ((string?)path.Attribute("stroke") is "false" or "0") element.Add(new XAttribute("stroke", "none"));
+                group.Add(element);
+            }
+            // Keep the geometry private until every path is understood: a later unsupported
+            // command must never turn a partially painted shape into a supported one.
+            return group;
+        }
+
+        private static bool LiteralPathCoordinate(XElement element, string name, out long value) =>
+            long.TryParse((string?)element.Attribute(name), NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+
+        private static bool CustomShapeHasUnrepresentedStyle(XElement properties, XElement? style, XElement? groupFill)
+        {
+            // The shared color resolver approximates only a subset of DrawingML transforms.
+            // Keep direct alpha, but diagnose richer transforms instead of silently inventing ink.
+            bool RichColor(XElement? fill) => fill?.Elements().Any(color =>
+                color.Elements().Any(modifier => modifier.Name != A.alpha)
+                || color.Elements(A.alpha).Skip(1).Any()) == true;
+            if (RichColor(properties.Element(A.solidFill)) || RichColor(properties.Element(A.ln)?.Element(A.solidFill))
+                || (properties.Element(A.grpFill) != null && RichColor(groupFill))) return true;
+            if (style?.HasElements == true || properties.Elements().Any(e => e.Name != A.xfrm && e.Name != A.custGeom
+                && e.Name != A.noFill && e.Name != A.solidFill && e.Name != A.grpFill && e.Name != A.ln
+                && !(e.Name == A.effectLst && !e.HasElements))) return true;
+            if (properties.Element(A.grpFill) != null && groupFill != null
+                && groupFill.Name != A.noFill && groupFill.Name != A.solidFill) return true;
+            var line = properties.Element(A.ln);
+            return line != null && (line.Attributes().Where(a => a.Name != PtOpenXml.Unid && !a.IsNamespaceDeclaration)
+                .Any(a => a.Name.Namespace != XNamespace.None || a.Name.LocalName switch
+            {
+                "w" => !long.TryParse(a.Value, out var width) || width < 9525,
+                "cap" => a.Value != "flat",
+                "cmpd" => a.Value != "sng",
+                "algn" => a.Value != "ctr",
+                _ => true,
+            }) || line.Elements().Any(e => e.Name != A.solidFill && e.Name != A.noFill
+                && !(e.Name == A.prstDash && (string?)e.Attribute("val") == "solid")
+                && !((e.Name == A.headEnd || e.Name == A.tailEnd) && (string?)e.Attribute("type") is null or "none")));
         }
 
         private static XElement RoundedRectangle(XElement presetGeometry, ShapeBox frame)

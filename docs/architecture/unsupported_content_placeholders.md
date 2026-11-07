@@ -56,7 +56,8 @@ const html = await convertDocxToHtml(docxBytes, {
 An inline drawing occupies its `wp:extent` whether or not the converter can draw it (issue #1270): the
 empty-paragraph pass counts an inline `w:drawing` as paragraph content, so a drawing that rendered to
 nothing used to leave its paragraph with no line box. When nothing in the drawing can be drawn — preset
-geometry other than `rect`, `roundRect`, `ellipse`, `line` and `straightConnector1`, custom geometry,
+geometry other than `rect`, `roundRect`, `hexagon`, `triangle`, `star5`, `ellipse`, `line` and
+`straightConnector1`, custom geometry outside the literal line/quadratic/cubic path subset,
 SmartArt, a chart type that is not projected, a picture whose image is missing or linked — the converter
 emits:
 
@@ -66,8 +67,8 @@ emits:
 - with placeholders **off**, a blank `<span data-docx-shape="unrendered" aria-hidden="true">` holding an
   empty SVG of the extent.
 
-A shape or group that is only partly drawable (a group holding a picture or a triangle beside a
-rectangle, a grouped text box's text, a picture fill or an unsupported fill colour) draws what it can and marks its wrapper
+A shape or group that is only partly drawable (an unsupported child beside a rectangle, a custom
+textbox region, a picture fill or an unsupported fill colour) draws what it can and marks its wrapper
 `data-docx-shape="partial"`; with placeholders on, the wrapper also carries `data-content-type="Other"`.
 A picture is still omitted entirely when the caller passes no image handler; an image handler that
 returns null declines that one picture, whose extent is kept as an unrendered box.
