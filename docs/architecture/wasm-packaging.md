@@ -36,7 +36,10 @@ delivery/verification subsystems, and pagination. The AOT tier then moved
 `dotnet.native.wasm`: the compiled methods live there, while the assemblies keep their size
 (the IL bodies of AOT-compiled methods are zeroed in place, which is why they cost nothing
 after compression). The guardrail that matters is the brotli wire total, which
-`scripts/build-wasm.sh` prints and holds under a 5896 KiB budget.
+`scripts/build-wasm.sh` prints and holds under a 5904 KiB budget. The resizing-box
+placement proof measured 6,040,293 bytes on CI runtime 10.0.14 (6,029,778 on local
+runtime 10.0.9), crossing the prior limit by 2,789 bytes. The 8 KiB increase keeps
+the same assembly roots and AOT profile.
 The table above records the original AOT rollout; the expanded browser profile
 below measures 5.44 MiB Brotli on SDK 10.0.301.
 

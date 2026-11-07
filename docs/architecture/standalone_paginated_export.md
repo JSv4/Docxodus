@@ -581,6 +581,14 @@ paper, so glyph rounding cannot hide originally visible text. Both placement and
 also refuse this proof if any sibling ink crosses the paper edge. This does not admit internal
 clipping in implicit boxes or clipping by an ordinary flow band.
 
+Direct main-body DrawingML boxes with shape AutoFit or page-relative percentage sizing
+can also carry `data-docx-textbox-source-position="page-offset"` provenance. This admits only explicit
+page-relative offsets beyond the right or bottom paper edge, with no alignment, rotation,
+reflection, linking, wrapping or partial shape representation. Percentage dimensions are
+resolved before the pristine snapshot; final placement must match the authored origin as
+well as the existing text and geometry proof. Internal clipping keeps its fixed-box rules.
+Running stories, table cells and grouped or nested boxes do not use this extension.
+
 Balloon layout keeps the original paper clip on its page-content holder. Placement proofs use
 that holder's origin and measured scale to compare authored coordinates before and after shrink,
 including viewer zoom. Visible PageMap fragments still use physical-sheet coordinates; the

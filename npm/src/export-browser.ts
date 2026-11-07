@@ -4093,7 +4093,7 @@ export async function convertDocxToPaginatedHtml(
         phase: "output_verification",
         anchorId,
         message: "A source paragraph is wholly outside its authored text-box clip or paper placement and is not painted.",
-        remediation: "Enlarge or reposition the source text box, or enable auto-fit, to include this paragraph in the rendered output.",
+        remediation: "Move an off-paper text box onto the page; for internal overflow, enlarge the box or enable auto-fit.",
       });
     }
     for (const anchorId of engine.getClippedTableContentAnchors()) {

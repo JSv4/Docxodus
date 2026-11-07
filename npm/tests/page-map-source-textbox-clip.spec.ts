@@ -325,3 +325,71 @@ for (const kind of ['outside', 'column-paragraph', 'margin-paragraph', 'changed-
     } else expect(result.error).toContain('has no measurable fragment');
   });
 }
+
+for (const fit of ['auto', 'percent']) for (const change of [
+  'right', 'bottom', 'visible', 'straddling', 'left', 'above', 'zoom', 'balloons',
+  'offset-before', 'font-before', 'wrong-origin', 'move-after', 'font-after', 'text-after', 'removed', 'linked', 'partial',
+]) test(`resizing page-offset proof binds ${fit} source geometry: ${change}`, async ({ page }) => {
+  const left = change === 'left' ? -170 : change === 'straddling' ? 290 : ['bottom', 'above', 'visible'].includes(change) ? 36 : 320;
+  const top = change === 'bottom' ? 400 : change === 'above' ? -200 : 20;
+  await page.setContent(`<div id="pagination-staging"><div data-section-index="0"
+    data-page-width="300" data-page-height="360" data-content-width="228" data-content-height="288"
+    data-margin-top="36" data-margin-right="36" data-margin-bottom="36" data-margin-left="36">
+    <p data-source-anchor-id="p:body:host" style="font:10pt/12pt Arial;margin:0">Birch host
+      <span data-docx-textbox="true" data-docx-textbox-source-position="page-offset" data-docx-drawing-anchor="true"
+        data-docx-anchor-h-relative="page" data-docx-anchor-v-relative="page"
+        data-docx-anchor-h-offset="${left}" data-docx-anchor-v-offset="${top}"
+        ${fit === 'auto' ? 'data-docx-anchor-autofit="true"' : 'data-docx-textbox-clip="true" data-docx-anchor-width-percent="8" data-docx-anchor-width-relative="page"'}
+        ${change === 'linked' ? 'data-docx-textbox-linked="true"' : change === 'partial' ? 'data-docx-shape="partial"' : ''}
+        style="display:inline-block;position:absolute;width:160pt;${fit === 'auto' ? '' : 'height:180pt;'}overflow:hidden">
+        <span data-source-anchor-id="p:body:resized" style="display:block;font:10pt/12pt Arial">Birch amber red green blue<br>Birch amber red green blue<br>Birch amber red green blue</span>
+      </span></p><p data-source-anchor-id="p:body:closing" data-format-description="Font: Bold" data-format-key="1"
+        style="font:10pt/12pt Arial;margin:0">Birch closing</p>
+    </div></div><div id="pagination-container"></div>`);
+  await page.addScriptTag({ path: bundle });
+  const result = await page.evaluate(({ fit, change }) => {
+    const engine = new (window as any).DocxodusPagination.PaginationEngine('pagination-staging', 'pagination-container', {
+      showPageNumbers: false, scale: change === 'zoom' ? 0.7 : 1,
+      commentColumnPlacement: change === 'balloons' ? 'balloons' : 'margin',
+    });
+    if (change === 'wrong-origin') {
+      const resolve = engine.resolveAnchorAxis.bind(engine);
+      engine.resolveAnchorAxis = (...args: any[]) => resolve(...args) + 10;
+    }
+    if (change.endsWith('-before')) {
+      const position = engine.positionDrawingAnchors.bind(engine);
+      engine.positionDrawingAnchors = (...args: any[]) => {
+        const box = args[1].querySelector('[data-docx-textbox]');
+        if (box) {
+          if (change === 'offset-before') box.dataset.docxAnchorHOffset = '350';
+          else box.firstElementChild.style.fontSize = '15pt';
+        }
+        return position(...args);
+      };
+    }
+    try {
+      engine.paginate();
+      const root = document.getElementById('pagination-container')!;
+      const box = root.querySelector<HTMLElement>('[data-docx-textbox]')!;
+      const text = box.firstElementChild as HTMLElement;
+      if (change === 'move-after') box.style.left = '350pt';
+      if (change === 'font-after') text.style.fontSize = '15pt';
+      if (change === 'text-after') text.textContent = 'Birch replacement';
+      if (change === 'removed') text.remove();
+      const map = engine.materializePageMap(0, 'resizing-source');
+      return { error: '', clipped: engine.getSourceClippedTextAnchors(),
+        mapped: map.fragments.some((f: any) => f.anchorId === 'p:body:resized'),
+        resized: fit === 'auto' ? parseFloat(getComputedStyle(box).height) > 40 : box.style.width === '24pt' };
+    } catch (error) { return { error: String(error), clipped: [], mapped: false, resized: false }; }
+  }, { fit, change });
+  if (['right', 'bottom', 'zoom', 'balloons'].includes(change)) {
+    expect(result.error).toBe('');
+    expect(result.clipped).toEqual(['p:body:resized']);
+    expect(result.resized).toBe(true);
+    expect(result.mapped).toBe(false);
+  } else if (['visible', 'straddling'].includes(change)) {
+    expect(result.clipped).toEqual([]);
+    if (result.error) expect(result.error).toContain('has no measurable fragment');
+    else expect(result.mapped).toBe(true);
+  } else expect(result.error).toContain('has no measurable fragment');
+});

@@ -7,16 +7,18 @@ export type SourceClipFit = 'fixed' | 'auto' | 'implicit' | 'overflow' | 'ellips
 /** Original three-line story: the source viewport holds two lines, unless it can grow. */
 export function sourceTextboxClipDocx(kind: SourceClipKind, fit: SourceClipFit = 'fixed', offPaper = false,
   story: 'body' | 'header' | 'footer' = 'body', paragraphRelative = false,
-  placement: { markup?: boolean; right?: boolean } = {}): Uint8Array {
+  placement: { markup?: boolean; right?: boolean; bottom?: boolean; visible?: boolean; percent?: boolean } = {}): Uint8Array {
   const wps = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape';
   const content = sourceClipLines.map((text, index) => '<w:p><w:pPr>' +
     `<w:spacing w:before="${index === 2 ? 160 : 0}" w:after="0" w:line="280" w:lineRule="exact"/></w:pPr>` +
     `<w:r><w:t>${text}</w:t></w:r></w:p>`).join('');
-  const geometry = '<wp:extent cx="2032000" cy="431800"/>';
+  const geometry = `<wp:extent cx="2032000" cy="${placement.percent ? 1778000 : 431800}"/>`;
+  const x = placement.visible || placement.bottom ? 457200 : placement.right ? 8229600 : paragraphRelative ? -3556000 : -2794000;
+  const y = placement.bottom ? 10287000 : 762000;
   const identity = '<wp:docPr id="1" name="Quail window"/>';
   const anchor = '<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="2" behindDoc="1" locked="0" layoutInCell="0" allowOverlap="1">' +
-    `<wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="${paragraphRelative ? 'column' : 'page'}"><wp:posOffset>${placement.right ? 8229600 : paragraphRelative ? -3556000 : -2794000}</wp:posOffset></wp:positionH>` +
-    `<wp:positionV relativeFrom="${paragraphRelative ? 'paragraph' : 'page'}"><wp:posOffset>762000</wp:posOffset></wp:positionV>` + geometry + '<wp:wrapNone/>' + identity;
+    `<wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="${paragraphRelative ? 'column' : 'page'}"><wp:posOffset>${x}</wp:posOffset></wp:positionH>` +
+    `<wp:positionV relativeFrom="${paragraphRelative ? 'paragraph' : 'page'}"><wp:posOffset>${y}</wp:posOffset></wp:positionV>` + geometry + '<wp:wrapNone/>' + identity;
   const drawing = kind === 'vml'
     ? '<w:pict><v:shape id="quail-shape" style="width:160pt;height:34pt;' +
       (offPaper ? `position:absolute;z-index:-2;margin-left:${placement.right ? 648 : -220}pt;margin-top:60pt;mso-position-horizontal-relative:page;mso-position-vertical-relative:page` : '') +
@@ -29,9 +31,9 @@ export function sourceTextboxClipDocx(kind: SourceClipKind, fit: SourceClipFit =
       '<wps:bodyPr lIns="0" tIns="0" rIns="0" bIns="0"' +
       (fit === 'overflow' || fit === 'ellipsis' ? ` vertOverflow="${fit}"` : '') + '>' +
       (fit === 'fixed' || fit === 'overflow' || fit === 'ellipsis' ? '<a:noAutofit/>' : fit === 'auto' ? '<a:spAutoFit/>' : '') +
-      '</wps:bodyPr></wps:wsp></a:graphicData></a:graphic>' + (offPaper ? '</wp:anchor>' : '</wp:inline>') + '</w:drawing>';
+      '</wps:bodyPr></wps:wsp></a:graphicData></a:graphic>' + (offPaper ? (placement.percent ? '<wp14:sizeRelH relativeFrom="page"><wp14:pctWidth>20000</wp14:pctWidth></wp14:sizeRelH>' : '') + '</wp:anchor>' : '</wp:inline>') + '</w:drawing>';
   const namespaces = `xmlns:w="${W_NS}" xmlns:r="${R_NS}" xmlns:wps="${wps}" ` +
-    'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" ' +
+    'xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" ' +
     'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml"';
   const boxParagraph = '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>' +
     (offPaper ? '<w:r><w:t>Quail placement host</w:t></w:r>' : '') + `<w:r>${drawing}</w:r></w:p>`;

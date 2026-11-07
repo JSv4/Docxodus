@@ -13,18 +13,21 @@ for (const placement of ['edge', 'onpage', 'outside'] as const) {
     const bytes = textboxFitDocx(inherited ? 'implicit' : fit, placement, inherited ? fit : undefined);
     writeFileSync(testInfo.outputPath('birch-fit.docx'), bytes);
     const render = renderDocxArtifacts(bytes, { browser, outputs: ['html', 'pdf'], reviewProfile: 'markup', commentProfile: 'hidden', timeoutMs: 120000 });
-    if (placement !== 'onpage' && (fit === 'shrink' || fit === 'auto')) {
+    if ((placement !== 'onpage' && fit === 'shrink') || (placement === 'edge' && fit === 'auto')) {
       await expect(render).rejects.toThrow(/has no measurable fragment/);
       return;
     }
     const result = await render;
     expect(result.pageCount).toBe(1);
+    const warnings = result.renderReport.warnings.filter(w => w.code === 'source_text_clipped');
+    expect(warnings).toHaveLength(placement === 'onpage' ? 0 : placement === 'edge' ? 1 : textboxFitLabels.length + 1);
     await page.setContent(result.html!);
     const anchors = await page.locator('[data-source-anchor-id]').evaluateAll(elements =>
       Object.fromEntries(elements.map(e => [(e.textContent ?? '').trim(), e.getAttribute('data-source-anchor-id')])));
     for (const label of [...textboxFitLabels, '¶']) {
       expect(anchors[label]).toBeTruthy();
       expect(result.pageMap.fragments.some(f => f.anchorId === anchors[label])).toBe(placement === 'onpage' || (placement === 'edge' && label !== '¶'));
+      expect(warnings.some(w => w.anchorId === anchors[label])).toBe(placement === 'outside' || (placement === 'edge' && label === '¶'));
     }
     const pdf = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
     try {

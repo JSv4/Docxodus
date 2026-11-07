@@ -6246,3 +6246,31 @@ run. Unknown properties and richer styles retain a whole-equation diagnostic. Th
 inventory checks MathML's actual italic identifier code points and each radical's generated `√`;
 the paragraph fragmenter moves complete inline equations, and prose baseline correction skips
 MathML just as it skips other independently laid-out media.
+
+## Resizing text boxes beyond an explicit page offset
+
+A direct main-body WPS box on 612 × 792pt paper can author a horizontal page offset
+of 650pt or a vertical page offset of 820pt. `wp:positionH` and `wp:positionV` both
+contain `wp:posOffset`; the box uses `wp:wrapNone`, no rotation and zero text insets.
+The independent Fir reproducer varies only fitting and placement:
+
+```xml
+<wps:bodyPr lIns="0" tIns="0" rIns="0" bIns="0"><a:spAutoFit/></wps:bodyPr>
+<!-- Or an implicit fixed bodyPr with page-relative width: -->
+<wp14:sizeRelH relativeFrom="page"><wp14:pctWidth>20000</wp14:pctWidth></wp14:sizeRelH>
+```
+
+| Renderer | Off-paper box | On-paper control |
+| --- | --- | --- |
+| LibreOffice 25.8.7.3 | All three box labels remain unpainted | All three labels paint |
+| Docxodus before this fix | PageMap refuses the missing source fragments | Delivers all labels |
+| Docxodus after this fix | Delivers with one authored-clipping warning per hidden paragraph | Delivers all labels |
+| Word | Unavailable for this investigation | No new Word parity claim |
+
+`ProcessTextBox` now distinguishes this page-offset provenance from fixed internal
+clipping. The paginator resolves page-percentage dimensions before capturing pristine
+text geometry, then requires both the authored off-paper offset and the matching final
+origin. Existing identity, mutation and partial-ink checks still apply. The grouped-box
+reproducer remains separate: LibreOffice relocates its remote member into visible group
+bounds, so its child offset is not a sufficient native clipping oracle. Running stories
+and unsupported anchor/transform contexts retain their prior verification behavior.

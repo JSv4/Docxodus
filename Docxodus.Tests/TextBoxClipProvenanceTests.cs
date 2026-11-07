@@ -43,7 +43,7 @@ public class TextBoxClipProvenanceTests
     [InlineData("auto", false)]
     [InlineData("shrink", false)]
     [InlineData("linked", false)]
-    public void Supported_placement_requires_effectively_fixed_sizing(string mode, bool eligible)
+    public void Fixed_and_resizing_placement_have_distinct_provenance(string mode, bool eligible)
     {
         using var stream = new MemoryStream();
         stream.Write(Fixture("drawing", mode));
@@ -62,8 +62,49 @@ public class TextBoxClipProvenanceTests
         var html = WmlToHtmlConverter.ConvertToHtml(document,
             new WmlToHtmlConverterSettings { RenderPagination = PaginationMode.Paginated, FabricateCssClasses = false });
         var box = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-docx-textbox") == "true" && e.Value.Contains("Quail marker"));
-        Assert.Equal(eligible ? "true" : null, (string?)box.Attribute("data-docx-textbox-source-position"));
+        Assert.Equal(eligible ? "true" : mode == "auto" ? "page-offset" : null, (string?)box.Attribute("data-docx-textbox-source-position"));
         if (mode == "implicit") Assert.Null(box.Attribute("data-docx-textbox-source-clip"));
+    }
+
+    [Theory]
+    [InlineData("auto", "plain", true)]
+    [InlineData("implicit", "percent", true)]
+    [InlineData("auto", "rotated", false)]
+    [InlineData("auto", "vertical", false)]
+    [InlineData("auto", "aligned", false)]
+    [InlineData("auto", "table", false)]
+    [InlineData("auto", "margin-percent", false)]
+    [InlineData("shrink", "plain", false)]
+    [InlineData("linked", "plain", false)]
+    public void Resizing_page_offset_provenance_requires_a_direct_unrotated_body_box(string fit, string mode, bool eligible)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Fixture("drawing", fit));
+        using var document = WordprocessingDocument.Open(stream, true);
+        var main = document.MainDocumentPart!;
+        var source = main.GetXDocument();
+        var anchor = source.Descendants(WP.inline).First();
+        anchor.Name = WP.anchor;
+        anchor.AddFirst(new XElement(WP.positionH, new XAttribute("relativeFrom", "page"),
+                new XElement(mode == "aligned" ? WP.align : WP.posOffset, mode == "aligned" ? "right" : "8229600")),
+            new XElement(WP.positionV, new XAttribute("relativeFrom", "page"), new XElement(WP.posOffset, 762000)));
+        anchor.Add(new XElement(WP.wrapNone));
+        if (mode == "rotated") anchor.Descendants(WPS.spPr).First().Add(new XElement(A.xfrm, new XAttribute("rot", 5400000)));
+        if (mode == "vertical") anchor.Descendants(WPS.bodyPr).First().SetAttributeValue("vert", "vert");
+        if (mode.EndsWith("percent", System.StringComparison.Ordinal))
+            anchor.Add(new XElement(WP14.sizeRelH, new XAttribute("relativeFrom", mode == "margin-percent" ? "margin" : "page"),
+                new XElement(WP14.pctWidth, 20000)));
+        if (mode == "table")
+        {
+            var paragraph = source.Descendants(W.p).First();
+            paragraph.ReplaceWith(new XElement(W.tbl, new XElement(W.tr, new XElement(W.tc, new XElement(paragraph)))));
+        }
+        main.PutXDocument();
+        var html = WmlToHtmlConverter.ConvertToHtml(document,
+            new WmlToHtmlConverterSettings { RenderPagination = PaginationMode.Paginated, FabricateCssClasses = false });
+        var box = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-docx-textbox") == "true" && e.Value.Contains("Quail marker"));
+        Assert.Equal(eligible, (string?)box.Attribute("data-docx-textbox-source-position") == "page-offset");
+        if (fit == "auto") Assert.Null(box.Attribute("data-docx-textbox-source-clip"));
     }
 
     [Theory]
@@ -96,7 +137,7 @@ public class TextBoxClipProvenanceTests
         var html = WmlToHtmlConverter.ConvertToHtml(document,
             new WmlToHtmlConverterSettings { RenderPagination = PaginationMode.Paginated, FabricateCssClasses = false });
         var box = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-docx-textbox") == "true");
-        Assert.Equal(fixedFit ? "true" : null, (string?)box.Attribute("data-docx-textbox-source-position"));
+        Assert.Equal(fixedFit ? "true" : autoFit ? "page-offset" : null, (string?)box.Attribute("data-docx-textbox-source-position"));
         Assert.Equal(!autoFit, ((string?)box.Attribute("style") ?? "").Split(';')
             .Any(declaration => declaration.TrimStart().StartsWith("height:", System.StringComparison.Ordinal)));
     }

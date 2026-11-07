@@ -82,6 +82,45 @@ for (const fit of ['overflow', 'ellipsis'] as const) test(`explicit ${fit} does 
   })).rejects.toThrow(/has no measurable fragment/);
 });
 
+for (const fit of ['auto', 'percent'] as const) for (const edge of ['right', 'bottom', 'visible'] as const)
+for (const markup of [false, true]) test(`${fit} box at ${edge} preserves authored placement, balloons ${markup}`, async ({ browser, page }) => {
+  test.setTimeout(120_000);
+  const bytes = sourceTextboxClipDocx('drawing', fit === 'auto' ? 'auto' : 'implicit', true, 'body', false,
+    { right: edge === 'right', bottom: edge === 'bottom', visible: edge === 'visible', percent: fit === 'percent', markup });
+  const result = await renderDocxArtifacts(bytes, { browser, outputs: ['html', 'pdf'],
+    reviewProfile: markup ? 'markup' : 'final', commentProfile: markup ? 'margin' : 'hidden',
+    ...(markup ? { markupPresentation: 'word' as const, commentColumnPlacement: 'balloons' as const } : {}),
+  });
+  const warnings = result.renderReport.warnings.filter(w => w.code === 'source_text_clipped');
+  expect(warnings).toHaveLength(edge === 'visible' ? 0 : 3);
+  expect(result.html).toContain('data-docx-textbox-source-position="page-offset"');
+  expect(result.html).not.toContain('data-docx-textbox-source-clip="true"');
+  await page.setContent(result.html!);
+  for (const line of sourceClipLines) {
+    const anchor = await page.getByText(line, { exact: true }).evaluate(element =>
+      element.closest('[data-source-anchor-id]')?.getAttribute('data-source-anchor-id'));
+    expect(anchor).toBeTruthy();
+    expect(result.pageMap.fragments.some(f => f.anchorId === anchor)).toBe(edge === 'visible');
+    expect(warnings.some(w => w.anchorId === anchor)).toBe(edge !== 'visible');
+  }
+  const pdf = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
+  try {
+    const items = (await (await (await pdf.promise).getPage(1)).getTextContent()).items.filter(item => 'str' in item);
+    const text = items.map(item => item.str).join(' ');
+    expect(text).toContain('Quail ledger complete');
+    for (const line of sourceClipLines) expect(text.includes(line)).toBe(edge === 'visible');
+  } finally { await pdf.destroy(); }
+});
+
+for (const fit of ['auto', 'percent'] as const) test(`strict policy rejects authored off-paper ${fit} text`, async ({ browser }) => {
+  test.setTimeout(120_000);
+  const bytes = sourceTextboxClipDocx('drawing', fit === 'auto' ? 'auto' : 'implicit', true, 'body', false,
+    { right: true, percent: fit === 'percent' });
+  await expect(renderDocxArtifacts(bytes, { browser, outputs: ['pdf'], reviewProfile: 'final',
+    commentProfile: 'hidden', unsupportedContent: 'strict',
+  })).rejects.toMatchObject({ code: 'resource_policy_failure', phase: 'output_verification' });
+});
+
 /** Mutate only the script-disabled print snapshot, after the source map has been finalized. */
 function shrinkPrintedBox(browser: Browser, evidence: { changed: number }): Browser {
   const bind = (target: any, key: string | symbol) => {
