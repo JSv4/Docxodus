@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { BrowserContext, Page } from "playwright-core";
 import { FONT_REQUEST_ATTRIBUTE, type CompleteRenderReport, type FontObservation } from "docxodus/export-browser";
-import { exportError } from "./contracts.js";
 
 // Serialized into the script-disabled, closed snapshot realm. No DOM writes or character splitting.
 function textNodes(maximum: number): Text[] {
@@ -24,12 +23,6 @@ function textIdentity(this: Text, requestAttribute: string) {
     fragmentId: parent?.closest("[data-page-fragment-id]")?.getAttribute("data-page-fragment-id"),
     pageNumber: Number(parent?.closest("[data-page-number]")?.getAttribute("data-page-number")),
   };
-}
-
-function limitFailure(): never {
-  return exportError("resource_limit", "output_verification",
-    "Font observations exceed the remaining renderDiagnostics limit.",
-    "Use a smaller document or a larger permitted diagnostic limit.");
 }
 
 /** CDP reports shaping usage for individual text nodes, including SVG, without font-file identity. */
@@ -55,7 +48,7 @@ export async function observeFonts(
     if (!array.result.objectId || array.exceptionDetails) throw new Error("Cannot enumerate finalized text nodes.");
     const properties = await session.send("Runtime.getProperties", { objectId: array.result.objectId, ownProperties: true });
     const nodes = properties.result.filter(property => /^(?:0|[1-9][0-9]*)$/.test(property.name));
-    if (nodes.length > remaining) limitFailure();
+    if (nodes.length > remaining) return { status: "unavailable", reason: "diagnostic_limit" };
     const uses: Extract<FontObservation, { status: "observed" }>["uses"] = [];
     let admitted = 0;
     for (const property of nodes) {
@@ -64,7 +57,7 @@ export async function observeFonts(
       const { nodeId } = await session.send("DOM.requestNode", { objectId });
       const { fonts } = await session.send("CSS.getPlatformFontsForNode", { nodeId });
       if (fonts.length === 0) continue;
-      if (admitted + 1 + fonts.length > remaining) limitFailure();
+      if (admitted + 1 + fonts.length > remaining) return { status: "unavailable", reason: "diagnostic_limit" };
       admitted += 1 + fonts.length;
       const validName = (value: unknown): value is string => typeof value === "string" && value.length > 0
         && value.length <= 2048 && !/[\u0000-\u001f\u007f]/.test(value);

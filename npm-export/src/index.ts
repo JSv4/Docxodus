@@ -996,6 +996,12 @@ async function renderOwned(
     report = structuredClone(browser.materialization.renderReport);
     report.fontObservation = browser.fontObservation;
     report.fontObservationDigest = materialDigest("docxodus:font-observation:v1", browser.fontObservation);
+    if (browser.fontObservation.status === "unavailable" && browser.fontObservation.reason === "diagnostic_limit") {
+      // One fixed summary sits outside the collection budget, even when it is already full.
+      report.warnings.push({ code: "font_observation_limit", severity: "warning", phase: "output_verification",
+        message: "Font observation exceeded the diagnostic budget; incomplete observations were discarded.",
+        remediation: "Use a smaller document when complete platform-font observations are required." });
+    }
     const environment = runtimeEnvironment(report, browser.runtime, attestation);
     const rendererFingerprint = materialDigest("docxodus:renderer-fingerprint:v1", {
       schemaVersion: 1,

@@ -467,7 +467,11 @@ The observation uses print media when PDF is requested, including HTML/PDF batch
 media for HTML-only export. It describes that snapshot and medium; it cannot attest how HTML
 will render on a future host. Browser-only exports explicitly report `browser_api_unavailable`;
 a recognized unsupported Chromium protocol reports `protocol_unavailable`. Observation work shares
-the export deadline and `renderDiagnostics` budget. Cancellation and resource limits remain errors.
+the export deadline and `renderDiagnostics` budget. When that observation budget is exhausted,
+the export continues with `diagnostic_limit`, discards incomplete observations, and adds one
+`font_observation_limit` warning. This fixed-size Node summary is outside the collection budget:
+an otherwise full report has at most one additional diagnostic. Existing font resolution and
+strict-font checks are unchanged. Cancellation, deadlines and other resource limits remain errors.
 
 These are shaping observations, not visible-ink proof: Chromium can report fonts for clipped or
 transparent text, and glyph counts do not map one-to-one to Unicode characters. CSS pseudo-element

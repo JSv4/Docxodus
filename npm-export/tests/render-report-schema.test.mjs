@@ -53,6 +53,10 @@ for (const status of ["complete", "failed"]) {
     report.fontObservation = { status: 'unavailable', reason: 'browser_api_unavailable' };
     delete report.fontObservationDigest;
     assert.equal(validate(report), true);
+    report.fontObservation = { status: 'unavailable', reason: 'diagnostic_limit' };
+    report.fontObservationDigest = 'b'.repeat(64);
+    assert.equal(validate(report), true, JSON.stringify(validate.errors));
+    delete report.fontObservationDigest;
     delete report.fontObservation;
     assert.equal(validate(report), true, 'legacy reports remain valid');
   });
