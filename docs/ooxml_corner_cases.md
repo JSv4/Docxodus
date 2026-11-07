@@ -3937,7 +3937,7 @@ list. A numbered legal document lost its spacing between clauses: in the NVCA ch
 FIRST → SECOND → THIRD, "General" → "Voting", and the space after the "A. COMMON STOCK" heading.
 
 **Fix.** `ApplyContextualSpacing` (formerly `GroupAndVerticallySpaceNumberedParagraphs`) in
-`Docxodus/WmlToHtmlConverter.cs` groups paragraphs only by `w:contextualSpacing` and style. Numbering
+`Docxodus/WmlToHtmlConverter.cs` groups adjacent paragraphs by style and checks each paragraph's own `w:contextualSpacing`. Numbering
 no longer suppresses spacing. Restoring the spacing added two pages to the charter's paginated view
 (measured before #1130),
 height LibreOffice also lays out.
@@ -3947,6 +3947,38 @@ height LibreOffice also lays out.
 list items; this predates #1151.
 
 Tests: `Docxodus.Tests/NumberedParagraphSpacingTests.cs`.
+
+### Contextual spacing belongs to each paragraph (#1553)
+
+The neighbor need not enable the setting. ECMA-376 17.3.1.9 removes the enabled
+paragraph's own spacing on a side touching the same style; the neighbor's spacing
+still participates in the maximum gap. With both paragraphs in the same style:
+
+```xml
+<w:p><w:pPr><w:spacing w:after="240"/><w:contextualSpacing/></w:pPr>
+  <w:r><w:t>First</w:t></w:r></w:p>
+<w:p><w:pPr><w:spacing w:before="0"/></w:pPr>
+  <w:r><w:t>Second</w:t></w:r></w:p>
+```
+
+| Probe | Word | LibreOffice 25.8.7.3 | Docxodus before / after |
+|---|---|---|---|
+| Issue `context-after-first.docx` | 13.75pt step, confirmed by the author | Not recaptured here | Previously retained the unwanted 12pt; now suppresses it |
+| Authored Oak body, 16pt exact line, first-only after-space | Not printed | 16pt step | 12pt unwanted gap / zero authored gap |
+| Oak body, second-only before-space | Not printed | 16pt step | 12pt unwanted gap / zero authored gap |
+| Oak body, first-only flag and neighbor's 6pt before-space | Not printed | 22pt step | 12pt gap / neighbor's 6pt gap |
+| Oak text boxes, first-only flag | Not printed | Retains 12pt; VML also adds inset | 12pt unwanted gap / zero authored gap |
+
+The Word measurement is from [the author's print results](https://github.com/JSv4/Docxodus/issues/1553#issuecomment-6701328156),
+not a new local Word capture. The exact-line Oak fixtures isolate spacing from natural
+line-height defaults. Their two native textbox references remain ineligible because
+LibreOffice disagrees with the declared spacing/position; no Word textbox parity is claimed.
+
+`ApplyContextualSpacing` now groups by resolved style, including implicit default styles,
+then gates each side with that paragraph's resolved on/off value. Border, frame, table,
+bookmark and other existing content boundaries remain intact. Native regressions and
+the public PDF tests cover body text and both textbox formats, including direct-off
+overrides and neighbor-owned space. Automatic spacing is a separate remaining part of #1553.
 
 ## Footnotes: the note number is a run of the first paragraph, and spacing after stops at the margin (issue #1130)
 

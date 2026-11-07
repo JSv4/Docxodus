@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Contextual paragraph spacing suppresses each paragraph's own before/after space beside the same style, even when the neighbor leaves the setting off. Body text and DrawingML/VML text boxes preserve neighbor-owned spacing, inherited overrides and intervening content (part of #1553).
+
 - Resizing DrawingML text boxes positioned beyond the right or bottom page edge report authored clipping instead of failing PageMap completeness. Direct main-body AutoFit and page-percentage boxes retain source text, strict-policy rejection and geometry-mutation guards (part of #1558).
 
 - Plain OMML fractions and square/indexed roots render as selectable MathML. Unsupported equation structures, run styling and document math properties retain whole-equation export diagnostics (part of #1554).
