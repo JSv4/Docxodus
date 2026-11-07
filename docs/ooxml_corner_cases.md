@@ -6217,3 +6217,32 @@ that resolved margin height so the shared border-layout refresh retains it after
 Rows whose content already exceeds the minimum continue to grow to fit. Exact/automatic row
 height behavior is a baseline control here, not a new native-parity claim: LibreOffice interprets
 some authored exact and automatic rows differently from the existing Word-validated paths.
+
+### Plain OMML equations and native math-font substitution (#1554)
+
+A minimal fraction is `<m:oMath><m:f><m:num><m:r><m:t>27.5</m:t></m:r></m:num>`
+`<m:den><m:r><m:t>9</m:t></m:r></m:den></m:f></m:oMath>`. Enclose it in
+`m:oMathPara` for display math. The independently authored benchmark sets
+`<m:mathPr><m:mathFont m:val="DejaVu Serif"/></m:mathPr>` in settings, with
+Liberation Serif body text and 12pt document defaults.
+
+| Renderer | Observed result |
+| --- | --- |
+| Word Online | Unavailable for this capture; no typography or baseline parity claim |
+| LibreOffice 25.8.7.3 | Selectable operands, but ignores the requested math face: Liberation Serif fractions and Liberation Serif/OpenSymbol roots |
+| Docxodus before | Whole-equation `[MATH]` placeholder; strict font export also refuses its unresolved generic monospace face |
+| Docxodus after | Selectable MathML fractions and roots; configured DejaVu Serif covers operands and radical layout |
+
+LibreOffice's equation outputs are retained but ineligible for font-dependent geometry scoring.
+Its root PDF words separate `√` from the radicand, while Chromium extracts `√64` as one word;
+the benchmark records the difference without token normalization. Independent MathML structure,
+operand order, required-font presence, PDF text and fraction-bar paint checks establish the bounded
+projection. An absent OMML math font permits substitution, so the converter uses CSS `math`
+rather than silently choosing the body face.
+
+`WmlToHtmlConverter.Math.cs` projects only complete supported expressions. The shared run-style
+resolver supplies equation size without the paragraph mark's direct formatting or a larger adjacent
+run. Unknown properties and richer styles retain a whole-equation diagnostic. The browser font
+inventory checks MathML's actual italic identifier code points and each radical's generated `√`;
+the paragraph fragmenter moves complete inline equations, and prose baseline correction skips
+MathML just as it skips other independently laid-out media.

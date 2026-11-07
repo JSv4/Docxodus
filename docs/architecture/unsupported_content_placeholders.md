@@ -44,7 +44,7 @@ const html = await convertDocxToHtml(docxBytes, {
 | WMF Image | `image/x-wmf` | `[WMF IMAGE]` | `unsupported-image` |
 | EMF Image | `image/x-emf` | `[EMF IMAGE]` | `unsupported-image` |
 | SVG Image | `image/svg+xml` | `[SVG IMAGE]` | `unsupported-image` |
-| Math Equation | `m:oMath`, `m:oMathPara` | `[MATH]` | `unsupported-math` |
+| Math Equation | Unsupported `m:oMath`, `m:oMathPara` structures/properties | `[MATH]` | `unsupported-math` |
 | Checkbox | `w:ffData` with `w:checkBox` | `[CHECKBOX]` | `unsupported-form` |
 | Text Input | `w:ffData` with `w:textInput` | `[TEXT INPUT]` | `unsupported-form` |
 | Dropdown | `w:ffData` with `w:ddList` | `[DROPDOWN]` | `unsupported-form` |

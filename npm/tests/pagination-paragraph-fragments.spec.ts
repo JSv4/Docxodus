@@ -39,6 +39,36 @@ async function addPaginationBundle(page: Page): Promise<void> {
 }
 
 test.describe('Pagination paragraph fragments', () => {
+  for (const kind of ['owned-math', 'plain-marker', 'raw-math', 'ruby-math', 'frame-math', 'display-math', 'floating-math']) {
+    test(`equation fragmentation preserves the ${kind} boundary`, async ({ page }) => {
+      const math = `<math xmlns="http://www.w3.org/1998/Math/MathML" display="${kind === 'display-math' ? 'block' : 'inline'}"
+        ${kind === 'floating-math' ? 'style="float:left"' : ''}><mfrac><mn>17</mn><mn>5</mn></mfrac></math>`;
+      const owned = `<span data-docx-math="true">${math}</span>`;
+      const text = Array.from({ length: 4 }, () => words).join(' ');
+      const body = kind === 'owned-math' ? owned.repeat(100) : kind === 'plain-marker'
+        ? `<span data-docx-math="true">${text}</span>` : (kind === 'ruby-math'
+          ? `<span data-docx-ruby="true" style="display:inline-block"><ruby>${math}</ruby></span>`
+          : kind === 'frame-math' ? `<span data-docx-frame-line>${math}</span>`
+            : kind === 'raw-math' ? math : owned) + text;
+      await page.setContent(viewerHtml(`<p style="margin:0">${body}</p>`));
+      await addPaginationBundle(page);
+      const result = await page.evaluate(() => {
+        const source = document.querySelector('#pagination-staging p')!;
+        const text = source.textContent, mathCount = source.querySelectorAll('math').length;
+        const container = document.getElementById('pagination-container')!;
+        new (window as any).DocxodusPagination.PaginationEngine(document.getElementById('pagination-staging'), container,
+          { showPageNumbers: false, fragmentParagraphs: true }).paginate();
+        return { text, mathCount, parts: container.querySelectorAll('.page-content > p').length,
+          actualText: Array.from(container.querySelectorAll('.page-content > p'), p => p.textContent).join(''),
+          actualMathCount: container.querySelectorAll('math').length };
+      });
+      expect(result.actualText).toBe(result.text);
+      expect(result.actualMathCount).toBe(result.mathCount);
+      if (kind === 'owned-math' || kind === 'plain-marker') expect(result.parts).toBeGreaterThan(1);
+      else expect(result.parts).toBe(1);
+    });
+  }
+
   for (const kind of ['plain-host', 'shifted-host', 'leading-drawing', 'later-drawing', 'wrapped-drawing',
     'aligned-drawing', 'empty-aligned-drawing', 'break-before-drawing', 'image-before-drawing']) {
     test(`range fragmentation preserves the ${kind} eligibility boundary`, async ({ page }) => {

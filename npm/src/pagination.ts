@@ -3562,6 +3562,7 @@ export class PaginationEngine {
     const textStarts = new Map<Text, number>();
     const lastTextByAtomic = new Map<HTMLElement, Text>();
     const layoutAtoms = this.rangeAtomicInlineBoxes(paragraph);
+    const mathAtoms = new Set(Array.from(layoutAtoms).filter(atom => atom.dataset.docxMath === "true"));
     const atomicAncestor = (element: Element | null): HTMLElement | null => {
       let outer: HTMLElement | null = null;
       for (let current = element; current && current !== paragraph; current = current.parentElement) {
@@ -3576,7 +3577,7 @@ export class PaginationEngine {
     const drawings = new Set(this.leadingFragmentDrawings(paragraph));
     const walker = this.document.createTreeWalker(paragraph,
       this.view.NodeFilter.SHOW_TEXT | this.view.NodeFilter.SHOW_ELEMENT, {
-        acceptNode: node => drawings.has(node as HTMLElement)
+        acceptNode: node => drawings.has(node as HTMLElement) || mathAtoms.has(node.parentElement!)
           ? this.view.NodeFilter.FILTER_REJECT : this.view.NodeFilter.FILTER_ACCEPT,
       });
     const flattenedChunks: string[] = [];
@@ -3589,8 +3590,9 @@ export class PaginationEngine {
           breaks.push({ element: node as HTMLElement, textOffset: flattenedLength });
           flattenedChunks.push("\n");
           flattenedLength++;
-        } else if ((node as Element).localName === "img") {
-          // An inline image occupies one indivisible object position in the break inventory.
+        } else if ((node as Element).localName === "img" || mathAtoms.has(node as HTMLElement)) {
+          // Images and equations occupy one indivisible object position. Adjacent equations
+          // may wrap without whitespace; concatenating their operands would invent a word.
           images.push({ element: node as HTMLElement, textOffset: flattenedLength });
           flattenedChunks.push("\uFFFC");
           flattenedLength++;
@@ -3638,7 +3640,7 @@ export class PaginationEngine {
 
     for (const { element, textOffset } of images) {
       this.checkpoint();
-      if (atomicAncestor(element) || element.closest("[data-list-marker], a[data-comment-id]")) continue;
+      if (atomicAncestor(element.parentElement) || element.closest("[data-list-marker], a[data-comment-id]")) continue;
       const parent = element.parentNode;
       if (!parent) continue;
       const offset = Array.prototype.indexOf.call(parent.childNodes, element);
@@ -3918,8 +3920,11 @@ export class PaginationEngine {
       "[contenteditable]",
     ].join(", ");
     const drawings = this.leadingFragmentDrawings(paragraph);
+    const atoms = this.rangeAtomicInlineBoxes(paragraph);
     if (Array.from(paragraph.querySelectorAll(unsupportedDescendants))
-      .some(element => !drawings.some(drawing => drawing.contains(element)))) {
+      .some(element => !drawings.some(drawing => drawing.contains(element))
+        && !(element.localName === "math" && Array.from(atoms).some(atom =>
+          atom.dataset.docxMath === "true" && atom.contains(element))))) {
       return false;
     }
 
@@ -3976,15 +3981,22 @@ export class PaginationEngine {
       });
   }
 
-  /** Converter shapes, tabs and ruby pairs can move as complete inline boxes. */
+  /** Converter shapes, tabs, math and ruby pairs can move as complete inline boxes. */
   private rangeAtomicInlineBoxes(paragraph: HTMLElement): Set<HTMLElement> {
     const boxes = new Set<HTMLElement>();
     for (const marker of Array.from(paragraph.querySelectorAll<HTMLElement>(
-      '[data-docx-shape="unrendered"], [data-docx-tab], [data-docx-ruby="true"], [data-docx-frame-line]',
+      '[data-docx-shape="unrendered"], [data-docx-tab], [data-docx-ruby="true"], [data-docx-math="true"], [data-docx-frame-line]',
     ))) {
       if (marker.hasAttribute('data-docx-frame-line')) { boxes.add(marker); continue; }
       let box: HTMLElement | null = marker;
-      if (marker.hasAttribute("data-docx-tab")) {
+      if (marker.dataset.docxMath === "true") {
+        const math = marker.firstElementChild;
+        if (marker.childNodes.length !== 1 || math?.localName !== "math" || math.getAttribute("display") !== "inline"
+          || this.view.getComputedStyle(marker).display !== "inline"
+          || [math, ...Array.from(math.querySelectorAll("*"))].some(element =>
+            element.namespaceURI !== "http://www.w3.org/1998/Math/MathML"
+            || !["math", "mrow", "mi", "mn", "mo", "mfrac", "msqrt", "mroot"].includes(element.localName))) continue;
+      } else if (marker.hasAttribute("data-docx-tab")) {
         if (marker.childNodes.length || this.view.getComputedStyle(marker).height !== "0px") continue;
         for (box = marker.parentElement; box && box !== paragraph; box = box.parentElement) {
           if (this.view.getComputedStyle(box).display === "inline-flex") break;
@@ -4109,6 +4121,10 @@ export class PaginationEngine {
       // The reading shares its base's line. Its raised glyphs must not manufacture a line
       // boundary for keep-lines or widow decisions; ordinary fit measurement still sees them.
       if (text.parentElement?.closest('[data-docx-ruby="true"] rt, [data-docx-ruby="true"] rp')) continue;
+      // Numerators and root indices occupy different heights within one indivisible line box.
+      const math = text.parentElement?.closest<HTMLElement>('[data-docx-math="true"]');
+      if (math?.parentElement && this.rangeAtomicInlineBoxes(math.parentElement).has(math))
+        return math.getBoundingClientRect();
       const drawing = text.parentElement?.closest('[data-docx-drawing-anchor]');
       if (drawing && drawing !== root && root.contains(drawing)) continue;
       const start = text === range.startContainer ? range.startOffset : 0;
