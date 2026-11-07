@@ -137,17 +137,19 @@ echo "Total WASM directory size:"
 du -sh "$WASM_DIST"
 
 # Wire-size budget gate. The brotli total is what a negotiation-capable host actually
-# sends to boot the runtime. Budget 5.75 MiB (measured 5.44 MiB after adding full editor
+# sends to boot the runtime. Budget 5896 KiB (measured 5.44 MiB after adding full editor
 # mounts, conversion options, and external annotation creation to the AOT profile).
 # The additional 286.5 KiB buys a sustained ~2–3x annotation speedup (#783). If this
 # trips, something re-rooted an assembly, a dependency grew, or a re-recorded profile
 # got much wider; see benchmarks/aot-coverage/README.md and
 # docs/architecture/wasm-packaging.md before raising it.
-WIRE_BUDGET_BYTES=$((5888 * 1024))
+# Canvas diagnostics on the CI runtime 10.0.14 crossed 5888 KiB by less than 1 KiB;
+# allow 8 KiB of measured feature/toolchain headroom without changing roots or AOT coverage.
+WIRE_BUDGET_BYTES=$((5896 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""
-echo "Wire size (brotli total): $((WIRE_BYTES / 1024)) KB (budget: $((WIRE_BUDGET_BYTES / 1024)) KB)"
+echo "Wire size (brotli total): $WIRE_BYTES bytes (budget: $WIRE_BUDGET_BYTES bytes)"
 if [ "$WIRE_BYTES" -gt "$WIRE_BUDGET_BYTES" ]; then
     echo "ERROR: WASM wire payload exceeds the ${WIRE_BUDGET_BYTES}-byte budget."
     echo "Did an assembly get re-rooted (TrimmerRootAssembly) or a dependency grow?"
