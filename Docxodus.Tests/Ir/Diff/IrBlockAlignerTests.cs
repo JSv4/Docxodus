@@ -667,6 +667,37 @@ public class IrBlockAlignerTests
         AssertInvariants(l, r, a);
     }
 
+    [Theory]
+    [InlineData(12, 12, 2, true)]
+    [InlineData(13, 12, 2, false)]
+    [InlineData(12, 13, 2, false)]
+    [InlineData(11, 11, 6, false)]
+    [InlineData(10, 10, 6, true)]
+    public void Complete_rewrite_positional_policy_is_bounded(int leftWords, int rightWords, int count, bool pairs)
+    {
+        var left = Doc(Enumerable.Repeat(string.Join(" ", Enumerable.Repeat("walnut", leftWords)), count).ToArray());
+        var right = Doc(Enumerable.Repeat(string.Join(" ", Enumerable.Repeat("cobalt", rightWords)), count).ToArray());
+        var alignment = Align(left, right);
+        Assert.Equal(pairs ? count : 0, Count(alignment, IrAlignmentKind.Modified));
+        AssertInvariants(left, right, alignment);
+        // Nested stories retain their existing lexical policy.
+        Assert.Equal(0, Count(IrBlockAligner.AlignBlocks(left.Body.Blocks, right.Body.Blocks, Default), IrAlignmentKind.Modified));
+    }
+
+    [Theory]
+    [InlineData(9, true)]
+    [InlineData(10, false)]
+    public void Complete_rewrite_total_word_boundary_is_64(int lastWords, bool pairs)
+    {
+        string[] Texts(string word) => Enumerable.Repeat(11, 5).Append(lastWords)
+            .Select(count => string.Join(" ", Enumerable.Repeat(word, count))).ToArray();
+        var left = Doc(Texts("walnut"));
+        var right = Doc(Texts("cobalt"));
+        var alignment = Align(left, right);
+        Assert.Equal(pairs ? 6 : 0, Count(alignment, IrAlignmentKind.Modified));
+        AssertInvariants(left, right, alignment);
+    }
+
     [Fact]
     public void Junction_growth_extends_below_a_paired_title()
     {

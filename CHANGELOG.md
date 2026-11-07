@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Complete short-document rewrites keep each old paragraph beside its positional replacement, preserving whole sentences and exact accept/reject results. Long rewrites and regions with established content correspondence retain their existing arrangement (#1556).
+
 - DrawingML custom paths render literal lines and quadratic/cubic curves in standalone and grouped shapes, preserving each path's coordinate space and paint switches. Unsupported commands, custom textbox regions and richer paint retain explicit export diagnostics (part of #1554).
 
 - Balloon layout retains the original paper clip and source-position evidence for off-paper textboxes, including zoomed viewers. Visible fragment coordinates remain relative to the physical sheet; changed text, geometry and newly clipped sibling ink still fail verification (part of #1558).
