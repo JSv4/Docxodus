@@ -93,6 +93,9 @@ The conversion happens in the following stages:
 XML normalizes raw CR/CRLF to LF. Before formatting, LF characters in `w:t` and
 `w:delText` become spaces; explicitly encoded CR characters remain breaks. Literal tabs use the same tab-stop path as `w:tab`;
 explicit `w:br` / `w:cr` elements and field instructions retain their meaning (#1564).
+Shared `PutXDocument` writers entitize surviving CR characters so revision projection
+and session saves do not turn them into LF before conversion. This preserves text
+character identity without changing the existing BOM or formatting policy.
 
 Run coalescing visits nested containers from the leaves upward on one copy of the input tree.
 Each container, including textbox paragraphs, is consolidated once (#1410).

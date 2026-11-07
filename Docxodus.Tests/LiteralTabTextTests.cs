@@ -77,6 +77,59 @@ public class LiteralTabTextTests
         Assert.Single(Tabs(html));
     }
 
+    public static IEnumerable<object[]> ReviewProjectionCases()
+    {
+        foreach (var story in new[] { "body", "header", "footer" })
+        foreach (var ending in new[] { "\r", "\r\n" })
+        foreach (var accept in new[] { false, true })
+        foreach (var tracked in new[] { false, true })
+            yield return new object[] { story, ending, accept, tracked };
+    }
+
+    [Theory]
+    [MemberData(nameof(ReviewProjectionCases))]
+    public void Review_projection_preserves_encoded_line_endings(string story, string ending, bool accept, bool tracked)
+    {
+        var bytes = LineEndingFixture(story, ending, tracked ? accept ? "inserted" : "deleted" : "none", encoded: true);
+        var source = new WmlDocument("encoded-cr.docx", bytes);
+        var resolved = accept ? RevisionProcessor.AcceptRevisions(source) : RevisionProcessor.RejectRevisions(source);
+        using var stream = new MemoryStream(resolved.DocumentByteArray);
+        using var doc = WordprocessingDocument.Open(stream, false);
+        var content = doc.ContentParts().SelectMany(p => p.GetXDocument().Descendants(W.t))
+            .Select(t => t.Value).StringConcatenate();
+        Assert.Contains("Harbor" + ending + "register", content);
+        Assert.Equal(bytes, source.DocumentByteArray);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void Part_and_session_saves_preserve_text_character_references(int path)
+    {
+        var bytes = LineEndingFixture("body", "\r\n", "none", encoded: true);
+        if (path == 3)
+        {
+            using var session = new DocxSession(bytes);
+            bytes = session.Save();
+        }
+        else
+        {
+            using var stream = new MemoryStream(); stream.Write(bytes);
+            using (var doc = WordprocessingDocument.Open(stream, true))
+            {
+                var part = doc.MainDocumentPart!;
+                if (path == 0) part.PutXDocument();
+                else if (path == 1) part.PutXDocument(new XDocument(part.GetXDocument()));
+                else part.PutXDocumentWithFormatting();
+            }
+            bytes = stream.ToArray();
+        }
+        using var reopened = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        Assert.Contains("Harbor\r\nregister", reopened.MainDocumentPart!.GetXDocument().Root!.Value);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

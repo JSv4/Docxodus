@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Literal line endings in Word text render as spaces across body, running stories and tracked text; explicit line-break elements and tab alignment remain intact (part of #1564).
+- Literal line endings in Word text render as spaces across body, running stories and tracked text; explicit line-break elements and tab alignment remain intact. Shared XML part saves preserve encoded carriage returns across revision projection and session saves (part of #1564).
 
 - Comparison tracks edits inside stable textbox groups, including header labels and nested formatting, while preserving hyperlink and media ownership. Whole-group header additions/removals retain their LibreOffice warning and have a documented markup PDF companion fallback (#1557).
 

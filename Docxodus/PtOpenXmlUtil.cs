@@ -246,6 +246,8 @@ namespace Docxodus
             return new XmlWriterSettings
             {
                 Encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: hasByteOrderMark),
+                // A literal CR would reload as LF. Preserve its character identity across saves.
+                NewLineHandling = NewLineHandling.Entitize,
             };
         }
 
@@ -273,6 +275,7 @@ namespace Docxodus
                 using (Stream partStream = part.GetStream(FileMode.Create, FileAccess.Write))
                 {
                     XmlWriterSettings settings = new XmlWriterSettings();
+                    settings.NewLineHandling = NewLineHandling.Entitize;
                     settings.Indent = true;
                     settings.OmitXmlDeclaration = true;
                     settings.NewLineOnAttributes = true;
