@@ -1163,6 +1163,9 @@ namespace Docxodus
 
             NormalizeLiteralTextControls(wordDoc);
 
+            var spacingRoot = wordDoc.MainDocumentPart!.GetXDocument().Root!;
+            new Internal.AutomaticParagraphSpacing(wordDoc).Stamp(spacingRoot, spacingRoot);
+
             // Only accept revisions if NOT rendering tracked changes AND document has tracked changes
             // This optimization saves ~9% of conversion time for documents without revisions
             if (!htmlConverterSettings.RenderTrackedChanges && RevisionAccepter.HasTrackedRevisions(wordDoc))
@@ -1238,6 +1241,8 @@ namespace Docxodus
             };
 
             FormattingAssembler.AssembleFormatting(wordDoc, formattingAssemblerSettings);
+
+            Internal.AutomaticParagraphSpacing.Apply(wordDoc.MainDocumentPart!.GetXDocument().Root!);
 
             MergeRevisionParagraphGroups(wordDoc, htmlConverterSettings);
             NormalizeFieldResults(wordDoc, htmlConverterSettings);
@@ -7051,6 +7056,9 @@ namespace Docxodus
             // A header row (w:tblHeader) repeats at the top of every page its table continues on, whatever
             // its height rule. The paginator does the repeating (issue #1171), so the row says it is one.
             var htmlRow = new XElement(Xhtml.tr,
+                settings.StampAnchors && (string?)element.Attribute(PtOpenXml.Unid) != null
+                    ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid)!)
+                    : null,
                 SourceAnchorIdentityAttribute(settings, element),
                 IsOnOffPropertyEnabled(element.Elements(W.trPr).Elements(W.tblHeader).FirstOrDefault())
                     ? new XAttribute("data-docx-header-row", "true") : null,

@@ -332,7 +332,7 @@ internal static class HtmlConversionOps
     /// <summary>
     /// Render a single block (addressed by a <c>kind:scope:unid</c> anchor) to faithful
     /// HTML. Builds a throwaway document that copies the source's styles/numbering/theme
-    /// parts and contains just the one block, then runs the standard converter. The full
+    /// parts and retains the block’s neighboring context, then runs the standard converter. The full
     /// document render is the faithfulness oracle — this must match the corresponding
     /// <c>data-anchor</c> element from a full render; a list item carries the counters the
     /// whole document resolves for it, so it shows the number the full render shows.
@@ -345,22 +345,9 @@ internal static class HtmlConversionOps
             throw new ArgumentException("No anchor id provided", nameof(anchorId));
         ArgumentNullException.ThrowIfNull(options);
 
-        docxBytes = StrictOoxmlNormalizer.NormalizeForReading(docxBytes);
-
-        using var sourceStream = new MemoryStream();
-        sourceStream.Write(docxBytes, 0, docxBytes.Length);
-        sourceStream.Position = 0;
-        using var sourceDoc = WordprocessingDocument.Open(sourceStream, true);
-
-        // Stateless path: no live session, so assign deterministic Unids here (the same
-        // call the full render uses) so the anchor resolves by construction — note parts
-        // included, else a footnote-paragraph anchor could never resolve on this path.
-        AssignAnchorUnids(sourceDoc);
-
-        var unid = AnchorUnid(anchorId);
-        var blockElement = FindByUnid(sourceDoc, unid)
-            ?? throw new ArgumentException($"anchor not found: {anchorId}", nameof(anchorId));
-        return RenderResolvedBlock(sourceDoc, blockElement, options);
+        using var session = new DocxSession(docxBytes, new DocxSessionSettings { CaptureInitialProjection = false });
+        AssignAnchorUnids(session.LiveDocument);
+        return RenderBlockHtml(session, anchorId, options);
     }
 
     /// <summary>
@@ -655,9 +642,9 @@ internal static class HtmlConversionOps
         var runs = new List<(List<XElement> Siblings, int Start, int End)>();
         foreach (var parentGroup in targets.Where(t => t.Parent is not null).GroupBy(t => t.Parent!))
         {
-            var siblings = parentGroup.Key.Elements()
-                .Where(e => e.Name == W.p || e.Name == W.tbl)
-                .ToList();
+            // Keep real boundaries (bookmarks, content controls, etc.) between paragraphs.
+            // The shell supplies its final section separately.
+            var siblings = parentGroup.Key.Elements().Where(e => e.Name != W.sectPr).ToList();
             var posOf = new Dictionary<XElement, int>();
             for (int i = 0; i < siblings.Count; i++) posOf[siblings[i]] = i;
 
@@ -678,6 +665,11 @@ internal static class HtmlConversionOps
             }
         }
 
+        // An intervening container can already include another parent's requested run.
+        // Clone that source subtree once, before adding field/comment scaffolding.
+        var includedRoots = runs.SelectMany(r => r.Siblings.Skip(r.Start).Take(r.End - r.Start + 1)).ToHashSet();
+        runs.RemoveAll(r => r.Siblings[r.Start].Ancestors().Any(includedRoots.Contains));
+
         // A comment range that opened in an EARLIER block than the run's first clone has no
         // w:commentRangeStart inside the shell body, so the converter's tracker would never open
         // it and the covered runs would render unhighlighted. Reconstruct the open set at each
@@ -696,6 +688,7 @@ internal static class HtmlConversionOps
 
         var bodyContent = new List<XElement>();
         var denseText = new Dictionary<string, DenseTextParagraph>(StringComparer.Ordinal);
+        var automaticSpacing = new AutomaticParagraphSpacing(liveDoc);
         foreach (var (siblings, start, end) in runs)
         {
             if (rangeIndex is not null)
@@ -718,6 +711,7 @@ internal static class HtmlConversionOps
                     if (dense is not null) denseText[denseUnid] = dense;
                 }
                 var clone = dense?.Template ?? CloneWithListNumbers(siblings[i]);
+                automaticSpacing.Stamp(siblings[i], clone);
                 if (dense is null)
                     RetargetPartRelationships(liveDoc, siblings[i], clone, renderMain, copiedImages);
                 identity?.Record(siblings[i], clone);
@@ -1140,56 +1134,6 @@ internal static class HtmlConversionOps
     }
 
     /// <summary>
-    /// Render one resolved block element to HTML via a throwaway document that copies the
-    /// source's formatting parts. Read-only w.r.t. <paramref name="sourceDoc"/> (the block is
-    /// cloned, parts are read), so it is safe to call on a live session document. This is the
-    /// STATELESS path (no per-session shell cache); the session-attached paths batch through
-    /// <see cref="RenderTargetsFromShell"/> instead.
-    /// </summary>
-    private static string RenderResolvedBlock(WordprocessingDocument sourceDoc, XElement blockElement,
-        HtmlConversionOptions options)
-    {
-        var unid = (string?)blockElement.Attribute(PtOpenXml.Unid);
-
-        // Same contract as the batch path: canonical source provenance is carried from the
-        // source package, never re-derived from the throwaway body.
-        var identity = BlockSourceIdentity.For(
-            options.StampAnchors,
-            WmlToMarkdownConverter.BuildAnchorIndexOnly(
-                sourceDoc, new WmlToMarkdownConverterSettings { Scopes = ProjectionScopes.All }),
-            sourceDoc);
-        EnsureListAnnotations(sourceDoc);
-        var blockClone = CloneWithListNumbers(blockElement);
-        identity?.Record(blockElement, blockClone);
-
-        // Build a throwaway doc: copied formatting parts + just this block.
-        using var blockStream = new MemoryStream();
-        using (var blockDoc = WordprocessingDocument.Create(
-                   blockStream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
-        {
-            var main = blockDoc.AddMainDocumentPart();
-            AddFormattingParts(blockDoc, sourceDoc);
-            RetargetPartRelationships(sourceDoc, blockElement, blockClone, main,
-                new Dictionary<string, string>(StringComparer.Ordinal));
-            var fieldIndex = FieldContextIndex.Build(new[] { blockElement });
-            var bodyContent = new List<object>();
-            if (fieldIndex.Opener(blockElement) is { } opener) bodyContent.Add(opener);
-            bodyContent.Add(blockClone);
-            if (fieldIndex.Closer(new List<XElement> { blockElement }, 0, 0) is { } closer) bodyContent.Add(closer);
-            main.PutXDocument(BuildShellDocument(sourceDoc.MainDocumentPart?.GetXDocument().Root, bodyContent.ToArray()));
-        }
-        blockStream.Position = 0;
-        using var renderDoc = WordprocessingDocument.Open(blockStream, true);
-        // Built from a block of bytes the read step's depth door measured (issue #1389).
-        PartDepthGuard.MarkMeasured(renderDoc);
-        var blockSettings = BuildBlockConverterSettings(options);
-        if (identity is not null) blockSettings.SourceAnchorIdentityProvider = identity.Resolve;
-        else if (options.CommentRenderMode >= 0) blockSettings.SourceAnchorIdentityProvider = CommentStoryIdentity;
-        var htmlElement = WmlToHtmlConverter.ConvertToHtml(renderDoc, blockSettings);
-        return ExtractBlockHtml(htmlElement, unid);
-    }
-
-    /// <summary>
     /// Canonical <c>kind:cmt:unid</c> identity for an element of the comments story (a
     /// <c>w:comment</c> definition or a block inside one), or null for anything else.
     /// </summary>
@@ -1427,19 +1371,6 @@ internal static class HtmlConversionOps
 
     /// <summary>Extract the rendered block (located by its stamped data-anchor) from the full
     /// converter output, not the <c>&lt;html&gt;</c> wrapper.</summary>
-    private static string ExtractBlockHtml(XElement htmlElement, string? unid)
-    {
-        XElement? inner = null;
-        if (unid != null)
-            inner = htmlElement.Descendants().FirstOrDefault(e => (string?)e.Attribute("data-anchor") == unid);
-        if (inner is null)
-        {
-            var body = htmlElement.Descendants().FirstOrDefault(e => e.Name.LocalName == "body");
-            inner = body?.Elements().FirstOrDefault() ?? htmlElement;
-        }
-        return BlockRenderRoot(inner).ToString(SaveOptions.DisableFormatting);
-    }
-
     private static XElement BlockRenderRoot(XElement element) =>
         element.Parent is { } parent && parent.Name.LocalName == "div"
         && parent.Attribute("data-anchor") is null
