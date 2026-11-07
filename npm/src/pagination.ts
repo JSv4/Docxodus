@@ -120,6 +120,8 @@ export interface MeasuredBlock {
   keepLines: boolean;
   /** A fresh-page attempt could not honor this paragraph's keep-lines constraint. */
   relaxedKeepLines?: boolean;
+  /** An oversized body paragraph could not honor keep-with-next on a fresh page. */
+  relaxedKeepWithNext?: boolean;
   /** Whether to force a page break before this block */
   pageBreakBefore: boolean;
   /** Whether this is a page break marker */
@@ -3829,14 +3831,14 @@ export class PaginationEngine {
    * Text, hard line breaks and whole inline images share Range fragmentation.
    * Out-of-flow objects and richer inline boxes retain their dedicated layout rules.
    */
-  private canFragmentParagraph(block: MeasuredBlock, relaxKeepLines = false): boolean {
+  private canFragmentParagraph(block: MeasuredBlock, relaxKeepLines = false, relaxKeepWithNext = false): boolean {
     if (!this.fragmentParagraphs) {
       return false;
     }
 
     const paragraph = block.element;
     if (
-      block.keepWithNext ||
+      (block.keepWithNext && !relaxKeepWithNext) ||
       (block.keepLines && !relaxKeepLines && !block.relaxedKeepLines) ||
       block.pageBreakBefore ||
       block.isPageBreak ||
@@ -3848,7 +3850,7 @@ export class PaginationEngine {
     // A body paragraph may cite notes: the paginator places a fragment's notes with the
     // fragment, so a citation never splits from its note (see notesCanStartOnPage).
     return this.canRangeFragmentParagraph(paragraph, false, true,
-      relaxKeepLines || block.relaxedKeepLines === true);
+      relaxKeepLines || block.relaxedKeepLines === true, false, false, relaxKeepWithNext);
   }
 
   /**
@@ -3864,6 +3866,7 @@ export class PaginationEngine {
     relaxKeepLines = false,
     terminalCellParagraph = false,
     textBoxParagraph = false,
+    relaxKeepWithNext = false,
   ): boolean {
     // The converter writes a Word paragraph with an outline level (a heading style) as h1-h6;
     // it breaks across pages like any other paragraph unless it keeps its lines together.
@@ -3872,7 +3875,7 @@ export class PaginationEngine {
       : bodyParagraph ? this.isWordParagraphElement(paragraph) : paragraph.tagName === "P";
     if (
       !wordParagraph ||
-      (paragraph.dataset.keepWithNext === "true" && !terminalCellParagraph) ||
+      (paragraph.dataset.keepWithNext === "true" && !terminalCellParagraph && !relaxKeepWithNext) ||
       (paragraph.dataset.keepLines === "true" && !relaxKeepLines) ||
       paragraph.dataset.pageBreakBefore === "true" ||
       paragraph.hasAttribute("contenteditable")
@@ -3934,7 +3937,7 @@ export class PaginationEngine {
     }
 
     const isValidatedEndnote = paragraph.dataset.paginationSafeEndnote === "true";
-    return isValidatedEndnote || this.hasRangeFragmentSafeLayout(paragraph, allowInlineRoot, relaxKeepLines);
+    return isValidatedEndnote || this.hasRangeFragmentSafeLayout(paragraph, allowInlineRoot, relaxKeepLines, relaxKeepWithNext);
   }
 
   /** The converter's automatic-spacing lift moves ink without changing inline line boxes. */
@@ -4014,8 +4017,10 @@ export class PaginationEngine {
     paragraph: HTMLElement,
     allowInlineRoot: boolean = false,
     relaxKeepLines = false,
+    relaxKeepWithNext = false,
   ): boolean {
     const paragraphStyle = this.view.getComputedStyle(paragraph);
+    const avoidAfter = relaxKeepWithNext && paragraph.dataset.keepWithNext === "true";
     const unshiftedHost = paragraphStyle.position === 'relative'
       && paragraphStyle.transform === 'none' && paragraphStyle.translate === 'none'
       && paragraphStyle.rotate === 'none' && paragraphStyle.scale === 'none'
@@ -4028,10 +4033,10 @@ export class PaginationEngine {
       paragraphStyle.float !== "none" ||
       (paragraphStyle.whiteSpace !== "normal" && paragraphStyle.whiteSpace !== "pre-wrap") ||
       paragraphStyle.breakBefore !== "auto" ||
-      paragraphStyle.breakAfter !== "auto" ||
+      (paragraphStyle.breakAfter !== "auto" && !(avoidAfter && paragraphStyle.breakAfter === "avoid")) ||
       (paragraphStyle.breakInside === "avoid" && !relaxKeepLines) ||
       paragraphStyle.pageBreakBefore !== "auto" ||
-      paragraphStyle.pageBreakAfter !== "auto" ||
+      (paragraphStyle.pageBreakAfter !== "auto" && !(avoidAfter && paragraphStyle.pageBreakAfter === "avoid")) ||
       (paragraphStyle.pageBreakInside === "avoid" && !relaxKeepLines)
     ) {
       return false;
@@ -4526,6 +4531,10 @@ export class PaginationEngine {
     if (block.element.localName === "div" || block.element.dataset.paginationCommentGroup === "true") {
       return this.tryFragmentParagraphGroup(block, dims, availableHeightPt, effectiveMarginTopPt);
     }
+    // Keep-next is relaxed only for an oversized body paragraph on an empty page. Note,
+    // cell and textbox callers of the shared Range gate retain their own keep policies.
+    const relaxKeepWithNext = block.relaxedKeepWithNext === true || (freshPage
+      && this.extractFootnoteRefs(block.element).every(id => this.footnoteRegistry.has(id)));
 
     // Continuations are detached Range clones. Validate their computed layout
     // in the same staging context used for measurement before splitting again.
@@ -4544,7 +4553,7 @@ export class PaginationEngine {
     if (host) this.prepareFrameExclusions(host, dims, Number(paragraph.dataset.paginationPhysicalPage ?? 1));
     let split: ParagraphSplitAttempt;
     try {
-      if (!this.canFragmentParagraph({ ...block, element: paragraph }, relaxKeepLines)) return null;
+      if (!this.canFragmentParagraph({ ...block, element: paragraph }, relaxKeepLines, relaxKeepWithNext)) return null;
 
       // Word moves a citing line, never part of one, to the page where its note can begin:
       // stop the head above the first citation whose note cannot start beside it. A head
@@ -4596,9 +4605,10 @@ export class PaginationEngine {
     return [split.head, split.tail].map((element, index) => ({
       ...this.measureElement(element, dims, block.sectionIndex, index === 0 ? prefix : []),
       element,
-      keepWithNext: false,
+      keepWithNext: index === 1 && block.keepWithNext,
       keepLines: false,
       relaxedKeepLines: relaxKeepLines || block.relaxedKeepLines,
+      relaxedKeepWithNext: relaxKeepWithNext,
       pageBreakBefore: false,
       isPageBreak: false,
     }));

@@ -215,7 +215,7 @@ test.describe('Pagination paragraph fragments', () => {
     expect(result).toEqual({
       keepLines: 3,
       unresolvedNote: 1,
-      keepNext: 1,
+      keepNext: 2,
       lineBreak: 2,
       clearingBreak: 1,
       pageBreak: 1,

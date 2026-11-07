@@ -45,7 +45,8 @@ export function refreshTableBorderLayout(table: HTMLTableElement): void {
       if (height > 0 && rule === 'exact' && clip) clip.style.height = `${Math.max(0,height-top-bottom)}px`;
     }
     if (height > 0 && (rule === 'exact' || rule === 'atLeast'))
-      row.style.height = `${height+(rule === 'exact' ? 0 : half(row,'top')+half(row,'bottom'))}px`;
+      row.style.height = `${height+(rule === 'exact' ? 0 : half(row,'top')+half(row,'bottom')
+        +Number(row.getAttribute('data-docx-row-margin-height'))*PT)}px`;
   }
   for (const [side, row] of [['top', table.rows[0]], ['bottom', table.rows[table.rows.length-1]]] as const) {
     table.style.setProperty(`padding-${side}`, `${half(row,side)}px`);

@@ -241,6 +241,8 @@ public static partial class WmlToHtmlConverter
             html.SetAttributeValue("data-docx-table-header-edges", TableBorderEdgesJson(join, theme));
         var height = TableRowHeightInTwips(source.Element(W.trPr)?.Element(W.trHeight)?.Attribute(W.val));
         if (height != null) html.SetAttributeValue("data-docx-source-row-height", (height.Value / 20m).ToString(CultureInfo.InvariantCulture));
+        if (height > 0m && ((string?)source.Element(W.trPr)?.Element(W.trHeight)?.Attribute(W.hRule) ?? "atLeast") == "atLeast")
+            html.SetAttributeValue("data-docx-row-margin-height", TableRowVerticalMarginsInPoints(source).ToString(CultureInfo.InvariantCulture));
     }
 
     private static string TableBorderEdgesJson(List<TableBorderEdge> edges, ThemeColorScheme? theme)
