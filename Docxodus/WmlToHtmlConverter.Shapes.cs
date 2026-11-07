@@ -867,7 +867,8 @@ namespace Docxodus
             if (properties.Element(A.grpFill) != null && groupFill != null
                 && groupFill.Name != A.noFill && groupFill.Name != A.solidFill) return true;
             var line = properties.Element(A.ln);
-            return line != null && (line.Attributes().Any(a => a.Name.LocalName switch
+            return line != null && (line.Attributes().Where(a => a.Name != PtOpenXml.Unid && !a.IsNamespaceDeclaration)
+                .Any(a => a.Name.Namespace != XNamespace.None || a.Name.LocalName switch
             {
                 "w" => !long.TryParse(a.Value, out var width) || width < 9525,
                 "cap" => a.Value != "flat",

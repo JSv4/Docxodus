@@ -46,18 +46,21 @@ public class HtmlDrawingShapeTests
         "<a:pathLst>" + paths + "</a:pathLst></a:custGeom>");
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void LiteralCustomPaths_PreserveIndependentCoordinatesAndPaintFlags(bool grouped)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void LiteralCustomPaths_PreserveIndependentCoordinatesAndPaintFlags(bool grouped, bool paginated)
     {
         var shape = CustomShape("<a:path w=\"100\" h=\"100\"><a:moveTo><a:pt x=\"0\" y=\"100\"/></a:moveTo>" +
             "<a:lnTo><a:pt x=\"50\" y=\"0\"/></a:lnTo><a:quadBezTo><a:pt x=\"75\" y=\"25\"/><a:pt x=\"100\" y=\"100\"/></a:quadBezTo>" +
             "<a:cubicBezTo><a:pt x=\"75\" y=\"75\"/><a:pt x=\"25\" y=\"75\"/><a:pt x=\"0\" y=\"100\"/></a:cubicBezTo><a:close/></a:path>" +
             "<a:path w=\"200\" h=\"200\" fill=\"none\" stroke=\"false\"><a:moveTo><a:pt x=\"50\" y=\"50\"/></a:moveTo>" +
-            "<a:lnTo><a:pt x=\"150\" y=\"150\"/></a:lnTo></a:path>");
+            "<a:lnTo><a:pt x=\"150\" y=\"150\"/></a:lnTo></a:path>")
+            .Replace("</wps:spPr>", "<a:ln w=\"25400\"><a:solidFill><a:srgbClr val=\"883311\"/></a:solidFill></a:ln></wps:spPr>");
         var input = Docx(InlineDrawing(grouped ? GroupUri : ShapeUri, grouped ? Group(shape) : shape));
         AssertSchemaValid(input);
-        var paragraph = MiddleParagraph(input, placeholders: true);
+        var paragraph = MiddleParagraph(input, paginated ? PaginationMode.Paginated : PaginationMode.None, placeholders: true);
         var paths = Drawn(OnlySvg(paragraph), "path").ToArray();
         Assert.Equal(2, paths.Length);
         Assert.Equal("M 0 914400 L 914400 0 Q 1371600 228600 1828800 914400 C 1371600 685800 457200 685800 0 914400 Z",
