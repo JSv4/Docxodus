@@ -1,12 +1,12 @@
 import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
 
 /** Original two-page inventory with the same three-column grid in each running story. */
-export function storyTableWidthDocx(kind: 'wide' | 'normal' | 'margin'): Uint8Array {
+export function storyTableWidthDocx(kind: 'wide' | 'normal' | 'margin', fixed = true): Uint8Array {
   const width = kind === 'wide' ? 10800 : kind === 'normal' ? 5040 : 6600;
   const paragraph = (text: string) => `<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
   const table = (story: string) => `<w:tbl><w:tblPr><w:tblW w:w="${width}" w:type="dxa"/>
-    <w:tblLayout w:type="fixed"/>${kind === 'margin' ? '<w:tblInd w:w="-400" w:type="dxa"/>' : ''}
-    <w:tblCellMar>${['top','bottom','left','right'].map(edge => `<w:${edge} w:w="0" w:type="dxa"/>`).join('')}</w:tblCellMar>
+    ${kind === 'margin' ? '<w:tblInd w:w="-400" w:type="dxa"/>' : ''}<w:tblLayout w:type="${fixed ? 'fixed' : 'autofit'}"/>
+    <w:tblCellMar>${['top','left','bottom','right'].map(edge => `<w:${edge} w:w="0" w:type="dxa"/>`).join('')}</w:tblCellMar>
     </w:tblPr><w:tblGrid>${`<w:gridCol w:w="${width / 3}"/>`.repeat(3)}</w:tblGrid><w:tr>
     ${['amber','blue','copper'].map(label => `<w:tc><w:tcPr><w:tcW w:w="${width / 3}" w:type="dxa"/></w:tcPr>${paragraph(`Moss ${story} ${label}`)}</w:tc>`).join('')}
     </w:tr></w:tbl>`;
