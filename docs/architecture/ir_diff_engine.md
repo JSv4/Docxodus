@@ -412,7 +412,7 @@ Word's Compare tracks *paragraph-and-above* property changes, not just run forma
 | Table row (exceptions) | `w:tblPrExChange` | `IrRow.TrPrExDigest` (tblPrEx-only flattened) | inner = OLD tblPrEx (CT_TblPrExBase); a `TableRow` revision with changed-name `"tblPrEx"` |
 | Table | `w:tblPrChange` + `w:tblGridChange` | `IrTable.TblPrDigest` / `TblGridDigest` (fingerprint → *FormatOnly*) | tblPrChange inner = OLD tblPr; tblGridChange is CT_Markup (bare `w:id`, no author/date), inner = OLD gridCol run |
 | Section (trailing) | `w:sectPrChange` on the trailing body `w:sectPr` | modeled `IrSectionFormat` (revision) / canonical props-diff excluding references (markup) | inner = OLD section properties (CT_SectPrBase — no header/footer references) |
-| Section (mid-document) | `w:sectPrChange` inside a paragraph's `w:pPr/w:sectPr` | `IrParagraph.InlineSectionFormat` (folded into the paragraph fingerprint + `BlockSignature`) | inner = OLD inline section properties; a per-paragraph Section revision. One-sided add/remove is structural (untracked); an unmodeled-only inline-sectPr change under `ModeledOnly` is the same blind spot as run/paragraph formats (right-applied, seen under `Full`) |
+| Section (mid-document) | `w:sectPrChange` inside a paragraph's `w:pPr/w:sectPr` | `IrParagraph.InlineSectionFormat` (folded into the paragraph fingerprint + `BlockSignature`) | inner = OLD inline section properties; a per-paragraph Section revision. One-sided add/remove replaces the paragraph through the structural carrier path, so accept/reject restore the boundary and its running-story ownership; an unmodeled-only inline-sectPr change under `ModeledOnly` is the same blind spot as run/paragraph formats (right-applied, seen under `Full`) |
 
 Key design points:
 

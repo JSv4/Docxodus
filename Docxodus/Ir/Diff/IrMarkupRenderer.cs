@@ -7702,7 +7702,7 @@ internal static partial class IrMarkupRenderer
         // Mid-document section-property change (A3): the emitted right pPr already carries the right inline
         // w:sectPr (cloned above); when the left pPr also had one and their PROPERTIES differ, it is tracked
         // as w:sectPrChange INSIDE that sectPr (NOT in the pPrChange inner — CT_PPrBase excludes sectPr). A
-        // one-sided inline sectPr (added/removed) is a structural change, not a property change — left as-is.
+        // one-sided inline sectPr (added/removed) is handled by the structural whole-paragraph replacement.
         var leftInlineSect = leftPPr?.Element(W.sectPr);
         var newPPrForSect = newPara.Element(W.pPr);
         var rightInlineSect = newPPrForSect?.Element(W.sectPr);
