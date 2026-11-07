@@ -100,10 +100,10 @@ public class DocxDiffCrossParagraphTests
         int previousEnd = -1;
         for (int i = 0; i < before.Length; i++)
         {
-            int deleted = Assert.Single(Enumerable.Range(0, paragraphs.Length).Where(p =>
-                string.Concat(paragraphs[p].Descendants(W.delText).Select(t => t.Value)) == before[i]));
-            int inserted = Assert.Single(Enumerable.Range(0, paragraphs.Length).Where(p =>
-                string.Concat(paragraphs[p].Descendants(W.ins).Descendants(W.t).Select(t => t.Value)) == after[i]));
+            int deleted = Assert.Single(Enumerable.Range(0, paragraphs.Length), p =>
+                string.Concat(paragraphs[p].Descendants(W.delText).Select(t => t.Value)) == before[i]);
+            int inserted = Assert.Single(Enumerable.Range(0, paragraphs.Length), p =>
+                string.Concat(paragraphs[p].Descendants(W.ins).Descendants(W.t).Select(t => t.Value)) == after[i]);
             Assert.InRange(System.Math.Abs(deleted - inserted), 0, 1);
             Assert.True(System.Math.Min(deleted, inserted) > previousEnd);
             previousEnd = System.Math.Max(deleted, inserted);
