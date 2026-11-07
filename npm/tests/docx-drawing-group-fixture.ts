@@ -12,7 +12,8 @@ export interface DrawingGroupOrientation {
 }
 
 export function drawingGroupDocx(header: boolean, kind: 'group' | 'nested' | 'separate' | 'canvas' | 'canvas-nested', inserted = false,
-  rotation = 0, orientation: DrawingGroupOrientation = {}): Uint8Array {
+  rotation = 0, orientation: DrawingGroupOrientation = {},
+  placement: { x?: number; y?: number; markup?: boolean; paragraph?: boolean } = {}): Uint8Array {
   const shapeNs = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape';
   const groupNs = 'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup';
   const canvasNs = 'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas';
@@ -27,15 +28,16 @@ export function drawingGroupDocx(header: boolean, kind: 'group' | 'nested' | 'se
     const children = nested ? '<a:chOff x="127000" y="254000"/><a:chExt cx="2540000" cy="762000"/>'
       : '<a:chOff x="0" y="0"/><a:chExt cx="4318000" cy="381000"/>';
     return `<wpg:${tag}><wpg:cNvGrpSpPr/><wpg:grpSpPr>${nested
-      ? transform(120,0,100,30,children,(orientation.nestedRotation ?? 0)*60000,orientation.nestedFlip) : transform(0,0,340,30,children,rotation,orientation.groupFlip)}</wpg:grpSpPr>${members}</wpg:${tag}>`;
+      ? transform(placement.x ?? 120,placement.y ?? 0,100,30,children,(orientation.nestedRotation ?? 0)*60000,orientation.nestedFlip) : transform(0,0,340,30,children,rotation,orientation.groupFlip)}</wpg:grpSpPr>${members}</wpg:${tag}>`;
   };
   const drawing = (payload: string, grouped: boolean, x = 72, id = 1) => `<w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0"
     simplePos="0" relativeHeight="0" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/>
-    <wp:positionH relativeFrom="page"><wp:posOffset>${x*12700}</wp:posOffset></wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>2540000</wp:posOffset></wp:positionV>
+    <wp:positionH relativeFrom="${placement.paragraph ? 'column' : 'page'}"><wp:posOffset>${(placement.paragraph ? 0 : x)*12700}</wp:posOffset></wp:positionH><wp:positionV relativeFrom="${placement.paragraph ? 'paragraph' : 'page'}"><wp:posOffset>${placement.paragraph ? 0 : 2540000}</wp:posOffset></wp:positionV>
     <wp:extent cx="${(grouped ? 340 : 100)*12700}" cy="381000"/><wp:wrapNone/><wp:docPr id="${id}" name="Window group"/>
     <a:graphic><a:graphicData uri="${payload.startsWith('<wpc:') ? canvasNs : grouped ? groupNs : shapeNs}">${payload}</a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
   const members = drawingGroupLabels.map((label,i) => kind.endsWith('nested') && i === 1
-    ? group(box(label,10,20,200,60),true) : box(label,i*120)).join('');
+    ? group(box(label,10,20,200,60),true) : box(label,i === 1 ? placement.x ?? i*120 : i*120,
+      i === 1 ? placement.y ?? 0 : 0)).join('');
   let content = kind === 'separate' ? drawingGroupLabels.map((label,i) => drawing(box(label,0),false,72+i*120,i+1)).join('')
     : drawing(kind.startsWith('canvas') ? `<wpc:wpc>${members}</wpc:wpc>` : group(members),true);
   if (inserted) content = `<w:ins w:id="11" w:author="Fixture Author" w:date="2026-02-03T10:00:00Z">${content}</w:ins>`;
@@ -54,7 +56,8 @@ export function drawingGroupDocx(header: boolean, kind: 'group' | 'nested' | 'se
     'word/_rels/document.xml.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
       + ['styles', 'settings', ...(header ? ['header'] : [])].map(name => `<Relationship Id="${name}" Type="${r}/${name}" Target="${name}.xml"/>`).join('')
       + '</Relationships>',
-    'word/document.xml': `<w:document ${namespaces}><w:body><w:p><w:r><w:t>Harbor register control</w:t></w:r></w:p>
+    'word/document.xml': `<w:document ${namespaces}><w:body><w:p>${placement.markup
+      ? '<w:pPr><w:jc w:val="center"/><w:pPrChange w:id="17" w:author="Fixture Author" w:date="2026-02-03T10:00:00Z"><w:pPr/></w:pPrChange></w:pPr>' : ''}<w:r><w:t>Harbor register control</w:t></w:r></w:p>
       ${header ? '' : carrier}<w:sectPr>${header ? '<w:headerReference w:type="default" r:id="header"/>' : ''}
       <w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:left="1440" w:bottom="1440" w:right="1440" w:header="360" w:footer="360"/>
       </w:sectPr></w:body></w:document>`,

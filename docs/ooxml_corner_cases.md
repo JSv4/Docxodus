@@ -6338,6 +6338,28 @@ reproducer remains separate: LibreOffice relocates its remote member into visibl
 bounds, so its child offset is not a sufficient native clipping oracle. Running stories
 and unsupported anchor/transform contexts retain their prior verification behavior.
 
+## Group members beyond the paper (#1558)
+
+The original reproducer places a 4-inch group at the left margin of 612pt paper,
+with matching `a:ext` and `a:chExt`, zero `a:chOff`, and a fixed member at
+`a:off x="9144000"` (720pt). Literal child mapping puts that member at 792pt.
+[Office's group-transform notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/9ce071a0-4053-4714-9025-1951253cab2a)
+define scaling by the ratio of group extents to child extents.
+
+| Renderer | Remote member |
+| --- | --- |
+| LibreOffice 25.8.7.3 | Repositions it near 403pt and wraps the label into narrow lines |
+| Docxodus before this fix | Uses the literal group map, then refuses the unmapped paragraph |
+| Docxodus after this fix | Preserves the same map and emits a source-clipping warning |
+| Word | No new capture; normalization and visual parity remain unverified |
+
+`sourceTextBoxAnchor` separates the fixed child's clip from the group's placement.
+Proof requires unchanged member geometry, an explicit correctly placed root origin and
+the original paragraph host where applicable. Empty lines use their own measured rectangles;
+their omission needs the same proof but emits no text-loss warning. Partial, transformed,
+linked or resized placement remains guarded. LibreOffice is a diagnostic for this case,
+not an oracle for excluding source text.
+
 ## Single-spaced body text on a line grid (#1551)
 
 The issue author's [Word print measurements](https://github.com/JSv4/Docxodus/issues/1551#issuecomment-6701327908)

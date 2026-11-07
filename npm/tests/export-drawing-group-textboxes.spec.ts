@@ -15,6 +15,46 @@ const fontLicenseAttestations: FontLicenseAttestation[] = [{
   basis: 'Bundled renamed DejaVu subset; redistribution and modification permitted by docs/demo/fonts/LICENSE.txt.',
 }];
 
+for (const [kind, paragraph] of [['group', false], ['nested', false], ['canvas', false], ['canvas-nested', false], ['group', true]] as const)
+for (const edge of ['visible', 'right', 'bottom'] as const) for (const markup of [false, true]) {
+  test(`grouped paper placement: ${kind}, ${edge}, balloons ${markup}, paragraph ${paragraph}`, async ({ browser, page }) => {
+    test.setTimeout(120_000);
+    const bytes = drawingGroupDocx(false, kind, false, 0, {}, {
+      x: edge === 'right' ? 720 : 120, y: edge === 'bottom' ? 720 : 0, markup, paragraph,
+    });
+    const result = await renderDocxArtifacts(bytes, { browser, fontDirectories, fontLicenseAttestations,
+      outputs: ['html', 'pdf'], reviewProfile: markup ? 'markup' : 'final', commentProfile: markup ? 'margin' : 'hidden',
+      ...(markup ? { markupPresentation: 'word' as const, commentColumnPlacement: 'balloons' as const } : {}),
+    });
+    expect(result.pageCount).toBe(1);
+    await page.setContent(result.html!);
+    if (markup) expect(await page.locator('.page-balloon').count()).toBeGreaterThan(0);
+    const warnings = result.renderReport.warnings.filter(w => w.code === 'source_text_clipped');
+    expect(warnings).toHaveLength(edge === 'visible' ? 0 : 1);
+    const pdf = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
+    try {
+      const items = (await (await (await pdf.promise).getPage(1)).getTextContent()).items.filter(item => 'str' in item);
+      const text = items.map(item => item.str).join(' ').replace(/\s+/g, ' ');
+      expect(text).toContain('Harbor register control');
+      for (const [index, label] of drawingGroupLabels.entries()) {
+        const anchor = await page.getByText(label, { exact: true }).evaluate(element =>
+          element.closest('[data-source-anchor-id]')!.getAttribute('data-source-anchor-id'));
+        const visible = index !== 1 || edge === 'visible';
+        expect(text.includes(label)).toBe(visible);
+        expect(result.pageMap.fragments.some(f => f.anchorId === anchor)).toBe(visible);
+        expect(warnings.some(w => w.anchorId === anchor)).toBe(!visible);
+      }
+    } finally { await pdf.destroy(); }
+  });
+}
+
+test('strict policy rejects authored off-paper group text with a source diagnostic', async ({ browser }) => {
+  await expect(renderDocxArtifacts(drawingGroupDocx(false, 'group', false, 0, {}, { x: 720 }), {
+    browser, fontDirectories, fontLicenseAttestations, outputs: ['pdf'], reviewProfile: 'final',
+    commentProfile: 'hidden', unsupportedContent: 'strict',
+  })).rejects.toMatchObject({ code: 'resource_policy_failure', phase: 'output_verification' });
+});
+
 test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}),
 } });
