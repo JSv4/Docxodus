@@ -702,7 +702,8 @@ internal static class IrTableDiffer
             switch (kind)
             {
                 case IrRowOpKind.EqualRow:
-                    if (IrEditScriptBuilder.RowCarriersDiffer(leftRows[li], rightRows[j]))
+                    if (IrEditScriptBuilder.RowCarriersDiffer(leftRows[li], rightRows[j]) ||
+                        IrEditScriptBuilder.TextboxContentDiffers(leftRows[li], rightRows[j]))
                         goto case IrRowOpKind.ModifyRow;
                     ops.Add(new IrRowOp(IrRowOpKind.EqualRow,
                         leftRows[li].Anchor.ToString(), rightRows[j].Anchor.ToString(), null));
@@ -1029,7 +1030,8 @@ internal static class IrTableDiffer
     private static IrCellOp PairedCellOp(IrCell left, IrCell right, IrDiffSettings settings)
     {
         var blockOps = left.ContentHash.Equals(right.ContentHash) &&
-            !IrEditScriptBuilder.BlockCarriersDiffer(left.Blocks, right.Blocks)
+            !IrEditScriptBuilder.BlockCarriersDiffer(left.Blocks, right.Blocks) &&
+            !IrEditScriptBuilder.TextboxContentDiffers(left.Blocks, right.Blocks)
             ? null
             : IrNodeList.From(DiffCellBlocks(left, right, settings));
         return new IrCellOp(left.Anchor.ToString(), right.Anchor.ToString(), blockOps);
