@@ -1,10 +1,10 @@
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
-export type TableRemainderKind = 'rows' | 'oversized' | 'row-cant-split' | 'cell' | 'kept' | 'kept-bookmarks' | 'kept-borders' | 'cell-cant-split' | 'columns' | 'columns-fit';
+export type TableRemainderKind = 'rows' | 'oversized' | 'row-cant-split' | 'cell' | 'kept' | 'kept-bookmarks' | 'kept-borders' | 'cell-cant-split' | 'columns' | 'columns-fit' | 'columns-cant-split';
 
 export function tableRemainderDocx(kind: TableRemainderKind, mainPart = 'word/document.xml'): Uint8Array {
   const columns = kind.startsWith('columns');
-  const count = kind === 'oversized' ? 18 : kind === 'columns' ? 12 : kind === 'columns-fit' ? 4 : 8;
+  const count = kind === 'oversized' ? 18 : (columns && kind !== 'columns-fit') ? 12 : kind === 'columns-fit' ? 4 : 8;
   const width = columns ? 2800 : 6000;
   const geometry = '<w:pgSz w:w="6800" w:h="3600"/><w:pgMar w:top="400" w:right="400" w:bottom="400" w:left="400" w:header="0" w:footer="0"/>';
   const paragraph = (text: string, extra = '') => `<w:p><w:pPr><w:keepNext w:val="0"/><w:keepLines w:val="0"/>

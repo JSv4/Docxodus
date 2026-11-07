@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Tall paragraphs and ordinary tables continue across multi-column pages, filling the available remainder and retaining source identities and following content. Sequential columns preserve every line when printed; complex table moves retain their diagnostic (part of #1558).
+
 - Large HTML/PDF exports continue when platform-font observations reach the diagnostic budget, reporting unavailable observations and one warning while preserving font verification (part of #1558).
 
 - Literal line endings in Word text render as spaces across body, running stories and tracked text; explicit line-break elements and tab alignment remain intact. Shared XML part saves preserve encoded carriage returns across revision projection and session saves (part of #1564).

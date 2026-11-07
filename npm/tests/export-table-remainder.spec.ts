@@ -6,7 +6,7 @@ import { tableRemainderDocx } from './docx-table-remainder-fixture.js';
 test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}) } });
 
-for (const kind of ['rows', 'oversized', 'row-cant-split', 'cell', 'kept', 'kept-bookmarks', 'kept-borders', 'cell-cant-split', 'columns', 'columns-fit'] as const) {
+for (const kind of ['rows', 'oversized', 'row-cant-split', 'cell', 'kept', 'kept-bookmarks', 'kept-borders', 'cell-cant-split', 'columns', 'columns-fit', 'columns-cant-split'] as const) {
   test(`public ${kind} table preserves PDF inventory and reports column fallback`, async ({ browser, page }) => {
     test.setTimeout(120_000);
     const result = await renderDocxArtifacts(tableRemainderDocx(kind), {
@@ -22,9 +22,9 @@ for (const kind of ['rows', 'oversized', 'row-cant-split', 'cell', 'kept', 'kept
         texts.push(content.items.filter(item => 'str' in item).map(item => item.str).join(' '));
       }
     } finally { await task.destroy(); }
-    const count = kind === 'oversized' ? 18 : kind === 'columns' ? 12 : kind === 'columns-fit' ? 4 : 8;
+    const count = kind === 'oversized' ? 18 : (kind === 'columns' || kind === 'columns-cant-split') ? 12 : kind === 'columns-fit' ? 4 : 8;
     const tokens = Array.from({ length: count }, (_, i) => `Cedar${i + 1}`);
-    const deferred = kind.startsWith('kept') || kind === 'cell-cant-split' || kind === 'columns';
+    const deferred = kind.startsWith('kept') || kind === 'cell-cant-split' || kind === 'columns-cant-split';
     const firstPage = texts[0].match(/Cedar\d+/g) ?? [];
     if (deferred) expect(firstPage).toEqual([]);
     else {
@@ -34,8 +34,8 @@ for (const kind of ['rows', 'oversized', 'row-cant-split', 'cell', 'kept', 'kept
     expect(texts.join(' ').match(/Cedar\d+/g)).toEqual(tokens);
     expect(texts.join(' ').match(/Complete\./g)).toHaveLength(1);
     const warnings = result.renderReport.warnings.filter(w => w.code === 'column_table_page_remainder');
-    expect(warnings).toHaveLength(kind === 'columns' ? 1 : 0);
-    if (kind === 'columns') expect(warnings[0]).toMatchObject({ phase: 'pagination', partUri: '/word/document.xml' });
+    expect(warnings).toHaveLength(kind === 'columns-cant-split' ? 1 : 0);
+    if (kind === 'columns-cant-split') expect(warnings[0]).toMatchObject({ phase: 'pagination', partUri: '/word/document.xml' });
     await page.setContent(result.html!);
     if (kind === 'kept-bookmarks') {
       for (let i = 0; i < count; i++) await expect(page.locator(`[id="RowEnd${i}"]`)).toHaveCount(1);
@@ -48,7 +48,7 @@ for (const kind of ['rows', 'oversized', 'row-cant-split', 'cell', 'kept', 'kept
 
 test('strict unsupported-content policy rejects the intact column-table move', async ({ browser }) => {
   test.setTimeout(120_000);
-  await expect(renderDocxArtifacts(tableRemainderDocx('columns'), {
+  await expect(renderDocxArtifacts(tableRemainderDocx('columns-cant-split'), {
     browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'hidden', timeoutMs: 120_000,
     unsupportedContent: 'strict',
   })).rejects.toMatchObject({ code: 'resource_policy_failure', phase: 'pagination' });
@@ -56,7 +56,7 @@ test('strict unsupported-content policy rejects the intact column-table move', a
 
 test('column fallback identifies a relocated main part', async ({ browser }) => {
   test.setTimeout(120_000);
-  const result = await renderDocxArtifacts(tableRemainderDocx('columns', 'ledger/body.xml'), {
+  const result = await renderDocxArtifacts(tableRemainderDocx('columns-cant-split', 'ledger/body.xml'), {
     browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'hidden', timeoutMs: 120_000,
   });
   expect(result.renderReport.warnings.filter(w => w.code === 'column_table_page_remainder'))
