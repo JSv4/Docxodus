@@ -116,6 +116,7 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
   // Read every style before probing: each probe changes the document, so a style read after one
   // recomputes the styles of the whole tree.
   const candidates: Array<{ element: HTMLElement; font: ProbeFont; fontSize: number; characters: string[] }> = [];
+  const grids: Array<{ paragraph: HTMLElement; pitch: number }> = [];
   for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
     if (!(element instanceof view.HTMLElement)) continue;
     const style = view.getComputedStyle(element);
@@ -125,6 +126,10 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
     const { fontStyle, fontWeight, fontStretch, fontFamily } = style;
     candidates.push({ element, font: { fontStyle, fontWeight, fontStretch, fontFamily }, fontSize,
       characters: probeCharacters(element) });
+    if (element.matches(PARAGRAPH_SELECTOR)) {
+      const pitch = Number.parseFloat(style.getPropertyValue("--docx-line-grid")) * 4 / 3;
+      if (pitch > 0) grids.push({ paragraph: element, pitch });
+    }
   }
   const targets: Array<{ element: HTMLElement; lineHeight: number }> = [];
   for (const { element, font, fontSize, characters } of candidates) {
@@ -136,8 +141,39 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
   for (const { element, lineHeight } of targets) {
     element.style.setProperty("line-height", `${lineHeight.toFixed(4)}px`);
   }
+  if (grids.length) applyParagraphLineGrids(grids, new Map(targets.map(({ element, lineHeight }) => [element, lineHeight])));
   positionRubyAnnotations(root);
   return targets.length;
+}
+
+/** Reserve whole grid slots for uniform single-spaced text, retaining its natural baseline. */
+function applyParagraphLineGrids(grids: Array<{ paragraph: HTMLElement; pitch: number }>, naturalHeights: Map<HTMLElement, number>): void {
+  const fontProperties = ["font-family", "font-size", "font-style", "font-weight", "font-stretch"];
+  for (const { paragraph, pitch } of grids) {
+    const view = paragraph.ownerDocument.defaultView!;
+    const natural = naturalHeights.get(paragraph);
+    const style = view.getComputedStyle(paragraph);
+    if (!natural || style.direction !== "ltr" || style.writingMode !== "horizontal-tb") continue;
+    const children = Array.from(paragraph.children);
+    if (!children.length || Array.from(paragraph.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim())
+      || children.some(child => {
+        if (!(child instanceof view.HTMLElement) || child.localName !== "span" || child.children.length
+          || !child.textContent?.trim() || naturalHeights.get(child) !== natural) return true;
+        const run = view.getComputedStyle(child);
+        return fontProperties.some(property => run.getPropertyValue(property) !== style.getPropertyValue(property))
+          || run.display !== "inline" || run.position !== "static" || run.verticalAlign !== "baseline" || run.transform !== "none";
+      })) continue;
+    const height = Math.ceil(natural / pitch) * pitch;
+    for (const child of children as HTMLElement[]) {
+      // As with automatic multiples, the paragraph strut remains natural and extra
+      // layout height goes below its ink. Read-only baseline correction still applies.
+      child.style.lineHeight = `${height}px`;
+      child.style.position = "relative";
+      child.style.top = `${(natural - height) / 2}px`;
+      child.style.setProperty("--docx-word-native-height", `${natural}px`);
+      child.style.setProperty("--docx-word-grid-height", `${height}px`);
+    }
+  }
 }
 
 /** Word's ruby raise is a baseline distance. Keep native horizontal ruby layout, moving only

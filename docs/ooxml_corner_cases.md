@@ -6337,3 +6337,31 @@ origin. Existing identity, mutation and partial-ink checks still apply. The grou
 reproducer remains separate: LibreOffice relocates its remote member into visible group
 bounds, so its child offset is not a sufficient native clipping oracle. Running stories
 and unsupported anchor/transform contexts retain their prior verification behavior.
+
+## Single-spaced body text on a line grid (#1551)
+
+The issue author's [Word print measurements](https://github.com/JSv4/Docxodus/issues/1551#issuecomment-6701327908)
+declare `<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>`
+in `w:docDefaults/w:pPrDefault`, with 12pt text, Letter paper and one-inch margins.
+The section carries `<w:docGrid w:type="lines" w:linePitch="360"/>`; the smaller
+grid uses `w:linePitch="240"`. There are 120 ordinary one-line paragraphs.
+
+| Case | Word step / first-page lines / pages | Docxodus before |
+| --- | --- | --- |
+| 18pt grid, explicit single spacing | 18pt / 36 / 4 | 13.799pt / 46 / 3 |
+| 12pt grid, explicit single spacing | 24pt / 27 / 5 | 13.799pt / 46 / 3 |
+| No grid or paragraph snap disabled | Same layout in the author's Word controls | Identical natural-height layouts |
+
+Single spacing reserves `ceil(naturalHeight / gridPitch)` whole grid slots. Original
+section ownership is recorded before conversion rewrites and on block clones; synthesized
+shell sections cannot supply a different grid. Effective paragraph snap overrides are read
+after formatting assembly. The shared natural-height pass applies the grid only when the
+paragraph strut and its direct plain text spans have uniform font metrics. It retains natural
+font height separately from grid allocation, including through text fitting and page splits.
+
+Baseline placement retains the existing natural-line policy on editor, viewer and export paths;
+the Word measurements above do not establish first-baseline parity. No new Word capture is
+claimed. Multiple, exact and at-least spacing, mixed/raised/nested inline content, cells, running
+stories, textboxes, revision-bearing documents and other grid types retain their previous
+behavior. Word's multiple-spacing formula, cell compatibility option and `beforeLines`/`afterLines`
+still require separate measurements; this is a partial resolution of #1551.

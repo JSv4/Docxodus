@@ -689,6 +689,7 @@ internal static class HtmlConversionOps
         var bodyContent = new List<XElement>();
         var denseText = new Dictionary<string, DenseTextParagraph>(StringComparer.Ordinal);
         var automaticSpacing = new AutomaticParagraphSpacing(liveDoc);
+        var lineGrid = new ParagraphLineGrid(liveDoc);
         foreach (var (siblings, start, end) in runs)
         {
             if (rangeIndex is not null)
@@ -712,6 +713,7 @@ internal static class HtmlConversionOps
                 }
                 var clone = dense?.Template ?? CloneWithListNumbers(siblings[i]);
                 automaticSpacing.Stamp(siblings[i], clone);
+                lineGrid.Stamp(siblings[i], clone);
                 if (dense is null)
                     RetargetPartRelationships(liveDoc, siblings[i], clone, renderMain, copiedImages);
                 identity?.Record(siblings[i], clone);

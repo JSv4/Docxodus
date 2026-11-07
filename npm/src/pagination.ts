@@ -3970,10 +3970,14 @@ export class PaginationEngine {
   private hasRangeFragmentSafePosition(element: HTMLElement, style: CSSStyleDeclaration): boolean {
     const spacing = parseFloat(style.getPropertyValue("--docx-auto-line-spacing"));
     const automaticBaseline = spacing > 0 && spacing !== 1 && parseFloat(style.top) <= 0;
+    const grid = parseFloat(element.style.getPropertyValue("--docx-word-grid-height"));
+    const natural = parseFloat(element.style.getPropertyValue("--docx-word-native-height"));
+    const gridBaseline = natural > 0 && grid >= natural && Math.abs(parseFloat(style.lineHeight) - grid) < 0.001
+      && Math.abs(parseFloat(style.top) - (natural - grid) / 2) < 0.001;
     const imageCarrier = element.localName !== "img" && !!element.querySelector("img")
       && !this.hasVisibleText(element.textContent ?? "");
     return style.position === "static" || (style.position === "relative"
-      && (automaticBaseline || imageCarrier)
+      && (automaticBaseline || gridBaseline || imageCarrier)
       && (style.left === "auto" || parseFloat(style.left) === 0)
       && (style.right === "auto" || parseFloat(style.right) === 0));
   }
@@ -4222,7 +4226,9 @@ export class PaginationEngine {
       fragment.style.setProperty("margin-bottom", "0", "important");
       // Word can place the final natural line box against the page edge;
       // inter-line leading belongs before a following line, not after this head.
-      const run = fragment.querySelector<HTMLElement>('[data-docx-word-fit]');
+      const fitted = fragment.querySelector<HTMLElement>('[data-docx-word-fit]');
+      // Grid slots belong to the line itself; they are not optional trailing leading.
+      const run = fitted?.style.getPropertyValue("--docx-word-grid-height") ? null : fitted;
       const last = run?.lastElementChild as HTMLElement | null;
       const natural = Number(run?.dataset.docxWordFit);
       if (last && natural > 0 && natural < parseFloat(run!.style.lineHeight))
