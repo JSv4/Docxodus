@@ -6,10 +6,16 @@ import { oversizedKeepDocx } from './docx-oversized-keeps-fixture.js';
 test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}) } });
 
-for (const keep of ['keepLines', 'widowControl'] as const) {
-  test(`${keep} preserves every inventory line when a paragraph exceeds a page`, async ({ browser }) => {
+for (const [keep, lines, opening, expected] of [
+  ['keepLines', 73, 0, [40, 33]], ['widowControl', 73, 0, [40, 33]],
+  ['keepNext', 73, 0, [40, 33]], ['styledKeepNext', 73, 0, [40, 33]], ['bothKeeps', 73, 0, [40, 33]],
+  ['keepNext', 73, 8, [0, 40, 33]],
+  ['keepNext', 80, 0, [40, 40, 0]],
+  ['keepNext', 3, 37, [0, 3]], ['none', 3, 37, [3, 0]],
+] as const) {
+  test(`${keep}, ${lines} lines after ${opening}: preserves content and page membership`, async ({ browser }) => {
     test.setTimeout(120_000);
-    const result = await renderDocxArtifacts(oversizedKeepDocx(keep), { browser, outputs: ['pdf'],
+    const result = await renderDocxArtifacts(oversizedKeepDocx(keep, lines, opening), { browser, outputs: ['pdf'],
       reviewProfile: 'markup', markupPresentation: 'word', commentProfile: 'margin',
       commentColumnPlacement: 'balloons', timeoutMs: 120_000 });
     const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
@@ -22,10 +28,12 @@ for (const keep of ['keepLines', 'widowControl'] as const) {
       }
       expect(pdf.numPages).toBeGreaterThan(1);
       expect(pdf.numPages).toBe(result.pageMap.pages.length);
-      expect(pages.join(' ').match(/Copper\d+/g)).toEqual(Array.from({ length: 73 }, (_, index) =>
+      expect(pages.join(' ').match(/Copper\d+/g)).toEqual(Array.from({ length: lines }, (_, index) =>
         `Copper${String(index + 1).padStart(3, '0')}`));
       expect(pages.join(' ').match(/Final receipt signed\./g)).toHaveLength(1);
-      expect(pages.every(page => (page.match(/Copper\d+/g)?.length ?? 0) >= 2)).toBe(true);
+      expect(pages.map(page => page.match(/Copper\d+/g)?.length ?? 0)).toEqual(expected);
+      expect(pages.at(-1)).toContain('Final receipt signed.');
+      expect(pages.join(' ').match(/Opening\d+/g) ?? []).toEqual(Array.from({ length: opening }, (_, i) => `Opening${i + 1}`));
     } finally { await task.destroy(); }
   });
 }
