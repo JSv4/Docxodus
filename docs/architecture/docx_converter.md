@@ -723,6 +723,9 @@ font-family: 'Courier New'
 square/indexed roots to native MathML. Inline and display forms retain their operand structure
 and selectable text. An explicit document `m:mathFont` becomes the math font family; absent
 that setting, CSS `math` leaves substitution visible to the shared export font policy.
+Equation size uses the shared run-style resolver, isolated from the paragraph mark and the
+largest surrounding prose run. Table-style contexts and richer inherited run formatting retain
+diagnostics because this resolver does not model those equation properties.
 
 Projection succeeds only for the complete equation. Unknown operators, properties, styled runs,
 whitespace or combining-token forms, and nested display fractions retain the existing whole-equation

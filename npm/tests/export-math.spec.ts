@@ -57,3 +57,18 @@ for (const kind of ['accent', 'styled'] as const) {
       .rejects.toMatchObject({ code: 'resource_policy_failure' });
   });
 }
+
+for (const paragraphSize of [undefined, 36]) {
+  test(`math size follows ${paragraphSize ? 'paragraph style' : 'document defaults'} beside large prose and mark`, async ({ browser, page }) => {
+    const result = await renderDocxArtifacts(mathDocx('fraction', 'mixed', '<m:mathFont m:val="Liberation Sans"/>',
+      { largeProse: true, markSize: 60, paragraphSize }), {
+      browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'hidden', unsupportedContent: 'strict',
+      fontDirectories: ['/usr/share/fonts/truetype/liberation'], strictFonts: true,
+    });
+    await page.setContent(result.html!);
+    const math = page.locator('.page-content math');
+    expect(await math.evaluate(element => getComputedStyle(element).fontSize)).toBe(paragraphSize ? '24px' : '16px');
+    expect(await math.evaluate(element => getComputedStyle(element).fontFamily)).toContain('Liberation Sans');
+    expect(result.renderReport.unsupportedContent).toEqual([]);
+  });
+}

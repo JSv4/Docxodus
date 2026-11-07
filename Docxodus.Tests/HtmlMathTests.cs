@@ -64,6 +64,24 @@ public class HtmlMathTests
         Assert.Contains("Noto Sans Math", (string?)math.Attribute("style"));
     }
 
+    [Theory]
+    [InlineData(24, false, false, "12pt")]
+    [InlineData(48, false, false, "24pt")]
+    [InlineData(24, true, false, "12pt")]
+    [InlineData(24, true, true, "18pt")]
+    public void Equation_size_comes_from_run_styles_not_large_neighbors_or_the_paragraph_mark(
+        int defaultSize, bool mark, bool style, string expected)
+    {
+        var paragraphStart = "<w:pPr>" + (style ? "<w:pStyle w:val=\"MathBody\"/>" : "")
+            + (mark ? "<w:rPr><w:sz w:val=\"60\"/></w:rPr>" : "") + "</w:pPr>"
+            + "<w:r><w:rPr><w:sz w:val=\"48\"/></w:rPr><w:t>Large neighbor</w:t></w:r>";
+        var styles = "<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val=\"" + defaultSize
+            + "\"/></w:rPr></w:rPrDefault></w:docDefaults>"
+            + (style ? "<w:style w:type=\"paragraph\" w:styleId=\"MathBody\"><w:name w:val=\"Math Body\"/><w:rPr><w:sz w:val=\"36\"/></w:rPr></w:style>" : "");
+        var math = Assert.Single(Convert(RunX, false, paragraphStart: paragraphStart, styles: styles).Descendants(MathMl + "math"));
+        Assert.Contains("font-size: " + expected + ";", (string?)math.Attribute("style"));
+    }
+
     [Fact]
     public void Literal_operators_do_not_become_scalable_delimiters_or_large_operators()
     {
@@ -90,6 +108,16 @@ public class HtmlMathTests
         var math = Assert.Single(Convert(formula, false).Descendants(MathMl + "math"));
         Assert.Equal("31.4", Assert.Single(math.Descendants(MathMl + "mn")).Value);
         Assert.Empty(math.Descendants(MathMl + "mo"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Paginated_source_identity_does_not_turn_supported_math_into_a_placeholder(bool root)
+    {
+        var formula = root ? "<m:rad><m:radPr><m:degHide/></m:radPr><m:deg/><m:e>" + RunX + "</m:e></m:rad>"
+            : "<m:f><m:num>" + RunX + "</m:num><m:den>" + RunTwo + "</m:den></m:f>";
+        Assert.Single(Convert(formula, false, paginated: true).Descendants(MathMl + (root ? "msqrt" : "mfrac")));
     }
 
     [Fact]
@@ -125,7 +153,8 @@ public class HtmlMathTests
         Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "MathEquation");
     }
 
-    private static XElement Convert(string formula, bool display, string mathProperties = "")
+    private static XElement Convert(string formula, bool display, string mathProperties = "", bool paginated = false,
+        string paragraphStart = "", string styles = "")
     {
         using var stream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -134,8 +163,8 @@ public class HtmlMathTests
             var math = "<m:oMath>" + formula + "</m:oMath>";
             if (display) math = "<m:oMathPara>" + math + "</m:oMathPara>";
             main.PutXDocument(XDocument.Parse("<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" "
-                + "xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><w:body><w:p>" + math + "</w:p><w:sectPr/></w:body></w:document>"));
-            main.AddNewPart<StyleDefinitionsPart>().Styles = new DocumentFormat.OpenXml.Wordprocessing.Styles();
+                + "xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><w:body><w:p>" + paragraphStart + math + "</w:p><w:sectPr/></w:body></w:document>"));
+            main.AddNewPart<StyleDefinitionsPart>().PutXDocument(XDocument.Parse("<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" + styles + "</w:styles>"));
             var settings = main.AddNewPart<DocumentSettingsPart>();
             settings.PutXDocument(XDocument.Parse("<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" "
                 + "xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\">"
@@ -147,6 +176,7 @@ public class HtmlMathTests
         {
             RenderUnsupportedContentPlaceholders = true,
             FabricateCssClasses = false,
+            PaginationMode = paginated ? (int)PaginationMode.Paginated : (int)PaginationMode.None,
         }));
     }
 }

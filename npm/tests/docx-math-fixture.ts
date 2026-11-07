@@ -14,13 +14,16 @@ export const MATH_FORMULAS = {
 export type MathLayout = 'inline' | 'display' | 'mixed' | 'edge' | 'long';
 
 export function mathDocx(kind: keyof typeof MATH_FORMULAS, layout: MathLayout,
-  mathProperties = ''): Uint8Array {
+  mathProperties = '', options: { largeProse?: boolean; markSize?: number; paragraphSize?: number } = {}): Uint8Array {
   const display = layout === 'display' || layout === 'edge';
   const formula = `<m:oMath>${MATH_FORMULAS[kind]}</m:oMath>`;
   const words = Array.from({ length: 100 }, (_, i) => `Birch${String(i).padStart(3, '0')}`);
   const math = display ? `<m:oMathPara>${formula}</m:oMathPara>` : formula;
   const body = layout === 'long' ? run(words.slice(0, 35).join(' ') + ' ') + math + run(' ' + words.slice(35).join(' '))
-    : layout === 'mixed' ? run('MathAnchor ') + math + run(' MathTail') : math;
+    : layout === 'mixed' ? (options.largeProse ? '<w:r><w:rPr><w:sz w:val="48"/></w:rPr><w:t>MathAnchor </w:t></w:r>' : run('MathAnchor '))
+      + math + run(' MathTail') : math;
+  const pPr = '<w:pPr>' + (options.paragraphSize ? '<w:pStyle w:val="MathBody"/>' : '')
+    + (options.markSize ? `<w:rPr><w:sz w:val="${options.markSize}"/></w:rPr>` : '') + '</w:pPr>';
   const parts: Record<string, string> = {
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
       + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'
@@ -31,11 +34,12 @@ export function mathDocx(kind: keyof typeof MATH_FORMULAS, layout: MathLayout,
       + ['styles', 'settings'].map(name => `<Relationship Id="${name}" Type="${r}/${name}" Target="${name}.xml"/>`).join('') + '</Relationships>',
     'word/document.xml': `<w:document xmlns:w="${w}" xmlns:m="${m}"><w:body><w:p>${run('MathBefore')}</w:p>`
       + (layout === 'edge' ? Array.from({ length: 8 }, (_, i) => `<w:p>${run('Edge' + i)}</w:p>`).join('') : '')
-      + `<w:p>${body}</w:p><w:p>${run('MathAfter')}</w:p><w:sectPr><w:pgSz w:w="6000" w:h="4000"/>`
+      + `<w:p>${pPr}${body}</w:p><w:p>${run('MathAfter')}</w:p><w:sectPr><w:pgSz w:w="6000" w:h="4000"/>`
       + '<w:pgMar w:top="600" w:left="600" w:bottom="600" w:right="600" w:header="300" w:footer="300"/></w:sectPr></w:body></w:document>',
     'word/styles.xml': `<w:styles xmlns:w="${w}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/>`
       + '<w:sz w:val="24"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>'
-      + '</w:pPr></w:pPrDefault></w:docDefaults></w:styles>',
+      + '</w:pPr></w:pPrDefault></w:docDefaults>'
+      + (options.paragraphSize ? `<w:style w:type="paragraph" w:styleId="MathBody"><w:name w:val="Math Body"/><w:rPr><w:sz w:val="${options.paragraphSize}"/></w:rPr></w:style>` : '') + '</w:styles>',
     'word/settings.xml': `<w:settings xmlns:w="${w}" xmlns:m="${m}">${mathProperties ? `<m:mathPr>${mathProperties}</m:mathPr>` : ''}</w:settings>`,
   };
   return storedZip(Object.entries(parts).map(([name, value]) => ({ name, data: xml(value) })));
