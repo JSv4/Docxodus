@@ -41,10 +41,18 @@ for (const message of ['Target closed', 'Timeout exceeded', 'Operation cancelled
   });
 }
 
-for (const setting of [{ nodes: 3, limit: 3 }, { faces: 3, limit: 4 }]) {
-  test(`shared diagnostics budget bounds ${setting.nodes ? 'node traversal' : 'face records'}`, async () => {
+for (const setting of [{ limit: 1 }, { nodes: 3, limit: 3 }, { nodes: 2, faces: 2, limit: 6 }]) {
+  test(`exhausted observation budget ${JSON.stringify(setting)} preserves export without partial evidence`, async () => {
     const p = protocol(setting);
-    await assert.rejects(p.run(), { code: 'resource_limit', phase: 'output_verification' });
+    assert.deepEqual(await p.run(), { status: 'unavailable', reason: 'diagnostic_limit' });
     assert.deepEqual(p.calls.slice(-2), ['Runtime.releaseObjectGroup', 'detach']);
   });
 }
+
+test('an exactly fitting observation retains complete evidence', async () => {
+  const p = protocol({ nodes: 2, limit: 5 });
+  const result = await p.run();
+  assert.equal(result.status, 'observed');
+  assert.equal(result.uses.length, 2);
+  assert.deepEqual(p.calls.slice(-2), ['Runtime.releaseObjectGroup', 'detach']);
+});

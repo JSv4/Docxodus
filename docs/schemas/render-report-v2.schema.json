@@ -1730,6 +1730,7 @@
               "enum": [
                 "browser_api_unavailable",
                 "protocol_unavailable",
+                "diagnostic_limit",
                 "not_requested"
               ]
             }

@@ -168,7 +168,7 @@ export const FONT_REQUEST_ATTRIBUTE = "data-docx-font-request";
 
 /** Browser shaping evidence; names and glyph counts do not attest a font file or visible ink. */
 export type FontObservation =
-  | { status: "unavailable"; reason: "browser_api_unavailable" | "protocol_unavailable" | "not_requested" }
+  | { status: "unavailable"; reason: "browser_api_unavailable" | "protocol_unavailable" | "diagnostic_limit" | "not_requested" }
   | {
       status: "observed";
       method: "chromium-cdp";

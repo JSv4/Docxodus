@@ -93,6 +93,59 @@ test('repeated exports bind stable observations to the report and PageMap', asyn
   assert.equal(a.fontObservation.uses.some(use => 'text' in use), false);
 });
 
+for (const outputs of [['html'], ['pdf'], ['html', 'pdf']]) {
+  test(`${outputs.join('+')} keeps every paragraph when font observations exceed the budget`, async () => {
+    const paragraphs = Array.from({ length: 120 }, (_, i) => `Orchard entry ${String(i).padStart(3, '0')}.`);
+    const source = fontObservationDocx({ text: paragraphs });
+    const result = await renderDocxArtifacts(source, { ...options, outputs, strictFonts: true,
+      limits: { renderDiagnostics: 128 } });
+    const report = result.renderReport;
+    assert.deepEqual(report.fontObservation, { status: 'unavailable', reason: 'diagnostic_limit' });
+    assert.equal(report.fontObservationDigest,
+      digest(`docxodus:font-observation:v1\0${canonicalJson(report.fontObservation)}`));
+    assert.equal(report.environment.rendererFingerprint, result.pageMap.rendererFingerprint);
+    assert.equal(report.fonts[0].verified, true);
+    assert.equal(report.fonts[0].status, 'resolved');
+    assert.equal(result.warnings.filter(w => w.code === 'font_observation_limit').length, 1);
+    if (outputs.length === 2) {
+      const complete = await renderDocxArtifacts(source, { ...options, outputs, strictFonts: true });
+      assert.equal(complete.renderReport.fontObservation.status, 'observed');
+      assert.equal(complete.pageCount, result.pageCount);
+      assert.deepEqual(complete.renderReport.fonts, report.fonts);
+      assert.deepEqual(complete.renderReport.fontIdentity, report.fontIdentity);
+      assert.equal(complete.warnings.some(w => w.code === 'font_observation_limit'), false);
+    }
+    const assertParagraphs = text => assert.deepEqual(
+      text.replace(/\s/g, '').match(/Orchardentry\d{3}\./g), paragraphs.map(p => p.replace(/\s/g, '')));
+    if (result.html) {
+      const context = await browser.newContext({ javaScriptEnabled: false });
+      try {
+        const page = await context.newPage();
+        await page.setContent(result.html);
+        assertParagraphs((await page.locator('.page-box').allTextContents()).join(''));
+      } finally { await context.close(); }
+    }
+    if (result.pdf) {
+      const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+      const task = getDocument({ data: new Uint8Array(result.pdf), verbosity: 0 });
+      try {
+        const pdf = await task.promise, text = [];
+        assert.equal(pdf.numPages, result.pageCount);
+        for (let n = 1; n <= pdf.numPages; n++) {
+          text.push((await (await pdf.getPage(n)).getTextContent()).items.map(item => item.str ?? '').join(' '));
+        }
+        assertParagraphs(text.join(' '));
+      } finally { await task.destroy(); }
+    }
+  });
+}
+
+test('an observation budget does not bypass strict font verification', async () => {
+  const source = fontObservationDocx({ family: MISSING_FAMILY, text: Array(120).fill('Orchard entry.') });
+  await assert.rejects(renderDocxArtifacts(source, { ...options, outputs: ['pdf'], strictFonts: true,
+    limits: { renderDiagnostics: 128 } }), { code: 'resource_policy_failure', phase: 'font_loading' });
+});
+
 test('text-node queries separate nested faces, SVG and unattributed generated text', async () => {
   const context = await browser.newContext({ javaScriptEnabled: false });
   try {

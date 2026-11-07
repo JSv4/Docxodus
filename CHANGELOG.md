@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Large HTML/PDF exports continue when platform-font observations reach the diagnostic budget, reporting unavailable observations and one warning while preserving font verification (part of #1558).
+
 - Literal line endings in Word text render as spaces across body, running stories and tracked text; explicit line-break elements and tab alignment remain intact. Shared XML part saves preserve encoded carriage returns across revision projection and session saves (part of #1564).
 
 - Comparison tracks edits inside stable textbox groups, including header labels and nested formatting, while preserving hyperlink and media ownership. Whole-group header additions/removals retain their LibreOffice warning and have a documented markup PDF companion fallback (#1557).
