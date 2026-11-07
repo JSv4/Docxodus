@@ -140,11 +140,14 @@ public sealed class DocxDiffComparison
             var script = IrEditScriptBuilder.Build(irLeft, irRight, diff, alignment: _alignment.Value);
             var paired = IrRelocationPairer.Apply(script, irLeft, irRight, diff);
             if (!_settings.CrossParagraphTokenDiff)
+            {
+                paired = FinalizeStories(paired, diff);
                 return (paired, paired);
+            }
             if (!IrRelocationPairer.TouchesBody(paired))
-                return (paired, null);
+                return (FinalizeStories(paired, diff), null);
             var (data, markup) = IrRelocationPairer.ApplyToBoth(script, _markupBuild.Value, irLeft, irRight, diff);
-            return (data, markup);
+            return (FinalizeStories(data, diff), FinalizeStories(markup, _settings.ToIrDiffSettings()));
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
         _redline = new(BuildRedline, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -259,13 +262,19 @@ public sealed class DocxDiffComparison
         if (!diff.CrossParagraphTokenDiff)
             script = _scripts.Value.Data;
         else if (!_markupBuild.Value.Operations.Any(op => op.Kind == IrEditOpKind.CrossParagraphRunBlock))
-            script = IrRelocationPairer.Apply(_markupBuild.Value, irLeft, irRight, diff);
+            script = FinalizeStories(IrRelocationPairer.Apply(_markupBuild.Value, irLeft, irRight, diff), diff);
         else
-            script = _scripts.Value.Markup ?? IrRelocationPairer.Apply(_markupBuild.Value, irLeft, irRight, diff);
+            script = _scripts.Value.Markup ?? FinalizeStories(IrRelocationPairer.Apply(_markupBuild.Value, irLeft, irRight, diff), diff);
         return IrMarkupRenderer.Render(script, left, right, diff, irLeft, irRight);
     }
 
     private IrDiffSettings DataSettings() => _settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
+
+    private IrEditScript FinalizeStories(IrEditScript script, IrDiffSettings settings)
+    {
+        var (left, right) = _ir.Value;
+        return IrEditScriptBuilder.FinalizeHeaderFooterOps(script, left, right, settings, _alignment.Value);
+    }
 
     /// <summary>
     /// The compatibility preflight a product's identical-bytes shortcut still owes its caller, run

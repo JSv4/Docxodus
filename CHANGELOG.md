@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file.
 
 - Tables use the remaining page space through the shared row/cell fragmenter, preserving row keeps, repeated headers, and nested content. Oversized keep recovery retries on a fresh page. Export reports intact multi-column table moves through `column_table_page_remainder`; strict unsupported-content policy rejects that fallback (#1569).
 
+- Comparison binds revised headers and footers to content inserted before deleted section boundaries, respects moved-paragraph barriers, and preserves first-page header flags when revisions are rejected (#1555).
+
 - Browser CI and npm release preflight use Ubuntu 24.04, supported by the locked Playwright browsers (#1580).
 
 - Textbox search returns only the selected compatibility branch. Span and match replacements update corresponding DrawingML/VML textbox paragraphs atomically, including formatting and tracked edits; divergent or nested alternatives are refused without changing the document (#1560).

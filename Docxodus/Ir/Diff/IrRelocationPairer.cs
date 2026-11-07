@@ -836,14 +836,23 @@ internal static class IrRelocationPairer
 
     /// <summary>The largest move group id anywhere in the script. Ids are unique across scopes (issue #924),
     /// so relocation ids continue above it.</summary>
-    private static int MaxMoveGroupId(IrEditScript script)
+    internal static int MaxMoveGroupId(IrEditScript script)
     {
         int max = 0;
+        void Tokens(IrTokenDiff? diff)
+        {
+            if (diff is not null)
+                foreach (var token in diff.Ops) max = System.Math.Max(max, token.RelocationGroupId ?? 0);
+        }
         void Visit(IEnumerable<IrEditOp> ops)
         {
             foreach (var op in ops)
             {
                 max = System.Math.Max(max, op.MoveGroupId ?? 0);
+                max = System.Math.Max(max, op.RelocationGroupId ?? 0);
+                Tokens(op.TokenDiff);
+                foreach (var segment in op.SegmentDiffs ?? Enumerable.Empty<IrTokenDiff>()) Tokens(segment);
+                foreach (var cell in op.CrossParagraphCells ?? Enumerable.Empty<IrCrossParagraphCell>()) Tokens(cell.Diff);
                 foreach (var row in op.TableDiff?.RowOps ?? Enumerable.Empty<IrRowOp>())
                 {
                     max = System.Math.Max(max, row.MoveGroupId ?? 0);
