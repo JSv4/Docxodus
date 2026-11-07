@@ -86,6 +86,18 @@ public class ImageInfo
 
 ## Processing Pipeline
 
+Paginated paragraph projection shares one recursive splitter for explicit page and column breaks.
+It lifts page markers into sibling blocks, preserving inline formatting and canonical source IDs
+without duplicating HTML/editor targets. Textboxes remain separate stories. Empty pre-break
+carriers use the paginator's existing zero-height source exclusion; ordinary authored blank lines
+and whitespace remain content. A terminal page break ends its paragraph on the old page unless
+`w:splitPgBreakAndParaMark` explicitly requests a paragraph-mark line on the next page (#1570).
+When editable anchors are requested, a `data-docx-break-paragraph` wrapper identifies the source
+owner and keeps all pieces together for single, batch and windowed block extraction. The paginator
+unwraps it before source inventory and column layout. The editable head retains a split marker so
+text and format edits repaint the complete source across pages; an empty head uses a span insertion
+to preserve the following break and text.
+
 The conversion happens in the following stages:
 
 ### 1. Preprocessing

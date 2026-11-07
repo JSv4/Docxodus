@@ -139,6 +139,7 @@ public class HtmlConversionWindowedMountTests
     [InlineData(24, false)]
     [InlineData(1, false)]
     [InlineData(24, true)]
+    [InlineData(1, true)]
     public void WM003_GroupAlignedWindowsReproduceTheFullRenderSectionBySection(int windowSize, bool paginated)
     {
         // The paginated profile positions anchored objects absolutely inside their page box;
@@ -211,6 +212,61 @@ public class HtmlConversionWindowedMountTests
         {
             SessionRegistry.CloseSession(handle);
         }
+    }
+
+    [Theory]
+    [InlineData("", "", false, "page", false)]
+    [InlineData("Before", "", false, "page", false)]
+    [InlineData("", "After", false, "page", false)]
+    [InlineData("Before", "After", false, "page", false)]
+    [InlineData("Before", "", true, "page", false)]
+    [InlineData("", "After", false, "column", false)]
+    [InlineData("Before", "After", false, "column", false)]
+    [InlineData("Before", "After", false, "page", true)]
+    public void PaginatedBreakParagraphSurvivesEveryBlockRender(string before, string after, bool splitMark, string kind, bool textbox)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var paragraph = new Wp.Paragraph(new Wp.Run(new Wp.Text(before),
+                new Wp.Break { Type = kind == "page" ? Wp.BreakValues.Page : Wp.BreakValues.Column }, new Wp.Text(after)));
+            if (textbox)
+                paragraph.Append(new Wp.Run($"""
+                    <w:r xmlns:w="{W}" xmlns:v="urn:schemas-microsoft-com:vml"><w:pict>
+                      <v:shape id="Box" style="width:120pt;height:40pt"><v:textbox><w:txbxContent>
+                        <w:p><w:r><w:t>Box</w:t></w:r></w:p>
+                      </w:txbxContent></v:textbox></v:shape></w:pict></w:r>
+                    """));
+            main.Document = new Wp.Document(new Wp.Body(
+                new Wp.Paragraph(new Wp.Run(new Wp.Text("First"))),
+                paragraph,
+                new Wp.Paragraph(new Wp.Run(new Wp.Text("Last"))),
+                new Wp.SectionProperties(new Wp.PageSize { Width = 12240, Height = 15840 })));
+            if (splitMark)
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings(
+                    new Wp.Compatibility(new Wp.SplitPageBreakAndParagraphMark()));
+        }
+        using var session = new DocxSession(stream.ToArray());
+        var options = new HtmlConversionOptions { PaginationMode = (int)PaginationMode.Paginated, StampAnchors = true, FabricateCssClasses = false };
+        var ids = session.ListBlocks().Body.Select(unit => unit.Id).ToArray();
+        var single = XElement.Parse(HtmlConversionOps.RenderBlockHtml(session, ids[1], options));
+        Assert.Equal(before + after + (textbox ? "Box" : ""), single.Value);
+        Assert.Single(single.DescendantsAndSelf(), e => (string?)e.Attribute(kind == "page" ? "data-page-break" : "data-column-break-before") == "true");
+        var anchors = single.DescendantsAndSelf().Attributes("data-anchor").Select(a => a.Value).ToArray();
+        Assert.Equal(textbox ? 2 : 1, anchors.Length);
+        Assert.Equal(anchors.Length, anchors.Distinct().Count());
+        Assert.Equal(single.ToString(), XElement.Parse(HtmlConversionOps.RenderBlockHtml(stream.ToArray(), ids[1], options)).ToString());
+        using var batch = JsonDocument.Parse(HtmlConversionOps.RenderBlocksHtml(session, ids, options));
+        Assert.Equal(single.ToString(), XElement.Parse(batch.RootElement.GetProperty(ids[1]).GetString()!).ToString());
+        var full = Parse(HtmlConversionOps.ConvertToHtml(stream.ToArray(), options));
+        var expected = Sections(full).SelectMany(section => section.Elements()).Select(e => e.ToString()).ToArray();
+        var actual = ids.SelectMany(id =>
+        {
+            using var range = JsonDocument.Parse(HtmlConversionOps.RenderBlocksRangeHtml(session, new[] { id }, options));
+            return range.RootElement.EnumerateArray().Select(n => XElement.Parse(n.GetString()!).ToString()).ToArray();
+        }).ToArray();
+        Assert.Equal(expected, actual);
     }
 
     /// <summary>A border a paragraph style contributes groups in the renderer, because formatting

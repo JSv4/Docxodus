@@ -1240,7 +1240,7 @@ namespace Docxodus
 
             MergeRevisionParagraphGroups(wordDoc, htmlConverterSettings);
             NormalizeFieldResults(wordDoc, htmlConverterSettings);
-            InsertAppropriateNonbreakingSpaces(wordDoc);
+            InsertAppropriateNonbreakingSpaces(wordDoc, htmlConverterSettings.RenderPagination == PaginationMode.Paginated);
             ReverseTableBordersForRtlTables(wordDoc);
             foreach (var part in wordDoc.ContentParts())
                 foreach (var table in part.GetXDocument().Descendants(W.tbl).Where(t => t.Descendants(W.tab).Any()))
@@ -5957,17 +5957,13 @@ namespace Docxodus
             // Check for page break (w:br with w:type="page")
             var breakType = (string?)element.Attribute(W.type);
 
-            // In pagination mode, emit a page break marker div for page breaks.
-            // NOTE: the empty XText child is load-bearing. Without a child node an empty
-            // XElement serializes as a self-closing <div .../>, which a browser's HTML parser
-            // treats as an UNCLOSED div (the slash is ignored for non-void elements). Every
-            // following sibling — including the visible #pagination-container — then nests inside
-            // the display:none staging and the paginated view renders blank. The empty text node
-            // forces an explicit </div> so staging and container stay siblings. (HC008d)
+            // The paragraph splitter lifts this inline marker into a sibling div. A div inside
+            // a paragraph makes HTML parsing close the paragraph early and synthesize blank lines.
+            // The empty text forces an explicit close tag for both non-void spellings (HC008d).
             if (settings.RenderPagination == PaginationMode.Paginated && breakType == "page")
             {
                 var prefix = settings.PaginationCssClassPrefix ?? "page-";
-                return new XElement(Xhtml.div,
+                return new XElement(Xhtml.span,
                     new XAttribute("class", prefix + "break"),
                     new XAttribute("data-page-break", "true"),
                     new XText(string.Empty));
@@ -6129,7 +6125,19 @@ namespace Docxodus
                 AddPaginationDataAttributes(element, joinedElement, paragraph);
                 if ((string?)paragraph.Attribute("data-keep-lines") == "true")
                     paragraph.Annotation<Dictionary<string, string>>()!["break-inside"] = "avoid";
-                return SplitColumnBreakParagraph(paragraph);
+                var splitMark = IsOnOffPropertyEnabled(wordDoc.MainDocumentPart?.DocumentSettingsPart?
+                    .GetXDocument().Root?.Element(W.compat)?.Element(W.splitPgBreakAndParaMark));
+                var fragments = SplitBreakParagraph(paragraph, "page", splitMark)
+                    .SelectMany(fragment => SplitBreakParagraph(fragment, "column")).ToList();
+                // Editor block/range extraction needs one root for the complete source unit.
+                // Pagination unwraps it before measuring the individual paragraphs and breaks.
+                if (fragments.Count > 1 && paragraph.Attribute("data-anchor") is { } owner)
+                {
+                    foreach (var fragment in fragments.Where(f => f.Attribute("data-anchor") != null))
+                        fragment.SetAttributeValue("data-docx-split-paragraph", "true");
+                    return new XElement(Xhtml.div, new XAttribute("data-docx-break-paragraph", owner.Value), fragments);
+                }
+                return fragments;
             }
 
             return paragraph;
@@ -6243,10 +6251,18 @@ namespace Docxodus
 
         }
 
-        private static object SplitColumnBreakParagraph(XElement paragraph)
+        private static IEnumerable<XElement> SplitBreakParagraph(XElement paragraph, string kind, bool splitMark = false)
         {
-            if (!paragraph.Descendants().Any(e => (string?)e.Attribute("data-column-break") == "true"))
-                return paragraph;
+            var markerName = "data-" + kind + "-break";
+            static bool InlineContainer(XElement element) => !PinsOrPlacesMedia(element)
+                && (element.Name == Xhtml.span || element.Name == Xhtml.a || element.Name == Xhtml.ins || element.Name == Xhtml.del);
+            static bool HasLineContent(XElement element) => element.Value.Length != 0 || element.Descendants().Any(e =>
+                !InlineContainer(e) || (e.Annotation<Dictionary<string, string>>() is { } css
+                    && (css.ContainsKey("width") || css.ContainsKey("display"))));
+            bool IsMarker(XElement element) => (string?)element.Attribute(markerName) == "true";
+            if (!paragraph.Descendants().Any(e => IsMarker(e)
+                && e.Ancestors().TakeWhile(a => a != paragraph).All(InlineContainer)))
+                return new[] { paragraph };
 
             // Split inside run wrappers as well as at direct paragraph children. A block div
             // inside a p makes HTML parsing close the canonical source paragraph before its text.
@@ -6258,16 +6274,24 @@ namespace Docxodus
                         ? new Dictionary<string, string>(style) : annotation);
                 return copy;
             }
-            static List<XElement> Split(XElement source)
+            var markers = new List<XElement>();
+            List<XElement> Split(XElement source)
             {
                 var pieces = new List<XElement> { CopyShell(source) };
                 foreach (var node in source.Nodes().ToList())
                 {
                     if (node is XElement child)
                     {
-                        if ((string?)child.Attribute("data-column-break") == "true")
+                        if (IsMarker(child))
                         {
+                            markers.Add(child);
                             pieces.Add(CopyShell(source));
+                            continue;
+                        }
+                        if (!InlineContainer(child))
+                        {
+                            child.Remove();
+                            pieces[^1].Add(child);
                             continue;
                         }
                         var children = Split(child);
@@ -6285,23 +6309,64 @@ namespace Docxodus
             }
             var fragments = Split(paragraph);
             var result = new List<XElement>();
+            var identities = new HashSet<(XName, string)>();
             for (var i = 0; i < fragments.Count; i++)
             {
                 var fragment = fragments[i];
-                if (i == 0 && string.IsNullOrWhiteSpace(fragment.Value)
-                    && !fragment.Descendants().Any(e => e.Name == Xhtml.img || e.Name == Xhtml.br))
-                    continue;
+                foreach (var span in fragment.Descendants(Xhtml.span).Reverse().ToList())
+                    if (IsDiscardableEmptySpan(span)) span.Remove();
+                // A discarded leading column carrier must not claim the surviving fragment's identity.
+                if (kind == "column" && i == 0 && !HasLineContent(fragment)) continue;
+                foreach (var descendant in fragment.DescendantsAndSelf())
+                    foreach (var name in new[] { "id", "name", "data-anchor", "data-committed-text" })
+                        if (descendant.Attribute(name) is { } identity && !identities.Add((identity.Name, identity.Value)))
+                            identity.Remove();
                 var style = fragment.Annotation<Dictionary<string, string>>()!;
                 if (i > 0)
                 {
-                    style["break-before"] = "column";
-                    fragment.SetAttributeValue("data-column-break-before", "true");
-                    fragment.Attribute("id")?.Remove();
+                    if (kind == "column")
+                    {
+                        style["break-before"] = "column";
+                        fragment.SetAttributeValue("data-column-break-before", "true");
+                    }
                     fragment.Attribute("data-page-break-before")?.Remove();
-                    if (result.Count > 0) style["margin-top"] = "0";
+                    if (result.Count > 0)
+                    {
+                        style["margin-top"] = "0";
+                        style["text-indent"] = "0";
+                    }
                 }
                 if (i < fragments.Count - 1) style["margin-bottom"] = "0";
-                result.Add(fragment);
+                var empty = !HasLineContent(fragment);
+                if (empty && kind == "page" && splitMark && i == fragments.Count - 1)
+                {
+                    fragment.Add(new XElement(Xhtml.br));
+                    empty = false;
+                }
+                if (empty && kind == "page" && i > 0)
+                {
+                    // Bookmarks and empty hyperlink/revision shells have identity, but no line.
+                    // The paragraph mark stays before the break, whose marker flow consumes.
+                    // Keep these targets on the preceding paragraph so they survive pagination.
+                    var owner = result.Last(e => !IsMarker(e));
+                    foreach (var node in fragment.Nodes().ToList())
+                    {
+                        node.Remove();
+                        owner.Add(node);
+                    }
+                }
+                // A leading empty carrier keeps an intentional first blank page. Its zero-height
+                // canonical anchor is already excluded by the paginator's explicit-break contract.
+                if (!empty || (kind == "page" ? i == 0 : i > 0))
+                {
+                    if (empty) fragment.Add(new XText(string.Empty));
+                    result.Add(fragment);
+                }
+                if (kind == "page" && i < markers.Count)
+                {
+                    markers[i].Name = Xhtml.div;
+                    result.Add(markers[i]);
+                }
             }
             return result;
         }
@@ -10562,7 +10627,7 @@ namespace Docxodus
             return (int)Math.Max(0m, w / 96m * 1440m / multiplier + spacingWidth + tabLength * 1440m + checkboxWidth);
         }
 
-        private static void InsertAppropriateNonbreakingSpaces(WordprocessingDocument wordDoc)
+        private static void InsertAppropriateNonbreakingSpaces(WordprocessingDocument wordDoc, bool paginated)
         {
             foreach (var part in wordDoc.ContentParts())
             {
@@ -10570,7 +10635,7 @@ namespace Docxodus
                 var root = pxd.Root;
                 if (root == null) return;
 
-                var newRoot = (XElement)InsertAppropriateNonbreakingSpacesTransform(root);
+                var newRoot = (XElement)InsertAppropriateNonbreakingSpacesTransform(root, paginated);
                 root.ReplaceWith(newRoot);
                 part.PutXDocument();
             }
@@ -10582,7 +10647,7 @@ namespace Docxodus
         // Ordinary run whitespace stays unchanged: the intrinsic pre-wrap rule preserves its width
         // and its original breaking semantics. An otherwise empty paragraph still needs the literal
         // NBSP placeholder below so HTML produces a line box.
-        private static object InsertAppropriateNonbreakingSpacesTransform(XNode node)
+        private static object InsertAppropriateNonbreakingSpacesTransform(XNode node, bool paginated)
         {
             XElement? element = node as XElement;
             if (element != null)
@@ -10622,14 +10687,17 @@ namespace Docxodus
                     // A floating (wp:anchor) drawing is not content either: it leaves the text flow, and
                     // the paginated view lifts it into the page box, so a paragraph holding nothing else
                     // lost its line. Word and LibreOffice keep the paragraph mark's line (issue #880).
-                    bool hasContent = ParagraphHasInFlowContent(element);
+                    bool hasContent = ParagraphHasInFlowContent(element) || (paginated &&
+                        element.Elements().Where(e => e.Name != W.pPr).SelectMany(e => InFlowDescendantsAndSelf(e))
+                            .Any(e => e.Name == W.br && (string?)e.Attribute(W.type) == "page"
+                                && e.Ancestors(W.p).FirstOrDefault() == element));
                     // Structural table-end paragraphs get a one-twip minimum box in ConvertParagraph.
                     // A full-size placeholder would extend beyond it and trip export clipping checks.
                     if (hasContent == false && (string?)element.Attribute(StructuralTableEndParagraphAttribute) != "true")
                         return new XElement(element.Name,
                             element.Attributes(),
                             new XAttribute(PtOpenXml.EmptyParagraph, true),
-                            element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n)),
+                            element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n, paginated)),
                             new XElement(W.r,
                                 element.Elements(W.pPr).Elements(W.rPr),
                                 new XElement(W.t, "\u00A0")));
@@ -10637,7 +10705,7 @@ namespace Docxodus
 
                 return new XElement(element.Name,
                     element.Attributes(),
-                    element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n)));
+                    element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n, paginated)));
             }
             return node;
         }

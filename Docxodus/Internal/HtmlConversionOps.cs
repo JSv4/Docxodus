@@ -793,11 +793,12 @@ internal static class HtmlConversionOps
                 : htmlElement.Descendants().Where(d => d.Name.LocalName == "body").Take(1).ToList();
             foreach (var node in hosts.SelectMany(host => host.Elements()))
             {
+                static XAttribute? UnitAnchor(XElement e) => e.Attribute("data-docx-break-paragraph") ?? e.Attribute("data-anchor");
                 var units = node.DescendantsAndSelf()
-                    .Where(d => d.Attribute("data-anchor") is not null
+                    .Where(d => UnitAnchor(d) is not null
                         && !d.Ancestors().TakeWhile(a => !ReferenceEquals(a, node.Parent))
-                            .Any(a => a.Attribute("data-anchor") is not null))
-                    .Select(d => (string)d.Attribute("data-anchor")!)
+                            .Any(a => UnitAnchor(a) is not null))
+                    .Select(d => UnitAnchor(d)!.Value)
                     .ToList();
                 if (units.Count > 0 && units.All(wantedUnids.Contains))
                     topLevel.Add((units[0], node.ToString(SaveOptions.DisableFormatting)));
@@ -818,17 +819,9 @@ internal static class HtmlConversionOps
             // (see the converter's tableDiv). Return that wrapper so an incremental
             // renderer inserts the same node shape a full render produces — a bare
             // <table> would lose alignment and leave wrapper husks on replace. Only
-            // tables: paragraph wrappers (border <div>s) can GROUP several blocks, so
-            // they are the client's remount-fallback territory, not extraction chrome.
-            var outer = e;
-            if (e.Name.LocalName == "table"
-                && e.Parent is { } p
-                && p.Name.LocalName == "div"
-                && p.Attribute("data-anchor") is null
-                && p.Elements().Count() == 1)
-            {
-                outer = p;
-            }
+            // tables and explicitly owned split paragraphs: border divs can GROUP several
+            // blocks, so they are the client's remount-fallback territory, not extraction chrome.
+            var outer = BlockRenderRoot(e);
             htmlByUnid[u] = outer.ToString(SaveOptions.DisableFormatting);
         }
         return htmlByUnid;
@@ -1444,8 +1437,15 @@ internal static class HtmlConversionOps
             var body = htmlElement.Descendants().FirstOrDefault(e => e.Name.LocalName == "body");
             inner = body?.Elements().FirstOrDefault() ?? htmlElement;
         }
-        return inner.ToString(SaveOptions.DisableFormatting);
+        return BlockRenderRoot(inner).ToString(SaveOptions.DisableFormatting);
     }
+
+    private static XElement BlockRenderRoot(XElement element) =>
+        element.Parent is { } parent && parent.Name.LocalName == "div"
+        && parent.Attribute("data-anchor") is null
+        && (parent.Attribute("data-docx-break-paragraph") is { } owner && owner.Value == (string?)element.Attribute("data-anchor")
+            || (element.Name.LocalName == "table" && parent.Elements().Count() == 1))
+            ? parent : element;
 
     /// <summary>Clone a whole formatting part (styles/numbering/theme/font) from src to dst.</summary>
     private static void CopyPartXml<TPart>(WordprocessingDocument src, WordprocessingDocument dst,
