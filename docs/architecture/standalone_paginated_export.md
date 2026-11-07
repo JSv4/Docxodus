@@ -1540,10 +1540,14 @@ indivisible note content retains the typed clipped-content failure rather than s
 result with missing text.
 
 Body paragraph fragmentation retains unshifted revision change-bar hosts and their inline revision
-metadata on each continuation (#1521). A leading `wrapNone` drawing stays whole on the first
-fragment; its textbox text does not participate in the body's line or widow measurements. Existing
-anchor placement resolves its coordinates after pagination. Preceding flow content, wrapping,
-line/character bases and paragraph-height alignment remain excluded from this path. Source
+metadata on each continuation (#1521). Fixed-base `wrapNone` drawings stay whole with their source
+Range, including drawings after body text; their textbox text does not participate in body line
+or widow measurements. Existing anchor placement resolves coordinates after pagination. Leading
+converter-owned edge pictures preserve their float and clearance on the head, using the existing
+float-height measurement and page-prefix exclusion paths. The shared layout gate receives the
+same admitted carriers as the structural gate; notes, cells and textbox stories retain the prior
+leading-only nonwrapping admission. Child images retain the normal inline image safety checks.
+Late wrapping pictures, line/character bases and paragraph-height alignment remain excluded. Source
 completeness and clipping checks still apply to both the body and the promoted drawing.
 
 For eligible uniform Latin paragraphs, `word-text.ts` fits lines from unrounded font advances

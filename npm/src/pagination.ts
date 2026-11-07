@@ -3633,7 +3633,7 @@ export class PaginationEngine {
     };
     const breaks: Array<{ element: HTMLElement; textOffset: number }> = [];
     const images: Array<{ element: HTMLElement; textOffset: number }> = [];
-    const drawings = new Set(this.leadingFragmentDrawings(paragraph));
+    const drawings = new Set(this.fragmentDrawingBoxes(paragraph));
     const walker = this.document.createTreeWalker(paragraph,
       this.view.NodeFilter.SHOW_TEXT | this.view.NodeFilter.SHOW_ELEMENT, {
         acceptNode: node => drawings.has(node as HTMLElement) || mathAtoms.has(node.parentElement!)
@@ -3978,7 +3978,7 @@ export class PaginationEngine {
       ...(bodyParagraph ? [] : ["[data-footnote-id]"]),
       "[contenteditable]",
     ].join(", ");
-    const drawings = this.leadingFragmentDrawings(paragraph);
+    const drawings = this.fragmentDrawingBoxes(paragraph, bodyParagraph);
     const atoms = this.rangeAtomicInlineBoxes(paragraph);
     if (Array.from(paragraph.querySelectorAll(unsupportedDescendants))
       .some(element => !drawings.some(drawing => drawing.contains(element))
@@ -3990,10 +3990,11 @@ export class PaginationEngine {
     // Range endpoints keep images whole, but floats and positioned picture carriers have their
     // own placement rules. Do not mistake an empty-text leading wrapper for a safe inline atom.
     for (const image of Array.from(paragraph.querySelectorAll<HTMLElement>("img"))) {
-      if (drawings.some(drawing => drawing.contains(image))) continue;
+      const drawing = drawings.find(drawing => drawing.contains(image));
+      if (drawing?.dataset.docxDrawingAnchor === 'true') continue;
       if (image.closest("[data-field], [data-list-marker], a[data-comment-id]")) return false;
       if (!(image.getBoundingClientRect().width > 0 && image.getBoundingClientRect().height > 0)) return false;
-      for (let carrier: HTMLElement | null = image; carrier && carrier !== paragraph; carrier = carrier.parentElement) {
+      for (let carrier: HTMLElement | null = image; carrier && carrier !== paragraph && carrier !== drawing; carrier = carrier.parentElement) {
         const style = this.view.getComputedStyle(carrier);
         if (style.display !== "inline" || !this.hasRangeFragmentSafePosition(carrier, style)
           || style.float !== "none" || style.transform !== "none") return false;
@@ -4001,7 +4002,7 @@ export class PaginationEngine {
     }
 
     const isValidatedEndnote = paragraph.dataset.paginationSafeEndnote === "true";
-    return isValidatedEndnote || this.hasRangeFragmentSafeLayout(paragraph, allowInlineRoot, relaxKeepLines, relaxKeepWithNext);
+    return isValidatedEndnote || this.hasRangeFragmentSafeLayout(paragraph, allowInlineRoot, relaxKeepLines, relaxKeepWithNext, drawings);
   }
 
   /** The converter's automatic-spacing lift moves ink without changing inline line boxes. */
@@ -4020,18 +4021,24 @@ export class PaginationEngine {
       && (style.right === "auto" || parseFloat(style.right) === 0));
   }
 
-  /** Leading, non-wrapping drawings belong wholly to the first fragment. Their fixed bases
-   * survive that split; line/character bases and paragraph-height alignment need a line model. */
-  private leadingFragmentDrawings(paragraph: HTMLElement): HTMLElement[] {
-    return Array.from(paragraph.querySelectorAll<HTMLElement>('[data-docx-drawing-anchor="true"]'))
+  /** Fixed-base anchors follow their source Range; leading edge pictures keep their float
+   * exclusion on the head. Later floats and line-dependent anchors need destination reflow. */
+  private fragmentDrawingBoxes(paragraph: HTMLElement, bodyParagraph = true): HTMLElement[] {
+    return Array.from(paragraph.querySelectorAll<HTMLElement>(
+      '[data-docx-drawing-anchor="true"], [data-docx-edge-picture="true"]'))
       .filter(drawing => {
-        if (drawing.dataset.docxAnchorWrap !== 'wrapNone'
-          || drawing.dataset.docxAnchorHRelative === 'character'
-          || drawing.dataset.docxAnchorVRelative === 'line'
-          || (drawing.dataset.docxAnchorVRelative === 'paragraph' && drawing.hasAttribute('data-docx-anchor-v-align')))
-          return false;
         const style = this.view.getComputedStyle(drawing);
-        if (style.position !== 'absolute' || style.float !== 'none') return false;
+        if (drawing.dataset.docxDrawingAnchor === 'true') {
+          if (drawing.dataset.docxAnchorWrap !== 'wrapNone'
+            || drawing.dataset.docxAnchorHRelative === 'character'
+            || drawing.dataset.docxAnchorVRelative === 'line'
+            || (drawing.dataset.docxAnchorVRelative === 'paragraph' && drawing.hasAttribute('data-docx-anchor-v-align'))
+            || style.position !== 'absolute' || style.float !== 'none') return false;
+          if (bodyParagraph) return true;
+        } else if (!bodyParagraph || style.position !== 'static' || !['left', 'right'].includes(style.float)
+          || style.transform !== 'none' || style.translate !== 'none' || style.rotate !== 'none' || style.scale !== 'none'
+          || drawing.children.length !== 1 || drawing.firstElementChild?.localName !== 'img'
+          || this.hasVisibleText(drawing.textContent ?? '')) return false;
         // Only ancestor shells may precede the drawing. Even a textless image,
         // break or tab could otherwise put its anchor on a later fragment.
         for (let node: Node = drawing; node !== paragraph; node = node.parentNode!) {
@@ -4093,6 +4100,7 @@ export class PaginationEngine {
     allowInlineRoot: boolean = false,
     relaxKeepLines = false,
     relaxKeepWithNext = false,
+    drawings = this.fragmentDrawingBoxes(paragraph, false),
   ): boolean {
     const paragraphStyle = this.view.getComputedStyle(paragraph);
     const avoidAfter = relaxKeepWithNext && paragraph.dataset.keepWithNext === "true";
@@ -4119,7 +4127,6 @@ export class PaginationEngine {
 
     // List markers stay with the first fragment. Known converter layout boxes also have
     // no internal endpoints, so moving a complete box preserves its inner layout.
-    const drawings = this.leadingFragmentDrawings(paragraph);
     if (Array.from(paragraph.querySelectorAll<HTMLElement>('[data-docx-drawing-anchor]'))
       .some(drawing => !drawings.includes(drawing))) return false;
     const leading = new Set([...this.leadingAtomicBoxes(paragraph), ...this.rangeAtomicInlineBoxes(paragraph), ...drawings]);

@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Long body paragraphs containing non-wrapping drawings or leading square/tight picture floats now split across pages while keeping each drawing with its source fragment. Late wrapping pictures and line-dependent placements retain their existing safeguards (part of #1558).
+
 - Fixed text boxes inside DrawingML groups and canvases can report authored off-paper clipping without failing export. Placement proof binds the group origin, member geometry and paragraph host; visible siblings and blank lines remain protected (part of #1558).
 
 - Standalone export fits eligible paragraphs and honors their resolved kerning independently of unrelated bold text, tables, lists and links, preserving PDF text order around unprepared content. Graphics flow and unsupported paragraph owners retain their existing layout policies (part of #1550 and #1562).
