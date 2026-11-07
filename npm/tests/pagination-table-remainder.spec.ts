@@ -45,8 +45,9 @@ for (const kind of ['rows', 'oversized', 'cant-split-rows', 'single-row', 'kept'
   });
 }
 
-for (const remeasure of [false, true]) {
-  test(`an intact column-table move retains its warning through remeasurement=${remeasure}`, async ({ page }) => {
+for (const remeasure of [false, true]) for (const guard of ['none', 'cant-split', 'note']) {
+  const cantSplit = guard === 'cant-split', note = guard === 'note';
+  test(`column-table remainder respects guard=${guard} through remeasurement=${remeasure}`, async ({ page }) => {
     const geometry = 'data-page-width="340" data-page-height="180" data-content-width="300" data-content-height="140" data-margin-top="20" data-margin-right="20" data-margin-bottom="20" data-margin-left="20"';
     await page.setContent(`<style>#pagination-staging,#pagination-container {font:12pt/14pt Arial}
       p {margin:0} table {width:130pt;border-collapse:collapse;table-layout:fixed} td {padding:0;border:0}</style>
@@ -54,8 +55,10 @@ for (const remeasure of [false, true]) {
       ${Array.from({ length:5 }, (_, i) => `<p ${remeasure && i === 0 ? 'data-docx-edge-picture="true"' : ''}>Lead${i + 1}</p>`).join('')}</section>
       <section data-section-index="1" ${geometry} data-section-type="continuous" data-cols="2" data-col-gap="20" style="column-count:2;column-gap:20pt">
       <div><table><colgroup><col style="width:100%"></colgroup><tbody>
-      ${Array.from({ length:12 }, (_, i) => `<tr><td><p>Cedar${i + 1}</p></td></tr>`).join('')}
-      </tbody></table></div><p>Complete.</p></section></div><div id="pagination-container"></div>`);
+      ${Array.from({ length:12 }, (_, i) => `<tr ${cantSplit ? 'data-docx-cant-split="true"' : ''}><td><p>Cedar${i + 1}</p></td></tr>`).join('')}
+      </tbody></table></div><p>Complete.${note ? '<sup data-footnote-id="note">1</sup>' : ''}</p></section>
+      ${note ? '<div id="pagination-footnote-registry"><div class="footnote-item" data-footnote-id="note"><span class="footnote-number">1</span><div class="footnote-content"><p>Note text.</p></div></div></div>' : ''}
+      </div><div id="pagination-container"></div>`);
     await page.addScriptTag({ path: bundle });
     const result = await page.evaluate(() => {
       const container = document.getElementById('pagination-container')!;
@@ -66,8 +69,10 @@ for (const remeasure of [false, true]) {
       }));
     });
     expect(result).toHaveLength(2);
-    expect(result[0].text).not.toContain('Cedar');
-    expect(result[1].text.match(/Cedar\d+/g)).toHaveLength(12);
-    expect(result.map(page => page.warnings)).toEqual([0, 1]);
+    const labels = result.flatMap(page => page.text.match(/Cedar\d+/g) ?? []);
+    expect(labels).toEqual(Array.from({ length:12 }, (_, i) => `Cedar${i + 1}`));
+    if (cantSplit || note) expect(result[0].text).not.toContain('Cedar');
+    else expect(result[0].text).toContain('Cedar');
+    expect(result.map(page => page.warnings)).toEqual(cantSplit || note ? [0, 1] : [0, 0]);
   });
 }

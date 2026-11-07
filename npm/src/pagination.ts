@@ -2589,7 +2589,6 @@ export class PaginationEngine {
       if (sequential && this.columnContainerOverflows(container, dims)) {
         // An indivisible child that exceeds all available columns keeps the established
         // oversized-block path; a constrained box must not hide it in an extra column.
-        delete container.dataset.paginationSequentialColumns;
         container.style.columnFill = "balance";
         container.style.maxHeight = "";
       }
@@ -2652,7 +2651,7 @@ export class PaginationEngine {
     host.appendChild(clone);
     this.stagingElement.appendChild(host);
     try {
-      if (clone.scrollWidth > clone.clientWidth + 1) return true;
+      if (clone.scrollWidth > clone.clientWidth + 1 || clone.scrollHeight > clone.clientHeight + 1) return true;
       // Keep-lines paragraphs must fit as a whole. A constrained column container
       // can report only its first partial box, even when scrollWidth still fits.
       // Move that source paragraph to the next page before print clips its text.
@@ -2663,52 +2662,95 @@ export class PaginationEngine {
     }
   }
 
-  /**
-   * Reflow columns against the actual remaining body band.
-   * A preceding title, running story or note reservation can make it shorter than the
-   * fresh-page band used while collecting source blocks. Split at source-child boundaries
-   * when the narrower band would create an extra horizontal column; the tail is reconsidered
-   * normally on the following page. No source child is duplicated or discarded.
-   */
+  /** CSS may break a column's table internally; protect row features it cannot model. */
+  private canFragmentColumnTable(element: HTMLElement, container = element): boolean {
+    const table = this.blockTable(element);
+    return !!table && !container.querySelector('[data-footnote-id]') && !table.querySelector('table, [rowspan]:not([rowspan="1"]), '
+      + '[data-docx-header-row="true"], [data-docx-cant-split="true"], [data-keep-with-next="true"]');
+  }
+
+  /** Reflow a column child stream against the actual remaining body band. */
   private reflowColumns(
     block: MeasuredBlock,
     dims: PageDimensions,
     availableHeightPt: number,
   ): MeasuredBlock[] | null {
+    if (block.element.dataset.paginationColumns !== "true" || availableHeightPt <= 0) return null;
     const sequential = block.element.dataset.paginationSequentialColumns === "true";
-    const contextual = this.runningStyleSources.length > 0 && block.element.dataset.paginationColumns === "true";
-    if ((!sequential && !contextual) || availableHeightPt <= 0) return null;
-    const maximumHeight = contextual ? availableHeightPt : this.smallestEffectiveContentHeight(dims, block.sectionIndex);
-    const height = Math.min(availableHeightPt, maximumHeight);
-    if (sequential ? Math.abs(parseFloat(block.element.style.maxHeight) - height) < 0.01
-      : block.heightPt <= height) return null;
+    const height = Math.min(availableHeightPt, this.smallestEffectiveContentHeight(dims, block.sectionIndex));
     const children = Array.from(block.element.children) as HTMLElement[];
     const make = (slice: HTMLElement[], limit: number): HTMLElement => {
       const container = block.element.cloneNode(false) as HTMLElement;
-      if (sequential) container.style.maxHeight = `${limit}pt`;
+      if (sequential) {
+        container.style.columnFill = "auto";
+        container.style.maxHeight = `${limit}pt`;
+      }
       for (const child of slice) container.appendChild(child.cloneNode(true));
       if (sequential) this.liftColumnSpaceBefore(container, dims);
       return container;
     };
-    const fits = (container: HTMLElement) => sequential
-      ? !this.columnContainerOverflows(container, dims)
-      : this.measureElement(container, dims, block.sectionIndex).heightPt <= height;
-    const whole = make(children, height);
-    if (fits(whole)) {
-      return [this.measureElement(whole, dims, block.sectionIndex)];
+    const fits = (slice: HTMLElement[]) => {
+      const candidate = make(slice, height);
+      return this.measureElement(candidate, dims, block.sectionIndex).heightPt <= height
+        && !this.columnContainerOverflows(candidate, dims);
+    };
+    if (fits(children)) {
+      if (!sequential || (block.element.style.columnFill === "auto"
+        && Math.abs(parseFloat(block.element.style.maxHeight) - height) < 0.01)) return null;
+      return [this.measureElement(make(children, height), dims, block.sectionIndex)];
     }
+
     let end = 0;
-    for (let count = 1; count < children.length; count++) {
-      this.checkpoint();
-      const candidate = make(children.slice(0, count), height);
-      if (!fits(candidate)) break;
-      if (children[count - 1].dataset.keepWithNext !== "true") end = count;
+    while (end < children.length && fits(children.slice(0, end + 1))) { this.checkpoint(); end++; }
+    let head = children.slice(0, end);
+    let tail = children.slice(end);
+    // Range line geometry is monotone only within one column. Analyze the source there,
+    // while every fit probe measures its complete prefix in the real multicol container.
+    const host = this.document.createElement("div");
+    const count = Number(block.element.style.columnCount);
+    const gap = parseFloat(block.element.style.columnGap);
+    const columnWidth = (dims.contentWidth - (count - 1) * gap) / count;
+    host.style.width = `${columnWidth}pt`;
+    const source = children[end].cloneNode(true) as HTMLElement;
+    host.appendChild(source);
+    this.stagingElement.appendChild(host);
+    let split: { head: HTMLElement; tail: HTMLElement } | null = null;
+    try {
+      const fitsChild = (candidate: HTMLElement) => fits([...head, candidate]);
+      // Column notes and complex table boundaries still require their own placement rules.
+      // Preserve the existing whole-child fallback for those shapes.
+      if (!block.element.querySelector("[data-footnote-id]")) {
+        const measured = this.measureElement(source, { ...dims, contentWidth: columnWidth }, block.sectionIndex);
+        if (this.canFragmentParagraph({ ...measured, element: source })) {
+          const paragraph = this.splitParagraphAtLargestFit(source, fitsChild, {
+            preserveWidowLines: source.dataset.widowControl !== "false",
+          });
+          if (paragraph.kind === "split") split = paragraph;
+        } else if (this.fragmentParagraphs) {
+          split = this.splitParagraphGroup(source, fitsChild, { bodyParagraph: true });
+        }
+        if (!split && this.canFragmentColumnTable(source)) {
+          split = this.splitTableAtRows(source, fitsChild, false);
+        }
+      }
+    } finally {
+      host.remove();
     }
-    if (end === 0) return null;
-    return [
-      this.measureElement(make(children.slice(0, end), height), dims, block.sectionIndex),
-      this.measureElement(make(children.slice(end), maximumHeight), dims, block.sectionIndex),
-    ];
+    if (split) {
+      head = [...head, split.head];
+      tail = [split.tail, ...children.slice(end + 1)];
+      delete split.tail.dataset.paginationColumnSpaceBefore;
+    } else {
+      while (end > 0 && children[end - 1].dataset.keepWithNext === "true") end--;
+      head = children.slice(0, end);
+      tail = children.slice(end);
+    }
+    if (head.length === 0) return null;
+    const parts = [make(head, height), make(tail, this.smallestEffectiveContentHeight(dims, block.sectionIndex))];
+    delete parts[0].dataset.paginationColumnTail;
+    parts[1].dataset.paginationColumnTail = "true";
+    this.reconcileFragmentIdentities(parts[0], parts[1]);
+    return parts.map(element => this.measureElement(element, dims, block.sectionIndex));
   }
 
   /**
@@ -2884,6 +2926,13 @@ export class PaginationEngine {
     pageInSection: number
   ): HTMLElement {
     const clone = block.element.cloneNode(true) as HTMLElement;
+    // Freeze the measured column band. Chromium print can omit the first line of
+    // later columns when their extent is expressed only as max-height.
+    if (clone.dataset.paginationSequentialColumns === "true" && clone.style.columnFill === "auto"
+      && block.heightPt >= parseFloat(clone.style.maxHeight) - pxToPt(1 / 64)) {
+      clone.style.height = clone.style.maxHeight;
+      clone.style.maxHeight = "";
+    }
     if (this.shouldSuppressPageTopSpacing(block, isFirstOnPage, pageInSection)) {
       clone.style.setProperty("margin-top", "0", "important");
     }
@@ -6679,6 +6728,23 @@ export class PaginationEngine {
         isFirstOnPage,
         pageInSection(block.sectionIndex)
       );
+      const nextColumn = blocks[i + 1];
+      if (block.element.dataset.paginationColumnTail === "true" && nextColumn
+        && nextColumn.sectionIndex === block.sectionIndex && nextColumn.element.dataset.paginationColumns === "true"
+        && block.heightPt + effectiveMarginTop <= remainingHeight - currentFootnoteHeight - additionalFootnoteHeight
+        && !this.columnContainerOverflows(block.element, blockDimensions)) {
+        const joined = block.element.cloneNode(true) as HTMLElement;
+        for (const child of Array.from(nextColumn.element.children)) {
+          const clone = child.cloneNode(true) as HTMLElement;
+          // The next chunk lifted its first paragraph's space-before into its wrapper.
+          // That space is inter-paragraph spacing again when the child joins this tail.
+          if (clone.dataset.paginationColumnSpaceBefore) clone.style.marginTop = clone.dataset.paginationColumnSpaceBefore;
+          joined.appendChild(clone);
+        }
+        blocks.splice(i, 2, this.measureElement(joined, blockDimensions, block.sectionIndex));
+        i--;
+        continue;
+      }
       const columnFragments = this.reflowColumns(
         block,
         blockDimensions,
@@ -6751,9 +6817,9 @@ export class PaginationEngine {
           continue;
         }
         if (pageHasPayload() && block.element.dataset.paginationColumns === "true"
-          && block.element.querySelector("table")) {
-          // The column path can cut between children, but cannot yet cut a table child
-          // against this remainder. Preserve the content and expose the whole-block move.
+          && Array.from(block.element.querySelectorAll<HTMLElement>("table"))
+            .some(table => !this.canFragmentColumnTable(table, block.element))) {
+          // Complex tables still move whole when their column boundaries cannot be modeled.
           block.element.dataset.docxColumnTableDeferred = "true";
           sourceBlock.element.dataset.docxColumnTableDeferred = "true";
         }

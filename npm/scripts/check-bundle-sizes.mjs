@@ -43,12 +43,14 @@ const budgetsKiB = {
   // Raise only the four exhausted gates by 0.5 KiB.
   // Tracked-paragraph fragmentation with leading drawings adds less than 0.4 KiB over 10531183.
   // Round only the three exhausted gates up by 0.5 KiB; pagination remains below 47 KiB.
-  'embed.bundle.js': 150.5,
+  // Shared column fragmentation adds 531–565 gzip bytes over 563a4c37.
+  // Round the four exhausted paginator-carrying gates up to the next 0.5 KiB.
+  'embed.bundle.js': 151,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
-  'embed.iife.js': 150.5,
+  'embed.iife.js': 151,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
-  'editor.bundle.js': 129.5,
+  'editor.bundle.js': 130.5,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
   // Whole inline-layout continuation adds 0.24 KiB (35.801 -> 36.038 on main).
@@ -57,7 +59,7 @@ const budgetsKiB = {
   // paginator to 47,629 bytes (46.513 KiB), 13 bytes over the old gate. Round only this gate up.
   // Page-remainder table splitting and its keep guards add 203 gzip bytes over 9dd93836.
   // Round only this exhausted gate up by 0.5 KiB (CI measures 47.1 KiB).
-  'pagination.bundle.js': 47.5,
+  'pagination.bundle.js': 48,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,

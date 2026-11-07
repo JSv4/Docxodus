@@ -624,11 +624,22 @@ claiming identical asymmetric-cell behavior in Word or LibreOffice. Fresh-page o
 may relax impossible keeps only after retrying there. With paragraph fragmentation disabled,
 the editor splits whole row groups only.
 
-Column layout can split between source children but cannot split a table child against a page
-remainder. An intact table-containing column block moved to the next page retains a diagnostic
-marker through remeasurement. Public export reports `column_table_page_remainder` from the final
-page tree and rejects it under strict unsupported-content policy. The table remains intact;
-the warning does not claim that its authored keeps permit a different break.
+Column layout reuses the paragraph/group Range fragmenter and whole-row table splitter against
+its actual remaining band (#1558). Text line geometry is measured at one column's width; each
+candidate prefix is tested in the complete column wrapper. Existing bounded source chunks avoid
+repeatedly cloning an entire section. A fitting synthetic tail can join the next adjacent chunk
+from the same section, so following content fills its last column. Each join consumes a chunk,
+and each split consumes content. Explicit page breaks remain barriers. Fully used sequential
+column bands retain an explicit height in the final page: Chromium print can omit a later column's
+first line when that band is expressed only as max-height.
+
+Paragraph fragmentation remains opt-in. Note-bearing column blocks, kept or explicitly broken
+paragraphs and author-fixed heights retain their existing whole-child fallback. Column tables with
+nested tables, repeated headers, vertical merges, cantSplit rows or row keeps also retain that
+fallback, because CSS does not model their internal column boundaries. An intact complex table
+moved from a page remainder retains a diagnostic marker through remeasurement. Public export
+reports `column_table_page_remainder` from the final tree and rejects it under strict unsupported-
+content policy. Ordinary table continuations do not emit that warning.
 
 ### Lazy Loading Compatibility
 
