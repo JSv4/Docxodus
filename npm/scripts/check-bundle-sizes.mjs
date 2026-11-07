@@ -55,7 +55,9 @@ const budgetsKiB = {
   // Independent textbox source inventories add 45 compressed bytes (39.978 -> 40.021 KiB).
   // Export-only table layout stays out of this bundle; its fragment callback brings the shared
   // paginator to 47,629 bytes (46.513 KiB), 13 bytes over the old gate. Round only this gate up.
-  'pagination.bundle.js': 47,
+  // Page-remainder table splitting and its keep guards add 203 gzip bytes over 9dd93836.
+  // Round only this exhausted gate up by 0.5 KiB (CI measures 47.1 KiB).
+  'pagination.bundle.js': 47.5,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,
