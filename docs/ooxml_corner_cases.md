@@ -6077,6 +6077,35 @@ when the source text wraps at hyphens. Inline pictures do not
 disable text-line widow control; an oversized picture paragraph can relax an
 impossible minimum only after trying a legal split on a fresh page.
 
+### Oversized body paragraphs with keep-next (#1558)
+
+On Letter paper with 72pt margins, a 73-line paragraph with
+`<w:keepNext/><w:spacing w:line="320" w:lineRule="exact"/>` cannot fit the
+648pt body. Direct, style-inherited, and combined keep-next/keep-lines cases
+previously failed export with clipped body content.
+
+| Input | LibreOffice 25.8.7.3 | Fixed Docxodus |
+| --- | --- | --- |
+| 73 target lines, no opening paragraph | 40 + 33 lines | 40 + 33 lines |
+| Eight opening lines, then 73 kept lines | Opening on p1; target 40 + 33 on p2–3 | Same |
+| 37 opening lines, then three kept lines and a closing paragraph | Target and closing on p2 | Same |
+| Same fitting case without keep-next | Target on p1; closing on p2 | Same |
+| 80 kept lines, then a closing paragraph | 40 + 40 lines; closing on p3 | Same |
+
+The [keepNext specification](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.keepnext)
+allows an impossible keep chain to start on a new page and break as needed.
+Word Online was unavailable; the table records native LibreOffice observations,
+not Word parity. In particular, an impossible chain need not keep its final line
+and the following paragraph on the same page.
+
+`tryFragmentParagraph` grants keep-next relaxation only after the oversized body
+paragraph reaches an empty page, with resolved notes. Continuations retain that
+permission and the tail's linkage to the following block. The existing Range
+splitter preserves line boundaries, widow constraints and source identities.
+An owned CSS `break-after:avoid` can relax with it; forced breaks and unowned
+avoid rules remain guarded. Note, table-cell, linked-textbox and grouped
+border/comment paragraph policies are outside this repair.
+
 ### Exact line spacing and bounded justified spaces (#1524)
 
 The authored sentence “Soft amber lamps guide seven quiet boats toward shore.” has a natural
