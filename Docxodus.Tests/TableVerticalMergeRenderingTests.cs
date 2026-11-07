@@ -149,11 +149,27 @@ public class TableVerticalMergeRenderingTests
     [InlineData("tr")]
     public void StandaloneTableFragmentsRetainTheirContent(string kind)
     {
-        var bytes = CreateDocument(Row(0, Cell("OrdinaryLeft"), Cell("OrdinaryRight")));
+        var bytes = CreateDocument(Row(0, Cell("OrdinaryLeft"), Cell("OrdinaryRight")),
+            Row(0, Cell("FollowingLeft"), Cell("FollowingRight")));
         using var session = new DocxSession(bytes);
-        var anchor = session.Project().AnchorIndex.Values.First(t => t.Anchor.Kind == kind).Anchor.Id;
+        var anchors = session.Project().AnchorIndex.Values.Where(t => t.Anchor.Kind == kind)
+            .Select(t => t.Anchor.Id).ToArray();
         var options = new HtmlConversionOptions { FabricateCssClasses = false };
-        Assert.Contains("OrdinaryLeft", HtmlConversionOps.RenderBlockHtml(bytes, anchor, options));
+        using var batch = System.Text.Json.JsonDocument.Parse(HtmlConversionOps.RenderBlocksHtml(session, anchors, options));
+        for (int i = 0; i < anchors.Length; i++)
+        {
+            var expected = kind == "tr" ? new[] { "OrdinaryLeft", "FollowingLeft" }[i]
+                : new[] { "OrdinaryLeft", "OrdinaryRight", "FollowingLeft", "FollowingRight" }[i];
+            foreach (var html in new[] { HtmlConversionOps.RenderBlockHtml(bytes, anchors[i], options),
+                HtmlConversionOps.RenderBlockHtml(session, anchors[i], options),
+                batch.RootElement.GetProperty(anchors[i]).GetString()! })
+            {
+                var element = XElement.Parse(html);
+                Assert.Equal(kind == "tr" ? "tr" : "td", element.Name.LocalName);
+                Assert.Contains(expected, element.Value);
+                Assert.DoesNotContain(expected.StartsWith("Ordinary", StringComparison.Ordinal) ? "Following" : "Ordinary", element.Value);
+            }
+        }
     }
 
     private static XElement Cell(string text, int span = 1, string? merge = null) =>
