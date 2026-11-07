@@ -405,12 +405,13 @@ public sealed partial class DocxSession
         // we filter explicitly below.
         var index = Project().AnchorIndex;
         var elements = AnchorTarget.ResolveAll(_doc!, index.Values);
-        foreach (var target in index.Values)
+        foreach (var target in index.Values.Distinct())
         {
             if (!ScopeMatches(target.Anchor.Scope, scope)) continue;
             if (target.Anchor.Kind is not ("p" or "h" or "li" or "tc")) continue;
 
             if (!elements.TryGetValue(target, out var element)) continue;
+            if (!WmlToMarkdownConverter.IsSelectedMarkup(element)) continue;
 
             // Table cells contain paragraphs; recurse so a Grep over the body
             // also hits cell text. Other kinds operate on the element directly.
@@ -530,12 +531,13 @@ public sealed partial class DocxSession
         List<(AnchorTarget, XElement)>? current = null;
         XElement? currentParent = null;
 
-        foreach (var target in index.Values)
+        foreach (var target in index.Values.Distinct())
         {
             if (!ScopeMatches(target.Anchor.Scope, scope)) { current = null; continue; }
             if (target.Anchor.Kind is not ("p" or "h" or "li")) { current = null; continue; }
 
             if (!elements.TryGetValue(target, out var element)) { current = null; continue; }
+            if (!WmlToMarkdownConverter.IsSelectedMarkup(element)) { current = null; continue; }
 
             if (current is not null && ReferenceEquals(element.Parent, currentParent))
             {

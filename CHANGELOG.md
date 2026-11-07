@@ -8,6 +8,8 @@ All notable changes to this project will be documented in this file.
 
 - Browser CI and npm release preflight use Ubuntu 24.04, supported by the locked Playwright browsers (#1580).
 
+- Textbox search returns only the selected compatibility branch. Span and match replacements update corresponding DrawingML/VML textbox paragraphs atomically, including formatting and tracked edits; divergent or nested alternatives are refused without changing the document (#1560).
+
 - Comparison preserves section breaks added to or removed from retained paragraphs when changes are accepted or rejected (#1545).
 
 - Drawing canvases retain every textbox and nested group's text and placement in HTML and PDF export (#1561).
