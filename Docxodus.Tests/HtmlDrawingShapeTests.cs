@@ -40,6 +40,116 @@ public class HtmlDrawingShapeTests
         $"<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm{xfrm}><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>" +
         $"<a:prstGeom prst=\"{geometry}\"><a:avLst/></a:prstGeom>{fill}{extra}</wps:spPr><wps:bodyPr/></wps:wsp>";
 
+    private static string CustomShape(string paths) => Shape().Replace(
+        "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>",
+        "<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l=\"0\" t=\"0\" r=\"r\" b=\"b\"/>" +
+        "<a:pathLst>" + paths + "</a:pathLst></a:custGeom>");
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LiteralCustomPaths_PreserveIndependentCoordinatesAndPaintFlags(bool grouped)
+    {
+        var shape = CustomShape("<a:path w=\"100\" h=\"100\"><a:moveTo><a:pt x=\"0\" y=\"100\"/></a:moveTo>" +
+            "<a:lnTo><a:pt x=\"50\" y=\"0\"/></a:lnTo><a:quadBezTo><a:pt x=\"75\" y=\"25\"/><a:pt x=\"100\" y=\"100\"/></a:quadBezTo>" +
+            "<a:cubicBezTo><a:pt x=\"75\" y=\"75\"/><a:pt x=\"25\" y=\"75\"/><a:pt x=\"0\" y=\"100\"/></a:cubicBezTo><a:close/></a:path>" +
+            "<a:path w=\"200\" h=\"200\" fill=\"none\" stroke=\"false\"><a:moveTo><a:pt x=\"50\" y=\"50\"/></a:moveTo>" +
+            "<a:lnTo><a:pt x=\"150\" y=\"150\"/></a:lnTo></a:path>");
+        var input = Docx(InlineDrawing(grouped ? GroupUri : ShapeUri, grouped ? Group(shape) : shape));
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, placeholders: true);
+        var paths = Drawn(OnlySvg(paragraph), "path").ToArray();
+        Assert.Equal(2, paths.Length);
+        Assert.Equal("M 0 914400 L 914400 0 Q 1371600 228600 1828800 914400 C 1371600 685800 457200 685800 0 914400 Z",
+            (string?)paths[0].Attribute("d"));
+        Assert.Equal("M 457200 228600 L 1371600 685800", (string?)paths[1].Attribute("d"));
+        Assert.Equal("none", (string?)paths[1].Attribute("fill"));
+        Assert.Equal("none", (string?)paths[1].Attribute("stroke"));
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-content-type") != null);
+    }
+
+    [Theory]
+    [InlineData("<a:path w=\"100\" h=\"100\"><a:moveTo><a:pt x=\"100\" y=\"50\"/></a:moveTo><a:arcTo wR=\"50\" hR=\"50\" stAng=\"0\" swAng=\"10800000\"/></a:path>")]
+    [InlineData("<a:path w=\"100\" h=\"100\"><a:moveTo><a:pt x=\"wd2\" y=\"0\"/></a:moveTo><a:lnTo><a:pt x=\"100\" y=\"100\"/></a:lnTo></a:path>")]
+    [InlineData("<a:path w=\"100\" h=\"100\" fill=\"darken\"><a:moveTo><a:pt x=\"0\" y=\"0\"/></a:moveTo><a:lnTo><a:pt x=\"100\" y=\"100\"/></a:lnTo></a:path>")]
+    public void UnsupportedCustomPath_RefusesTheWholeGeometry(string unsupported)
+    {
+        var input = Docx(InlineDrawing(ShapeUri, CustomShape(
+            "<a:path w=\"100\" h=\"100\"><a:moveTo><a:pt x=\"0\" y=\"0\"/></a:moveTo>" +
+            "<a:lnTo><a:pt x=\"100\" y=\"100\"/></a:lnTo></a:path>" + unsupported)));
+        AssertSchemaValid(input);
+        AssertUnrenderedBox(MiddleParagraph(input));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CustomTextbox_PreservesTextAndReportsUnrepresentedGeometry(bool grouped)
+    {
+        var shape = CustomShape("<a:path w=\"100\" h=\"100\"><a:moveTo><a:pt x=\"0\" y=\"0\"/></a:moveTo>" +
+            "<a:lnTo><a:pt x=\"100\" y=\"100\"/></a:lnTo></a:path>")
+            .Replace("<wps:bodyPr/>", "<wps:txbx><w:txbxContent><w:p><w:r><w:t>Custom caption</w:t></w:r></w:p>" +
+                "</w:txbxContent></wps:txbx><wps:bodyPr><a:noAutofit/></wps:bodyPr>");
+        var input = Docx(InlineDrawing(grouped ? GroupUri : ShapeUri, grouped ? Group(shape) : shape));
+        AssertSchemaValid(input);
+        var html = XElement.Parse(HtmlConversionOps.ConvertToHtml(input, new HtmlConversionOptions
+        {
+            RenderUnsupportedContentPlaceholders = true,
+        }));
+        Assert.Contains("Custom caption", html.Value);
+        Assert.Contains(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+        Assert.DoesNotContain(html.Descendants(), e => e.Attribute("data-docx-textbox-source-clip") != null);
+    }
+
+    [Theory]
+    [InlineData("<a:lnTo><a:pt x=\"10\" y=\"10\"/></a:lnTo>")]
+    [InlineData("<a:close/>")]
+    [InlineData("<a:moveTo><a:pt x=\"0\" y=\"0\"/></a:moveTo><a:cubicBezTo><a:pt x=\"10\" y=\"10\"/></a:cubicBezTo>")]
+    [InlineData("<a:moveTo><a:pt x=\"9223372036854775808\" y=\"0\"/></a:moveTo>")]
+    public void MalformedCustomPath_KeepsTheExtentInsteadOfPaintingPartialCommands(string commands)
+    {
+        var input = Docx(InlineDrawing(ShapeUri, CustomShape("<a:path w=\"100\" h=\"100\">" + commands + "</a:path>")));
+        AssertUnrenderedBox(MiddleParagraph(input));
+    }
+
+    [Theory]
+    [InlineData("<a:effectLst><a:glow rad=\"12700\"><a:srgbClr val=\"FF0000\"/></a:glow></a:effectLst>")]
+    [InlineData("<a:ln w=\"25400\"><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill><a:prstDash val=\"dash\"/></a:ln>")]
+    [InlineData("<a:ln w=\"25400\"><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill><a:headEnd type=\"triangle\"/></a:ln>")]
+    public void CustomPath_WithUnrepresentedPaint_RemainsPartial(string paint)
+    {
+        var shape = CustomShape("<a:path w=\"100\" h=\"100\"><a:moveTo><a:pt x=\"0\" y=\"0\"/></a:moveTo>" +
+            "<a:lnTo><a:pt x=\"100\" y=\"100\"/></a:lnTo></a:path>").Replace("</wps:spPr>", paint + "</wps:spPr>");
+        var input = Docx(InlineDrawing(ShapeUri, shape));
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, placeholders: true);
+        Assert.Single(Drawn(OnlySvg(paragraph), "path"));
+        Assert.Contains(paragraph.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+    }
+
+    [Theory]
+    [InlineData("fill", "alphaMod", "0", true)]
+    [InlineData("line", "alphaOff", "-100000", true)]
+    [InlineData("group", "alphaMod", "0", true)]
+    [InlineData("fill", "alpha", "40000", false)]
+    [InlineData("line", "alpha", "40000", false)]
+    [InlineData("group", "alpha", "40000", false)]
+    public void CustomPath_ColorTransformsRemainDiagnosed(string scope, string modifier, string value, bool partial)
+    {
+        var shape = CustomShape("<a:path w=\"100\" h=\"100\"><a:moveTo><a:pt x=\"0\" y=\"0\"/></a:moveTo>" +
+            "<a:lnTo><a:pt x=\"100\" y=\"100\"/></a:lnTo></a:path>");
+        var fill = $"<a:solidFill><a:srgbClr val=\"19647E\"><a:{modifier} val=\"{value}\"/></a:srgbClr></a:solidFill>";
+        shape = scope == "line" ? shape.Replace("</wps:spPr>", "<a:ln w=\"25400\">" + fill + "</a:ln></wps:spPr>")
+            : shape.Replace(Teal, scope == "group" ? "<a:grpFill/>" : fill);
+        var group = Group(shape).Replace("</wpg:grpSpPr>", fill + "</wpg:grpSpPr>");
+        var input = Docx(InlineDrawing(scope == "group" ? GroupUri : ShapeUri, scope == "group" ? group : shape));
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, placeholders: true);
+        Assert.Single(Drawn(OnlySvg(paragraph), "path"));
+        Assert.Equal(partial, paragraph.Descendants().Any(e => (string?)e.Attribute("data-content-type") == "Other"));
+        if (!partial) Assert.Contains("\"0.4\"", paragraph.ToString());
+    }
+
     /// <summary>The issue's group: the same rectangle under an identity child coordinate space.</summary>
     private static string Group(string children, string childOffset = "0", long childCx = 1828800,
         long childCy = 914400) =>

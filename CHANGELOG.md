@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- DrawingML custom paths render literal lines and quadratic/cubic curves in standalone and grouped shapes, preserving each path's coordinate space and paint switches. Unsupported commands, custom textbox regions and richer paint retain explicit export diagnostics (part of #1554).
+
 - Plain inline VML lines render their endpoint geometry, stroke and Office default side spacing. Lines alone in a paragraph start at its top; grouped, positioned, zero-length and hairline forms retain unsupported-content diagnostics (part of #1554).
 
 - DrawingML triangles and five-point stars render their preset adjustments in standalone and grouped drawings. Rotated children inside unequally scaled groups retain their paint and text with an explicit approximation diagnostic, rejected by strict export policy (part of #1554).
