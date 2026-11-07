@@ -6147,6 +6147,8 @@ Bottom-aligning the sole inline picture removes the otherwise unused text descen
 margin under a multiple is the additional natural text-line height, derived from the inherited
 line height. Font preparation therefore continues to supply the same unrounded metrics used by
 ordinary text, without introducing another font-height estimate.
+The inline-media guard recognizes both XHTML and unnamespaced image handlers, so the text-only
+baseline lift for automatic multiples cannot move a picture upward into the preceding paragraph.
 
 A minimum table row bounds content before its vertical cell margins and collapsed borders.
 Native variants with opposing cell margins (12pt top in one cell, 12pt bottom in another)

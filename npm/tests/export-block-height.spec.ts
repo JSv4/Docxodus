@@ -30,9 +30,11 @@ for (const [multiple, mark, imageHeight] of [[1, 12, 100], [1, 8, 100], [1, 20, 
     expect(Math.abs(words[1].y - words[0].y - (Math.max(imageHeight, 13.8) + 13.8 * multiple))).toBeLessThan(.5);
     await page.setContent(result.html!);
     await page.evaluate(() => document.fonts.ready);
-    const height = await page.locator('.page-content p').filter({ has: page.locator('img') })
-      .evaluate(p => p.getBoundingClientRect().height * .75);
-    expect(Math.abs(height - (Math.max(imageHeight, 13.8) + 13.8 * (multiple - 1)))).toBeLessThan(.05);
+    const bounds = await page.locator('.page-content p').filter({ has: page.locator('img') })
+      .evaluate(p => ({ height: p.getBoundingClientRect().height * .75,
+        pictureTop: (p.querySelector('img')!.getBoundingClientRect().top - p.getBoundingClientRect().top) * .75 }));
+    expect(Math.abs(bounds.height - (Math.max(imageHeight, 13.8) + 13.8 * (multiple - 1)))).toBeLessThan(.05);
+    expect(Math.abs(bounds.pictureTop - Math.max(13.8 - imageHeight, 0))).toBeLessThan(.05);
   });
 }
 

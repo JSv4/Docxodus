@@ -7854,7 +7854,7 @@ namespace Docxodus
         /// <summary>An image, inline SVG/text box, or an absolutely positioned element (a floating drawing).</summary>
         private static bool PinsOrPlacesMedia(XElement element)
         {
-            if (element.Name == Xhtml.img || element.Name.LocalName == "svg" ||
+            if (element.Name == Xhtml.img || element.Name == XhtmlNoNamespace.img || element.Name.LocalName == "svg" ||
                 element.Attribute("data-docx-textbox") != null)
                 return true;
             var style = element.Annotation<Dictionary<string, string>>();

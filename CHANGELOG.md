@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Picture-only paragraphs no longer reserve a text descent below an inline picture; automatic spacing adds the extra natural text-line height. Minimum table rows add their top and bottom cell margins outside the declared content height, including continued tables (#1568).
+- Picture-only paragraphs no longer reserve a text descent below an inline picture; automatic spacing adds the extra natural text-line height without lifting the picture into the preceding paragraph. Minimum table rows add their top and bottom cell margins outside the declared content height, including continued tables (#1568).
 
 - Fixed-width tables retain their authored width and centered margin overhang on every page. Table text or pictures cut by the paper edge produces a source warning, or a strict export failure; wholly missing cells still fail completeness checks (#1563).
 
