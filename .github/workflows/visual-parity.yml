@@ -49,7 +49,7 @@ concurrency:
 
 jobs:
   visual-parity:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The browser-page benchmark and the generated-PDF benchmark each traverse the full corpus.
     # Keep one bounded job so they share the exact reference environment, with enough time for
     # the second benchmark to finish and publish its own failure evidence.
