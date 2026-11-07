@@ -337,7 +337,7 @@ namespace Docxodus
                     member = imageHandler == null ? null : ProcessPictureOrObject(wordDoc, child, imageHandler, settings);
                     if (member != null) RecordImageRepresentation(settings, child);
                     member ??= ProcessTextBox(wordDoc, child, settings, map == null ? null : frame)
-                        ?? ProcessVmlShape(child, settings);
+                        ?? ProcessVmlShape(child, settings, allowInlineLine: false);
                 }
                 if (member == null) continue;
                 if (map != null && frame is { } position)
@@ -392,7 +392,8 @@ namespace Docxodus
                 : null;
         }
 
-        private static XElement? ProcessVmlShape(XElement element, WmlToHtmlConverterSettings? settings)
+        private static XElement? ProcessVmlShape(XElement element, WmlToHtmlConverterSettings? settings,
+            bool allowInlineLine = true)
         {
             // Image and textbox paths already had the opportunity to render their content.
             // Do not turn an explicitly omitted picture into an unsupported shape.
@@ -400,8 +401,9 @@ namespace Docxodus
             var shapes = element.DescendantsAndSelf().Where(IsVmlShape).ToList();
             var shape = shapes.FirstOrDefault();
             if (shape == null) return null;
-            if (shapes.Count == 1 && (shape == element || shape.Parent == element) && TryVmlRectangle(shape) is { } rectangle)
-                return rectangle;
+            if (shapes.Count == 1 && (shape == element || shape.Parent == element) &&
+                TryVmlPrimitive(shape, allowInlineLine) is { } primitive)
+                return primitive;
             var placeholder = (settings == null ? null
                 : CreateUnsupportedContentPlaceholder(settings, shape, UnsupportedContentType.Other, "[SHAPE]"))
                 ?? new XElement(Xhtml.span, new XAttribute("aria-hidden", "true"));
@@ -417,11 +419,13 @@ namespace Docxodus
             return placeholder;
         }
 
-        private static XElement? TryVmlRectangle(XElement shape)
+        private static XElement? TryVmlPrimitive(XElement shape, bool allowInlineLine)
         {
-            if (shape.Name.LocalName != "rect" || shape.HasElements || shape.Attributes().Any(a =>
+            var isLine = shape.Name.LocalName == "line";
+            if ((shape.Name.LocalName != "rect" && !(isLine && allowInlineLine)) || shape.HasElements || shape.Attributes().Any(a =>
                 !a.IsNamespaceDeclaration && a.Name.Namespace != PtOpenXml.pt && !(a.Name.Namespace == XNamespace.None && (a.Name.LocalName is
-                    "style" or "id" or "title" or "alt" or "fillcolor" or "filled" or "strokecolor" or "stroked" or "strokeweight") ||
+                    "style" or "id" or "title" or "alt" or "fillcolor" or "filled" or "strokecolor" or "stroked" or "strokeweight"
+                    || isLine && a.Name.LocalName is "from" or "to") ||
                     a.Name.NamespaceName == "urn:schemas-microsoft-com:office:office" && a.Name.LocalName == "spid")))
                 return null;
             var tokens = ((string?)shape.Attribute("style") ?? "").Split(';')
@@ -430,42 +434,105 @@ namespace Docxodus
             // their unsupported fallback rather than silently discarding those instructions.
             if (tokens.Any(token => !token.StartsWith("width:", StringComparison.Ordinal) &&
                 !token.StartsWith("height:", StringComparison.Ordinal))) return null;
-            var width = WidthInPoints(tokens);
-            var height = HeightInPoints(tokens);
-            if (width is not > 0 || height is not > 0 || !float.IsFinite(width.Value) || !float.IsFinite(height.Value) ||
-                width.Value > long.MaxValue / 12700d || height.Value > long.MaxValue / 12700d)
-                return null;
-            var filled = VmlFlag(shape, "filled");
+            double widthEmu, heightEmu;
+            XElement geometry;
+            if (isLine)
+            {
+                // Inline placement uses the endpoint bounding box; retain the direction inside it.
+                // Office overrides the older VML omitted-to default with 50pt on each axis.
+                if (VmlLineEndpoint(shape, "from", 0) is not { } from ||
+                    VmlLineEndpoint(shape, "to", 635000) is not { } to) return null;
+                widthEmu = Math.Abs(to.X - from.X); heightEmu = Math.Abs(to.Y - from.Y);
+                if (widthEmu == 0 && heightEmu == 0) return null;
+                var left = Math.Min(from.X, to.X); var top = Math.Min(from.Y, to.Y);
+                geometry = new XElement(Svg + "line", new XAttribute("x1", Format(from.X - left)),
+                    new XAttribute("y1", Format(from.Y - top)), new XAttribute("x2", Format(to.X - left)),
+                    new XAttribute("y2", Format(to.Y - top)));
+            }
+            else
+            {
+                var width = WidthInPoints(tokens); var height = HeightInPoints(tokens);
+                if (width is not > 0 || height is not > 0 || !float.IsFinite(width.Value) || !float.IsFinite(height.Value) ||
+                    width.Value > long.MaxValue / 12700d || height.Value > long.MaxValue / 12700d) return null;
+                widthEmu = width.Value * 12700d; heightEmu = height.Value * 12700d;
+                geometry = ShapeRectangle(new ShapeBox(0, 0, Math.Round(widthEmu), Math.Round(heightEmu)));
+            }
+            var filled = isLine ? false : VmlFlag(shape, "filled");
             var stroked = VmlFlag(shape, "stroked");
             var fill = NormalizeVmlCssColor((string?)shape.Attribute("fillcolor") ?? "#ffffff");
             var stroke = NormalizeVmlCssColor((string?)shape.Attribute("strokecolor") ?? "#000000");
             var weight = (string?)shape.Attribute("strokeweight");
             // VML's default is one CSS pixel. A unitless attribute is measured in EMUs.
-            double? strokeWidth = weight == null ? 9525 :
-                double.TryParse(weight, NumberStyles.Float, CultureInfo.InvariantCulture, out var emu) ? emu :
-                weight.EndsWith("px", StringComparison.Ordinal) && double.TryParse(weight[..^2], NumberStyles.Float,
-                    CultureInfo.InvariantCulture, out var pixels) ? pixels * 9525 :
-                WidthInPoints(new[] { "width:" + weight }) is { } points ? points * 12700d : null;
+            double? strokeWidth = weight == null ? 9525 : VmlLengthEmu(weight, 1);
             if (filled == null || stroked == null || filled == true && fill == null ||
-                stroked == true && (stroke == null || strokeWidth is not >= 0 || !double.IsFinite(strokeWidth.Value)))
+                stroked == true && (stroke == null || strokeWidth is not >= 0 || !double.IsFinite(strokeWidth.Value) ||
+                    isLine && strokeWidth == 0))
                 return null;
-            var widthEmu = (long)Math.Round(width.Value * 12700d);
-            var heightEmu = (long)Math.Round(height.Value * 12700d);
-            var rect = ShapeRectangle(new ShapeBox(0, 0, widthEmu, heightEmu));
-            rect.Add(new XAttribute("fill", filled == true ? fill! : "none"),
+            geometry.Add(new XAttribute("fill", filled == true ? fill! : "none"),
                 new XAttribute("stroke", stroked == true ? stroke! : "none"));
-            if (stroked == true) rect.Add(new XAttribute("stroke-width", Format(strokeWidth!.Value)));
+            if (stroked == true) geometry.Add(new XAttribute("stroke-width", Format(strokeWidth!.Value)));
             var space = DrawingSpace();
-            space.Add(rect);
-            var svg = DrawingSvg(widthEmu, heightEmu, space);
+            space.Add(geometry);
+            var widthUnits = (long)Math.Round(widthEmu); var heightUnits = (long)Math.Round(heightEmu);
+            var svg = DrawingSvg(widthUnits, heightUnits, space);
             var alt = (string?)shape.Attribute("alt") ?? (string?)shape.Attribute("title");
             if (string.IsNullOrEmpty(alt)) svg.SetAttributeValue("aria-hidden", "true");
             else svg.Add(new XAttribute("role", "img"), new XAttribute("aria-label", alt));
             var wrapper = new XElement(Xhtml.span, svg);
             var style = new Dictionary<string, string> { { "display", "inline-block" } };
-            AddEmuDimensions(style, widthEmu, heightEmu);
+            AddEmuDimensions(style, widthUnits, heightUnits);
+            if (isLine)
+            {
+                style["margin-left"] = "9pt";
+                style["margin-right"] = "9pt";
+                // With no adjacent inline content, the line starts at the paragraph's top;
+                // the paragraph mark still supplies its minimum natural line height.
+                if (IsSoleVmlParagraphObject(shape)) style["vertical-align"] = "top";
+            }
             wrapper.AddAnnotation(style);
             return wrapper;
+        }
+
+        private static bool IsSoleVmlParagraphObject(XElement shape)
+        {
+            static bool IsCarrier(XElement e) => e.Name == W.pict || e.Name == W._object || e.Name == W.drawing;
+            var host = shape.Parent;
+            var paragraph = host?.Ancestors(W.p).FirstOrDefault();
+            if (paragraph == null || (host!.Name != W.pict && host.Name != W._object)) return false;
+            // The empty-paragraph transform appends this exact run. Authored NBSPs remain content.
+            var last = paragraph.Elements().LastOrDefault();
+            var placeholder = (bool?)paragraph.Attribute(PtOpenXml.EmptyParagraph) == true && last?.Name == W.r
+                && last.Elements().Count(e => e.Name != W.rPr) == 1 && last.Element(W.t)?.Value == "\u00a0"
+                ? last.Element(W.t) : null;
+            return paragraph.Elements().Where(e => e.Name != W.pPr)
+                .SelectMany(e => InFlowDescendantsAndSelf(e))
+                .Where(e => (IsCarrier(e) || !e.HasElements) && e != placeholder && e.Name != W.r && e.Name != W.hyperlink &&
+                    !(e.Name == W.t && e.Value.Length == 0) && !IsBlockBoundaryMarker(e) &&
+                    !e.Ancestors().TakeWhile(a => a != paragraph).Any(IsCarrier) &&
+                    !e.AncestorsAndSelf().Any(a => a.Name == W.rPr || a.Name == W.pPr || a.Name == W.customXmlPr))
+                .SequenceEqual(new[] { host });
+        }
+
+        private static (double X, double Y)? VmlLineEndpoint(XElement shape, string attribute, double fallback)
+        {
+            var value = (string?)shape.Attribute(attribute);
+            if (value == null) return (fallback, fallback);
+            var pair = value.Split(new[] { ',', ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            return pair.Length == 2 && VmlLengthEmu(pair[0], 9525) is { } x && VmlLengthEmu(pair[1], 9525) is { } y
+                && Math.Abs(x) < long.MaxValue / 2d && Math.Abs(y) < long.MaxValue / 2d ? (x, y) : null;
+        }
+
+        private static double? VmlLengthEmu(string value, double unitlessScale)
+        {
+            value = value.Trim();
+            var scale = value.Length < 2 ? 0 : value[^2..].ToLowerInvariant() switch
+            {
+                "pt" => 12700d, "px" => 9525d, "in" => 914400d, "cm" => 360000d, "mm" => 36000d, "pc" => 152400d, _ => 0,
+            };
+            if (scale != 0) value = value[..^2];
+            else scale = unitlessScale;
+            return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
+                && double.IsFinite(number * scale) ? number * scale : null;
         }
 
         private static bool? VmlFlag(XElement shape, string name) => ((string?)shape.Attribute(name))?.ToLowerInvariant() switch

@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Plain inline VML lines render their endpoint geometry, stroke and Office default side spacing. Lines alone in a paragraph start at its top; grouped, positioned, zero-length and hairline forms retain unsupported-content diagnostics (part of #1554).
+
 - DrawingML triangles and five-point stars render their preset adjustments in standalone and grouped drawings. Rotated children inside unequally scaled groups retain their paint and text with an explicit approximation diagnostic, rejected by strict export policy (part of #1554).
 
 - Fixed-width tables retain their authored width and centered margin overhang on every page. Table text or pictures cut by the paper edge produces a source warning, or a strict export failure; wholly missing cells still fail completeness checks (#1563).

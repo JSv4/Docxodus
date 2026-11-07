@@ -5182,15 +5182,38 @@ Triangle and five-point-star paths use the same published preset definitions, in
 inner-radius and horizontal/vertical factor adjustments. They are evaluated in the source frame
 before group scaling. Unequal parent scaling with a rotated child remains an approximation and
 now reports partial content in both geometry-only and textbox groups; strict export rejects it.
-This is partial coverage of #1554: OMML, custom paths, other presets, EMF/WMF and VML lines remain
-outside this change. Native LibreOffice references and independent formula evaluation support the
-new polygons; no new Word reference is claimed.
+This is partial coverage of #1554: OMML, custom paths, other presets and EMF/WMF remain outside
+the polygon change; plain inline VML lines are covered below. Native LibreOffice references and
+independent formula evaluation support the new polygons; no new Word reference is claimed.
 
 Simple VML rectangles follow the declared fill/stroke flags and colours. Their default outline is
 one pixel ([Microsoft VML reference](https://learn.microsoft.com/en-us/windows/win32/vml/msdn-online-vml-strokeweight-attribute));
 unitless stroke weights are EMUs. Drawing these primitives avoids injecting a placeholder label
 into the PDF text inventory. Other geometry, unsupported formulas and positioned VML retain the
 ordinary unsupported-content policy.
+
+
+Plain inline VML lines use `from`/`to` as endpoint coordinates, normalize the bounding origin,
+and preserve both directions. Unitless endpoint coordinates are CSS pixels outside groups;
+physical `pt`, `px`, `in`, `cm`, `mm` and `pc` units are accepted. Office overrides the older
+VML omitted `to` default with [50pt on each axis](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/c9213df2-ecc4-434f-8b6c-23d6db4f117c)
+and specifies [9pt left/right wrap distances](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/72cca723-d706-4c31-9daf-d99448eeaa4d).
+The default pen is 0.75pt. Width/height styles do not replace the endpoint span.
+
+SDK-valid LibreOffice probes support normalized nonzero origins, horizontal/vertical spans,
+and retained layout for hidden strokes. A line alone in a paragraph starts at its top;
+with adjacent text it uses the inline baseline. The sole-object inventory excludes hidden
+content and unselected compatibility branches but retains breaks, note references, authored
+spaces and other media. It ignores only the converter's appended empty-paragraph placeholder.
+The existing browser text-baseline correction and pixel quantization can separate mixed text
+from line ink by up to 1.5pt in these probes; this change does not alter that shared correction.
+
+No Word capture is claimed. LibreOffice drops reversed lines and uses a hairline for omitted
+pen widths, so it is not an oracle for those two properties: endpoint direction follows the
+source geometry and the default pen follows Office's specification. Explicit zero-width pens
+and zero-length lines retain `Other` diagnostics because their native paint/layout differs
+from a zero-width SVG stroke and an ordinary inline box. Grouped lines, multiple shapes in
+one carrier, positioning styles and stroke effects also retain the existing unsupported policy.
 
 
 ## Tables: zero-width fixed cells keep a measurable sliver (issue #1201)

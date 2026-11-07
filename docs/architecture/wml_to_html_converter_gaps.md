@@ -393,7 +393,11 @@ their paragraphs. Page/margin bases that continuous HTML cannot resolve, and int
 a single float cannot represent, are marked `Other` when unsupported-content metadata is enabled.
 A floating group handled by the text-box path reports its unrendered members too. Simple inline VML
 rectangles draw their fill, outline and declared dimensions; the default outline is one CSS pixel.
-Positioned VML, richer VML content and other unsupported primitives keep their dimensions and are
+Plain inline VML lines use their endpoint bounds, preserve direction, and add Office's 9pt side
+spacing. A sole visible line in a `w:pict` or `w:object` aligns to the paragraph top; mixed content
+uses the ordinary inline baseline. Unitless endpoints are pixels; unitless pen widths are EMUs.
+Zero-length lines and explicit zero-width pens remain unsupported, as do lines inside groups or
+multi-shape carriers. Positioned VML, richer VML content and other unsupported primitives are
 reported rather than silently flattened. Fallback labels inherit the document font.
 
 ---
