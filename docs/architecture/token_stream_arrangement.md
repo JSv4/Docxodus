@@ -55,6 +55,19 @@ does not change a word’s function-word classification. Content-word matches an
 an established pair retain their existing rules. This is an arrangement fix verified through
 exact accept/reject reconstruction; no new Word comparison result is claimed.
 
+Complete short-body rewrites use positional whole-paragraph replacements (#1556), following
+the requested review policy. The body must contain at least two paragraphs, equal counts on
+both sides, no already matched block, and no shared non-function content word anywhere.
+Each paragraph contains only prose tokens, has no automatic-list identity, contains 1–12 words,
+and each side has at most 64 words. Notes, images and other atoms retain their existing matching.
+These are explicit policy
+bounds, not inferred Word thresholds. Section metadata may follow the body; nested stories,
+interior gaps, longer rewrites and genuine cross-paragraph content matches retain their existing
+alignment. The aligner marks each positional pair as a whole rewrite, and the script builder
+uses its existing whole-paragraph replacement operation, keeping both complete sentences
+adjacent without streaming shared articles or list numbers across them. Accept and reject
+still reconstruct every original paragraph exactly.
+
 This point was open when the note was first written; #699 decoded it against the reference compare
 corpus (803 base/next/reference triples), and the finding reversed the expected conclusion.
 

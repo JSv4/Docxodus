@@ -156,10 +156,9 @@ internal enum IrEditOpKind
 /// the wrappers' aligned child blocks, exactly like a table cell's <see cref="IrCellOp.BlockOps"/>, so the
 /// renderers draw the changes inside ONE copy of the wrapper (issue #1143). Null when the wrapper itself changed:
 /// the pair is then replaced whole.</item>
-/// <item><see cref="RequiresWholeParagraphReplace"/>: set only on a paired paragraph operation whose
-/// non-tokenizable structural carrier differs (an inline <c>w:sdt</c>/<c>w:smartTag</c> envelope or a
-/// non-hyperlink field code/state carrier). Its token diff remains available for apply/diagnostics, but renderers
-/// must emit whole old/new paragraphs so the original carrier never leaks through Accept or Reject.</item>
+/// <item><see cref="RequiresWholeParagraphReplace"/>: a paired paragraph whose structural carrier
+/// differs or whose short complete-rewrite policy preserves whole sentences. Its token diff remains
+/// available for apply, consensus and diagnostics; renderers emit whole old/new paragraphs.</item>
 /// </list>
 /// </remarks>
 internal sealed record IrEditOp(

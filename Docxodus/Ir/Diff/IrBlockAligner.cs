@@ -154,9 +154,8 @@ internal static class IrBlockAligner
         var splitGroups = new List<(int SingularIndex, List<int> PluralIndexes)>();
         var mergeGroups = new List<(int SingularIndex, List<int> PluralIndexes)>();
 
-        // Renderer-only body provenance: an explicit shared id survives on the two standalone
-        // Delete/Insert entries of a 1×1 full lexical rewrite. It deliberately lives beside, rather
-        // than inside, the alignment kind/match arrays: the two blocks are still genuinely unpaired.
+        // Body rewrite provenance: an id marks standalone Delete/Insert entries of a 1×1
+        // lexical rewrite, or a short positional Modified pair that must render whole.
         // Nested callers use the same engine with marking disabled, so their normal seam behavior is
         // byte-for-byte unchanged — and do not allocate these per-block arrays.
         int?[]? leftBodyFullRewriteGroups = markBodyFullRewriteGaps ? new int?[nLeft] : null;
@@ -671,6 +670,53 @@ internal static class IrBlockAligner
             AbsorbStoryTailSurplus(leftBlocks, rightBlocks, leftFrom, leftTo, rightFrom, rightTo,
                 leftKind, rightKind, leftMatch, rightMatch, leftoverLeft, leftoverRight,
                 splitGroups, mergeGroups, settings);
+        }
+
+        // Short complete body rewrites have positional review value even without lexical evidence
+        // (#1556). Keep each replacement whole; streaming shared articles would split sentences.
+        // This is an explicit review policy: at most 12 words per paragraph and 64 per side,
+        // equal paragraph counts, and no established correspondence anywhere in the body.
+        // Longer or partially matched rewrites retain the evidence-based alignment and
+        // coherent-block arrangement.
+        if (leftBodyFullRewriteGroups is { } shortLeftGroups &&
+            rightBodyFullRewriteGroups is { } shortRightGroups &&
+            leftFrom == 0 && rightFrom == 0 &&
+            leftBlocks.Skip(leftTo).All(block => block is IrSectionBreak) &&
+            rightBlocks.Skip(rightTo).All(block => block is IrSectionBreak) &&
+            leftoverLeft.Count >= 2 && leftoverLeft.Count == leftoverRight.Count &&
+            leftoverLeft.Count == leftTo - leftFrom && leftoverRight.Count == rightTo - rightFrom &&
+            IsShortRewrite(leftBlocks, leftoverLeft) && IsShortRewrite(rightBlocks, leftoverRight) &&
+            !ContentWords(leftBlocks, leftoverLeft).Intersect(ContentWords(rightBlocks, leftoverRight)).Any())
+        {
+            for (int k = 0; k < leftoverLeft.Count; k++)
+            {
+                int li = leftoverLeft[k], rj = leftoverRight[k];
+                leftKind[li] = rightKind[rj] = IrAlignmentKind.Modified;
+                leftMatch[li] = rj;
+                rightMatch[rj] = li;
+                shortLeftGroups[li] = shortRightGroups[rj] = nextBodyFullRewriteGroupId++;
+            }
+            return;
+        }
+
+        IEnumerable<string> ContentWords(IrNodeList<IrBlock> blocks, List<int> indices) => indices
+            .SelectMany(index => similarity.PairingWordKeys((IrParagraph)blocks[index]).Keys)
+            .Where(key => !IsFunctionWordKey(key));
+
+        bool IsShortRewrite(IrNodeList<IrBlock> blocks, List<int> indices)
+        {
+            int words = 0;
+            foreach (int index in indices)
+            {
+                if (blocks[index] is not IrParagraph paragraph || paragraph.List is not null ||
+                    !similarity.HasOnlyTextTokens(paragraph))
+                    return false;
+                int count = similarity.WordCount(paragraph);
+                if (count is < 1 or > 12) return false;
+                words += count;
+                if (words > 64) return false;
+            }
+            return true;
         }
 
         // Unambiguous 1×1 residue → Modified. When exactly ONE free left and ONE free right survive
@@ -2994,7 +3040,7 @@ internal static class IrBlockAligner
             int li = rightMatch[j];
             IrBlock? leftBlock = li != -1 ? leftBlocks[li] : null;
             entries.Add(new IrAlignedBlock(kind, leftBlock, rightBlocks[j],
-                BodyFullRewriteGroupId: kind == IrAlignmentKind.Inserted && rightBodyFullRewriteGroups is { } rightGroups
+                BodyFullRewriteGroupId: rightBodyFullRewriteGroups is { } rightGroups
                     ? rightGroups[j] : null));
 
             // After emitting a paired right block, flush deletions anchored to its left partner.

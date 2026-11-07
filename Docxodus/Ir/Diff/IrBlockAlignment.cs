@@ -56,10 +56,10 @@ internal enum IrAlignmentKind
 /// and <see cref="MultiBlocks"/> = the N≥2 right blocks in right order.
 /// <see cref="IrAlignmentKind.Merge"/> carries a null <see cref="Left"/>, a non-null <see cref="Right"/>,
 /// and <see cref="MultiBlocks"/> = the N≥2 left blocks in left order.
-/// <para><see cref="BodyFullRewriteGroupId"/> is set only on the two standalone entries of one
-/// body-level 1×1 full-lexical-rewrite gap. It is renderer-projection provenance, not an alignment
-/// kind: its right Inserted and left Deleted entries share one positive id so the Word-shaped renderer
-/// can retain their separate paragraph marks. Nested scopes are deliberately never marked.</para>
+/// <para><see cref="BodyFullRewriteGroupId"/> marks a whole body-paragraph replacement: either
+/// the two standalone entries of a 1×1 lexical rewrite, or a Modified pair assigned by position
+/// inside a short complete rewrite. It prevents the latter's sentences from streaming across
+/// paragraph boundaries. Nested scopes are deliberately never marked.</para>
 /// </summary>
 internal sealed record IrAlignedBlock(
     IrAlignmentKind Kind, IrBlock? Left, IrBlock? Right,

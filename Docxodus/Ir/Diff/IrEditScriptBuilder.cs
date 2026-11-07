@@ -1351,6 +1351,12 @@ internal static class IrEditScriptBuilder
                     break;
 
                 case IrAlignmentKind.Modified:
+                    if (entry.BodyFullRewriteGroupId is not null)
+                    {
+                        ops.Add(MakeModifyOp(entry.Left!, entry.Right!, settings) with
+                            { RequiresWholeParagraphReplace = true });
+                        break;
+                    }
                     // A story-final pair directly preceded by unpaired gap content (an Inserted/Deleted
                     // entry) is part of a LARGER tail construct in the reference output — its window
                     // carries the gap's matter too, and the reference retains the pair's lone word
@@ -1512,7 +1518,8 @@ internal static class IrEditScriptBuilder
         bool lastPairHasSources = false;
         for (int i = start; i < entries.Count && entries[i].Kind == IrAlignmentKind.Modified; i++)
         {
-            if (entries[i].Left is not IrParagraph lp || entries[i].Right is not IrParagraph rp ||
+            if (entries[i].BodyFullRewriteGroupId is not null ||
+                entries[i].Left is not IrParagraph lp || entries[i].Right is not IrParagraph rp ||
                 !IrCrossParagraphSegmenter.IsStreamable(lp) || !IrCrossParagraphSegmenter.IsStreamable(rp) ||
                 HasStructuralCarrier(lp) || HasStructuralCarrier(rp))
                 break;
@@ -1773,7 +1780,8 @@ internal static class IrEditScriptBuilder
             }
             else if (e.Kind == IrAlignmentKind.Modified)
             {
-                if (e.Left is not IrParagraph lp || e.Right is not IrParagraph rp ||
+                if (e.BodyFullRewriteGroupId is not null ||
+                    e.Left is not IrParagraph lp || e.Right is not IrParagraph rp ||
                     !IrCrossParagraphSegmenter.IsStreamable(lp) || !IrCrossParagraphSegmenter.IsStreamable(rp) ||
                     HasStructuralCarrier(lp) || HasStructuralCarrier(rp))
                     break;

@@ -113,6 +113,10 @@ internal sealed class IrBlockSimilarity
     /// call; used by the junction pass's uniqueness discipline.</summary>
     public IReadOnlyDictionary<string, int> WordKeys(IrParagraph paragraph) => Bag(paragraph).WordCounts;
 
+    /// <summary>True when cached tokens contain only prose, without notes, images or other atoms.</summary>
+    public bool HasOnlyTextTokens(IrParagraph paragraph) => Bag(paragraph).Tokens
+        .All(token => token.Kind is IrDiffTokenKind.Word or IrDiffTokenKind.Separator);
+
     /// <summary>Content-token total used by split/merge length gates, reusing cached tokenization.</summary>
     public int ContentTokenCount(IrParagraph paragraph)
     {

@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Complete short-document rewrites keep each old paragraph beside its positional replacement, preserving whole sentences and exact accept/reject results. Long rewrites and regions with established content correspondence retain their existing arrangement (#1556).
+
 - Oversized body paragraphs with direct or inherited keep-with-next settings split across fresh pages while preserving every line, source identity, and continuation. Fitting keep chains still move together; note, cell and textbox keep policies retain their existing behavior (part of #1558).
 
 - Plain inline VML lines render their endpoint geometry, stroke and Office default side spacing. Lines alone in a paragraph start at its top; grouped, positioned, zero-length and hairline forms retain unsupported-content diagnostics (part of #1554).

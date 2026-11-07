@@ -34,7 +34,7 @@ public class DocxDiffCrossParagraphTests
     [InlineData("numbered", true)]
     [InlineData("linked", false)]
     [InlineData("linked", true)]
-    public void CompleteRewrite_KeepsInsertedAndDeletedBlocksCoherent(string shape, bool reverse)
+    public void ShortCompleteRewrite_KeepsWholeSentencesBesideTheirPositionalReplacement(string shape, bool reverse)
     {
         bool articles = shape != "distinct";
         var before = articles
@@ -71,12 +71,82 @@ public class DocxDiffCrossParagraphTests
 
         var paragraphs = XDocument.Parse(Docs.MainPartXml(result)).Root!.Element(W.body)!
             .Elements(W.p).ToArray();
-        var sides = paragraphs.SelectMany(p => p.Descendants())
+        AssertPositionalWholeRewrites(paragraphs,
+            before.Select((text, i) => shape == "numbered" ? $"{i + 1}. {text}" : text).ToArray(),
+            after.Select((text, i) => shape == "numbered" ? $"{i + 1}. {text}" : text).ToArray());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ShortCompleteRewrite_Issue1556_PairsByPosition(bool reverse)
+    {
+        var before = new[] { "Garden club minutes", "Roses need pruning.",
+            "Members voted on the budget.", "Dues rise in March." };
+        var after = new[] { "Library opening hours", "Volunteers shelve donated novels every Saturday morning.",
+            "Children meet in the reading room.", "Parking stays free." };
+        if (reverse) (before, after) = (after, before);
+        var left = Docs.Para(before);
+        var right = Docs.Para(after);
+        var result = DocxCompare.Compare(left, right);
+        Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(result)));
+        Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionProcessor.AcceptRevisions(result)));
+        AssertPositionalWholeRewrites(XDocument.Parse(Docs.MainPartXml(result)).Root!.Element(W.body)!
+            .Elements(W.p).ToArray(), before, after);
+    }
+
+    private static void AssertPositionalWholeRewrites(XElement[] paragraphs, string[] before, string[] after)
+    {
+        int previousEnd = -1;
+        for (int i = 0; i < before.Length; i++)
+        {
+            int deleted = Assert.Single(Enumerable.Range(0, paragraphs.Length).Where(p =>
+                string.Concat(paragraphs[p].Descendants(W.delText).Select(t => t.Value)) == before[i]));
+            int inserted = Assert.Single(Enumerable.Range(0, paragraphs.Length).Where(p =>
+                string.Concat(paragraphs[p].Descendants(W.ins).Descendants(W.t).Select(t => t.Value)) == after[i]));
+            Assert.InRange(System.Math.Abs(deleted - inserted), 0, 1);
+            Assert.True(System.Math.Min(deleted, inserted) > previousEnd);
+            previousEnd = System.Math.Max(deleted, inserted);
+        }
+    }
+
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins)]
+    [InlineData(ConflictResolution.FirstReviewerWins)]
+    [InlineData(ConflictResolution.StackAll)]
+    public void ShortCompleteRewrite_IdenticalReviewersPreserveConsensus(ConflictResolution policy)
+    {
+        var left = Docs.Para("Walnut hatches close.", "Scarlet pouches rest.");
+        var right = Docs.Para("Cobalt pennants soar.", "Silver keys turn.");
+        var result = DocxDiff.Consolidate(left, new[]
+        {
+            new DocxDiffReviewer { Author = "A", Document = right },
+            new DocxDiffReviewer { Author = "B", Document = right },
+        }, new DocxDiffConsolidateSettings { ConflictResolution = policy });
+        Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(result)));
+        Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionProcessor.AcceptRevisions(result)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LongCompleteRewrite_KeepsInsertedAndDeletedBlocksCoherent(bool reverse)
+    {
+        var before = new[] { "Walnut levers lift brass hatches.", "Scarlet pouches rest beside birch shelves.",
+            "Slate markers indicate narrow inlets.", "Hooks steady woven baskets." }
+            .Select(text => string.Join(" ", Enumerable.Repeat(text, 4))).ToArray();
+        var after = new[] { "Cobalt pennants cross broad meadows.", "Silent carriages circle frozen ponds.",
+            "Silver keys unlock round cabinets.", "Amber beads adorn linen collars." }
+            .Select(text => string.Join(" ", Enumerable.Repeat(text, 4))).ToArray();
+        if (reverse) (before, after) = (after, before);
+        var left = Docs.Para(before);
+        var right = Docs.Para(after);
+        var result = DocxCompare.Compare(left, right);
+        Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(result)));
+        Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionProcessor.AcceptRevisions(result)));
+        var sides = XDocument.Parse(Docs.MainPartXml(result)).Descendants()
             .Where(e => e.Name == W.delText || e.Name == W.t && e.Ancestors(W.ins).Any())
-            .Where(e => !string.IsNullOrWhiteSpace(e.Value))
-            .Select(e => e.Name == W.delText).ToArray();
-        // Exactly two text-side runs: one boundary paragraph may contain the end of one
-        // block and start of the other, but must not interleave their individual words.
+            .Where(e => !string.IsNullOrWhiteSpace(e.Value)).Select(e => e.Name == W.delText).ToArray();
         Assert.Equal(1, sides.Zip(sides.Skip(1)).Count(pair => pair.First != pair.Second));
     }
 
