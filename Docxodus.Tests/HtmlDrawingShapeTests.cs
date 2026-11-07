@@ -76,6 +76,12 @@ public class HtmlDrawingShapeTests
                     "<w:p><w:r><w:t>End of inspection</w:t></w:r></w:p><w:sectPr/></w:body></w:document>");
             main.AddNewPart<StyleDefinitionsPart>().Styles = new DocumentFormat.OpenXml.Wordprocessing.Styles();
             main.AddNewPart<DocumentSettingsPart>().Settings = new DocumentFormat.OpenXml.Wordprocessing.Settings();
+            if (middleParagraphContent.Contains("<w:footnoteReference"))
+            {
+                using var writer = new StreamWriter(main.AddNewPart<FootnotesPart>().GetStream(FileMode.Create, FileAccess.Write));
+                writer.Write("<w:footnotes xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+                    "<w:footnote w:id=\"1\"><w:p><w:r><w:footnoteRef/><w:t>Line note</w:t></w:r></w:p></w:footnote></w:footnotes>");
+            }
             doc.Save();
         }
         return stream.ToArray();
@@ -618,6 +624,123 @@ public class HtmlDrawingShapeTests
         Assert.Equal(stroke, (string?)rect.Attribute("stroke"));
         Assert.Equal(width, (string?)rect.Attribute("stroke-width"));
         Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-content-type") != null);
+    }
+
+    [Theory]
+    [InlineData("0,0", "100pt,0", 1270000, 0, null, "9525")]
+    [InlineData("0,0", "0,60pt", 0, 762000, "2pt", "25400")]
+    [InlineData("10pt,10pt", "80pt,35pt", 889000, 317500, "2pt", "25400")]
+    [InlineData("-10pt,-5pt", "60pt,20pt", 889000, 317500, "2pt", "25400")]
+    [InlineData("0,0", "96,48", 914400, 457200, "2pt", "25400")]
+    [InlineData("0,0", "1in,6pc", 914400, 914400, "25400", "25400")]
+    [InlineData("0,0", "2.54cm,25.4mm", 914400, 914400, "2px", "19050")]
+    public void InlineVmlLine_DrawsItsCoordinateSpanAndStroke(string from, string to, long width, long height,
+        string? strokeWeight, string expectedStroke)
+    {
+        var weight = strokeWeight == null ? "" : $" strokeweight=\"{strokeWeight}\"";
+        var input = Docx($"<w:r><w:pict><v:line xmlns:v=\"urn:schemas-microsoft-com:vml\" from=\"{from}\" "
+            + $"to=\"{to}\" strokecolor=\"#16777A\"{weight}/></w:pict></w:r>");
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
+        var svg = OnlySvg(paragraph);
+        var line = Assert.Single(Drawn(svg, "line"));
+        Assert.Equal("0", (string?)line.Attribute("x1"));
+        Assert.Equal("0", (string?)line.Attribute("y1"));
+        Assert.Equal(width.ToString(CultureInfo.InvariantCulture), (string?)line.Attribute("x2"));
+        Assert.Equal(height.ToString(CultureInfo.InvariantCulture), (string?)line.Attribute("y2"));
+        Assert.Equal("none", (string?)line.Attribute("fill"));
+        Assert.Equal("#16777A", (string?)line.Attribute("stroke"));
+        Assert.Equal(expectedStroke, (string?)line.Attribute("stroke-width"));
+        Assert.Null(svg.Attribute("viewBox"));
+        var style = (string?)svg.Parent!.Attribute("style");
+        Assert.Contains("margin-left: 9pt", style);
+        Assert.Contains("margin-right: 9pt", style);
+        Assert.Contains("width: " + (width / 12700d).ToString("0.###", CultureInfo.InvariantCulture) + "pt", style);
+        Assert.Contains("height: " + (height / 12700d).ToString("0.###", CultureInfo.InvariantCulture) + "pt", style);
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-content-type") != null);
+    }
+
+    [Theory]
+    [InlineData("", "0", "0", "635000", "635000", "#000000")]
+    [InlineData("from=\"10pt,20pt\"", "0", "0", "508000", "381000", "#000000")]
+    [InlineData("from=\"80pt,35pt\" to=\"10pt,10pt\"", "889000", "317500", "0", "0", "#000000")]
+    [InlineData("from=\"0,25pt\" to=\"70pt,0\"", "0", "317500", "889000", "0", "#000000")]
+    [InlineData("to=\"70pt,25pt\" stroked=\"f\"", "0", "0", "889000", "317500", "none")]
+    [InlineData("to=\"70pt,25pt\" style=\"width:1pt;height:2pt\" filled=\"t\" fillcolor=\"red\"", "0", "0", "889000", "317500", "#000000")]
+    public void InlineVmlLine_PreservesDefaultsDirectionAndHiddenPaint(string attributes,
+        string x1, string y1, string x2, string y2, string stroke)
+    {
+        var input = Docx("<w:r><w:pict><v:line xmlns:v=\"urn:schemas-microsoft-com:vml\" " + attributes + "/></w:pict></w:r>");
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
+        var svg = OnlySvg(paragraph);
+        var line = Assert.Single(Drawn(svg, "line"));
+        Assert.Equal(new[] { x1, y1, x2, y2 }, new[] { "x1", "y1", "x2", "y2" }.Select(a => (string?)line.Attribute(a)));
+        Assert.Equal("none", (string?)line.Attribute("fill"));
+        Assert.Equal(stroke, (string?)line.Attribute("stroke"));
+        Assert.Equal(stroke == "none" ? null : "9525", (string?)line.Attribute("stroke-width"));
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-content-type") != null);
+    }
+
+    [Theory]
+    [InlineData("<v:line from=\"0,0\" to=\"0,0\"/>")]
+    [InlineData("<v:line to=\"100pt,0\" strokeweight=\"0\"/>")]
+    [InlineData("<v:line from=\"0,0\" to=\"100pt,0\"><v:stroke dashstyle=\"dash\"/></v:line>")]
+    [InlineData("<v:line from=\"0,0\" to=\"100pt,0\" style=\"position:absolute;left:20pt;top:30pt\"/>")]
+    [InlineData("<v:group style=\"width:100pt;height:50pt\" coordsize=\"100,50\"><v:line from=\"0,0\" to=\"100,50\"/></v:group>")]
+    [InlineData("<v:line to=\"100pt,0\"/><v:line to=\"0,50pt\"/>")]
+    public void VmlLine_UnsupportedPlacementOrPaintRetainsItsDiagnostic(string source)
+    {
+        var input = Docx("<w:r><w:pict xmlns:v=\"urn:schemas-microsoft-com:vml\">" + source + "</w:pict></w:r>");
+        AssertSchemaValid(input);
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
+        Assert.Contains(paragraph.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Name.LocalName == "line");
+    }
+
+    [Theory]
+    [InlineData("to=\"NaN,0\"")]
+    [InlineData("to=\"1e300pt,0\"")]
+    [InlineData("to=\"1%,0\"")]
+    [InlineData("to=\"1,2,3\"")]
+    [InlineData("to=\"100pt,0\" strokeweight=\"-1pt\"")]
+    public void VmlLine_InvalidGeometryOrStrokeRetainsItsDiagnostic(string attributes)
+    {
+        var input = Docx("<w:r><w:pict><v:line xmlns:v=\"urn:schemas-microsoft-com:vml\" " + attributes + "/></w:pict></w:r>");
+        var paragraph = MiddleParagraph(input, PaginationMode.Paginated, placeholders: true);
+        Assert.Contains(paragraph.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Name.LocalName == "line");
+    }
+
+    [Theory]
+    [InlineData("pict", "", true)]
+    [InlineData("object", "", true)]
+    [InlineData("pict", "<w:r><w:t>Adjacent</w:t></w:r>", false)]
+    [InlineData("pict", "<w:r><w:br/></w:r>", false)]
+    [InlineData("pict", "<w:r><w:cr/></w:r>", false)]
+    [InlineData("pict", "<w:r><w:footnoteReference w:id=\"1\"/></w:r>", false)]
+    [InlineData("pict", "<w:r><w:t>\u00a0</w:t></w:r>", false)]
+    [InlineData("pict", "<w:r><w:t/></w:r>", true)]
+    [InlineData("pict", "<w:r><w:rPr><w:b/></w:rPr><w:t/></w:r>", true)]
+    [InlineData("pict", "<w:hyperlink w:anchor=\"Line\"/>", true)]
+    [InlineData("pict", "<w:r><w:rPr><w:vanish/></w:rPr><w:t>Hidden</w:t></w:r>", true)]
+    [InlineData("pict", "<w:bookmarkStart w:id=\"3\" w:name=\"Line\"/><w:bookmarkEnd w:id=\"3\"/>", true)]
+    [InlineData("pict", "<w:r><w:pict><v:rect xmlns:v=\"urn:schemas-microsoft-com:vml\" style=\"width:10pt;height:10pt\"/></w:pict></w:r>", false)]
+    [InlineData("pict", "<w:r><w:pict><v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\" style=\"width:20pt;height:30pt\" fillcolor=\"red\"><v:textbox><w:txbxContent><w:p><w:pPr><w:rPr><w:vanish/></w:rPr></w:pPr><w:r><w:rPr><w:vanish/></w:rPr><w:t>Hidden</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>", false)]
+    public void VmlLine_OnlyASoleVisibleObjectAlignsToTheParagraphTop(string host, string adjacent, bool sole)
+    {
+        var input = Docx(adjacent + $"<w:r><w:{host}><v:line xmlns:v=\"urn:schemas-microsoft-com:vml\" "
+            + $"to=\"0,60pt\"/></w:{host}></w:r>");
+        AssertSchemaValid(input);
+        var html = XElement.Parse(HtmlConversionOps.ConvertToHtml(input, new HtmlConversionOptions
+        {
+            FabricateCssClasses = false, PaginationMode = (int)PaginationMode.Paginated,
+            RenderUnsupportedContentPlaceholders = true, RenderFootnotesAndEndnotes = true,
+        }));
+        var line = Assert.Single(html.Descendants(), e => e.Name.LocalName == "line");
+        var style = (string?)line.Ancestors().First(e => e.Name.LocalName == "svg").Parent!.Attribute("style");
+        if (sole) Assert.Contains("vertical-align: top", style);
+        else Assert.DoesNotContain("vertical-align: top", style);
     }
 
     [Fact]
