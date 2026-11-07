@@ -7,14 +7,16 @@ import { wordTextScript } from './word-text-script.js';
 const plain = (text: string, extra = '') =>
   `<p style="--docx-auto-line-spacing: 1; line-height: 16.8667px; margin: 0"${extra}><span style="font: 11pt 'Liberation Serif', serif; line-height: 16.8667px">${text}</span></p>`;
 
-async function prepare(page: Page, body: string): Promise<{ prepared: number; marked: string[] }> {
+async function prepare(page: Page, body: string): Promise<{ prepared: number; marked: string[]; rtlPreserved: boolean }> {
   await page.setContent(`<div id="root">${body}</div>`);
   await page.addScriptTag({ content: wordTextScript });
   await page.waitForFunction(() => (window as any).wordText);
   return page.evaluate(() => {
     const root = document.getElementById('root')!;
+    const rtl = root.querySelector('[dir="rtl"]'), before = rtl?.outerHTML;
     const prepared = (window as any).wordText.prepareWordText(root);
-    return { prepared, marked: Array.from(root.querySelectorAll('[data-docx-word-text-prepared]')).map((p) => p.textContent!) };
+    return { prepared, rtlPreserved: before === rtl?.outerHTML,
+      marked: Array.from(root.querySelectorAll('[data-docx-word-text-prepared]')).map((p) => p.textContent!) };
   });
 }
 
@@ -32,11 +34,12 @@ test('a plain right-to-left paragraph keeps HTML layout without excluding its ne
   expect(result.marked).toEqual(['InsetMarker Elm archive entries.']);
 });
 
-test('a right-to-left paragraph with rich inline content still keeps the whole document on HTML layout', async ({ page }) => {
+test('rich right-to-left content keeps its own HTML without excluding its neighbor', async ({ page }) => {
   const result = await prepare(page, `
     ${plain('InsetMarker Elm archive entries.')}
     <p dir="rtl" style="--docx-auto-line-spacing: 1; margin: 0"><span>Elm</span><sup>2</sup></p>`);
-  expect(result.prepared).toBe(0);
+  expect(result.marked).toEqual(['InsetMarker Elm archive entries.']);
+  expect(result.rtlPreserved).toBe(true);
 });
 
 test('painted words keep a fractional paragraph origin the SVG origin snaps away', async ({ page }) => {
