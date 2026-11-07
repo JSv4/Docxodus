@@ -616,6 +616,20 @@ a page split, independently of whether an impossible keep-lines constraint was r
 The fragmenter measures those lines after reflowing each fragment in the paragraph's layout
 context; a source range can span two lines yet become a one-line continuation after the split.
 
+Tables also try the remaining page band before a whole-block move (#1569), using the same
+row/cell splitter as oversized tables and note-citing tables. Rowspan groups remain indivisible;
+repeated headers use those hard groups. A terminal direct-cell paragraph with keep-next prevents
+the row boundary from splitting. This conservative rule honors a keep in either cell without
+claiming identical asymmetric-cell behavior in Word or LibreOffice. Fresh-page oversized recovery
+may relax impossible keeps only after retrying there. With paragraph fragmentation disabled,
+the editor splits whole row groups only.
+
+Column layout can split between source children but cannot split a table child against a page
+remainder. An intact table-containing column block moved to the next page retains a diagnostic
+marker through remeasurement. Public export reports `column_table_page_remainder` from the final
+page tree and rejects it under strict unsupported-content policy. The table remains intact;
+the warning does not claim that its authored keeps permit a different break.
+
 ### Lazy Loading Compatibility
 
 This approach is designed for future lazy loading:
