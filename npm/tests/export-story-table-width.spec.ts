@@ -8,9 +8,9 @@ test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}) } });
 
 for (const kind of ['wide', 'normal', 'margin'] as const) {
-  test(`${kind} running-story tables preserve all labels on both pages`, async ({ browser, page }) => {
+  test(`${kind === 'wide' ? 'AutoFit wide' : kind} running-story tables preserve all labels on both pages`, async ({ browser, page }) => {
     test.setTimeout(120_000);
-    const result = await renderDocxArtifacts(storyTableWidthDocx(kind), { browser, outputs: ['html', 'pdf'],
+    const result = await renderDocxArtifacts(storyTableWidthDocx(kind, kind !== 'wide'), { browser, outputs: ['html', 'pdf'],
       reviewProfile: 'markup', markupPresentation: 'word', commentProfile: 'margin', commentColumnPlacement: 'balloons' });
     expect(result.pageCount).toBe(2);
     const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
@@ -27,13 +27,11 @@ for (const kind of ['wide', 'normal', 'margin'] as const) {
     const grids = await page.locator('.page-header table, .page-footer table').evaluateAll(tables => tables.map(table => ({
       width: table.getBoundingClientRect().width * 0.75,
       font: getComputedStyle(table.querySelector('span')!).fontSize,
-      fitted: (table as HTMLElement).style.getPropertyPriority('width') === 'important',
     })));
     expect(grids).toHaveLength(4);
     for (const grid of grids) {
       expect(grid.width).toBeCloseTo(kind === 'wide' ? 288 : kind === 'normal' ? 252 : 330, 0);
       expect(grid.font).toBe('12px');
-      expect(grid.fitted).toBe(kind === 'wide');
     }
     for (const story of ['header','footer']) {
       const paragraphs = result.pageMap.fragments.filter(f => f.story === story && f.anchorId.startsWith('p:'));
@@ -62,3 +60,11 @@ for (const fragmentParagraphs of [false, true]) {
     expect(result.widths.map(width => Math.round(width))).toEqual(fragmentParagraphs ? [228,328] : [450,450]);
   });
 }
+
+// The source 540pt fixed header/footer grid puts its third cell beyond 360pt paper.
+// Preserve that authored geometry and keep the whole-cell completeness guard.
+test('fixed running-story tables with off-paper cells fail completeness', async ({ browser }) => {
+  await expect(renderDocxArtifacts(storyTableWidthDocx('wide'), { browser, outputs: ['pdf'],
+    reviewProfile: 'final', commentProfile: 'hidden',
+  })).rejects.toThrow(/has no measurable fragment/);
+});

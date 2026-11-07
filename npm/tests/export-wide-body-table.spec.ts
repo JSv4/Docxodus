@@ -6,9 +6,9 @@ import { wideBodyTableDocx } from './docx-page-fitting-fixture.js';
 test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}) } });
 
-test('an over-wide asymmetric table fits its text and images on every continuation', async ({ browser, page }) => {
+test('an AutoFit asymmetric table fits its text and images on every continuation', async ({ browser, page }) => {
   test.setTimeout(120_000);
-  const result = await renderDocxArtifacts(wideBodyTableDocx(), { browser, outputs: ['html', 'pdf'],
+  const result = await renderDocxArtifacts(wideBodyTableDocx(false), { browser, outputs: ['html', 'pdf'],
     reviewProfile: 'markup', markupPresentation: 'word', commentProfile: 'margin',
     commentColumnPlacement: 'balloons', timeoutMs: 120_000 });
   const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
@@ -38,4 +38,12 @@ test('an over-wide asymmetric table fits its text and images on every continuati
     }))));
   expect(geometry.every(table => table.rightOverflow <= 1 && table.bottomOverflow <= 1)).toBe(true);
   expect(geometry.flatMap(table => table.fonts).every(font => parseFloat(font) >= 14)).toBe(true);
+});
+
+// A 780pt fixed grid places the fifth cell wholly beyond Letter paper. Native rendering
+// loses all 39 E labels; preserving that geometry must not bypass source completeness.
+test('a fixed table with wholly off-paper cells fails completeness', async ({ browser }) => {
+  await expect(renderDocxArtifacts(wideBodyTableDocx(), {
+    browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'hidden',
+  })).rejects.toThrow(/has no measurable fragment/);
 });

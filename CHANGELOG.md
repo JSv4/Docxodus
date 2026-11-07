@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Fixed-width tables retain their authored width and centered margin overhang on every page. Table text or pictures cut by the paper edge produces a source warning, or a strict export failure; wholly missing cells still fail completeness checks (#1563).
+
 - Hard page breaks split paragraph markup without adding a blank line or fallback-font placeholder on the following page. Styled continuations, bookmarks, nested textbox stories and the explicit `splitPgBreakAndParaMark` paragraph-mark line are preserved. Windowed and single-block editor renders retain every fragment, and editing a split paragraph repaints its pages without dropping the break or tail (#1570).
 
 - Tall paragraphs and ordinary tables continue across multi-column pages, filling the available remainder and retaining source identities and following content. Sequential columns preserve every line when printed; complex table moves retain their diagnostic (part of #1558).

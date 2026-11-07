@@ -588,6 +588,18 @@ The print snapshot still verifies every visible fragment, so shrinking a box aft
 cannot silently hide another paragraph. This does not change the existing exact-row text-layer
 preservation below.
 
+### Fixed tables beyond the paper (issue #1563)
+
+Positive DXA widths in fixed or inferred-fixed tables retain their authored geometry. Centered
+tables extend equally into both margins, including on continuation pages. Automatic, percentage
+and explicit AutoFit widths retain their existing layout policy. A border extending beyond paper
+does not itself indicate missing text. Nonwhitespace text or a source visual cut by the paper edge produces a
+`source_table_content_clipped` warning with its source paragraph anchor; `unsupportedContent: "strict"`
+rejects it at `output_verification`. Hidden runs and content already hidden by authored clips do not
+produce this warning. Promoted pictures and textbox text retain their original table ownership;
+the diagnostic follows their final placement while applying their authored clips. This diagnostic does not exempt wholly missing source anchors from PageMap
+completeness checks, so a table with an entirely off-paper cell still fails export.
+
 ### Text clipped by exact-height rows (issue #1140)
 
 The converter clips the cells of an exact-height row (`w:hRule="exact"`) with `overflow: hidden`, as

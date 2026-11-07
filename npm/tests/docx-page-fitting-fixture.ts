@@ -60,14 +60,14 @@ export function pageFittingDocx(body: string): Uint8Array {
     { name: 'word/media/tile.png', data: fittingTilePng() }]);
 }
 
-export function wideBodyTableDocx(): Uint8Array {
+export function wideBodyTableDocx(fixed = true): Uint8Array {
   const widths = [2300, 4300, 2900, 3500, 2600];
   const rows = Array.from({ length: 39 }, (_, row) => `<w:tr>${widths.map((width, column) => `<w:tc>
     <w:tcPr><w:tcW w:w="${width}" w:type="dxa"/><w:vAlign w:val="top"/></w:tcPr><w:p>
     <w:pPr><w:keepLines w:val="0"/><w:widowControl w:val="0"/><w:spacing w:after="0" w:line="320" w:lineRule="exact"/></w:pPr>
     <w:r><w:t>Ochre${String(row + 1).padStart(2, '0')}${String.fromCharCode(65 + column)} recorded.</w:t></w:r>
     ${row === 0 ? fittingImageRun(column + 1, 20, 10) : ''}</w:p></w:tc>`).join('')}</w:tr>`).join('');
-  return pageFittingDocx(`<w:tbl><w:tblPr><w:tblW w:w="15600" w:type="dxa"/><w:tblLayout w:type="fixed"/>
+  return pageFittingDocx(`<w:tbl><w:tblPr><w:tblW w:w="15600" w:type="dxa"/><w:tblLayout w:type="${fixed ? 'fixed' : 'autofit'}"/>
     <w:tblCellMar><w:top w:w="30" w:type="dxa"/><w:bottom w:w="30" w:type="dxa"/></w:tblCellMar>
     </w:tblPr><w:tblGrid>${widths.map(width => `<w:gridCol w:w="${width}"/>`).join('')}</w:tblGrid>${rows}</w:tbl>
     <w:p><w:r><w:t>Batch complete.</w:t></w:r></w:p>`);
