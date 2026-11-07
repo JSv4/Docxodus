@@ -68,6 +68,19 @@ public class TableRowHeightRuleTests
         Assert.Null(Clip(html));
     }
 
+    [Theory]
+    [InlineData("atLeast", "44.75pt")]
+    [InlineData(null, "44.75pt")]
+    [InlineData("exact", "36pt")]
+    public void MinimumHeightAddsCellMarginsWhileExactHeightKeepsItsWholePitch(string? rule, string expected)
+    {
+        const string margins = "<w:tcMar><w:top w:w=\"60\" w:type=\"dxa\"/><w:bottom w:w=\"100\" w:type=\"dxa\"/></w:tcMar>";
+        var html = Render(rule, vAlign: margins);
+        Assert.Equal(expected, Style(Row(html))["height"]);
+        Assert.Equal("3pt", Style(html.Descendants(Xhtml.td).Single())["padding-top"]);
+        Assert.Equal("5pt", Style(html.Descendants(Xhtml.td).Single())["padding-bottom"]);
+    }
+
     [Fact]
     public void ExactHeightIsTheWholeRowAndClipsItsCells()
     {

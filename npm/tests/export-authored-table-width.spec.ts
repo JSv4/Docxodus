@@ -49,6 +49,20 @@ for (const [type, width, centered, rows, indent, expectedWidth, expectedLeft, la
 
 const clippedText = 'The ferry crews repaint the harbor signs every autumn before the storms arrive at the pier';
 
+for (const kind of ['text', 'inline', 'promoted', 'textbox']) test(`balloon layout retains the paper-clipped table ${kind} diagnostic`, async ({ browser }) => {
+  const bytes = tableDocx(580, 'dxa', false, 1, 0, { markup: true,
+    ...(kind === 'text' ? { text: clippedText } : { imageWidth: 290, anchored: kind !== 'inline', textbox: kind === 'textbox' }),
+  });
+  const options = { browser, outputs: ['html', 'pdf'] as ('html' | 'pdf')[], reviewProfile: 'markup' as const,
+    commentProfile: 'margin' as const, markupPresentation: 'word' as const, commentColumnPlacement: 'balloons' as const,
+    fontDirectories: ['/usr/share/fonts/truetype/liberation'], strictFonts: true };
+  const result = await renderDocxArtifacts(bytes, options);
+  expect(result.html).toContain('page-markup-page');
+  expect(result.renderReport.warnings.filter(w => w.code === 'source_table_content_clipped')).toHaveLength(1);
+  await expect(renderDocxArtifacts(bytes, { ...options, unsupportedContent: 'strict' }))
+    .rejects.toMatchObject({ code: 'resource_policy_failure', phase: 'output_verification' });
+});
+
 test('paper clips an authored wide table with a source warning', async ({ browser }) => {
   const result = await renderDocxArtifacts(tableDocx(580, 'dxa', false, 1, 0, { text: clippedText }), {
     browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'hidden',

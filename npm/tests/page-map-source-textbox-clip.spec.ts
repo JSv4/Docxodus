@@ -4,6 +4,103 @@ import { fileURLToPath } from 'node:url';
 
 const bundle = join(dirname(fileURLToPath(import.meta.url)), '../dist/pagination.bundle.js');
 
+for (const relative of ['page', 'paragraph']) for (const scale of [0.7, 1, 1.25])
+for (const change of ['none', 'empty', 'blank', 'before', 'after', 'font', 'text', 'host']) {
+  test(`balloon shrink preserves the ${relative} paper clip at zoom ${scale}: ${change}`, async ({ page }) => {
+    await page.setContent(`<div id="pagination-staging"><div data-section-index="0"
+      data-page-width="300" data-page-height="360" data-content-width="228" data-content-height="288"
+      data-margin-top="36" data-margin-right="36" data-margin-bottom="36" data-margin-left="36">
+      <p data-source-anchor-id="p:body:host" style="font:10pt/12pt Arial;margin:0">Birch host
+        <span data-docx-textbox="true" data-docx-textbox-clip="true" data-docx-textbox-source-position="true"
+          data-docx-drawing-anchor="true" data-docx-anchor-h-relative="${relative === 'page' ? 'page' : 'column'}" data-docx-anchor-v-relative="${relative}"
+          data-docx-anchor-h-offset="320" data-docx-anchor-v-offset="20"
+          style="display:inline-block;position:absolute;width:160pt;height:70pt;overflow:hidden">
+          <span data-source-anchor-id="p:body:hidden" style="display:block;font:10pt/12pt Arial">${change === 'empty' ? '<br>' : change === 'blank' ? '&nbsp;' : 'Birch outside'}</span>
+        </span></p>
+      <p data-source-anchor-id="p:body:closing" data-format-description="Font: Bold" data-format-key="1"
+        style="font:10pt/12pt Arial;margin:0">Birch closing</p>
+      </div></div><div id="pagination-container"></div>`);
+    await page.addScriptTag({ path: bundle });
+    const result = await page.evaluate(({ scale, change }) => {
+      try {
+        const prefix = scale === 1.25 ? 'quail-' : 'page-';
+        const { PaginationEngine, measureRenderedSource } = (window as any).DocxodusPagination;
+        const engine = new PaginationEngine('pagination-staging', 'pagination-container', {
+          showPageNumbers: false, scale, cssPrefix: prefix, commentColumnPlacement: 'balloons', deferMarkupBalloons: true,
+        });
+        engine.paginate();
+        const root = document.getElementById('pagination-container')!;
+        const box = root.querySelector<HTMLElement>('[data-docx-textbox]')!;
+        const hidden = box.querySelector<HTMLElement>('[data-source-anchor-id]')!;
+        if (change === 'before') box.style.left = '330pt';
+        engine.layoutMarkupBalloons();
+        if (change === 'after') box.style.left = '330pt';
+        if (change === 'font') hidden.style.fontSize = '15pt';
+        if (change === 'text') hidden.textContent = 'Birch replaced';
+        if (change === 'host') root.querySelector<HTMLElement>('[data-source-anchor-id="p:body:host"]')!.style.marginTop = '10pt';
+        const page = root.querySelector<HTMLElement>(`.${prefix}box`)!;
+        const { visible } = measureRenderedSource(window, hidden, page, page.getBoundingClientRect());
+        const painted = visible.right > visible.left && visible.bottom > visible.top;
+        const before = root.innerHTML;
+        const map = engine.materializePageMap(0, 'balloon-source-clip');
+        const repeated = engine.materializePageMap(0, 'balloon-source-clip');
+        const paper = page.getBoundingClientRect();
+        const closing = root.querySelector<HTMLElement>('[data-source-anchor-id="p:body:closing"]')!;
+        const ink = measureRenderedSource(window, closing, page, paper).visible;
+        const expected = { x: (ink.left - paper.left) * 300 / paper.width, y: (ink.top - paper.top) * 360 / paper.height,
+          width: (ink.right - ink.left) * 300 / paper.width, height: (ink.bottom - ink.top) * 360 / paper.height };
+        const geometry = map.fragments.find((fragment: any) => fragment.anchorId === 'p:body:closing').geometry;
+        return { error: '', anchors: map.fragments.map((f: any) => f.anchorId), clipped: engine.getSourceClippedTextAnchors(), painted,
+          readOnly: before === root.innerHTML && JSON.stringify(map) === JSON.stringify(repeated),
+          physical: Object.entries(expected).every(([key, value]) => Math.abs(geometry[key] - value) < 0.01),
+          balloons: root.querySelectorAll(`.${prefix}balloon`).length };
+      } catch (error) { return { error: String(error), anchors: [], clipped: [], painted: false, readOnly: false, physical: false, balloons: 0 }; }
+    }, { scale, change });
+    if (['none', 'empty', 'blank'].includes(change)) {
+      expect(result.error).toBe('');
+      expect(result.anchors).toContain('p:body:closing');
+      expect(result.clipped).toEqual(change === 'none' ? ['p:body:hidden'] : []);
+      expect(result.painted).toBe(false);
+      expect(result.readOnly).toBe(true);
+      expect(result.physical).toBe(true);
+      expect(result.balloons).toBeGreaterThan(0);
+    } else if (change === 'host' && relative === 'page') expect(result.error).toBe('');
+    else expect(result.error).toContain('has no measurable fragment');
+  });
+}
+
+for (const scale of [0.7, 1, 1.25]) for (const change of [false, true]) {
+  test(`balloon clipping cannot excuse newly lost sibling ink at zoom ${scale}, mutation ${change}`, async ({ page }) => {
+    await page.setContent(`<div id="pagination-staging"><div data-section-index="0"
+      data-page-width="300" data-page-height="360" data-content-width="228" data-content-height="288"
+      data-margin-top="36" data-margin-right="36" data-margin-bottom="36" data-margin-left="36">
+      <p data-source-anchor-id="p:body:host" data-format-description="Font: Bold" data-format-key="1" style="font:10pt/12pt Arial;margin:0">Birch host
+        <span data-docx-textbox="true" data-docx-textbox-clip="true" data-docx-textbox-source-position="true"
+          data-docx-drawing-anchor="true" data-docx-anchor-h-relative="page" data-docx-anchor-v-relative="page"
+          data-docx-anchor-h-offset="36" data-docx-anchor-v-offset="330"
+          style="display:inline-block;position:absolute;width:160pt;height:70pt;overflow:hidden">
+          <span data-source-anchor-id="p:body:visible" style="display:block;font:10pt/12pt Arial;margin-top:10pt">Birch visible</span>
+          <span data-source-anchor-id="p:body:hidden" style="display:block;font:10pt/12pt Arial;margin-top:30pt">Birch outside</span>
+        </span></p></div></div><div id="pagination-container"></div>`);
+    await page.addScriptTag({ path: bundle });
+    const result = await page.evaluate(({ scale, change }) => {
+      const engine = new (window as any).DocxodusPagination.PaginationEngine('pagination-staging', 'pagination-container', {
+        showPageNumbers: false, scale, commentColumnPlacement: 'balloons', deferMarkupBalloons: true,
+      });
+      engine.paginate();
+      engine.layoutMarkupBalloons();
+      const before = engine.materializePageMap(0, 'before');
+      if (change) document.querySelector<HTMLElement>('#pagination-container [data-source-anchor-id="p:body:visible"]')!.style.transform = 'translateY(14pt)';
+      let error = '';
+      try { engine.materializePageMap(0, 'after'); } catch (failure) { error = String(failure); }
+      return { error, anchors: before.fragments.map((fragment: any) => fragment.anchorId) };
+    }, { scale, change });
+    expect(result.anchors).toContain('p:body:visible');
+    if (change) expect(result.error).toContain('has no measurable fragment');
+    else expect(result.error).toBe('');
+  });
+}
+
 for (const change of ['none', 'zoom-half', 'zoom-small', 'zoom-large', 'zoom-double', 'upper-edge', 'partial-source', 'partial-before', 'partial-after', 'before-placement', 'offset-before', 'transform-before', 'after-placement', 'font', 'box'] as const) {
   test(`partial source placement preserves original ink geometry: ${change}`, async ({ page }) => {
     await page.setContent(`<div id="pagination-staging"><div data-section-index="0"

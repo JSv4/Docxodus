@@ -641,6 +641,11 @@ to put their baselines at 80% of the exact line height without enlarging any lin
 exact-spaced text may paint into the page margins, bounded by the paper and running stories;
 see the measured #882 entry in `docs/ooxml_corner_cases.md`.
 
+A paragraph containing only one inline picture uses bottom alignment under automatic spacing
+of at least one line. This removes the unused text descent; multiples add their extra natural
+text-line height below the picture. Mixed text, explicit breaks, floating drawings and other
+spacing rules retain their existing line participation (#1568).
+
 ### Indentation
 
 | Word Property | CSS Property |
