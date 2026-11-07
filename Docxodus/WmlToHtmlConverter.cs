@@ -1150,6 +1150,7 @@ namespace Docxodus
             InlineExternalTextBoxBodies(wordDoc);
             htmlConverterSettings.ImageRepresentations.Clear();
             foreach (var part in wordDoc.ContentParts()) part.RemoveAnnotations<LinkedTextBoxStoryIds>();
+            wordDoc.MainDocumentPart!.RemoveAnnotations<MathRenderingContext>();
 
             // Canonical source identity (data-source-anchor-id) is the SOURCE document's: index it
             // before revision acceptance, markup simplification and formatting assembly rewrite
@@ -3846,7 +3847,8 @@ namespace Docxodus
             // Handle math equations (OMML)
             if (element.Name == M.oMath || element.Name == M.oMathPara)
             {
-                return CreateUnsupportedContentPlaceholder(settings, element, UnsupportedContentType.MathEquation, "[MATH]");
+                return ProcessMath(element, MathContext(wordDoc))
+                    ?? CreateUnsupportedContentPlaceholder(settings, element, UnsupportedContentType.MathEquation, "[MATH]");
             }
 
             // Handle form fields
@@ -10643,13 +10645,14 @@ namespace Docxodus
 
         private static void InsertAppropriateNonbreakingSpaces(WordprocessingDocument wordDoc, bool paginated)
         {
+            var math = MathContext(wordDoc);
             foreach (var part in wordDoc.ContentParts())
             {
                 var pxd = part.GetXDocument();
                 var root = pxd.Root;
                 if (root == null) return;
 
-                var newRoot = (XElement)InsertAppropriateNonbreakingSpacesTransform(root, paginated);
+                var newRoot = (XElement)InsertAppropriateNonbreakingSpacesTransform(root, paginated, math);
                 root.ReplaceWith(newRoot);
                 part.PutXDocument();
             }
@@ -10661,7 +10664,7 @@ namespace Docxodus
         // Ordinary run whitespace stays unchanged: the intrinsic pre-wrap rule preserves its width
         // and its original breaking semantics. An otherwise empty paragraph still needs the literal
         // NBSP placeholder below so HTML produces a line box.
-        private static object InsertAppropriateNonbreakingSpacesTransform(XNode node, bool paginated)
+        private static object InsertAppropriateNonbreakingSpacesTransform(XNode node, bool paginated, MathRenderingContext math)
         {
             XElement? element = node as XElement;
             if (element != null)
@@ -10701,7 +10704,7 @@ namespace Docxodus
                     // A floating (wp:anchor) drawing is not content either: it leaves the text flow, and
                     // the paginated view lifts it into the page box, so a paragraph holding nothing else
                     // lost its line. Word and LibreOffice keep the paragraph mark's line (issue #880).
-                    bool hasContent = ParagraphHasInFlowContent(element) || (paginated &&
+                    bool hasContent = ParagraphHasInFlowContent(element, math) || (paginated &&
                         element.Elements().Where(e => e.Name != W.pPr).SelectMany(e => InFlowDescendantsAndSelf(e))
                             .Any(e => e.Name == W.br && (string?)e.Attribute(W.type) == "page"
                                 && e.Ancestors(W.p).FirstOrDefault() == element));
@@ -10711,7 +10714,7 @@ namespace Docxodus
                         return new XElement(element.Name,
                             element.Attributes(),
                             new XAttribute(PtOpenXml.EmptyParagraph, true),
-                            element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n, paginated)),
+                            element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n, paginated, math)),
                             new XElement(W.r,
                                 element.Elements(W.pPr).Elements(W.rPr),
                                 new XElement(W.t, "\u00A0")));
@@ -10719,18 +10722,21 @@ namespace Docxodus
 
                 return new XElement(element.Name,
                     element.Attributes(),
-                    element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n, paginated)));
+                    element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n, paginated, math)));
             }
             return node;
         }
 
-        private static bool ParagraphHasInFlowContent(XElement element) => element.Elements()
+        private static bool ParagraphHasInFlowContent(XElement element, MathRenderingContext math) => element.Elements()
             .Where(e => e.Name != W.pPr).SelectMany(child => InFlowDescendantsAndSelf(child))
             .Any(e => e.Name == W.dayLong || e.Name == W.dayShort || e.Name == W.drawing ||
                 e.Name == W.monthLong || e.Name == W.monthShort || e.Name == W.noBreakHyphen ||
                 e.Name == W._object || e.Name == W.pgNum || e.Name == W.ptab || e.Name == W.separator ||
                 e.Name == W.softHyphen || e.Name == W.sym || (e.Name == W.t && e.Value.Length != 0) ||
-                e.Name == W.tab || e.Name == W.yearLong || e.Name == W.yearShort);
+                e.Name == W.tab || e.Name == W.yearLong || e.Name == W.yearShort ||
+                ((e.Name == M.oMath || e.Name == M.oMathPara)
+                    && !e.Ancestors().Any(a => a.Name == M.oMath || a.Name == M.oMathPara)
+                    && ProcessMath(e, math) != null));
 
         /// <summary><paramref name="element"/> and its descendants, leaving out hidden runs and
         /// unselected compatibility branches. Floating drawings are excluded unless the caller

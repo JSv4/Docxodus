@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Plain OMML fractions and square/indexed roots render as selectable MathML. Unsupported equation structures, run styling and document math properties retain whole-equation export diagnostics (part of #1554).
+
 - Complete short-document rewrites keep each old paragraph beside its positional replacement, preserving whole sentences and exact accept/reject results. Long rewrites and regions with established content correspondence retain their existing arrangement (#1556).
 
 - DrawingML custom paths render literal lines and quadratic/cubic curves in standalone and grouped shapes, preserving each path's coordinate space and paint switches. Unsupported commands, custom textbox regions and richer paint retain explicit export diagnostics (part of #1554).

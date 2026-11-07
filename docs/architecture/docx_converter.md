@@ -717,6 +717,19 @@ font-family: 'Times New Roman', 'serif'
 font-family: 'Courier New'
 ```
 
+## Math equations
+
+`WmlToHtmlConverter.Math.cs` projects unstyled literal runs, default stacked fractions, and
+square/indexed roots to native MathML. Inline and display forms retain their operand structure
+and selectable text. An explicit document `m:mathFont` becomes the math font family; absent
+that setting, CSS `math` leaves substitution visible to the shared export font policy.
+
+Projection succeeds only for the complete equation. Unknown operators, properties, styled runs,
+whitespace or combining-token forms, and nested display fractions retain the existing whole-equation
+diagnostic. The last restriction preserves OMML's default full-size nested display operands until
+their size rule is modeled; ordinary MathML fractions would shrink them. This is a bounded
+structural projection, not a claim of complete OMML or Word typography parity.
+
 ## Limitations
 
 ### Content Removed During Preprocessing
@@ -755,7 +768,7 @@ The following are **discarded** and will not appear in output:
 - `w:w` - Character width scaling
 
 **Document features:**
-- Math equations (OMML)
+- Math equations beyond the fraction/root subset described above
 - Chart families other than clustered column/horizontal bar charts
 - Diagrams (SmartArt)
 - Complex text boxes
