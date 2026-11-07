@@ -6072,3 +6072,48 @@ automatic spacing. Exact paragraphs had been excluded with other contexts lackin
 paint model. They now reuse that selector with per-line HTML space advances, retaining their
 exact baseline and full pitch. Tight ink, rich runs and other unsupported flow remain on their
 existing path; no document-wide negative spacing is applied.
+
+### Hard page breaks and the following paragraph mark (#1570)
+
+A break-only paragraph and a terminal break should not create an extra line at the top of the
+next page when the compatibility flag is absent:
+
+```xml
+<w:p><w:r><w:t>First</w:t></w:r></w:p>
+<w:p><w:r><w:br w:type="page"/></w:r></w:p>
+<w:p><w:r><w:t>Second</w:t></w:r></w:p>
+```
+
+The issue author's [Word print results](https://github.com/JSv4/Docxodus/issues/1570#issuecomment-6701330047)
+put both mode-15 documents' first lines at 83.28pt on pages 1 and 2. These are reported Word
+measurements, not fresh Word captures by this change. With Liberation Serif 12pt, zero paragraph
+spacing and the original issue packages, local LibreOffice 25.8.7.3 and public Chromium export give:
+
+| Case | Word page-2 extra line height | LibreOffice | Docxodus before | Docxodus fixed |
+| --- | ---: | ---: | ---: | ---: |
+| Break-only paragraph, mode 15 | 0pt | 0pt | 25.5pt | 0pt |
+| Break at end of text, mode 15 | 0pt | 0pt | 12pt | 0pt |
+| Same two cases, mode 12 | Not printed | 0pt | 25.5pt / 12pt | 0pt |
+| Explicit `splitPgBreakAndParaMark` | Not printed | 13.8pt | 25.5pt | 13.5pt |
+
+The last row intentionally differs from the issue's original zero-height hypothesis.
+[The documented compatibility option](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.splitpagebreakandparagraphmark)
+moves a terminal paragraph mark onto a line after the break. Explicit false retains the ordinary
+zero-gap behavior. The 0.3pt native/browser line-height difference is the existing automatic-line
+metric difference; this change does not tune it. Word validation of that explicit-flag case remains
+pending. Authored exact-line-height benchmark cases independently check the flag and its false
+control against LibreOffice, alongside no-break, blank-paragraph and ordinary line-break controls.
+
+`ProcessBreak` formerly emitted a block `div` inside `p`, which HTML parsing closes early, adding
+an empty paragraph. Break-only source paragraphs also acquired an unformatted NBSP placeholder.
+The shared page/column paragraph splitter now emits legal sibling page markers and retains only
+source-authored content or the explicitly requested paragraph-mark line. Empty hyperlink/revision
+shells and bookmarks cannot add spacing; their targets remain on a surviving paragraph. Splitting
+stops at nested textbox/media stories. Inline formatting, source identities, blank lines and
+intentional whitespace survive. A leading break keeps a zero-height carrier; repeated run breaks
+and a terminal unflagged break follow the independently checked LibreOffice boundary behavior.
+
+A separate source-mapping limitation remains: joining a paragraph through a hidden mark to a
+break-only paragraph leaves an unmeasurable nested canonical source. Both the unchanged renderer
+and this change reject that export; this fix does not suppress the completeness check or claim
+support for that joined-source case.
