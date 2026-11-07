@@ -30,6 +30,9 @@ public static partial class WmlToHtmlConverter
         if (context.Undrawn > 0)
             ReportShapeLayoutLoss(wrapper, settings ?? new WmlToHtmlConverterSettings(),
                 "Part of this drawing group is not rendered", source.Name.LocalName);
+        if (HasUnrepresentedGroupRotation(source, new ShapeBox(0, 0, width, height)))
+            ReportShapeLayoutLoss(wrapper, settings ?? new WmlToHtmlConverterSettings(),
+                "Rotation within an unequally scaled group is approximated", source.Name.LocalName);
         if ((string?)wrapper.Attribute("data-docx-shape") == "partial")
             wrapper.Descendants().Attributes().Where(a => a.Name.LocalName is
                 "data-docx-textbox-source-clip" or "data-docx-textbox-source-position").Remove();
@@ -43,15 +46,7 @@ public static partial class WmlToHtmlConverter
         var properties = source.Element(WpgGroupProperties);
         var transform = properties?.Element(A.xfrm);
         var orientation = parentOrientation.Then(transform);
-        var offset = transform?.Element(A.chOff);
-        var extent = transform?.Element(A.chExt);
-        var childWidth = (long?)extent?.Attribute(NoNamespace.cx) ?? frame.Width;
-        var childHeight = (long?)extent?.Attribute(NoNamespace.cy) ?? frame.Height;
-        var scaleX = childWidth > 0 ? frame.Width / childWidth : 1;
-        var scaleY = childHeight > 0 ? frame.Height / childHeight : 1;
-        var map = new ShapeMap(scaleX, scaleY,
-            -((long?)offset?.Attribute(NoNamespace.x) ?? 0) * scaleX,
-            -((long?)offset?.Attribute(NoNamespace.y) ?? 0) * scaleY);
+        var map = GroupChildMap(properties, new ShapeBox(0, 0, frame.Width, frame.Height));
         var fill = properties?.Elements().FirstOrDefault(IsFillChoice);
         if (fill == null || fill.Name == A.grpFill) fill = inheritedFill;
         var group = new XElement(Xhtml.span, new XAttribute("data-docx-drawing-group", "true"));

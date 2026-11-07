@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file.
 
 - Picture-only paragraphs no longer reserve a text descent below an inline picture; automatic spacing adds the extra natural text-line height without lifting the picture into the preceding paragraph. Minimum table rows add their top and bottom cell margins outside the declared content height, including continued tables (#1568).
 
+- Plain inline VML lines render their endpoint geometry, stroke and Office default side spacing. Lines alone in a paragraph start at its top; grouped, positioned, zero-length and hairline forms retain unsupported-content diagnostics (part of #1554).
+
+- DrawingML triangles and five-point stars render their preset adjustments in standalone and grouped drawings. Rotated children inside unequally scaled groups retain their paint and text with an explicit approximation diagnostic, rejected by strict export policy (part of #1554).
+
 - Fixed-width tables retain their authored width and centered margin overhang on every page. Table text or pictures cut by the paper edge produces a source warning, or a strict export failure; wholly missing cells still fail completeness checks (#1563).
 
 - Hard page breaks split paragraph markup without adding a blank line or fallback-font placeholder on the following page. Styled continuations, bookmarks, nested textbox stories and the explicit `splitPgBreakAndParaMark` paragraph-mark line are preserved. Windowed and single-block editor renders retain every fragment, and editing a split paragraph repaints its pages without dropping the break or tail (#1570).
