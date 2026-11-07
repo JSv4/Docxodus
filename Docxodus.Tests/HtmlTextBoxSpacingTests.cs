@@ -53,13 +53,68 @@ public class HtmlTextBoxSpacingTests
         Assert.Contains("margin-top: 6pt;", (string?)paragraphs[1].Attribute("style"));
     }
 
-    private static XElement[] Render(bool legacy, bool contextual, bool differentStyle, bool implicitDefault = false, bool inBox = true)
+    [Theory]
+    [InlineData(false, false, true)]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, true)]
+    [InlineData(true, true, false)]
+    public void ContextualSpacingSuppressesOnlyTheFlaggedParagraphsOwnEdges(bool legacy, bool inBox, bool first)
     {
-        string Paragraph(string text, string style) =>
+        var paragraphs = Render(legacy, contextual: false, differentStyle: false, inBox: inBox,
+            firstContextual: first, secondContextual: !first);
+        Assert.Contains("margin-top: 6pt;", (string?)paragraphs[0].Attribute("style"));
+        Assert.Contains($"margin-bottom: {(first ? "0" : "9pt")};", (string?)paragraphs[0].Attribute("style"));
+        Assert.Contains($"margin-top: {(first ? "6pt" : "0")};", (string?)paragraphs[1].Attribute("style"));
+        Assert.Contains("margin-bottom: 9pt;", (string?)paragraphs[1].Attribute("style"));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void DirectOffOverridesTheStyleWithoutDisablingItsNeighbor(bool legacy, bool inBox)
+    {
+        var paragraphs = Render(legacy, contextual: true, differentStyle: false, implicitDefault: true,
+            inBox: inBox, firstContextual: false);
+        Assert.Contains("margin-bottom: 9pt;", (string?)paragraphs[0].Attribute("style"));
+        Assert.Contains("margin-top: 0;", (string?)paragraphs[1].Attribute("style"));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void ContextualSpacingDoesNotLookThroughATable(bool legacy, bool inBox)
+    {
+        var paragraphs = Render(legacy, contextual: true, differentStyle: false, inBox: inBox,
+            between: "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"1200\"/></w:tblGrid>" +
+                "<w:tr><w:tc><w:p><w:r><w:t>Intervening table</w:t></w:r></w:p></w:tc></w:tr></w:tbl>");
+        Assert.Contains("margin-bottom: 9pt;", (string?)paragraphs[0].Attribute("style"));
+        Assert.Contains("margin-top: 6pt;", (string?)paragraphs[1].Attribute("style"));
+    }
+
+    [Fact]
+    public void ContextualSpacingPreservesInterveningBookmarks()
+    {
+        var paragraphs = Render(false, contextual: true, differentStyle: false, inBox: false,
+            between: "<w:bookmarkStart w:id=\"1\" w:name=\"Mark\"/><w:bookmarkEnd w:id=\"1\"/>");
+        Assert.Contains("margin-bottom: 9pt;", (string?)paragraphs[0].Attribute("style"));
+        Assert.Contains("margin-top: 6pt;", (string?)paragraphs[1].Attribute("style"));
+        Assert.Contains(paragraphs[0].Ancestors().Last().Descendants(), e => (string?)e.Attribute("id") == "Mark");
+    }
+
+    private static XElement[] Render(bool legacy, bool contextual, bool differentStyle, bool implicitDefault = false,
+        bool inBox = true, bool? firstContextual = null, bool? secondContextual = null, string between = "")
+    {
+        string Paragraph(string text, string style, bool? direct) =>
             "<w:p><w:pPr>" + (implicitDefault && text == "Swift copper lantern"
-                ? "" : $"<w:pStyle w:val=\"{style}\"/>") + $"</w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>";
-        var content = Paragraph("Swift copper lantern", "Swift") +
-            Paragraph("Swift violet meadow", differentStyle ? "Other" : "Swift");
+                ? "" : $"<w:pStyle w:val=\"{style}\"/>") +
+            (direct.HasValue ? $"<w:contextualSpacing w:val=\"{(direct.Value ? 1 : 0)}\"/>" : "") +
+            $"</w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>";
+        var content = Paragraph("Swift copper lantern", "Swift", firstContextual) + between +
+            Paragraph("Swift violet meadow", differentStyle ? "Other" : "Swift", secondContextual);
         var drawing = legacy
             ? "<w:pict><v:shape style=\"width:180pt;height:64pt\"><v:textbox><w:txbxContent>" + content +
                 "</w:txbxContent></v:textbox></v:shape></w:pict>"

@@ -3,12 +3,14 @@ import { storedZip, xml } from './docx-zip.js';
 export const textboxSpacingLines = ['Swift copper lantern', 'Swift violet meadow', 'Swift amber window', 'Swift silver basket'];
 
 /** Original four-line text box; contextual spacing is necessary to fit its fixed extent. */
-export function textboxSpacingDocx(legacy: boolean, contextual = true, implicitDefault = false): Uint8Array {
+export function textboxSpacingDocx(legacy: boolean, contextual = true, implicitDefault = false,
+  paragraphContextual?: readonly boolean[], inBody = false): Uint8Array {
   const w = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
   const wps = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape';
-  const height = contextual ? 72 : 120;
+  const height = contextual && !paragraphContextual ? 72 : 120;
   const content = textboxSpacingLines.map((text, index) => '<w:p><w:pPr>' +
-    (implicitDefault && index % 2 === 0 ? '' : '<w:pStyle w:val="Swift"/>') + '</w:pPr>' +
+    (implicitDefault && index % 2 === 0 ? '' : '<w:pStyle w:val="Swift"/>') +
+    (paragraphContextual ? `<w:contextualSpacing w:val="${paragraphContextual[index] ? 1 : 0}"/>` : '') + '</w:pPr>' +
     `<w:r><w:t>${text}</w:t></w:r></w:p>`).join('');
   const drawing = legacy
     ? `<w:pict><v:shape style="width:190pt;height:${height}pt"><v:textbox inset="0,0,0,0">` +
@@ -38,7 +40,7 @@ export function textboxSpacingDocx(legacy: boolean, contextual = true, implicitD
     { name: 'word/document.xml', data: xml(`<w:document xmlns:w="${w}" xmlns:wps="${wps}" ` +
       'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" ' +
       'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml">' +
-      `<w:body><w:p><w:r>${drawing}</w:r></w:p><w:p><w:r><w:t>Swift body marker</w:t></w:r></w:p>` +
+      `<w:body>${inBody ? content : `<w:p><w:r>${drawing}</w:r></w:p>`}<w:p><w:r><w:t>Swift body marker</w:t></w:r></w:p>` +
       '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>' +
       '</w:sectPr></w:body></w:document>') },
   ]);

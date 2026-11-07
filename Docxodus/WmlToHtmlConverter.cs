@@ -11238,39 +11238,24 @@ namespace Docxodus
         private static IEnumerable<object> ApplyContextualSpacing(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             IEnumerable<XElement> elements, decimal currentMarginLeft)
         {
-            // Word removes the spacing between two paragraphs only through w:contextualSpacing, and
-            // only between paragraphs of the same style. Membership of one numbered list is not a
-            // reason: consecutive numbered paragraphs keep their spacing after (issue #1151).
-            var grouped = elements
-                .GroupAdjacent(e =>
-                {
-                    var contextualSpacing = e.Elements(W.pPr).Elements(W.contextualSpacing).FirstOrDefault();
-                    if (IsOnOffPropertyEnabled(contextualSpacing))
-                    {
-                        // FormattingAssembler records the resolved style even when w:pStyle
-                        // is omitted and the paragraph uses the document's default style.
-                        var styleName = (string?)e.Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault()
-                            ?? (string?)e.Attribute(PtOpenXml.StyleName);
-                        return "sty:" + styleName;
-                    }
-                    return "";
-                })
-                .ToList();
-            var newContent = grouped
+            // Each enabled paragraph removes only its own spacing beside the same style (#1553).
+            // The neighbor's flag is independent; list membership alone removes nothing (#1151).
+            // FormattingAssembler records the resolved default style when w:pStyle is omitted.
+            return elements
+                .GroupAdjacent(e => e.Name == W.p
+                    ? "sty:" + ((string?)e.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val)
+                        ?? (string?)e.Attribute(PtOpenXml.StyleName))
+                    : "")
                 .Select(g =>
                 {
-                    if (g.Key == "")
-                        return g.Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
                     var last = g.Count() - 1;
-                    // For contextualSpacing groups (sty: prefix), suppress both trailing whitespace
-                    // for non-last paragraphs AND leading whitespace for non-first paragraphs.
-                    // Word removes all inter-paragraph spacing for same-style contextualSpacing paragraphs.
-                    var isContextualGroup = g.Key.StartsWith("sty:");
-                    return g.Select((e, i) => ConvertToHtmlTransform(wordDoc, settings, e,
-                        i != last, currentMarginLeft,
-                        suppressLeadingWhiteSpace: isContextualGroup && i != 0));
+                    return g.Select((e, i) =>
+                    {
+                        var contextual = g.Key != "" && IsOnOffPropertyEnabled(e.Element(W.pPr)?.Element(W.contextualSpacing));
+                        return ConvertToHtmlTransform(wordDoc, settings, e, contextual && i != last,
+                            currentMarginLeft, suppressLeadingWhiteSpace: contextual && i != 0);
+                    });
                 });
-            return (IEnumerable<object>)newContent;
         }
 
         private class BorderMappingInfo
