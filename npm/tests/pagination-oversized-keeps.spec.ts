@@ -67,7 +67,7 @@ for (const [name, preludeLines, widow, keep, expected] of [
   });
 }
 
-for (const keep of ['keep-lines', 'widow-control'] as const) {
+for (const keep of ['keep-lines', 'widow-control', 'keep-with-next'] as const) {
   test(`an oversized ${keep} paragraph continues without losing a line`, async ({ page }) => {
     await page.setContent(`<style>
       #pagination-staging, #pagination-container { font: 12pt/16pt Arial; }
@@ -77,7 +77,7 @@ for (const keep of ['keep-lines', 'widow-control'] as const) {
       data-page-width="260" data-page-height="120" data-content-width="220" data-content-height="80"
       data-margin-top="20" data-margin-right="20" data-margin-bottom="20" data-margin-left="20">
       <p id="transfer-register" data-anchor="p:body:register" data-${keep}="true"
-        style="break-inside:avoid">${entries.map(entry => `<b>${entry}</b> transferred.`).join('<br>')}</p>
+        style="${keep === 'keep-with-next' ? 'break-after:avoid' : 'break-inside:avoid'}">${entries.map(entry => `<b>${entry}</b> transferred.`).join('<br>')}</p>
       <p>Closing receipt.</p>
     </div></div><div id="pagination-container"></div>`);
     await page.addScriptTag({ path: bundle });
@@ -134,3 +134,24 @@ test('a keep that fits a fresh page moves there as one paragraph', async ({ page
   expect(result).toEqual({ pages: 2, count: 1, page: '2',
     text: 'First transfer.Second transfer.Third transfer.' });
 });
+
+for (const guard of ['unowned avoid', 'forced break', 'editor', 'unresolved note']) {
+  test(`oversized keep-next retains the ${guard} restriction`, async ({ page }) => {
+    await page.setContent(`<style>#staging,#container{font:12pt/16pt Arial}p{margin:0}</style>
+      <div id="staging"><div data-section-index="0" data-page-width="260" data-page-height="120"
+        data-content-width="220" data-content-height="80" data-margin-top="20" data-margin-bottom="20"
+        data-margin-left="20" data-margin-right="20">
+        <p data-case="target" ${guard === 'unowned avoid' ? '' : 'data-keep-with-next="true"'}
+          style="break-after:${guard === 'forced break' ? 'page' : 'avoid'}">
+          ${entries.join('<br>')}${guard === 'unresolved note' ? '<sup data-footnote-id="missing">1</sup>' : ''}</p>
+        <p>Closing receipt.</p>
+      </div></div><div id="container"></div>`);
+    await page.addScriptTag({ path: bundle });
+    await page.evaluate(guard => {
+      new (window as any).DocxodusPagination.PaginationEngine(document.getElementById('staging'),
+        document.getElementById('container'), { fragmentParagraphs: guard !== 'editor', showPageNumbers: false }).paginate();
+    }, guard);
+    await expect(page.locator('#container [data-case="target"]')).toHaveCount(1);
+    expect(await page.locator('#container [data-case="target"]').textContent()).toContain(entries.at(-1));
+  });
+}
