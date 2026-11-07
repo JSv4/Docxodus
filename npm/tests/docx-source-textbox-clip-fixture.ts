@@ -5,21 +5,24 @@ export type SourceClipKind = 'drawing' | 'vml';
 export type SourceClipFit = 'fixed' | 'auto' | 'implicit' | 'overflow' | 'ellipsis';
 
 /** Original three-line story: the source viewport holds two lines, unless it can grow. */
-export function sourceTextboxClipDocx(kind: SourceClipKind, fit: SourceClipFit = 'fixed', offPaper = false, story: 'body' | 'header' | 'footer' = 'body', paragraphRelative = false): Uint8Array {
+export function sourceTextboxClipDocx(kind: SourceClipKind, fit: SourceClipFit = 'fixed', offPaper = false,
+  story: 'body' | 'header' | 'footer' = 'body', paragraphRelative = false,
+  placement: { markup?: boolean; right?: boolean } = {}): Uint8Array {
   const wps = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape';
   const content = sourceClipLines.map((text, index) => '<w:p><w:pPr>' +
     `<w:spacing w:before="${index === 2 ? 160 : 0}" w:after="0" w:line="280" w:lineRule="exact"/></w:pPr>` +
     `<w:r><w:t>${text}</w:t></w:r></w:p>`).join('');
-  const geometry = '<wp:extent cx="2032000" cy="431800"/><wp:docPr id="1" name="Quail window"/>';
+  const geometry = '<wp:extent cx="2032000" cy="431800"/>';
+  const identity = '<wp:docPr id="1" name="Quail window"/>';
   const anchor = '<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="2" behindDoc="1" locked="0" layoutInCell="0" allowOverlap="1">' +
-    `<wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="${paragraphRelative ? 'column' : 'page'}"><wp:posOffset>${paragraphRelative ? -3556000 : -2794000}</wp:posOffset></wp:positionH>` +
-    `<wp:positionV relativeFrom="${paragraphRelative ? 'paragraph' : 'page'}"><wp:posOffset>762000</wp:posOffset></wp:positionV>` + geometry + '<wp:wrapNone/>';
+    `<wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="${paragraphRelative ? 'column' : 'page'}"><wp:posOffset>${placement.right ? 8229600 : paragraphRelative ? -3556000 : -2794000}</wp:posOffset></wp:positionH>` +
+    `<wp:positionV relativeFrom="${paragraphRelative ? 'paragraph' : 'page'}"><wp:posOffset>762000</wp:posOffset></wp:positionV>` + geometry + '<wp:wrapNone/>' + identity;
   const drawing = kind === 'vml'
     ? '<w:pict><v:shape id="quail-shape" style="width:160pt;height:34pt;' +
-      (offPaper ? 'position:absolute;z-index:-2;margin-left:-220pt;margin-top:60pt;mso-position-horizontal-relative:page;mso-position-vertical-relative:page' : '') +
+      (offPaper ? `position:absolute;z-index:-2;margin-left:${placement.right ? 648 : -220}pt;margin-top:60pt;mso-position-horizontal-relative:page;mso-position-vertical-relative:page` : '') +
       '"><v:textbox inset="0pt,0pt,0pt,0pt"' + (fit === 'auto' ? ' style="mso-fit-shape-to-text:true"' : '') + '>' +
       `<w:txbxContent>${content}</w:txbxContent></v:textbox></v:shape></w:pict>`
-    : '<w:drawing>' + (offPaper ? anchor : '<wp:inline>' + geometry) +
+    : '<w:drawing>' + (offPaper ? anchor : '<wp:inline>' + geometry + identity) +
       `<a:graphic><a:graphicData uri="${wps}"><wps:wsp><wps:cNvSpPr txBox="1"/>` +
       '<wps:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr>' +
       `<wps:txbx><w:txbxContent>${content}</w:txbxContent></wps:txbx>` +
@@ -46,7 +49,9 @@ export function sourceTextboxClipDocx(kind: SourceClipKind, fit: SourceClipFit =
       '<w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="20"/>' +
       '</w:rPr></w:rPrDefault></w:docDefaults></w:styles>',
     'word/document.xml': `<w:document ${namespaces}><w:body>` + (story === 'body' ? boxParagraph : '') +
-      '<w:p><w:r><w:t>Quail ledger complete</w:t></w:r></w:p>' +
+      '<w:p>' + (placement.markup ? '<w:pPr><w:jc w:val="center"/>' +
+        '<w:pPrChange w:id="9" w:author="Quail Editor" w:date="2026-03-04T09:00:00Z"><w:pPr/></w:pPrChange></w:pPr>' : '') +
+      '<w:r><w:t>Quail ledger complete</w:t></w:r></w:p>' +
       '<w:sectPr>' + (story === 'body' ? '' : `<w:${story}Reference w:type="default" r:id="story"/>`) +
       '<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1080" w:right="720" w:bottom="1080" w:left="720" w:header="240" w:footer="240"/></w:sectPr></w:body></w:document>',
   };

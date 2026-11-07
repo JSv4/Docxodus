@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Balloon layout retains the original paper clip and source-position evidence for off-paper textboxes, including zoomed viewers. Visible fragment coordinates remain relative to the physical sheet; changed text, geometry and newly clipped sibling ink still fail verification (part of #1558).
+
 - Plain inline VML lines render their endpoint geometry, stroke and Office default side spacing. Lines alone in a paragraph start at its top; grouped, positioned, zero-length and hairline forms retain unsupported-content diagnostics (part of #1554).
 
 - DrawingML triangles and five-point stars render their preset adjustments in standalone and grouped drawings. Rotated children inside unequally scaled groups retain their paint and text with an explicit approximation diagnostic, rejected by strict export policy (part of #1554).
