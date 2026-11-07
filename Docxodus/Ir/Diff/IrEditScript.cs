@@ -261,7 +261,9 @@ internal sealed record IrTextboxDiff(IrNodeList<IrEditOp> Ops);
 /// </remarks>
 internal sealed record IrNoteDiff(IrNoteKind Kind, string NoteId, IrNodeList<IrEditOp> Ops, string? LeftNoteId = null);
 
-internal readonly record struct IrHeaderFooterBinding(int SectionIndex, IrHeaderFooterKind Kind);
+// RightSectionIndex identifies the source section, which can differ from the physical review
+// section. -1 means no proven right source; null preserves the legacy First-story activation.
+internal readonly record struct IrHeaderFooterBinding(int SectionIndex, IrHeaderFooterKind Kind, int? RightSectionIndex = null);
 
 /// <summary>
 /// The block-level diff of ONE header/footer story (the header/footer scope-diff campaign, 2026-07-03).

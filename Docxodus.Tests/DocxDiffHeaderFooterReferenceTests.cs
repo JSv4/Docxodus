@@ -5,6 +5,7 @@ using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
+using Docxodus.Ir.Diff;
 using Docxodus.Tests.Ir.Diff;
 using Xunit;
 using Section = Docxodus.Tests.Ir.Diff.HeaderFooterFixtures.Section;
@@ -34,7 +35,8 @@ public class DocxDiffHeaderFooterReferenceTests
         XDocument mainXd;
         using (var s = main.GetStream(FileMode.Open, FileAccess.Read)) mainXd = XDocument.Load(s);
         var refName = W + (isHeader ? "headerReference" : "footerReference");
-        var reference = mainXd.Descendants(W + "sectPr").Take(sectionIndex + 1).Reverse()
+        var reference = mainXd.Descendants(W + "sectPr").Where(s => s.Parent?.Name != W + "sectPrChange")
+            .Take(sectionIndex + 1).Reverse()
             .SelectMany(sectPr => sectPr.Elements(refName))
             .FirstOrDefault(e => ((string?)e.Attribute(W + "type") ?? "default") == kind);
         var relId = (string?)reference?.Attribute(R + "id");
@@ -96,6 +98,206 @@ public class DocxDiffHeaderFooterReferenceTests
     {
         Assert.Equal(text, ReferencedStoryText(output, isHeader, section));
         Assert.Contains("<w:ins ", ReferencedStoryXml(output, isHeader, section));
+    }
+
+    [Theory]
+    [InlineData(false, "default", false)]
+    [InlineData(true, "default", false)]
+    [InlineData(false, "first", true)]
+    [InlineData(true, "first", true)]
+    [InlineData(false, "first", false)]
+    [InlineData(true, "first", false)]
+    [InlineData(false, "even", false)]
+    [InlineData(true, "even", false)]
+    public void RewrittenMergedSections_ShowInsertedStoriesBeforeDeletedBoundary(bool retainFirst, string kind, bool originalTitle)
+    {
+        var orchard = Enumerable.Range(1, 3).Select(n => $"Orchard note {n}: the pear rows were pruned before the first frost arrived this season.").ToArray();
+        var cellar = Enumerable.Range(1, 3).Select(n => $"Cellar note {n}: the cider barrels were turned twice while the weather stayed mild.").ToArray();
+        var weather = Enumerable.Range(1, 4).Select(n => $"Weather memo {n}: rainfall at the ridge station stayed under the seasonal average again.");
+        var original = HeaderFooterFixtures.Build(new[] { new Section(orchard), new Section(cellar) },
+            titlePg: originalTitle, evenAndOddHeaders: kind == "even");
+        var revised = HeaderFooterFixtures.Build(new[] { new Section(
+            (retainFirst ? orchard.Take(1).Concat(weather) : weather).ToArray(),
+            Headers: new[] { (kind, "h") }, Footers: new[] { (kind, "f") }) },
+            new Dictionary<string, string[]> { ["h"] = new[] { "RIDGE REGISTER" } },
+            new Dictionary<string, string[]> { ["f"] = new[] { "Weather receipt" } },
+            titlePg: kind == "first", evenAndOddHeaders: kind == "even");
+        var result = DocxCompare.Compare(original, revised);
+        AssertStoryEndpoints(original, revised, result, true, kind);
+        AssertStoryEndpoints(original, revised, result, false, kind);
+        foreach (var (header, text) in new[] { (true, "RIDGE REGISTER"), (false, "Weather receipt") })
+        {
+            var xml = ReferencedStoryXml(result, header, 0, kind);
+            Assert.NotNull(xml);
+            var story = XDocument.Parse(xml);
+            Assert.Equal(text, string.Concat(story.Descendants(W + "t").Select(t => t.Value)));
+            Assert.NotEmpty(story.Descendants(W + "ins"));
+        }
+    }
+
+    private const string BoundaryText = "Orchard pears grew heavy before autumn arrived across the quiet mountain valley.";
+    private const string MovedText = "The archive delivery includes numbered folders with blue stamps and sealed ribbons for northern offices.";
+    private const string KeptText = "Stable inventory remains unchanged while maintenance personnel inspect emergency equipment and review safety instructions carefully.";
+    private const string InsertedText = "Applicants must submit identity documents through certified postal channels every Friday morning.";
+
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, true)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, true)]
+    public void StoryVisibility_RespectsFormatTracking(bool track, bool unchangedStory, bool disableFirst)
+    {
+        string kind = disableFirst ? "default" : "first";
+        var refs = unchangedStory ? new[] { (kind, "h") } : null;
+        var original = HeaderFooterFixtures.Build(new[] { new Section(new[] { BoundaryText }, Headers: refs), new Section(new[] { MovedText }) },
+            unchangedStory ? new Dictionary<string, string[]> { ["h"] = new[] { "FIRST PAGE STORY" } } : null, titlePg: disableFirst);
+        var revised = HeaderFooterFixtures.Build(new[] { new Section(new[] { InsertedText }, Headers: new[] { (kind, "h") }) },
+            new Dictionary<string, string[]> { ["h"] = new[] { "FIRST PAGE STORY" } }, titlePg: !disableFirst);
+        var result = DocxCompare.Compare(original, revised, new DocxDiffSettings { TrackBlockFormatChanges = track });
+        using var stream = new MemoryStream(result.DocumentByteArray);
+        using var package = WordprocessingDocument.Open(stream, false);
+        var xml = package.MainDocumentPart!.GetXDocument();
+        Assert.Equal(track, xml.Descendants(W + "sectPrChange").Any());
+        Assert.All(xml.Descendants(W + "sectPr").Where(s => s.Parent?.Name != W + "sectPrChange"),
+            s => Assert.Equal(!disableFirst, WordprocessingMLUtil.GetBoolProp(s, W + "titlePg")));
+        if (track) AssertStoryEndpoints(original, revised, result, true, kind);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void MovedParagraph_BlocksStoryBindingAcrossDeletedBoundary(bool spanMove, bool crossParagraph)
+    {
+        const string divider = "Permanent divider remains here unchanged.";
+        var original = HeaderFooterFixtures.Build(new[] {
+            new Section(new[] { BoundaryText }),
+            new Section(spanMove ? new[] { MovedText, divider, KeptText } : new[] { MovedText, KeptText }) });
+        var revised = HeaderFooterFixtures.Build(new[] { new Section(
+            spanMove ? new[] { InsertedText, divider, KeptText + " " + MovedText } : new[] { InsertedText, KeptText, MovedText },
+            Headers: new[] { ("default", "h") }) },
+            new Dictionary<string, string[]> { ["h"] = new[] { "REVISED STORY" } });
+        var settings = new DocxDiffSettings { CrossParagraphTokenDiff = crossParagraph };
+        var dataFirst = DocxDiff.CreateComparison(original, revised, settings);
+        var json = dataFirst.GetEditScriptJson();
+        var revisions = dataFirst.GetRevisions();
+        var result = dataFirst.ToRedline();
+        var redlineFirst = DocxDiff.CreateComparison(original, revised, settings);
+        Assert.Equal(result.DocumentByteArray, redlineFirst.ToRedline().DocumentByteArray);
+        Assert.Equal(json, redlineFirst.GetEditScriptJson());
+        Assert.Equal(revisions.Select(r => r.ToString()), redlineFirst.GetRevisions().Select(r => r.ToString()));
+        var script = IrEditScriptJson.Read(json);
+        Assert.Equal(json, IrEditScriptJson.Write(script));
+        Assert.Contains(script.Operations, op => spanMove ? op.RelocationGroupId is not null : op.MoveGroupId is not null);
+        Assert.Null(ReferencedStoryXml(result, true, 0));
+        AssertInsertedStory(result, true, 1, "REVISED STORY");
+        AssertStoryEndpoints(original, revised, result, true, "default");
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public void LaterReviewSection_UsesSourceFirstPageFlag(bool explicitOff, bool revisedTitle)
+    {
+        var original = HeaderFooterFixtures.Build(new[] {
+            new Section(new[] { BoundaryText }), new Section(new[] { MovedText, KeptText,
+                "Musicians practice difficult concert arrangements beside the old riverside theater." }),
+            new Section(new[] { "Inventory balance remains recorded for the winter quarter." }) }, titlePg: explicitOff);
+        if (explicitOff)
+        {
+            using var stream = new MemoryStream();
+            stream.Write(original.DocumentByteArray);
+            using (var package = WordprocessingDocument.Open(stream, true))
+            {
+                var main = package.MainDocumentPart!;
+                foreach (var flag in main.GetXDocument().Descendants(W + "titlePg")) flag.SetAttributeValue(W + "val", "0");
+                main.PutXDocument();
+            }
+            original = new WmlDocument("explicit-off.docx", stream.ToArray());
+        }
+        var revised = HeaderFooterFixtures.Build(new[] { new Section(new[] { InsertedText, KeptText, MovedText },
+            Headers: new[] { ("first", "h") }) },
+            new Dictionary<string, string[]> { ["h"] = new[] { "FIRST PAGE STORY" } }, titlePg: revisedTitle);
+        var comparison = DocxDiff.CreateComparison(original, revised);
+        var result = comparison.ToRedline();
+        using var output = new MemoryStream(result.DocumentByteArray);
+        using var doc = WordprocessingDocument.Open(output, false);
+        var sections = doc.MainDocumentPart!.GetXDocument().Descendants(W + "sectPr")
+            .Where(s => s.Parent?.Name != W + "sectPrChange").ToArray();
+        Assert.Equal(revisedTitle, WordprocessingMLUtil.GetBoolProp(sections[1], W + "titlePg"));
+        Assert.All(sections, s => Assert.InRange(s.Elements(W + "sectPrChange").Count(), 0, 1));
+        AssertStoryEndpoints(original, revised, result, true, "first");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReboundStoryMoves_ReserveBodyAndTokenRelocationIds(bool crossParagraph)
+    {
+        const string divider = "Permanent divider remains here unchanged.";
+        const string fragment = "Visitors should photograph historic window patterns before entering the northern observatory wing.";
+        const string first = "Curators catalogue artifacts carefully while volunteers prepare explanatory labels for incoming exhibitions.";
+        const string last = "Engineers inspect roof drainage systems every spring and record necessary repairs in maintenance journals.";
+        var refs = new[] { ("default", "h") };
+        var original = HeaderFooterFixtures.Build(new[] { new Section(new[] { BoundaryText }, Headers: refs),
+            new Section(new[] { MovedText, divider, KeptText, first + " " + fragment, last }, Headers: refs) },
+            new Dictionary<string, string[]> { ["h"] = new[] { BoundaryText, MovedText, KeptText } });
+        var revised = HeaderFooterFixtures.Build(new[] { new Section(
+            new[] { InsertedText, divider, KeptText + " " + MovedText, first, last + " " + fragment }, Headers: refs) },
+            new Dictionary<string, string[]> { ["h"] = new[] { MovedText, BoundaryText, KeptText } });
+        var comparison = DocxDiff.CreateComparison(original, revised, new DocxDiffSettings { CrossParagraphTokenDiff = crossParagraph });
+        var script = IrEditScriptJson.Read(comparison.GetEditScriptJson());
+        var directIds = script.Operations.Where(op => op.RelocationGroupId is not null).Select(op => op.RelocationGroupId!.Value).ToArray();
+        var tokenIds = script.Operations.Where(op => op.TokenDiff is not null)
+            .SelectMany(op => op.TokenDiff!.Ops).Where(op => op.RelocationGroupId is not null)
+            .Select(op => op.RelocationGroupId!.Value).ToArray();
+        Assert.NotEmpty(directIds);
+        Assert.Contains(tokenIds, id => !directIds.Contains(id));
+        int maximum = directIds.Concat(tokenIds).Max();
+        var headerMoves = script.HeaderFooterOps!.SelectMany(h => h.Ops).Where(op => op.MoveGroupId is not null).ToArray();
+        Assert.NotEmpty(headerMoves);
+        Assert.All(headerMoves, op => Assert.True(op.MoveGroupId > maximum));
+        AssertStoryEndpoints(original, revised, comparison.ToRedline(), true, "default");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MixedBoundaryFallback_DoesNotInferVisibilityFromReviewOrdinals(bool legacyJson)
+    {
+        const string tail = "The permanent inventory continues in the final section after the revised boundary.";
+        var original = HeaderFooterFixtures.Build(new[] { new Section(new[] { BoundaryText }), new Section(new[] { KeptText, tail }) });
+        var refs = new[] { ("default", "h") };
+        var revised = HeaderFooterFixtures.Build(new[] { new Section(new[] { KeptText, InsertedText }, Headers: refs),
+            new Section(new[] { tail }, Headers: refs) },
+            new Dictionary<string, string[]> { ["h"] = new[] { "SHARED DEFAULT STORY" } }, titlePg: true);
+        using var stream = new MemoryStream();
+        stream.Write(revised.DocumentByteArray);
+        using (var package = WordprocessingDocument.Open(stream, true))
+        {
+            var main = package.MainDocumentPart!;
+            main.GetXDocument().Root!.Element(W + "body")!.Element(W + "sectPr")!.Element(W + "titlePg")!.Remove();
+            main.PutXDocument();
+        }
+        revised = new WmlDocument("mixed.docx", stream.ToArray());
+        var result = DocxCompare.Compare(original, revised);
+        if (legacyJson)
+        {
+            var script = IrEditScriptJson.Read(DocxDiff.GetEditScriptJson(original, revised));
+            script = script with { HeaderFooterOps = Docxodus.Ir.IrNodeList.From(script.HeaderFooterOps!.Select(h => h with {
+                ReferenceBindings = h.ReferenceBindings is null ? null : Docxodus.Ir.IrNodeList.From(
+                    h.ReferenceBindings.Select(b => b with { RightSectionIndex = null })) })) };
+            string json = IrEditScriptJson.Write(script);
+            Assert.DoesNotContain("rightSectionIndex", json);
+            result = IrMarkupRenderer.Render(IrEditScriptJson.Read(json), original, revised, new IrDiffSettings());
+        }
+        AssertStoryEndpoints(original, revised, result, true, "default");
     }
 
     [Theory]
@@ -254,14 +456,24 @@ public class DocxDiffHeaderFooterReferenceTests
 
     private static void AssertStoryEndpoints(WmlDocument original, WmlDocument revised, WmlDocument result, bool header, string kind)
     {
+        string StoryText(WmlDocument document, int section) =>
+            ReferencedStoryXml(document, header, section, kind) is { } xml ? XDocument.Parse(xml).Root!.Value : "";
+        bool[] TitlePageFlags(WmlDocument document)
+        {
+            using var stream = new MemoryStream(document.DocumentByteArray);
+            using var package = WordprocessingDocument.Open(stream, false);
+            return package.MainDocumentPart!.Document.Descendants<DocumentFormat.OpenXml.Wordprocessing.SectionProperties>()
+                .Select(section => section.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.TitlePage>() is { } flag
+                    && (flag.Val?.Value ?? true)).ToArray();
+        }
         foreach (var (expected, resolved) in new[] {
             (original, RevisionProcessor.RejectRevisions(result)),
             (revised, RevisionProcessor.AcceptRevisions(result)) })
         {
             Assert.Equal(SectionCount(expected), SectionCount(resolved));
+            Assert.Equal(TitlePageFlags(expected), TitlePageFlags(resolved));
             for (int i = 0; i < SectionCount(expected); i++)
-                Assert.Equal(XDocument.Parse(ReferencedStoryXml(expected, header, i, kind)!).Root!.Value,
-                    XDocument.Parse(ReferencedStoryXml(resolved, header, i, kind)!).Root!.Value);
+                Assert.Equal(StoryText(expected, i), StoryText(resolved, i));
             AssertEveryReferenceResolves(resolved);
             Assert.Equal(BodyTexts(expected), BodyTexts(resolved));
         }

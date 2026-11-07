@@ -3148,7 +3148,7 @@ internal static partial class IrMarkupRenderer
             }
         }
 
-        ApplyHeaderFooterReferenceBindings(hfOps, outputParts, main, rightMain);
+        ApplyHeaderFooterReferenceBindings(hfOps, outputParts, main, rightMain, state);
     }
 
     /// <summary>
@@ -3281,20 +3281,21 @@ internal static partial class IrMarkupRenderer
         {
             // Legacy/single-cell shape: attach directly. Refined topology records attach all cells together
             // after every output part exists, so a clone can safely rejoin the original at a later section.
-            BindHeaderFooterReference(diff.IsHeader, diff.Kind, diff.SectionIndex, newPart, main, rightMain);
+            BindHeaderFooterReference(diff.IsHeader, diff.Kind, diff.SectionIndex, newPart, main, rightMain, state);
         }
         return newPart;
     }
 
     /// <summary>Whether the right document's <paramref name="sectionIndex"/>-th section activates
     /// <c>w:titlePg</c> (sectPrChange inners excluded from the section count).</summary>
-    private static bool RightSectionHasTitlePg(MainDocumentPart rightMain, int sectionIndex)
+    private static bool? RightSectionTitlePg(MainDocumentPart rightMain, int sectionIndex)
     {
         var body = rightMain.GetXDocument().Root?.Element(W.body);
         if (body is null)
-            return false;
+            return null;
         var sectPrs = BlockMetadataOps.SectionBreaks(body).ToList();
-        return sectionIndex < sectPrs.Count && sectPrs[sectionIndex].Element(W.titlePg) is not null;
+        return sectionIndex >= 0 && sectionIndex < sectPrs.Count
+            ? WordprocessingMLUtil.GetBoolProp(sectPrs[sectionIndex], W.titlePg) : null;
     }
 
     /// <summary>
@@ -3305,7 +3306,7 @@ internal static partial class IrMarkupRenderer
     /// </summary>
     private static void ApplyHeaderFooterReferenceBindings(
         IReadOnlyList<IrHeaderFooterDiff> hfOps, IReadOnlyDictionary<int, OpenXmlPart> outputParts,
-        MainDocumentPart main, MainDocumentPart? rightMain)
+        MainDocumentPart main, MainDocumentPart? rightMain, RenderState state)
     {
         for (int index = 0; index < hfOps.Count; index++)
         {
@@ -3314,13 +3315,14 @@ internal static partial class IrMarkupRenderer
                 !outputParts.TryGetValue(index, out var part))
                 continue;
             foreach (var binding in bindings)
-                BindHeaderFooterReference(diff.IsHeader, binding.Kind, binding.SectionIndex, part, main, rightMain);
+                BindHeaderFooterReference(diff.IsHeader, binding.Kind, binding.SectionIndex, part, main, rightMain,
+                    state, binding.RightSectionIndex);
         }
     }
 
     private static void BindHeaderFooterReference(
         bool isHeader, IrHeaderFooterKind kind, int sectionIndex, OpenXmlPart part,
-        MainDocumentPart main, MainDocumentPart? rightMain)
+        MainDocumentPart main, MainDocumentPart? rightMain, RenderState state, int? rightSectionIndex = null)
     {
         var body = main.GetXDocument().Root?.Element(W.body);
         if (body is null)
@@ -3373,11 +3375,26 @@ internal static partial class IrMarkupRenderer
             }
         }
 
-        // Activate only the visibility flags genuinely active on the right. A latent First/Even ref must stay
-        // latent; forcing a flag routes pages through an otherwise invisible, empty story.
-        if (rightMain is not null && kind == IrHeaderFooterKind.First && sectPr.Element(W.titlePg) is null &&
-            RightSectionHasTitlePg(rightMain, sectionIndex))
-            InsertIntoSectPr(sectPr, new XElement(W.titlePg));
+        // Revised content can precede a deleted carrier whose first-page flag differs in either
+        // direction. Use its source section even for unchanged stories; no right owner means leave
+        // the original visibility alone. A latent First reference must stay latent.
+        bool? sourceTitlePg = rightMain is null ? null : RightSectionTitlePg(rightMain, rightSectionIndex ?? sectionIndex);
+        // Older scripts had only an ordinal and activated First stories; they cannot prove
+        // ownership for the new two-direction synchronization.
+        if (rightSectionIndex is null && (kind != IrHeaderFooterKind.First || sourceTitlePg != true)) sourceTitlePg = null;
+        if (sourceTitlePg is { } titlePg &&
+            WordprocessingMLUtil.GetBoolProp(sectPr, W.titlePg) != titlePg)
+        {
+            var before = new XElement(sectPr);
+            if (!titlePg) sectPr.Element(W.titlePg)?.Remove();
+            else if (sectPr.Element(W.titlePg) is { } flag) flag.Attribute(W.val)?.Remove();
+            else InsertIntoSectPr(sectPr, new XElement(W.titlePg));
+            // The story binding can activate a deleted carrier before its boundary disappears.
+            // Preserve the original flag on rejection, including an explicit false value. An
+            // existing property revision already owns the before-image and must remain singular.
+            if (state.Settings.TrackSectionFormatChanges && sectPr.Element(W.sectPrChange) is null)
+                ApplySectPrChange(sectPr, before, sectPr, state);
+        }
         if (rightMain?.DocumentSettingsPart?.GetXDocument().Root?.Element(W.evenAndOddHeaders) is not null &&
             kind == IrHeaderFooterKind.Even)
             WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);

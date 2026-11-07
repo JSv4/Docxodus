@@ -168,6 +168,7 @@ internal static class IrEditScriptJson
                 writer.WriteStartObject();
                 writer.WriteNumber("sectionIndex", binding.SectionIndex);
                 writer.WriteString("kind", binding.Kind.ToString());
+                if (binding.RightSectionIndex is { } rightSection) writer.WriteNumber("rightSectionIndex", rightSection);
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();
@@ -318,7 +319,9 @@ internal static class IrEditScriptJson
                 int bindingSectionIndex = bindingElement.GetProperty("sectionIndex").GetInt32();
                 var bindingKind = Enum.Parse<Docxodus.Ir.IrHeaderFooterKind>(
                     bindingElement.GetProperty("kind").GetString()!);
-                bindings.Add(new IrHeaderFooterBinding(bindingSectionIndex, bindingKind));
+                int? rightSectionIndex = bindingElement.TryGetProperty("rightSectionIndex", out var rightSection)
+                    ? rightSection.GetInt32() : null;
+                bindings.Add(new IrHeaderFooterBinding(bindingSectionIndex, bindingKind, rightSectionIndex));
             }
             if (bindings.Count > 0)
                 referenceBindings = IrNodeList.From(bindings);

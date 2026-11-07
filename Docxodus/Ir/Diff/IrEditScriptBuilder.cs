@@ -73,10 +73,22 @@ internal static class IrEditScriptBuilder
         var bodyOps = ProjectAlignment(left.Body.Blocks, alignment, settings, allowCrossParagraph: true,
             fusedAnchors: settings.CrossParagraphTokenDiff ? null : markupFusedAnchors);
         var noteOps = BuildNoteOps(left, right, settings, KeptNoteReferences(left, right, bodyOps, settings));
-        var headerFooterOps = BuildHeaderFooterOps(left, right, settings, alignment);
+        var headerFooterOps = BuildHeaderFooterOps(left, right, settings, alignment, bodyOps);
         return UniqueMoveGroupIds.Apply(new IrEditScript(IrNodeList.From(bodyOps),
             noteOps.Count == 0 ? null : IrNodeList.From(noteOps),
             headerFooterOps));
+    }
+
+    // Relocation pairing runs after Build and can turn an ordinary deletion into a gap barrier.
+    // Reproject only the stories; body/note move ids already participate in the paired scripts.
+    internal static IrEditScript FinalizeHeaderFooterOps(
+        IrEditScript script, IrDocument left, IrDocument right, IrDiffSettings settings, IrBlockAlignment alignment)
+    {
+        if (!settings.CompareHeadersFooters || !script.Operations.Any(op =>
+                op.RelocationGroupId is not null && op.Kind is IrEditOpKind.InsertBlock or IrEditOpKind.DeleteBlock))
+            return script;
+        var stories = BuildHeaderFooterOps(left, right, settings, alignment, script.Operations);
+        return script with { HeaderFooterOps = UniqueMoveGroupIds.Headers(stories, IrRelocationPairer.MaxMoveGroupId(script) + 1) };
     }
 
     /// <summary>
@@ -92,6 +104,12 @@ internal static class IrEditScriptBuilder
         private int _next;
 
         private UniqueMoveGroupIds(int next) => _next = next;
+
+        public static IrNodeList<IrHeaderFooterDiff>? Headers(IrNodeList<IrHeaderFooterDiff>? stories, int next)
+        {
+            var renumber = new UniqueMoveGroupIds(next);
+            return stories is null ? null : IrNodeList.From(stories.Select(h => h with { Ops = renumber.Scope(h.Ops) }));
+        }
 
         public static IrEditScript Apply(IrEditScript script)
         {
@@ -184,12 +202,13 @@ internal static class IrEditScriptBuilder
     /// ascending, kind Default&lt;First&lt;Even), then footers.</para>
     /// </summary>
     private static IrNodeList<IrHeaderFooterDiff>? BuildHeaderFooterOps(
-        IrDocument left, IrDocument right, IrDiffSettings settings, IrBlockAlignment alignment)
+        IrDocument left, IrDocument right, IrDiffSettings settings, IrBlockAlignment alignment,
+        IEnumerable<IrEditOp> bodyOps)
     {
         if (!settings.CompareHeadersFooters)
             return null;
 
-        var sections = MatchSectionBoundaries(left, right, alignment);
+        var sections = MatchSectionBoundaries(left, right, alignment, bodyOps);
         var diffs = new List<IrHeaderFooterDiff>();
         BuildOneHeaderFooterScope(left, right, left.Headers, right.Headers, isHeader: true, settings, diffs, sections);
         BuildOneHeaderFooterScope(left, right, left.Footers, right.Footers, isHeader: false, settings, diffs, sections);
@@ -199,7 +218,7 @@ internal static class IrEditScriptBuilder
     // Boundary carriers delimit physical review sections. Any retained content before a new
     // boundary still belongs to its source section; a wholly inserted section has no left story.
     private static List<(int Left, int Right)>? MatchSectionBoundaries(
-        IrDocument left, IrDocument right, IrBlockAlignment alignment)
+        IrDocument left, IrDocument right, IrBlockAlignment alignment, IEnumerable<IrEditOp> bodyOps)
     {
         Dictionary<string, (int Section, bool Ends)> SourceSections(IrDocument document)
         {
@@ -226,7 +245,7 @@ internal static class IrEditScriptBuilder
         var sections = new List<(int, int)>();
         int currentLeft = -1, currentRight = -1, seenLeft = 0, seenRight = 0;
         bool insertedBoundary = false, deletedBoundary = false;
-        foreach (var entry in alignment.Entries)
+        foreach (var entry in RenderedGapOrder(alignment, bodyOps))
         {
             bool hasLeft = leftSections.TryGetValue(entry.Left?.Anchor.ToString() ?? "", out var l);
             bool hasRight = rightSections.TryGetValue(entry.Right?.Anchor.ToString() ?? "", out var r);
@@ -242,8 +261,8 @@ internal static class IrEditScriptBuilder
                 continue;
             insertedBoundary |= entry.Kind == IrAlignmentKind.Inserted;
             deletedBoundary |= entry.Kind == IrAlignmentKind.Deleted;
-            // Replacement gaps reorder insertions before deletions during rendering. Retain the
-            // existing grid for those, moved boundaries, and changes on a retained carrier.
+            // Mixed inserted/deleted boundaries, moved boundaries, and changed retained carriers
+            // still need the existing grid; the projection covers one-sided boundary changes.
             if (insertedBoundary && deletedBoundary ||
                 entry.Kind is IrAlignmentKind.Moved or IrAlignmentKind.MovedModified ||
                 hasLeft && hasRight && l.Ends != r.Ends)
@@ -257,6 +276,44 @@ internal static class IrEditScriptBuilder
             return null;
         sections.Add((leftCount, rightCount));
         return sections;
+    }
+
+    // RenderBlockOpsWordShaped emits ordinary replacement gaps insertion-first. Named moves,
+    // paired relocations and all two-sided ops flush the gap, including move sources that have
+    // no separate alignment entry. Use the projected operations to locate those exact barriers.
+    private static IEnumerable<IrAlignedBlock> RenderedGapOrder(
+        IrBlockAlignment alignment, IEnumerable<IrEditOp> bodyOps)
+    {
+        var gaps = new Dictionary<(bool Insert, string Anchor), int>();
+        int gap = 0;
+        foreach (var op in bodyOps)
+        {
+            if (op.RelocationGroupId is null && op.Kind is IrEditOpKind.InsertBlock or IrEditOpKind.DeleteBlock)
+            {
+                bool insert = op.Kind == IrEditOpKind.InsertBlock;
+                var anchor = insert ? op.RightAnchor : op.LeftAnchor;
+                if (anchor is not null) gaps[(insert, anchor)] = gap;
+            }
+            else gap++;
+        }
+        var entries = alignment.Entries.ToArray();
+        var groups = new Dictionary<int, List<int>>();
+        for (int i = 0; i < entries.Length; i++)
+        {
+            var entry = entries[i];
+            if (entry.Kind is not (IrAlignmentKind.Inserted or IrAlignmentKind.Deleted)) continue;
+            bool insert = entry.Kind == IrAlignmentKind.Inserted;
+            string anchor = (insert ? entry.Right : entry.Left)!.Anchor.ToString();
+            if (!gaps.TryGetValue((insert, anchor), out int id)) continue;
+            if (!groups.TryGetValue(id, out var indices)) groups[id] = indices = new List<int>();
+            indices.Add(i);
+        }
+        foreach (var indices in groups.Values)
+        {
+            var ordered = indices.Select(i => entries[i]).OrderBy(e => e.Kind == IrAlignmentKind.Inserted ? 0 : 1).ToArray();
+            for (int i = 0; i < indices.Count; i++) entries[indices[i]] = ordered[i];
+        }
+        return entries;
     }
 
     private static readonly IrHeaderFooterKind[] HeaderFooterKinds =
@@ -352,6 +409,7 @@ internal static class IrEditScriptBuilder
         // unchanged stories remain absent as before. We also bind at output-part transitions and when an explicit
         // left reference would override an inherited clone even though the desired output part stays the same.
         // This produces the crucial clone→primary rejoin record with empty Ops when needed.
+        bool changedSectionOwnership = sections is not null && sections.Any(pair => pair.Left != pair.Right);
         foreach (var kind in HeaderFooterKinds)
         {
             object? previousOutput = null;
@@ -373,11 +431,14 @@ internal static class IrEditScriptBuilder
                 bool explicitWouldOverrideDesired = explicitLeftStory is not null && !explicitAlreadySelectsDesired;
                 bool rightExplicitNeedsBinding = explicitRightStory is not null &&
                     (plan.Ops.Count > 0 || plan.CloneLeftPart || plan.LeftPartUri is null);
-                bool needsBinding = rightExplicitNeedsBinding || (hasPreviousOutput
+                // Even unchanged text can become visible when the revised source enables or
+                // disables its first-page flag. Carry that source identity without reading provenance.
+                bool needsBinding = changedSectionOwnership && sections![s].Right >= 0 && plan.Right is not null ||
+                    rightExplicitNeedsBinding || (hasPreviousOutput
                     ? !Equals(previousOutput, desiredOutput) || explicitWouldOverrideDesired
                     : !explicitAlreadySelectsDesired);
                 if (needsBinding)
-                    plan.ReferenceBindings.Add(new IrHeaderFooterBinding(s, kind));
+                    plan.ReferenceBindings.Add(new IrHeaderFooterBinding(s, kind, sections is null ? -1 : sections[s].Right));
 
                 previousOutput = desiredOutput;
                 hasPreviousOutput = true;
