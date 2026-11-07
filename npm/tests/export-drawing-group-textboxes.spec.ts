@@ -19,7 +19,7 @@ test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}),
 } });
 
-for (const header of [false, true]) for (const kind of ['group', 'nested', 'separate'] as const) {
+for (const header of [false, true]) for (const kind of ['group', 'nested', 'separate', 'canvas', 'canvas-nested'] as const) {
   test(`${header ? 'header' : 'body'} DrawingML ${kind} keeps all stories and their bounds`, async ({ browser, page }) => {
     test.setTimeout(120_000);
     const result = await renderDocxArtifacts(drawingGroupDocx(header, kind), {

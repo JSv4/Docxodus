@@ -12,7 +12,7 @@ namespace Docxodus.Tests;
 public class HtmlGroupedDrawingTextBoxTests
 {
     private static readonly string Namespaces = $"xmlns:w=\"{W.w}\" xmlns:r=\"{R.r}\" xmlns:wp=\"{WP.wp}\" " +
-        $"xmlns:a=\"{A.a}\" xmlns:wps=\"{WPS.wps}\" xmlns:wpg=\"{WPG.wpg}\" xmlns:pic=\"{Pic.pic}\"";
+        $"xmlns:a=\"{A.a}\" xmlns:wps=\"{WPS.wps}\" xmlns:wpg=\"{WPG.wpg}\" xmlns:wpc=\"{WPC.wpc}\" xmlns:pic=\"{Pic.pic}\"";
     private const string SignalPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0HcAAAAASUVORK5CYII=";
     private const string BodyControlPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGO4I2cEAAMGAS2aHkTAAAAAAElFTkSuQmCC";
     private static readonly string[] Labels = { "CEDAR WINDOW", "MOSS WINDOW", "SKY WINDOW" };
@@ -33,6 +33,8 @@ public class HtmlGroupedDrawingTextBoxTests
         Transform(x, y, width, height, $"<a:chOff x=\"{childX * 12700}\" y=\"{childY * 12700}\"/><a:chExt cx=\"{childWidth * 12700}\" cy=\"{childHeight * 12700}\"/>") +
         $"</wpg:grpSpPr>{members}</wpg:{(nested ? "grpSp" : "wgp")}>";
 
+    private static string Canvas(string members) => $"<wpc:wpc>{members}</wpc:wpc>";
+
     private static string Drawing(string members, bool grouped = true, bool inserted = false)
     {
         var run = $"""
@@ -42,7 +44,7 @@ public class HtmlGroupedDrawingTextBoxTests
               <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
               <wp:extent cx="{(grouped ? 360 : 100) * 12700}" cy="{(grouped ? 80 : 30) * 12700}"/>
               <wp:wrapNone/><wp:docPr id="1" name="Window group"/>
-              <a:graphic><a:graphicData uri="{(grouped ? WPG.wpg : WPS.wps)}">{members}</a:graphicData></a:graphic>
+              <a:graphic><a:graphicData uri="{(members.StartsWith("<wpc:", StringComparison.Ordinal) ? WPC.wpc : grouped ? WPG.wpg : WPS.wps)}">{members}</a:graphicData></a:graphic>
             </wp:anchor></w:drawing></w:r>
             """;
         return inserted ? $"<w:ins w:id=\"11\" w:author=\"Fixture Author\" w:date=\"2026-02-03T10:00:00Z\">{run}</w:ins>" : run;
@@ -99,13 +101,18 @@ public class HtmlGroupedDrawingTextBoxTests
         .Where(element => (string?)element.Attribute("data-docx-textbox") == "true").ToArray();
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public void EveryIndependentStorySurvivesCleanAndInsertedGroups(bool header, bool inserted)
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, true)]
+    public void EveryIndependentStorySurvivesCleanAndInsertedGroups(bool header, bool inserted, bool canvas)
     {
-        var html = Render(Drawing(Group(string.Concat(Labels.Select((text, index) => Box(text, index * 120)))), inserted: inserted), header);
+        var members = string.Concat(Labels.Select((text, index) => Box(text, index * 120)));
+        var html = Render(Drawing(canvas ? Canvas(members) : Group(members), inserted: inserted), header);
         var boxes = Boxes(html);
         Assert.Equal(Labels, boxes.Select(box => box.Value.Trim()));
         Assert.All(boxes, box => Assert.Contains("width: 100pt", (string?)box.Attribute("style")));
@@ -119,14 +126,17 @@ public class HtmlGroupedDrawingTextBoxTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ChildOffsetsAndNestedScalePreserveSeparateFrames(bool nested)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void ChildOffsetsAndNestedScalePreserveSeparateFrames(bool nested, bool canvas)
     {
         var second = nested
-            ? Group(Box(Labels[1], 10, 20, 200, 60), true, 120, 20, 100, 30, 10, 20, 200, 60)
+            ? Group(Box(Labels[1], 10, 20, 200, 60), !canvas, 120, 20, 100, 30, 10, 20, 200, 60)
             : Box(Labels[1], 120, 20);
-        var boxes = Boxes(Render(Drawing(Group(Box(Labels[0]) + second + Box(Labels[2], 240))), true));
+        var members = Box(Labels[0]) + second + Box(Labels[2], 240);
+        var boxes = Boxes(Render(Drawing(canvas ? Canvas(members) : Group(members)), true));
         Assert.Equal(3, boxes.Length);
         Assert.All(boxes, box => Assert.Contains("width: 100pt", (string?)box.Attribute("style")));
         Assert.Contains("left: 0pt", (string?)boxes[0].Parent!.Attribute("style"));
@@ -176,6 +186,21 @@ public class HtmlGroupedDrawingTextBoxTests
         Assert.Equal(Labels.Take(2), Boxes(html).Select(box => box.Value.Trim()));
         Assert.Contains(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "Other");
         Assert.All(Boxes(html), box => Assert.Null(box.Attribute("data-docx-textbox-source-clip")));
+    }
+
+    [Theory]
+    [InlineData("bg", "", false)]
+    [InlineData("whole", "", false)]
+    [InlineData("bg", "<a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill>", true)]
+    [InlineData("whole", "<a:ln><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill></a:ln>", true)]
+    [InlineData("bg", "<a:noFill/>", false)]
+    [InlineData("bg", "<a:effectLst/>", false)]
+    [InlineData("whole", "<a:ln><a:noFill/></a:ln>", false)]
+    public void CanvasFormattingKeepsUnsupportedDiagnostics(string kind, string properties, bool unsupported)
+    {
+        var html = Render(Drawing(Canvas($"<wpc:{kind}>{properties}</wpc:{kind}>" + Box(Labels[0]))), false);
+        Assert.Equal(Labels[0], Assert.Single(Boxes(html)).Value.Trim());
+        Assert.Equal(unsupported, html.Descendants().Any(e => (string?)e.Attribute("data-content-type") == "Other"));
     }
 
     [Fact]

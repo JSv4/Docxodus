@@ -11,10 +11,11 @@ export interface DrawingGroupOrientation {
   upright?: boolean;
 }
 
-export function drawingGroupDocx(header: boolean, kind: 'group' | 'nested' | 'separate', inserted = false,
+export function drawingGroupDocx(header: boolean, kind: 'group' | 'nested' | 'separate' | 'canvas' | 'canvas-nested', inserted = false,
   rotation = 0, orientation: DrawingGroupOrientation = {}): Uint8Array {
   const shapeNs = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape';
   const groupNs = 'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup';
+  const canvasNs = 'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas';
   const transform = (x: number, y: number, width: number, height: number, extra = '', rotate = 0, flip?: 'H' | 'V') =>
     `<a:xfrm rot="${rotate}" ${flip ? `flip${flip}="1"` : ''}><a:off x="${x*12700}" y="${y*12700}"/><a:ext cx="${width*12700}" cy="${height*12700}"/>${extra}</a:xfrm>`;
   const box = (label: string, x: number, y = 0, width = 100, height = 30) =>
@@ -22,7 +23,7 @@ export function drawingGroupDocx(header: boolean, kind: 'group' | 'nested' | 'se
       <a:noFill/><a:ln><a:noFill/></a:ln></wps:spPr><wps:txbx><w:txbxContent><w:p><w:r><w:t>${label}</w:t></w:r></w:p></w:txbxContent></wps:txbx>
       <wps:bodyPr lIns="0" tIns="0" rIns="0" bIns="0" upright="${orientation.upright ? 1 : 0}"><a:noAutofit/></wps:bodyPr></wps:wsp>`;
   const group = (members: string, nested = false) => {
-    const tag = nested ? 'grpSp' : 'wgp';
+    const tag = nested && !kind.startsWith('canvas') ? 'grpSp' : 'wgp';
     const children = nested ? '<a:chOff x="127000" y="254000"/><a:chExt cx="2540000" cy="762000"/>'
       : '<a:chOff x="0" y="0"/><a:chExt cx="4318000" cy="381000"/>';
     return `<wpg:${tag}><wpg:cNvGrpSpPr/><wpg:grpSpPr>${nested
@@ -32,15 +33,15 @@ export function drawingGroupDocx(header: boolean, kind: 'group' | 'nested' | 'se
     simplePos="0" relativeHeight="0" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/>
     <wp:positionH relativeFrom="page"><wp:posOffset>${x*12700}</wp:posOffset></wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>2540000</wp:posOffset></wp:positionV>
     <wp:extent cx="${(grouped ? 340 : 100)*12700}" cy="381000"/><wp:wrapNone/><wp:docPr id="${id}" name="Window group"/>
-    <a:graphic><a:graphicData uri="${grouped ? groupNs : shapeNs}">${payload}</a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
-  const members = drawingGroupLabels.map((label,i) => kind === 'nested' && i === 1
+    <a:graphic><a:graphicData uri="${payload.startsWith('<wpc:') ? canvasNs : grouped ? groupNs : shapeNs}">${payload}</a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
+  const members = drawingGroupLabels.map((label,i) => kind.endsWith('nested') && i === 1
     ? group(box(label,10,20,200,60),true) : box(label,i*120)).join('');
   let content = kind === 'separate' ? drawingGroupLabels.map((label,i) => drawing(box(label,0),false,72+i*120,i+1)).join('')
-    : drawing(group(members),true);
+    : drawing(kind.startsWith('canvas') ? `<wpc:wpc>${members}</wpc:wpc>` : group(members),true);
   if (inserted) content = `<w:ins w:id="11" w:author="Fixture Author" w:date="2026-02-03T10:00:00Z">${content}</w:ins>`;
   const carrier = `<w:p>${content}</w:p>`;
   const namespaces = `xmlns:w="${w}" xmlns:r="${r}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
-    xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="${shapeNs}" xmlns:wpg="${groupNs}"`;
+    xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="${shapeNs}" xmlns:wpg="${groupNs}" xmlns:wpc="${canvasNs}"`;
   const parts: Record<string, string> = {
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
       + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
