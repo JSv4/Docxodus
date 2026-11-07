@@ -102,6 +102,8 @@ inventory. This path does not call revision acceptance or rewrite the caller's p
 VML drawing containers project each independent member, with nested group coordinate maps
 preserving individual textbox and picture bounds (#1482). The ordinary textbox paragraph
 converter still owns formatting, contextual spacing, source identities and fixed-box clipping.
+DrawingML groups and drawing canvases use the same member walker: a canvas uses its own
+coordinate space, while nested groups apply their child offsets and scale (#1561).
 The host records expected textbox identities from selected source OOXML; the image/chart paths
 record only their actual selected alternatives so a missing image can still fall back to text.
 This makes conversion-time loss observable to the paginator's existing completeness check.

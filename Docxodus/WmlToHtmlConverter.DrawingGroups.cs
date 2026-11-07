@@ -13,7 +13,7 @@ public static partial class WmlToHtmlConverter
     {
         var container = drawing.Elements().FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
         var source = container?.Element(A.graphic)?.Element(A.graphicData)?.Elements().FirstOrDefault();
-        if (source?.Name != WpgGroup
+        if ((source?.Name != WpgGroup && source?.Name != WpcCanvas)
             || !source.Descendants().Any(e => e.Name == W.txbxContent || e.Name == WPS.wps + "linkedTxbx")) return null;
 
         var extent = container!.Element(WP.extent);
@@ -119,12 +119,21 @@ public static partial class WmlToHtmlConverter
                 }
             }
             else if (child.Name == WPG.wpg + "graphicFrame" || child.Name == WPC.wpc + "graphicFrame"
-                || child.Name == W14.w14 + "contentPart" || child.Name == MC.AlternateContent)
+                || child.Name == W14.w14 + "contentPart" || child.Name == MC.AlternateContent
+                || ((child.Name == WPC.wpc + "bg" || child.Name == WPC.wpc + "whole") && HasCanvasFormatting(child)))
                 context.Undrawn++;
             if (member != null) group.Add(member);
         }
         return group;
     }
+
+    private static bool HasCanvasFormatting(XElement properties) => properties.Elements().Any(property =>
+    {
+        if (property.Name == A.noFill) return false;
+        if (property.Name == A.ln) return property.HasElements && property.Element(A.noFill) == null;
+        if (property.Name == A.effectLst) return property.HasElements;
+        return true;
+    });
 
     private readonly record struct DrawingTextOrientation(double Rotation, int FlipX, int FlipY)
     {
