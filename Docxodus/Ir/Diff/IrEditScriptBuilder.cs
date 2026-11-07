@@ -1276,19 +1276,15 @@ internal static class IrEditScriptBuilder
             switch (entry.Kind)
             {
                 case IrAlignmentKind.Unchanged:
-                    if (StructuralCarrierDiffers(entry.Left!, entry.Right!))
-                        ops.Add(MakeModifyOp(entry.Left!, entry.Right!, settings));
-                    else
-                        ops.Add(new IrEditOp(IrEditOpKind.EqualBlock,
-                            entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
-                            null, null, null));
-                    break;
-
                 case IrAlignmentKind.FormatOnly:
-                    if (StructuralCarrierDiffers(entry.Left!, entry.Right!))
+                    // Textbox interiors are absent from their host's format fingerprint, including
+                    // when that host is nested in a table or block wrapper.
+                    if (StructuralCarrierDiffers(entry.Left!, entry.Right!) ||
+                        TextboxContentDiffers(entry.Left!, entry.Right!))
                         ops.Add(MakeModifyOp(entry.Left!, entry.Right!, settings));
                     else
-                        ops.Add(new IrEditOp(IrEditOpKind.FormatOnlyBlock,
+                        ops.Add(new IrEditOp(entry.Kind == IrAlignmentKind.Unchanged
+                                ? IrEditOpKind.EqualBlock : IrEditOpKind.FormatOnlyBlock,
                             entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
                             null, null, null));
                     break;
@@ -2039,6 +2035,49 @@ internal static class IrEditScriptBuilder
         for (int i = 0; i < Math.Min(left.Count, right.Count); i++)
             if (left[i].CarrierDigest != right[i].CarrierDigest ||
                 BlockCarriersDiffer(left[i].Blocks, right[i].Blocks)) return true;
+        return false;
+    }
+
+    internal static bool TextboxContentDiffers(IrBlock left, IrBlock right)
+    {
+        if (left is IrParagraph lp && right is IrParagraph rp)
+        {
+            if (!ContainsTextbox(lp.Inlines) && !ContainsTextbox(rp.Inlines)) return false;
+            var leftBoxes = CollectTextboxes(lp.Inlines);
+            var rightBoxes = CollectTextboxes(rp.Inlines);
+            if (leftBoxes.Count != rightBoxes.Count) return true;
+            for (int i = 0; i < leftBoxes.Count; i++)
+            {
+                var lb = leftBoxes[i].Blocks;
+                var rb = rightBoxes[i].Blocks;
+                if (lb.Count != rb.Count) return true;
+                for (int j = 0; j < lb.Count; j++)
+                    if (lb[j].ContentHash != rb[j].ContentHash ||
+                        lb[j].FormatFingerprint != rb[j].FormatFingerprint ||
+                        TextboxContentDiffers(lb[j], rb[j])) return true;
+            }
+        }
+        else if (left is IrTable lt && right is IrTable rt)
+        {
+            for (int i = 0; i < Math.Min(lt.Rows.Count, rt.Rows.Count); i++)
+                if (TextboxContentDiffers(lt.Rows[i], rt.Rows[i])) return true;
+        }
+        else if (left is IrSdtBlock ls && right is IrSdtBlock rs)
+            return TextboxContentDiffers(ls.Blocks, rs.Blocks);
+        return false;
+    }
+
+    internal static bool TextboxContentDiffers(IrRow left, IrRow right)
+    {
+        for (int i = 0; i < Math.Min(left.Cells.Count, right.Cells.Count); i++)
+            if (TextboxContentDiffers(left.Cells[i].Blocks, right.Cells[i].Blocks)) return true;
+        return false;
+    }
+
+    internal static bool TextboxContentDiffers(IReadOnlyList<IrBlock> left, IReadOnlyList<IrBlock> right)
+    {
+        for (int i = 0; i < Math.Min(left.Count, right.Count); i++)
+            if (TextboxContentDiffers(left[i], right[i])) return true;
         return false;
     }
 

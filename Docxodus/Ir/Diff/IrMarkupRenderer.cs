@@ -1988,14 +1988,17 @@ internal static partial class IrMarkupRenderer
                 EmitCarriedRemovedTable(carried, state, sink);
 
         if (!lowerToPreservedReplace &&
-            !op.RequiresWholeParagraphReplace && op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara &&
-            op.TextboxDiffs is null)             // textbox-interior diffs are not finely rendered in Task 3
+            !op.RequiresWholeParagraphReplace && op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara)
         {
             // Commented paragraphs render finely too: comment range markers + the commentReference run ride
             // through the token diff as AlwaysKeep zero-width markers (IsAlwaysKeepMarker / WalkRun), then
             // NormalizeComments reconciles them to unique/paired/resolved markup. (Was: bailed to whole-block.)
-            RenderModifiedParagraph(op, tokenDiff, state, sink);
-            return;
+            if (op.TextboxDiffs is null)
+            {
+                RenderModifiedParagraph(op, tokenDiff, state, sink);
+                return;
+            }
+            if (RenderModifiedTextboxParagraph(op, tokenDiff, state, sink)) return;
         }
 
         // A Modified TABLE pair with a nested table diff renders row/cell-precise markup (Task 4).
@@ -2014,6 +2017,44 @@ internal static partial class IrMarkupRenderer
             EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
         if (op.RightAnchor != null)
             EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+    }
+
+    private static bool RenderModifiedTextboxParagraph(
+        IrEditOp op, IrTokenDiff tokenDiff, RenderState state, List<XElement> sink)
+    {
+        var diffs = op.TextboxDiffs!;
+        var left = SourceElement(op.LeftAnchor, state.Left);
+        var right = SourceElement(op.RightAnchor, state.RightSource);
+        if (left is null || right is null) return false;
+        var leftBodies = IrReader.OutermostTextboxBodies(left).ToArray();
+        var rightBodies = IrReader.OutermostTextboxBodies(right).ToArray();
+        if (leftBodies.Length != diffs.Count || rightBodies.Length != diffs.Count) return false;
+        foreach (var body in leftBodies.Concat(rightBodies))
+            if (IrReader.ScanWrapperContent(body.Elements()) is (true, _) or (_, true) ||
+                body.Ancestors().TakeWhile(e => !ReferenceEquals(e, left) && !ReferenceEquals(e, right))
+                    .Attributes().Any(a => a.Name.Namespace == R.r)) return false;
+
+        // The host's masked textbox tokens preserve each unchanged carrier once, including
+        // every physical Choice/Fallback copy. Only its bodies receive the nested revisions.
+        var host = new List<XElement>();
+        RenderModifiedParagraph(op, tokenDiff, state, host);
+        if (host.Count != 1) return false;
+        var bodies = IrReader.OutermostTextboxBodies(host[0]).ToArray();
+        if (bodies.Length != diffs.Count) return false;
+        // The host clone was registered as entirely right-owned. Empty its replaceable bodies,
+        // then narrow those registrations to the retained shell before adding mixed-source content.
+        foreach (var body in bodies) body.RemoveNodes();
+        foreach (var ancestor in bodies.SelectMany(body => body.AncestorsAndSelf().Reverse()).Distinct())
+            state.KeepMediaRegistrationToCurrentChildren(ancestor);
+        for (int i = 0; i < bodies.Length; i++)
+        {
+            var children = new List<XElement>();
+            RenderBlockOpsWordShaped(diffs[i].Ops, state, children);
+            bodies[i].ReplaceNodes(children);
+        }
+        PartNamespaces.Of(right.AncestorsAndSelf().ToArray()).DeclareIn(host[0]);
+        sink.Add(host[0]);
+        return true;
     }
 
     /// <summary>
@@ -11247,14 +11288,20 @@ internal static partial class IrMarkupRenderer
         /// Positions are kept, so the per-scope registry slices stay valid.</summary>
         public void KeepMediaRegistrationToCurrentChildren(XElement clone)
         {
-            foreach (var list in RightSourcedClonesBySource.Values)
+            Narrow(RightSourcedClonesBySource, e => e.DescendantsAndSelf().Attributes().Any(a => a.Name.Namespace == R.r));
+            Narrow(NoteRefClonesBySource, e => e.DescendantsAndSelf()
+                .Any(n => n.Name == W.footnoteReference || n.Name == W.endnoteReference));
+
+            void Narrow(Dictionary<int, List<XElement>> buckets, Func<XElement, bool> hasReference)
             {
-                int index;
-                while ((index = list.FindIndex(e => ReferenceEquals(e, clone))) >= 0)
+                foreach (var list in buckets.Values)
                 {
-                    list.RemoveAt(index);
-                    list.InsertRange(index, clone.Elements()
-                        .Where(e => e.DescendantsAndSelf().Attributes().Any(a => a.Name.Namespace == R.r)));
+                    int index;
+                    while ((index = list.FindIndex(e => ReferenceEquals(e, clone))) >= 0)
+                    {
+                        list.RemoveAt(index);
+                        list.InsertRange(index, clone.Elements().Where(hasReference));
+                    }
                 }
             }
         }

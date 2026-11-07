@@ -3657,6 +3657,22 @@ a supported import path; it does not establish a general lossless conversion of 
 group. No equivalent safe revision encoding was identified by these experiments. The core
 comparison output therefore retains the native DrawingML and its revision wrappers.
 
+For text edits within an unchanged group, comparison now places revisions inside each textbox (#1557). The one-word header reproduction opens in LibreOffice 25.8.7.3 with this output, and the verifier no longer reports a revision around the group. Whole-group additions and removals still require the native wrappers and retain the warning.
+
+The supported fallback for reviewing those whole-group changes is a **markup PDF companion** from the public `@docxodus/export` renderer, preserving the revision-bearing DOCX as the editable source:
+
+```javascript
+const result = await renderDocxArtifacts(redlineBytes, {
+  outputs: ["pdf"],
+  reviewProfile: "markup",
+  commentProfile: "hidden",
+  fontDirectories: verifiedFontDirectories,
+});
+// Deliver result.pdf as the review preview alongside the original redlineBytes.
+```
+
+The reproduced insertion and deletion both export with their label text and revision colors through the production AOT renderer. This is a preview fallback, not a LibreOffice-compatible tracked DOCX or a Word layout claim. Inspect the render report and preview for the actual document; if export fails, retain the DOCX and report the preview as unavailable. Delivery bundles expose the same policy through `DeliveryReviewProfile.Markup` and `DocxodusExportHostRenderer` (see [delivery rendering](architecture/delivery_bundle.md)). Original/final PDFs, if requested separately, are resolved views rather than a tracked review.
+
 The harness added in #1048 did not protect shipped consumers: it only recorded the conversion
 failure, and v15 output still triggers it. Inspect the **actual output**, since a comparison of
 two clean inputs can introduce the failing revision wrapper:

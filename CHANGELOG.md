@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Comparison tracks edits inside stable textbox groups, including header labels and nested formatting, while preserving hyperlink and media ownership. Whole-group header additions/removals retain their LibreOffice warning and have a documented markup PDF companion fallback (#1557).
+
 - Browser CI and npm release preflight use Ubuntu 24.04, supported by the locked Playwright browsers (#1580).
 
 - Textbox search returns only the selected compatibility branch. Span and match replacements update corresponding DrawingML/VML textbox paragraphs atomically, including formatting and tracked edits; divergent or nested alternatives are refused without changing the document (#1560).

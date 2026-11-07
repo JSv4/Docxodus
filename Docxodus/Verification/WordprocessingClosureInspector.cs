@@ -892,8 +892,9 @@ internal static class WordprocessingClosureInspector
                 "This header contains a tracked anchored DrawingML group with text boxes. "
                 + "LibreOffice has a known import failure for this shape; compatibility branches "
                 + "are at risk when the renderer selects this drawing.",
-                "Preserve the original DOCX and its revisions. Use another renderer verified "
-                + "for this document; do not flatten revisions to obtain a PDF.",
+                "Preserve the original DOCX and its revisions. Use a verified markup PDF companion "
+                + "from Docxodus export for review; check its render report and preview. "
+                + "Do not flatten revisions to make LibreOffice load the file.",
                 "libreoffice", DeliverableFindingCategory.Render);
         }
     }

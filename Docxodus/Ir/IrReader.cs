@@ -818,7 +818,7 @@ internal static class IrReader
     /// their cells. A nested wrapper around blocks is not entered: it is one child of this wrapper, with
     /// flags of its own, and is kept or replaced as a whole. A wrapper around table rows or cells is read
     /// through, as the table reader reads it.</summary>
-    private static (bool BlockLevelMarkers, bool ParagraphSpanningField) ScanWrapperContent(IEnumerable<XElement> content)
+    internal static (bool BlockLevelMarkers, bool ParagraphSpanningField) ScanWrapperContent(IEnumerable<XElement> content)
     {
         var markers = false;
         var spanningField = false;
@@ -1868,7 +1868,7 @@ internal static class IrReader
     /// deliberately excluded here because the recursive block walker re-discovers them when it descends
     /// into an outer body's inner paragraphs (so each is modeled exactly once at its real nesting depth).
     /// </summary>
-    private static IEnumerable<XElement> OutermostTextboxBodies(XElement root)
+    internal static IEnumerable<XElement> OutermostTextboxBodies(XElement root)
     {
         // Take a w:txbxContent only when no ANCESTOR (walking up but stopping at the carrier root) is
         // itself a w:txbxContent — that is the outermost-within-carrier test. DescendantsAndSelf so a

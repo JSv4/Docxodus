@@ -88,7 +88,7 @@ that preflight read safely; SDK exceptions become structured unavailable-evidenc
   revision-wrapped anchored DrawingML group containing text boxes in a header. Inspect the actual
   comparison output with `DeliverableVerifier.VerifyDeliverable(redline)`, or the corresponding
   session/transport operation, before sending it to LibreOffice. The finding gives the part,
-  XPath and preservation guidance; it does not claim a render was attempted. Standard reports
+  XPath and preservation guidance; it does not claim a render was attempted. Stable textbox label edits now keep the group untracked (#1557), so this warning no longer applies to those outputs. Whole-group changes retain the warning; use the [documented companion preview fallback](../ooxml_corner_cases.md#alternative-encoding-and-preservation-policy) when LibreOffice cannot load them. Standard reports
   the warning and Strict blocks on it. See [the measured controls](../ooxml_corner_cases.md#libreoffice-fails-on-tracked-anchored-header-groups-with-text-boxes).
 - **Semantic and package deltas:** `SemanticDiff` supplies modeled changes. A separate manifest
   comparator retains every changed part and relationship, so an unmodeled change cannot be hidden
