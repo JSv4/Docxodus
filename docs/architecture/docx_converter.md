@@ -90,6 +90,10 @@ The conversion happens in the following stages:
 
 ### 1. Preprocessing
 
+XML normalizes raw CR/CRLF to LF. Before formatting, LF characters in `w:t` and
+`w:delText` become spaces; explicitly encoded CR characters remain breaks. Literal tabs use the same tab-stop path as `w:tab`;
+explicit `w:br` / `w:cr` elements and field instructions retain their meaning (#1564).
+
 Run coalescing visits nested containers from the leaves upward on one copy of the input tree.
 Each container, including textbox paragraphs, is consolidated once (#1410).
 

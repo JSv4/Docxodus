@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Literal line endings in Word text render as spaces across body, running stories and tracked text; explicit line-break elements and tab alignment remain intact (part of #1564).
+
 - Comparison tracks edits inside stable textbox groups, including header labels and nested formatting, while preserving hyperlink and media ownership. Whole-group header additions/removals retain their LibreOffice warning and have a documented markup PDF companion fallback (#1557).
 
 - Tables use the remaining page space through the shared row/cell fragmenter, preserving row keeps, repeated headers, and nested content. Oversized keep recovery retries on a fresh page. Export reports intact multi-column table moves through `column_table_page_remainder`; strict unsupported-content policy rejects that fallback (#1569).

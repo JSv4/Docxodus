@@ -2,6 +2,13 @@ import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
 
 export type LiteralTabCase = 'body' | 'header' | 'footer' | 'multiple' | 'deleted' | 'inserted';
 
+export const literalLineEndingCases: Array<[LiteralTabCase, string, string, string]> = [
+  ['body', 'LF', '\n', ' '], ['header', 'raw CR', '\r', ' '],
+  ['footer', 'raw CRLF', '\r\n', ' '], ['deleted', 'LF', '\n', ' '],
+  ['inserted', 'raw CRLF', '\r\n', ' '], ['body', 'double LF', '\n\n', '  '],
+  ['body', 'encoded LF', '&#10;', ' '], ['body', 'encoded double LF', '&#10;&#10;', '  '],
+];
+
 /** Original tab-only, mixed-text and deleted-text inputs, with explicit-tab controls. */
 export function literalTabFixture(kind: LiteralTabCase, literal = true): Uint8Array {
   const format = '<w:rPr><w:b/><w:color w:val="225588"/></w:rPr>';
@@ -20,6 +27,25 @@ export function literalTabFixture(kind: LiteralTabCase, literal = true): Uint8Ar
   if (kind === 'inserted') content = '<w:ins w:id="8" w:author="Ferry reviewer" w:date="2026-01-01T00:00:00Z">' + content + '</w:ins>';
   const paragraph = '<w:p><w:pPr><w:tabs>' + (kind === 'multiple' ? '<w:tab w:val="left" w:pos="2400"/>' : '')
     + '<w:tab w:val="right" w:pos="9360" w:leader="dot"/></w:tabs></w:pPr>' + content + '</w:p>';
+  return storyFixture(kind, paragraph);
+}
+
+/** Literal line endings, including numeric CR references that XML itself does not normalize. */
+export function literalLineEndingFixture(kind: LiteralTabCase, ending: string, alignedTab = true): Uint8Array {
+  const tag = kind === 'deleted' ? 'delText' : 't';
+  const text = (value: string) => `<w:${tag} xml:space="preserve">${value}</w:${tag}>`;
+  let content = '<w:r><w:rPr><w:b/></w:rPr>' + text('NorthMark')
+    + (ending.startsWith('<w:') ? ending : '')
+    + text((ending.startsWith('<w:') ? '' : ending) + ' HarborMark')
+    + (alignedTab ? '<w:tab/>' + text('TailMark') : '') + '</w:r>';
+  if (kind === 'deleted' || kind === 'inserted') {
+    const revision = kind === 'deleted' ? 'del' : 'ins';
+    content = `<w:${revision} w:id="9" w:author="Ferry reviewer" w:date="2026-01-01T00:00:00Z">${content}</w:${revision}>`;
+  }
+  return storyFixture(kind, '<w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="9360"/></w:tabs></w:pPr>' + content + '</w:p>');
+}
+
+function storyFixture(kind: LiteralTabCase, paragraph: string): Uint8Array {
   const story = kind === 'header' || kind === 'footer' ? kind : null;
   const overrides = ['document', 'styles', 'settings'].map(part => '<Override PartName="/word/' + part
     + '.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.'
