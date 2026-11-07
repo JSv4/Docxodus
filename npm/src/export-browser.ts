@@ -4005,6 +4005,18 @@ export async function convertDocxToPaginatedHtml(
     }
     frame = finalized.frame;
     const { document: renderDocument, engine, pages } = finalized;
+    for (const block of Array.from(renderDocument.querySelectorAll<HTMLElement>('#pagination-container [data-docx-column-table-deferred]'))) {
+      const anchorId = block.querySelector('table [data-source-anchor-id]')
+        ?.getAttribute('data-source-anchor-id') ?? undefined;
+      policyWarning(state, options, {
+        code: 'column_table_page_remainder',
+        phase: 'pagination',
+        message: 'A multi-column block containing a table moved intact to the next page. Splitting table content to use the remaining page area is not supported.',
+        remediation: 'Use a single-column section or review the page breaks before publication.',
+        partUri: derivedManifest?.facts.mainDocumentUri ?? manifest.facts.mainDocumentUri ?? undefined,
+        ...(anchorId ? { anchorId } : {}),
+      });
+    }
     for (const spacer of Array.from(renderDocument.querySelectorAll<HTMLElement>('#pagination-container [data-docx-relaxed-clearance]'))) {
       policyWarning(state, options, {
         code: "drawing_clearance_relaxed",

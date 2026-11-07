@@ -8,6 +8,8 @@ All notable changes to this project will be documented in this file.
 
 - Comparison tracks edits inside stable textbox groups, including header labels and nested formatting, while preserving hyperlink and media ownership. Whole-group header additions/removals retain their LibreOffice warning and have a documented markup PDF companion fallback (#1557).
 
+- Tables use the remaining page space through the shared row/cell fragmenter, preserving row keeps, repeated headers, and nested content. Oversized keep recovery retries on a fresh page. Export reports intact multi-column table moves through `column_table_page_remainder`; strict unsupported-content policy rejects that fallback (#1569).
+
 - Browser CI and npm release preflight use Ubuntu 24.04, supported by the locked Playwright browsers (#1580).
 
 - Textbox search returns only the selected compatibility branch. Span and match replacements update corresponding DrawingML/VML textbox paragraphs atomically, including formatting and tracked edits; divergent or nested alternatives are refused without changing the document (#1560).

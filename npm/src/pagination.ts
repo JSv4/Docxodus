@@ -4445,21 +4445,39 @@ export class PaginationEngine {
     }));
   }
 
-  /** Keep complete row groups before a citation whose note cannot start on this page. */
-  private tryFragmentCitingTable(
+  /** Fill the remaining body band without separating a citation from its note. */
+  private tryFragmentTable(
     block: MeasuredBlock,
     dims: PageDimensions,
     availableHeightPt: number,
     effectiveMarginTopPt: number,
     notesStart: (footnoteIds: string[], headHeightPt: number) => boolean,
   ): MeasuredBlock[] | null {
-    if (block.keepLines || block.keepWithNext || block.pageBreakBefore) return null;
-    const split = this.splitTableAtRows(block.element, (head) => {
-      const measured = this.measureElement(head, dims, block.sectionIndex);
-      return effectiveMarginTopPt + measured.heightPt <= availableHeightPt
-        && notesStart(this.extractFootnoteRefs(head), measured.heightPt);
-    }, false);
+    if (block.keepLines || block.keepWithNext || block.pageBreakBefore
+      || availableHeightPt <= effectiveMarginTopPt || !this.blockTable(block.element)) return null;
+    // Carried fragments are detached. Cell splitting must still see their inherited styles.
+    const host = !block.element.isConnected ? this.document.createElement("div") : null;
+    const candidate = host ? block.element.cloneNode(true) as HTMLElement : block.element;
+    if (host) {
+      host.style.cssText = `position:absolute;visibility:hidden;left:-9999px;width:${dims.contentWidth}pt`;
+      host.appendChild(candidate);
+      this.stagingElement.appendChild(host);
+    }
+    let split: { head: HTMLElement; tail: HTMLElement } | null;
+    try {
+      const fits = (head: HTMLElement) => {
+        const measured = this.measureElement(head, dims, block.sectionIndex);
+        return effectiveMarginTopPt + measured.heightPt <= availableHeightPt
+          && notesStart(this.extractFootnoteRefs(head), measured.heightPt);
+      };
+      split = this.fragmentParagraphs
+        ? this.splitTableContent(candidate, fits, false)
+        : this.splitTableAtRows(candidate, fits, false);
+    } finally {
+      host?.remove();
+    }
     if (!split) return null;
+    this.reconcileFragmentIdentities(split.head, split.tail);
     split.head.style.setProperty("margin-bottom", "0", "important");
     split.tail.style.setProperty("margin-top", "0", "important");
     return [split.head, split.tail].map(element => ({
@@ -4872,8 +4890,7 @@ export class PaginationEngine {
     for (const child of Array.from(element.childNodes)) {
       if (child === table) continue;
       if (child.nodeType === this.view.Node.TEXT_NODE && !(child.textContent ?? "").trim()) continue;
-      if (!(child instanceof this.view.HTMLAnchorElement) || !child.id || child.hasAttribute("href")
-        || child.childNodes.length !== 0) return null;
+      if (!this.isEmptyBookmarkTarget(child)) return null;
     }
     return table as HTMLTableElement;
   }
@@ -4888,6 +4905,7 @@ export class PaginationEngine {
     fits: (head: HTMLElement) => boolean,
     forceFirst: boolean,
     allowNested = false,
+    relaxKeeps = false,
   ): { head: HTMLElement; tail: HTMLElement } | null {
     const table = this.blockTable(element);
     if (!table || table.tBodies.length !== 1 || (!allowNested && table.querySelector("table"))
@@ -4899,7 +4917,8 @@ export class PaginationEngine {
     const allEnds = this.tableRowGroupEnds(rows);
     const headerRows = rows.slice(0, this.leadingHeaderRowCount(rows, allEnds));
     // A cut inside or right after the header run would leave a page of header rows alone.
-    const ends = allEnds.filter((end) => end > headerRows.length && end < rows.length);
+    const ends = allEnds.filter((end) => end > headerRows.length && end < rows.length
+      && (relaxKeeps || !this.rowKeepsWithNext(rows[end - 1])));
     if (ends.length === 0) return null;
     const wrapper = element === table ? null : element;
     // The table's header rows open the continuation again, as on a body table's later pages.
@@ -4924,6 +4943,25 @@ export class PaginationEngine {
     return { head: fragment(0, cut, true), tail: fragment(cut, rows.length, false) };
   }
 
+  private isEmptyBookmarkTarget(node: Node): boolean {
+    return node instanceof this.view.HTMLAnchorElement && !!node.id
+      && !node.hasAttribute("href") && node.childNodes.length === 0;
+  }
+
+  /** A terminal flow paragraph can keep this row with its successor. Nested tables own their keeps. */
+  private rowKeepsWithNext(row: HTMLTableRowElement): boolean {
+    return Array.from(row.cells).some(cell => {
+      let last = cell.lastElementChild as HTMLElement | null;
+      while (last) {
+        if (this.isEmptyBookmarkTarget(last)) last = last.previousElementSibling as HTMLElement | null;
+        else if (last.dataset.paginationCommentGroup === "true" || this.isBorderGroup(last)) {
+          last = last.lastElementChild as HTMLElement | null;
+        } else return this.isWordParagraphElement(last) && last.dataset.keepWithNext === "true";
+      }
+      return false;
+    });
+  }
+
   /** Split a table between rows, or inside the first row when no complete row fits. */
   private splitTableContent(
     element: HTMLElement,
@@ -4931,9 +4969,10 @@ export class PaginationEngine {
     forceFirst: boolean,
     freshBody = false,
   ): { head: HTMLElement; tail: HTMLElement } | null {
-    const wholeRows = this.splitTableAtRows(element, fits, false, true);
+    const relaxKeeps = freshBody || forceFirst;
+    const wholeRows = this.splitTableAtRows(element, fits, false, true, relaxKeeps);
     if (wholeRows) return wholeRows;
-    const fallback = () => forceFirst ? this.splitTableAtRows(element, fits, true, true) : null;
+    const fallback = () => forceFirst ? this.splitTableAtRows(element, fits, true, true, true) : null;
     const table = this.blockTable(element);
     if (!table || table.tBodies.length !== 1
       || Array.from(table.children).some(child => child !== table.tBodies[0] && child.localName !== "colgroup")) {
@@ -4947,6 +4986,7 @@ export class PaginationEngine {
     // Keep vertical merges, declared row heights and non-top cell alignment intact. These need
     // their own layout rules; ordinary rows can partition each cell in the same measured band.
     if (!row || !ends.includes(headers.length + 1) || (row.dataset.docxCantSplit === "true" && !freshBody)
+      || (!relaxKeeps && rows.length > headers.length + 1 && this.rowKeepsWithNext(row))
       || row.dataset.docxHeaderRow === "true"
       || row.dataset.docxRowHeightRule || row.style.height || row.style.minHeight
       || Array.from(row.cells).some(cell => cell.rowSpan !== 1
@@ -6703,16 +6743,19 @@ export class PaginationEngine {
             && allBlockFootnoteIds.every(id => this.footnoteRegistry.has(id)),
           isFirstOnPage && currentFootnoteHeight === 0 && !currentContinuation
             && block.heightPt > freshBlockPageBodyHeight,
-        ) ?? (allBlockFootnoteIds.length > 0 && freshBlockHeight > freshBlockPageBodyHeight
-          // A table taller than a fresh page also needs the note-aware row splitter. The
-          // generic oversized-table fallback cannot reserve room beside its citations.
-          ? this.tryFragmentCitingTable(block, blockDimensions, effectiveRemainingHeight,
-            effectiveMarginTop, headNotesStart)
-          : null);
+        ) ?? this.tryFragmentTable(block, blockDimensions, effectiveRemainingHeight,
+          effectiveMarginTop, headNotesStart);
         if (fragments) {
           blocks.splice(i, 1, ...fragments);
           i--;
           continue;
+        }
+        if (pageHasPayload() && block.element.dataset.paginationColumns === "true"
+          && block.element.querySelector("table")) {
+          // The column path can cut between children, but cannot yet cut a table child
+          // against this remainder. Preserve the content and expose the whole-block move.
+          block.element.dataset.docxColumnTableDeferred = "true";
+          sourceBlock.element.dataset.docxColumnTableDeferred = "true";
         }
       }
 
@@ -6763,7 +6806,7 @@ export class PaginationEngine {
               headNotesStart,
               pagePrefix(currentContent),
               block.keepLines && isFirstOnPage && currentFootnoteHeight === 0 && !currentContinuation,
-            ) ?? this.tryFragmentCitingTable(block, blockDimensions, effectiveRemainingHeight,
+            ) ?? this.tryFragmentTable(block, blockDimensions, effectiveRemainingHeight,
               effectiveMarginTop, headNotesStart);
             if (fragments) {
               blocks.splice(i, 1, ...fragments);
@@ -6911,15 +6954,22 @@ export class PaginationEngine {
           continue;
         }
       } else {
-        // Block is taller than a page. Ordinary tables can be split at complete
-        // row boundaries; every other block retains the established overflow path.
+        // The ordinary fragmenters found no legal remainder head. Move before oversized
+        // recovery relaxes keeps or cantSplit, so its fresh-body rules apply on a fresh page.
+        if (pageHasPayload()) {
+          finishPage(block.sectionIndex);
+          i--;
+          continue;
+        }
+        // Block is taller than a page. Ordinary tables can recover row/cell fragments;
+        // every other block retains the established overflow path.
         const tableFragments = this.trySplitSimpleOversizedTable(
           block,
           dimensionsFor(block.sectionIndex),
           block.sectionIndex,
         );
         if (tableFragments) {
-          // Let normal fitting place the first fragment beside preceding content when it fits.
+          // Retry the recovered fragments through the ordinary fitting and note accounting.
           blocks.splice(i, 1, ...tableFragments);
           i--;
           continue;
@@ -6928,11 +6978,6 @@ export class PaginationEngine {
         // Unsupported oversized blocks are intentionally left intact. Splitting
         // arbitrary HTML, merged tables, or footnote-bearing tables would be less
         // correct than the prior clipped fallback.
-        if (pageHasPayload()) {
-          finishPage(block.sectionIndex);
-          i--;
-          continue;
-        }
         markSectionPlaced(block.sectionIndex);
         const oversized = this.cloneBlockForPage(
           block,
