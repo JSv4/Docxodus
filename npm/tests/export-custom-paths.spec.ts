@@ -29,10 +29,20 @@ for (const kind of ['polygon', 'quadratic', 'cubic', 'open', 'hole', 'sameWindin
         const text = (await pdfPage.getTextContent()).items.flatMap(item => 'str' in item ? [item.str] : []).join('');
         expect(text).toBe('Optical panelEnd of inspection');
         const ops = await pdfPage.getOperatorList();
-        const painted = ops.fnArray.flatMap((op, i) =>
-          op === OPS.constructPath ? [ops.argsArray[i][0]] : []);
-        const fills = painted.filter(op => [OPS.fill, OPS.eoFill, OPS.fillStroke, OPS.eoFillStroke].includes(op));
-        const strokes = painted.filter(op => [OPS.stroke, OPS.fillStroke, OPS.eoFillStroke].includes(op));
+        // Inspect the authored drawing colors, excluding the printed white page background.
+        let fill = '', stroke = '';
+        const stack: [string, string][] = [], fills: number[] = [], strokes: number[] = [];
+        ops.fnArray.forEach((op, i) => {
+          if (op === OPS.save) stack.push([fill, stroke]);
+          else if (op === OPS.restore) [fill, stroke] = stack.pop() ?? ['', ''];
+          else if (op === OPS.setFillRGBColor) fill = ops.argsArray[i][0];
+          else if (op === OPS.setStrokeRGBColor) stroke = ops.argsArray[i][0];
+          else if (op === OPS.constructPath) {
+            const mode = ops.argsArray[i][0];
+            if (fill === '#19647e' && [OPS.fill, OPS.eoFill, OPS.fillStroke, OPS.eoFillStroke].includes(mode)) fills.push(mode);
+            if (stroke === '#883311' && [OPS.stroke, OPS.fillStroke, OPS.eoFillStroke].includes(mode)) strokes.push(mode);
+          }
+        });
         expect(fills.length).toBe(kind === 'open' || kind === 'invisible' ? 0 : 1);
         if (kind === 'hole' || kind === 'sameWinding') expect(fills).toEqual([OPS.eoFill]);
         expect(strokes.length).toBe(kind === 'open' || kind === 'multiple' ? 1 : 0);
