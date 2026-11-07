@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml;
@@ -13,6 +14,142 @@ namespace Docxodus.Tests;
 
 public class LiteralTabTextTests
 {
+    public static IEnumerable<object[]> LineEndingCases()
+    {
+        foreach (var story in new[] { "body", "header", "footer" })
+        foreach (var ending in new[] { "\n", "\r", "\r\n", "\n\n" })
+        foreach (var revision in new[] { "none", "deleted", "inserted" })
+        foreach (var encoded in new[] { false, true })
+            if (!encoded || !ending.Contains('\r'))
+                yield return new object[] { story, ending, revision, encoded };
+    }
+
+    [Theory]
+    [MemberData(nameof(LineEndingCases))]
+    public void Literal_line_endings_match_spaces_without_changing_tabs(string story, string ending, string revision, bool encoded)
+    {
+        string spaces = ending == "\n\n" ? "  " : " ";
+        var expected = Convert(Fixture(story, " North\tHarbor" + spaces + "register ", literal: true,
+            deleted: revision == "deleted", inserted: revision == "inserted"));
+        var bytes = LineEndingFixture(story, ending, revision, encoded);
+        var actual = Convert(bytes);
+        Assert.Equal(expected.Element(Xhtml.body)!.Value, actual.Element(Xhtml.body)!.Value);
+        Assert.Equal(Tabs(expected), Tabs(actual));
+        Assert.Equal(expected.Descendants(Xhtml.br).Count(), actual.Descendants(Xhtml.br).Count());
+    }
+
+    private static byte[] LineEndingFixture(string story, string ending, string revision, bool encoded)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Fixture(story, " North\tHarbor~END~register ", literal: true,
+            deleted: revision == "deleted", inserted: revision == "inserted"));
+        using (var zip = new ZipArchive(stream, ZipArchiveMode.Update, leaveOpen: true))
+        {
+            var entry = zip.Entries.Single(e => e.FullName == "word/" +
+                (story == "body" ? "document" : story + "1") + ".xml");
+            string xml;
+            using (var reader = new StreamReader(entry.Open())) xml = reader.ReadToEnd();
+            // Author raw XML bytes explicitly: SDK text serialization normalizes CR here.
+            xml = xml.Replace("~END~", encoded ? ending.Replace("\r", "&#13;").Replace("\n", "&#10;") : ending);
+            var parsed = XDocument.Parse(xml).Descendants()
+                .Single(e => (e.Name == W.t || e.Name == W.delText) && e.Value.Contains("Harbor")).Value;
+            Assert.Contains(encoded ? ending : ending.Replace("\r\n", "\n").Replace('\r', '\n'), parsed);
+            using var output = entry.Open();
+            output.SetLength(0);
+            using var writer = new StreamWriter(output);
+            writer.Write(xml);
+        }
+        return stream.ToArray();
+    }
+
+    [Theory]
+    [InlineData("body", "\r")]
+    [InlineData("body", "\r\n")]
+    [InlineData("header", "\r")]
+    [InlineData("header", "\r\n")]
+    [InlineData("footer", "\r")]
+    [InlineData("footer", "\r\n")]
+    public void Encoded_carriage_returns_preserve_the_existing_break(string story, string ending)
+    {
+        var html = Convert(LineEndingFixture(story, ending, "none", encoded: true));
+        var text = html.Element(Xhtml.body)!.Value.Replace("\r\n", "\n").Replace('\r', '\n');
+        Assert.Contains("Harbor\n" + (ending.Length == 2 ? " " : "") + "register", text);
+        Assert.Single(Tabs(html));
+    }
+
+    public static IEnumerable<object[]> ReviewProjectionCases()
+    {
+        foreach (var story in new[] { "body", "header", "footer" })
+        foreach (var ending in new[] { "\r", "\r\n" })
+        foreach (var accept in new[] { false, true })
+        foreach (var tracked in new[] { false, true })
+            yield return new object[] { story, ending, accept, tracked };
+    }
+
+    [Theory]
+    [MemberData(nameof(ReviewProjectionCases))]
+    public void Review_projection_preserves_encoded_line_endings(string story, string ending, bool accept, bool tracked)
+    {
+        var bytes = LineEndingFixture(story, ending, tracked ? accept ? "inserted" : "deleted" : "none", encoded: true);
+        var source = new WmlDocument("encoded-cr.docx", bytes);
+        var resolved = accept ? RevisionProcessor.AcceptRevisions(source) : RevisionProcessor.RejectRevisions(source);
+        using var stream = new MemoryStream(resolved.DocumentByteArray);
+        using var doc = WordprocessingDocument.Open(stream, false);
+        var content = doc.ContentParts().SelectMany(p => p.GetXDocument().Descendants(W.t))
+            .Select(t => t.Value).StringConcatenate();
+        Assert.Contains("Harbor" + ending + "register", content);
+        Assert.Equal(bytes, source.DocumentByteArray);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void Part_and_session_saves_preserve_text_character_references(int path)
+    {
+        var bytes = LineEndingFixture("body", "\r\n", "none", encoded: true);
+        if (path == 3)
+        {
+            using var session = new DocxSession(bytes);
+            bytes = session.Save();
+        }
+        else
+        {
+            using var stream = new MemoryStream(); stream.Write(bytes);
+            using (var doc = WordprocessingDocument.Open(stream, true))
+            {
+                var part = doc.MainDocumentPart!;
+                if (path == 0) part.PutXDocument();
+                else if (path == 1) part.PutXDocument(new XDocument(part.GetXDocument()));
+                else part.PutXDocumentWithFormatting();
+            }
+            bytes = stream.ToArray();
+        }
+        using var reopened = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        Assert.Contains("Harbor\r\nregister", reopened.MainDocumentPart!.GetXDocument().Root!.Value);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Explicit_line_break_elements_remain_breaks(bool carriageReturn)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Fixture("body", "North", literal: true));
+        using (var doc = WordprocessingDocument.Open(stream, true))
+        {
+            var run = doc.MainDocumentPart!.Document!.Descendants<Wp.Run>().Last();
+            run.Append(carriageReturn ? new Wp.CarriageReturn() : new Wp.Break());
+            run.Append(new Wp.Text("Harbor"));
+            doc.MainDocumentPart.Document.Save();
+        }
+        var html = Convert(stream.ToArray());
+        Assert.Single(html.Descendants(Xhtml.br));
+        Assert.Contains("North", html.Value);
+        Assert.Contains("Harbor", html.Value);
+    }
+
     public static IEnumerable<object[]> Cases()
     {
         foreach (var story in new[] { "body", "header", "footer" })
@@ -104,7 +241,7 @@ public class LiteralTabTextTests
         var main = doc.MainDocumentPart!;
         var field = new Wp.Paragraph(
             new Wp.Run(new Wp.FieldChar { FieldCharType = Wp.FieldCharValues.Begin }),
-            new Wp.Run(new Wp.FieldCode("PAGE\t") { Space = SpaceProcessingModeValues.Preserve }),
+            new Wp.Run(new Wp.FieldCode("PAGE\t\n") { Space = SpaceProcessingModeValues.Preserve }),
             new Wp.Run(new Wp.FieldChar { FieldCharType = Wp.FieldCharValues.Separate }),
             new Wp.Run(new Wp.Text("7")),
             new Wp.Run(new Wp.FieldChar { FieldCharType = Wp.FieldCharValues.End }));
@@ -119,7 +256,7 @@ public class LiteralTabTextTests
 
         Assert.Empty(Tabs(html));
         Assert.Contains(html.Descendants(), e => (string?)e.Attribute("data-field") == "PAGE");
-        Assert.Equal("PAGE\t", main.GetXDocument().Descendants(W.instrText).Single().Value);
+        Assert.Equal("PAGE\t\n", main.GetXDocument().Descendants(W.instrText).Single().Value);
     }
 
     private static void AssertDecorationBridge(XElement tab)

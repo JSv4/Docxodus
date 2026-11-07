@@ -1091,19 +1091,20 @@ namespace Docxodus
             };
         }
 
-        // Producers such as docx-js put literal tabs inside text nodes. Expand them before
-        // simplification and formatting so they use the same stop/leader calculations as w:tab.
-        private static void ExpandLiteralTextTabs(WordprocessingDocument wordDoc)
+        // XML-normalized literal line endings are spaces. Preserve encoded CR and w:br/w:cr.
+        // Expand literal tabs before formatting so they use the same calculations as w:tab.
+        private static void NormalizeLiteralTextControls(WordprocessingDocument wordDoc)
         {
             foreach (var part in wordDoc.ContentParts())
             {
                 var texts = part.GetXDocument().Descendants()
-                    .Where(e => (e.Name == W.t || e.Name == W.delText) && e.Value.Contains('\t'))
+                    .Where(e => (e.Name == W.t || e.Name == W.delText) && e.Value.IndexOfAny(['\t', '\n']) >= 0)
                     .ToList();
                 if (texts.Count == 0) continue;
                 foreach (var text in texts)
                 {
-                    text.ReplaceWith(text.Value.Split('\t').SelectMany((segment, index) => new object?[]
+                    var value = text.Value.Replace('\n', ' ');
+                    text.ReplaceWith(value.Split('\t').SelectMany((segment, index) => new object?[]
                     {
                         index == 0 ? null : new XElement(W.tab),
                         segment.Length == 0 ? null : new XElement(text.Name, text.Attributes(), segment),
@@ -1159,7 +1160,7 @@ namespace Docxodus
             if (htmlConverterSettings.StampCanonicalSourceAnchors)
                 htmlConverterSettings.SourceAnchorIdentityProvider = CanonicalSourceIdentity(wordDoc);
 
-            ExpandLiteralTextTabs(wordDoc);
+            NormalizeLiteralTextControls(wordDoc);
 
             // Only accept revisions if NOT rendering tracked changes AND document has tracked changes
             // This optimization saves ~9% of conversion time for documents without revisions
