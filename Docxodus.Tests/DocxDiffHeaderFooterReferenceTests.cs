@@ -192,6 +192,31 @@ public class DocxDiffHeaderFooterReferenceTests
         AssertStoryEndpoints(original, revised, result, false, "default");
     }
 
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
+    public void RetainedParagraphSectionBoundary_RestoresBothTopologies(bool appendText, bool reverse, bool editText)
+    {
+        const string retained = "The maintenance summary stays in this section.";
+        const string tail = "Arrange the welcome badges by arrival time.";
+        var original = HeaderFooterFixtures.Build(new[] {
+            new Section(appendText ? new[] { retained } : new[] { retained, tail },
+                Footers: new[] { ("default", "a") }) },
+            footerParts: new Dictionary<string, string[]> { ["a"] = new[] { "MAINTENANCE COPY" } });
+        var revised = HeaderFooterFixtures.Build(new[] {
+            new Section(new[] { editText ? retained.Replace("maintenance", "inspection") : retained },
+                Footers: new[] { ("default", "a") }),
+            new Section(new[] { tail }, Footers: new[] { ("default", "empty") }) },
+            footerParts: new Dictionary<string, string[]> {
+                ["a"] = new[] { "MAINTENANCE COPY" }, ["empty"] = new[] { "" } });
+        if (reverse) (original, revised) = (revised, original);
+        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), false, "default");
+    }
+
     [Fact]
     public void SectionBoundaryInsideControl_DoesNotSuppressLaterStoryEdits()
     {

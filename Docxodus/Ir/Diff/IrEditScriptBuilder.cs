@@ -1999,11 +1999,13 @@ internal static class IrEditScriptBuilder
     /// <summary>
     /// Structural carrier facts stay outside visible-content identity. Descend through equal containers so
     /// textbox geometry changes are still compared, without making stable textbox shells unsliceable.
+    /// A section boundary's presence cannot be archived in pPrChange or sectPrChange; replace its carrier.
     /// </summary>
     internal static bool StructuralCarrierDiffers(IrBlock left, IrBlock right)
     {
         if (left is IrParagraph lp && right is IrParagraph rp)
-            return lp.InlineEnvelopeDigest != rp.InlineEnvelopeDigest ||
+            return (lp.InlineSectionBreakAnchor is null) != (rp.InlineSectionBreakAnchor is null) ||
+                lp.InlineEnvelopeDigest != rp.InlineEnvelopeDigest ||
                 lp.FieldEnvelopeDigest != rp.FieldEnvelopeDigest ||
                 ((ContainsTextbox(lp.Inlines) || ContainsTextbox(rp.Inlines)) &&
                  TextboxCarriersDiffer(CollectTextboxes(lp.Inlines), CollectTextboxes(rp.Inlines)));
