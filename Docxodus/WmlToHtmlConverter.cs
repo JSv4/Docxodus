@@ -1114,6 +1114,77 @@ namespace Docxodus
             }
         }
 
+        private static readonly XName IgnoreFitText = XNamespace.Get("urn:docxodus:rendering") + "ignoreFitText";
+
+        internal static void StampFitTextExclusions(XElement source, XElement clone)
+        {
+            var insideControl = source.AncestorsAndSelf(W.sdt).Any();
+            foreach (var run in clone.DescendantsAndSelf(W.r).Where(r => insideControl || r.Ancestors(W.sdt).Any()))
+            {
+                var props = run.Element(W.rPr);
+                if (props == null) run.AddFirst(props = new XElement(W.rPr));
+                // Properties survive run splitting and prevent merging with an
+                // otherwise identically formatted fitted neighbor outside the control.
+                if (props.Element(IgnoreFitText) == null) props.Add(new XElement(IgnoreFitText));
+            }
+        }
+
+        private static void StampFitTextGroups(WordprocessingDocument wordDoc)
+        {
+            var nextId = 0;
+            foreach (var part in wordDoc.ContentParts())
+            {
+                var exclusions = part.GetXDocument().Descendants(IgnoreFitText).ToList();
+                var containers = exclusions.Select(e => e.Parent!.Parent!.Parent!).Distinct().ToList();
+                foreach (var marker in exclusions)
+                {
+                    marker.Parent!.Element(W.fitText)?.Remove();
+                    marker.Remove();
+                }
+                // Removing controls should not split ordinary prose. Restore only merges
+                // whose assembled properties AND semantic run attributes still agree.
+                foreach (var container in containers)
+                    WordprocessingMLUtil.CoalesceContainerRuns(container, preserveRunAttributes: true);
+            }
+            foreach (var part in wordDoc.ContentParts())
+            foreach (var paragraph in part.GetXDocument().Descendants(W.p))
+            {
+                var group = new List<XElement>();
+                (int Width, int Id)? previous = null;
+                void Finish()
+                {
+                    // Conflicting target widths do not define one fit region.
+                    if (group.Select(r => (int?)r.Element(W.rPr)?.Element(W.fitText)?.Attribute(W.val)).Distinct().Count() > 1)
+                    {
+                        group.Clear();
+                        return;
+                    }
+                    foreach (var run in group)
+                    {
+                        run.SetAttributeValue(PtOpenXml.pt + "FitTextGroup", nextId);
+                        run.SetAttributeValue(PtOpenXml.pt + "FitTextCount", group.Count);
+                    }
+                    if (group.Count > 0) nextId++;
+                    group.Clear();
+                }
+                foreach (var element in paragraph.Descendants(W.r).Where(r => r.Ancestors(W.p).First() == paragraph))
+                {
+                    var props = element.Element(W.rPr);
+                    var fit = props?.Element(W.fitText);
+                    (int Width, int Id)? current = element.Name == W.r && fit != null
+                        && !element.Ancestors(M.oMath).Any()
+                        && !GetBoolProp(props!, W.rtl)
+                        && !(paragraph.Element(W.pPr) is { } pPr && GetBoolProp(pPr, W.bidi))
+                        && int.TryParse((string?)fit.Attribute(W.val), out var width) && width >= 0 && width <= 31680
+                        && int.TryParse((string?)fit.Attribute(W.id) ?? "0", out var id) ? (width, id) : null;
+                    if (current?.Id != previous?.Id || current == null) Finish();
+                    if (current != null) group.Add(element);
+                    previous = current;
+                }
+                Finish();
+            }
+        }
+
         private static void AddImpliedFootnoteSeparators(WordprocessingDocument wordDoc)
         {
             var part = wordDoc.MainDocumentPart?.FootnotesPart;
@@ -1182,6 +1253,11 @@ namespace Docxodus
 
             PrepareRevisionVisibility(wordDoc, htmlConverterSettings);
 
+            // Word ignores fitText inside content controls. Preserve that boundary
+            // before the simplifier removes the controls, including inherited fitText.
+            foreach (var part in wordDoc.ContentParts())
+                StampFitTextExclusions(part.GetXDocument().Root!, part.GetXDocument().Root!);
+
             SimplifyMarkupSettings simplifyMarkupSettings = new SimplifyMarkupSettings
             {
                 RemoveComments = !htmlConverterSettings.RenderComments,
@@ -1242,6 +1318,8 @@ namespace Docxodus
             };
 
             FormattingAssembler.AssembleFormatting(wordDoc, formattingAssemblerSettings);
+
+            StampFitTextGroups(wordDoc);
 
             Internal.AutomaticParagraphSpacing.Apply(wordDoc.MainDocumentPart!.GetXDocument().Root!);
 
@@ -8651,6 +8729,14 @@ namespace Docxodus
                     runStartMark,
                     content,
                     runEndMark);
+
+                if (run.Attribute(PtOpenXml.pt + "FitTextGroup") is { } fitGroup)
+                {
+                    var fitWidth = (int)rPr.Element(W.fitText)!.Attribute(W.val)!;
+                    xe.SetAttributeValue("data-docx-fit-text-width", (fitWidth / 20m).ToString(CultureInfo.InvariantCulture));
+                    xe.SetAttributeValue("data-docx-fit-text-id", fitGroup.Value);
+                    xe.SetAttributeValue("data-docx-fit-text-count", (string?)run.Attribute(PtOpenXml.pt + "FitTextCount"));
+                }
 
                 xe.AddAnnotation(style);
                 content = xe;

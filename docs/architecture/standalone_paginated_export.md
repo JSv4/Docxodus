@@ -1614,6 +1614,19 @@ retain its scale at the new width refuses export with `pagination_failure`. Unsc
 unsupported paragraphs retain their prior layout. Body, header, footer and note bands each accumulate
 their own fractional line-height rounding; unrelated body paragraphs cannot displace a running story.
 
+Manual `w:fitText` widths use a measured inline region before pagination. The converter identifies
+contiguous source runs with the same ID (an omitted ID is Word's zero), including differently
+formatted runs, and preserves their group size so a missing or separately wrapped piece cannot
+receive the entire target width. Content-control boundaries survive source simplification;
+opposite-direction exclusions use the resolved run and paragraph properties. Plain Latin groups retain their original run elements inside an
+inline carrier whose advance is the requested width; only the inner box scales horizontally.
+Character spacing is ignored as Word specifies. The paginator recognizes this validated carrier as
+one atom, so surrounding prose can continue across pages without bisecting or duplicating it.
+Incomplete groups, conflicting widths, fields, complex descendants, non-Latin text and interacting character
+percentage scales retain their existing rendering. The original single-word 100pt case and a 20pt
+compression control follow the documented width contract; they do not establish Word's treatment
+of oversized regions or its exact-fit rounding threshold.
+
 The browser's font-unit boundary is not a complete Word fitting contract. In #1564 the author
 [confirmed that Word fits the 65-character Liberation Mono prefix into 468pt](https://github.com/JSv4/Docxodus/issues/1564#issuecomment-6701328774),
 although its raw advances total 468.076pt. Current export still wraps the final word. The separate

@@ -1098,7 +1098,7 @@ namespace Docxodus
             return result;
         }
 
-        private static void CoalesceContainerRuns(XElement runContainer)
+        internal static void CoalesceContainerRuns(XElement runContainer, bool preserveRunAttributes = false)
         {
             // Adjacent children that may merge, grouped by the predicate above. An element that
             // cannot merge with its predecessor starts a new group, so a group of one is normal
@@ -1109,7 +1109,13 @@ namespace Docxodus
                 List<XElement>? last = groupedAdjacentRunsWithIdenticalFormatting.Count > 0
                     ? groupedAdjacentRunsWithIdenticalFormatting[groupedAdjacentRunsWithIdenticalFormatting.Count - 1]
                     : null;
-                if (last != null && CanCoalesceAdjacent(last[last.Count - 1], ce)) last.Add(ce);
+                var previous = last?[last.Count - 1];
+                // After formatting assembly, run attributes also distinguish resolved fonts,
+                // list markers and source identities. Never discard those boundaries.
+                bool sameAttributes = !preserveRunAttributes || previous?.Name == W.r && ce.Name == W.r
+                    && previous.Attributes().OrderBy(a => a.Name.ToString()).Select(a => (a.Name, a.Value))
+                        .SequenceEqual(ce.Attributes().OrderBy(a => a.Name.ToString()).Select(a => (a.Name, a.Value)));
+                if (previous != null && sameAttributes && CanCoalesceAdjacent(previous, ce)) last!.Add(ce);
                 else groupedAdjacentRunsWithIdenticalFormatting.Add(new List<XElement> { ce });
             }
 

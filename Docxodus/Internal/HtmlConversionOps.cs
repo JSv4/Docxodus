@@ -714,6 +714,7 @@ internal static class HtmlConversionOps
                 var clone = dense?.Template ?? CloneWithListNumbers(siblings[i]);
                 automaticSpacing.Stamp(siblings[i], clone);
                 lineGrid.Stamp(siblings[i], clone);
+                WmlToHtmlConverter.StampFitTextExclusions(siblings[i], clone);
                 if (dense is null)
                     RetargetPartRelationships(liveDoc, siblings[i], clone, renderMain, copiedImages);
                 identity?.Record(siblings[i], clone);

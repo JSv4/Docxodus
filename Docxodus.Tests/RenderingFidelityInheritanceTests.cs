@@ -1,6 +1,9 @@
+using System;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Xml.Linq;
+using Docxodus.Internal;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using Xunit;
@@ -10,7 +13,8 @@ namespace Docxodus.Tests;
 public class RenderingFidelityInheritanceTests
 {
     private static XElement Render(string body, string? notes = null, bool endnote = false,
-        PaginationMode mode = PaginationMode.Paginated, string runDefaults = "")
+        PaginationMode mode = PaginationMode.Paginated, string runDefaults = "", Action<byte[]>? inspectSource = null,
+        string? numbering = null)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -25,6 +29,8 @@ public class RenderingFidelityInheritanceTests
                 </w:rPr></w:rPrDefault></w:docDefaults></w:styles>
                 """));
             main.AddNewPart<DocumentSettingsPart>().PutXDocument(XDocument.Parse($"<w:settings xmlns:w=\"{W.w}\"/>"));
+            if (numbering != null)
+                main.AddNewPart<NumberingDefinitionsPart>().PutXDocument(XDocument.Parse($"<w:numbering xmlns:w=\"{W.w}\">{numbering}</w:numbering>"));
             if (notes != null)
             {
                 var kind = endnote ? "endnote" : "footnote";
@@ -32,7 +38,9 @@ public class RenderingFidelityInheritanceTests
                 part.PutXDocument(XDocument.Parse($"<w:{kind}s xmlns:w=\"{W.w}\"><w:{kind} w:id=\"1\">{notes}</w:{kind}></w:{kind}s>"));
             }
         }
-        return WmlToHtmlConverter.ConvertToHtml(new WmlDocument("authored.docx", stream.ToArray()),
+        var bytes = stream.ToArray();
+        inspectSource?.Invoke(bytes);
+        return WmlToHtmlConverter.ConvertToHtml(new WmlDocument("authored.docx", bytes),
             new WmlToHtmlConverterSettings
             {
                 RenderPagination = mode, RenderFootnotesAndEndnotes = true,
@@ -210,5 +218,91 @@ public class RenderingFidelityInheritanceTests
         var runs = html.Descendants().Where(e => e.Name.LocalName == "span").ToList();
         Assert.Contains("--docx-character-scale: 0.8", (string?)runs.Single(e => e.Value == "Inherited").Attribute("style"));
         Assert.Contains("--docx-character-scale: 1", (string?)runs.Single(e => e.Value == "Reset").Attribute("style"));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("w:id=\"0\"")]
+    [InlineData("w:id=\"7\"")]
+    public void FitTextGroupsContiguousRunsButNotSeparateOccurrences(string id)
+    {
+        string Run(string text, string extra = "") => $"<w:r><w:rPr><w:fitText w:val=\"2000\" {id}/>{extra}</w:rPr><w:t>{text}</w:t></w:r>";
+        var html = Render("<w:p>" + Run("Na") + Run("me", "<w:b/>")
+            + "<w:r><w:t> tail </w:t></w:r>" + Run("Other") + "</w:p>");
+        var runs = html.Descendants().Where(e => e.Attribute("data-docx-fit-text-width") != null).ToList();
+        Assert.Equal(3, runs.Count);
+        Assert.All(runs, r => Assert.Equal("100", (string?)r.Attribute("data-docx-fit-text-width")));
+        Assert.Equal((string?)runs[0].Attribute("data-docx-fit-text-id"), (string?)runs[1].Attribute("data-docx-fit-text-id"));
+        Assert.NotEqual((string?)runs[0].Attribute("data-docx-fit-text-id"), (string?)runs[2].Attribute("data-docx-fit-text-id"));
+        Assert.Equal(new[] { "2", "2", "1" }, runs.Select(r => (string?)r.Attribute("data-docx-fit-text-count")));
+    }
+
+    [Fact]
+    public void FitTextInContentControlsStaysIgnoredAfterSimplification()
+    {
+        var html = Render("<w:p><w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>Name</w:t></w:r></w:sdtContent></w:sdt></w:p>",
+            runDefaults: "<w:fitText w:val=\"2000\"/>");
+        Assert.Contains("Name", html.Value);
+        Assert.DoesNotContain(html.Descendants(), e => e.Attribute("data-docx-fit-text-width") != null);
+    }
+
+    [Theory]
+    [InlineData(false, "")]
+    [InlineData(true, "")]
+    [InlineData(false, "<w:rPr><w:rFonts w:ascii=\"Liberation Mono\" w:hAnsi=\"Liberation Mono\"/></w:rPr>")]
+    public void ContentControlBoundaryPreservesOrdinaryTextAndListMarkers(bool list, string properties)
+    {
+        const string numbering = "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/>"
+            + "<w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"%1.\"/><w:suff w:val=\"nothing\"/></w:lvl></w:abstractNum>"
+            + "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+        var prefix = list ? "<w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr>" : "";
+        var middle = $"<w:r>{properties}<w:t xml:space=\"preserve\"> middle </w:t></w:r>";
+        string Body(string content) => $"<w:p>{prefix}<w:r><w:t>First</w:t></w:r>{content}<w:r><w:t>Last</w:t></w:r></w:p>";
+        string[] Runs(XElement html) => html.Descendants().Where(e => e.Name.LocalName == "span" && !e.HasElements)
+            .Select(e => e.Value + "|" + (string?)e.Attribute("style")).ToArray();
+        var control = Render(Body(middle), numbering: list ? numbering : null);
+        var wrapped = Render(Body($"<w:sdt><w:sdtPr/><w:sdtContent>{middle}</w:sdtContent></w:sdt>"),
+            numbering: list ? numbering : null);
+        Assert.Equal(Runs(control), Runs(wrapped));
+    }
+
+    [Fact]
+    public void FitTextCountsItsWholeSourceGroupAcrossAHyperlink()
+    {
+        const string fit = "<w:rPr><w:fitText w:val=\"2000\"/></w:rPr>";
+        var html = Render($"<w:p><w:r>{fit}<w:t>Na</w:t></w:r><w:hyperlink w:anchor=\"target\"><w:r>{fit}<w:t>me</w:t></w:r></w:hyperlink></w:p>");
+        var runs = html.Descendants().Where(e => e.Attribute("data-docx-fit-text-width") != null).ToList();
+        Assert.Equal(2, runs.Count);
+        Assert.All(runs, r => Assert.Equal("2", (string?)r.Attribute("data-docx-fit-text-count")));
+        Assert.Single(runs.Select(r => (string?)r.Attribute("data-docx-fit-text-id")).Distinct());
+    }
+
+    [Fact]
+    public void ConflictingWidthsDoNotAllocateTheWholeTargetToSeparateGroupPieces()
+    {
+        var html = Render("<w:p><w:r><w:rPr><w:fitText w:val=\"2000\"/></w:rPr><w:t>Na</w:t></w:r>"
+            + "<w:r><w:rPr><w:fitText w:val=\"1000\"/></w:rPr><w:t>me</w:t></w:r></w:p>");
+        Assert.DoesNotContain(html.Descendants(), e => e.Attribute("data-docx-fit-text-width") != null);
+    }
+
+    [Fact]
+    public void FitTextPreservesContentControlContextInEveryBlockRenderer()
+    {
+        byte[] bytes = Array.Empty<byte>();
+        Render("<w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+            runDefaults: "<w:fitText w:val=\"2000\"/>", inspectSource: source => bytes = source);
+        var options = new HtmlConversionOptions { FabricateCssClasses = false, StampAnchors = true,
+            PaginationMode = (int)PaginationMode.Paginated };
+        var full = HtmlConversionOps.ConvertToHtml(bytes, options);
+        var paragraph = XElement.Parse(full).Descendants().Single(e => e.Name.LocalName == "p" && e.Value == "Name");
+        var anchor = (string)paragraph.Attribute("data-anchor")!;
+        using var session = new DocxSession(bytes);
+        using var batch = JsonDocument.Parse(HtmlConversionOps.RenderBlocksHtml(session, new[] { anchor }, options));
+        foreach (var html in new[] { full, HtmlConversionOps.RenderBlockHtml(bytes, anchor, options),
+            HtmlConversionOps.RenderBlockHtml(session, anchor, options), batch.RootElement.GetProperty(anchor).GetString()! })
+        {
+            Assert.Contains("Name", html);
+            Assert.DoesNotContain("data-docx-fit-text-width", html);
+        }
     }
 }
