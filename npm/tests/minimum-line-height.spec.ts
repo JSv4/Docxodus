@@ -7,14 +7,15 @@ test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}),
 } });
 
-test('a minimum below uniform natural height preserves the natural line and repeated preparation', async ({ page }) => {
+for (const owner of ['body', 'cell']) test(`a ${owner} minimum below uniform natural height preserves repeated preparation`, async ({ page }) => {
   await page.goto('/test-harness.html');
-  const result = await page.evaluate(async () => {
+  const result = await page.evaluate(async owner => {
     const url = 'http://localhost:8083/line-metrics.js';
     const { applyUnroundedNormalLineHeights } = await import(url);
     const root = document.createElement('div');
     root.innerHTML = '<p style="font:20pt/16pt Liberation Serif;--docx-min-line-height:16pt;margin:0">'
       + '<span>Nettle records remain legible.</span></p>';
+    if (owner === 'cell') root.innerHTML = '<table><tr><td>' + root.innerHTML + '</td></tr></table>';
     document.body.append(root);
     await document.fonts.ready;
     const paragraph = root.querySelector('p')!;
@@ -24,7 +25,7 @@ test('a minimum below uniform natural height preserves the natural line and repe
     const first = measure();
     applyUnroundedNormalLineHeights(root);
     return { first, repeated: measure() };
-  });
+  }, owner);
   for (const height of result.first) expect(height * .75).toBeCloseTo(2355 / 2048 * 20, 3);
   expect(result.repeated).toEqual(result.first);
 });
@@ -58,7 +59,6 @@ for (const [name, wrapper] of [
   ['header registry', '<div id="pagination-hf-registry" style="display:none"><div data-hf-type="header-default">CONTENT</div></div>'],
   ['footer', '<div data-hf-type="footer-default">CONTENT</div>'],
   ['frame', '<div data-docx-text-frame="true">CONTENT</div>'],
-  ['cell', '<table><tr><td>CONTENT</td></tr></table>'],
 ]) test(`minimum spacing retains the ${name} owner policy`, async ({ page }) => {
   await page.goto('/test-harness.html');
   const result = await page.evaluate(async wrapper => {
@@ -126,4 +126,37 @@ for (const repeats of [8, 40]) test(`a 16pt minimum cannot compress 20pt exporte
     expect(text.join(' ').replace(/\s+/g, ' ').trim()).toBe(words.trim());
     expect(pdf.numPages).toBe(control.pageCount);
   } finally { await task.destroy(); await controlTask.destroy(); }
+});
+
+const uniformMarker = '<span data-list-marker="true" style="display:inline-flex;align-items:baseline;width:24px">'
+  + '<span><span>1.</span></span><span style="display:inline-block;flex:1">'
+  + '<span data-docx-tab="left" style="display:inline-block;width:100%;height:0"></span></span></span>';
+
+for (const [name, marker, restored] of [
+  ['flat number', '<span data-list-marker="true">1.</span>', true],
+  ['uniform number', uniformMarker, true],
+  ['larger number', uniformMarker.replace('<span>1.', '<span style="font-size:30pt">1.'), false],
+  ['raised number', uniformMarker.replace('<span>1.', '<span style="vertical-align:super">1.'), false],
+  ['positioned number', uniformMarker.replace('<span>1.', '<span style="position:relative;top:2px">1.'), false],
+  ['nested link', uniformMarker.replace('<span>1.</span>', '<a href="#">1.</a>'), false],
+] as const) test(`a minimum preserves the ${name} metric contract`, async ({ page }) => {
+  await page.goto('/test-harness.html');
+  const result = await page.evaluate(async marker => {
+    const url = 'http://localhost:8083/line-metrics.js';
+    const { applyUnroundedNormalLineHeights } = await import(url);
+    const root = document.createElement('div');
+    root.innerHTML = '<p style="font:20pt/16pt Liberation Serif;--docx-min-line-height:16pt">'
+      + marker + '<span>Teasel records remain legible.</span></p>';
+    document.body.append(root);
+    const elements = Array.from(root.querySelectorAll('p,span,a'));
+    const measure = () => elements.map(e => getComputedStyle(e).lineHeight);
+    const before = measure();
+    applyUnroundedNormalLineHeights(root);
+    const after = measure();
+    applyUnroundedNormalLineHeights(root);
+    return { before, after, repeated: measure() };
+  }, marker);
+  if (restored) for (const height of result.after) expect(Number.parseFloat(height) * .75).toBeCloseTo(2355 / 2048 * 20, 3);
+  else expect(result.after).toEqual(result.before);
+  expect(result.repeated).toEqual(result.after);
 });

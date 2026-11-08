@@ -654,7 +654,9 @@ raised spaces, nested runs, breaks and other structural content keep their exist
 Mixed-size visible runs still use the existing paragraph-wide metric policy (remaining #1565).
 
 At-least spacing carries `--docx-min-line-height`. The shared paginated natural-metrics pass
-restores the natural height when a smaller minimum would compress uniform ordinary body text.
+restores the natural height when a smaller minimum would compress uniform ordinary text in
+body paragraphs, table cells or numbered paragraphs. Uniform list numbers and their tab wrappers
+move with the paragraph; larger, raised or positioned markers retain their existing metrics.
 It leaves larger minima, mixed metrics and structural content under their existing policies;
 the restored natural lines use the established viewer/export baseline correction.
 
