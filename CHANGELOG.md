@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Empty text runs no longer enlarge the line metrics of nonempty paragraphs. Blank paragraphs, spaces and structural runs retain their existing metrics (part of #1565).
+
 - Long body paragraphs containing non-wrapping drawings or leading square/tight picture floats now split across pages while keeping each drawing with its source fragment. Late wrapping pictures and line-dependent placements retain their existing safeguards (part of #1558).
 
 - Fixed text boxes inside DrawingML groups and canvases can report authored off-paper clipping without failing export. Placement proof binds the group origin, member geometry and paragraph host; visible siblings and blank lines remain protected (part of #1558).

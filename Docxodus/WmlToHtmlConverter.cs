@@ -8401,6 +8401,11 @@ namespace Docxodus
             decimal? sz = null;
             foreach (var run in paragraph.DescendantsTrimmed(W.txbxContent).Where(e => e.Name == W.r))
             {
+                // Empty text does not size a nonempty paragraph. Blank paragraphs retain
+                // their existing mark/placeholder metrics, as do spaces and structural runs.
+                if ((bool?)paragraph.Attribute(PtOpenXml.EmptyParagraph) != true &&
+                    run.Elements().All(e => e.Name == W.rPr || (e.Name == W.t && e.Value.Length == 0)))
+                    continue;
                 var runSize = GetFontSize(run);
                 if (runSize != null && (sz == null || runSize > sz))
                 {
