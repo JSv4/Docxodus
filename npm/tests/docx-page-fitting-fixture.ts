@@ -105,7 +105,7 @@ export function floatingPictureDocx(height = 300, tight = false): Uint8Array {
 }
 
 /** Original numbered lines around one anchored tile; source order determines its page. */
-export function floatingParagraphDocx(wrap: 'none' | 'square' | 'tight' | 'top-bottom', after: number | readonly number[] = 0, count = 82, prefix = 0): Uint8Array {
+export function floatingParagraphDocx(wrap: 'none' | 'square' | 'tight' | 'top-bottom', after: number | readonly number[] = 0, count = 82, prefix = 0, prefixPicture = false): Uint8Array {
   const positions = typeof after === 'number' ? [after] : after;
   const picture = (id: number) => fittingImageRun(id, 72, 72)
     .replace('<wp:inline>', `<wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
@@ -117,7 +117,7 @@ export function floatingParagraphDocx(wrap: 'none' | 'square' | 'tight' | 'top-b
     .replace('</wp:inline>', '</wp:anchor>');
   const drawingsAt = (position: number) => positions.map((after, index) => after === position ? picture(index + 1) : '').join('');
   const properties = '<w:pPr><w:keepLines w:val="0"/><w:widowControl w:val="0"/><w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="exact"/></w:pPr>';
-  const leading = prefix ? `<w:p>${properties}${Array.from({ length: prefix }, (_, i) => `<w:r><w:t>WillowLead${i + 1}</w:t></w:r>`).join('<w:r><w:br/></w:r>')}</w:p>` : '';
+  const leading = prefix ? `<w:p>${properties}${prefixPicture ? picture(99) : ''}${Array.from({ length: prefix }, (_, i) => `<w:r><w:t>WillowLead${i + 1}</w:t></w:r>`).join('<w:r><w:br/></w:r>')}</w:p>` : '';
   const lines = Array.from({ length: count }, (_, index) => drawingsAt(index)
     + `<w:r><w:t>Willow${String(index + 1).padStart(3, '0')} recorded.</w:t>${index + 1 < count ? '<w:br/>' : ''}</w:r>`).join('');
   return pageFittingDocx(`${leading}<w:p>${properties}${lines}${drawingsAt(count)}</w:p>
