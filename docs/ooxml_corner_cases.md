@@ -6501,3 +6501,25 @@ This is a partial resolution. Mixed fonts, raised text, explicit breaks, picture
 paragraphs and other paragraph owners retain their existing metrics. The confirmed 13pt
 minimum on 10pt text and the other above-natural minima still require a separate baseline
 policy; this change does not claim to resolve them or add a new Word capture.
+
+## A larger space-only run raised ordinary text lines (#1565)
+
+With 10pt text under a 12pt default, a separate `<w:r><w:t xml:space="preserve"> </w:t></w:r>`
+selected the larger paragraph strut and contributed its own inline font metrics. The
+[issue author's Word print](https://github.com/JSv4/Docxodus/issues/1565#issuecomment-6701329112)
+records 11.5pt on every line of `default-size-space-run.docx`; the retained LibreOffice print
+advances 11.55pt, while the earlier Docxodus reproduction advanced 13.5/14.25/13.5pt.
+This uses the existing Word measurement, not a new capture.
+
+The shared converter now excludes ordinary U+0020-only runs from the strut when their own
+paragraph has visible text and automatic spacing. The space retains its font, text and width,
+with a zero-height top-aligned inline box. Zero height alone is insufficient: a much larger
+space can still contribute ascent relative to the baseline. Tests compare first baseline and
+paragraph height with unchanged controls at 12, 48 and 100pt, as well as line pitch, complete
+text, source anchors and horizontal advance across continuation pages.
+
+Blank and space-only paragraphs, tabs, explicit breaks, NBSP, painted or raised spaces,
+other line rules and nested runs retain their existing metrics. The visibility check stays
+within the host paragraph, excludes hidden text and conservatively excludes web-hidden text
+in both views. It is cached once per source paragraph to avoid quadratic scans. Mixed visible
+fonts and blank-break baseline policy remain outside this partial resolution.

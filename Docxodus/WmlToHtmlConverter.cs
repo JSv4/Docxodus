@@ -8403,9 +8403,10 @@ namespace Docxodus
             foreach (var run in paragraph.DescendantsTrimmed(W.txbxContent).Where(e => e.Name == W.r))
             {
                 // Empty text does not size a nonempty paragraph. Blank paragraphs retain
-                // their existing mark/placeholder metrics, as do spaces and structural runs.
+                // their existing mark/placeholder metrics, as do structural runs.
                 if ((bool?)paragraph.Attribute(PtOpenXml.EmptyParagraph) != true &&
-                    run.Elements().All(e => e.Name == W.rPr || (e.Name == W.t && e.Value.Length == 0)))
+                    (run.Elements().All(e => e.Name == W.rPr || (e.Name == W.t && e.Value.Length == 0)) ||
+                     IsOrdinarySpaceRun(run)))
                     continue;
                 var runSize = GetFontSize(run);
                 if (runSize != null && (sz == null || runSize > sz))
@@ -8421,6 +8422,38 @@ namespace Docxodus
                 CreateFontCssProperty(font, null, null, style, paragraph);
             if (sz != null)
                 style.AddIfMissing("font-size", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", sz / 2.0m));
+        }
+
+        // A larger ordinary space advances horizontally but does not size the line (#1565).
+        // Blank paragraphs and painted, raised, structural or nested content keep their metrics.
+        private sealed record SpaceRunParagraph(bool HasVisibleText);
+
+        private static bool IsOrdinarySpaceRun(XElement run)
+        {
+            var paragraph = run.Parent;
+            var rule = (string?)paragraph?.Element(W.pPr)?.Element(W.spacing)?.Attribute(W.lineRule);
+            if (paragraph?.Name != W.p || rule is not (null or "auto") ||
+                (bool?)paragraph.Attribute(PtOpenXml.EmptyParagraph) == true ||
+                run.Attribute(PtOpenXml.ListItemRun) != null ||
+                !run.Elements(W.t).Any(e => e.Value.Length > 0) ||
+                run.Elements().Any(e => e.Name != W.rPr && (e.Name != W.t || e.Value.Any(c => c != ' '))))
+                return false;
+            var context = paragraph.Annotation<SpaceRunParagraph>();
+            if (context == null)
+            {
+                context = new SpaceRunParagraph(paragraph.Elements().Where(e => e.Name != W.pPr)
+                    .SelectMany(e => InFlowDescendantsAndSelf(e)).Any(e => e.Name == W.t &&
+                        e.Ancestors(W.p).FirstOrDefault() == paragraph && e.Value.Any(c => !char.IsWhiteSpace(c)) &&
+                        !e.Ancestors(W.r).Any(r => r.Element(W.rPr)?.Element(W.webHidden) != null)));
+                paragraph.AddAnnotation(context);
+            }
+            if (!context.HasVisibleText) return false;
+            return !run.Elements(W.rPr).Elements().Any(e =>
+                e.Name == W.bdr || e.Name == W.u || e.Name == W.strike || e.Name == W.dstrike ||
+                e.Name == W.highlight || e.Name == W.shd || e.Name == W.position || e.Name == W.vertAlign ||
+                e.Name == W.rtl || e.Name == W.cs || e.Name == W.vanish || e.Name == W.webHidden ||
+                e.Name == W.em || e.Name == W.emboss || e.Name == W.imprint || e.Name == W.outline ||
+                e.Name == W.shadow || e.Name == W.rPrChange);
         }
 
         private static void DefineLineHeight(Dictionary<string, string> style, XElement paragraph)
@@ -8538,6 +8571,11 @@ namespace Docxodus
 
             var style = DefineRunStyle(run, out var secondaryDecoration);
             ApplyFieldResultPresentation(run, style);
+            if (IsOrdinarySpaceRun(run))
+            {
+                style["line-height"] = "0";
+                style["vertical-align"] = "top";
+            }
             if (paragraphHasExactLineHeight)
             {
                 // CSS line boxes are allowed to grow when baseline-aligned runs use font

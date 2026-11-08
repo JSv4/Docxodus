@@ -6,11 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Ordinary space-only runs retain their authored width without enlarging automatically spaced text lines. Blank, decorated, raised and structural content keep their existing metrics (part of #1565).
+
 - Standalone export applies character-width percentages to both line fitting and glyph painting in plain, automatically spaced body paragraphs. Font size, line height, source text and page anchors are preserved; richer text layouts retain their existing policy (part of #1564).
 
 - Minimum line spacing below uniform body text's natural height no longer compresses its lines in paginated output. Larger minima and mixed-content line metrics retain their existing policies (part of #1566).
 
-- Empty text runs no longer enlarge the line metrics of nonempty paragraphs. Blank paragraphs, spaces and structural runs retain their existing metrics (part of #1565).
+- Empty text runs no longer enlarge the line metrics of nonempty paragraphs. Blank paragraphs and structural runs retain their existing metrics (part of #1565).
 
 - Long body paragraphs containing non-wrapping drawings or square/tight picture floats now split across pages while keeping each drawing with its source fragment. A single late edge picture reflows the beginning of its destination fragment and retains its full height budget. Multiple late pictures and line-dependent placements retain their existing safeguards (part of #1558).
 
