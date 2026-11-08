@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Left-aligned mixed Latin text and numbered body paragraphs use the fonts on each visual line for single spacing, multiples of at least one, and minimum line spacing. Viewer and export pagination preserve complete line boundaries and source identities (part of #1565 and #1566).
+
 - Uniform text honors minimum line spacing below 14pt, including the reported 13pt minimum on 10pt text. Explicit height overrides and mixed-content metrics retain their existing policies (part of #1566).
 
 - Standalone export honors explicit WordPerfect justification for eligible uniform paragraphs in compatibility modes 14 and 15. It fits words to the documented expanded width, then compresses interword gaps without changing glyph widths, including overwide final lines (part of #1550).

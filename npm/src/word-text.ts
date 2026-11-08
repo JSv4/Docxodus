@@ -580,12 +580,7 @@ function prepareText(root: HTMLElement, checkpoint: (() => void) | undefined, ow
     fixedTables.set(table, valid);
     return valid;
   };
-  // Pagination measures each section at this declared width. Line fitting must
-  // use that same band before the engine starts collecting its block heights.
-  for (const section of Array.from(root.querySelectorAll<HTMLElement>('[data-section-index][data-content-width]'))) {
-    const width = Number(section.dataset.contentWidth);
-    if (Number.isFinite(width) && width > 0) section.style.width = `${width}pt`;
-  }
+  prepareSectionTextWidths(root);
   let prepared = 0;
   for (const paragraph of paragraphsIn(root)) {
     checkpoint?.();
@@ -659,6 +654,14 @@ function prepareText(root: HTMLElement, checkpoint: (() => void) | undefined, ow
     prepared++;
   }
   return prepared;
+}
+
+/** Match the section band before any paragraph font or line measurement. */
+export function prepareSectionTextWidths(root: HTMLElement): void {
+  for (const section of Array.from(root.querySelectorAll<HTMLElement>('[data-section-index][data-content-width]'))) {
+    const width = Number(section.dataset.contentWidth);
+    if (Number.isFinite(width) && width > 0) section.style.width = `${width}pt`;
+  }
 }
 
 /** Paint prepared paragraphs after the page tree is final. No line or page breaks change here. */
