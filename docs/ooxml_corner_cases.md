@@ -6516,9 +6516,9 @@ minimum remains intact, and excluded mixed or above-natural paragraphs receive n
 Public body/header/footer regressions compare every glyph bound and PageMap rectangle.
 
 This is a partial resolution. Mixed fonts, raised text, explicit breaks, pictures, blank
-paragraphs, differently styled markers and frames retain their existing metrics. The confirmed 13pt
-minimum on 10pt text and the other above-natural minima still require a separate baseline
-policy; this change does not claim to resolve them or add a new Word capture.
+paragraphs, differently styled markers and frames retain their existing metrics. The original
+below-natural recovery did not address the confirmed 13pt minimum on 10pt text; the subsequent
+small-minimum correction is documented below. No new Word capture is claimed.
 
 ## A larger space-only run raised ordinary text lines (#1565)
 
@@ -6589,3 +6589,23 @@ selection for this option, keeping the existing modern policy for other document
 Selected word advances exceeding actual width cannot fit through gap reduction,
 so those paragraphs retain their existing fallback. Mixed runs and other
 unsupported paragraph structures remain outside this partial correction.
+
+## Small line minima were omitted for uniform text (#1566)
+
+For 10pt Liberation Serif, `<w:spacing w:line="260" w:lineRule="atLeast"/>`
+must raise its approximately 11.5pt natural line to 13pt. The converter retained the
+minimum marker but omitted its CSS height below an arbitrary 14pt threshold. Public
+PDF export therefore kept the natural pitch. The
+[issue author's Word print](https://github.com/JSv4/Docxodus/issues/1566#issuecomment-6701329387)
+confirms 13pt. The [ECMA remarks in the Open XML SDK documentation](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.spacingbetweenlines.line?view=openxml-3.0.1)
+specify centered text when the minimum exceeds its natural line, supporting the existing
+CSS baseline policy used for larger minima.
+
+The shared uniform-metrics pass now applies these omitted small minima to the paragraph
+and its ordinary runs. It records which heights began as `normal`, so an explicit CSS
+override equal to the natural height is not mistaken for the converter fallback.
+Repeated preparation and cloned continuations keep the resolved minimum. This path
+does not acquire the single-spacing marker or natural-baseline lift used when recovering
+a below-natural minimum. Mixed fonts, raised text and richer inline structures retain
+their existing guards. Exact Word first-baseline coordinates remain unmeasured; the
+confirmed line pitch and the documented centering rule do not establish those coordinates.
