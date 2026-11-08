@@ -60,12 +60,14 @@ const budgetsKiB = {
   // Raise only these four exhausted gates to the next 0.1 KiB.
   // Group-member placement proof measures 156790/156839/135472/51015 gzip bytes.
   // Round only the four exhausted gates up to the next 0.1 KiB.
-  'embed.bundle.js': 153.2,
+  // Floating-paragraph admission measures 156920/156958/135611 gzip bytes
+  // for embed/IIFE/editor. Round only these exhausted gates up to the next 0.1 KiB.
+  'embed.bundle.js': 153.3,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
-  'embed.iife.js': 153.2,
+  'embed.iife.js': 153.3,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
-  'editor.bundle.js': 132.4,
+  'editor.bundle.js': 132.5,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
   // Whole inline-layout continuation adds 0.24 KiB (35.801 -> 36.038 on main).

@@ -90,7 +90,8 @@ test.describe('Pagination paragraph fragments', () => {
           { showPageNumbers: false, fragmentParagraphs: true }).paginate();
         return container.querySelectorAll('.page-content > p').length;
       });
-      if (kind === 'plain-host' || kind === 'leading-drawing') expect(count).toBeGreaterThan(1);
+      if (['plain-host', 'leading-drawing', 'later-drawing', 'break-before-drawing', 'image-before-drawing'].includes(kind))
+        expect(count).toBeGreaterThan(1);
       else expect(count).toBe(1);
     });
   }

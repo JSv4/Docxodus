@@ -6419,3 +6419,45 @@ another; each retains its own fitting, pitch and paint policy.
 This is a partial resolution. Mixed runs within the affected paragraph, implicit line spacing,
 other rendering paths, `wpJustification` condensation limits and default ligatures remain outside
 this change. No new Word capture or broader font-shaping parity is claimed.
+
+## Floating pictures inside a paragraph spanning pages (#1558)
+
+A body paragraph containing a small floating picture can be taller than the page.
+The earlier Range gate treated a non-leading anchor or any edge float as indivisible,
+so export refused the whole paragraph as clipped. The picture itself need not be tall.
+The minimal case has 82 hard-broken lines, 11pt Liberation Sans, exact 16pt spacing,
+Letter paper and 72pt margins. Its 72pt picture uses this anchor, inserted after a
+chosen number of lines:
+
+```xml
+<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0"
+           relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
+  <wp:simplePos x="0" y="0"/>
+  <wp:positionH relativeFrom="column"><wp:posOffset>3810000</wp:posOffset></wp:positionH>
+  <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+  <wp:extent cx="914400" cy="914400"/><wp:wrapNone/>
+  <!-- docPr and an ordinary picture graphic follow -->
+</wp:anchor>
+```
+
+| Case | LibreOffice 25.8.7.3 | Docxodus after this fix |
+| --- | --- | --- |
+| Nonwrapping anchor after 0, 1 or 39 lines | Picture on page 1 | Same source-fragment ownership |
+| Nonwrapping anchor after 40 or 41 lines | Picture on page 2 | Same source-fragment ownership |
+| Nonwrapping anchor after all 82 lines | Picture on page 3 | Same source-fragment ownership |
+| Leading square/tight picture, zero horizontal offset | Picture at left margin; text on three pages | Same; 40/40/2 labeled lines |
+| Leading square/tight picture after a separate 38-line prefix | Picture stays on page 1 and overhangs the body bottom | Existing body-fit policy moves its first fragment to page 2 |
+| Word | No new capture available | No Word parity claim |
+
+`PaginationEngine.fragmentDrawingBoxes` admits fixed-base nonwrapping anchors at any
+source position in body paragraphs. Range cloning retains each drawing with its source;
+moving every anchor to the paragraph head would put later pictures on the wrong page.
+Leading converter-owned edge pictures reuse float-exclusion measurement and the existing
+image safety checks. Cells, notes and textboxes retain their narrower admission rules.
+
+Late wrapping pictures remain excluded. In a separate ordinary-prose calibration,
+LibreOffice places a late square picture at the destination paragraph fragment's top,
+while a direct CSS float stays below the preceding text. Moving only the cloned float
+would invalidate source line measurements and wrapping. That requires destination-fragment
+reflow, beyond this fix. The partial-page difference above also remains an explicit policy
+limitation; neither it nor minimum-height-row clipping is resolved by this change.
