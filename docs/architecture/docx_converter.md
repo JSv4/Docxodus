@@ -646,10 +646,12 @@ of at least one line. This removes the unused text descent; multiples add their 
 text-line height below the picture. Mixed text, explicit breaks, floating drawings and other
 spacing rules retain their existing line participation (#1568).
 
-When choosing a nonempty paragraph's strut font, empty text runs do not participate. Blank
-paragraphs retain their existing placeholder metrics; spaces, breaks and other structural run
-content retain their existing participation. Mixed-size visible runs still use the existing
-paragraph-wide metric policy (the remaining scope of #1565).
+When choosing a nonempty paragraph's strut font, empty text runs do not participate. Ordinary
+space-only runs directly in an automatically spaced paragraph also keep their horizontal advance
+without sizing its lines: their inline boxes have zero line height and top alignment. A cached
+visible-text check excludes nested stories and hidden content. Blank paragraphs, decorated or
+raised spaces, nested runs, breaks and other structural content keep their existing participation.
+Mixed-size visible runs still use the existing paragraph-wide metric policy (remaining #1565).
 
 At-least spacing carries `--docx-min-line-height`. The shared paginated natural-metrics pass
 restores the natural height when a smaller minimum would compress uniform ordinary body text.
