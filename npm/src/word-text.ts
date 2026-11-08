@@ -392,7 +392,7 @@ function positionWords(paragraph: HTMLElement, run: HTMLElement,
 }
 
 /** Run after fonts and natural line heights resolve, before pagination measures them. */
-export function prepareWordText(root: HTMLElement, checkpoint?: () => void, owners: 'body' | 'tables' | 'all' = 'all'): number {
+export function prepareWordText(root: HTMLElement, checkpoint?: () => void, owners: 'body' | 'tables' | 'running' | 'all' = 'all'): number {
   const mode = Number(root.closest('[data-docx-compatibility-mode]')?.getAttribute('data-docx-compatibility-mode') ??
     root.ownerDocument.body.getAttribute('data-docx-compatibility-mode') ?? 14);
   if (!plainFlow(root)) return 0;
@@ -437,6 +437,9 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void, owne
     if (!run) continue;
     const runStyle = view.getComputedStyle(run);
     const scale = characterScale(runStyle);
+    // The measured running-story pass extends only character scaling. Preserve
+    // unscaled stories even when the initial document-wide pass could not run.
+    if (owners === 'running' && scale === 1) continue;
     // Unscaled cell text retains its existing layout until the general table
     // line-breaking policy is resolved. Scaled text needs both fitted lines and paint.
     if (table && scale === 1) continue;

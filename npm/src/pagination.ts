@@ -412,6 +412,8 @@ export interface PaginationOptions {
   prepareTableFragment?: (table: HTMLTableElement) => void;
   /** @internal Export text preparation after body tables have their final column widths. */
   prepareTableText?: (section: HTMLElement) => void;
+  /** @internal Export text preparation inside a measured running-story band. */
+  prepareStoryText?: (story: HTMLElement) => void;
   /** Exact invalidation tokens used to materialize an authoritative PageMap with the result. */
   layoutToken?: { documentVersion: number; rendererFingerprint: string };
 }
@@ -942,6 +944,7 @@ export class PaginationEngine {
   private pageCountCheckpoint?: (prospectivePageCount: number) => void;
   private prepareTableFragment?: (table: HTMLTableElement) => void;
   private prepareTableText?: (section: HTMLElement) => void;
+  private prepareStoryText?: (story: HTMLElement) => void;
   private createdPageCount = 0;
   private layoutToken?: { documentVersion: number; rendererFingerprint: string };
   private hfRegistry: HeaderFooterRegistry;
@@ -1052,6 +1055,7 @@ export class PaginationEngine {
     this.pageCountCheckpoint = options.checkPageCount;
     this.prepareTableFragment = options.prepareTableFragment;
     this.prepareTableText = options.prepareTableText;
+    this.prepareStoryText = options.prepareStoryText;
     this.layoutToken = options.layoutToken;
     this.hfRegistry = new Map();
     this.footnoteRegistry = new Map();
@@ -6351,6 +6355,7 @@ export class PaginationEngine {
     const frameStory = measureContainer.querySelector<HTMLElement>('[data-docx-frame-story]');
     if (frameStory) frameStory.style.height = '';
     if (this.fragmentParagraphs) this.fitOverwideTables(measureContainer, dims);
+    this.prepareStoryText?.(measureContainer);
     this.prepareFrameExclusions(measureContainer, dims, physical);
     if (frameStory) {
       // Flex items contain descendant floats. Count ordinary flow after every field refresh

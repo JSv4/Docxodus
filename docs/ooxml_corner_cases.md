@@ -6555,6 +6555,13 @@ and zero cell margins. Its single text run sets `<w:w w:val="80"/>` (or 100/150)
 Standalone export now fits scaled cell text after table geometry resolves and paints the
 same horizontal scale without changing font height. Each ancestor table must have a proven
 fixed width and resolved grid. Adjacent cells keep independent baseline-rounding corrections.
+
+The same uniform automatic-spacing text in a running header or footer is fitted at its
+section's resolved width before the running-story height is measured. A linked story is
+prepared independently when the next section changes its margins or paper width. Public
+PDF regressions cover 80%, 100% and 150% widths, repeated and inherited stories, first/even
+selection, changing STYLEREF siblings, glyph height and PageMap geometry. Scaled notes,
+mixed runs and field-bearing paragraphs remain outside this bounded extension.
 Public regressions cover body/cell controls, continuation pages, bordered and padded repeated
 headers, nested fixed tables and merged grids. AutoFit and percentage owners retain their
 existing policy. Mixed runs, `fitText`, and the unresolved Word exact-fit boundary remain open.

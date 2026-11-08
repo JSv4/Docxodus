@@ -5,6 +5,26 @@ const styles = `<style>p{font:12pt/18px 'Liberation Mono';margin:0;width:144pt;-
   .run{white-space:pre-wrap;font-kerning:none;line-height:18px}</style>`;
 const words = Array.from({ length: 72 }, (_, i) => `W${String(i).padStart(4, '0')}`);
 
+test('running-story measurement preserves unscaled and exact paragraphs', async ({ page }) => {
+  await page.setContent(`${styles}<main data-docx-compatibility-mode="15">
+    <p id="natural"><span class="run">${words.join(' ')}</span></p>
+    <p id="exact" style="--docx-auto-line-spacing:0;--docx-exact-line-height:18px;text-align:justify"><span class="run">${words.join(' ')}</span></p>
+    <p id="scaled"><span class="run" style="--docx-character-scale:.8">${words.join(' ')}</span></p>
+    <p id="expanded"><span class="run" style="--docx-character-scale:1.5">${words.join(' ')}</span></p>
+    <p id="scaled-exact" style="--docx-auto-line-spacing:0;--docx-exact-line-height:18px;text-align:justify"><span class="run" style="--docx-character-scale:1.5">${words.join(' ')}</span></p>
+    </main>`);
+  await page.addScriptTag({ content:wordTextScript });
+  const result = await page.evaluate(() => {
+    const root = document.querySelector('main')!, api = window as any;
+    const controls = ['natural', 'exact', 'scaled-exact'].map(id => document.getElementById(id)!);
+    const before = controls.map(p => p.outerHTML);
+    const prepared = api.prepareWordText(root, undefined, 'running');
+    const painted = api.paintWordText(root);
+    return { prepared, painted, unchanged:controls.every((p, i) => p.outerHTML === before[i]) };
+  });
+  expect(result).toEqual({ prepared:2, painted:2, unchanged:true });
+});
+
 test('painting adjacent cells keeps their equal first baselines', async ({ page }) => {
   const text = Array.from({ length:100 }, (_, i) => `Copper${String(i).padStart(3, '0')}`).join(' ');
   await page.setContent(`<style>body{margin:0}table{border-collapse:collapse;table-layout:fixed;width:400px}
