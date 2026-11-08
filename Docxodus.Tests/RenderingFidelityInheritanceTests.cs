@@ -285,17 +285,26 @@ public class RenderingFidelityInheritanceTests
         Assert.DoesNotContain(html.Descendants(), e => e.Attribute("data-docx-fit-text-width") != null);
     }
 
-    [Fact]
-    public void FitTextPreservesContentControlContextInEveryBlockRenderer()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ContentControlContextAndNestedIdentitySurviveEveryBlockRenderer(bool textbox)
     {
         byte[] bytes = Array.Empty<byte>();
-        Render("<w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        var content = textbox
+            ? "<w:r><w:pict><v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\" style=\"width:100pt;height:40pt\">"
+                + "<v:textbox><w:txbxContent><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:txbxContent>"
+                + "</v:textbox></v:shape></w:pict></w:r>"
+            : "<w:r><w:t>Name</w:t></w:r>";
+        Render($"<w:sdt><w:sdtPr/><w:sdtContent><w:p>{content}</w:p></w:sdtContent></w:sdt>",
             runDefaults: "<w:fitText w:val=\"2000\"/>", inspectSource: source => bytes = source);
         var options = new HtmlConversionOptions { FabricateCssClasses = false, StampAnchors = true,
             PaginationMode = (int)PaginationMode.Paginated };
         var full = HtmlConversionOps.ConvertToHtml(bytes, options);
-        var paragraph = XElement.Parse(full).Descendants().Single(e => e.Name.LocalName == "p" && e.Value == "Name");
+        var paragraph = XElement.Parse(full).Descendants().First(e => e.Name.LocalName == "p" && e.Attribute("data-anchor") != null);
         var anchor = (string)paragraph.Attribute("data-anchor")!;
+        var required = (string?)paragraph.Attribute("data-docx-required-source-anchors");
+        if (textbox) Assert.False(string.IsNullOrEmpty(required));
         using var session = new DocxSession(bytes);
         using var batch = JsonDocument.Parse(HtmlConversionOps.RenderBlocksHtml(session, new[] { anchor }, options));
         foreach (var html in new[] { full, HtmlConversionOps.RenderBlockHtml(bytes, anchor, options),
@@ -303,6 +312,8 @@ public class RenderingFidelityInheritanceTests
         {
             Assert.Contains("Name", html);
             Assert.DoesNotContain("data-docx-fit-text-width", html);
+            var owner = XElement.Parse(html).DescendantsAndSelf().Single(e => (string?)e.Attribute("data-anchor") == anchor);
+            Assert.Equal(required, (string?)owner.Attribute("data-docx-required-source-anchors"));
         }
     }
 }

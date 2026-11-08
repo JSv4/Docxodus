@@ -714,10 +714,11 @@ internal static class HtmlConversionOps
                 var clone = dense?.Template ?? CloneWithListNumbers(siblings[i]);
                 automaticSpacing.Stamp(siblings[i], clone);
                 lineGrid.Stamp(siblings[i], clone);
-                WmlToHtmlConverter.StampFitTextExclusions(siblings[i], clone);
                 if (dense is null)
                     RetargetPartRelationships(liveDoc, siblings[i], clone, renderMain, copiedImages);
                 identity?.Record(siblings[i], clone);
+                // Identity pairs source/clone descendants before this stamp adds children.
+                WmlToHtmlConverter.StampFitTextExclusions(siblings[i], clone);
                 bodyContent.Add(clone);
             }
             if (fieldIndex?.Closer(siblings, start, end) is { } closer) bodyContent.Add(closer);
