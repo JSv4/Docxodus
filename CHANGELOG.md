@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Uniform text honors minimum line spacing below 14pt, including the reported 13pt minimum on 10pt text. Explicit height overrides and mixed-content metrics retain their existing policies (part of #1566).
+
 - Standalone export honors explicit WordPerfect justification for eligible uniform paragraphs in compatibility modes 14 and 15. It fits words to the documented expanded width, then compresses interword gaps without changing glyph widths, including overwide final lines (part of #1550).
 
 - Standalone export honors manual `w:fitText` widths for plain Latin text, sharing the requested width across contiguous runs and preserving ordinary following text, baselines and paragraph continuations (part of #1564).

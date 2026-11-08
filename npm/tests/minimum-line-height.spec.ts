@@ -91,7 +91,7 @@ for (const [name, wrapper] of [
 });
 
 for (const [name, minimum, size, height] of [
-  ['already natural', 10, 20, 'normal'], ['unresolved small minimum', 13, 10, 'normal'],
+  ['already natural', 10, 20, 'normal'],
   ['larger minimum', 16, 10, '16pt'], ['explicit height override', 16, 20, '18pt'],
 ] as const) test(`minimum spacing preserves the ${name} control`, async ({ page }) => {
   await page.goto('/test-harness.html');
@@ -109,6 +109,47 @@ for (const [name, minimum, size, height] of [
   }, { minimum, size, height });
   expect(result.actual).toEqual(result.control);
   expect(result.automatic).toBe('');
+});
+
+for (const [name, minimum, height, markup, recovers] of [
+  ['12pt minimum', 12, 'normal', '<span>Small minimum.</span>', true],
+  ['13pt minimum', 13, 'normal', '<span>Small minimum.</span>', true],
+  ['fractional minimum', 13.5, 'normal', '<span>Small minimum.</span>', true],
+  ['explicit override', 13, '12pt', '<span>Small minimum.</span>', false],
+  ['explicit natural height', 13, `${2355 / 2048 * 10}pt`, '<span>Small minimum.</span>', false],
+  ['explicit run height', 13, 'normal', `<span style="line-height:${2355 / 2048 * 10}pt">Small minimum.</span>`, false],
+  ['explicit paragraph height', 13, `${2355 / 2048 * 10}pt`, '<span style="line-height:normal">Small minimum.</span>', false],
+  ['mixed sizes', 13, 'normal', '<span>Text</span><span style="font-size:9pt">small</span>', false],
+  ['mixed fonts', 13, 'normal', '<span>Text</span><span style="font-family:Liberation Sans">sans</span>', false],
+  ['raised run', 13, 'normal', '<span style="vertical-align:super">Raised text.</span>', false],
+] as const) test(`small minimum respects ${name}`, async ({ page }) => {
+  await page.goto('/test-harness.html');
+  const result = await page.evaluate(async ({ minimum, height, markup, recovers }) => {
+    const url = 'http://localhost:8083/line-metrics.js';
+    const { applyUnroundedNormalLineHeights } = await import(url);
+    const actual = document.createElement('p');
+    actual.style.cssText = `font:10pt/${height} Liberation Serif;--docx-min-line-height:${minimum}pt`;
+    actual.innerHTML = markup;
+    const control = actual.cloneNode(true) as HTMLElement;
+    control.style.removeProperty('--docx-min-line-height');
+    if (recovers) control.style.lineHeight = `${minimum}pt`;
+    document.body.append(actual, control);
+    const measure = (p: HTMLElement) => [p, ...Array.from(p.querySelectorAll('span'))].map(e => ({
+      height: getComputedStyle(e).lineHeight, top: getComputedStyle(e).top,
+      auto: (e as HTMLElement).style.getPropertyValue('--docx-auto-line-spacing'),
+    }));
+    applyUnroundedNormalLineHeights(control);
+    const count = applyUnroundedNormalLineHeights(actual), first = measure(actual);
+    const repeatCount = applyUnroundedNormalLineHeights(actual), repeated = measure(actual);
+    const clone = actual.cloneNode(true) as HTMLElement; document.body.append(clone);
+    const cloneCount = applyUnroundedNormalLineHeights(clone);
+    return { count, repeatCount, cloneCount, first, repeated, clone: measure(clone), expected: measure(control) };
+  }, { minimum, height, markup, recovers });
+  expect(result.first).toEqual(result.expected);
+  expect(result.repeated).toEqual(result.first);
+  expect(result.clone).toEqual(result.first);
+  expect(result.repeatCount).toBe(0); expect(result.cloneCount).toBe(0);
+  if (recovers) expect(result.count).toBe(2);
 });
 
 for (const repeats of [8, 40]) test(`a 16pt minimum cannot compress 20pt exported text (${repeats} repetitions)`, async ({ browser }) => {

@@ -144,8 +144,12 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
   for (const { element, lineHeight } of targets) {
     element.style.setProperty("line-height", `${lineHeight.toFixed(4)}px`);
   }
-  if (grids.length) applyParagraphLineGrids(grids, new Map(targets.map(({ element, lineHeight }) => [element, lineHeight])));
-  const restored = minimums.length ? restoreNaturalMinimums(minimums, ratioFor) : 0;
+  let restored = 0;
+  if (grids.length || minimums.length) {
+    const naturalHeights = new Map(targets.map(({ element, lineHeight }) => [element, lineHeight]));
+    if (grids.length) applyParagraphLineGrids(grids, naturalHeights);
+    if (minimums.length) restored = applyUniformLineMinimums(minimums, ratioFor, naturalHeights);
+  }
   positionRubyAnnotations(root);
   return targets.length + restored;
 }
@@ -182,8 +186,9 @@ function uniformParagraphRuns(paragraph: HTMLElement, allowStructuralWrappers = 
   return runs as HTMLElement[];
 }
 
-/** A minimum below a uniform natural line must not become a smaller fixed line. */
-function restoreNaturalMinimums(paragraphs: HTMLElement[], ratioFor: (style: ProbeFont, text: string) => number): number {
+/** Uniform lines take the greater of their natural height and their authored minimum. */
+function applyUniformLineMinimums(paragraphs: HTMLElement[], ratioFor: (style: ProbeFont, text: string) => number,
+  naturalHeights: Map<HTMLElement, number>): number {
   const view = paragraphs[0].ownerDocument.defaultView!;
   let changed = 0;
   for (const paragraph of paragraphs) {
@@ -195,14 +200,23 @@ function restoreNaturalMinimums(paragraphs: HTMLElement[], ratioFor: (style: Pro
     const minimum = Number.parseFloat(style.getPropertyValue('--docx-min-line-height')) * 4 / 3;
     if (!(minimum > 0)) continue;
     const natural = ratioFor(style, LATIN_PROBE) * Number.parseFloat(style.fontSize);
-    if (!(natural > minimum && Math.abs(Number.parseFloat(style.lineHeight) - minimum) < .01)) continue;
+    const height = Number.parseFloat(style.lineHeight);
+    const restoreNatural = natural > minimum && Math.abs(height - minimum) < .01;
+    // The converter omits fixed heights below 14pt. Recover only its normal-height
+    // fallback, retaining explicit CSS overrides even when they equal the natural height.
+    const applyMinimum = minimum < 14 * 4 / 3 && minimum > natural
+      && naturalHeights.has(paragraph) && Math.abs(height - natural) < .01;
+    if (!restoreNatural && !applyMinimum) continue;
     const runs = uniformParagraphRuns(paragraph, true);
-    if (!runs || runs.some(run => view.getComputedStyle(run).lineHeight !== style.lineHeight)) continue;
-    for (const element of [paragraph, ...runs]) element.style.lineHeight = `${natural.toFixed(4)}px`;
-    // This uniform minimum is equivalent to single spacing. Let the shared text
-    // fitter and painter preserve its natural kerning and fractional baselines.
-    paragraph.style.setProperty('--docx-auto-line-spacing', '1');
-    changed += runs.length + 1;
+    if (!runs || runs.some(run => view.getComputedStyle(run).lineHeight !== style.lineHeight
+      || (applyMinimum && !naturalHeights.has(run)))) continue;
+    for (const element of [paragraph, ...runs]) {
+      element.style.lineHeight = `${Math.max(natural, minimum).toFixed(4)}px`;
+      if (!naturalHeights.has(element)) changed++;
+    }
+    // Only a below-natural minimum is equivalent to single spacing. Enlarged
+    // lines retain the existing centered baseline policy for minimum spacing.
+    if (restoreNatural) paragraph.style.setProperty('--docx-auto-line-spacing', '1');
   }
   return changed;
 }
