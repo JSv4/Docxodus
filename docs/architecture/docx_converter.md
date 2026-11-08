@@ -373,6 +373,12 @@ hook reuses the body paragraph line fitter; continued cells and repeated headers
 lines. Fractional-baseline rounding accumulates within each cell independently. AutoFit,
 percentage-width and unresolved tables, unscaled cells and richer runs keep their current flow.
 
+Running headers and footers use the same text fitter inside their measured content band,
+after table widths resolve and before their height is reserved. Each section owns a separate
+registry clone, including inherited stories; page clones retain that section's fitted lines.
+Field-bearing runs and wrapping-frame stories keep their existing layout guards. Note
+continuations require separate preparation that shares their measurement and final paint.
+
 Tables are wrapped in a `<div>` for alignment control:
 
 ```html

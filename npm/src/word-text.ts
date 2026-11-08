@@ -392,7 +392,7 @@ function positionWords(paragraph: HTMLElement, run: HTMLElement,
 }
 
 /** Run after fonts and natural line heights resolve, before pagination measures them. */
-export function prepareWordText(root: HTMLElement, checkpoint?: () => void, owners: 'body' | 'tables' | 'all' = 'all'): number {
+export function prepareWordText(root: HTMLElement, checkpoint?: () => void, owners: 'body' | 'tables' | 'running' | 'all' = 'all'): number {
   const mode = Number(root.closest('[data-docx-compatibility-mode]')?.getAttribute('data-docx-compatibility-mode') ??
     root.ownerDocument.body.getAttribute('data-docx-compatibility-mode') ?? 14);
   if (!plainFlow(root)) return 0;
@@ -437,6 +437,9 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void, owne
     if (!run) continue;
     const runStyle = view.getComputedStyle(run);
     const scale = characterScale(runStyle);
+    // The measured running-story pass extends only character scaling. Preserve
+    // unscaled stories even when the initial document-wide pass could not run.
+    if (owners === 'running' && scale === 1) continue;
     // Unscaled cell text retains its existing layout until the general table
     // line-breaking policy is resolved. Scaled text needs both fitted lines and paint.
     if (table && scale === 1) continue;
@@ -493,8 +496,8 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
   const view = document.defaultView;
   if (!view) return 0;
   const paragraphs = Array.from(root.querySelectorAll<HTMLElement>(`[${PREPARED}]`));
-  const pictures = Array.from(root.querySelectorAll('img'));
-  const hasPictures = pictures.length > 0;
+  const allPictures = Array.from(root.querySelectorAll('img'));
+  const storyPictures = new Map<Element, HTMLImageElement[]>();
   const columnOf = (paragraph: HTMLElement): HTMLElement | null => {
     for (let parent = paragraph.parentElement; parent && parent !== root; parent = parent.parentElement)
       if (Number(view.getComputedStyle(parent).columnCount) > 1) return parent;
@@ -539,6 +542,12 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
   const drift = new Map<Element, number>();
   for (const paragraph of paragraphs) {
     checkpoint?.();
+    // Running stories have their own flow. A body picture must not disable
+    // their word positioning; body and promoted-drawing handling stays shared.
+    const story = paragraph.closest('.page-header, .page-footer');
+    if (story && !storyPictures.has(story)) storyPictures.set(story, Array.from(story.querySelectorAll('img')));
+    const pictures = story ? storyPictures.get(story)! : allPictures;
+    const hasPictures = pictures.length > 0;
     const column = columnOf(paragraph);
     if (column && fragmentedColumns.has(column)) {
       paragraph.removeAttribute(PREPARED);

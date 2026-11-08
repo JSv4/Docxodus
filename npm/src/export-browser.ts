@@ -3887,6 +3887,7 @@ export async function convertDocxToPaginatedHtml(
           fragmentParagraphs: true,
           prepareTableFragment: refreshTableBorderLayout,
           prepareTableText: section => prepareWordText(section, () => checkpointWordText(state), 'tables'),
+          prepareStoryText: story => prepareWordText(story, () => checkpointWordText(state), 'running'),
           commentOverflow: "appendix",
           // Running-story placement below changes the visible fragment set, and this path always
           // restamps through normalizePageMapFragmentIdentities(); stamping inside paginate()

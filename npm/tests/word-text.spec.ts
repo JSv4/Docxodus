@@ -99,9 +99,10 @@ test('rich runs and unsupported scripts retain their source structure', async ({
   expect(result.after).toEqual(result.before);
 });
 
-test('a convex both-sides contour places short text before the picture and longer text after it', async ({ page }) => {
+for (const band of ['content', 'header', 'footer'])
+test(`a ${band} convex both-sides contour places short text before the picture and longer text after it`, async ({ page }) => {
   const text = 'a b An authored caption retains every word.';
-  await page.setContent(`${styles}<main class="page-content" style="position:relative;width:400pt;height:400pt">
+  await page.setContent(`${styles}<main class="page-${band}" style="position:relative;width:400pt;height:400pt">
     <p data-source-anchor-id="p:body:picture"><span class="run"><span data-docx-edge-picture="true" data-docx-wrap-text="bothSides"
       style="float:left;width:72pt;height:72pt;shape-outside:polygon(50% 0%,100% 50%,50% 100%,0% 50%) border-box;
         shape-margin:5pt;--docx-wrap-distance-left:5pt;--docx-wrap-distance-right:5pt"><img alt="Authored contour" style="width:72pt;height:72pt"></span></span><span class="run">${text}</span></p>
