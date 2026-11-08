@@ -117,9 +117,12 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
   // recomputes the styles of the whole tree.
   const candidates: Array<{ element: HTMLElement; font: ProbeFont; fontSize: number; characters: string[] }> = [];
   const grids: Array<{ paragraph: HTMLElement; pitch: number }> = [];
+  const minimums: HTMLElement[] = [];
   for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
     if (!(element instanceof view.HTMLElement)) continue;
     const style = view.getComputedStyle(element);
+    if (element.matches(PARAGRAPH_SELECTOR) && Number.parseFloat(style.getPropertyValue('--docx-min-line-height')) > 0)
+      minimums.push(element);
     if (style.lineHeight !== "normal") continue;
     const fontSize = Number.parseFloat(style.fontSize);
     if (!(fontSize > 0)) continue;
@@ -142,29 +145,59 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
     element.style.setProperty("line-height", `${lineHeight.toFixed(4)}px`);
   }
   if (grids.length) applyParagraphLineGrids(grids, new Map(targets.map(({ element, lineHeight }) => [element, lineHeight])));
+  const restored = minimums.length ? restoreNaturalMinimums(minimums, ratioFor) : 0;
   positionRubyAnnotations(root);
-  return targets.length;
+  return targets.length + restored;
+}
+
+/** Ordinary inline runs whose metrics can be represented by their paragraph's font. */
+function uniformParagraphRuns(paragraph: HTMLElement): HTMLElement[] | undefined {
+  const view = paragraph.ownerDocument.defaultView!;
+  const style = view.getComputedStyle(paragraph);
+  const fontProperties = ["font-family", "font-size", "font-style", "font-weight", "font-stretch"];
+  if (style.direction !== "ltr" || style.writingMode !== "horizontal-tb") return;
+  const children = Array.from(paragraph.children);
+  if (!children.length || Array.from(paragraph.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim())
+    || children.some(child => {
+      if (!(child instanceof view.HTMLElement) || child.localName !== "span" || child.children.length
+        || !child.textContent?.trim()) return true;
+      const run = view.getComputedStyle(child);
+      return fontProperties.some(property => run.getPropertyValue(property) !== style.getPropertyValue(property))
+        || run.display !== "inline" || run.position !== "static" || run.verticalAlign !== "baseline" || run.transform !== "none";
+    })) return;
+  return children as HTMLElement[];
+}
+
+/** A minimum below a uniform natural line must not become a smaller fixed line. */
+function restoreNaturalMinimums(paragraphs: HTMLElement[], ratioFor: (style: ProbeFont, text: string) => number): number {
+  const view = paragraphs[0].ownerDocument.defaultView!;
+  let changed = 0;
+  for (const paragraph of paragraphs) {
+    if (paragraph.closest('table, ol, ul, li, a, aside, section.footnotes, section.endnotes, '
+      + '[data-footnote-id], [data-comment-id], [data-hf-type], #pagination-hf-registry, '
+      + '[data-docx-textbox], [data-docx-text-frame], [data-docx-drawing-anchor]')
+      || BEYOND_LATIN.test(paragraph.textContent ?? '')) continue;
+    const style = view.getComputedStyle(paragraph);
+    const minimum = Number.parseFloat(style.getPropertyValue('--docx-min-line-height')) * 4 / 3;
+    if (!(minimum > 0)) continue;
+    const natural = ratioFor(style, LATIN_PROBE) * Number.parseFloat(style.fontSize);
+    if (!(natural > minimum && Math.abs(Number.parseFloat(style.lineHeight) - minimum) < .01)) continue;
+    const runs = uniformParagraphRuns(paragraph);
+    if (!runs || runs.some(run => view.getComputedStyle(run).lineHeight !== style.lineHeight)) continue;
+    for (const element of [paragraph, ...runs]) element.style.lineHeight = `${natural.toFixed(4)}px`;
+    changed += runs.length + 1;
+  }
+  return changed;
 }
 
 /** Reserve whole grid slots for uniform single-spaced text, retaining its natural baseline. */
 function applyParagraphLineGrids(grids: Array<{ paragraph: HTMLElement; pitch: number }>, naturalHeights: Map<HTMLElement, number>): void {
-  const fontProperties = ["font-family", "font-size", "font-style", "font-weight", "font-stretch"];
   for (const { paragraph, pitch } of grids) {
-    const view = paragraph.ownerDocument.defaultView!;
     const natural = naturalHeights.get(paragraph);
-    const style = view.getComputedStyle(paragraph);
-    if (!natural || style.direction !== "ltr" || style.writingMode !== "horizontal-tb") continue;
-    const children = Array.from(paragraph.children);
-    if (!children.length || Array.from(paragraph.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim())
-      || children.some(child => {
-        if (!(child instanceof view.HTMLElement) || child.localName !== "span" || child.children.length
-          || !child.textContent?.trim() || naturalHeights.get(child) !== natural) return true;
-        const run = view.getComputedStyle(child);
-        return fontProperties.some(property => run.getPropertyValue(property) !== style.getPropertyValue(property))
-          || run.display !== "inline" || run.position !== "static" || run.verticalAlign !== "baseline" || run.transform !== "none";
-      })) continue;
+    const children = uniformParagraphRuns(paragraph);
+    if (!natural || !children || children.some(child => naturalHeights.get(child) !== natural)) continue;
     const height = Math.ceil(natural / pitch) * pitch;
-    for (const child of children as HTMLElement[]) {
+    for (const child of children) {
       // As with automatic multiples, the paragraph strut remains natural and extra
       // layout height goes below its ink. Read-only baseline correction still applies.
       child.style.lineHeight = `${height}px`;

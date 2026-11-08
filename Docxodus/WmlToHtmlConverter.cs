@@ -8359,6 +8359,7 @@ namespace Docxodus
             if (lineRule == "atLeast" && line is { } atLeastLine)
             {
                 var points = atLeastLine/20m;
+                style.Add("--docx-min-line-height", PointsCss(points));
                 if (points >= 14m)
                     style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0#}pt", points));
             }

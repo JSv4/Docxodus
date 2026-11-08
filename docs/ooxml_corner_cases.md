@@ -2536,7 +2536,8 @@ values are measured in the DOM with Chromium placing baselines on whole CSS pixe
   a page band's bottom edge by a pixel, and the check counts relatively positioned boxes. Run before
   pagination, it failed a footnote continuation as clipped. A child that sits off the baseline is not used as the probe (a raised run would otherwise have
   its raise "corrected" away), and a child holding an image, an SVG or a positioned element is not moved.
-  Exact and at-least line heights are left alone, since Word's placement for them has not been recorded.
+  Exact line heights and at-least minima that enlarge a line retain their separate placement policies.
+  Uniform body text whose natural height exceeds an at-least minimum uses the natural baseline (#1566).
   Chromium's printed PDF snaps text origins to whole pixels, so in print the fix shows as landing on Word's
   pixel.
 - **A raised run (`w:position`) grows Word's line.** CASE6 raises "raised" by 3 pt on the first line
@@ -6480,3 +6481,23 @@ and line breaks. The converter now skips runs containing only properties and emp
 choosing the strut of a nonempty paragraph. The existing empty-paragraph marker preserves blank
 paragraph behavior; whitespace and structural content remain eligible. This does not implement
 mixed-font line metrics, minimum-line baselines or blank-break policies.
+
+## A smaller line minimum compressed uniform larger text (#1566)
+
+With 20pt Liberation Serif, `<w:spacing w:line="320" w:lineRule="atLeast"/>`
+declares a 16pt minimum below the font's approximately 23pt natural line. The converter
+instead emitted a fixed 16pt line, causing visible overlap. The issue author's existing
+[Word print measurements](https://github.com/JSv4/Docxodus/issues/1566#issuecomment-6701329387)
+confirm a 23pt pitch. Current-main public export measured 15.94pt on the reproducer,
+against 23.00pt on its single-spacing control; individual PDF origins round to 0.75pt.
+
+The converter retains the authored minimum as `--docx-min-line-height`. The shared
+natural-metrics pass restores a uniform ordinary body paragraph's natural height when
+its current fixed height matches that smaller minimum. Its runs retain their font and
+source text, and the existing natural-line baseline correction applies in read-only output.
+The same pass owns viewer and editor layout before pagination.
+
+This is a partial resolution. Mixed fonts, raised text, explicit breaks, pictures, blank
+paragraphs and other paragraph owners retain their existing metrics. The confirmed 13pt
+minimum on 10pt text and the other above-natural minima still require a separate baseline
+policy; this change does not claim to resolve them or add a new Word capture.
