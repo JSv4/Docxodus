@@ -17,9 +17,9 @@ test('raised and lowered inline textboxes preserve text and the following paragr
   try {
     const content = await (await (await task.promise).getPage(1)).getTextContent();
     const items = content.items.filter(item=>'str' in item);
-    const text = items.map(item=>item.str).join(' ');
+    const text = items.map(item=>item.str).join(' ').replace(/\s+/g, ' ');
     labels.push(items.find(item=>item.str.includes('Cobalt label'))!.transform[5]);
-    receipts.push(items.find(item=>item.str.includes('Cobalt inventory'))!.transform[5]);
+    receipts.push(items.find(item=>item.str.includes('inventory'))!.transform[5]);
     for (const label of ['Cobalt label inside.','Cobalt inventory complete.']) expect(text.split(label)).toHaveLength(2);
   } finally { await task.destroy(); }
   await page.setContent(result.html!);

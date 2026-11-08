@@ -50,16 +50,18 @@ test('fractional paragraph paint preserves every character, block box and PageMa
     expect(result.lines[i] - result.lines[i - 1]).toBeCloseTo(14.5, 1);
 });
 
-for (const [name, content] of [
-  ['picture', '<img width="20" height="20">'],
-  ['inline picture', '<p><span><img width="20" height="20"></span><span class="run">Inline picture text</span></p>'],
-  ['positioned picture', '<p><span><span style="float:left;position:relative"><img width="20" height="20"></span></span><span class="run">Positioned picture text</span></p>'],
-  ['horizontally shifted text', '<p><span class="run" style="white-space:pre-wrap;position:relative;left:3pt">Shifted text</span></p>'],
-  ['table', '<table><tr><td>Cell</td></tr></table>'],
-  ['note', '<a class="footnote-ref">1</a>'],
-  ['columns with rich text', '<section data-cols="2"><p><span class="run"><b>Rich column</b></span></p></section>'],
-]) {
-  test(`complex ${name} flow retains its original HTML layout`, async ({ page }) => {
+for (const [name, content, spatial] of [
+  ['picture', '<img width="20" height="20">', true],
+  ['inline picture', '<p><span><img width="20" height="20"></span><span class="run">Inline picture text</span></p>', true],
+  ['positioned picture', '<p><span><span style="float:left;position:relative"><img width="20" height="20"></span></span><span class="run">Positioned picture text</span></p>', true],
+  ['floating shape', '<svg style="float:left;width:120px;height:80px"><rect width="120" height="80"/></svg>', true],
+  ['wrapping frame', '<div data-docx-frame-exclusion="true" style="float:left;width:120px;height:80px">Frame</div>', true],
+  ['horizontally shifted text', '<p><span class="run" style="white-space:pre-wrap;position:relative;left:3pt">Shifted text</span></p>', false],
+  ['table', '<table><tr><td>Cell</td></tr></table>', false],
+  ['note', '<a class="footnote-ref">1</a>', false],
+  ['columns with rich text', '<section data-cols="2"><p><span class="run"><b>Rich column</b></span></p></section>', false],
+] as const) {
+  test(`complex ${name} content retains its own HTML layout`, async ({ page }) => {
     await page.setContent(`${styles}<main><p><span class="run">AV A plain paragraph</span></p>${content}</main>`);
     await page.addScriptTag({ content: lineMetrics });
     await page.addScriptTag({ content: wordText });
@@ -67,11 +69,12 @@ for (const [name, content] of [
       const api = window as any;
       const root = document.querySelector('main')!;
       api.applyUnroundedNormalLineHeights(root);
-      const before = root.innerHTML;
-      return { count: api.prepareWordText(root), before, after: root.innerHTML };
+      const complex = () => Array.from(root.children).slice(1).map(child => child.outerHTML);
+      const before = complex();
+      return { count: api.prepareWordText(root), before, after: complex() };
     });
-    expect(result.count).toBe(0);
-    expect(result.after).toBe(result.before);
+    expect(result.count).toBe(spatial ? 0 : 1);
+    expect(result.after).toEqual(result.before);
   });
 }
 
@@ -88,11 +91,12 @@ test('rich runs and unsupported scripts retain their source structure', async ({
     const api = window as any;
     const root = document.querySelector('main')!;
     api.applyUnroundedNormalLineHeights(root);
-    const before = root.innerHTML;
-    return { count: api.prepareWordText(root), before, after: root.innerHTML };
+    const rich = () => Array.from(root.children).slice(1).map(child => child.outerHTML);
+    const before = rich();
+    return { count: api.prepareWordText(root), before, after: rich() };
   });
-  expect(result.count).toBe(0);
-  expect(result.after).toBe(result.before);
+  expect(result.count).toBe(1);
+  expect(result.after).toEqual(result.before);
 });
 
 test('a convex both-sides contour places short text before the picture and longer text after it', async ({ page }) => {

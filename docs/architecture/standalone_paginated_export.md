@@ -1550,8 +1550,15 @@ The same line selector handles plain exact-spaced justified text in compatibilit
 Only ordinary spaces change advance, per selected line; a naturally fitting final line keeps its
 spaces. Each continuation retains the full exact pitch. Admission requires the font's ascent and
 descent to fit that line's 80%/20% bands, so overlapping ink keeps the existing inline overflow path.
-Hard breaks, tabs, bidi, mixed runs, pictures and columns retain their existing layout. Mixing exact
-and automatic spacing does not opt previously excluded automatic paragraphs into vector paint.
+Hard breaks, tabs, bidi, mixed runs, pictures and columns retain their existing layout. Eligibility
+is paragraph-local: neighboring rich text, tables, lists, links or different line-spacing rules
+do not change an otherwise eligible paragraph's fitting, kerning or paint policy. Exact paragraphs
+retain HTML paint; automatic paragraphs retain the vector painter. Table/list contents, notes,
+comments, textboxes and frames remain excluded, while ordinary running-story paragraphs still
+qualify. The vector keeps the positioned paint phase of baseline-adjusted HTML runs, preserving
+PDF text order around tables and other unprepared content. Graphics, wrapping frames and unsupported
+picture flow retain the document-level guard
+because they can change the available line intervals of neighboring paragraphs.
 `TestFiles/ExactJustificationFlow/word-observations.json` pins the native legacy/modern boundary.
 
 Auto-spacing retains the resolved font height's precision through the spacing multiple. The

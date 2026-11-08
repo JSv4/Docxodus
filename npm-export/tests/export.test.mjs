@@ -914,6 +914,17 @@ describe("@docxodus/export", { concurrency: false }, () => {
     await writeFile(join(successArtifacts, "exact-row-overflow.html"), result.html);
   });
 
+  for (const line of [360, 480]) test(`keeps ${line / 240}x-spaced paragraphs around a table in PDF source order`, async () => {
+    const result = await renderDocxArtifacts(generateExactRowOverflowDocx({
+      spacing: `w:line="${line}" w:lineRule="auto"`,
+    }), { ...baseOptions, browser, outputs: ["pdf"] });
+    const expected = "Opening ledger paragraph. Birch exact record. Overflow Birch continuation line. "
+      + "Neighbour cell. Following row text. Second column. Closing ledger paragraph.";
+    const order = await inspectPdfPageOrder(result.pdf, 1);
+    assert.equal(order.streamText, expected);
+    assert.equal(order.structureText, expected);
+  });
+
   // Layout overflow is not hidden text: a line box includes the font's whole ascent and descent and a
   // paragraph its spacing, so a one-line row a little shorter than its line, or space after, overflows
   // the clip box while every glyph still shows.

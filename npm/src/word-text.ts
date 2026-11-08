@@ -17,23 +17,15 @@ const FITTED_LINE = 'data-docx-word-line';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PARAGRAPHS = 'p, h1, h2, h3, h4, h5, h6';
 
-function plainDocument(root: HTMLElement, allowExact = false): boolean {
-  if (root.querySelector('table, svg, math, canvas, video, audio, iframe, object, a, ol, ul, aside, template, section.footnotes, section.endnotes'))
+function plainFlow(root: HTMLElement): boolean {
+  // Graphics and wrapping frames can exclude space from neighboring paragraphs.
+  // Their line intervals remain owned by the existing flow implementation.
+  if (root.querySelector('svg, math, canvas, video, audio, iframe, object, [data-docx-frame-exclusion]'))
     return false;
-  if (Array.from(root.querySelectorAll('img')).some(img => !img.closest(PARAGRAPHS))) return false;
-  // A document mixing plain text with shifted runs, exact spacing or rich
-  // inline structure keeps one consistent legacy layout. Those contexts need
-  // their own line model before they can share the precision renderer.
-  // Running stories are ordinary paragraphs measured into their own bands, so
-  // they qualify like body text (issue #1123). A right-to-left paragraph keeps
-  // its HTML line layout, so it no longer disqualifies the left-to-right ones
-  // when it is otherwise plain; it is held to every other condition here.
-  const view = root.ownerDocument.defaultView;
-  return Array.from(root.querySelectorAll<HTMLElement>(PARAGRAPHS)).every(p => {
-    const style = view?.getComputedStyle(p);
-    const run = plainRun(p, style?.direction === 'rtl', allowExact);
-    return run !== null && (Number(style?.getPropertyValue('--docx-auto-line-spacing')) > 0 ||
-      (allowExact && Number.parseFloat(style?.getPropertyValue('--docx-exact-line-height') ?? '') > 0));
+  return Array.from(root.querySelectorAll('img')).every(img => {
+    const paragraph = img.closest<HTMLElement>(PARAGRAPHS);
+    return paragraph !== null && plainRun(paragraph,
+      root.ownerDocument.defaultView?.getComputedStyle(paragraph).direction === 'rtl') !== null;
   });
 }
 
@@ -389,8 +381,7 @@ function positionWords(paragraph: HTMLElement, run: HTMLElement,
 export function prepareWordText(root: HTMLElement, checkpoint?: () => void): number {
   const mode = Number(root.closest('[data-docx-compatibility-mode]')?.getAttribute('data-docx-compatibility-mode') ??
     root.ownerDocument.body.getAttribute('data-docx-compatibility-mode') ?? 14);
-  const precision = plainDocument(root);
-  if (!precision && (mode < 15 || !plainDocument(root, true))) return 0;
+  if (!plainFlow(root)) return 0;
   const view = root.ownerDocument.defaultView;
   if (!view) return 0;
   // Pagination measures each section at this declared width. Line fitting must
@@ -402,17 +393,19 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
   let prepared = 0;
   for (const paragraph of Array.from(root.querySelectorAll<HTMLElement>(PARAGRAPHS))) {
     checkpoint?.();
-    const run = plainRun(paragraph, false, !precision);
-    if (!run) continue;
+    if (paragraph.closest('table, ol, ul, li, a, aside, template, section.footnotes, section.endnotes, ' +
+      '[data-footnote-id], [data-comment-id], [data-docx-textbox], [data-docx-text-frame], [data-docx-drawing-anchor]')) continue;
     const style = view.getComputedStyle(paragraph);
     const multiple = Number(style.getPropertyValue('--docx-auto-line-spacing'));
-    const exact = !precision && Number.parseFloat(style.getPropertyValue('--docx-exact-line-height')) > 0;
+    const exact = mode >= 15 && Number.parseFloat(style.getPropertyValue('--docx-exact-line-height')) > 0;
+    const run = plainRun(paragraph, false, exact);
+    if (!run) continue;
     const runStyle = view.getComputedStyle(run);
     const kerning = runStyle.getPropertyValue('--docx-font-kerning').trim() || 'none';
     // A unit multiple leaves the run at `line-height: normal`; the export's unrounded
     // normal-line pass (line-metrics.ts) has already resolved it to a length.
     const height = Number.parseFloat(runStyle.lineHeight);
-    if ((!precision && !exact) || (!(multiple > 0) && !exact) || !(height > 0) || !['none', 'normal'].includes(kerning)) continue;
+    if ((!(multiple > 0) && !exact) || !(height > 0) || !['none', 'normal'].includes(kerning)) continue;
     // Keep the resolved font height's precision through the spacing multiple.
     // Rounding the natural height to twips and flooring the product shortens
     // every line; native Word controls show the loss accumulating down a page.
@@ -423,7 +416,6 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
     if (exact && (style.textAlign !== 'justify' || !['auto', 'start', 'left'].includes(style.textAlignLast) ||
       column || root.querySelector('img'))) continue;
     // Exact lines keep their HTML baseline/ink handling and full declared pitch.
-    // Mixed auto/exact documents do not opt their auto paragraphs into vector paint.
     if (exact) {
       if (fitWordLines(paragraph, run, true, checkpoint, true)) prepared++;
       continue;
@@ -556,9 +548,11 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     const dx = page ? remainder(band.left - page.left) : 0;
     const dy = page ? remainder(band.top - page.top) : 0;
     svg.setAttribute('role', 'group');
+    // Baseline-adjusted HTML runs paint as positioned content. Keep that phase
+    // so mixed HTML/vector paragraphs reach the PDF text layer in source order.
     svg.style.cssText = columnBand
       ? 'position:absolute;left:0;top:0;display:block;overflow:visible'
-      : 'display:block;overflow:visible';
+      : 'position:relative;display:block;overflow:visible';
     const baseline = (metric.height - metric.descent) * fontSize;
     Array.from(rows.values()).forEach((words, index) => {
       const line = document.createElementNS(SVG_NS, 'text');

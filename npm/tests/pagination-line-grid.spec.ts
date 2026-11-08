@@ -72,7 +72,7 @@ test(`wrapped grid paragraph, table=${entry.table}, arbitrary offset=${!!entry.s
     const staging = document.getElementById('staging')!, pages = document.getElementById('pages')!;
     applyUnroundedNormalLineHeights(staging); prepareWordText(staging);
     const fitted = staging.querySelector('p > span')!.getAttribute('data-docx-word-fit');
-    if (shifted) staging.querySelector<HTMLElement>('p > span')!.style.top = '-1px';
+    if (shifted) Object.assign(staging.querySelector<HTMLElement>('p > span')!.style, { position: 'relative', top: '-1px' });
     new (window as any).DocxodusPagination.PaginationEngine(staging, pages,
       { scale: 1, showPageNumbers: false, fragmentParagraphs: true }).paginate();
     const paragraph = pages.querySelector('.page-content p')!;
@@ -84,7 +84,7 @@ test(`wrapped grid paragraph, table=${entry.table}, arbitrary offset=${!!entry.s
     }
     return { fitted, rows: rows.size, text: Array.from(pages.querySelectorAll('.page-content p')).map(p => p.textContent).join(' ') };
   }, !!entry.shifted);
-  expect(result.fitted).toBe(entry.table ? null : '0');
+  expect(result.fitted).toBe('0');
   if (entry.shifted) expect(result.rows).toBeGreaterThan(35);
   else expect(result.rows).toBe(35);
   expect(result.text.match(/Cedar\d+/g)).toEqual(Array.from({ length: 900 }, (_, i) => `Cedar${i}`));

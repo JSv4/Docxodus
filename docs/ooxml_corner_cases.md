@@ -6365,3 +6365,35 @@ claimed. Multiple, exact and at-least spacing, mixed/raised/nested inline conten
 stories, textboxes, revision-bearing documents and other grid types retain their previous
 behavior. Word's multiple-spacing formula, cell compatibility option and `beforeLines`/`afterLines`
 still require separate measurements; this is a partial resolution of #1551.
+
+## Unrelated content changed paragraph fitting and kerning (#1550, #1562)
+
+With 12pt Liberation Serif, a 468pt column, explicit single spacing and compatibility mode 15,
+the same ordinary paragraph changed line breaks when a later paragraph contained bold text,
+a table, a list or a link. The export's `plainDocument` gate disabled both bounded space
+compression and resolved kerning for the whole document.
+
+| Reproducer | Plain document | Before, with unrelated rich content | After, either context |
+| --- | --- | --- | --- |
+| Justified harbor paragraph (#1550) | First line ends `pier as` | Ends `northern pier` | Ends `pier as` |
+| Left-aligned kerning paragraph, no `w:kern` (#1562) | Ends `Where` | Ends `Where Water` | Ends `Where` |
+| Same 12pt text with `w:kern w:val="28"` | Kerning disabled by the existing threshold policy | Ends `Where Water` | Ends `Where` |
+| Kerning enabled at 8pt in a run, defaults or style | Ends `Where Water` | Ends `Where Water` | Ends `Where Water` |
+
+The [issue author's Word print](https://github.com/JSv4/Docxodus/issues/1562#issuecomment-6701328347)
+confirms the unkerned `Where` break beside unrelated bold content. Existing Word observations
+already establish the bounded ordinary-space policy; this change does not extend its limits.
+Public DOCX regressions cover all five neighboring-content variants and both kerning thresholds
+in run, default and style properties. LibreOffice agrees on the absent/enabled kerning distinction,
+but applies kerning above the font-size threshold too; those native controls cannot adjudicate it.
+
+`prepareWordText` now admits each paragraph using its own line policy, plain-run checks and
+source owner. It retains the graphics/frame and picture-flow guards because spatial exclusions
+can affect adjacent paragraphs. Notes, margin comments, table/list content and textboxes retain
+their own layout paths; running-story paragraphs and eligible LTR text beside RTL content keep
+their existing eligibility. Resolved automatic and exact paragraphs no longer disqualify one
+another; each retains its own fitting, pitch and paint policy.
+
+This is a partial resolution. Mixed runs within the affected paragraph, implicit line spacing,
+other rendering paths, `wpJustification` condensation limits and default ligatures remain outside
+this change. No new Word capture or broader font-shaping parity is claimed.
