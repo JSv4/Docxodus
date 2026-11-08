@@ -91,6 +91,13 @@ function horizontal(tokens: Array<{ text: string; x: number; width: number }>) {
   return tokens.map(({ text, x, width }) => ({ text, x, width }));
 }
 
+test('equal vertical metrics preserve styled text for ordinary horizontal fitting', async ({ page }) => {
+  const result = await exercise(page, paragraph({ paragraphStyle: 'font-size:10pt',
+    firstStyle: 'font-size:10pt;font-weight:bold' }));
+  expect(result.count).toBe(0);
+  expect(result.after.html).toBe(result.before.html);
+});
+
 test('one-word visual lines retain every line instead of collapsing equal x coordinates', async ({ page }) => {
   const result = await exercise(page, paragraph({ width: 42, text: Array(12).fill('word').join(' ') }));
   expect(result.count).toBe(1);

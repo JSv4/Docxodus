@@ -311,6 +311,11 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
       || !owned && style.lineHeight !== 'normal'
         && !(minimum >= 14 * 4 / 3 && Math.abs(Number.parseFloat(style.lineHeight) - minimum) < .02)
       || !owned && new Set(fonts.map(f => `${f.size}|${f.family}|${f.weight}|${f.style}`)).size < 2) continue;
+    const metrics = new Map(fonts.map(f => [f.run, measure({ fontFamily: f.family,
+      fontWeight: f.weight, fontStyle: f.style, fontStretch: f.stretch }, f.size)]));
+    // Styling alone does not require vertical line ownership. Equal metrics keep
+    // the ordinary flow available to the precise horizontal text fitter.
+    if (!owned && new Set([...metrics.values()].map(m => `${m.ascent}|${m.descent}`)).size < 2) continue;
     const before = paragraph.cloneNode(true) as HTMLElement;
     const sourceText = paragraph.textContent;
     const words = () => {
@@ -333,10 +338,9 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
     // Removing old metrics reunites the original shaping runs before a width refit.
     paragraph.normalize();
     if (owned) pristine = words();
-    const metrics = new Map<HTMLElement, ReturnType<typeof measure>>();
     for (const f of fonts) {
       const font = { fontFamily: f.family, fontWeight: f.weight, fontStyle: f.style, fontStretch: f.stretch };
-      const metric = measure(font, f.size); metrics.set(f.run, metric);
+      const metric = metrics.get(f.run)!;
       Object.assign(f.run.style, font, { fontSize: `${f.size}px`, lineHeight: `${metric.ascent + metric.descent}px`, position: 'static', top: 'auto' });
     }
     // Resolve font-relative paragraph geometry before removing its global strut.
