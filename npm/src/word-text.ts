@@ -18,6 +18,96 @@ const NOTE_FIT = 'data-docx-note-fit';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PARAGRAPHS = 'p, h1, h2, h3, h4, h5, h6';
 
+/** A manual width belongs to the contiguous group, including differently styled runs. */
+export function prepareFitText(root: HTMLElement, checkpoint?: () => void): number {
+  const view = root.ownerDocument.defaultView;
+  if (!view) return 0;
+  let count = 0;
+  const visited = new Set<HTMLElement>();
+  for (const first of Array.from(root.querySelectorAll<HTMLElement>('[data-docx-fit-text-width]'))) {
+    checkpoint?.();
+    if (visited.has(first) || first.closest('[data-docx-fit-text-group], [data-field]')) continue;
+    const width = Number(first.dataset.docxFitTextWidth);
+    const group = [first];
+    visited.add(first);
+    let next = first.nextSibling;
+    while (next instanceof view.HTMLElement && next.dataset.docxFitTextWidth === first.dataset.docxFitTextWidth
+      && next.dataset.docxFitTextId === first.dataset.docxFitTextId) {
+      checkpoint?.();
+      group.push(next); visited.add(next); next = next.nextSibling;
+    }
+    if (!Number.isFinite(width) || width < 0 || group.length !== Number(first.dataset.docxFitTextCount)
+      || group.some(run => run.localName !== 'span'
+      || run.children.length || run.childNodes.length !== 1 || run.firstChild?.nodeType !== 3
+      || !/^[\u0020-\u024f]+$/u.test(run.textContent ?? '')
+      || (() => {
+        const style = view.getComputedStyle(run);
+        return style.direction !== 'ltr' || style.display !== 'inline' || style.cssFloat !== 'none'
+          || style.transform !== 'none' || style.translate !== 'none' || style.rotate !== 'none' || style.scale !== 'none'
+          || style.writingMode !== 'horizontal-tb' || characterScale(style) !== 1
+          || ['left', 'right'].some(side => !['auto', '0px'].includes(style.getPropertyValue(side)))
+          || ['top', 'right', 'bottom', 'left'].some(side =>
+            style.getPropertyValue(`margin-${side}`) !== '0px' || style.getPropertyValue(`padding-${side}`) !== '0px'
+            || style.getPropertyValue(`border-${side}-width`) !== '0px');
+      })())) continue;
+    const outer = root.ownerDocument.createElement('span');
+    const inner = root.ownerDocument.createElement('span');
+    outer.dataset.docxFitTextGroup = 'true';
+    outer.style.cssText = `display:inline-block;width:${width}pt;text-indent:0;white-space:pre;margin:0;padding:0;border:0`;
+    inner.style.cssText = 'display:inline-block;white-space:pre;transform-origin:left top;margin:0;padding:0;border:0';
+    const originalStyles = group.map(run => run.getAttribute('style'));
+    first.before(outer); outer.append(inner); inner.append(...group);
+    for (const run of group) {
+      run.style.whiteSpace = 'pre';
+      run.style.letterSpacing = '0';
+    }
+    // Computed width is local to the region. A client rectangle also includes
+    // a transformed story/container and would apply that scale a second time.
+    const natural = Number.parseFloat(view.getComputedStyle(inner).width);
+    if (!(natural > 0)) {
+      outer.replaceWith(...group);
+      group.forEach((run, i) => originalStyles[i] === null ? run.removeAttribute('style') : run.setAttribute('style', originalStyles[i]!));
+      continue;
+    }
+    inner.style.transform = `scaleX(${width * 4 / 3 / natural})`;
+    count++;
+  }
+  return count;
+}
+
+/** Only the measured manual-width carrier is an indivisible pagination atom. */
+export function isFitTextInlineBox(box: HTMLElement): boolean {
+  const view = box.ownerDocument.defaultView!, inner = box.firstElementChild;
+  if (box.localName !== 'span' || box.dataset.docxFitTextGroup !== 'true' || box.childNodes.length !== 1
+    || !(inner instanceof view.HTMLElement) || inner.localName !== 'span'
+    || !inner.childNodes.length || inner.childNodes.length !== inner.children.length) return false;
+  const runs = Array.from(inner.children) as HTMLElement[], first = runs[0];
+  const width = Number(first.dataset.docxFitTextWidth);
+  const scale = /^scaleX\(([\d.e+-]+)\)$/.exec(inner.style.transform);
+  if (!Number.isFinite(width) || width < 0 || !scale || !(Number(scale[1]) >= 0)
+    || runs.length !== Number(first.dataset.docxFitTextCount)
+    || runs.some(run => run.localName !== 'span' || run.children.length || run.childNodes.length !== 1
+      || run.firstChild?.nodeType !== 3 || run.dataset.docxFitTextId !== first.dataset.docxFitTextId
+      || run.dataset.docxFitTextWidth !== first.dataset.docxFitTextWidth
+      || ['top', 'right', 'bottom', 'left'].some(side => {
+        const style = view.getComputedStyle(run);
+        return style.getPropertyValue(`margin-${side}`) !== '0px' || style.getPropertyValue(`padding-${side}`) !== '0px'
+          || style.getPropertyValue(`border-${side}-width`) !== '0px';
+      }))) return false;
+  if ([box, inner].some(element => {
+    const style = view.getComputedStyle(element);
+    return style.display !== 'inline-block' || style.position !== 'static' || style.cssFloat !== 'none'
+      || style.whiteSpace !== 'pre' || style.direction !== 'ltr' || style.writingMode !== 'horizontal-tb'
+      || style.translate !== 'none' || style.rotate !== 'none' || style.scale !== 'none'
+      || (element === box && style.transform !== 'none')
+      || ['top', 'right', 'bottom', 'left'].some(side =>
+        style.getPropertyValue(`padding-${side}`) !== '0px' || style.getPropertyValue(`border-${side}-width`) !== '0px');
+  })) return false;
+  const outer = box.getBoundingClientRect(), painted = inner.getBoundingClientRect();
+  return Math.abs(outer.width - width * 4 / 3) < 1 / 32
+    && Math.abs(painted.width - outer.width) < 1 / 32 && Math.abs(painted.left - outer.left) < 1 / 32;
+}
+
 function plainFlow(root: HTMLElement): boolean {
   // Graphics and wrapping frames can exclude space from neighboring paragraphs.
   // Their line intervals remain owned by the existing flow implementation.
@@ -90,6 +180,7 @@ function plainRun(paragraph: HTMLElement, rightToLeft = false, allowExact = fals
   // Other scripts need their own fallback-font metrics, shaping and bidi model.
   if (!text.trim() || /^\s/.test(text) || (!rightToLeft && !/^[\u0020-\u024f]*$/u.test(text))) return null;
   if (Array.from(run.attributes).some(a => !['class', 'style', 'lang', 'dir', FONT_REQUEST_ATTRIBUTE,
+    'data-docx-fit-text-width', 'data-docx-fit-text-id', 'data-docx-fit-text-count',
     ...(allowExact ? ['data-docx-exact-run'] : []),
     ...(fitted || run.getAttribute(FITTED_RUN) === '0' ? [FITTED_RUN] : [])].includes(a.name))) return null;
   const style = view.getComputedStyle(run);

@@ -9,7 +9,7 @@
 import limitsContractJson from "./export-resource-limits-v1.json";
 import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
 import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExactLineInk, measureLaidOutBottoms } from "./line-metrics.js";
-import { prepareWordText, paintWordText, createFootnoteTextPreparer } from "./word-text.js";
+import { prepareWordText, paintWordText, createFootnoteTextPreparer, prepareFitText } from "./word-text.js";
 import { preserveClippedExactRowText } from "./exact-row-text.js";
 import { prepareParagraphBorders, paintParagraphBorders } from "./paragraph-borders.js";
 import { prepareTableBorders, paintTableBorders, refreshTableBorderLayout } from "./table-borders.js";
@@ -3873,6 +3873,7 @@ export async function convertDocxToPaginatedHtml(
         const restoreTextMeasurement = revealMeasurementStaging(renderDocument);
         try {
           applyUnroundedNormalLineHeights(renderDocument.body);
+          prepareFitText(renderDocument.body, () => checkpointWordText(state));
           prepareWordText(renderDocument.body, () => checkpointWordText(state), 'body');
           prepareParagraphBorders(renderDocument.body);
           prepareTableBorders(renderDocument.body);

@@ -28,6 +28,7 @@ import {
   type MarkupBalloonResult,
 } from "./markup-balloons.js";
 import { BalloonAppendix } from "./balloon-appendix.js";
+import { isFitTextInlineBox } from "./word-text.js";
 
 export type { PageBands, PageDimensions } from "./page-geometry.js";
 
@@ -4154,11 +4155,14 @@ export class PaginationEngine {
   private rangeAtomicInlineBoxes(paragraph: HTMLElement): Set<HTMLElement> {
     const boxes = new Set<HTMLElement>();
     for (const marker of Array.from(paragraph.querySelectorAll<HTMLElement>(
-      '[data-docx-shape="unrendered"], [data-docx-tab], [data-docx-ruby="true"], [data-docx-math="true"], [data-docx-frame-line]',
+      '[data-docx-shape="unrendered"], [data-docx-tab], [data-docx-ruby="true"], [data-docx-math="true"], [data-docx-frame-line], [data-docx-fit-text-group]',
     ))) {
       if (marker.hasAttribute('data-docx-frame-line')) { boxes.add(marker); continue; }
       let box: HTMLElement | null = marker;
-      if (marker.dataset.docxMath === "true") {
+      const fitted = marker.hasAttribute('data-docx-fit-text-group');
+      if (fitted) {
+        if (!isFitTextInlineBox(marker)) continue;
+      } else if (marker.dataset.docxMath === "true") {
         const math = marker.firstElementChild;
         if (marker.childNodes.length !== 1 || math?.localName !== "math" || math.getAttribute("display") !== "inline"
           || this.view.getComputedStyle(marker).display !== "inline"
@@ -4182,7 +4186,7 @@ export class PaginationEngine {
         const rubyAnnotation = marker.dataset.docxRuby === "true" && element.localName === "rt"
           && style.position === "relative" && (style.left === "auto" || parseFloat(style.left) === 0);
         return (!rubyAnnotation && !this.hasRangeFragmentSafePosition(element, style))
-          || style.float !== "none" || style.transform !== "none";
+          || style.float !== "none" || (style.transform !== "none" && !(fitted && element === marker.firstElementChild));
       })) continue;
       boxes.add(box);
     }

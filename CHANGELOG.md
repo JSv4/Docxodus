@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Standalone export honors manual `w:fitText` widths for plain Latin text, sharing the requested width across contiguous runs and preserving ordinary following text, baselines and paragraph continuations (part of #1564).
+
 - Ordinary space-only runs retain their authored width without enlarging automatically spaced text lines. Blank, decorated, raised and structural content keep their existing metrics (part of #1565).
 
 - Standalone export applies character-width percentages to both line fitting and glyph painting in plain, automatically spaced body paragraphs, running headers/footers, footnotes and resolved fixed-width table cells. Footnote continuations refit to their destination width while retaining paragraph identities and source eligibility. Independent story bands keep their own rounding and picture-dependent justification. Font size, line height, source text and page anchors are preserved; richer text layouts retain their existing policy (part of #1564).
