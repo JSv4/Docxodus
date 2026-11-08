@@ -62,9 +62,9 @@ const budgetsKiB = {
   // Round only the four exhausted gates up to the next 0.1 KiB.
   // Floating-paragraph admission measures 156920/156958/135611 gzip bytes
   // for embed/IIFE/editor. Round only these exhausted gates up to the next 0.1 KiB.
-  // Natural minimum-line recovery adds 228–247 gzip bytes over a376a611.
+  // Natural minimum-line recovery adds 255–275 gzip bytes over a376a611.
   // Round only the four exhausted gates to the next 0.1 KiB.
-  'embed.bundle.js': 153.5,
+  'embed.bundle.js': 153.6,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
   'embed.iife.js': 153.6,
