@@ -416,7 +416,7 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
     // Keep the resolved font height's precision through the spacing multiple.
     // Rounding the natural height to twips and flooring the product shortens
     // every line; native Word controls show the loss accumulating down a page.
-    const nativeHeight = height / multiple;
+    const nativeHeight = Number.parseFloat(runStyle.getPropertyValue('--docx-word-native-height')) || height / multiple;
     let column = false;
     for (let ancestor = paragraph.parentElement; ancestor && ancestor !== root; ancestor = ancestor.parentElement)
       if (Number(view.getComputedStyle(ancestor).columnCount) > 1) column = true;

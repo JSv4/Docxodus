@@ -1165,6 +1165,7 @@ namespace Docxodus
 
             var spacingRoot = wordDoc.MainDocumentPart!.GetXDocument().Root!;
             new Internal.AutomaticParagraphSpacing(wordDoc).Stamp(spacingRoot, spacingRoot);
+            new Internal.ParagraphLineGrid(wordDoc).Stamp(spacingRoot, spacingRoot);
 
             // Only accept revisions if NOT rendering tracked changes AND document has tracked changes
             // This optimization saves ~9% of conversion time for documents without revisions
@@ -8246,6 +8247,7 @@ namespace Docxodus
 
             DefineStrutFont(style, paragraph);
             DefineLineHeight(style, paragraph);
+            Internal.ParagraphLineGrid.AddStyle(paragraph, style);
 
             // vertical text alignment as of December 2013 does not work in any major browsers.
             CreateStyleFromTextAlignment(style, pPr.Element(W.textAlignment));

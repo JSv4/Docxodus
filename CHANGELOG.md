@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Uniform single-spaced body text reserves whole line-grid slots from its original section, including block renders and wrapped continuations. Paragraph snap overrides are preserved; natural baseline placement remains unchanged (part of #1551).
+
 - Automatic spacing between ordinary body paragraphs uses Word's 14 pt gap, or zero between items in the same list, while retaining explicit neighbor-owned spacing. Stateless block rendering now shares the session renderer's neighbor context (part of #1553).
 
 - Contextual paragraph spacing suppresses each paragraph's own before/after space beside the same style, even when the neighbor leaves the setting off. Body text and DrawingML/VML text boxes preserve neighbor-owned spacing, inherited overrides and intervening content (part of #1553).
