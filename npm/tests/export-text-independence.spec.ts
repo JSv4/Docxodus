@@ -24,12 +24,14 @@ function check(alignment: keyof typeof fitTexts, neighbor: FitNeighbor,
     try {
       const pdf = await task.promise;
       const content = await (await pdf.getPage(1)).getTextContent();
-      const rows = new Map<number, string[]>();
+      const rows = new Map<number, Array<{ text: string; x: number }>>();
       for (const item of content.items) if ('str' in item && item.str.trim()) {
         const y = Math.round(item.transform[5] * 100) / 100;
-        const row = rows.get(y) ?? []; row.push(item.str.trim()); rows.set(y, row);
+        const row = rows.get(y) ?? []; row.push({ text: item.str.trim(), x: item.transform[4] }); rows.set(y, row);
       }
-      const lines = Array.from(rows.values(), row => row.join(' '));
+      // PDF paint order can put list markers first; line ownership is geometric.
+      const lines = Array.from(rows).sort(([a], [b]) => b - a)
+        .map(([, row]) => row.sort((a, b) => a.x - b.x).map(item => item.text).join(' '));
       expect(lines[0]).toMatch(new RegExp(ending + '$'));
       expect(lines.slice(0, 2).join(' ')).toBe(fitTexts[alignment]);
     } finally { await task.destroy(); }

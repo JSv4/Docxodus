@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Standalone export fits eligible paragraphs and honors their resolved kerning independently of unrelated bold text, tables, lists and links. Graphics flow and unsupported paragraph owners retain their existing layout policies (part of #1550 and #1562).
+- Standalone export fits eligible paragraphs and honors their resolved kerning independently of unrelated bold text, tables, lists and links, preserving PDF text order around unprepared content. Graphics flow and unsupported paragraph owners retain their existing layout policies (part of #1550 and #1562).
 
 - Uniform single-spaced body text reserves whole line-grid slots from its original section, including block renders and wrapped continuations. Paragraph snap overrides are preserved; natural baseline placement remains unchanged (part of #1551).
 

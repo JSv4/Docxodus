@@ -548,9 +548,11 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     const dx = page ? remainder(band.left - page.left) : 0;
     const dy = page ? remainder(band.top - page.top) : 0;
     svg.setAttribute('role', 'group');
+    // Baseline-adjusted HTML runs paint as positioned content. Keep that phase
+    // so mixed HTML/vector paragraphs reach the PDF text layer in source order.
     svg.style.cssText = columnBand
       ? 'position:absolute;left:0;top:0;display:block;overflow:visible'
-      : 'display:block;overflow:visible';
+      : 'position:relative;display:block;overflow:visible';
     const baseline = (metric.height - metric.descent) * fontSize;
     Array.from(rows.values()).forEach((words, index) => {
       const line = document.createElementNS(SVG_NS, 'text');

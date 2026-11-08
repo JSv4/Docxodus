@@ -1555,7 +1555,9 @@ is paragraph-local: neighboring rich text, tables, lists, links or different lin
 do not change an otherwise eligible paragraph's fitting, kerning or paint policy. Exact paragraphs
 retain HTML paint; automatic paragraphs retain the vector painter. Table/list contents, notes,
 comments, textboxes and frames remain excluded, while ordinary running-story paragraphs still
-qualify. Graphics, wrapping frames and unsupported picture flow retain the document-level guard
+qualify. The vector keeps the positioned paint phase of baseline-adjusted HTML runs, preserving
+PDF text order around tables and other unprepared content. Graphics, wrapping frames and unsupported
+picture flow retain the document-level guard
 because they can change the available line intervals of neighboring paragraphs.
 `TestFiles/ExactJustificationFlow/word-observations.json` pins the native legacy/modern boundary.
 
