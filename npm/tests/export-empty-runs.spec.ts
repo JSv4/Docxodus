@@ -65,7 +65,7 @@ test('empty runs inside a textbox preserve its PDF geometry and source fragments
   const actual = await renderDocxArtifacts(docx(true), options);
   expect(await facts(actual.pdf!)).toEqual(await facts(control.pdf!));
   await page.setContent(actual.html!);
-  const anchors = await page.locator('.page-box p[data-source-anchor-id]').evaluateAll(elements => elements
+  const anchors = await page.locator('.page-box [data-source-anchor-id]').evaluateAll(elements => elements
     .filter(element => element.textContent?.startsWith('Juniper'))
     .map(element => element.getAttribute('data-source-anchor-id')));
   expect(new Set(anchors).size).toBe(2);
