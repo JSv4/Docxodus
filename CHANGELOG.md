@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 
 - Standalone export applies character-width percentages to both line fitting and glyph painting in plain, automatically spaced body paragraphs and resolved fixed-width table cells. Font size, line height, source text and page anchors are preserved; richer text layouts retain their existing policy (part of #1564).
 
-- Minimum line spacing below uniform text's natural height no longer compresses its lines in body paragraphs, table cells or numbered paragraphs in paginated output. Larger minima, mixed-content lines and differently styled list markers retain their existing policies (part of #1566).
+- Minimum line spacing below uniform text's natural height no longer compresses its lines in body paragraphs, table cells, numbered paragraphs, running headers/footers or plain note paragraphs in paginated output. Larger minima, mixed-content lines and differently styled markers retain their existing policies (part of #1566).
 
 - Empty text runs no longer enlarge the line metrics of nonempty paragraphs. Blank paragraphs and structural runs retain their existing metrics (part of #1565).
 

@@ -662,10 +662,17 @@ Mixed-size visible runs still use the existing paragraph-wide metric policy (rem
 
 At-least spacing carries `--docx-min-line-height`. The shared paginated natural-metrics pass
 restores the natural height when a smaller minimum would compress uniform ordinary text in
-body paragraphs, table cells or numbered paragraphs. Uniform list numbers and their tab wrappers
-move with the paragraph; larger, raised or positioned markers retain their existing metrics.
-It leaves larger minima, mixed metrics and structural content under their existing policies;
-the restored natural lines use the established viewer/export baseline correction.
+body paragraphs, table cells, numbered paragraphs, running headers/footers and plain notes.
+Uniform list numbers and their tab wrappers move with the paragraph. Endnotes retain their
+outer list presentation and inline note-identity wrapper; the wrapper and its plain leaf runs
+receive the same natural height before cloning and measurement. Larger, raised, linked or
+positioned markers retain their existing metrics, including a styled note reference in the
+same paragraph as its text.
+It leaves larger minima, mixed metrics and structural content under their existing policies.
+A recovered paragraph also carries the equivalent automatic single-spacing marker while
+retaining its authored minimum. Eligible body and running text then share natural spacing's
+line fitting, kerning and fractional-baseline painting; existing note, list and cell paint
+guards remain in force.
 
 ### Indentation
 
