@@ -6492,13 +6492,15 @@ confirm a 23pt pitch. Current-main public export measured 15.94pt on the reprodu
 against 23.00pt on its single-spacing control; individual PDF origins round to 0.75pt.
 
 The converter retains the authored minimum as `--docx-min-line-height`. The shared
-natural-metrics pass restores a uniform ordinary body paragraph's natural height when
+natural-metrics pass restores a uniform ordinary paragraph's natural height in the body,
+table cells and numbered paragraphs when
 its current fixed height matches that smaller minimum. Its runs retain their font and
 source text, and the existing natural-line baseline correction applies in read-only output.
-The same pass owns viewer and editor layout before pagination.
+Uniform list numbers and tab wrappers receive the same natural height. Flat numbers without
+a suffix keep their ordinary inline path. The same pass owns viewer and editor layout before pagination.
 
 This is a partial resolution. Mixed fonts, raised text, explicit breaks, pictures, blank
-paragraphs and other paragraph owners retain their existing metrics. The confirmed 13pt
+paragraphs, differently styled list markers, notes, headers and frames retain their existing metrics. The confirmed 13pt
 minimum on 10pt text and the other above-natural minima still require a separate baseline
 policy; this change does not claim to resolve them or add a new Word capture.
 

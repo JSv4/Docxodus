@@ -151,21 +151,29 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
 }
 
 /** Ordinary inline runs whose metrics can be represented by their paragraph's font. */
-function uniformParagraphRuns(paragraph: HTMLElement): HTMLElement[] | undefined {
+function uniformParagraphRuns(paragraph: HTMLElement, allowListMarker = false): HTMLElement[] | undefined {
   const view = paragraph.ownerDocument.defaultView!;
   const style = view.getComputedStyle(paragraph);
   const fontProperties = ["font-family", "font-size", "font-style", "font-weight", "font-stretch"];
   if (style.direction !== "ltr" || style.writingMode !== "horizontal-tb") return;
   const children = Array.from(paragraph.children);
+  const marker = allowListMarker && children[0]?.getAttribute('data-list-marker') === 'true'
+    && view.getComputedStyle(children[0]).display === 'inline-flex' ? children[0] : null;
+  const runs = children.flatMap(child => child === marker ? [child, ...Array.from(child.querySelectorAll('*'))] : [child]);
   if (!children.length || Array.from(paragraph.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim())
-    || children.some(child => {
-      if (!(child instanceof view.HTMLElement) || child.localName !== "span" || child.children.length
-        || !child.textContent?.trim()) return true;
+    || runs.some(child => {
+      const inMarker = marker?.contains(child);
+      if (!(child instanceof view.HTMLElement) || child.localName !== "span"
+        || (!inMarker && (child.children.length || !child.textContent?.trim()))) return true;
       const run = view.getComputedStyle(child);
+      // Converter list prefixes are an inline flex box with two flex items: the
+      // number and its tab suffix. Their uniform metrics must move together.
+      const display = child === marker ? 'inline-flex' : child.parentElement === marker ? 'block'
+        : inMarker && child.hasAttribute('data-docx-tab') ? 'inline-block' : 'inline';
       return fontProperties.some(property => run.getPropertyValue(property) !== style.getPropertyValue(property))
-        || run.display !== "inline" || run.position !== "static" || run.verticalAlign !== "baseline" || run.transform !== "none";
+        || run.display !== display || run.position !== "static" || run.verticalAlign !== "baseline" || run.transform !== "none";
     })) return;
-  return children as HTMLElement[];
+  return runs as HTMLElement[];
 }
 
 /** A minimum below a uniform natural line must not become a smaller fixed line. */
@@ -173,7 +181,7 @@ function restoreNaturalMinimums(paragraphs: HTMLElement[], ratioFor: (style: Pro
   const view = paragraphs[0].ownerDocument.defaultView!;
   let changed = 0;
   for (const paragraph of paragraphs) {
-    if (paragraph.closest('table, ol, ul, li, a, aside, section.footnotes, section.endnotes, '
+    if (paragraph.closest('ol, ul, li, a, aside, section.footnotes, section.endnotes, '
       + '[data-footnote-id], [data-comment-id], [data-hf-type], #pagination-hf-registry, '
       + '[data-docx-textbox], [data-docx-text-frame], [data-docx-drawing-anchor]')
       || BEYOND_LATIN.test(paragraph.textContent ?? '')) continue;
@@ -182,7 +190,7 @@ function restoreNaturalMinimums(paragraphs: HTMLElement[], ratioFor: (style: Pro
     if (!(minimum > 0)) continue;
     const natural = ratioFor(style, LATIN_PROBE) * Number.parseFloat(style.fontSize);
     if (!(natural > minimum && Math.abs(Number.parseFloat(style.lineHeight) - minimum) < .01)) continue;
-    const runs = uniformParagraphRuns(paragraph);
+    const runs = uniformParagraphRuns(paragraph, true);
     if (!runs || runs.some(run => view.getComputedStyle(run).lineHeight !== style.lineHeight)) continue;
     for (const element of [paragraph, ...runs]) element.style.lineHeight = `${natural.toFixed(4)}px`;
     changed += runs.length + 1;
