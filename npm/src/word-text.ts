@@ -14,6 +14,7 @@ const PREPARED = 'data-docx-word-text-prepared';
 // A positive value carries fitted-line natural height; zero certifies unchanged line choices.
 const FITTED_RUN = 'data-docx-word-fit';
 const FITTED_LINE = 'data-docx-word-line';
+const NOTE_FIT = 'data-docx-note-fit';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PARAGRAPHS = 'p, h1, h2, h3, h4, h5, h6';
 
@@ -100,7 +101,7 @@ function plainRun(paragraph: HTMLElement, rightToLeft = false, allowExact = fals
     parent.getPropertyValue(`border-${side.toLowerCase()}-width`) !== '0px')) return null;
   if (parent.direction !== (rightToLeft ? 'rtl' : 'ltr') || parent.writingMode !== 'horizontal-tb' ||
       style.display !== 'inline' || !['static', 'relative'].includes(style.position) ||
-      (style.position === 'relative' && (style.left !== '0px' || style.right !== '0px')) ||
+      (style.position === 'relative' && [style.left, style.right].some(side => !['auto', '0px'].includes(side))) ||
       style.textTransform !== 'none' || style.fontVariantCaps !== 'normal' ||
       style.textDecorationLine !== 'none' || !['normal', '0px'].includes(style.letterSpacing) ||
       !['normal', '100%'].includes(style.fontStretch) ||
@@ -393,9 +394,75 @@ function positionWords(paragraph: HTMLElement, run: HTMLElement,
 
 /** Run after fonts and natural line heights resolve, before pagination measures them. */
 export function prepareWordText(root: HTMLElement, checkpoint?: () => void, owners: 'body' | 'tables' | 'running' | 'all' = 'all'): number {
+  return prepareText(root, checkpoint, owners);
+}
+
+function paragraphsIn(root: HTMLElement): HTMLElement[] {
+  return root.matches(PARAGRAPHS) ? [root] : Array.from(root.querySelectorAll<HTMLElement>(PARAGRAPHS));
+}
+
+/** Notes share float flow, so eligibility belongs to the complete pristine registry. */
+export function createFootnoteTextPreparer(registry: HTMLElement | null, checkpoint?: () => void): (root: HTMLElement) => boolean {
+  const eligible = registry && plainFlow(registry) && !registry.querySelector(
+    'img, [data-docx-textbox], [data-docx-text-frame], [data-docx-drawing-anchor]');
+  // A fragment can lose a marker, link, or differently styled run. Its source
+  // must already have been plain; splitting must never widen this admission.
+  const sources = new Map<string, boolean>();
+  for (const paragraph of eligible ? paragraphsIn(registry) : []) {
+    checkpoint?.();
+    const anchor = paragraph.dataset.sourceAnchorId;
+    if (anchor) sources.set(anchor, !sources.has(anchor) && !!plainRun(paragraph)
+      && paragraph.ownerDocument.defaultView!.getComputedStyle(paragraph).display === 'block');
+  }
+  return root => {
+    if (!eligible) return true;
+    for (const paragraph of paragraphsIn(root)) {
+      checkpoint?.();
+      if (!paragraph.closest('[data-footnote-id]') || !sources.get(paragraph.dataset.sourceAnchorId ?? '')) continue;
+      const owned = paragraph.hasAttribute(PREPARED);
+      let before: HTMLElement | undefined;
+      if (owned) {
+        let saved;
+        try { saved = JSON.parse(paragraph.getAttribute(NOTE_FIT) ?? 'null'); } catch { return false; }
+        if (!saved || !Number.isFinite(saved.width) || saved.width <= 0 ||
+          !(saved.runStyle === null || typeof saved.runStyle === 'string') ||
+          typeof saved.lineHeight !== 'string' || !['', 'important'].includes(saved.priority)) return false;
+        // Preserve fragment leading trims and avoid rescanning every remaining word.
+        if (paragraph.getBoundingClientRect().width === saved.width) continue;
+        const run = plainRun(paragraph);
+        if (!run || !(Number(run.getAttribute(FITTED_RUN)) > 0)) return false;
+        before = paragraph.cloneNode(true) as HTMLElement;
+        run.textContent = run.textContent;
+        run.removeAttribute(FITTED_RUN);
+        if (saved.runStyle === null) run.removeAttribute('style'); else run.setAttribute('style', saved.runStyle);
+        if (saved.lineHeight) paragraph.style.setProperty('line-height', saved.lineHeight, saved.priority);
+        else paragraph.style.removeProperty('line-height');
+        paragraph.removeAttribute(PREPARED);
+      }
+      const run = plainRun(paragraph);
+      if (!run) { if (owned) return false; else continue; }
+      const saved = { runStyle:run.getAttribute('style'), lineHeight:paragraph.style.lineHeight,
+        priority:paragraph.style.getPropertyPriority('line-height') };
+      if (prepareText(paragraph, checkpoint, 'notes')) {
+        paragraph.setAttribute(NOTE_FIT, JSON.stringify({ ...saved, width:paragraph.getBoundingClientRect().width }));
+      } else if (before) {
+        // A failed continuation must not silently change scale. Keep its owned
+        // representation intact and let the export refuse the incomplete fit.
+        paragraph.replaceChildren(...Array.from(before.childNodes));
+        const style = before.getAttribute('style');
+        if (style === null) paragraph.removeAttribute('style'); else paragraph.setAttribute('style', style);
+        paragraph.setAttribute(PREPARED, 'true');
+        return false;
+      }
+    }
+    return true;
+  };
+}
+
+function prepareText(root: HTMLElement, checkpoint: (() => void) | undefined, owners: 'body' | 'tables' | 'running' | 'notes' | 'all'): number {
   const mode = Number(root.closest('[data-docx-compatibility-mode]')?.getAttribute('data-docx-compatibility-mode') ??
     root.ownerDocument.body.getAttribute('data-docx-compatibility-mode') ?? 14);
-  if (!plainFlow(root)) return 0;
+  if (owners !== 'notes' && !plainFlow(root)) return 0;
   const view = root.ownerDocument.defaultView;
   if (!view) return 0;
   const fixedTables = new Map<HTMLTableElement, boolean>();
@@ -419,18 +486,21 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void, owne
     if (Number.isFinite(width) && width > 0) section.style.width = `${width}pt`;
   }
   let prepared = 0;
-  for (const paragraph of Array.from(root.querySelectorAll<HTMLElement>(PARAGRAPHS))) {
+  for (const paragraph of paragraphsIn(root)) {
     checkpoint?.();
     if (paragraph.hasAttribute(PREPARED)) continue;
     const table = paragraph.closest('table');
+    if (owners === 'notes' && (table || !paragraph.closest('[data-footnote-id]'))) continue;
     if (owners === 'body' && table || owners === 'tables' && !table) continue;
     let stable = true;
     for (let owner = table; owner; owner = owner.parentElement?.closest('table') ?? null)
       if (!fixedGrid(owner)) { stable = false; break; }
     if (!stable) continue;
     if (paragraph.closest('ol, ul, li, a, aside, template, section.footnotes, section.endnotes, ' +
-      '[data-footnote-id], [data-comment-id], [data-docx-textbox], [data-docx-text-frame], [data-docx-drawing-anchor]')) continue;
+      '[data-comment-id], [data-docx-textbox], [data-docx-text-frame], [data-docx-drawing-anchor]') ||
+      owners !== 'notes' && paragraph.closest('[data-footnote-id]')) continue;
     const style = view.getComputedStyle(paragraph);
+    if (owners === 'notes' && style.display !== 'block') continue;
     const multiple = Number(style.getPropertyValue('--docx-auto-line-spacing'));
     const exact = mode >= 15 && Number.parseFloat(style.getPropertyValue('--docx-exact-line-height')) > 0;
     const run = plainRun(paragraph, false, exact);
@@ -439,7 +509,7 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void, owne
     const scale = characterScale(runStyle);
     // The measured running-story pass extends only character scaling. Preserve
     // unscaled stories even when the initial document-wide pass could not run.
-    if (owners === 'running' && scale === 1) continue;
+    if ((owners === 'running' || owners === 'notes') && scale === 1) continue;
     // Unscaled cell text retains its existing layout until the general table
     // line-breaking policy is resolved. Scaled text needs both fitted lines and paint.
     if (table && scale === 1) continue;
@@ -542,9 +612,9 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
   const drift = new Map<Element, number>();
   for (const paragraph of paragraphs) {
     checkpoint?.();
-    // Running stories have their own flow. A body picture must not disable
+    // Independent story bands have their own flow. A body picture must not disable
     // their word positioning; body and promoted-drawing handling stays shared.
-    const story = paragraph.closest('.page-header, .page-footer');
+    const story = paragraph.closest('.page-header, .page-footer, .page-footnotes');
     if (story && !storyPictures.has(story)) storyPictures.set(story, Array.from(story.querySelectorAll('img')));
     const pictures = story ? storyPictures.get(story)! : allPictures;
     const hasPictures = pictures.length > 0;
@@ -586,7 +656,8 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     if (pictures.length === 1) rows = contourRows(pictures[0], paragraph, run, rows.size, checkpoint) ?? rows;
     // Cells flow independently: rounding inside one cell must not move a
     // neighboring cell or the body paragraph following the table.
-    const flow = paragraph.closest('td, th') ?? paragraph.closest('.page-box');
+    const flow = paragraph.closest('td, th') ??
+      paragraph.closest('.page-content, .page-header, .page-footer, .page-footnotes') ?? paragraph.closest('.page-box');
     const lost = column || !flow ? 0 : drift.get(flow) ?? 0;
     if (flow && !column) {
       const shortfall = rows.size * pitch - box.height;
@@ -652,6 +723,7 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     paragraph.style.setProperty('--docx-word-text-height', `${height}px`);
     paragraph.style.height = 'var(--docx-word-text-height)';
     paragraph.removeAttribute(PREPARED);
+    paragraph.removeAttribute(NOTE_FIT);
   }
   return pending.length;
 }
