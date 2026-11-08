@@ -226,7 +226,7 @@ public class RenderingFidelityInheritanceTests
     [InlineData("w:id=\"7\"")]
     public void FitTextGroupsContiguousRunsButNotSeparateOccurrences(string id)
     {
-        string Run(string text, string extra = "") => $"<w:r><w:rPr><w:fitText w:val=\"2000\" {id}/>{extra}</w:rPr><w:t>{text}</w:t></w:r>";
+        string Run(string text, string extra = "") => $"<w:r><w:rPr>{extra}<w:fitText w:val=\"2000\" {id}/></w:rPr><w:t>{text}</w:t></w:r>";
         var html = Render("<w:p>" + Run("Na") + Run("me", "<w:b/>")
             + "<w:r><w:t> tail </w:t></w:r>" + Run("Other") + "</w:p>");
         var runs = html.Descendants().Where(e => e.Attribute("data-docx-fit-text-width") != null).ToList();

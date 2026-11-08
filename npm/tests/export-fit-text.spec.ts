@@ -13,8 +13,8 @@ for (const width of [20, 100]) for (const split of [false, true]) {
   test(`fitText keeps ${split ? 'two contiguous runs' : 'one run'} within ${width}pt before ordinary text`, async ({ browser, page }, testInfo) => {
     test.setTimeout(120_000);
     const run = (text:string, fit=false, bold=false) => `<w:r><w:rPr>
-      <w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="24"/>
-      ${bold ? '<w:b/>' : ''}${fit ? `<w:fitText w:val="${width * 20}" w:id="1"/>` : ''}
+      <w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/>${bold ? '<w:b/>' : ''}<w:sz w:val="24"/>
+      ${fit ? `<w:fitText w:val="${width * 20}" w:id="1"/>` : ''}
       </w:rPr><w:t xml:space="preserve">${text}</w:t></w:r>`;
     const properties = '<w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>';
     const name = split ? run('Na', true) + run('me', true, true) : run('Name', true);
