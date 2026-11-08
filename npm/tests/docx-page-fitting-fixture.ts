@@ -34,17 +34,20 @@ export function fittingImageRun(id: number, widthPt: number, heightPt: number): 
     </pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
 }
 
-export function pageFittingDocx(body: string): Uint8Array {
+export function pageFittingDocx(body: string, compatibility = ''): Uint8Array {
   const relations = (content: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${content}</Relationships>`;
   const parts = {
     '[Content_Types].xml': `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
       <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
       <Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/>
       <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-      <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`,
+      <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+      ${compatibility ? '<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>' : ''}</Types>`,
     '_rels/.rels': relations(`<Relationship Id="main" Type="${R_NS}/officeDocument" Target="word/document.xml"/>`),
     'word/_rels/document.xml.rels': relations(`<Relationship Id="styles" Type="${R_NS}/styles" Target="styles.xml"/>
-      <Relationship Id="tile" Type="${R_NS}/image" Target="media/tile.png"/>`),
+      <Relationship Id="tile" Type="${R_NS}/image" Target="media/tile.png"/>
+      ${compatibility ? `<Relationship Id="settings" Type="${R_NS}/settings" Target="settings.xml"/>` : ''}`),
+    ...(compatibility ? { 'word/settings.xml': `<w:settings xmlns:w="${W_NS}"><w:compat>${compatibility}</w:compat></w:settings>` } : {}),
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>
       <w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/><w:sz w:val="22"/>
       </w:rPr></w:rPrDefault></w:docDefaults></w:styles>`,

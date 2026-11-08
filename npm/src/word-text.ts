@@ -315,6 +315,10 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
   const view = run.ownerDocument.defaultView!;
   const style = view.getComputedStyle(paragraph);
   const runStyle = view.getComputedStyle(run);
+  const wordPerfect = style.textAlign === 'justify' && (paragraph.closest('[data-docx-wordperfect-justification]')
+    ?.getAttribute('data-docx-wordperfect-justification') ?? paragraph.ownerDocument.body
+      .getAttribute('data-docx-wordperfect-justification')) === 'true';
+  modernJustification &&= !wordPerfect;
   const scale = characterScale(runStyle);
   const text = run.textContent!;
   // Hyphens/slashes and nonordinary spaces have additional break opportunities.
@@ -339,13 +343,16 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
   while (start < words.length) {
     checkpoint?.();
     const available = width - (rows.length ? 0 : indent);
+    // wpJustification selects against an expanded band, then fits its gaps back
+    // into the actual line width (MS-OE376, 2.1.481).
+    const selectionWidth = wordPerfect ? available * (1 + 281 / 7200) : available;
     let natural = 0, spaces = 0, best = start, bestCost = Infinity;
     for (let end = start; end < words.length; end++) {
       if ((end & 63) === 0) checkpoint?.();
       if (end > start) { spaces += words[end - 1].spaces; natural += words[end - 1].spaces * space; }
       natural += words[end].width;
       const minimum = natural - (modernJustification ? spaces * space / 4 : 0);
-      if (minimum > available) break;
+      if (minimum > selectionWidth) break;
       // Native Word prefers less gap strain, with condensation twice as costly
       // as expansion. A final line that fits naturally needs no justification.
       // The 75% floor bounds which condensed alternatives are legal.
@@ -353,6 +360,9 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
         spaces ? Math.abs(available - natural) / (spaces * space) * (natural > available ? 2 : 1) : Infinity;
       if (cost <= bestCost) { best = end; bestCost = cost; }
     }
+    // Interword compression cannot fit a line whose letters alone exceed its
+    // width. Keep the paragraph's existing flow instead of overlapping glyphs.
+    if (wordPerfect && words.slice(start, best + 1).reduce((sum, word) => sum + word.width, 0) > available) return null;
     rows.push({ text: words.slice(start, best + 1).map(w => w.text).join(''),
       spaces: words.slice(start, best).reduce((n, w) => n + w.spaces, 0), available });
     start = best + 1;
@@ -384,7 +394,7 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
         run.style.top = '0';
       }
       run.setAttribute(FITTED_RUN, '0');
-      if (modernJustification) run.style.setProperty('--docx-word-space-compression', `${-space / 4}px`);
+      if (modernJustification || wordPerfect) run.style.setProperty('--docx-word-space-compression', `${-space / 4}px`);
       return 'unchanged';
     }
   }
@@ -420,7 +430,7 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
     const excess = range.getBoundingClientRect().width - rows[index].available;
     const justify = exact && index < lines.length - 1;
     if (excess <= 0 && !justify) continue;
-    if (!rows[index].spaces || (exact && excess / rows[index].spaces > space / 4 + 1 / 64)) {
+    if (!rows[index].spaces || (exact && !wordPerfect && excess / rows[index].spaces > space / 4 + 1 / 64)) {
       run.replaceChildren(...previousContent);
       if (previousFit === null) run.removeAttribute(FITTED_RUN); else run.setAttribute(FITTED_RUN, previousFit);
       if (previousStyle === null) run.removeAttribute('style'); else run.setAttribute('style', previousStyle);
@@ -434,7 +444,7 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
   // Range clones, so pagination need not resolve their font metrics again.
   run.setAttribute(FITTED_RUN, String(exact ? Number.parseFloat(runStyle.lineHeight) :
     Number.parseFloat(run.style.getPropertyValue('--docx-word-native-height'))));
-  if (modernJustification) run.style.setProperty('--docx-word-space-compression', `${-space / 4}px`);
+  if (modernJustification || wordPerfect) run.style.setProperty('--docx-word-space-compression', `${-space / 4}px`);
   return 'fitted';
 }
 

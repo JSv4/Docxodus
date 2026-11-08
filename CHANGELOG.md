@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Standalone export honors explicit WordPerfect justification for eligible uniform paragraphs in compatibility modes 14 and 15. It fits words to the documented expanded width, then compresses interword gaps without changing glyph widths, including overwide final lines (part of #1550).
+
 - Standalone export honors manual `w:fitText` widths for plain Latin text, sharing the requested width across contiguous runs and preserving ordinary following text, baselines and paragraph continuations (part of #1564).
 
 - Ordinary space-only runs retain their authored width without enlarging automatically spaced text lines. Blank, decorated, raised and structural content keep their existing metrics (part of #1565).

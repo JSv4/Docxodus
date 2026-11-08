@@ -6565,3 +6565,27 @@ mixed runs and field-bearing paragraphs remain outside this bounded extension.
 Public regressions cover body/cell controls, continuation pages, bordered and padded repeated
 headers, nested fixed tables and merged grids. AutoFit and percentage owners retain their
 existing policy. Mixed runs, `fitText`, and the unresolved Word exact-fit boundary remain open.
+
+## Explicit WordPerfect justification selects against an expanded line (#1550)
+
+`<w:compat><w:wpJustification/></w:compat>` applies to paragraphs with
+`<w:jc w:val="both"/>`, including compatibility mode 14. The
+[Microsoft implementation note](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/faeffa01-a15f-4e62-b63c-023901149d29)
+defines an effective selection width of `actual * (1 + 281/7200)`, followed by
+interword compression into the actual width. First-line indentation reduces
+actual width before expansion. Glyph advances remain unchanged.
+
+For the original 66-character Liberation Mono example, natural width is
+475.277344pt and the 468pt column's selection budget is 486.265pt. The
+[issue author's Word print](https://github.com/JSv4/Docxodus/issues/1550#issuecomment-6701327696)
+keeps `naps` on that line. Main exported `gulls`; the corrected public PDF
+regression ends with `naps`, including when that is the paragraph's final line.
+This cites the author's observation; no new Word capture or extreme-condensation
+measurement is claimed.
+
+The converter retains the explicit option on the body and pagination staging;
+the export import preserves both. `fitWordLines` uses greedy expanded-width
+selection for this option, keeping the existing modern policy for other documents.
+Selected word advances exceeding actual width cannot fit through gap reduction,
+so those paragraphs retain their existing fallback. Mixed runs and other
+unsupported paragraph structures remain outside this partial correction.
