@@ -1582,9 +1582,23 @@ regression checks those distances within each uninterrupted page segment.
 
 When the selected line contents already agree with the measured inline flow, that flow retains
 its block geometry in either compatibility mode. The precision fitter replaces those boxes only
-when its line choices differ. Vector paint derives word positions from unrounded font advances
+when its line choices differ or an authored character-width scale requires owned lines. Vector paint derives word positions from unrounded font advances
 in both paths: matching line breaks do not establish that the browser's hinted word advances match
 the font. Natural final lines, alignment and repeated ordinary spaces retain their own rules.
+
+The converter retains resolved `w:w` percentages as `--docx-character-scale`, including an explicit
+100% reset of inherited formatting. For plain automatically spaced body paragraphs, the existing
+line fitter scales advances and spaces before choosing breaks. Its line boxes and vector glyphs
+apply the same horizontal scale without changing font size, vertical metrics or paragraph origins.
+Preparation commits only after the complete line layout succeeds. Unsupported break controls,
+overwide words, exact spacing, mixed runs, running stories, tables, pictures and columns retain
+their existing policy; percentage scaling for those owners remains open under #1564.
+
+The browser's font-unit boundary is not a complete Word fitting contract. In #1564 the author
+[confirmed that Word fits the 65-character Liberation Mono prefix into 468pt](https://github.com/JSv4/Docxodus/issues/1564#issuecomment-6701328774),
+although its raw advances total 468.076pt. Current export still wraps the final word. The separate
+128-character browser control does not resolve this discrepancy; discriminating Word measurements
+are needed before choosing a general rounding or tolerance rule.
 
 Private line boxes preserve the original text and permit page splits only between complete lines;
 they introduce no synthetic source characters. Vector paint then positions words with those font

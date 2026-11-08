@@ -86,9 +86,10 @@ for (const source of observations.cases) {
 
 for (const mode of [14, 15]) {
   for (const indent of [0, 36]) {
-    test(`mode ${mode} retains a true exact font boundary with ${indent}pt indent`, async ({ page }) => {
+    test(`mode ${mode} retains the browser font boundary with ${indent}pt indent`, async ({ page }) => {
       // Liberation Mono advances are 1229/2048 em: 128 glyphs at 12pt = 921.75pt exactly.
-      // The issue's original 65-glyph/468pt line is actually 468.076171875pt and should wrap.
+      // Word fits the issue's 65-glyph prefix into 468pt despite its 468.076171875pt
+      // raw advance. This browser-boundary control does not establish that native fitting rule.
       const prefix = 'Copper '.repeat(18) + 'ox';
       await page.setContent(`<style>p{font:12pt 'Liberation Mono',monospace;line-height:18px;margin:0;
         --docx-auto-line-spacing:1;text-indent:${indent}pt}span{white-space:pre-wrap;font-kerning:none;line-height:18px}</style>
