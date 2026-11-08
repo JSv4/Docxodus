@@ -589,6 +589,15 @@ resolved before the pristine snapshot; final placement must match the authored o
 well as the existing text and geometry proof. Internal clipping keeps its fixed-box rules.
 Running stories, table cells and grouped or nested boxes do not use this extension.
 
+Fixed members of converter-owned DrawingML groups and canvases use the enclosing group as
+their placement anchor while retaining their own internal clip. Their pristine bounds are
+relative to that anchor, and its final origin must equal the explicit reference origin plus
+source offset. Nested member offsets, paragraph hosts and blank-line geometry are bound too.
+This path rejects transforms, partial members, linked stories, nested anchors and root resizing;
+root resizing does not disable an independently valid fixed child's internal clip. A group
+extent is never treated as a clipping rectangle. These checks establish authored coordinate
+consistency; they do not establish Word's normalization of unusual group bounds.
+
 Balloon layout keeps the original paper clip on its page-content holder. Placement proofs use
 that holder's origin and measured scale to compare authored coordinates before and after shrink,
 including viewer zoom. Visible PageMap fragments still use physical-sheet coordinates; the

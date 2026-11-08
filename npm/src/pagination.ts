@@ -677,8 +677,28 @@ function blankLineClippedByTextBox(view: Window, element: HTMLElement, rect: DOM
   return clippedByTextBox(view, element, [rect], page) !== null;
 }
 
+/** A fixed member owns its clip; its enclosing DrawingML group owns page placement. */
+function sourceTextBoxAnchor(box: HTMLElement): HTMLElement {
+  if (box.dataset.docxDrawingAnchor === 'true' || box.dataset.docxTextboxSourceClip !== 'true') return box;
+  if (box.parentElement?.dataset.docxDrawingMember !== 'true') return box;
+  const view = box.ownerDocument.defaultView!;
+  for (let node: HTMLElement | null = box; node; node = node.parentElement) {
+    const style = view.getComputedStyle(node);
+    if (node.dataset.docxShape === 'partial' || node.dataset.docxTextboxLinked === 'true'
+      || ['transform', 'translate', 'rotate', 'scale'].some(name => style.getPropertyValue(name) !== 'none')) return box;
+    if (node !== box && node.dataset.docxDrawingMember !== 'true' && node.dataset.docxDrawingGroup !== 'true') return box;
+    if (node.dataset.docxDrawingAnchor === 'true') return node.dataset.docxDrawingGroup === 'true' ? node : box;
+  }
+  return box;
+}
+
 function eligibleSourceTextBox(box: HTMLElement, placement = false): boolean {
   if (box.dataset.docxTextboxLinked === 'true' || box.dataset.docxShape === 'partial') return false;
+  const anchor = placement ? sourceTextBoxAnchor(box) : box;
+  if (placement && anchor !== box && ['h', 'v'].some(axis =>
+    anchor.hasAttribute(`data-docx-anchor-${axis}-align`)
+    || !(anchor.getAttribute(`data-docx-anchor-${axis}-offset`) ?? '').trim()
+    || !Number.isFinite(Number(anchor.getAttribute(`data-docx-anchor-${axis}-offset`))))) return false;
   if (placement && box.dataset.docxTextboxSourcePosition === 'page-offset') {
     return box.dataset.docxDrawingAnchor === 'true'
       && ['h', 'v'].every(axis => box.getAttribute(`data-docx-anchor-${axis}-relative`) === 'page'
@@ -692,16 +712,16 @@ function eligibleSourceTextBox(box: HTMLElement, placement = false): boolean {
       });
   }
   return box.dataset.docxTextboxClip === 'true'
-    && (placement ? box.dataset.docxTextboxSourcePosition === 'true' : box.dataset.docxTextboxSourceClip === 'true')
-    && box.dataset.docxAnchorAutofit !== 'true'
+    && (placement ? box.dataset.docxTextboxSourcePosition === 'true' || anchor !== box : box.dataset.docxTextboxSourceClip === 'true')
+    && anchor.dataset.docxAnchorAutofit !== 'true'
     && ['width', 'height'].every(axis => {
-      const percent = box.getAttribute(`data-docx-anchor-${axis}-percent`);
+      const percent = anchor.getAttribute(`data-docx-anchor-${axis}-percent`);
       return percent === null || (percent.trim() !== '' && Number(percent) === 0);
     })
-    && (!placement || (box.dataset.docxDrawingAnchor === 'true'
-      && ((['page', 'margin'].includes(box.dataset.docxAnchorHRelative ?? '')
-        && ['page', 'margin'].includes(box.dataset.docxAnchorVRelative ?? ''))
-        || (['column', 'margin'].includes(box.dataset.docxAnchorHRelative ?? '') && box.dataset.docxAnchorVRelative === 'paragraph'))));
+    && (!placement || (anchor.dataset.docxDrawingAnchor === 'true'
+      && ((['page', 'margin'].includes(anchor.dataset.docxAnchorHRelative ?? '')
+        && ['page', 'margin'].includes(anchor.dataset.docxAnchorVRelative ?? ''))
+        || (['column', 'margin'].includes(anchor.dataset.docxAnchorHRelative ?? '') && anchor.dataset.docxAnchorVRelative === 'paragraph'))));
 }
 
 function sourcePlacementBounds(box: DOMRect, rects: DOMRect[], paper: DOMRect,
@@ -894,7 +914,7 @@ export function renderedSourceMeasurerExpression(): string {
 }
 
 /** Authored page coordinates, before viewer zoom or the balloon layout's shrink. */
-interface SourcePageFrame { element: HTMLElement; paper: DOMRect; scaleX: number; scaleY: number }
+interface SourcePageFrame { element: HTMLElement; paper: DOMRect; scaleX: number; scaleY: number; dimensions: PageDimensions }
 
 export class PaginationEngine {
   private stagingElement: HTMLElement;
@@ -1722,7 +1742,7 @@ export class PaginationEngine {
             unpaintedAnchorIds.add(anchorId);
           else if (this.isInitiallyClippedText(element, sourceFrame, page.element, partialTextBoxInk)) {
             unpaintedAnchorIds.add(anchorId);
-            clippedTextAnchorIds.add(anchorId);
+            if (/\S/.test(element.textContent ?? '')) clippedTextAnchorIds.add(anchorId);
           }
           continue;
         }
@@ -1939,14 +1959,27 @@ export class PaginationEngine {
       `:scope > .${this.cssPrefix}markup-layer > .${this.cssPrefix}markup-page`);
     const element = holder ?? page;
     const paper = element.getBoundingClientRect();
-    return { element, paper, scaleX: paper.width / ptToPx(dimensions.pageWidth),
+    return { element, paper, dimensions, scaleX: paper.width / ptToPx(dimensions.pageWidth),
       scaleY: paper.height / ptToPx(dimensions.pageHeight) };
   }
 
   private sourceTextPlacementBounds(owner: HTMLElement, rects: DOMRect[], frame: SourcePageFrame,
-    partialInk?: Map<HTMLElement, boolean>): number[] | undefined {
+    partialInk?: Map<HTMLElement, boolean>, paragraph?: HTMLElement | null): number[] | undefined {
     const { paper, scaleX, scaleY } = frame;
     const box = owner.getBoundingClientRect();
+    const anchor = sourceTextBoxAnchor(owner);
+    if (anchor !== owner) {
+      const host = paragraph?.getBoundingClientRect();
+      if (anchor.dataset.docxAnchorVRelative === 'paragraph' && !host) return;
+      const context = { staticLeft: 0, staticTop: 0, lineHeight: 0, paragraphLeft: 0, paragraphWidth: 0,
+        paragraphTop: host ? pxToPt((host.top - paper.top) / scaleY) : 0, paragraphHeight: 0 };
+      const horizontal = this.horizontalAnchorReference(anchor.dataset.docxAnchorHRelative!, frame.dimensions, 1,
+        context, this.horizontalSectionDimensions(paragraph ?? anchor, frame.dimensions));
+      const vertical = this.verticalAnchorReference(anchor.dataset.docxAnchorVRelative!, frame.dimensions, 1, context);
+      const root = anchor.getBoundingClientRect();
+      if (Math.abs((root.left - paper.left) / scaleX - ptToPx(horizontal.start + this.anchorNumber(anchor, 'h-offset')!)) >= 0.1
+        || Math.abs((root.top - paper.top) / scaleY - ptToPx(vertical.start + this.anchorNumber(anchor, 'v-offset')!)) >= 0.1) return;
+    }
     if (owner.dataset.docxTextboxSourcePosition === 'page-offset') {
       const left = ptToPx(this.anchorNumber(owner, 'h-offset') ?? NaN);
       const top = ptToPx(this.anchorNumber(owner, 'v-offset') ?? NaN);
@@ -1985,15 +2018,16 @@ export class PaginationEngine {
     const anchorId = element.dataset.sourceAnchorId;
     if (!boxId || !anchorId) return;
     const text = (element.textContent ?? '').replace(/\s/g, '');
-    if (!text) return;
-    const rects = sourceTextRects(this.view, element, () => this.checkpoint());
+    if (!text && (sourceTextBoxAnchor(owner) === owner || !rendersOnlyItsLine(element))) return;
+    const rects = text ? sourceTextRects(this.view, element, () => this.checkpoint()) : [element.getBoundingClientRect()];
     let originalOutside = false;
     if (eligibleSourceTextBox(owner, true)) {
       const box = owner.getBoundingClientRect();
+      const anchor = sourceTextBoxAnchor(owner), origin = anchor.getBoundingClientRect();
       const style = this.view.getComputedStyle(owner);
       const identity = JSON.stringify([boxId, text, style.transform, style.translate, style.rotate, style.scale,
-        ...Array.from(owner.attributes).filter(a => a.name.startsWith('data-docx-anchor-') && a.name !== DRAWING_HOST_ATTRIBUTE).map(a => [a.name, a.value])]);
-      const bounds = textBounds(box, [element.getBoundingClientRect(), ...rects], box,
+        ...Array.from(anchor.attributes).filter(a => a.name.startsWith('data-docx-anchor-') && a.name !== DRAWING_HOST_ATTRIBUTE).map(a => [a.name, a.value])]);
+      const bounds = textBounds(box, [element.getBoundingClientRect(), ...rects], origin,
         frame?.scaleX ?? 1, frame?.scaleY ?? 1);
       if (!frame) this.sourceTextPlacement.set(anchorId, { identity, bounds });
       else {
@@ -2005,17 +2039,18 @@ export class PaginationEngine {
         // Both original and actual ink must be off paper, so rounding cannot excuse new loss.
         const original = [];
         for (let i = 8; i < source.bounds.length; i += 4)
-          original.push(new this.view.DOMRect(box.left + source.bounds[i] * frame.scaleX,
-            box.top + source.bounds[i + 1] * frame.scaleY,
+          original.push(new this.view.DOMRect(origin.left + source.bounds[i] * frame.scaleX,
+            origin.top + source.bounds[i + 1] * frame.scaleY,
             source.bounds[i + 2] * frame.scaleX, source.bounds[i + 3] * frame.scaleY));
         originalOutside = sourcePlacementBounds(box, original, frame.paper) !== undefined;
       }
     }
     if (frame && originalOutside && eligibleSourceTextBox(owner, true)) {
-      const placement = this.sourceTextPlacementBounds(owner, rects, frame, partialInk);
+      const placement = this.sourceTextPlacementBounds(owner, rects, frame, partialInk, paragraph);
       if (placement) {
         let host: { id: string; bounds: number[] } | undefined;
-        if (owner.dataset.docxAnchorVRelative === 'paragraph') {
+        const anchor = sourceTextBoxAnchor(owner);
+        if (anchor.dataset.docxAnchorVRelative === 'paragraph' || (anchor !== owner && anchor.dataset.docxAnchorHRelative === 'column')) {
           if (!paragraph?.dataset.sourceAnchorId) return;
           const rect = paragraph.getBoundingClientRect();
           host = { id: paragraph.dataset.sourceAnchorId, bounds: textBounds(rect, [], frame.paper, frame.scaleX, frame.scaleY) };
@@ -2025,6 +2060,7 @@ export class PaginationEngine {
       }
     }
     if (!eligibleSourceTextBox(owner)) return;
+    if (paper && sourceTextBoxAnchor(owner) !== owner) return;
     // At placement, only the paper can establish new authored clipping. A new overflow of
     // the box itself must still fail; it may be a pagination or inherited-formatting defect.
     if (paper) {
@@ -2045,18 +2081,20 @@ export class PaginationEngine {
     partialInk: Map<HTMLElement, boolean>): boolean {
     const proof = this.initiallyClippedText.get(element.dataset.sourceAnchorId ?? '');
     if (!proof || (element.textContent ?? '').replace(/\s/g, '') !== proof.text) return false;
-    const rects = sourceTextRects(this.view, element, () => this.checkpoint());
+    const rects = proof.text ? sourceTextRects(this.view, element, () => this.checkpoint()) : [element.getBoundingClientRect()];
     if (proof.placement) {
+      let paragraph: HTMLElement | null = null;
       if (proof.host) {
         const host = pageElement.querySelector<HTMLElement>(`[data-source-anchor-id="${this.view.CSS.escape(proof.host.id)}"]`);
         if (!host) return false;
+        paragraph = host;
         const rect = host.getBoundingClientRect();
         const bounds = textBounds(rect, [], frame.paper, frame.scaleX, frame.scaleY);
         if (bounds.some((value, index) => Math.abs(value - proof.host!.bounds[index]) >= 0.1)) return false;
       }
-      const owner = element.parentElement?.closest<HTMLElement>('[data-docx-textbox-source-position]');
+      const owner = element.parentElement?.closest<HTMLElement>('[data-docx-textbox-source-position], [data-docx-textbox-source-clip="true"]');
       if (!owner || owner.dataset.docxSourceClipId !== proof.boxId || !eligibleSourceTextBox(owner, true)) return false;
-      const bounds = this.sourceTextPlacementBounds(owner, rects, frame, partialInk);
+      const bounds = this.sourceTextPlacementBounds(owner, rects, frame, partialInk, paragraph);
       return bounds?.length === proof.placement.length
         && bounds.every((value, index) => Math.abs(value - proof.placement![index]) < 0.1);
     }
