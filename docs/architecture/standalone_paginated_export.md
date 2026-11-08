@@ -1586,6 +1586,12 @@ when its line choices differ. Vector paint derives word positions from unrounded
 in both paths: matching line breaks do not establish that the browser's hinted word advances match
 the font. Natural final lines, alignment and repeated ordinary spaces retain their own rules.
 
+The browser's font-unit boundary is not a complete Word fitting contract. In #1564 the author
+[confirmed that Word fits the 65-character Liberation Mono prefix into 468pt](https://github.com/JSv4/Docxodus/issues/1564#issuecomment-6701328774),
+although its raw advances total 468.076pt. Current export still wraps the final word. The separate
+128-character browser control does not resolve this discrepancy; discriminating Word measurements
+are needed before choosing a general rounding or tolerance rule.
+
 Private line boxes preserve the original text and permit page splits only between complete lines;
 they introduce no synthetic source characters. Vector paint then positions words with those font
 advances, justifies non-final fragments, and retains natural spacing on a fitting final line.
