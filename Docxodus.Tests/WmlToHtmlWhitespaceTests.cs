@@ -11,7 +11,7 @@ namespace Docxodus.Tests;
 
 public class WmlToHtmlWhitespaceTests
 {
-    private static byte[] Fixture(string text, bool splitRun = false, int? mode = null)
+    private static byte[] Fixture(string text, bool splitRun = false, int? mode = null, bool? wordPerfect = null)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -34,6 +34,9 @@ public class WmlToHtmlWhitespaceTests
                     { Name = Wp.CompatSettingNameValues.CompatibilityMode, Uri = "http://schemas.microsoft.com/office/word",
                         Val = number.ToString(CultureInfo.InvariantCulture) }))
                 : new Wp.Settings();
+            if (wordPerfect is { } enabled)
+                main.DocumentSettingsPart!.Settings!.GetFirstChild<Wp.Compatibility>()!
+                    .PrependChild(new Wp.WordPerfectJustification { Val = enabled });
             doc.Save();
             PackageValidation.AssertValid(doc, FileFormatVersions.Microsoft365);
         }
@@ -66,6 +69,21 @@ public class WmlToHtmlWhitespaceTests
             new WmlToHtmlConverterSettings());
         Assert.Equal(expected.ToString(CultureInfo.InvariantCulture),
             (string?)html.Element(Xhtml.body)?.Attribute("data-docx-compatibility-mode"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Text_layout_preserves_the_explicit_WordPerfect_justification_option(bool? enabled)
+    {
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("wp.docx",
+            Fixture("Alder Oak", mode: 14, wordPerfect: enabled)),
+            new WmlToHtmlConverterSettings { RenderPagination = PaginationMode.Paginated });
+        var expected = enabled == true ? "true" : null;
+        Assert.Equal(expected, (string?)html.Element(Xhtml.body)?.Attribute("data-docx-wordperfect-justification"));
+        Assert.Equal(expected, (string?)html.Descendants().Single(e => (string?)e.Attribute("id") == "pagination-staging")
+            .Attribute("data-docx-wordperfect-justification"));
     }
 
     [Fact]

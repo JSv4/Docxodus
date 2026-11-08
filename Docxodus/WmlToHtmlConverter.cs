@@ -3643,7 +3643,7 @@ namespace Docxodus
                 }
 
                 return new XElement(Xhtml.body,
-                    new XAttribute("data-docx-compatibility-mode", ReadCompatibilityMode(wordDoc)), bodyContent);
+                    TextLayoutCompatibilityAttributes(wordDoc), bodyContent);
             }
 
             // Transform the w:p element to the XHTML h:h1-h6 or h:p element (if the previous paragraph does not
@@ -7553,7 +7553,7 @@ namespace Docxodus
                     new XElement(Xhtml.div,
                         new XAttribute("id", "pagination-staging"),
                         new XAttribute("class", prefix + "staging"),
-                        new XAttribute("data-docx-compatibility-mode", ReadCompatibilityMode(wordDoc)),
+                        TextLayoutCompatibilityAttributes(wordDoc),
                         useWord8FootnoteLayout
                             ? new XAttribute("data-footnote-layout-like-word8", "true")
                             : null,
@@ -7764,6 +7764,14 @@ namespace Docxodus
         /// </summary>
         private static readonly XName LegacyTableIndentAttribute =
             XName.Get("legacy-table-indent", "urn:docxodus:rendering");
+
+        private static IEnumerable<XAttribute> TextLayoutCompatibilityAttributes(WordprocessingDocument wordDoc)
+        {
+            yield return new XAttribute("data-docx-compatibility-mode", ReadCompatibilityMode(wordDoc));
+            if (IsOnOffPropertyEnabled(wordDoc.MainDocumentPart?.DocumentSettingsPart?.GetXDocument().Root?
+                .Element(W.compat)?.Element(W.wpJustification)))
+                yield return new XAttribute("data-docx-wordperfect-justification", "true");
+        }
 
         private static int ReadCompatibilityMode(WordprocessingDocument wordDoc)
         {

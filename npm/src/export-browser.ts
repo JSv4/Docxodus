@@ -2425,8 +2425,11 @@ function sanitizeConvertedDocument(
     target.head.appendChild(target.importNode(style, true));
   }
   target.body.replaceChildren(...Array.from(parsed.body.childNodes, (node) => target.importNode(node, true)));
-  const compatibility = parsed.body.getAttribute("data-docx-compatibility-mode");
-  if (compatibility !== null) target.body.setAttribute("data-docx-compatibility-mode", compatibility);
+  for (const name of ["data-docx-compatibility-mode", "data-docx-wordperfect-justification"]) {
+    const value = parsed.body.getAttribute(name);
+    if (value === null) target.body.removeAttribute(name);
+    else target.body.setAttribute(name, value);
+  }
 }
 
 function inventoryUnsupportedContent(
