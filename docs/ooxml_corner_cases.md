@@ -6461,3 +6461,22 @@ while a direct CSS float stays below the preceding text. Moving only the cloned 
 would invalidate source line measurements and wrapping. That requires destination-fragment
 reflow, beyond this fix. The partial-page difference above also remains an explicit policy
 limitation; neither it nor minimum-height-row clipping is resolved by this change.
+
+## Empty runs enlarged every line of a nonempty paragraph (#1565)
+
+An empty text run with a larger size was selected by `DefineStrutFont`, raising the base height
+used by every line and automatic spacing multiple. With 12pt Liberation Serif and double
+spacing, prepend `<w:r><w:rPr><w:sz w:val="28"/></w:rPr><w:t/></w:r>` to an ordinary paragraph
+whose spacing is `<w:spacing w:line="480" w:lineRule="auto"/>`.
+
+| Case | Word | Retained LibreOffice print | Docxodus before |
+| --- | --- | --- | --- |
+| Ordinary 12pt double-spaced text | Expected control: 27.6pt | 27.6pt | 27.59–27.60pt |
+| Same text with an empty 14pt run | 27.5–27.77pt | 27.6pt | 32.19–32.20pt |
+
+The Word result is the [issue author's existing measurement](https://github.com/JSv4/Docxodus/issues/1565#issuecomment-6701329112),
+not a new capture. Current-main public export reproduces the inflated pitch with identical text
+and line breaks. The converter now skips runs containing only properties and empty text when
+choosing the strut of a nonempty paragraph. The existing empty-paragraph marker preserves blank
+paragraph behavior; whitespace and structural content remain eligible. This does not implement
+mixed-font line metrics, minimum-line baselines or blank-break policies.

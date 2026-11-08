@@ -646,6 +646,11 @@ of at least one line. This removes the unused text descent; multiples add their 
 text-line height below the picture. Mixed text, explicit breaks, floating drawings and other
 spacing rules retain their existing line participation (#1568).
 
+When choosing a nonempty paragraph's strut font, empty text runs do not participate. Blank
+paragraphs retain their existing placeholder metrics; spaces, breaks and other structural run
+content retain their existing participation. Mixed-size visible runs still use the existing
+paragraph-wide metric policy (the remaining scope of #1565).
+
 ### Indentation
 
 | Word Property | CSS Property |
