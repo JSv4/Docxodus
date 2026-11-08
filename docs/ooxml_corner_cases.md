@@ -6525,3 +6525,20 @@ other line rules and nested runs retain their existing metrics. The visibility c
 within the host paragraph, excludes hidden text and conservatively excludes web-hidden text
 in both views. It is cached once per source paragraph to avoid quadratic scans. Mixed visible
 fonts and blank-break baseline policy remain outside this partial resolution.
+
+## Character width was ignored inside fixed table cells (#1564)
+
+Wrapping the same uniform paragraph in a fixed 468pt table cell discarded its character
+scale. With 12pt Liberation Serif, the word `Copper` at 100%, 80% and 150% measured
+35.326, 28.261 and 52.989pt in body export, but 35.326pt for all three in the cell.
+LibreOffice measured 35.292, 28.243 and 52.938pt in both owners. The reduced packages
+have zero Open XML SDK findings; these are diagnostic prints, without a new Word capture.
+
+The source uses `<w:tblW w:w="9360" w:type="dxa"/>`, fixed layout, a matching grid
+and zero cell margins. Its single text run sets `<w:w w:val="80"/>` (or 100/150).
+Standalone export now fits scaled cell text after table geometry resolves and paints the
+same horizontal scale without changing font height. Each ancestor table must have a proven
+fixed width and resolved grid. Adjacent cells keep independent baseline-rounding corrections.
+Public regressions cover body/cell controls, continuation pages, bordered and padded repeated
+headers, nested fixed tables and merged grids. AutoFit and percentage owners retain their
+existing policy. Mixed runs, `fitText`, and the unresolved Word exact-fit boundary remain open.

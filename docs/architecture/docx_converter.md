@@ -366,6 +366,13 @@ paired PDF controls verify alignment with neighboring HTML ink and the exact dec
 This does not claim a general correction of transformed HTML print origins. Tables with
 unsupported border styles or unresolved grids continue through the existing native renderer.
 
+Standalone export fits uniform scaled cell text after table widths and borders resolve,
+before pagination measures block heights. Each enclosing table must carry the converter's
+authored fixed-width marker and a resolved column grid. The export-only `prepareTableText`
+hook reuses the body paragraph line fitter; continued cells and repeated headers retain its
+lines. Fractional-baseline rounding accumulates within each cell independently. AutoFit,
+percentage-width and unresolved tables, unscaled cells and richer runs keep their current flow.
+
 Tables are wrapped in a `<div>` for alignment control:
 
 ```html
@@ -787,7 +794,7 @@ The following are **discarded** and will not appear in output:
 - `w:outline`, `w:shadow` - Text effects
 - `w:kern` - Kerning
 - `w:fitText` - Text scaling
-- `w:w` - Character width scaling
+- `w:w` - Character width scaling outside plain automatically spaced body text and resolved fixed-width cells in standalone export
 
 **Document features:**
 - Math equations beyond the fraction/root subset described above

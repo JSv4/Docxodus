@@ -410,6 +410,8 @@ export interface PaginationOptions {
   checkPageCount?: (prospectivePageCount: number) => void;
   /** @internal Export-only table layout, applied to each clone before its fit is measured. */
   prepareTableFragment?: (table: HTMLTableElement) => void;
+  /** @internal Export text preparation after body tables have their final column widths. */
+  prepareTableText?: (section: HTMLElement) => void;
   /** Exact invalidation tokens used to materialize an authoritative PageMap with the result. */
   layoutToken?: { documentVersion: number; rendererFingerprint: string };
 }
@@ -939,6 +941,7 @@ export class PaginationEngine {
   private cancellationCheckpoint?: () => void;
   private pageCountCheckpoint?: (prospectivePageCount: number) => void;
   private prepareTableFragment?: (table: HTMLTableElement) => void;
+  private prepareTableText?: (section: HTMLElement) => void;
   private createdPageCount = 0;
   private layoutToken?: { documentVersion: number; rendererFingerprint: string };
   private hfRegistry: HeaderFooterRegistry;
@@ -1048,6 +1051,7 @@ export class PaginationEngine {
     this.cancellationCheckpoint = options.checkCancellation;
     this.pageCountCheckpoint = options.checkPageCount;
     this.prepareTableFragment = options.prepareTableFragment;
+    this.prepareTableText = options.prepareTableText;
     this.layoutToken = options.layoutToken;
     this.hfRegistry = new Map();
     this.footnoteRegistry = new Map();
@@ -2301,6 +2305,7 @@ export class PaginationEngine {
       this.prepareBodyEdgePictures(section);
     }
     this.prepareShapeClearance(section, dims);
+    this.prepareTableText?.(section);
 
     // Get direct children (paragraphs, tables, divs, etc.)
     const children = Array.from(section.children) as HTMLElement[];
