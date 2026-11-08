@@ -1547,7 +1547,14 @@ converter-owned edge pictures preserve their float and clearance on the head, us
 float-height measurement and page-prefix exclusion paths. The shared layout gate receives the
 same admitted carriers as the structural gate; notes, cells and textbox stories retain the prior
 leading-only nonwrapping admission. Child images retain the normal inline image safety checks.
-Late wrapping pictures, line/character bases and paragraph-height alignment remain excluded. Source
+A single later edge picture in an ordinary body paragraph also retains its source Range position.
+An empty float supplies its wrapping exclusion at the beginning of whichever fragment owns the
+picture; every candidate rebuilds that exclusion before measurement. The picture paints at that
+fragment's paragraph origin and keeps its existing height budget and page-specific fitting.
+Candidates whose wrapping float is displaced by preceding content retry on a fresh page;
+a persistent disagreement between the final picture and its exclusion refuses pagination.
+Positioned inline ancestors, multiple pictures and other story owners retain their prior handling.
+Line/character bases and paragraph-height alignment remain excluded. Source
 completeness and clipping checks still apply to both the body and the promoted drawing.
 
 For eligible uniform Latin paragraphs, `word-text.ts` fits lines from unrounded font advances

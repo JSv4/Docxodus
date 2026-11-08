@@ -74,6 +74,9 @@ floating-shape export regressions also inspect PDF paint order (#1346).
 When a paragraph splits beside a float, its candidate head is measured with the preceding page
 content. Measuring it alone would admit more text than its narrowed first lines can hold. The tail
 is measured without the previous page's float, so every glyph remains within its own body band.
+For a single converter-owned late edge picture in a body paragraph, the real image keeps its raw
+source position. Each candidate fragment rebuilds an empty wrapping float only if it contains that
+image. The empty float carries no source identity; image and paragraph identities survive normally.
 
 Read-only `paginateHtml()` defaults to a scrollable comment panel outside each page. The source
 comment subtree and its outside presentation, like the `"balloons"` placement's markup area, balloons

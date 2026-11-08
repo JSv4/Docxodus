@@ -1131,6 +1131,8 @@ export class PaginationEngine {
       // A copy: pages the balloon appendix adds join this list, not the caller's result.
       this.lastPages = [...pages];
       if (!this.deferMarkupBalloons) pages.push(...(this.layoutMarkupBalloons()?.appendedPages ?? []));
+      if (!this.edgeExclusionsMatch(this.containerElement))
+        throw new Error('A wrapping picture does not match its destination exclusion');
 
       const result = {
         totalPages: pages.length,
@@ -2296,6 +2298,7 @@ export class PaginationEngine {
     if (this.fragmentParagraphs) {
       this.fitOverwideTables(section, dims);
       this.fitOversizedPictures(section, dims, sectionIndex, pictureBodyHeight);
+      this.prepareBodyEdgePictures(section);
     }
     this.prepareShapeClearance(section, dims);
 
@@ -2416,6 +2419,11 @@ export class PaginationEngine {
       let floated: HTMLElement | null = null;
       for (let current: HTMLElement | null = image; current && current !== element; current = current.parentElement) {
         const style = this.view.getComputedStyle(current);
+        if (current.hasAttribute('data-docx-fragment-edge') && style.position === 'absolute'
+          && style.float === 'none' && style.overflowY === 'visible') {
+          floated = current;
+          continue;
+        }
         if (style.position === "absolute" || style.position === "fixed" || (current !== image && style.overflowY !== "visible")) {
           floated = null;
           break;
@@ -2448,7 +2456,9 @@ export class PaginationEngine {
       for (let carrier: HTMLElement | null = image; carrier && carrier !== paragraph; carrier = carrier.parentElement) {
         const style = this.view.getComputedStyle(carrier);
         if (carrier !== image && style.overflowY !== "visible") { supported = false; break; }
-        if (style.float !== "none" && style.position === "static" && style.transform === "none"
+        const edge = carrier.hasAttribute('data-docx-fragment-edge')
+          && style.position === 'absolute' && style.float === 'none';
+        if ((edge || style.float !== "none" && style.position === "static") && style.transform === "none"
           && !floating && (carrier === image || (carrier.querySelectorAll("img").length === 1
             && !this.hasVisibleText(carrier.textContent ?? "")))) {
           floating = carrier;
@@ -2516,8 +2526,9 @@ export class PaginationEngine {
     host.appendChild(clone);
     this.stagingElement.appendChild(host);
     try {
-      return this.fitOversizedPictures(host, dims, block.sectionIndex, bodyHeight)
-        ? { ...block, ...this.measureElement(clone, dims, block.sectionIndex) } : null;
+      if (!this.fitOversizedPictures(host, dims, block.sectionIndex, bodyHeight)) return null;
+      this.prepareBodyEdgePictures(host);
+      return { ...block, ...this.measureElement(clone, dims, block.sectionIndex) };
     } finally {
       clone.remove();
       host.remove();
@@ -2973,8 +2984,10 @@ export class PaginationEngine {
     const frameBottoms = Array.from(measurementHost.querySelectorAll<HTMLElement>('[data-docx-frame-exclusion] > [data-docx-text-frame]'))
       .filter(frame => !frame.closest('[data-docx-textbox]'))
       .map(frame => this.frameExclusionRectangle(frame).bottom - rect.top);
-    const heightPt = pxToPt(Math.max(rect.height, ...this.floatingPictureCarriers(measuredElement)
-      .map(picture => picture.getBoundingClientRect().bottom - rect.top)));
+    // A preceding float can move an exclusion away from its paragraph-owned picture.
+    // Reject that candidate so the ordinary splitter/fresh-page retry can move its owner.
+    const heightPt = this.edgeExclusionsMatch(measuredElement) ? pxToPt(Math.max(rect.height, ...this.floatingPictureCarriers(measuredElement)
+      .map(picture => picture.getBoundingClientRect().bottom - rect.top))) : Infinity;
     const measured: MeasuredBlock = {
       element,
       sectionIndex,
@@ -3928,6 +3941,7 @@ export class PaginationEngine {
     terminalCellParagraph = false,
     textBoxParagraph = false,
     relaxKeepWithNext = false,
+    drawings = this.fragmentDrawingBoxes(paragraph, bodyParagraph),
   ): boolean {
     // The converter writes a Word paragraph with an outline level (a heading style) as h1-h6;
     // it breaks across pages like any other paragraph unless it keeps its lines together.
@@ -3978,7 +3992,6 @@ export class PaginationEngine {
       ...(bodyParagraph ? [] : ["[data-footnote-id]"]),
       "[contenteditable]",
     ].join(", ");
-    const drawings = this.fragmentDrawingBoxes(paragraph, bodyParagraph);
     const atoms = this.rangeAtomicInlineBoxes(paragraph);
     if (Array.from(paragraph.querySelectorAll(unsupportedDescendants))
       .some(element => !drawings.some(drawing => drawing.contains(element))
@@ -4021,9 +4034,87 @@ export class PaginationEngine {
       && (style.right === "auto" || parseFloat(style.right) === 0));
   }
 
-  /** Fixed-base anchors follow their source Range; leading edge pictures keep their float
-   * exclusion on the head. Later floats and line-dependent anchors need destination reflow. */
-  private fragmentDrawingBoxes(paragraph: HTMLElement, bodyParagraph = true): HTMLElement[] {
+  /** A single edge picture can exclude space from the beginning of its source fragment. */
+  private canReflowEdgePicture(paragraph: HTMLElement): boolean {
+    if (paragraph.closest('table, section.endnotes, [data-footnote-id], [data-comment-id], [data-hf-type], '
+      + '[data-docx-textbox], [data-docx-text-frame], [data-pagination-columns], '
+      + '#pagination-hf-registry, #pagination-footnote-registry, #pagination-comment-margin-registry')
+      || paragraph.querySelector('[data-footnote-id], [data-docx-drawing-anchor]')
+      || paragraph.querySelectorAll('img').length !== 1
+      || paragraph.querySelectorAll('[data-docx-edge-picture="true"]').length !== 1) return false;
+    // Absolute ink must use the paragraph as its containing block, including after cloning.
+    const drawing = paragraph.querySelector<HTMLElement>('[data-docx-edge-picture="true"]')!;
+    for (let carrier = drawing.parentElement; carrier && carrier !== paragraph; carrier = carrier.parentElement) {
+      const style = this.view.getComputedStyle(carrier);
+      if (style.position !== 'static' || style.transform !== 'none' || style.translate !== 'none'
+        || style.rotate !== 'none' || style.scale !== 'none' || style.filter !== 'none'
+        || style.backdropFilter !== 'none' || style.perspective !== 'none' || style.contain !== 'none'
+        || style.containerType !== 'normal' || style.willChange !== 'auto') return false;
+    }
+    return true;
+  }
+
+  private isLeadingDrawing(paragraph: HTMLElement, drawing: HTMLElement): boolean {
+    // Even a textless image, break or tab before it owns an earlier source position.
+    for (let node: Node = drawing; node !== paragraph; node = node.parentNode!)
+      for (let sibling = node.previousSibling; sibling; sibling = sibling.previousSibling)
+        if (sibling.nodeType === this.view.Node.ELEMENT_NODE
+          || (sibling.nodeType === this.view.Node.TEXT_NODE && sibling.textContent !== '')) return false;
+    return true;
+  }
+
+  /** Resolve the float while attached, retaining the picture at its original Range position. */
+  private prepareBodyEdgePictures(section: HTMLElement): void {
+    for (const paragraph of Array.from(section.querySelectorAll<HTMLElement>('p,h1,h2,h3,h4,h5,h6'))) {
+      this.checkpoint();
+      const drawing = paragraph.querySelector<HTMLElement>('[data-docx-edge-picture="true"]');
+      if (!drawing || !this.canReflowEdgePicture(paragraph)
+        || (!drawing.hasAttribute('data-docx-fragment-edge') && this.isLeadingDrawing(paragraph, drawing))
+        || !this.canRangeFragmentParagraph(paragraph, false, true, true, false, false, false,
+          this.fragmentDrawingBoxes(paragraph, true, true))) continue;
+      const style = this.view.getComputedStyle(drawing);
+      const proxy = this.document.createElement('span');
+      // A previous measured fragment already has absolute paint, but its cached float side
+      // still owns the exclusion. Dimensions and contours may have changed during picture fitting.
+      proxy.style.cssText = drawing.getAttribute('data-docx-fragment-edge') ?? '';
+      if (style.float !== 'none') proxy.style.float = style.float;
+      for (const property of ['width', 'height', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+        'shape-outside', 'shape-margin']) proxy.style.setProperty(property, style.getPropertyValue(property));
+      drawing.setAttribute('data-docx-fragment-edge', proxy.style.cssText);
+      this.rebuildEdgeExclusion(paragraph);
+    }
+  }
+
+  /** A cloned prefix excludes only pictures actually retained by that prefix's raw Range. */
+  private rebuildEdgeExclusion(paragraph: HTMLElement): void {
+    for (const proxy of Array.from(paragraph.querySelectorAll('[data-docx-edge-exclusion]'))) proxy.remove();
+    for (const drawing of Array.from(paragraph.querySelectorAll<HTMLElement>('[data-docx-fragment-edge]'))) {
+      const proxy = this.document.createElement('span');
+      proxy.setAttribute('data-docx-edge-exclusion', 'true');
+      proxy.setAttribute('aria-hidden', 'true');
+      proxy.style.cssText = drawing.getAttribute('data-docx-fragment-edge')!;
+      paragraph.prepend(proxy);
+      paragraph.style.position = 'relative';
+      drawing.style.position = 'absolute';
+      drawing.style.float = 'none';
+      drawing.style.top = '0';
+      drawing.style.setProperty(proxy.style.float, '0');
+    }
+  }
+
+  private edgeExclusionsMatch(element: HTMLElement): boolean {
+    return Array.from(element.querySelectorAll<HTMLElement>('[data-docx-fragment-edge]')).every(drawing => {
+      this.checkpoint();
+      const proxy = drawing.closest('p,h1,h2,h3,h4,h5,h6')?.querySelector(':scope > [data-docx-edge-exclusion]');
+      if (!proxy) return false;
+      const ink = drawing.getBoundingClientRect(), exclusion = proxy.getBoundingClientRect();
+      return (['left', 'top', 'width', 'height'] as const).every(axis => Math.abs(ink[axis] - exclusion[axis]) < 0.1);
+    });
+  }
+
+  /** Fixed-base anchors follow their source Range. Edge pictures retain that same ownership
+   * while a separate empty float reflows the destination fragment from its beginning. */
+  private fragmentDrawingBoxes(paragraph: HTMLElement, bodyParagraph = true, preparingEdge = false): HTMLElement[] {
     return Array.from(paragraph.querySelectorAll<HTMLElement>(
       '[data-docx-drawing-anchor="true"], [data-docx-edge-picture="true"]'))
       .filter(drawing => {
@@ -4035,19 +4126,14 @@ export class PaginationEngine {
             || (drawing.dataset.docxAnchorVRelative === 'paragraph' && drawing.hasAttribute('data-docx-anchor-v-align'))
             || style.position !== 'absolute' || style.float !== 'none') return false;
           if (bodyParagraph) return true;
-        } else if (!bodyParagraph || style.position !== 'static' || !['left', 'right'].includes(style.float)
+        } else if (!bodyParagraph || !(style.position === 'static' && ['left', 'right'].includes(style.float)
+          || drawing.hasAttribute('data-docx-fragment-edge') && style.position === 'absolute' && style.float === 'none')
           || style.transform !== 'none' || style.translate !== 'none' || style.rotate !== 'none' || style.scale !== 'none'
           || drawing.children.length !== 1 || drawing.firstElementChild?.localName !== 'img'
           || this.hasVisibleText(drawing.textContent ?? '')) return false;
-        // Only ancestor shells may precede the drawing. Even a textless image,
-        // break or tab could otherwise put its anchor on a later fragment.
-        for (let node: Node = drawing; node !== paragraph; node = node.parentNode!) {
-          for (let sibling = node.previousSibling; sibling; sibling = sibling.previousSibling) {
-            if (sibling.nodeType === this.view.Node.ELEMENT_NODE
-              || (sibling.nodeType === this.view.Node.TEXT_NODE && sibling.textContent !== '')) return false;
-          }
-        }
-        return true;
+        else if ((preparingEdge || drawing.hasAttribute('data-docx-fragment-edge'))
+          && this.canReflowEdgePicture(paragraph)) return true;
+        return this.isLeadingDrawing(paragraph, drawing);
       });
   }
 
@@ -4312,6 +4398,7 @@ export class PaginationEngine {
         fragment.style.setProperty("text-align-last", "justify", "important");
     }
 
+    this.rebuildEdgeExclusion(fragment);
     return fragment;
   }
 
