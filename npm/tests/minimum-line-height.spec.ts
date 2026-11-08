@@ -7,27 +7,42 @@ test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}),
 } });
 
-for (const owner of ['body', 'cell']) test(`a ${owner} minimum below uniform natural height preserves repeated preparation`, async ({ page }) => {
+for (const [owner, wrapper] of [
+  ['body', 'CONTENT'], ['cell', '<table><tr><td>CONTENT</td></tr></table>'],
+  ['footnote', '<div data-footnote-id="1"><span class="footnote-content">CONTENT</span></div>'],
+  ['endnote', '<section class="endnotes"><ol><li>CONTENT</li></ol></section>'],
+  ['header registry', '<div id="pagination-hf-registry" style="display:none"><div data-hf-type="header-default">CONTENT</div></div>'],
+  ['footer', '<div data-hf-type="footer-default">CONTENT</div>'],
+]) test(`a ${owner} minimum below uniform natural height preserves repeated preparation`, async ({ page }) => {
   await page.goto('/test-harness.html');
-  const result = await page.evaluate(async owner => {
+  const result = await page.evaluate(async wrapper => {
     const url = 'http://localhost:8083/line-metrics.js';
     const { applyUnroundedNormalLineHeights } = await import(url);
     const root = document.createElement('div');
     root.innerHTML = '<p style="font:20pt/16pt Liberation Serif;--docx-min-line-height:16pt;margin:0">'
       + '<span>Nettle records remain legible.</span></p>';
-    if (owner === 'cell') root.innerHTML = '<table><tr><td>' + root.innerHTML + '</td></tr></table>';
+    root.innerHTML = wrapper.replace('CONTENT', root.innerHTML);
+    const note = root.querySelector('section.endnotes p');
+    if (note) note.innerHTML = '<span data-source-anchor-id="en:en:0123456789abcdef0123456789abcdef">' + note.innerHTML + '</span>';
     document.body.append(root);
     await document.fonts.ready;
     const paragraph = root.querySelector('p')!;
-    const measure = () => [paragraph, paragraph.firstElementChild!].map(element =>
+    const measure = () => [paragraph, ...Array.from(paragraph.querySelectorAll('span'))].map(element =>
       Number.parseFloat(getComputedStyle(element).lineHeight));
     applyUnroundedNormalLineHeights(root);
     const first = measure();
     applyUnroundedNormalLineHeights(root);
-    return { first, repeated: measure() };
-  }, owner);
+    const clone = root.cloneNode(true) as HTMLElement;
+    document.body.append(clone); applyUnroundedNormalLineHeights(clone);
+    const copied = clone.querySelector('p')!;
+    return { first, repeated: measure(), cloned:[copied, ...Array.from(copied.querySelectorAll('span'))]
+      .map(element => Number.parseFloat(getComputedStyle(element).lineHeight)),
+      auto:copied.style.getPropertyValue('--docx-auto-line-spacing'), minimum:copied.style.getPropertyValue('--docx-min-line-height') };
+  }, wrapper);
   for (const height of result.first) expect(height * .75).toBeCloseTo(2355 / 2048 * 20, 3);
   expect(result.repeated).toEqual(result.first);
+  expect(result.cloned).toEqual(result.first);
+  expect(result.auto).toBe('1'); expect(result.minimum).toBe('16pt');
 });
 
 for (const [name, content] of [
@@ -48,16 +63,15 @@ for (const [name, content] of [
     const elements = Array.from(root.querySelectorAll('p,span'));
     const before = elements.map(e => getComputedStyle(e).lineHeight);
     applyUnroundedNormalLineHeights(root);
-    return { before, after: elements.map(e => getComputedStyle(e).lineHeight) };
+    return { before, after: elements.map(e => getComputedStyle(e).lineHeight),
+      automatic:elements.map(e => getComputedStyle(e).getPropertyValue('--docx-auto-line-spacing')) };
   }, content);
   expect(result.after).toEqual(result.before);
+  expect(result.automatic.every(value => !value)).toBe(true);
 });
 
 for (const [name, wrapper] of [
-  ['footnote', '<div data-footnote-id="1"><span class="footnote-content">CONTENT</span></div>'],
   ['comment', '<div data-comment-id="1">CONTENT</div>'],
-  ['header registry', '<div id="pagination-hf-registry" style="display:none"><div data-hf-type="header-default">CONTENT</div></div>'],
-  ['footer', '<div data-hf-type="footer-default">CONTENT</div>'],
   ['frame', '<div data-docx-text-frame="true">CONTENT</div>'],
 ]) test(`minimum spacing retains the ${name} owner policy`, async ({ page }) => {
   await page.goto('/test-harness.html');
@@ -91,9 +105,10 @@ for (const [name, minimum, size, height] of [
     root.append(actual); document.body.append(root);
     applyUnroundedNormalLineHeights(root);
     const heights = (p: Element) => [p, p.firstElementChild!].map(e => getComputedStyle(e).lineHeight);
-    return { control: heights(control), actual: heights(actual) };
+    return { control: heights(control), actual: heights(actual), automatic:actual.style.getPropertyValue('--docx-auto-line-spacing') };
   }, { minimum, size, height });
   expect(result.actual).toEqual(result.control);
+  expect(result.automatic).toBe('');
 });
 
 for (const repeats of [8, 40]) test(`a 16pt minimum cannot compress 20pt exported text (${repeats} repetitions)`, async ({ browser }) => {
@@ -159,4 +174,33 @@ for (const [name, marker, restored] of [
   if (restored) for (const height of result.after) expect(Number.parseFloat(height) * .75).toBeCloseTo(2355 / 2048 * 20, 3);
   else expect(result.after).toEqual(result.before);
   expect(result.repeated).toEqual(result.after);
+});
+
+for (const [name, content, owned, restored] of [
+  ['plain leaves', '<span>Verbena note text.</span>', true, true],
+  ['superscript reference beside text', '<span style="vertical-align:super">i</span><span>Verbena note text.</span>', true, false],
+  ['linked reference beside text', '<a href="#ref">i</a><span>Verbena note text.</span>', true, false],
+  ['mixed note fonts', '<span style="font-size:10pt">Small</span><span>Verbena note text.</span>', true, false],
+  ['unowned nested spans', '<span>Verbena note text.</span>', false, false],
+] as const) test(`endnote minimum validates ${name}`, async ({ page }) => {
+  await page.goto('/test-harness.html');
+  const result = await page.evaluate(async ({ content, owned }) => {
+    const url = 'http://localhost:8083/line-metrics.js';
+    const { applyUnroundedNormalLineHeights } = await import(url);
+    const root = document.createElement('section'); root.className = 'endnotes';
+    const noteId = 'en:en:0123456789abcdef0123456789abcdef';
+    root.innerHTML = '<ol><li><p data-source-anchor-id="p:en:abcdef0123456789abcdef0123456789" '
+      + 'style="font:20pt/16pt Liberation Serif;--docx-min-line-height:16pt"><span '
+      + (owned ? `data-source-anchor-id="${noteId}"` : '') + '>' + content + '</span></p></li></ol>';
+    document.body.append(root);
+    const elements = Array.from(root.querySelectorAll('p,span,a'));
+    const before = elements.map(e => getComputedStyle(e).lineHeight);
+    const identities = () => elements.map(e => e.getAttribute('data-source-anchor-id'));
+    const originalIds = identities();
+    applyUnroundedNormalLineHeights(root);
+    return { before, after:elements.map(e => getComputedStyle(e).lineHeight), originalIds, ids:identities() };
+  }, { content, owned });
+  expect(result.ids).toEqual(result.originalIds);
+  if (restored) for (const height of result.after) expect(Number.parseFloat(height) * .75).toBeCloseTo(2355 / 2048 * 20, 3);
+  else expect(result.after).toEqual(result.before);
 });

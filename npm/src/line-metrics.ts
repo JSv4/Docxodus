@@ -151,20 +151,26 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
 }
 
 /** Ordinary inline runs whose metrics can be represented by their paragraph's font. */
-function uniformParagraphRuns(paragraph: HTMLElement, allowListMarker = false): HTMLElement[] | undefined {
+function uniformParagraphRuns(paragraph: HTMLElement, allowStructuralWrappers = false): HTMLElement[] | undefined {
   const view = paragraph.ownerDocument.defaultView!;
   const style = view.getComputedStyle(paragraph);
   const fontProperties = ["font-family", "font-size", "font-style", "font-weight", "font-stretch"];
   if (style.direction !== "ltr" || style.writingMode !== "horizontal-tb") return;
   const children = Array.from(paragraph.children);
-  const marker = allowListMarker && children[0]?.getAttribute('data-list-marker') === 'true'
+  const marker = allowStructuralWrappers && children[0]?.getAttribute('data-list-marker') === 'true'
     && view.getComputedStyle(children[0]).display === 'inline-flex' ? children[0] : null;
-  const runs = children.flatMap(child => child === marker ? [child, ...Array.from(child.querySelectorAll('*'))] : [child]);
+  // Paginated endnotes retain their note identity in one inline wrapper around
+  // each paragraph's runs. Its own font and line height must move with them.
+  const note = allowStructuralWrappers && paragraph.matches('section.endnotes > ol > li > p')
+    && children.length === 1 && children[0].getAttribute('data-source-anchor-id')?.startsWith('en:en:') ? children[0] : null;
+  if (note && Array.from(note.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim())) return;
+  const runs = children.flatMap(child => child === marker ? [child, ...Array.from(child.querySelectorAll('*'))]
+    : child === note ? [child, ...Array.from(child.children)] : [child]);
   if (!children.length || Array.from(paragraph.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim())
     || runs.some(child => {
       const inMarker = marker?.contains(child);
       if (!(child instanceof view.HTMLElement) || child.localName !== "span"
-        || (!inMarker && (child.children.length || !child.textContent?.trim()))) return true;
+        || (!inMarker && ((child !== note && child.children.length) || !child.textContent?.trim()))) return true;
       const run = view.getComputedStyle(child);
       // Converter list prefixes are an inline flex box with two flex items: the
       // number and its tab suffix. Their uniform metrics must move together.
@@ -181,9 +187,9 @@ function restoreNaturalMinimums(paragraphs: HTMLElement[], ratioFor: (style: Pro
   const view = paragraphs[0].ownerDocument.defaultView!;
   let changed = 0;
   for (const paragraph of paragraphs) {
-    if (paragraph.closest('ol, ul, li, a, aside, section.footnotes, section.endnotes, '
-      + '[data-footnote-id], [data-comment-id], [data-hf-type], #pagination-hf-registry, '
+    if (paragraph.closest('a, aside, [data-comment-id], '
       + '[data-docx-textbox], [data-docx-text-frame], [data-docx-drawing-anchor]')
+      || (paragraph.closest('ol, ul, li') && !paragraph.matches('section.endnotes > ol > li > p'))
       || BEYOND_LATIN.test(paragraph.textContent ?? '')) continue;
     const style = view.getComputedStyle(paragraph);
     const minimum = Number.parseFloat(style.getPropertyValue('--docx-min-line-height')) * 4 / 3;
@@ -193,6 +199,9 @@ function restoreNaturalMinimums(paragraphs: HTMLElement[], ratioFor: (style: Pro
     const runs = uniformParagraphRuns(paragraph, true);
     if (!runs || runs.some(run => view.getComputedStyle(run).lineHeight !== style.lineHeight)) continue;
     for (const element of [paragraph, ...runs]) element.style.lineHeight = `${natural.toFixed(4)}px`;
+    // This uniform minimum is equivalent to single spacing. Let the shared text
+    // fitter and painter preserve its natural kerning and fractional baselines.
+    paragraph.style.setProperty('--docx-auto-line-spacing', '1');
     changed += runs.length + 1;
   }
   return changed;
