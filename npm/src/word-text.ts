@@ -392,12 +392,26 @@ function positionWords(paragraph: HTMLElement, run: HTMLElement,
 }
 
 /** Run after fonts and natural line heights resolve, before pagination measures them. */
-export function prepareWordText(root: HTMLElement, checkpoint?: () => void): number {
+export function prepareWordText(root: HTMLElement, checkpoint?: () => void, owners: 'body' | 'tables' | 'all' = 'all'): number {
   const mode = Number(root.closest('[data-docx-compatibility-mode]')?.getAttribute('data-docx-compatibility-mode') ??
     root.ownerDocument.body.getAttribute('data-docx-compatibility-mode') ?? 14);
   if (!plainFlow(root)) return 0;
   const view = root.ownerDocument.defaultView;
   if (!view) return 0;
+  const fixedTables = new Map<HTMLTableElement, boolean>();
+  const fixedGrid = (table: HTMLTableElement): boolean => {
+    const cached = fixedTables.get(table);
+    if (cached !== undefined) return cached;
+    const fixed = table.dataset.docxFixedWidth === 'true' && view.getComputedStyle(table).tableLayout === 'fixed'
+      && table.getBoundingClientRect().width > 0;
+    const columns = fixed ? Array.from(table.querySelectorAll<HTMLTableColElement>(':scope > colgroup > col')) : [];
+    const count = fixed ? Array.from(table.rows).reduce((max, row) =>
+      Math.max(max, Array.from(row.cells).reduce((n, cell) => n + cell.colSpan, 0)), 0) : 0;
+    const valid = fixed && (count === 1 || columns.length === count
+      && columns.every(col => col.span === 1 && col.getBoundingClientRect().width > 0));
+    fixedTables.set(table, valid);
+    return valid;
+  };
   // Pagination measures each section at this declared width. Line fitting must
   // use that same band before the engine starts collecting its block heights.
   for (const section of Array.from(root.querySelectorAll<HTMLElement>('[data-section-index][data-content-width]'))) {
@@ -407,7 +421,14 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
   let prepared = 0;
   for (const paragraph of Array.from(root.querySelectorAll<HTMLElement>(PARAGRAPHS))) {
     checkpoint?.();
-    if (paragraph.closest('table, ol, ul, li, a, aside, template, section.footnotes, section.endnotes, ' +
+    if (paragraph.hasAttribute(PREPARED)) continue;
+    const table = paragraph.closest('table');
+    if (owners === 'body' && table || owners === 'tables' && !table) continue;
+    let stable = true;
+    for (let owner = table; owner; owner = owner.parentElement?.closest('table') ?? null)
+      if (!fixedGrid(owner)) { stable = false; break; }
+    if (!stable) continue;
+    if (paragraph.closest('ol, ul, li, a, aside, template, section.footnotes, section.endnotes, ' +
       '[data-footnote-id], [data-comment-id], [data-docx-textbox], [data-docx-text-frame], [data-docx-drawing-anchor]')) continue;
     const style = view.getComputedStyle(paragraph);
     const multiple = Number(style.getPropertyValue('--docx-auto-line-spacing'));
@@ -416,6 +437,9 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
     if (!run) continue;
     const runStyle = view.getComputedStyle(run);
     const scale = characterScale(runStyle);
+    // Unscaled cell text retains its existing layout until the general table
+    // line-breaking policy is resolved. Scaled text needs both fitted lines and paint.
+    if (table && scale === 1) continue;
     const kerning = runStyle.getPropertyValue('--docx-font-kerning').trim() || 'none';
     // A unit multiple leaves the run at `line-height: normal`; the export's unrounded
     // normal-line pass (line-metrics.ts) has already resolved it to a length.
@@ -551,12 +575,14 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     if (!rows.size || splitWord) continue;
     if (!hasPictures && !column) positionWords(paragraph, run, rows, checkpoint);
     if (pictures.length === 1) rows = contourRows(pictures[0], paragraph, run, rows.size, checkpoint) ?? rows;
-    const pageBox = paragraph.closest('.page-box');
-    const lost = column || !pageBox ? 0 : drift.get(pageBox) ?? 0;
-    if (pageBox && !column) {
+    // Cells flow independently: rounding inside one cell must not move a
+    // neighboring cell or the body paragraph following the table.
+    const flow = paragraph.closest('td, th') ?? paragraph.closest('.page-box');
+    const lost = column || !flow ? 0 : drift.get(flow) ?? 0;
+    if (flow && !column) {
       const shortfall = rows.size * pitch - box.height;
       // Only layout-unit truncation (well under a pixel) is a drift; anything else is geometry.
-      if (shortfall > 0 && shortfall < 1) drift.set(pageBox, lost + shortfall);
+      if (shortfall > 0 && shortfall < 1) drift.set(flow, lost + shortfall);
     }
     const svg = document.createElementNS(SVG_NS, 'svg');
     const fontRequest = run.getAttribute(FONT_REQUEST_ATTRIBUTE);

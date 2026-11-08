@@ -3873,7 +3873,7 @@ export async function convertDocxToPaginatedHtml(
         const restoreTextMeasurement = revealMeasurementStaging(renderDocument);
         try {
           applyUnroundedNormalLineHeights(renderDocument.body);
-          prepareWordText(renderDocument.body, () => checkpointWordText(state));
+          prepareWordText(renderDocument.body, () => checkpointWordText(state), 'body');
           prepareParagraphBorders(renderDocument.body);
           prepareTableBorders(renderDocument.body);
         } finally {
@@ -3886,6 +3886,7 @@ export async function convertDocxToPaginatedHtml(
           pageGap: 0,
           fragmentParagraphs: true,
           prepareTableFragment: refreshTableBorderLayout,
+          prepareTableText: section => prepareWordText(section, () => checkpointWordText(state), 'tables'),
           commentOverflow: "appendix",
           // Running-story placement below changes the visible fragment set, and this path always
           // restamps through normalizePageMapFragmentIdentities(); stamping inside paginate()
