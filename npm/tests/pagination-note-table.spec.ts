@@ -79,7 +79,7 @@ const range = (from: number, to: number) => Array.from({ length: to - from + 1 }
 async function verifyPdf(browser: Browser, info: TestInfo, bytes: Uint8Array, rows: number, name: string, side = false) {
   const result = await renderDocxArtifacts(bytes,
     { browser, outputs: ['pdf'], timeoutMs: 120_000, reviewProfile: 'final', commentProfile: 'hidden' });
-  const text = (await inspectPdf(result.pdf!)).pages.map(p => p.text).join(' ');
+  const text = (await inspectPdf(result.pdf!)).pages.map(p => p.text).join(' ').replace(/\s+/g, ' ');
   for (const label of side ? ['Note', 'Side'] : ['Note']) {
     expect(Array.from(text.matchAll(new RegExp(`${label} table row\\s+(\\d+)`, 'g')), m => Number(m[1]))).toEqual(range(1, rows));
   }

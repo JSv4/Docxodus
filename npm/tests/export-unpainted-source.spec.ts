@@ -26,7 +26,7 @@ for (const kind of ['rowless-table', 'empty-cell', 'joined-hidden', 'joined-visi
     try {
       const pdf = await task.promise;
       const content = await (await pdf.getPage(1)).getTextContent();
-      const text = content.items.filter(item => 'str' in item).map(item => item.str).join(' ');
+      const text = content.items.filter(item => 'str' in item).map(item => item.str).join(' ').replace(/\s+/g, ' ');
       if (kind.startsWith('joined-')) {
         expect(text).toContain('Observation:');
         expect(text).toContain('Orbit verified.');
