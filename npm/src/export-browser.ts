@@ -9,7 +9,7 @@
 import limitsContractJson from "./export-resource-limits-v1.json";
 import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
 import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExactLineInk, measureLaidOutBottoms } from "./line-metrics.js";
-import { prepareWordText, paintWordText } from "./word-text.js";
+import { prepareWordText, paintWordText, createFootnoteTextPreparer } from "./word-text.js";
 import { preserveClippedExactRowText } from "./exact-row-text.js";
 import { prepareParagraphBorders, paintParagraphBorders } from "./paragraph-borders.js";
 import { prepareTableBorders, paintTableBorders, refreshTableBorderLayout } from "./table-borders.js";
@@ -3879,6 +3879,8 @@ export async function convertDocxToPaginatedHtml(
         } finally {
           restoreTextMeasurement();
         }
+        const prepareFootnotes = createFootnoteTextPreparer(
+          staging.querySelector<HTMLElement>('#pagination-footnote-registry'), () => checkpointWordText(state));
         const engine = new PaginationEngine(staging, container, {
           scale: 1,
           cssPrefix: "page-",
@@ -3888,6 +3890,11 @@ export async function convertDocxToPaginatedHtml(
           prepareTableFragment: refreshTableBorderLayout,
           prepareTableText: section => prepareWordText(section, () => checkpointWordText(state), 'tables'),
           prepareStoryText: story => prepareWordText(story, () => checkpointWordText(state), 'running'),
+          prepareFootnoteText: note => {
+            if (!prepareFootnotes(note)) fail('pagination_failure', 'pagination',
+              'Scaled footnote text cannot fit its continuation page width.',
+              'Use a consistent note width or report the source document to Docxodus.');
+          },
           commentOverflow: "appendix",
           // Running-story placement below changes the visible fragment set, and this path always
           // restamps through normalizePageMapFragmentIdentities(); stamping inside paginate()

@@ -414,6 +414,8 @@ export interface PaginationOptions {
   prepareTableText?: (section: HTMLElement) => void;
   /** @internal Export text preparation inside a measured running-story band. */
   prepareStoryText?: (story: HTMLElement) => void;
+  /** Prepare attached note clones before measurement, splitting and final placement. */
+  prepareFootnoteText?: (note: HTMLElement) => void;
   /** Exact invalidation tokens used to materialize an authoritative PageMap with the result. */
   layoutToken?: { documentVersion: number; rendererFingerprint: string };
 }
@@ -945,6 +947,7 @@ export class PaginationEngine {
   private prepareTableFragment?: (table: HTMLTableElement) => void;
   private prepareTableText?: (section: HTMLElement) => void;
   private prepareStoryText?: (story: HTMLElement) => void;
+  private prepareFootnoteText?: (note: HTMLElement) => void;
   private createdPageCount = 0;
   private layoutToken?: { documentVersion: number; rendererFingerprint: string };
   private hfRegistry: HeaderFooterRegistry;
@@ -1056,6 +1059,7 @@ export class PaginationEngine {
     this.prepareTableFragment = options.prepareTableFragment;
     this.prepareTableText = options.prepareTableText;
     this.prepareStoryText = options.prepareStoryText;
+    this.prepareFootnoteText = options.prepareFootnoteText;
     this.layoutToken = options.layoutToken;
     this.hfRegistry = new Map();
     this.footnoteRegistry = new Map();
@@ -5230,6 +5234,7 @@ export class PaginationEngine {
     // Append to staging for measurement
     this.noteMeasurementHost().appendChild(measureContainer);
     try {
+      this.prepareFootnoteText?.(measureContainer);
       return pxToPt(measureContainer.getBoundingClientRect().height);
     } finally {
       measureContainer.remove();
@@ -5473,9 +5478,11 @@ export class PaginationEngine {
           candidate.style.setProperty("display", "block", "important");
         }
         content.appendChild(candidate);
+        this.prepareFootnoteText?.(candidate);
         const candidateHeight = pxToPt(measureContainer.getBoundingClientRect().height);
         if (candidateHeight <= availableHeightPt) {
-          fitting.push(element);
+          if (sourcePosition !== null) candidate.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, sourcePosition);
+          fitting.push(candidate);
           continue;
         }
 
@@ -5530,7 +5537,8 @@ export class PaginationEngine {
         } else if (fitting.length === 0) {
           // A genuinely indivisible first element retains the established visible
           // clipped fallback, but only for itself. Its siblings continue later.
-          fitting.push(element);
+          if (sourcePosition !== null) candidate.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, sourcePosition);
+          fitting.push(candidate);
           remaining = continuation.remainingElements.slice(index + 1);
         } else {
           remaining = continuation.remainingElements.slice(index);
@@ -5700,6 +5708,8 @@ export class PaginationEngine {
     // note's number rendered alone above its text — the same visible symptom as the escaped-CSS
     // bug, from an unrelated cause, on the notes that happened to take a can't-split path.
     try {
+      this.prepareFootnoteText?.(attachedFootnote);
+      this.prepareFootnoteText?.(measureContainer);
       const footnoteContent = attachedFootnote.querySelector(".footnote-content");
       if (!footnoteContent) {
         // No content structure to split — hand back the element's own children.
@@ -5720,6 +5730,7 @@ export class PaginationEngine {
         const child = children[i];
         const measuredCandidate = child.cloneNode(true) as HTMLElement;
         measuredContent.appendChild(measuredCandidate);
+        this.prepareFootnoteText?.(measuredCandidate);
         const candidateFits = pxToPt(measureContainer.getBoundingClientRect().height)
           <= availableHeightPt;
         if (candidateFits) {
@@ -8318,6 +8329,7 @@ export class PaginationEngine {
     // zeroes, so measuring while building the page silently did nothing.
     const notesEl = pageBox.querySelector<HTMLElement>(`.${this.cssPrefix}footnotes`);
     if (notesEl) {
+      this.prepareFootnoteText?.(notesEl);
       const notesHeightPt = pxToPt(notesEl.getBoundingClientRect().height);
       if (notesHeightPt > 0) {
         contentArea.style.height = `${Math.max(0, contentAreaHeight - notesHeightPt)}pt`;

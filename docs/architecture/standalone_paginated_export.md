@@ -1595,13 +1595,24 @@ the font. Natural final lines, alignment and repeated ordinary spaces retain the
 
 The converter retains resolved `w:w` percentages as `--docx-character-scale`, including an explicit
 100% reset of inherited formatting. For plain automatically spaced body paragraphs, resolved fixed-width cells and running
-headers/footers, the existing line fitter scales advances and spaces before choosing breaks.
+headers/footers and eligible footnotes, the existing line fitter scales advances and spaces before choosing breaks.
 Running stories prepare after their section width resolves; each final header/footer band
 owns its picture-dependent word positioning, so body graphics cannot remove justification. Its line boxes and vector glyphs
 apply the same horizontal scale without changing font size, vertical metrics or paragraph origins.
 Preparation commits only after the complete line layout succeeds. Unsupported break controls,
-overwide words, exact spacing, mixed runs, unresolved table widths, notes, pictures and columns retain
+overwide words, exact spacing, mixed runs, unresolved table widths, endnotes, pictures and columns retain
 their existing policy; percentage scaling for those owners remains open under #1564.
+
+Footnotes prepare in the attached measurement and final page bands, including packed notes and
+continued fragments. A source paragraph must be a plain block before splitting; losing a reference,
+link or differently styled run from its tail cannot make the tail newly eligible. A graphic or frame
+anywhere in the note registry, including separator stories, retains the existing shared note flow.
+Prepared clones carry their fitted width and original run/line-height styles. Same-width copies keep
+their line boxes and fragment trims; a changed width reconstructs and fits the remaining text while
+preserving continuation-owned margins and indentation. A previously fitted paragraph that cannot
+retain its scale at the new width refuses export with `pagination_failure`. Unscaled and initially
+unsupported paragraphs retain their prior layout. Body, header, footer and note bands each accumulate
+their own fractional line-height rounding; unrelated body paragraphs cannot displace a running story.
 
 The browser's font-unit boundary is not a complete Word fitting contract. In #1564 the author
 [confirmed that Word fits the 65-character Liberation Mono prefix into 468pt](https://github.com/JSv4/Docxodus/issues/1564#issuecomment-6701328774),
