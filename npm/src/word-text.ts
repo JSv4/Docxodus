@@ -192,6 +192,11 @@ function contourRows(image: HTMLImageElement, paragraph: HTMLElement, run: HTMLE
   return next === words.length && rows.size === lineCount ? rows : null;
 }
 
+function characterScale(style: CSSStyleDeclaration): number {
+  const scale = Number(style.getPropertyValue('--docx-character-scale'));
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
 /** Measure advances at a large em to avoid CSS-pixel font hinting in line positions. */
 function wordMeasure(run: HTMLElement, exactHeight = 0): ((text: string) => number) | null {
   const style = run.ownerDocument.defaultView!.getComputedStyle(run);
@@ -208,33 +213,35 @@ function wordMeasure(run: HTMLElement, exactHeight = 0): ((text: string) => numb
     if (metrics.fontBoundingBoxAscent * scale > exactHeight * .8 ||
       metrics.fontBoundingBoxDescent * scale > exactHeight * .2) return null;
   }
-  return text => context.measureText(text).width * scale;
+  const width = characterScale(style);
+  return text => context.measureText(text).width * scale * width;
 }
 
 /** Resolve plain line contents before pagination, using unrounded font advances. */
 function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustification: boolean,
-  checkpoint?: () => void, exact = false): boolean {
+  checkpoint?: () => void, exact = false): 'fitted' | 'unchanged' | null {
   const view = run.ownerDocument.defaultView!;
   const style = view.getComputedStyle(paragraph);
   const runStyle = view.getComputedStyle(run);
+  const scale = characterScale(runStyle);
   const text = run.textContent!;
   // Hyphens/slashes and nonordinary spaces have additional break opportunities.
   // Pictures and columns retain their separately measured flow.
   if (runStyle.whiteSpace !== 'pre-wrap' || /[^\u0020-\u007e\u00c0-\u024f]|[-/]/u.test(text) ||
       !/^-?[\d.]+px$/.test(style.textIndent) || style.wordBreak !== 'normal' ||
       (!['normal', '0px'].includes(runStyle.wordSpacing) &&
-       !run.style.getPropertyValue('--docx-word-space-compression'))) return false;
+       !run.style.getPropertyValue('--docx-word-space-compression'))) return null;
   const measure = wordMeasure(run, exact ? Number.parseFloat(runStyle.lineHeight) : 0);
   const width = paragraph.getBoundingClientRect().width;
   const indent = Number.parseFloat(style.textIndent) || 0;
-  if (!measure || !(width > 0) || !(width - indent > 0)) return false;
+  if (!measure || !(width > 0) || !(width - indent > 0)) return null;
   const space = measure(' ');
   const words = Array.from(text.matchAll(/\S+ */gu), (match, index) => {
     if ((index & 63) === 0) checkpoint?.();
     const word = match[0].trimEnd();
     return { text: match[0], width: measure(word), spaces: match[0].length - word.length };
   });
-  if (!words.length || words.some(w => w.width > width) || words[0].width > width - indent) return false;
+  if (!words.length || words.some(w => w.width > width) || words[0].width > width - indent) return null;
   const rows: Array<{ text: string; spaces: number; available: number }> = [];
   let start = 0;
   while (start < words.length) {
@@ -261,7 +268,7 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
   // A measured flow needs no replacement when its complete line choices agree.
   // Preserve inline block geometry in either mode. The painter still derives
   // word positions from font advances; matching breaks do not certify DOM X.
-  if (run.childNodes.length === 1 && run.firstChild?.nodeType === 3) {
+  if (scale === 1 && run.childNodes.length === 1 && run.firstChild?.nodeType === 3) {
     const measured: string[] = [];
     let offset = 0, top = NaN;
     for (const word of words) {
@@ -286,10 +293,12 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
       }
       run.setAttribute(FITTED_RUN, '0');
       if (modernJustification) run.style.setProperty('--docx-word-space-compression', `${-space / 4}px`);
-      return false;
+      return 'unchanged';
     }
   }
   const previousStyle = run.getAttribute('style');
+  const previousFit = run.getAttribute(FITTED_RUN);
+  const previousContent = Array.from(run.childNodes);
   const fragment = run.ownerDocument.createDocumentFragment();
   const lines = rows.map((row, index) => {
     checkpoint?.();
@@ -298,6 +307,11 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
     line.style.cssText = 'display:block;white-space:pre;word-spacing:0px;text-indent:0';
     if (exact) line.style.textAlignLast = 'start';
     if (!index && indent) line.style.marginLeft = `${indent}px`;
+    if (scale !== 1) {
+      line.style.width = `${row.available / scale}px`;
+      line.style.transformOrigin = 'left top';
+      line.style.transform = `scaleX(${scale})`;
+    }
     line.textContent = row.text;
     fragment.append(line);
     return line;
@@ -315,21 +329,21 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
     const justify = exact && index < lines.length - 1;
     if (excess <= 0 && !justify) continue;
     if (!rows[index].spaces || (exact && excess / rows[index].spaces > space / 4 + 1 / 64)) {
-      run.replaceChildren(run.ownerDocument.createTextNode(text));
-      run.removeAttribute(FITTED_RUN);
+      run.replaceChildren(...previousContent);
+      if (previousFit === null) run.removeAttribute(FITTED_RUN); else run.setAttribute(FITTED_RUN, previousFit);
       if (previousStyle === null) run.removeAttribute('style'); else run.setAttribute('style', previousStyle);
-      return false;
+      return null;
     }
     // The DOM supplies line boxes for pagination. Compensate its font rounding
     // only within this chosen line; vector paint uses the font's true advances.
-    lines[index].style.wordSpacing = `${-excess / rows[index].spaces}px`;
+    lines[index].style.wordSpacing = `${-excess / rows[index].spaces / scale}px`;
   }
   // Carry the measured natural height with the owned line boxes, including
   // Range clones, so pagination need not resolve their font metrics again.
   run.setAttribute(FITTED_RUN, String(exact ? Number.parseFloat(runStyle.lineHeight) :
     Number.parseFloat(run.style.getPropertyValue('--docx-word-native-height'))));
   if (modernJustification) run.style.setProperty('--docx-word-space-compression', `${-space / 4}px`);
-  return true;
+  return 'fitted';
 }
 
 /** Space-aware positioning for an ordinary, unfragmented left-to-right line box. */
@@ -401,6 +415,7 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
     const run = plainRun(paragraph, false, exact);
     if (!run) continue;
     const runStyle = view.getComputedStyle(run);
+    const scale = characterScale(runStyle);
     const kerning = runStyle.getPropertyValue('--docx-font-kerning').trim() || 'none';
     // A unit multiple leaves the run at `line-height: normal`; the export's unrounded
     // normal-line pass (line-metrics.ts) has already resolved it to a length.
@@ -413,18 +428,27 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
     let column = false;
     for (let ancestor = paragraph.parentElement; ancestor && ancestor !== root; ancestor = ancestor.parentElement)
       if (Number(view.getComputedStyle(ancestor).columnCount) > 1) column = true;
+    // Width changes need a complete fitted line model. Other owners retain their
+    // existing flow until both their layout and paint can apply the same scale.
+    if (scale !== 1 && (exact || column || root.querySelector('img') ||
+      paragraph.closest('[data-hf-type], #pagination-hf-registry'))) continue;
     if (exact && (style.textAlign !== 'justify' || !['auto', 'start', 'left'].includes(style.textAlignLast) ||
       column || root.querySelector('img'))) continue;
     // Exact lines keep their HTML baseline/ink handling and full declared pitch.
     if (exact) {
-      if (fitWordLines(paragraph, run, true, checkpoint, true)) prepared++;
+      if (fitWordLines(paragraph, run, true, checkpoint, true) === 'fitted') prepared++;
       continue;
     }
+    const previousStyle = run.getAttribute('style');
     run.style.fontKerning = kerning;
     run.style.lineHeight = `${height}px`;
     run.style.setProperty('--docx-word-native-height', `${nativeHeight}px`);
-    if (!column && !root.querySelector('img'))
-      fitWordLines(paragraph, run, mode >= 15 && style.textAlign === 'justify', checkpoint);
+    const fitted = !column && !root.querySelector('img')
+      ? fitWordLines(paragraph, run, mode >= 15 && style.textAlign === 'justify', checkpoint) : null;
+    if (scale !== 1 && fitted === null) {
+      if (previousStyle === null) run.removeAttribute('style'); else run.setAttribute('style', previousStyle);
+      continue;
+    }
     // An empty drawing run participates in the first inline box. Give it the
     // same resolved height so its inherited auto multiplier is not applied twice.
     for (const picture of Array.from(paragraph.children).filter(child => pictureSibling(child, view))) {
@@ -499,6 +523,8 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     const run = plainRun(paragraph);
     if (!run) continue;
     const style = view.getComputedStyle(run);
+    const scale = characterScale(style);
+    if (scale !== 1 && !(Number(run.getAttribute(FITTED_RUN)) > 0)) continue;
     const metric = fontMetrics(style);
     const fontSize = Number.parseFloat(style.fontSize);
     const pitch = Number.parseFloat(style.lineHeight);
@@ -556,6 +582,12 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     const baseline = (metric.height - metric.descent) * fontSize;
     Array.from(rows.values()).forEach((words, index) => {
       const line = document.createElementNS(SVG_NS, 'text');
+      if (scale !== 1) {
+        line.setAttribute('transform', `scale(${scale} 1)`);
+        // Anisotropic SVG transforms otherwise hint at a rounded effective
+        // font size, changing both glyph advances and the vertical baseline.
+        line.setAttribute('text-rendering', 'geometricPrecision');
+      }
       line.setAttribute('y', String((box.top - band.top + dy + lost + baseline + index * pitch) * 4));
       line.setAttribute('xml:space', 'preserve');
       for (const property of ['font-family', 'font-weight', 'font-style', 'font-stretch', 'font-kerning'])
@@ -564,7 +596,7 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
       line.style.fill = style.color;
       for (const word of words) {
         const span = document.createElementNS(SVG_NS, 'tspan');
-        span.setAttribute('x', String((box.left - band.left + dx + word.x) * 4));
+        span.setAttribute('x', String((box.left - band.left + dx + word.x) * 4 / scale));
         span.textContent = word.text;
         line.append(span);
       }

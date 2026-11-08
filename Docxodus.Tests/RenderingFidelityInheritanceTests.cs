@@ -189,4 +189,26 @@ public class RenderingFidelityInheritanceTests
         var run = html.Descendants().Single(e => e.Name.LocalName == "span" && e.Value == "Default kerning");
         Assert.DoesNotContain("--docx-font-kerning", (string?)run.Attribute("style"));
     }
+
+    [Theory]
+    [InlineData("80", "0.8")]
+    [InlineData("100", "1")]
+    [InlineData("150", "1.5")]
+    public void CharacterWidthPreservesTheResolvedPercentage(string value, string expected)
+    {
+        var html = Render($"<w:p><w:r><w:rPr><w:w w:val=\"{value}\"/></w:rPr><w:t>Width</w:t></w:r></w:p>");
+        var run = html.Descendants().Single(e => e.Name.LocalName == "span" && e.Value == "Width");
+        Assert.Contains($"--docx-character-scale: {expected}", (string?)run.Attribute("style"));
+        Assert.Contains("font-size: 11pt", (string?)run.Attribute("style"));
+    }
+
+    [Fact]
+    public void CharacterWidthInheritsDefaultsAndAllowsAnExplicitReset()
+    {
+        var html = Render("<w:p><w:r><w:t>Inherited</w:t></w:r><w:r><w:rPr><w:w w:val=\"100\"/></w:rPr><w:t>Reset</w:t></w:r></w:p>",
+            runDefaults: "<w:w w:val=\"80\"/>");
+        var runs = html.Descendants().Where(e => e.Name.LocalName == "span").ToList();
+        Assert.Contains("--docx-character-scale: 0.8", (string?)runs.Single(e => e.Value == "Inherited").Attribute("style"));
+        Assert.Contains("--docx-character-scale: 1", (string?)runs.Single(e => e.Value == "Reset").Attribute("style"));
+    }
 }

@@ -8971,6 +8971,12 @@ namespace Docxodus
             if (kern != null)
                 style["--docx-font-kerning"] = sz != null && sz >= kern ? "normal" : "none";
 
+            // Character width scales glyphs and advances together; font-stretch
+            // selects a different face instead. The export text owner consumes this.
+            if (int.TryParse((string?)rPr.Element(W._w)?.Attribute(W.val), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var characterWidth) && characterWidth > 0)
+                style["--docx-character-scale"] = (characterWidth / 100m).ToString(CultureInfo.InvariantCulture);
+
             // W.caps
             if (GetBoolProp(rPr, W.caps))
                 style.AddIfMissing("text-transform", "uppercase");

@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Standalone export applies character-width percentages to both line fitting and glyph painting in plain, automatically spaced body paragraphs. Font size, line height, source text and page anchors are preserved; richer text layouts retain their existing policy (part of #1564).
+
 - Minimum line spacing below uniform body text's natural height no longer compresses its lines in paginated output. Larger minima and mixed-content line metrics retain their existing policies (part of #1566).
 
 - Empty text runs no longer enlarge the line metrics of nonempty paragraphs. Blank paragraphs, spaces and structural runs retain their existing metrics (part of #1565).
