@@ -13,6 +13,8 @@ export interface BodyFillOptions {
   paragraphs: number;
   /** Font size in half-points. */
   fontHalfPoints: number;
+  /** Give the first word a different font weight for the mixed-run clipping control. */
+  boldFirstWord?: boolean;
   /** Exact line height in twips (240 = 12pt). */
   lineTwips: number;
   /** Use minimum spacing to exercise glyph overflow outside the exact-spacing contract. */
@@ -37,8 +39,11 @@ export function bodyFillDocx(options: BodyFillOptions): Uint8Array {
   const pPr = (before = 0) =>
     `<w:pPr><w:spacing w:before="${before}" w:after="0" w:line="${options.lineTwips}" w:lineRule="${options.lineRule ?? 'exact'}"/></w:pPr>`;
   const rPr = `<w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="${options.fontHalfPoints}"/></w:rPr>`;
-  const paragraph = (text: string, before = 0) =>
-    `<w:p>${pPr(before)}<w:r>${rPr}<w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
+  const paragraph = (text: string, before = 0) => {
+    const split = options.boldFirstWord ? text.indexOf(' ') + 1 : 0;
+    const first = split ? `<w:r>${rPr.replace('<w:sz', '<w:b/><w:sz')}<w:t xml:space="preserve">${text.slice(0, split)}</w:t></w:r>` : '';
+    return `<w:p>${pPr(before)}${first}<w:r>${rPr}<w:t xml:space="preserve">${text.slice(split)}</w:t></w:r></w:p>`;
+  };
   const table = options.tableAfterFirstParagraph
     ? '<w:tbl><w:tblPr><w:tblpPr w:topFromText="150" w:vertAnchor="text"/><w:tblW w:w="5000" w:type="pct"/><w:tblBorders>' +
       '<w:top w:val="single" w:sz="4"/><w:bottom w:val="single" w:sz="4"/></w:tblBorders></w:tblPr>' +

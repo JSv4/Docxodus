@@ -651,6 +651,11 @@ paragraphs retain their existing placeholder metrics; spaces, breaks and other s
 content retain their existing participation. Mixed-size visible runs still use the existing
 paragraph-wide metric policy (the remaining scope of #1565).
 
+At-least spacing carries `--docx-min-line-height`. The shared paginated natural-metrics pass
+restores the natural height when a smaller minimum would compress uniform ordinary body text.
+It leaves larger minima, mixed metrics and structural content under their existing policies;
+the restored natural lines use the established viewer/export baseline correction.
+
 ### Indentation
 
 | Word Property | CSS Property |

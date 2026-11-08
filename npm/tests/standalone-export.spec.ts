@@ -846,11 +846,14 @@ test.describe('standalone paginated HTML', () => {
     expect(result.html).toContain('After the box.');
   });
 
-  test('lays a page out again instead of failing when its last line would be clipped', async ({ page }) => {
-    // Issue #848. The converter gives this minimum-spaced paragraph a 14pt CSS line box.
-    // 46 such boxes fit the 648pt band, but the 24pt glyphs extend past its bottom. This must
-    // still trigger the corrective pass: only authored EXACT spacing permits glyph overhang.
-    const source = bodyFillDocx({ paragraphs: 46, fontHalfPoints: 48, lineTwips: 280, lineRule: 'atLeast' });
+  for (const mixed of [false, true]) test(mixed
+    ? 'lays a page out again when mixed minimum-spaced text would be clipped'
+    : 'retains natural height when a smaller minimum would compress page-filling text', async ({ page }) => {
+    // Uniform 24pt Liberation Serif has a 27.598pt natural pitch, so 23 paragraphs fit.
+    // Mixed bold/regular runs retain the existing 14pt boxes and must still exercise #848's
+    // corrective pass: only authored EXACT spacing permits glyph overhang.
+    const source = bodyFillDocx({ paragraphs: 46, fontHalfPoints: 48, lineTwips: 280,
+      lineRule: 'atLeast', boldFirstWord: mixed });
 
     const result = await convert(page, source);
 
@@ -861,8 +864,9 @@ test.describe('standalone paginated HTML', () => {
       return Array.from(parsed.querySelectorAll('.page-box')).map((box) =>
         Array.from(box.querySelectorAll('.page-content p')).map((p) => p.textContent?.trim()));
     }, result.html);
-    expect(pages[0]).toHaveLength(45);
-    expect(pages[1]).toEqual(['Line 46 of the body, typography and spacing.']);
+    const text = Array.from({ length: 46 }, (_, i) => `Line ${i + 1} of the body, typography and spacing.`);
+    const firstPageCount = mixed ? 45 : Math.floor(648 / (2355 / 2048 * 24));
+    expect(pages).toEqual([text.slice(0, firstPageCount), text.slice(firstPageCount)]);
     // A correction rebuilds the attempt and truncates its own entries, so the report records one
     // pass through the render phases, in the same order as any successful render.
     const order = result.renderReport.readiness
