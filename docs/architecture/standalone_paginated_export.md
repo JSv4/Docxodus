@@ -1594,11 +1594,13 @@ in both paths: matching line breaks do not establish that the browser's hinted w
 the font. Natural final lines, alignment and repeated ordinary spaces retain their own rules.
 
 The converter retains resolved `w:w` percentages as `--docx-character-scale`, including an explicit
-100% reset of inherited formatting. For plain automatically spaced body paragraphs, the existing
-line fitter scales advances and spaces before choosing breaks. Its line boxes and vector glyphs
+100% reset of inherited formatting. For plain automatically spaced body paragraphs, resolved fixed-width cells and running
+headers/footers, the existing line fitter scales advances and spaces before choosing breaks.
+Running stories prepare after their section width resolves; each final header/footer band
+owns its picture-dependent word positioning, so body graphics cannot remove justification. Its line boxes and vector glyphs
 apply the same horizontal scale without changing font size, vertical metrics or paragraph origins.
 Preparation commits only after the complete line layout succeeds. Unsupported break controls,
-overwide words, exact spacing, mixed runs, running stories, tables, pictures and columns retain
+overwide words, exact spacing, mixed runs, unresolved table widths, notes, pictures and columns retain
 their existing policy; percentage scaling for those owners remains open under #1564.
 
 The browser's font-unit boundary is not a complete Word fitting contract. In #1564 the author

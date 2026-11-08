@@ -3,13 +3,14 @@ import { writeFileSync } from 'node:fs';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
+import { fittingImageRun, fittingTilePng } from './docx-page-fitting-fixture.js';
 
 test.use({ launchOptions: { chromiumSandbox:true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath:process.env.DOCXODUS_CHROMIUM_PATH } : {}),
 } });
 
 const words = Array.from({ length:12 }, (_, i) => `W${String(i).padStart(4, '0')}`);
-function source(owner:'header' | 'footer', percent:number, variants:boolean) {
+function source(owner:'header' | 'footer', percent:number, variants:boolean, options:{ justify?:boolean; picture?:boolean } = {}) {
   const type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.';
   const rels = (content:string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${content}</Relationships>`;
   const section = (width:number, reference:boolean) => '<w:sectPr>'
@@ -18,7 +19,7 @@ function source(owner:'header' | 'footer', percent:number, variants:boolean) {
     + `<w:pgSz w:w="${width}" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/>`
     + (reference && variants ? '<w:titlePg/>' : '') + '</w:sectPr>';
   const styled = variants ? '<w:pStyle w:val="RunningTitle"/>' : '';
-  const body = `<w:p><w:pPr>${styled}</w:pPr><w:r><w:t>Body0</w:t></w:r></w:p>`
+  const body = `<w:p><w:pPr>${styled}</w:pPr><w:r><w:t>Body0</w:t></w:r>${options.picture ? fittingImageRun(1, 12, 12) : ''}</w:p>`
     + `<w:p><w:pPr>${styled}<w:pageBreakBefore/>${section(5760, true)}</w:pPr><w:r><w:t>Body1</w:t></w:r></w:p>`
     + `<w:p><w:pPr>${styled}</w:pPr><w:r><w:t>Body2</w:t></w:r></w:p><w:p><w:pPr>${styled}<w:pageBreakBefore/></w:pPr><w:r><w:t>Body3</w:t></w:r></w:p>`
     + section(7200, false);
@@ -26,22 +27,25 @@ function source(owner:'header' | 'footer', percent:number, variants:boolean) {
   const stories = variants ? [[owner, 'story', 'W'], [owner + '-first', 'first', 'F'], [owner + '-even', 'even', 'E']] : [[owner, 'story', 'W']];
   const parts:Record<string,string> = {
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + (options.picture ? '<Default Extension="png" ContentType="image/png"/>' : '')
       + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'
       + [['document', 'document.main'], ['styles', 'styles'], ['settings', 'settings'], ...stories.map(([name]) => [name, owner])].map(([name, suffix]) =>
         `<Override PartName="/word/${name}.xml" ContentType="${type}${suffix}+xml"/>`).join('') + '</Types>',
     '_rels/.rels': rels(`<Relationship Id="main" Type="${R_NS}/officeDocument" Target="word/document.xml"/>`),
     'word/_rels/document.xml.rels': rels(`<Relationship Id="styles" Type="${R_NS}/styles" Target="styles.xml"/>`
       + `<Relationship Id="settings" Type="${R_NS}/settings" Target="settings.xml"/>`
+      + (options.picture ? `<Relationship Id="tile" Type="${R_NS}/image" Target="media/tile.png"/>` : '')
       + stories.map(([name, id]) => `<Relationship Id="${id}" Type="${R_NS}/${owner}" Target="${name}.xml"/>`).join('')),
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Mono" w:hAnsi="Liberation Mono"/><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>`
       + (variants ? '<w:style w:type="paragraph" w:styleId="RunningTitle"><w:name w:val="RunningTitle"/></w:style>' : '') + '</w:styles>',
     'word/settings.xml': `<w:settings xmlns:w="${W_NS}">${variants ? '<w:evenAndOddHeaders/>' : ''}</w:settings>`,
-    ...Object.fromEntries(stories.map(([name, , prefix]) => [`word/${name}.xml`, `<w:${tag} xmlns:w="${W_NS}"><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>`
+    ...Object.fromEntries(stories.map(([name, , prefix]) => [`word/${name}.xml`, `<w:${tag} xmlns:w="${W_NS}"><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>${options.justify ? '<w:jc w:val="both"/>' : ''}</w:pPr>`
       + `<w:r><w:rPr><w:w w:val="${percent}"/></w:rPr><w:t>${words.map(w => prefix + w.slice(1)).join(' ')}</w:t></w:r></w:p>`
       + (variants ? '<w:p><w:fldSimple w:instr=" STYLEREF RunningTitle "><w:r><w:t>Cached</w:t></w:r></w:fldSimple></w:p>' : '') + `</w:${tag}>`])),
-    'word/document.xml': `<w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"><w:body>${body}</w:body></w:document>`,
+    'word/document.xml': `<w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>${body}</w:body></w:document>`,
   };
-  return storedZip(Object.entries(parts).map(([name, value]) => ({ name, data:xml(value) })));
+  return storedZip([...Object.entries(parts).map(([name, value]) => ({ name, data:xml(value) })),
+    ...(options.picture ? [{ name:'word/media/tile.png', data:fittingTilePng() }] : [])]);
 }
 
 for (const owner of ['header', 'footer'] as const) for (const [percent, variants] of [[80, false], [100, false], [150, false], [80, true]] as const)
@@ -90,4 +94,39 @@ for (const owner of ['header', 'footer'] as const) for (const [percent, variants
       for (const key of ['x', 'y', 'width', 'height'] as const)
         expect(Math.abs(mapped.geometry[key] - fragment.geometry[key])).toBeLessThan(.1);
     }
+  });
+
+for (const owner of ['header', 'footer'] as const) for (const percent of [80, 150])
+  test(`${owner} at ${percent}% keeps justification when the body contains a picture`, async ({ browser }, testInfo) => {
+    test.setTimeout(120_000);
+    const captures = [];
+    for (const picture of [false, true]) {
+      const bytes = source(owner, percent, false, { justify:true, picture });
+      writeFileSync(testInfo.outputPath(picture ? 'image.docx' : 'control.docx'), bytes);
+      const result = await renderDocxArtifacts(bytes, { browser, outputs:['pdf'], reviewProfile:'final', commentProfile:'hidden' });
+      expect(result.pageCount).toBe(4);
+      const task = getDocument({ data:new Uint8Array(result.pdf!), verbosity:0 });
+      const pages = [];
+      try {
+        const pdf = await task.promise;
+        for (let n = 1; n <= pdf.numPages; n++) {
+          const items = (await (await pdf.getPage(n)).getTextContent()).items
+            .filter(i => 'str' in i && /^W\d/.test(i.str.trim()));
+          const labels = items.map(i => { if (!('str' in i)) throw new Error('Missing text');
+            return { text:i.str.trim(), x:i.transform[4], y:i.transform[5], width:i.width, height:i.height }; });
+          expect(labels.map(i => i.text)).toEqual(words);
+          const first = labels.filter(i => Math.abs(i.y - labels[0].y) < .01);
+          const band = n <= 2 ? 144 : 216;
+          expect(first.at(-1)!.x + first.at(-1)!.width).toBeCloseTo(72 + band, 1);
+          for (const label of labels) {
+            expect(label.width).toBeCloseTo(5 * 1229 / 2048 * 12 * percent / 100, 2);
+            expect(label.height).toBeCloseTo(12, 2);
+          }
+          pages.push(labels);
+        }
+      } finally { await task.destroy(); }
+      captures.push(pages);
+    }
+    for (let p = 0; p < 4; p++) for (let i = 0; i < words.length; i++)
+      expect(Math.abs(captures[0][p][i].x - captures[1][p][i].x)).toBeLessThan(.02);
   });

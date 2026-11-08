@@ -496,8 +496,8 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
   const view = document.defaultView;
   if (!view) return 0;
   const paragraphs = Array.from(root.querySelectorAll<HTMLElement>(`[${PREPARED}]`));
-  const pictures = Array.from(root.querySelectorAll('img'));
-  const hasPictures = pictures.length > 0;
+  const allPictures = Array.from(root.querySelectorAll('img'));
+  const storyPictures = new Map<Element, HTMLImageElement[]>();
   const columnOf = (paragraph: HTMLElement): HTMLElement | null => {
     for (let parent = paragraph.parentElement; parent && parent !== root; parent = parent.parentElement)
       if (Number(view.getComputedStyle(parent).columnCount) > 1) return parent;
@@ -542,6 +542,12 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
   const drift = new Map<Element, number>();
   for (const paragraph of paragraphs) {
     checkpoint?.();
+    // Running stories have their own flow. A body picture must not disable
+    // their word positioning; body and promoted-drawing handling stays shared.
+    const story = paragraph.closest('.page-header, .page-footer');
+    if (story && !storyPictures.has(story)) storyPictures.set(story, Array.from(story.querySelectorAll('img')));
+    const pictures = story ? storyPictures.get(story)! : allPictures;
+    const hasPictures = pictures.length > 0;
     const column = columnOf(paragraph);
     if (column && fragmentedColumns.has(column)) {
       paragraph.removeAttribute(PREPARED);
