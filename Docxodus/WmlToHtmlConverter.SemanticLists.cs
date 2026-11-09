@@ -252,8 +252,8 @@ namespace Docxodus
                 "\u2022" => "disc",
                 "\u25e6" => "circle",
                 "\u25aa" or "\u25a0" => "square",
-                "o" when normalizeBullets && string.Equals(
-                    EffectiveFormat(glyph, style).Family?.Split(',')[0].Trim().Trim('\'', '"'), "Courier New", StringComparison.OrdinalIgnoreCase) => "circle",
+                "o" when normalizeBullets && EffectiveFormat(glyph, style).Family?
+                    .StartsWith("'Courier New',", StringComparison.OrdinalIgnoreCase) == true => "circle",
                 _ => null,
             };
             if (!info.Ordered && normalizeBullets && bulletType != null)

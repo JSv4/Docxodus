@@ -96,7 +96,7 @@ for (const worker of [false, true]) {
       const results = [];
       for (const normalizeBulletMarkers of [false, true]) {
         const html = await api.convertDocxToHtml(new Uint8Array(input), {
-          semanticLists: true, normalizeBulletMarkers, fabricateCssClasses: false, stampAnchors: true,
+          semanticLists: true, normalizeBulletMarkers, fabricateClasses: false, stampAnchors: true,
         });
         const doc = new DOMParser().parseFromString(html, 'text/html');
         const items = Array.from(doc.querySelectorAll('li'));

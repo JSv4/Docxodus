@@ -110,6 +110,7 @@ namespace OxPt
         [Theory]
         [InlineData("Calibri", "o")]
         [InlineData("Courier New", "O")]
+        [InlineData("Courier New, Variant", "o")]
         [InlineData("Calibri", "☐")]
         [InlineData("Calibri", "□")]
         [InlineData("Calibri", "[ ]")]
