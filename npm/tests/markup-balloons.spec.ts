@@ -6,7 +6,7 @@ import {
 
 /** Inert data the Word presentation records for balloons; nothing reads it under other placements. */
 const BALLOON_DATA = ['data-format-description', 'data-format-key', 'data-author-color', 'data-initials',
-  'data-font-family', 'data-balloon-font-family', 'data-balloon-font-size'];
+  'data-font-family', 'data-font-stack', 'data-balloon-font-family', 'data-balloon-font-stack', 'data-balloon-font-size'];
 
 async function open(page: Page) {
   await page.goto('/test-harness.html');

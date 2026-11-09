@@ -8,7 +8,7 @@
  * at a line break only where two lines stay on each side, and a bar may close a page alone. The
  * geometry below was measured from Word's Print to PDF of a page of 25 long comments, in points.
  */
-import { DEFAULT_BALLOON_FONT, fontStack, type CutComment, type MarkupBalloonPage } from "./markup-balloons.js";
+import { DEFAULT_BALLOON_FONT, fontStack, type CutComment, type MarkupBalloonPage, type MarkupBalloonFont } from "./markup-balloons.js";
 
 const APPENDIX = {
   /** The bar's outer edges stand this far outside the text column on either side. */
@@ -43,7 +43,7 @@ export class BalloonAppendix {
     private readonly document: Document,
     comments: CutComment[],
     private readonly cssPrefix: string,
-    private readonly font: { family: string; sizePt: number } = DEFAULT_BALLOON_FONT,
+    private readonly font: MarkupBalloonFont = DEFAULT_BALLOON_FONT,
   ) {
     this.queue = comments.flatMap((comment, index): Block[] => [
       { kind: "bar", comment, number: index + 1 },
@@ -122,7 +122,8 @@ export class BalloonAppendix {
       `margin-left:-${APPENDIX.barOutset}pt;margin-right:-${APPENDIX.barOutset}pt;padding:0 ${inset}pt;` +
       `border:${APPENDIX.barBorder}pt solid ${comment.color};` +
       `box-shadow:${APPENDIX.barShadow}pt ${APPENDIX.barShadow}pt 0 ${comment.color};background:${comment.fill};` +
-      `color:#000;font:bold ${this.font.sizePt}pt/1 ${fontStack(this.font.family)};white-space:nowrap`;
+      `color:#000;font-weight:bold;font-size:${this.font.sizePt}pt;line-height:1;white-space:nowrap`;
+    bar.style.fontFamily = fontStack(this.font.family, this.font.stack);
     const cell = (text: string, css: string) => {
       const span = this.document.createElement("span");
       span.textContent = text;
@@ -142,7 +143,8 @@ export class BalloonAppendix {
     paragraph.className = `${this.cssPrefix}balloon-appendix-text`;
     const lineHeight = APPENDIX.textSizePt * APPENDIX.leading;
     paragraph.style.cssText = `min-height:${lineHeight}pt;color:#000;overflow-wrap:anywhere;` +
-      `font-size:${APPENDIX.textSizePt}pt;line-height:${lineHeight}pt;font-family:${fontStack(comment.textFont ?? this.font.family)}`;
+      `font-size:${APPENDIX.textSizePt}pt;line-height:${lineHeight}pt`;
+    paragraph.style.fontFamily = fontStack(comment.textFont ?? this.font.family, comment.textFont ? comment.textFontStack : this.font.stack);
     paragraph.textContent = text;
     return paragraph;
   }

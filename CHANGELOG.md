@@ -15,6 +15,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Missing fonts now use the document's declared pitch, family and PANOSE class for generic fallbacks. Body text, running stories, markup balloons and their appendix share the same font stack; tab-stop estimation also honors declared fixed pitch (#1574).
+
 - Adjacent ordinary HTML text spans with identical rendered attributes now join, including when anchor stamping or unused run properties prevented source runs from coalescing. Text, block anchors, field/bookmark boundaries and layout boxes are preserved (#1624).
 
 - Flow HTML headers and footers now use the final section's inherited default references, including an empty final section. First/even-only and unreferenced package parts no longer appear as document-wide stories (#1619).

@@ -1361,6 +1361,14 @@ namespace Docxodus
             foreach (var part in wordDoc.ContentParts())
                 foreach (var table in part.GetXDocument().Descendants(W.tbl).Where(t => t.Descendants(W.tab).Any()))
                     PrepareExactTableBorders(table);
+            // The font table's declared fallbacks. Annotated onto EVERY story root, not just the
+            // main one: a header's content resolves annotations through its own part root, so
+            // annotating the body alone would silently skip the running stories.
+            var fontFallbacks = LoadFontTableFallbacks(wordDoc);
+            wordDoc.MainDocumentPart!.GetXDocument().Root!.AddAnnotation(fontFallbacks);
+            foreach (var storyRoot in EnumerateStoryRoots(wordDoc))
+                storyRoot.AddAnnotation(fontFallbacks);
+
             CalculateSpanWidthForTabs(wordDoc, htmlConverterSettings.ShowDeletedRevisionContent);
             AdjustTableBorders(wordDoc);
             AnnotateOwningContentParts(wordDoc);
@@ -1420,14 +1428,6 @@ namespace Docxodus
                 var themeColorScheme = LoadThemeColorScheme(wordDoc);
                 rootElement.AddAnnotation(themeColorScheme);
             }
-
-            // The font table's declared fallbacks. Annotated onto EVERY story root, not just the
-            // main one: a header's content resolves annotations through its own part root, so
-            // annotating the body alone would silently skip the running stories.
-            var fontAltNames = LoadFontAltNames(wordDoc);
-            rootElement.AddAnnotation(fontAltNames);
-            foreach (var storyRoot in EnumerateStoryRoots(wordDoc))
-                storyRoot.AddAnnotation(fontAltNames);
 
             // Build footnote/endnote numbering tracker for sequential display numbers
             var footnoteTracker = new FootnoteNumberingTracker();
@@ -5779,7 +5779,11 @@ namespace Docxodus
                 note.Add(
                     comment.Initials is { Length: > 0 } initials ? new XAttribute("data-initials", initials) : null,
                     new XAttribute("data-author-color", WordAuthorColor(settings, comment.Author, comment.AuthorNumber)),
-                    comment.TextFont is { } font ? new XAttribute("data-font-family", font) : null);
+                    comment.TextFont is { } font ? new[]
+                    {
+                        new XAttribute("data-font-family", font),
+                        new XAttribute("data-font-stack", FontFamilyCss(font, null, null, comment.SourceElement)),
+                    } : null);
                 // A cut-short comment's printed heading shows its date as the author's clock read it.
                 // data-date is the true UTC instant whenever the package records one, so keep w:date.
                 var written = (string?)comment.SourceElement.Attribute(W.date);
@@ -7528,6 +7532,7 @@ namespace Docxodus
                             ? new[]
                             {
                                 new XAttribute("data-balloon-font-family", font.Family),
+                                new XAttribute("data-balloon-font-stack", FontFamilyCss(font.Family, null, null, element)),
                                 new XAttribute("data-balloon-font-size", font.SizePt.ToString(CultureInfo.InvariantCulture)),
                             }
                             : null,
@@ -9304,11 +9309,8 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Loads the theme color scheme from the document's ThemePart.
-        /// </summary>
-        /// <summary>
-        /// The document's own declared fallback for each font family: <c>w:altName</c> from
-        /// <c>word/fontTable.xml</c>, keyed by the family it stands in for.
+        /// The document's declared alternate names and generic font classes from
+        /// <c>word/fontTable.xml</c>, keyed by font family.
         /// </summary>
         /// <remarks>
         /// ECMA-376 §17.8.3.1 defines <c>w:altName</c> as the family to use when the primary one is
@@ -9319,10 +9321,12 @@ namespace Docxodus
         /// the primary name left the renderer asking for families that cannot exist, which
         /// standalone export reports as <c>font_unavailable</c> (issue #670).
         /// </remarks>
-        internal sealed class FontAltNames
+        private sealed class FontTableFallbacks
         {
             public Dictionary<string, string> ByFamily { get; } =
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            public Dictionary<string, GenericFontFamily> Classes { get; } =
+                new Dictionary<string, GenericFontFamily>(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>Root elements of every non-body story the converter renders.</summary>
@@ -9339,9 +9343,9 @@ namespace Docxodus
             if (main.WordprocessingCommentsPart?.GetXDocument().Root is { } comments) yield return comments;
         }
 
-        private static FontAltNames LoadFontAltNames(WordprocessingDocument wordDoc)
+        private static FontTableFallbacks LoadFontTableFallbacks(WordprocessingDocument wordDoc)
         {
-            var altNames = new FontAltNames();
+            var altNames = new FontTableFallbacks();
 
             var fontTablePart = wordDoc.MainDocumentPart?.FontTablePart;
             if (fontTablePart == null)
@@ -9351,14 +9355,44 @@ namespace Docxodus
                 ?? Enumerable.Empty<XElement>())
             {
                 var name = (string?)font.Attribute(W.name);
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                if (DeclaredFontClass(font) is { } family)
+                    altNames.Classes[name] = family;
                 var alt = (string?)font.Element(W.altName)?.Attribute(W.val);
-                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(alt)) continue;
+                if (string.IsNullOrWhiteSpace(alt)) continue;
                 // A self-referential entry adds nothing and would duplicate the family in the stack.
                 if (string.Equals(name, alt, StringComparison.OrdinalIgnoreCase)) continue;
                 altNames.ByFamily[name!] = alt!;
             }
 
             return altNames;
+        }
+
+        private static GenericFontFamily? DeclaredFontClass(XElement font)
+        {
+            if ((string?)font.Element(W.pitch)?.Attribute(W.val) == "fixed")
+                return GenericFontFamily.Monospace;
+            switch ((string?)font.Element(W.family)?.Attribute(W.val))
+            {
+                case "swiss": return GenericFontFamily.SansSerif;
+                case "roman": return GenericFontFamily.Serif;
+                case "modern": return GenericFontFamily.Monospace;
+                case "script":
+                case "decorative": return null;
+            }
+            var panose = (string?)font.Element(W.panose1)?.Attribute(W.val);
+            if (panose?.Length != 20 || !panose.All(Uri.IsHexDigit)) return null;
+            var bytes = Convert.FromHexString(panose);
+            // PANOSE's text/display family defines serif style and monospaced proportion.
+            // Other family kinds use different meanings for the same byte positions.
+            if (bytes[0] != 2) return null;
+            if (bytes[3] == 9) return GenericFontFamily.Monospace;
+            return bytes[1] switch
+            {
+                >= 2 and <= 10 => GenericFontFamily.Serif,
+                >= 11 and <= 15 => GenericFontFamily.SansSerif,
+                _ => null,
+            };
         }
 
         private static ThemeColorScheme LoadThemeColorScheme(WordprocessingDocument wordDoc)
@@ -9986,6 +10020,9 @@ namespace Docxodus
                     ? finalSectionWidth
                     : null;
                 var newRoot = (XElement)CalculateSpanWidthTransform(root, defaultTabStop, partLineWidth, includeDeletedText);
+                // Measurement rebuilds the tree; rendering still needs the same font-table context.
+                if (root.Annotation<FontTableFallbacks>() is { } fallbacks)
+                    newRoot.AddAnnotation(fallbacks);
                 root.ReplaceWith(newRoot);
                 part.PutXDocument();
             }
@@ -10382,7 +10419,8 @@ namespace Docxodus
                     // A generated list-number run measures with the narrow-glyph-aware estimate
                     // so its suffix tab resolves against a realistic pen position (issue #415).
                     var widthOfText = CalcWidthOfRunInTwips(dummyRun3,
-                        isListMarker: runContainingTabToReplace.Attribute(PtOpenXml.ListItemRun) != null, isTabPrefix: proportionalTabPrefixes);
+                        isListMarker: runContainingTabToReplace.Attribute(PtOpenXml.ListItemRun) != null,
+                        isTabPrefix: proportionalTabPrefixes, fontOwner: runContainingTabToReplace);
 
                     currentElement.Add(new XAttribute(PtOpenXml.TabWidth,
                         TabWidthValue(widthOfText)));
@@ -10677,7 +10715,8 @@ namespace Docxodus
 
         private static HashSet<string> KnownFamilies => FontFamilyHelper.KnownFamilies;
 
-        private static int CalcWidthOfRunInTwips(XElement r, bool isListMarker = false, bool isTabPrefix = false)
+        private static int CalcWidthOfRunInTwips(XElement r, bool isListMarker = false, bool isTabPrefix = false,
+            XElement? fontOwner = null)
         {
             // A run with no resolvable font (WordprocessingMLUtil.MeasurementFontName returns null) takes
             // the character-width estimate below, the same fallback as an unknown font family; one
@@ -10746,7 +10785,7 @@ namespace Docxodus
                 // Preserve conservative reservations for following text on complex inline paths,
                 // and fixed-pitch advances for the monospace fallback emitted in CSS.
                 // Estimates are in points; this method consumes CSS pixels at 96 DPI.
-                if (isListMarker || (isTabPrefix && ClassifyFont(fontName ?? "") != GenericFontFamily.Monospace))
+                if (isListMarker || (isTabPrefix && ClassifyFont(fontName ?? "", fontOwner ?? r) != GenericFontFamily.Monospace))
                 {
                     w = MetricsGetter.EstimateTextWidth(sz, runText) * 96 / 72;
                 }
@@ -11756,7 +11795,7 @@ namespace Docxodus
         private static readonly string[] MonospacePatterns =
         {
             "mono", "courier", "consolas", "code", "terminal", "fixed",
-            "typewriter", "menlo", "inconsolata", "fira code", "source code",
+            "typewriter", "console", "menlo", "inconsolata", "fira code", "source code",
             "dejavu mono", "ubuntu mono", "roboto mono", "sf mono", "cascadia"
         };
 
@@ -11776,8 +11815,11 @@ namespace Docxodus
             "noto serif", "source serif", "pt serif", "libre baskerville"
         };
 
-        private static GenericFontFamily ClassifyFont(string fontName)
+        private static GenericFontFamily ClassifyFont(string fontName, XElement owner)
         {
+            var fallbacks = owner.AncestorsAndSelf().Last().Annotation<FontTableFallbacks>();
+            if (fallbacks?.Classes.TryGetValue(fontName, out var family) == true)
+                return family;
             if (string.IsNullOrWhiteSpace(fontName))
                 return GenericFontFamily.Serif;
 
@@ -11856,55 +11898,26 @@ namespace Docxodus
             return null;
         }
 
-        private static readonly Dictionary<string, string> FontFallback = new Dictionary<string, string>()
-        {
-            { "Arial", @"'{0}', 'sans-serif'" },
-            { "Arial Narrow", @"'{0}', 'sans-serif'" },
-            { "Arial Rounded MT Bold", @"'{0}', 'sans-serif'" },
-            { "Arial Unicode MS", @"'{0}', 'sans-serif'" },
-            { "Baskerville Old Face", @"'{0}', 'serif'" },
-            { "Berlin Sans FB", @"'{0}', 'sans-serif'" },
-            { "Berlin Sans FB Demi", @"'{0}', 'sans-serif'" },
-            { "Calibri Light", @"'{0}', 'sans-serif'" },
-            { "Gill Sans MT", @"'{0}', 'sans-serif'" },
-            { "Gill Sans MT Condensed", @"'{0}', 'sans-serif'" },
-            { "Lucida Sans", @"'{0}', 'sans-serif'" },
-            { "Lucida Sans Unicode", @"'{0}', 'sans-serif'" },
-            { "Segoe UI", @"'{0}', 'sans-serif'" },
-            { "Segoe UI Light", @"'{0}', 'sans-serif'" },
-            { "Segoe UI Semibold", @"'{0}', 'sans-serif'" },
-            { "Tahoma", @"'{0}', 'sans-serif'" },
-            { "Trebuchet MS", @"'{0}', 'sans-serif'" },
-            { "Verdana", @"'{0}', 'sans-serif'" },
-            { "Book Antiqua", @"'{0}', 'serif'" },
-            { "Bookman Old Style", @"'{0}', 'serif'" },
-            { "Californian FB", @"'{0}', 'serif'" },
-            { "Cambria", @"'{0}', 'serif'" },
-            { "Constantia", @"'{0}', 'serif'" },
-            { "Garamond", @"'{0}', 'serif'" },
-            { "Lucida Bright", @"'{0}', 'serif'" },
-            { "Lucida Fax", @"'{0}', 'serif'" },
-            { "Palatino Linotype", @"'{0}', 'serif'" },
-            { "Times New Roman", @"'{0}', 'serif'" },
-            { "Wide Latin", @"'{0}', 'serif'" },
-            { "Courier New", @"'{0}', 'monospace'" },
-            { "Lucida Console", @"'{0}', 'monospace'" },
-        };
-
         private static void CreateFontCssProperty(string font, string? languageType, string? langCode,
             Dictionary<string, string> style, XElement owner)
         {
             if (string.IsNullOrEmpty(font))
                 return;
+            style.AddIfMissing("font-family", FontFamilyCss(font, languageType, langCode, owner));
+        }
 
-            var fontParts = new List<string> { $"'{font}'" };
+        private static string FontFamilyCss(string font, string? languageType, string? langCode, XElement owner)
+        {
+            static string Quote(string family) => "'" + family.Replace("\\", "\\\\").Replace("'", "\\'")
+                .Replace("\r", "\\d ").Replace("\n", "\\a ").Replace("\f", "\\c ") + "'";
+            var fontParts = new List<string> { Quote(font) };
 
             // The document's own declared stand-in comes first among the fallbacks: a family the
             // package itself says to substitute is a better answer than anything inferred from the
-            // name. See FontAltNames.
-            var altNames = owner.AncestorsAndSelf().Last().Annotation<FontAltNames>();
+            // name. See FontTableFallbacks.
+            var altNames = owner.AncestorsAndSelf().Last().Annotation<FontTableFallbacks>();
             if (altNames != null && altNames.ByFamily.TryGetValue(font, out var altName))
-                fontParts.Add($"'{altName}'");
+                fontParts.Add(Quote(altName));
 
             // Add CJK fallback chain for East Asian content
             if (languageType == "eastAsia")
@@ -11918,31 +11931,9 @@ namespace Docxodus
                 }
             }
 
-            // Add generic fallback based on known fonts or classification
-            string genericFallback;
-            if (FontFallback.TryGetValue(font, out var template))
-            {
-                // Extract fallback from existing template (e.g., "'sans-serif'" from "'{0}', 'sans-serif'")
-                var lastComma = template.LastIndexOf(',');
-                if (lastComma > 0)
-                {
-                    genericFallback = template.Substring(lastComma + 1).Trim().Trim('\'');
-                }
-                else
-                {
-                    genericFallback = "serif";
-                }
-            }
-            else
-            {
-                // Classify unknown font
-                var classification = ClassifyFont(font);
-                genericFallback = GetGenericFallback(classification);
-            }
+            fontParts.Add(GetGenericFallback(ClassifyFont(font, owner)));
 
-            fontParts.Add(genericFallback);
-
-            style.AddIfMissing("font-family", string.Join(", ", fontParts));
+            return string.Join(", ", fontParts);
         }
 
         #endregion

@@ -1637,7 +1637,7 @@ export class PaginationEngine {
     if (this.lastPages.length === 0) throw new Error("paginate() must complete before layoutMarkupBalloons()");
     const staging = this.stagingElement.dataset;
     const font = staging.balloonFontFamily && Number.parseFloat(staging.balloonFontSize ?? "") > 0
-      ? { family: staging.balloonFontFamily, sizePt: Number.parseFloat(staging.balloonFontSize!) }
+      ? { family: staging.balloonFontFamily, sizePt: Number.parseFloat(staging.balloonFontSize!), stack: staging.balloonFontStack }
       : undefined;
     const appendix = this.balloonOverflow === "appendix";
     const layout = layoutMarkupBalloons({

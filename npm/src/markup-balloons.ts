@@ -61,7 +61,8 @@ const WORD = {
 };
 
 /** The balloon font when the document names none: Word's own. */
-export const DEFAULT_BALLOON_FONT: { family: string; sizePt: number } = WORD.font;
+export interface MarkupBalloonFont { family: string; sizePt: number; stack?: string }
+export const DEFAULT_BALLOON_FONT: MarkupBalloonFont = WORD.font;
 
 /** Anchors whose line tops are this close share a line. */
 const SAME_LINE = 2;
@@ -74,6 +75,7 @@ export interface MarkupBalloonComment {
   initials?: string;
   color?: string;
   fontFamily?: string;
+  fontStack?: string;
   /** w:date as the author's clock read it, for the printed heading of a comment cut short. */
   dateAsWritten?: string;
   paragraphs: string[];
@@ -97,11 +99,11 @@ export function readMarkupBalloonComments(registry: Element | null): {
     const noteClass = Array.from(note.classList).find((name) => name.endsWith("margin-note"));
     if (!noteClass) return [];
     commentPrefix = noteClass.replace(/margin-note$/, "");
-    const { commentId: id = "", author, initials, authorColor: color, fontFamily, dateAsWritten } = note.dataset;
+    const { commentId: id = "", author, initials, authorColor: color, fontFamily, fontStack, dateAsWritten } = note.dataset;
     const body = note.querySelector(`:scope > .${commentPrefix}margin-note-body`);
     const parentId = note.parentElement?.closest<HTMLElement>("[data-comment-id]")?.dataset.commentId;
     const paragraphs = Array.from(body?.children ?? [], (paragraph) => paragraph.textContent?.trim() ?? "");
-    return [{ id, parentId, author, initials, color, fontFamily, dateAsWritten, paragraphs }];
+    return [{ id, parentId, author, initials, color, fontFamily, fontStack, dateAsWritten, paragraphs }];
   });
   return { comments, commentPrefix };
 }
@@ -179,6 +181,7 @@ export interface CutComment {
   color: string;
   fill: string;
   textFont?: string;
+  textFontStack?: string;
   paragraphs: string[];
 }
 
@@ -189,6 +192,7 @@ interface Entry {
   color: string;
   fill: string;
   textFont?: string;
+  textFontStack?: string;
   /** Document order, for balloons of one line. */
   order: number;
   lineTop: number;
@@ -210,13 +214,13 @@ export function layoutMarkupBalloons(options: {
   comments: MarkupBalloonComment[];
   commentPrefix: string;
   cssPrefix: string;
-  font?: { family: string; sizePt: number };
+  font?: MarkupBalloonFont;
   /** Number each cut comment's box, "… [n]", for a listing of their full text (Word's Print to PDF). */
   numberCutBoxes?: boolean;
 }): MarkupBalloonResult {
   const { document, pages, comments, commentPrefix, cssPrefix } = options;
   const result: MarkupBalloonResult = { truncatedCommentIds: [], truncatedFormatting: 0, unplacedCommentIds: [], cutComments: [] };
-  const font = options.font && options.font.sizePt > 0 ? options.font : WORD.font;
+  const font: MarkupBalloonFont = options.font && options.font.sizePt > 0 ? options.font : WORD.font;
   // The registry lists a root before its replies, so each reply's thread is already known.
   const thread = new Map<string, string>();
   for (const { id, parentId } of comments) thread.set(id, parentId !== undefined && thread.has(parentId) ? thread.get(parentId)! : id);
@@ -292,7 +296,8 @@ export function layoutMarkupBalloons(options: {
           const reply = comment.parentId !== undefined ? `R${comments.indexOf(byId.get(comment.parentId)!) + 1}` : "";
           entries.push({
             label: `Commented [${comment.initials || initialsOf(comment.author)}${comments.indexOf(comment) + 1}${reply}]:`,
-            text: comment.paragraphs, color, fill: paleFill(color), textFont: comment.fontFamily, order: order++,
+            text: comment.paragraphs, color, fill: paleFill(color), textFont: comment.fontFamily,
+            textFontStack: comment.fontStack, order: order++,
             lineTop: last.top, from: { x: last.right, y: last.bottom }, height: 0, top: 0, commentId: comment.id, comment,
           });
         }
@@ -360,7 +365,8 @@ export function layoutMarkupBalloons(options: {
           result.truncatedCommentIds.push(entry.commentId);
           const { author, dateAsWritten, paragraphs } = entry.comment!;
           result.cutComments.push({ commentId: entry.commentId, pageNumber: pageIndex + 1, label: entry.label.replace(/:$/, ""),
-            author, dateAsWritten, color: entry.color, fill: entry.fill, textFont: entry.textFont, paragraphs });
+            author, dateAsWritten, color: entry.color, fill: entry.fill,
+            textFont: entry.textFont, textFontStack: entry.textFontStack, paragraphs });
         }
         // Word numbers the boxes through the document; a header's comment cut on every page keeps its
         // first number. A balloon cut off at the page's foot has no box.
@@ -447,17 +453,18 @@ class MarkupSheet {
   }
 }
 
-function balloon(document: Document, entry: Entry, font: { family: string; sizePt: number }, cssPrefix: string,
+function balloon(document: Document, entry: Entry, font: MarkupBalloonFont, cssPrefix: string,
   left: number, width: number): HTMLElement {
   const element = document.createElement("div");
   element.className = `${cssPrefix}balloon`;
   element.dataset.pageMapExclude = "true";
   // The label and any formatting wording are set in the balloon font; a comment keeps its own.
   element.style.cssText = `left:${left}pt;width:${width}pt;font-size:${font.sizePt}pt;border-color:${entry.color};` +
-    `background-color:${entry.fill};font-family:${fontStack(entry.textFont ?? font.family)}`;
+    `background-color:${entry.fill}`;
+  element.style.fontFamily = fontStack(entry.textFont ?? font.family, entry.textFont ? entry.textFontStack : font.stack);
   const content = document.createElement("div");
   const label = document.createElement("b");
-  label.style.fontFamily = fontStack(font.family);
+  label.style.fontFamily = fontStack(font.family, font.stack);
   label.textContent = entry.label;
   content.append(label, ...entry.text.flatMap((paragraph, index) =>
     index === 0 ? [` ${paragraph}`] : [document.createElement("br"), paragraph]));
@@ -497,7 +504,7 @@ function fit(entries: Entry[], top: number, bottom: number, lineHeight: number,
  * margins carry its edges onto the balloon's padding edge. It stays in the flow: positioned
  * absolutely, it made Chromium shrink every printed page.
  */
-function cutShort(document: Document, entry: Entry, font: { family: string; sizePt: number }, cssPrefix: string,
+function cutShort(document: Document, entry: Entry, font: MarkupBalloonFont, cssPrefix: string,
   sheet: MarkupSheet): void {
   const element = entry.element!;
   const scale = font.sizePt / WORD.font.sizePt;
@@ -512,7 +519,8 @@ function cutShort(document: Document, entry: Entry, font: { family: string; size
   box.style.cssText = `align-self:end;box-sizing:border-box;height:${boxHeight}pt;` +
     `margin:0 -${WORD.padInline}pt -${WORD.padBlock}pt 0;line-height:${boxHeight - 2 * WORD.hairline}pt;` +
     `padding:0 ${WORD.cut.boxPadInline * scale}pt;border:${WORD.hairline}pt solid #000;background:#fff;color:#000;` +
-    `white-space:nowrap;font-size:${font.sizePt}pt;font-family:${fontStack(font.family)}`;
+    `white-space:nowrap;font-size:${font.sizePt}pt`;
+  box.style.fontFamily = fontStack(font.family, font.stack);
   element.style.display = "grid";
   element.style.gridTemplateColumns = "minmax(0, 1fr) auto";
   element.style.minHeight = `${WORD.cut.height * scale}pt`;
@@ -642,8 +650,8 @@ function paleFill(color: string): string {
   return WORD.paleFills[color.toUpperCase()] ?? `color-mix(in srgb, ${color} 17%, white)`;
 }
 
-export function fontStack(family: string): string {
-  return `${JSON.stringify(family)}, sans-serif`;
+export function fontStack(family: string, resolved?: string): string {
+  return resolved ?? `${JSON.stringify(family)}, sans-serif`;
 }
 
 /**

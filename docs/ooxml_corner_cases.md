@@ -6669,3 +6669,40 @@ the entire drawing inside LibreOffice's clip. The proof limits the control to
 uncropped, unrotated, nonwrapping page anchors and compares all other package bytes.
 Unknown EMF records still reject the entire image and retain the existing
 placeholder/strict-refusal behavior.
+
+## Missing-font classes differ from native font selection (#1574)
+
+A missing face can declare a class without naming an installed replacement:
+
+```xml
+<w:font w:name="Maranta Three">
+  <w:family w:val="modern"/><w:pitch w:val="fixed"/>
+</w:font>
+<!-- The alternative monospaced probe uses only: -->
+<w:font w:name="Maranta Four"><w:panose1 w:val="02070309020205020404"/></w:font>
+```
+
+The original Maranta fixtures select these names through default `w:rFonts` and
+include body text, a tab prefix, header and footer. Swiss/Roman probes and controls
+naming installed Liberation faces isolate descriptor handling from font availability.
+
+| Renderer | Swiss / Roman | Modern + fixed / PANOSE monospace |
+| --- | --- | --- |
+| Word | No capture; adjudication pending | No capture; adjudication pending |
+| LibreOffice 25.8.7.3 | Noto Sans / Noto Serif | Noto Serif / Noto Serif |
+| Docxodus before this fix | Generic serif / serif | Generic serif / serif |
+| Docxodus with this fix | Generic sans-serif / serif | Generic monospace / monospace |
+
+`WmlToHtmlConverter.FontFamilyCss` and `ClassifyFont` now share the font-table
+classification for CSS and tab-prefix estimates. An explicit `altName` remains the
+first named fallback; fixed pitch, a recognized family, then Latin-text PANOSE
+provide the generic class before name heuristics. The
+[Microsoft PANOSE definition](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/6063ca18-7f12-41bf-9e6b-eaaecdc315a0)
+identifies family type 2 and proportion 9 for the monospaced probe. These descriptors
+do not specify a concrete replacement face or guarantee native substitution behavior.
+
+The benchmark preserves all four declared LibreOffice captures as ineligible under
+its concrete Liberation-family checks. Swiss/Roman preserve the class while differing
+in face; the monospace captures differ in class too. The named controls remain
+references only for their own inputs. Eligible declared-input scoring and Word parity
+are pending. The standalone export's existing strict-font resolution policy is unchanged.
