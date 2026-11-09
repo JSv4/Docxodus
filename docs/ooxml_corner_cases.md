@@ -6564,7 +6564,26 @@ selection, changing STYLEREF siblings, glyph height and PageMap geometry. Scaled
 mixed runs and field-bearing paragraphs remain outside this bounded extension.
 Public regressions cover body/cell controls, continuation pages, bordered and padded repeated
 headers, nested fixed tables and merged grids. AutoFit and percentage owners retain their
-existing policy. Mixed runs, `fitText`, and the unresolved Word exact-fit boundary remain open.
+existing policy. Manual `fitText` was subsequently resolved separately; mixed runs remain
+outside the original closure criteria. The fixed-pitch boundary is described below.
+
+## Fixed-pitch cells at an exact line boundary (#1564)
+
+The original 12pt Liberation Mono paragraph contains 65 characters in a 468pt column.
+Its TrueType advance is 1229/2048 em per character, totaling 468.076171875pt, so the
+raw-font fitter put the final word on the next line. The
+[issue author confirmed that Word keeps that word on the first line](https://github.com/JSv4/Docxodus/issues/1564#issuecomment-6701328774).
+
+For unkerned fixed-pitch text, the fitter and word painter now share a nearest-twip
+cell advance (7.2pt here), before authored character scaling. This is an inferred,
+scoped correction, not a newly captured Word reference or a general rounding rule.
+Distinct glyph probes and a per-string additivity check retain proportional and
+fallback measurements; glyph outlines keep their true widths. The original 65-cell
+case, its 60-cell indented companion, mode 14/15 and left/justified public exports
+retain complete text and one page. One-twip-narrower and extra-character controls,
+character scaling, kerning, fallback and raw overwide words bound the policy.
+The 45 retained proportional Word comparisons remain the regression oracle for
+ordinary justification.
 
 ## Explicit WordPerfect justification selects against an expanded line (#1550)
 

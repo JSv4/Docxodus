@@ -228,7 +228,7 @@ for (const mode of [14, 15]) {
       const lines = Array.from(p.querySelectorAll('svg > text'));
       const last = Array.from(lines.at(-1)!.querySelectorAll('tspan')).map(w => Number(w.getAttribute('x')) / 4);
       return { wordsPerLine: Array.from(rows.values()).map(words => words.length),
-        lastGap: last.length > 1 ? last[1] - last[0] : null, naturalGap: word + space,
+        lastGap: last.length > 1 ? last[1] - last[0] : null, naturalGap: 5 * Math.round(space * 15) / 15,
         heightBefore: height, heightAfter: p.getBoundingClientRect().height };
     });
     expect(actual.wordsPerLine).toEqual(mode === 15 ? [3, 2] : [2, 2, 1]);

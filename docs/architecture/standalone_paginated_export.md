@@ -1557,13 +1557,25 @@ Positioned inline ancestors, multiple pictures and other story owners retain the
 Line/character bases and paragraph-height alignment remain excluded. Source
 completeness and clipping checks still apply to both the body and the promoted drawing.
 
-For eligible uniform Latin paragraphs, `word-text.ts` fits lines from unrounded font advances
+For eligible uniform Latin paragraphs, `word-text.ts` fits lines from resolved font advances
 in the declared section band before pagination measures block heights. Legacy compatibility modes
 use natural spaces. Modern justified lines choose the least gap strain, with condensation twice
 as costly as expansion and a 75% minimum ordinary-space advance. Independent Word captures pin the
 mixed-prose transition at a 0.05pt boundary and cover both font sizes, repeated spaces, first-line
 indents and final lines. See `TestFiles/JustificationFlow/word-observations.json` for the immutable
 input/output hashes and native line inventories.
+
+Fixed-pitch text with kerning disabled uses a nearest-twip cell advance for line selection
+and word origins, before any authored character-width scale. This is a bounded implementation
+inference from the [issue author's confirmed 65-character Word line](https://github.com/JSv4/Docxodus/issues/1564#issuecomment-6701328774),
+not a general Word font-rounding rule. Distinct narrow/wide glyphs must match the space advance;
+each measured string must also retain additive cell widths. Proportional text, enabled kerning
+and non-additive fallback/shaping keep their unrounded measurements. Glyph outlines remain
+unscaled except for authored character scaling; alignment and gap compression use the last
+word's raw painted edge. Declared point/pixel widths (or resolved CSS widths) replace client widths only
+when they differ by less than one browser layout unit; accumulated arithmetic has only a machine
+precision allowance. A real one-twip overflow still wraps. Both replacement and unchanged-line
+paths refuse raw unbreakable words wider than their available band.
 
 The same line selector handles plain exact-spaced justified text in compatibility mode 15 or later
 (#1524), while keeping HTML paint and the established baseline at 80% of each declared line height.
@@ -1589,7 +1601,7 @@ regression checks those distances within each uninterrupted page segment.
 
 When the selected line contents already agree with the measured inline flow, that flow retains
 its block geometry in either compatibility mode. The precision fitter replaces those boxes only
-when its line choices differ or an authored character-width scale requires owned lines. Vector paint derives word positions from unrounded font advances
+when its line choices differ or an authored character-width scale requires owned lines. Vector paint derives word positions from the same resolved advances
 in both paths: matching line breaks do not establish that the browser's hinted word advances match
 the font. Natural final lines, alignment and repeated ordinary spaces retain their own rules.
 
@@ -1601,7 +1613,7 @@ owns its picture-dependent word positioning, so body graphics cannot remove just
 apply the same horizontal scale without changing font size, vertical metrics or paragraph origins.
 Preparation commits only after the complete line layout succeeds. Unsupported break controls,
 overwide words, exact spacing, mixed runs, unresolved table widths, endnotes, pictures and columns retain
-their existing policy; percentage scaling for those owners remains open under #1564.
+their existing policy; those additional owners are outside the original #1564 closure criteria.
 
 Footnotes prepare in the attached measurement and final page bands, including packed notes and
 continued fragments. A source paragraph must be a plain block before splitting; losing a reference,

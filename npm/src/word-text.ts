@@ -290,7 +290,7 @@ function characterScale(style: CSSStyleDeclaration): number {
 }
 
 /** Measure advances at a large em to avoid CSS-pixel font hinting in line positions. */
-function wordMeasure(run: HTMLElement, exactHeight = 0): ((text: string) => number) | null {
+function wordMeasure(run: HTMLElement, exactHeight = 0): { (text: string): number; raw: (text: string) => number } | null {
   const style = run.ownerDocument.defaultView!.getComputedStyle(run);
   const context = run.ownerDocument.createElement('canvas').getContext('2d');
   if (!context) return null;
@@ -306,10 +306,31 @@ function wordMeasure(run: HTMLElement, exactHeight = 0): ((text: string) => numb
       metrics.fontBoundingBoxDescent * scale > exactHeight * .2) return null;
   }
   const width = characterScale(style);
-  return text => context.measureText(text).width * scale * width;
+  // Word fits the confirmed 65-cell, 12pt Liberation Mono line into 468pt. The
+  // TrueType cell (1229/2048 em) is slightly wider than its 144-twip pitch.
+  // Resolve that fixed pitch before an authored width scale; proportional
+  // text and strings with shaping/fallback advances retain their measurements.
+  const cell = context.measureText(' ').width;
+  const pitch = Math.round(cell * scale * 15) / 15;
+  const fixed = Number.isFinite(pitch) && pitch > 0 && context.fontKerning === 'none'
+    && [...'iW.m'].every(char => context.measureText(char).width === cell);
+  return Object.assign((text: string) => {
+    const measured = context.measureText(text).width;
+    return (fixed && Math.abs(measured - cell * text.length) < 1 / 64
+      ? pitch * text.length : measured * scale) * width;
+  }, { raw: (text: string) => context.measureText(text).width * scale * width });
 }
 
-/** Resolve plain line contents before pagination, using unrounded font advances. */
+function paragraphWidth(paragraph: HTMLElement, style: CSSStyleDeclaration): number {
+  const measured = paragraph.getBoundingClientRect().width;
+  const declared = /^([\d.]+)(px|pt)$/.exec(paragraph.style.width);
+  const resolved = declared ? Number(declared[1]) * (declared[2] === 'pt' ? 4 / 3 : 1) : Number.parseFloat(style.width);
+  // Client rectangles and computed widths can lose subpixel precision. Prefer
+  // a layout-equivalent declared/resolved width, including authored point units.
+  return Math.abs(resolved - measured) < 1 / 64 ? resolved : measured;
+}
+
+/** Resolve plain line contents before pagination, using the shared advance model. */
 function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustification: boolean,
   checkpoint?: () => void, exact = false): 'fitted' | 'unchanged' | null {
   const view = run.ownerDocument.defaultView!;
@@ -328,7 +349,7 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
       (!['normal', '0px'].includes(runStyle.wordSpacing) &&
        !run.style.getPropertyValue('--docx-word-space-compression'))) return null;
   const measure = wordMeasure(run, exact ? Number.parseFloat(runStyle.lineHeight) : 0);
-  const width = paragraph.getBoundingClientRect().width;
+  const width = paragraphWidth(paragraph, style);
   const indent = Number.parseFloat(style.textIndent) || 0;
   if (!measure || !(width > 0) || !(width - indent > 0)) return null;
   const space = measure(' ');
@@ -352,11 +373,14 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
       if (end > start) { spaces += words[end - 1].spaces; natural += words[end - 1].spaces * space; }
       natural += words[end].width;
       const minimum = natural - (modernJustification ? spaces * space / 4 : 0);
-      if (minimum > selectionWidth) break;
+      // Two additions per word can put an exact sum a few floating-point
+      // units above its band. Bound arithmetic error, not physical overflow.
+      const roundoff = Number.EPSILON * 2 * (end - start + 1) * Math.max(natural, selectionWidth);
+      if (minimum - selectionWidth > roundoff) break;
       // Native Word prefers less gap strain, with condensation twice as costly
       // as expansion. A final line that fits naturally needs no justification.
       // The 75% floor bounds which condensed alternatives are legal.
-      const cost = !modernJustification ? -end : end === words.length - 1 && natural <= available ? -1 :
+      const cost = !modernJustification ? -end : end === words.length - 1 && natural - available <= roundoff ? -1 :
         spaces ? Math.abs(available - natural) / (spaces * space) * (natural > available ? 2 : 1) : Infinity;
       if (cost <= bestCost) { best = end; bestCost = cost; }
     }
@@ -379,8 +403,11 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
       range.setStart(run.firstChild, offset);
       range.setEnd(run.firstChild, offset + word.text.trimEnd().length);
       if (range.getClientRects().length !== 1) break;
-      const next = range.getBoundingClientRect().top;
+      const box = range.getBoundingClientRect(), next = box.top;
       if (next !== top) { measured.push(''); top = next; }
+      // Matching line choices cannot certify an indivisible word whose raw
+      // glyphs exceed the band; unlike gaps, those glyphs cannot be condensed.
+      if (box.width > width - (measured.length === 1 ? indent : 0)) return null;
       measured[measured.length - 1] += word.text;
       offset += word.text.length;
     }
@@ -478,8 +505,10 @@ function positionWords(paragraph: HTMLElement, run: HTMLElement,
       if ((i & 63) === 0) checkpoint?.();
       return measure(word.text);
     });
+    // Origins follow cell advances, but the final word paints raw glyphs.
+    // Align/compress against that physical edge rather than a rounded cell end.
     const natural = advances.reduce((a, b) => a + b, 0) -
-      (advances.at(-1)! - measure(words.at(-1)!.text.trimEnd()));
+      (advances.at(-1)! - measure.raw(words.at(-1)!.text.trimEnd()));
     const spaces = words.slice(0, -1).reduce((count, word) => count + (word.text.match(/ +$/)?.[0].length ?? 0), 0);
     const compressed = run.style.getPropertyValue('--docx-word-space-compression') && natural > available;
     const adjustment = spaces && (align === 'justify' || compressed) ? (available - natural) / spaces : 0;
