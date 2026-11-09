@@ -7323,13 +7323,15 @@ namespace Docxodus
 
         private static object CreateSectionDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element)
         {
-            // Group elements by section. In pagination mode, we preserve section boundaries.
-            // Without pagination, adjacent sections with identical formatting are conflated.
+            // A registry needs the source section identity even when adjacent properties match.
+            // Plain flow output can still combine sections with identical formatting.
             var groupedIntoDivs = element
                 .Elements()
                 .GroupAdjacent(e => {
-                    var sectAnnotation = e.Annotation<SectionAnnotation>();
-                    return sectAnnotation != null ? sectAnnotation.SectionElement!.ToString() : "";
+                    var section = e.Annotation<SectionAnnotation>()?.SectionElement;
+                    return settings.RenderHeadersAndFooters && settings.RenderHeaderFooterRegistry
+                        ? (object?)section ?? ""
+                        : section?.ToString() ?? "";
                 });
 
             int sectionIndex = 0;

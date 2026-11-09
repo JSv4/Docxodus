@@ -11,6 +11,35 @@ namespace Docxodus.Tests;
 
 public class FlowHeaderFooterRegistryTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BodyIndicesMatchRegistryWhenAdjacentSectionsHaveEqualProperties(bool anchors)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Document(false, false));
+        using (var document = WordprocessingDocument.Open(stream, true))
+        {
+            var main = document.MainDocumentPart!;
+            var body = main.Document.Body!;
+            var following = body.Elements<Wp.Paragraph>().Last();
+            foreach (var text in new[] { "Middle one", "Middle two" })
+                body.InsertBefore(new Wp.Paragraph(new Wp.ParagraphProperties(new Wp.SectionProperties()),
+                    new Wp.Run(new Wp.Text(text))), following);
+            var header = main.AddNewPart<HeaderPart>();
+            header.Header = new Wp.Header(new Wp.Paragraph(new Wp.Run(new Wp.Text("Final header"))));
+            body.GetFirstChild<Wp.SectionProperties>()!.PrependChild(
+                new Wp.HeaderReference { Type = Wp.HeaderFooterValues.Default, Id = main.GetIdOfPart(header) });
+        }
+        var html = XDocument.Parse(HtmlConversionOps.ConvertToHtml(stream.ToArray(), new HtmlConversionOptions
+        { RenderHeadersAndFooters = true, RenderHeaderFooterRegistry = true, StampAnchors = anchors }));
+        var headers = html.Descendants().Where(e => (string?)e.Attribute("data-hf-type") == "header-default").ToList();
+        Assert.Equal(new[] { "header-default", "header-default", "header-default", "Final header" }, headers.Select(e => e.Value));
+        Assert.Equal(new[] { "0", "1", "2", "3" }, html.Descendants().Attributes("data-section-index").Select(a => a.Value));
+        Assert.Equal(headers.Select(e => (string?)e.Attribute("data-section")),
+            html.Descendants().Attributes("data-section-index").Select(a => a.Value));
+    }
+
     private static byte[] Document(bool first, bool even)
     {
         using var stream = new MemoryStream();
