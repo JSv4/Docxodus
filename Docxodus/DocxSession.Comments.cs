@@ -666,6 +666,8 @@ public sealed partial class DocxSession
         if (RefuseNonBlockSibling(element, target.Anchor, "InsertTable") is { } notBlock) return notBlock;
 
         var opts = options ?? new TableInsertOptions();
+        if (opts.StyleId is not null && ValidateTableStyle(opts.StyleId, anchorId) is { } styleError)
+            return styleError;
         var contents = opts.CellContents;
 
         if (contents is not null)
@@ -702,8 +704,9 @@ public sealed partial class DocxSession
                 : new XElement(W.tblW, new XAttribute(W._w, 5000), new XAttribute(W.type, "pct"));
 
             var tblPr = new XElement(W.tblPr,
+                opts.StyleId is null ? null : new XElement(W.tblStyle, new XAttribute(W.val, opts.StyleId)),
                 tblW,
-                BuildTableBorders(opts.Borderless),
+                opts.StyleId is null || opts.Borderless ? BuildTableBorders(opts.Borderless) : null,
                 new XElement(W.tblLayout, new XAttribute(W.type, "fixed")));
 
             var tblGrid = new XElement(W.tblGrid);

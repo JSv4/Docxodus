@@ -494,6 +494,10 @@ public static partial class DocxSessionBridge
     public static string SetColumnWidths(int h, string cellAnchor, string widthsJson) =>
         DocxSessionOps.SetColumnWidths(h, cellAnchor, widthsJson);
 
+    [JSExport]
+    public static string SetTableStyle(int h, string anchorId, string styleId) =>
+        DocxSessionOps.SetTableStyle(h, anchorId, styleId);
+
     /// <summary>Set the table-level borders of the table containing <paramref name="cellAnchor"/>.
     /// <paramref name="specJson"/> is a TableBorderSpec object
     /// ({ scope?: "all"|"outside"|"inside", style?, size?, color? }); "" = thin single all round.</summary>

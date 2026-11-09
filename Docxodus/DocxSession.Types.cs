@@ -386,8 +386,13 @@ public sealed record ParagraphFormatOp
 /// <summary>Options for <see cref="DocxSession.InsertTable"/>.</summary>
 public sealed record TableInsertOptions
 {
+    /// <summary>Existing table style id in the package. Null uses the default direct formatting.
+    /// With a style, borders inherit from that style unless <see cref="Borderless"/> is true.</summary>
+    public string? StyleId { get; init; }
+
     /// <summary>When true, emit explicit "none" table + inside borders (an invisible layout table —
-    /// the S-1 multi-column blocks). When false, a thin single border on every edge.</summary>
+    /// the S-1 multi-column blocks). When false, inherit the supplied style's borders, or use
+    /// a thin single border on every edge when no style is supplied.</summary>
     public bool Borderless { get; init; }
 
     /// <summary>Row-major (row 0 left→right, then row 1, …) markdown for each cell. A null/short list

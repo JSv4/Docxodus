@@ -1467,7 +1467,7 @@ internal static partial class Dispatcher
             "docxodus_table" => action is "insert" or "insert_row" or "insert_column"
                 or "delete_row" or "delete_column" or "replace_cell_content" or "merge_cells"
                 or "unmerge_cells" or "set_column_widths" or "set_borders" or "set_shading"
-                or "set_repeat_header_row" or "set_row_options",
+                or "set_repeat_header_row" or "set_row_options" or "set_style",
             "docxodus_list" => action is "apply_format" or "apply_format_range" or "set_level"
                 or "set_start" or "clear_start" or "remove",
             "docxodus_comment" => action is "add" or "reply" or "resolve" or "update" or "remove",
@@ -1672,6 +1672,9 @@ internal static partial class Dispatcher
                 RequireNumbers(args, "rows", "columns");
                 ValidateOptionalEnum(args, "position", "before", "after");
                 ValidateTableInsertOptions(ObjectArguments.Read(args, tool, action));
+                break;
+            case ("docxodus_table", "set_style"):
+                RequireStrings(args, "anchorId", "styleId");
                 break;
             case ("docxodus_table", "insert_row"):
             case ("docxodus_table", "insert_column"):
@@ -1947,6 +1950,7 @@ internal static partial class Dispatcher
 
     private static void ValidateTableInsertOptions(JsonElement options)
     {
+        ValidateOptionalString(options, "styleId");
         ValidateOptionalArray(options, "cellContents");
         ValidateOptionalArray(options, "columnWidths");
         ValidateOptionalEnum(options, "cellAlignment", "left", "center", "right", "justify");
@@ -2052,6 +2056,7 @@ internal static partial class Dispatcher
         "unmerge_cells" => DocxSessionOps.UnmergeCells(session.Handle, Str(args, "cellAnchorId")),
         "set_column_widths" => DocxSessionOps.SetColumnWidths(
             session.Handle, Str(args, "cellAnchorId"), RawArray(args, "widths")),
+        "set_style" => DocxSessionOps.SetTableStyle(session.Handle, Str(args, "anchorId"), Str(args, "styleId")),
         "set_borders" => DocxSessionOps.SetTableBorders(
             session.Handle, Str(args, "cellAnchorId"), ObjectArguments.ReadJson(args, "docxodus_table", "set_borders")),
         "set_shading" => DocxSessionOps.SetCellShading(

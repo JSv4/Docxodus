@@ -1629,9 +1629,12 @@ class TableInsertOptions:
     cell_contents: tuple[str, ...] = ()
     cell_alignment: str | None = None
     column_widths: tuple[int, ...] = ()
+    style_id: str | None = None
 
     def to_wire(self) -> dict[str, Any]:
         result: dict[str, Any] = {"borderless": self.borderless}
+        if self.style_id is not None:
+            result["styleId"] = self.style_id
         if self.cell_contents:
             result["cellContents"] = list(self.cell_contents)
         if self.cell_alignment is not None:

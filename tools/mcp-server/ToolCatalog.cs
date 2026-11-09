@@ -411,6 +411,7 @@ internal static class ToolCatalog
                   "properties": {
                     "cellContents": { "type": "array", "items": { "type": "string" }, "description": "insert_table: row-major markdown per cell." },
                     "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"], "description": "insert_table." },
+                    "styleId": { "type": "string", "description": "Existing table style id. Borders inherit unless borderless is true." },
                     "columnWidths": { "type": "array", "items": { "type": "integer" }, "description": "insert_table: twips per column, left to right." },
                     "borderless": { "type": "boolean", "description": "insert_table: no table borders (default false)." },
                     "levels": { "type": "string", "description": "insert_table_of_contents: heading levels to list, a level or range within 1-9 (default \"1-3\")." },
@@ -776,8 +777,9 @@ internal static class ToolCatalog
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
-                "action": { "type": "string", "enum": ["get_metadata", "resolve_cell_anchor", "resolve_cell_coordinate", "insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content", "merge_cells", "unmerge_cells", "set_column_widths", "set_borders", "set_shading", "set_repeat_header_row", "set_row_options"] },
-                "anchorId": { "type": "string", "description": "insert: reference block (paired with position)." },
+                "action": { "type": "string", "enum": ["get_metadata", "resolve_cell_anchor", "resolve_cell_coordinate", "insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content", "merge_cells", "unmerge_cells", "set_column_widths", "set_style", "set_borders", "set_shading", "set_repeat_header_row", "set_row_options"] },
+                "anchorId": { "type": "string", "description": "insert: reference block (paired with position). set_style: canonical tbl or tc anchor." },
+                "styleId": { "type": "string", "description": "set_style: existing table style id; records tblPrChange when tracking." },
                 "tableAnchorId": { "type": "string", "description": "get_metadata/resolve_cell_coordinate: the table's canonical tbl anchor." },
                 "position": { "type": "string", "enum": ["before", "after"], "description": "insert: relative to anchorId. insert_row/insert_column: relative to cellAnchorId." },
                 "rows": { "type": "integer" }, "columns": { "type": "integer" },
@@ -787,6 +789,7 @@ internal static class ToolCatalog
                   "properties": {
                     "cellContents": { "type": "array", "items": { "type": "string" }, "description": "Row-major markdown per cell." },
                     "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"] },
+                    "styleId": { "type": "string", "description": "Existing table style id. Borders inherit unless borderless is true." },
                     "columnWidths": { "type": "array", "items": { "type": "integer" }, "description": "Twips per column, left to right." },
                     "borderless": { "type": "boolean", "description": "No table borders (default false)." }
                   }
