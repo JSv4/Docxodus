@@ -454,13 +454,15 @@ jobs:
       - name: Install the baseline's Chromium build
         if: steps.baseline-build.outputs.cache-hit == 'true'
         run: npm --prefix baseline-source/npm-export rebuild @playwright/browser-chromium
+      # Into the same directory the cached run wrote, because results record their own output paths.
       - name: Re-measure the baseline live
         if: steps.baseline-build.outputs.cache-hit == 'true'
         working-directory: oracle
         run: |
+          mv runs/baseline runs/baseline-cached
           export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/baseline-source"
           export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
-          python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter docxodus --candidate "$BASELINE_COMMIT" --out runs/baseline-live --gate report
+          python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter docxodus --candidate "$BASELINE_COMMIT" --out runs/baseline --gate report
       - name: Require the cached baseline to reproduce exactly
         if: steps.baseline-build.outputs.cache-hit == 'true'
-        run: python3 tools/rendering-fidelity/check-cached-results.py oracle/runs/baseline/result.json oracle/runs/baseline-live/result.json
+        run: python3 tools/rendering-fidelity/check-cached-results.py oracle/runs/baseline-cached/result.json oracle/runs/baseline/result.json
