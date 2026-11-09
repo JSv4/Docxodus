@@ -978,7 +978,7 @@ public static class WmlToMarkdownConverter
             "fn" => block.Name == W.footnote && !IsBoilerplateNote(block),
             "en" => block.Name == W.endnote && !IsBoilerplateNote(block),
             "cmt" => block.Name == W.comment,
-            _ => block.Name == W.tbl
+            _ => (block.Name == W.tbl && ProjectedRows(block, settings).Any())
                 || (block.Name == W.p && (settings.EmptyParagraphs != EmptyParagraphMode.Suppress
                     || EmitBlockMarkdown(document, settings, scopeName, block).Length > 0)),
         };
@@ -1066,7 +1066,7 @@ public static class WmlToMarkdownConverter
     private static void EmitTextboxes(XElement host, EmitContext ctx)
     {
         if (ctx.TextboxDepth >= Ir.IrReader.MaxTextboxDepth || !host.Descendants(W.txbxContent).Any()) return;
-        foreach (var body in TextboxBodies(host))
+        foreach (var body in TextboxBodies(host, ctx.Settings))
         {
             var revision = ctx.InheritedRevision == Revision.Deleted || body.Ancestors().TakeWhile(a => a != host)
                 .Any(a => a.Name == W.del || a.Name == W.moveFrom) ? Revision.Deleted
@@ -1090,9 +1090,9 @@ public static class WmlToMarkdownConverter
             || sb[sb.Length - 1 - Environment.NewLine.Length] != '\n')) sb.AppendLine();
     }
 
-    private static IEnumerable<XElement> TextboxBodies(XElement host)
+    private static IEnumerable<XElement> TextboxBodies(XElement host, WmlToMarkdownConverterSettings settings)
     {
-        IEnumerable<XElement> Children(XElement element) => element.Name == W.tbl ? TableChildren(element, W.tr)
+        IEnumerable<XElement> Children(XElement element) => element.Name == W.tbl ? ProjectedRows(element, settings)
             : element.Name == W.tr ? TableChildren(element, W.tc)
             : element.Name == W.tc || element.Name == W.footnote || element.Name == W.endnote || element.Name == W.comment
                 ? ExpandBlockWrappers(element.Elements()).Where(e => e.Name == W.p || e.Name == W.tbl)
@@ -1593,8 +1593,13 @@ public static class WmlToMarkdownConverter
     private static IEnumerable<XElement> TableChildren(XElement parent, XName name) =>
         Ir.IrReader.TableChildren(parent, name).Select(child => child.Element);
 
+    private static IEnumerable<XElement> ProjectedRows(XElement table, WmlToMarkdownConverterSettings settings) =>
+        TableChildren(table, W.tr).Where(row => settings.TrackedChanges == TrackedChangeMode.RenderInline
+            || row.Element(W.trPr)?.Element(W.del) is null);
+
     private static void EmitTable(XElement tbl, EmitContext ctx)
     {
+        if (!ProjectedRows(tbl, ctx.Settings).Any()) return;
         var anchor = AnchorPrefix(tbl, ctx).TrimEnd();
         if (ctx.Settings.TableMode == TableRenderMode.AlwaysOpaque || !CanRenderAsGfm(tbl, ctx))
         {
@@ -1609,9 +1614,10 @@ public static class WmlToMarkdownConverter
         if (ctx.Settings.TableMode == TableRenderMode.AlwaysGfm) return true;
 
         // Merged cells disqualify (Word's gridSpan val>1 or any vMerge).
-        if (tbl.Descendants(W.gridSpan).Any(g => ((int?)g.Attribute(W.val) ?? 1) > 1)) return false;
-        if (tbl.Descendants(W.vMerge).Any()) return false;
-        foreach (var tc in TableChildren(tbl, W.tr).SelectMany(r => TableChildren(r, W.tc)))
+        var rows = ProjectedRows(tbl, ctx.Settings).ToList();
+        if (rows.SelectMany(r => r.Descendants(W.gridSpan)).Any(g => ((int?)g.Attribute(W.val) ?? 1) > 1)) return false;
+        if (rows.SelectMany(r => r.Descendants(W.vMerge)).Any()) return false;
+        foreach (var tc in rows.SelectMany(r => TableChildren(r, W.tc)))
         {
             if (ExpandBlockWrappers(tc.Elements()).Any(e => e.Name == W.tbl)) return false;
             if (CellTextRaw(tc).Length > ctx.Settings.TableInlineCellMax) return false;
@@ -1622,7 +1628,7 @@ public static class WmlToMarkdownConverter
     private static void EmitGfmTable(XElement tbl, string anchor, EmitContext ctx)
     {
         if (anchor.Length > 0) { ctx.Sb.Append(anchor); ctx.Sb.AppendLine(); }
-        var rows = TableChildren(tbl, W.tr).ToList();
+        var rows = ProjectedRows(tbl, ctx.Settings).ToList();
         if (rows.Count == 0) return;
 
         var headerCells = TableChildren(rows[0], W.tc).Select(CellTextForGfm).ToList();
@@ -1638,16 +1644,16 @@ public static class WmlToMarkdownConverter
 
     private static void EmitOpaqueTable(XElement tbl, string anchor, EmitContext ctx)
     {
-        var rows = TableChildren(tbl, W.tr).Count();
+        var rows = ProjectedRows(tbl, ctx.Settings).ToList();
         // The table's WIDTH is its grid extent, not the first row's cell count — a merged header
         // row has fewer cells than columns, and a merge is precisely what lands a table here.
-        var cols = TableChildren(tbl, W.tr)
+        var cols = rows
             .Select(tr => TableChildren(tr, W.tc)
                 .Sum(tc => Math.Max(1, (int?)tc.Element(W.tcPr)?.Element(W.gridSpan)?.Attribute(W.val) ?? 1)))
             .DefaultIfEmpty(0).Max();
         if (anchor.Length > 0) { ctx.Sb.Append(anchor); ctx.Sb.AppendLine(); }
         ctx.Sb.AppendLine("```table");
-        ctx.Sb.Append("rows: ").Append(rows).AppendLine();
+        ctx.Sb.Append("rows: ").Append(rows.Count).AppendLine();
         ctx.Sb.Append("cols: ").Append(cols).AppendLine();
         ctx.Sb.AppendLine("```");
         ctx.Sb.AppendLine();
