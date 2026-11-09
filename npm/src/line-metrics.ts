@@ -215,10 +215,227 @@ function applyUniformLineMinimums(paragraphs: HTMLElement[], ratioFor: (style: P
       if (!naturalHeights.has(element)) changed++;
     }
     // Only a below-natural minimum is equivalent to single spacing. Enlarged
-    // lines retain the existing centered baseline policy for minimum spacing.
+    // lines retain their authored minimum for the final baseline pass.
     if (restoreNatural) paragraph.style.setProperty('--docx-auto-line-spacing', '1');
   }
   return changed;
+}
+
+/** Give mixed ordinary text one shared ascent, descent and spacing floor per visual line. */
+export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => void): number {
+  const document = root.ownerDocument, view = document.defaultView!;
+  const ratioFor = naturalLineHeightRatios(document), probeSize = fontProbeSize(document);
+  const canvas = document.createElement('canvas').getContext('2d');
+  if (!canvas) return 0;
+  const fontMetrics = new Map<string, { ascent: number; descent: number; offset: number; native: number }>();
+  const measure = (font: ProbeFont, size: number) => {
+    const key = `${font.fontStyle} ${font.fontWeight} ${font.fontStretch} ${size}px ${font.fontFamily}`;
+    let result = fontMetrics.get(key);
+    if (result) return result;
+    const height = ratioFor(font, LATIN_PROBE) * size;
+    canvas.font = `${font.fontStyle} ${font.fontWeight} ${probeSize}px ${font.fontFamily}`;
+    const descent = canvas.measureText(LATIN_PROBE).fontBoundingBoxDescent / probeSize * size;
+    const probe = document.createElement('span'), marker = document.createElement('span');
+    probe.style.cssText = 'position:absolute;left:-100000px;visibility:hidden;display:inline-block;white-space:nowrap;line-height:normal';
+    Object.assign(probe.style, { fontFamily: font.fontFamily, fontStyle: font.fontStyle,
+      fontWeight: font.fontWeight, fontStretch: font.fontStretch, fontSize: `${size}px` });
+    probe.textContent = LATIN_PROBE;
+    marker.style.cssText = 'display:inline-block;width:0;height:0;padding:0;margin:0;border:0;vertical-align:baseline';
+    probe.append(marker); document.body.append(probe);
+    const range = document.createRange(); range.selectNodeContents(probe.firstChild!);
+    result = { ascent: height - descent, descent, native: probe.getBoundingClientRect().height,
+      offset: marker.getBoundingClientRect().top - range.getBoundingClientRect().top };
+    probe.remove(); fontMetrics.set(key, result); return result;
+  };
+  const paragraphs = root.matches(PARAGRAPH_SELECTOR) ? [root]
+    : Array.from(root.querySelectorAll<HTMLElement>(PARAGRAPH_SELECTOR));
+  let prepared = 0;
+  for (const paragraph of paragraphs) {
+    checkpoint?.();
+    const owned = paragraph.hasAttribute('data-docx-mixed-lines');
+    const width = paragraph.getBoundingClientRect().width;
+    if (owned && Number(paragraph.dataset.docxMixedLines) === width) continue;
+    if (!(width > 0) || paragraph.closest('table, ol, ul, li, aside, [data-hf-type], '
+      + '#pagination-hf-registry, #pagination-footnote-registry, #pagination-comment-margin-registry, '
+      + '[data-footnote-id], [data-comment-id], section.endnotes, '
+      + '[data-docx-textbox], [data-docx-text-frame], [data-docx-drawing-anchor]')) continue;
+    const style = view.getComputedStyle(paragraph);
+    const minimum = Number.parseFloat(style.getPropertyValue('--docx-min-line-height')) * 4 / 3 || 0;
+    const multiple = Number(style.getPropertyValue('--docx-auto-line-spacing')) || 1;
+    const section = paragraph.closest<HTMLElement>('[data-section-index]');
+    if (Number(section?.dataset.cols ?? 1) > 1 || section?.querySelector(
+      '[data-docx-text-frame], [data-docx-wrap-text], [data-docx-edge-picture]')) continue;
+    if (style.direction !== 'ltr' || style.writingMode !== 'horizontal-tb'
+      || !['left', 'start'].includes(style.textAlign) || multiple < 1
+      || Number.parseFloat(style.getPropertyValue('--docx-line-grid')) > 0
+      || Number.parseFloat(style.getPropertyValue('--docx-exact-line-height')) > 0
+      || /[^\u0020-\u024f]/u.test(paragraph.textContent ?? '')
+      || Array.from(paragraph.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim())) continue;
+    const marker = paragraph.firstElementChild?.getAttribute('data-list-marker') === 'true'
+      ? paragraph.firstElementChild : null;
+    if (paragraph.querySelector('[data-field], [data-footnote-id], [data-endnote-id], [data-comment-id], '
+      + '[data-docx-fit-text-group], [data-docx-word-line], [data-docx-ruby]')) continue;
+    // The converter's number and suffix tab occupy two baseline-aligned flex items.
+    if (marker && (marker.children.length !== 2 || marker.children[0].children.length !== 1
+      || !marker.children[0].firstElementChild?.matches('span[data-list-marker="true"]')
+      || marker.children[0].firstElementChild.children.length
+      || marker.children[1].children.length !== 1
+      || !marker.children[1].firstElementChild?.matches('span[data-docx-tab]')
+      || marker.children[1].firstElementChild.childNodes.length)) continue;
+    const runs = Array.from(paragraph.querySelectorAll<HTMLElement>('span'))
+      .filter(run => !run.hasAttribute('data-docx-line-metric'));
+    const fonts = runs.map(run => {
+      const css = view.getComputedStyle(run);
+      return { run, size: Number.parseFloat(css.fontSize), family: css.fontFamily,
+        weight: css.fontWeight, style: css.fontStyle, stretch: css.fontStretch,
+        display: css.display, align: css.verticalAlign, position: css.position, top: css.top,
+        height: css.lineHeight, transform: css.transform,
+        sides: [css.left, css.right], bottom: css.bottom, float: css.cssFloat };
+    });
+    const paragraphFont = owned ? undefined : measure(style, Number.parseFloat(style.fontSize));
+    if (!runs.length || paragraph.querySelector('*:not(span)') || fonts.some(f =>
+      !(f.size > 0) || f.transform !== 'none' || !['static', 'relative'].includes(f.position)
+      || f.float !== 'none' || f.sides.some(side => !['auto', '0px'].includes(side))
+      || !['auto', '0px'].includes(f.bottom) && !(f.position === 'relative'
+        && Math.abs(Number.parseFloat(f.bottom) + Number.parseFloat(f.top)) < .02)
+      || f.position === 'relative' && !(multiple > 1
+        && Math.abs(Number.parseFloat(f.top) + Number.parseFloat(f.height) * (1 - 1 / multiple) / 2) < .02)
+      || !owned && f.run.style.lineHeight && !['normal', 'calc(1lh*var(--docx-auto-line-spacing))']
+        .includes(f.run.style.lineHeight.replace(/\s/g, ''))
+      || !owned && f.height !== 'normal' && Math.abs(Number.parseFloat(f.height)
+        - (minimum >= 14 * 4 / 3 ? minimum : paragraphFont!.native * multiple)) > .02
+      || f.display !== (f.run === marker ? 'inline-flex' : f.run.parentElement === marker ? 'block'
+        : marker?.contains(f.run) && f.run.hasAttribute('data-docx-tab') ? 'inline-block' : 'inline')
+      || f.align !== 'baseline'
+      || !marker?.contains(f.run) && f.run.children.length > (owned ? f.run.querySelectorAll('[data-docx-line-metric]').length : 0))
+      || !owned && style.lineHeight !== 'normal'
+        && !(minimum >= 14 * 4 / 3 && Math.abs(Number.parseFloat(style.lineHeight) - minimum) < .02)
+      || !owned && new Set(fonts.map(f => `${f.size}|${f.family}|${f.weight}|${f.style}`)).size < 2) continue;
+    const metrics = new Map(fonts.map(f => [f.run, measure({ fontFamily: f.family,
+      fontWeight: f.weight, fontStyle: f.style, fontStretch: f.stretch }, f.size)]));
+    // Styling alone does not require vertical line ownership. Equal metrics keep
+    // the ordinary flow available to the precise horizontal text fitter.
+    if (!owned && new Set([...metrics.values()].map(m => `${m.ascent}|${m.descent}`)).size < 2) continue;
+    const before = paragraph.cloneNode(true) as HTMLElement;
+    const sourceText = paragraph.textContent;
+    const words = () => {
+      const pieces: Array<{ node: Text; start: number; end: number; left: number; width: number; top: number }> = [];
+      const walker = document.createTreeWalker(paragraph, view.NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null)
+        for (const match of node.data.matchAll(/\S+/gu)) {
+          const range = document.createRange();
+          range.setStart(node, match.index); range.setEnd(node, match.index + match[0].length);
+          if (range.getClientRects().length !== 1) return undefined;
+          const box = range.getBoundingClientRect();
+          pieces.push({ node, start: match.index, end: match.index + match[0].length,
+            left: box.left, width: box.width, top: box.top });
+        }
+      return pieces;
+    };
+    let pristine = owned ? undefined : words();
+    if (!owned && !pristine?.length) continue;
+    for (const strut of Array.from(paragraph.querySelectorAll('[data-docx-line-metric]'))) strut.remove();
+    // Removing old metrics reunites the original shaping runs before a width refit.
+    paragraph.normalize();
+    if (owned) pristine = words();
+    for (const f of fonts) {
+      const font = { fontFamily: f.family, fontWeight: f.weight, fontStyle: f.style, fontStretch: f.stretch };
+      const metric = metrics.get(f.run)!;
+      Object.assign(f.run.style, font, { fontSize: `${f.size}px`, lineHeight: `${metric.ascent + metric.descent}px`, position: 'static', top: 'auto' });
+    }
+    // Resolve font-relative paragraph geometry before removing its global strut.
+    for (const property of ['text-indent', 'margin-top', 'margin-bottom', 'margin-left', 'margin-right',
+      'padding-top', 'padding-bottom', 'padding-left', 'padding-right'])
+      paragraph.style.setProperty(property, style.getPropertyValue(property));
+    paragraph.style.fontSize = '0'; paragraph.style.lineHeight = '0';
+    type Piece = { node: Text; start: number; end: number; left: number; width: number; run: HTMLElement };
+    type Line = { pieces: Piece[]; ascent: number; descent: number; baseline: number };
+    const lines: Line[] = [];
+    let simple = true;
+    const walker = document.createTreeWalker(paragraph, view.NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
+      const run = node.parentElement!, metric = metrics.get(run);
+      if (!metric) continue;
+      for (const match of node.data.matchAll(/\S+/gu)) {
+        checkpoint?.();
+        const range = document.createRange();
+        range.setStart(node, match.index); range.setEnd(node, match.index + match[0].length);
+        const box = range.getBoundingClientRect();
+        if (range.getClientRects().length !== 1) simple = false;
+        const baseline = box.top + metric.offset;
+        if (!lines.length || Math.abs(baseline - lines.at(-1)!.baseline) > .05)
+          lines.push({ pieces: [], ascent: 0, descent: 0, baseline });
+        const line = lines.at(-1)!;
+        line.pieces.push({ node, start: match.index, end: match.index + match[0].length, left: box.left, width: box.width, run });
+        line.ascent = Math.max(line.ascent, metric.ascent); line.descent = Math.max(line.descent, metric.descent);
+      }
+    }
+    for (const run of runs) run.style.lineHeight = '0';
+    const inserted: HTMLElement[] = [];
+    for (const line of [...lines].reverse()) {
+      const last = line.pieces.at(-1)!;
+      const natural = line.ascent + line.descent;
+      const height = minimum ? Math.max(minimum, natural) : natural * multiple;
+      // Word puts minimum-height surplus above the baseline; automatic multiples
+      // put their surplus below it. Both retain the font's natural descent.
+      const descent = line.descent + (minimum ? 0 : height - natural);
+      const range = document.createRange(); range.setStart(last.node, last.end); range.collapse(true);
+      const strut = document.createElement('span');
+      strut.dataset.docxLineMetric = minimum ? 'minimum' : 'auto';
+      strut.dataset.docxLineNatural = String(natural); strut.dataset.docxLineDescent = String(line.descent);
+      strut.setAttribute('aria-hidden', 'true');
+      strut.style.cssText = `display:inline-block;position:static;float:none;transform:none;width:0;height:${height}px;font-size:0;line-height:0;vertical-align:${-descent}px;margin:0;padding:0;border:0`;
+      range.insertNode(strut); inserted.unshift(strut);
+    }
+    // Empty inline boxes may wrap separately. Require each metric to remain on
+    // its own source line, and never accept a changed horizontal layout.
+    const observed = (words() ?? []).map(piece => ({ ...piece,
+      baseline: piece.top + metrics.get(piece.node.parentElement!)!.offset }));
+    let nextTop = paragraph.getBoundingClientRect().top + Number.parseFloat(style.paddingTop) + Number.parseFloat(style.borderTopWidth);
+    const ownsLines = inserted.every((strut, index) => {
+      const box = strut.getBoundingClientRect(), expected = Number.parseFloat(strut.style.height);
+      const valid = Math.abs(box.top - nextTop) < .05 + index / 64 && Math.abs(box.height - expected) < 1 / 32;
+      nextTop += expected;
+      return valid;
+    });
+    let pieceIndex = 0;
+    const membership = lines.every((line, index) => {
+      const strut = inserted[index], box = strut.getBoundingClientRect();
+      const baseline = box.bottom + Number.parseFloat(strut.style.verticalAlign);
+      return line.pieces.every(() => Math.abs(observed[pieceIndex++]?.baseline - baseline) < .05);
+    });
+    const valid = pristine && simple && lines.length > 0 && ownsLines && membership && sourceText === paragraph.textContent && observed.length === pristine.length
+      && pristine.every((piece, index) => Math.abs(piece.left - observed[index].left) < 1 / 32
+        && Math.abs(piece.width - observed[index].width) < 1 / 32)
+      && inserted.every((strut, index) => index === 0 || strut.getBoundingClientRect().top > inserted[index - 1].getBoundingClientRect().top);
+    if (!valid) {
+      paragraph.replaceChildren(...Array.from(before.childNodes));
+      const saved = before.getAttribute('style');
+      if (saved === null) paragraph.removeAttribute('style'); else paragraph.setAttribute('style', saved);
+      continue;
+    }
+    paragraph.dataset.docxMixedLines = String(width);
+    prepared++;
+  }
+  return prepared;
+}
+
+/** Only our empty zero-width metric boxes may bypass ordinary inline layout guards. */
+export function isMixedLineMetric(element: HTMLElement): boolean {
+  if (!element.closest('[data-docx-mixed-lines]') || element.localName !== 'span'
+    || element.childNodes.length || element.id || element.hasAttribute('data-anchor')
+    || element.hasAttribute('data-source-anchor-id') || !['auto', 'minimum'].includes(element.dataset.docxLineMetric ?? '')) return false;
+  const style = element.isConnected ? element.ownerDocument.defaultView!.getComputedStyle(element) : element.style;
+  const natural = Number(element.dataset.docxLineNatural), descent = Number(element.dataset.docxLineDescent);
+  const height = Number.parseFloat(style.height);
+  const extra = element.dataset.docxLineMetric === 'minimum' ? 0 : height - natural;
+  return natural > 0 && descent > 0 && descent < natural && Number.isFinite(natural)
+    && style.display === 'inline-block' && style.position === 'static' && style.transform === 'none'
+    && style.float === 'none' && style.width === '0px' && height > 0 && Number.isFinite(height)
+    && Math.abs(Number.parseFloat(style.verticalAlign) + descent + extra) < .01
+    && ['margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'padding-top', 'padding-right',
+      'padding-bottom', 'padding-left', 'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width']
+      .every(property => Number.parseFloat(style.getPropertyValue(property)) === 0);
 }
 
 /** Reserve whole grid slots for uniform single-spaced text, retaining its natural baseline. */
@@ -527,10 +744,19 @@ export function alignBaselinesToWord(root: Element): number {
     if (!first) continue;
     const lineHeight = Number.parseFloat(style.lineHeight);
     const fontSize = Number.parseFloat(style.fontSize);
-    // Word's placement is recorded for natural line heights (single spacing and auto multiples, which the
-    // converter builds on the paragraph's natural height), not for exact or at-least ones.
+    const natural = ratioFor(style, LATIN_PROBE) * fontSize;
+    const minimum = Number.parseFloat(style.getPropertyValue('--docx-min-line-height')) * 4 / 3;
+    // The original Word 16pt-on-10pt capture places the baseline at H - descent,
+    // putting the enlarged minimum's surplus above the text. Admit only uniform
+    // authored minima, retaining explicit overrides and exact/mixed-run handling.
+    const minimumRuns = minimum >= natural && Math.abs(lineHeight - minimum) < .01
+      && !Number.parseFloat(style.getPropertyValue('--docx-exact-line-height'))
+      && !Number.parseFloat(style.getPropertyValue('--docx-line-grid'))
+      && !BEYOND_LATIN.test(paragraph.textContent ?? '')
+      ? uniformParagraphRuns(paragraph, true) : undefined;
+    const uniformMinimum = minimumRuns?.every(run => view.getComputedStyle(run).lineHeight === style.lineHeight);
     if (!(lineHeight > 0) || !(fontSize > 0) ||
-      Math.abs(lineHeight - ratioFor(style, LATIN_PROBE) * fontSize) > 0.01) continue;
+      !uniformMinimum && Math.abs(lineHeight - natural) > 0.01) continue;
     const descent = descentRatio(style);
     if (!(descent > 0)) continue;
     const childStyle = view.getComputedStyle(first);
@@ -541,7 +767,8 @@ export function alignBaselinesToWord(root: Element): number {
     // puts above: a fraction of the line. Half a line or more means the font does not follow this model.
     if (!Number.isFinite(shift) || Math.abs(shift) < 1 / 64 || Math.abs(shift) >= lineHeight / 2) continue;
     for (const child of Array.from(paragraph.children))
-      if (child instanceof view.HTMLElement && movable(child, view)) {
+      if (child instanceof view.HTMLElement && (movable(child, view)
+        || uniformMinimum && minimumRuns!.includes(child))) {
         // Compose with the offset the child already has (a run's w:position, or the lift of an auto multiple),
         // which may come from a stylesheet rule rather than its own style attribute.
         const top = Number.parseFloat(view.getComputedStyle(child).top);

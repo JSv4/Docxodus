@@ -1,0 +1,60 @@
+{
+  "records": [
+    {
+      "sourceFile": "strut-lead-in-multiple.docx",
+      "sourceSha256": "e4f2f0277628574cfec99a843b2cf3fbac1a9c62ba1fe5526a33fbb99b4f23f0",
+      "issueComment": "https://github.com/JSv4/Docxodus/issues/1565#issuecomment-6700736177",
+      "wordPdf": "strut-lead-in-multiple.pdf",
+      "wordPdfSha256": "1e6025727118b92883d77d4b9be44af74cea147f300186706e1b838384d224fd",
+      "capture": "Microsoft Word Online, File > Export > Download as PDF, 2026-11-09 UTC",
+      "font": "Times New Roman 7.06, embedded subset",
+      "metrics": {
+        "unitsPerEm": 2048,
+        "hheaAscent": 1825,
+        "hheaDescent": -443,
+        "hheaLineGap": 87
+      },
+      "baselinesPt": [
+        87.030029296875,
+        101.780029296875,
+        113.530029296875,
+        125.54998779296875,
+        137.04998779296875
+      ],
+      "visibleLines": [
+        "Harbor. Every autumn the ferry crews repaint the harbor signs before the storms reach our northern pier while the gulls",
+        "complain about the noise all afternoon long and the old lighthouse keeper counts the coils of rope stacked beside the slipway and",
+        "writes the tally into a damp ledger that nobody ever reads because the weather has already decided how the season will turn out",
+        "for everybody.",
+        "Next paragraph."
+      ]
+    },
+    {
+      "sourceFile": "atleast-16-on-10.docx",
+      "sourceSha256": "47a72364ab4b0b7107037719e9cb581905494468eb0c5f424757379a42d7b0b5",
+      "issueComment": "https://github.com/JSv4/Docxodus/issues/1566#issuecomment-6700736692",
+      "wordPdf": "atleast-16-on-10.pdf",
+      "wordPdfSha256": "f1b172edaf2507a711ee4beaa16a6d7c37737c7cebbea017ef06399699842588",
+      "capture": "Microsoft Word Online, File > Export > Download as PDF, 2026-11-09 UTC",
+      "font": "Times New Roman 7.06, embedded subset",
+      "metrics": {
+        "unitsPerEm": 2048,
+        "hheaAscent": 1825,
+        "hheaDescent": -443,
+        "hheaLineGap": 87
+      },
+      "baselinesPt": [
+        85.780029296875,
+        101.780029296875,
+        117.79998779296875,
+        133.79998779296875
+      ],
+      "visibleLines": [
+        "Every autumn the ferry crews repaint the harbor signs before the storms reach our northern pier while the gulls",
+        "complain about the noise all afternoon long and the old lighthouse keeper counts the coils of rope stacked beside the",
+        "slipway and writes the tally into a damp ledger.",
+        "Next."
+      ]
+    }
+  ]
+}

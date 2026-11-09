@@ -6598,8 +6598,12 @@ minimum marker but omitted its CSS height below an arbitrary 14pt threshold. Pub
 PDF export therefore kept the natural pitch. The
 [issue author's Word print](https://github.com/JSv4/Docxodus/issues/1566#issuecomment-6701329387)
 confirms 13pt. The [ECMA remarks in the Open XML SDK documentation](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.spacingbetweenlines.line?view=openxml-3.0.1)
-specify centered text when the minimum exceeds its natural line, supporting the existing
-CSS baseline policy used for larger minima.
+specify centered text when the minimum exceeds its natural line. The original Word
+16pt-on-10pt PDF captured on 2026-11-09 differs: its first baseline is 85.78003pt below
+the page top, with a 72pt margin. Retaining the font's natural descent puts the baseline
+at 85.83691pt, while centered leading predicts 83.58643pt. `TestFiles/LineSpacingWord`
+preserves the exact input, PDF, hashes and observations. This measured compatibility
+behavior supersedes the earlier assumption that Word followed CSS centering.
 
 The shared uniform-metrics pass now applies these omitted small minima to the paragraph
 and its ordinary runs. It records which heights began as `normal`, so an explicit CSS
@@ -6607,5 +6611,7 @@ override equal to the natural height is not mistaken for the converter fallback.
 Repeated preparation and cloned continuations keep the resolved minimum. This path
 does not acquire the single-spacing marker or natural-baseline lift used when recovering
 a below-natural minimum. Mixed fonts, raised text and richer inline structures retain
-their existing guards. Exact Word first-baseline coordinates remain unmeasured; the
-confirmed line pitch and the documented centering rule do not establish those coordinates.
+their existing guards. The final export/viewer baseline pass validates uniform authored
+minima and places their text at the resolved height minus the natural descent. Mixed
+line metrics use the same descent policy separately for each line. Neither correction
+changes the line's reserved height or overrides an explicit unrelated CSS height.

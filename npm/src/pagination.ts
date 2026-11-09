@@ -6,7 +6,7 @@
  */
 
 import { formatPageNumber } from "./page-number-format.js";
-import { alignBaselinesToWord, alignExactLineBaselines, applyUnroundedNormalLineHeights, insetClipBounds, preserveExactLineInk } from "./line-metrics.js";
+import { alignBaselinesToWord, alignExactLineBaselines, applyUnroundedNormalLineHeights, insetClipBounds, isMixedLineMetric, prepareMixedLineHeights, preserveExactLineInk } from "./line-metrics.js";
 import {
   DEFAULT_MARGIN,
   DEFAULT_PAGE_HEIGHT,
@@ -28,7 +28,7 @@ import {
   type MarkupBalloonResult,
 } from "./markup-balloons.js";
 import { BalloonAppendix } from "./balloon-appendix.js";
-import { isFitTextInlineBox } from "./word-text.js";
+import { isFitTextInlineBox, prepareSectionTextWidths } from "./word-text.js";
 
 export type { PageBands, PageDimensions } from "./page-geometry.js";
 
@@ -1194,7 +1194,13 @@ export class PaginationEngine {
     // advanced 12.75pt where Word advances 12.65pt for 11pt Times New Roman, and the error
     // accumulated down every page (issues #850, #1151). Resolve each line height before
     // anything here is measured.
-    applyUnroundedNormalLineHeights(this.stagingElement);
+    const stagingStyle = this.stagingElement.style.cssText;
+    try {
+      Object.assign(this.stagingElement.style, { display: 'block', visibility: 'hidden', position: 'absolute', left: '-9999px' });
+      prepareSectionTextWidths(this.stagingElement);
+      prepareMixedLineHeights(this.stagingElement, () => this.checkpoint());
+      applyUnroundedNormalLineHeights(this.stagingElement);
+    } finally { this.stagingElement.style.cssText = stagingStyle; }
 
     this.sourceClipBoxes = new WeakSet();
     this.inspectedSourceText = new WeakSet();
@@ -3644,6 +3650,25 @@ export class PaginationEngine {
     paragraph: HTMLElement,
     emergencyGraphemeBreaks = false,
   ): ParagraphFragmentEndpoint[] {
+    if (paragraph.hasAttribute('data-docx-mixed-lines')) {
+      const endpoints: ParagraphFragmentEndpoint[] = [];
+      const walker = this.document.createTreeWalker(paragraph,
+        this.view.NodeFilter.SHOW_TEXT | this.view.NodeFilter.SHOW_ELEMENT);
+      let textOffset = 0, pending = false;
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        this.checkpoint();
+        if (node instanceof this.view.HTMLElement && isMixedLineMetric(node)) pending = true;
+        if (node.nodeType !== this.view.Node.TEXT_NODE) continue;
+        const text = (node as Text).data;
+        const spaces = /^\s*/u.exec(text)![0].length;
+        if (pending && spaces < text.length) {
+          endpoints.push({ node, offset: spaces, textOffset: textOffset + spaces, priority: 2 });
+          pending = false;
+        }
+        textOffset += text.length;
+      }
+      return endpoints;
+    }
     const textNodes: Text[] = [];
     const textStarts = new Map<Text, number>();
     const lastTextByAtomic = new Map<HTMLElement, Text>();
@@ -4155,8 +4180,9 @@ export class PaginationEngine {
   private rangeAtomicInlineBoxes(paragraph: HTMLElement): Set<HTMLElement> {
     const boxes = new Set<HTMLElement>();
     for (const marker of Array.from(paragraph.querySelectorAll<HTMLElement>(
-      '[data-docx-shape="unrendered"], [data-docx-tab], [data-docx-ruby="true"], [data-docx-math="true"], [data-docx-frame-line], [data-docx-fit-text-group]',
+      '[data-docx-shape="unrendered"], [data-docx-tab], [data-docx-ruby="true"], [data-docx-math="true"], [data-docx-frame-line], [data-docx-fit-text-group], [data-docx-line-metric]',
     ))) {
+      if (isMixedLineMetric(marker)) { boxes.add(marker); continue; }
       if (marker.hasAttribute('data-docx-frame-line')) { boxes.add(marker); continue; }
       let box: HTMLElement | null = marker;
       const fitted = marker.hasAttribute('data-docx-fit-text-group');
@@ -4266,6 +4292,7 @@ export class PaginationEngine {
    * A raised citation number in the middle of a line sits higher, so it stays on its line.
    */
   private startsVisualLine(paragraph: HTMLElement, endpoint: ParagraphFragmentEndpoint): boolean {
+    if (paragraph.hasAttribute('data-docx-mixed-lines')) return true;
     if (endpoint.consumeBreak) return true;
     const range = this.document.createRange();
     range.selectNodeContents(paragraph);
@@ -4372,6 +4399,11 @@ export class PaginationEngine {
       // The original bottom spacing belongs after the complete paragraph, not
       // between synthetic page fragments.
       fragment.style.setProperty("margin-bottom", "0", "important");
+      const mixedLine = Array.from(fragment.querySelectorAll<HTMLElement>('[data-docx-line-metric]')).at(-1);
+      if (mixedLine?.dataset.docxLineMetric === 'auto' && isMixedLineMetric(mixedLine)) {
+        mixedLine.style.height = `${mixedLine.dataset.docxLineNatural}px`;
+        mixedLine.style.verticalAlign = `${-Number(mixedLine.dataset.docxLineDescent)}px`;
+      }
       // Word can place the final natural line box against the page edge;
       // inter-line leading belongs before a following line, not after this head.
       const fitted = fragment.querySelector<HTMLElement>('[data-docx-word-fit]');
@@ -4513,6 +4545,8 @@ export class PaginationEngine {
     let endpoints = this.paragraphFragmentEndpoints(paragraph);
     let best = largestFit(endpoints);
     const hasMultipleFragmentLines = (fragment: HTMLElement) => {
+      if (fragment.hasAttribute('data-docx-mixed-lines'))
+        return fragment.querySelectorAll('[data-docx-line-metric]').length > 1;
       paragraph.replaceWith(fragment);
       try {
         const range = this.document.createRange();

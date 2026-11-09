@@ -40,6 +40,11 @@ for (const [size, minimum, expected, repeats] of [[10, 13, 13, 2], [10, 13, 13, 
         words.push(...items.flatMap(item => 'str' in item ? [item.str] : []));
         expect(baselines.at(-1)).toBeGreaterThan(71);
         expect(baselines[0]).toBeLessThan(721);
+        // Word's original 16pt-on-10pt PDF starts at 85.780pt from the top:
+        // the whole surplus is above the text, not split as CSS leading.
+        // Liberation Serif has the same 2355/2048 height and 443/2048 descent.
+        const expectedFirst = 792 - 72 - expected + 443 / 2048 * size;
+        expect(Math.abs(baselines[0] - expectedFirst)).toBeLessThan(.76);
       }
       expect(words.join(' ').replace(/\s+/g, ' ').trim()).toBe(text);
       expect(steps.length).toBeGreaterThan(3);
