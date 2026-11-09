@@ -55,8 +55,8 @@
 
   <!-- SkiaSharp dependencies (only for non-WASM builds) -->
   <ItemGroup Condition="'$(WASM_BUILD)' != 'true'">
-    <PackageReference Include="SkiaSharp" Version="4.154.0" />
-    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.154.0" />
+    <PackageReference Include="SkiaSharp" Version="4.155.0" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.155.0" />
   </ItemGroup>
 
   <ItemGroup>
