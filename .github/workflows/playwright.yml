@@ -107,7 +107,7 @@ jobs:
   # runs. Listing the specs loads them, so this needs the built export companion.
   checks:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
