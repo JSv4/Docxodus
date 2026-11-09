@@ -21,6 +21,7 @@ export const COMPLETE_ONLY_CONVERSION_OPTIONS = [
   "stampAnchors",
   "revisionPresentation",
   "semanticLists",
+  "normalizeBulletMarkers",
   "stampPageNumberFields",
   "renderHeaderFooterRegistry",
 ] as const satisfies readonly (keyof ConversionOptions)[];

@@ -67,11 +67,12 @@ namespace OxPt
 
         private static readonly string Decimal = AbstractNum(0, ("decimal", "%1."), ("lowerLetter", "%2."));
 
-        private static XElement Convert(byte[] docx, bool semanticLists = true, PaginationMode pagination = PaginationMode.None) =>
+        private static XElement Convert(byte[] docx, bool semanticLists = true, PaginationMode pagination = PaginationMode.None, bool normalizeBullets = false) =>
             WmlToHtmlConverter.ConvertToHtml(new WmlDocument("t.docx", docx), new WmlToHtmlConverterSettings
             {
                 FabricateCssClasses = false,
                 SemanticLists = semanticLists,
+                NormalizeBulletMarkers = normalizeBullets,
                 RenderPagination = pagination,
             });
 
@@ -86,6 +87,105 @@ namespace OxPt
         private static string OwnText(XElement li) =>
             string.Concat(li.Nodes().Where(n => n is not XElement e || e.Name.LocalName is not ("ol" or "ul"))
                 .Select(n => n is XElement e ? e.Value : (n as XText)?.Value)).Trim();
+
+        [Theory]
+        [InlineData("Symbol", "\uf0b7", "disc")]
+        [InlineData("Courier New", "o", "circle")]
+        [InlineData("Wingdings", "\uf0a7", "square")]
+        public void Standard_Word_bullets_can_use_CSS_markers(string font, string glyph, string cssType)
+        {
+            var numbering = AbstractNum(0, ("bullet", glyph)).Replace("</w:lvl>",
+                $"<w:rPr><w:rFonts w:ascii=\"{font}\" w:hAnsi=\"{font}\"/></w:rPr></w:lvl>") + Num(1, 0);
+            var bytes = BuildDocx(Item("Harbor") + Item("Ledger"), numbering);
+            var original = Body(Convert(bytes));
+            Assert.Contains("list-style-type: none", Style(Assert.Single(original.Descendants(Xhtml.ul))));
+            Assert.All(original.Descendants(Xhtml.li), item => Assert.True(HasMarkerSpan(item)));
+            var body = Body(Convert(bytes, normalizeBullets: true));
+            var list = Assert.Single(body.Descendants(Xhtml.ul));
+            Assert.Contains("list-style-type: " + cssType, Style(list));
+            Assert.All(list.Elements(), item => Assert.False(HasMarkerSpan(item)));
+            Assert.Equal(new[] { "Harbor", "Ledger" }, list.Elements().Select(OwnText));
+        }
+
+        [Theory]
+        [InlineData("Calibri", "o")]
+        [InlineData("Courier New", "O")]
+        [InlineData("Courier New, Variant", "o")]
+        [InlineData("Calibri", "☐")]
+        [InlineData("Calibri", "□")]
+        [InlineData("Calibri", "[ ]")]
+        [InlineData("Wingdings", "\uf0fe")]
+        [InlineData("Wingdings", "\uf075")]
+        public void Normalization_preserves_custom_bullets_and_checkbox_content(string font, string glyph)
+        {
+            var numbering = AbstractNum(0, ("bullet", glyph)).Replace("</w:lvl>",
+                $"<w:rPr><w:rFonts w:ascii=\"{font}\" w:hAnsi=\"{font}\"/></w:rPr></w:lvl>") + Num(1, 0);
+            var bytes = BuildDocx(Item("Confirm"), numbering);
+            Assert.Equal(Convert(bytes).ToString(), Convert(bytes, normalizeBullets: true).ToString());
+            Assert.True(HasMarkerSpan(Assert.Single(Convert(bytes, normalizeBullets: true).Descendants(Xhtml.li))));
+        }
+
+        [Theory]
+        [InlineData("Symbol", "\uf0b7")]
+        [InlineData("Courier New", "o")]
+        public void Normalization_preserves_hidden_bullets(string font, string glyph)
+        {
+            var numbering = AbstractNum(0, ("bullet", glyph)).Replace("</w:lvl>",
+                $"<w:rPr><w:rFonts w:ascii=\"{font}\" w:hAnsi=\"{font}\"/><w:vanish/></w:rPr></w:lvl>") + Num(1, 0);
+            var bytes = BuildDocx(Item("Visible text"), numbering);
+            Assert.Equal(Convert(bytes).ToString(), Convert(bytes, normalizeBullets: true).ToString());
+            var item = Assert.Single(Convert(bytes, normalizeBullets: true).Descendants(Xhtml.li));
+            Assert.True(HasMarkerSpan(item));
+            Assert.Contains(item.Descendants(), span => Style(span).Contains("display: none"));
+        }
+
+        [Theory]
+        [InlineData("Courier New", "Calibri", "circle")]
+        [InlineData("Calibri", "Courier New", "none")]
+        public void Normalization_reads_the_glyph_font_not_the_suffix_tab(string markerFont, string bodyFont, string cssType)
+        {
+            var numbering = AbstractNum(0, ("bullet", "o")).Replace("</w:lvl>",
+                $"<w:rPr><w:rFonts w:ascii=\"{markerFont}\" w:hAnsi=\"{markerFont}\"/><w:sz w:val=\"22\"/></w:rPr></w:lvl>") + Num(1, 0);
+            var paragraph = Item("Harbor").Replace("<w:r><w:t>",
+                $"<w:r><w:rPr><w:rFonts w:ascii=\"{bodyFont}\" w:hAnsi=\"{bodyFont}\"/><w:sz w:val=\"32\"/></w:rPr><w:t>");
+            var html = Convert(BuildDocx(paragraph, numbering), normalizeBullets: true);
+            Assert.Contains("list-style-type: " + cssType, Style(Assert.Single(html.Descendants(Xhtml.ul))));
+            Assert.Equal(cssType == "none", HasMarkerSpan(Assert.Single(html.Descendants(Xhtml.li))));
+        }
+
+        [Theory]
+        [InlineData(false, PaginationMode.None)]
+        [InlineData(true, PaginationMode.Paginated)]
+        public void Normalization_does_nothing_outside_semantic_flow_lists(bool semantic, PaginationMode pagination)
+        {
+            var bytes = BuildDocx(Item("Harbor"), AbstractNum(0, ("bullet", "•")) + Num(1, 0));
+            Assert.Equal(Convert(bytes, semantic, pagination).ToString(),
+                Convert(bytes, semantic, pagination, normalizeBullets: true).ToString());
+        }
+
+        [Fact]
+        public void Normalization_preserves_numbered_markers_and_nested_indents()
+        {
+            var numbered = BuildDocx(Item("Harbor") + Item("Ledger", level: 1),
+                AbstractNum(0, ("decimal", "%1."), ("decimal", "%1.%2.")) + Num(1, 0));
+            Assert.Equal(Convert(numbered).ToString(), Convert(numbered, normalizeBullets: true).ToString());
+            var bullets = BuildDocx(Item("Harbor") + Item("Ledger", level: 1),
+                AbstractNum(0, ("bullet", "•"), ("bullet", "◦")) + Num(1, 0));
+            var html = XElement.Parse(HtmlConversionOps.ConvertToHtml(bullets, new HtmlConversionOptions
+            {
+                SemanticLists = true, NormalizeBulletMarkers = true, FabricateCssClasses = false, StampAnchors = true,
+            }));
+            var items = html.Descendants(Xhtml.li).ToList();
+            Assert.Equal(2, items.Count);
+            Assert.All(items, item =>
+            {
+                Assert.Contains("margin-left: 36pt", Style(item));
+                Assert.Contains("text-indent: 0", Style(item));
+                Assert.NotNull(item.Attribute("data-anchor"));
+                Assert.False(HasMarkerSpan(item));
+            });
+            Assert.Contains("list-style-type: circle", Style(Assert.Single(items[0].Elements(Xhtml.ul))));
+        }
 
         [Fact]
         public void Adjacent_numbered_items_become_one_ordered_list_drawn_by_css()

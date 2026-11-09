@@ -385,6 +385,7 @@ public partial class DocumentConverter
     /// <param name="stampAnchors">Stamp block elements with data-anchor ids</param>
     /// <param name="revisionPresentation">How tracked changes look: 0 = Docxodus style (default), 1 = Word's All Markup style</param>
     /// <param name="semanticLists">Emit Word lists as ol/ul/li (ignored by paginated output)</param>
+    /// <param name="normalizeBulletMarkers">Use CSS for familiar semantic bullet shapes, allowing formatting changes</param>
     /// <param name="stampPageNumberFields">Mark PAGE / NUMPAGES fields in flow output, preserving cached results</param>
     /// <param name="renderHeaderFooterRegistry">Put active flow header/footer variants in a hidden registry</param>
     /// <returns>HTML string or JSON error object</returns>
@@ -415,7 +416,8 @@ public partial class DocumentConverter
         bool semanticLists = false,
         int hiddenRevisionKinds = 0,
         bool stampPageNumberFields = false,
-        bool renderHeaderFooterRegistry = false)
+        bool renderHeaderFooterRegistry = false,
+        bool normalizeBulletMarkers = false)
     {
         if (docxBytes == null || docxBytes.Length == 0)
         {
@@ -428,6 +430,7 @@ public partial class DocumentConverter
             {
                 StampAnchors = stampAnchors,
                 SemanticLists = semanticLists,
+                NormalizeBulletMarkers = normalizeBulletMarkers,
                 StampPageNumberFields = stampPageNumberFields,
                 RenderHeaderFooterRegistry = renderHeaderFooterRegistry,
                 RevisionPresentation = revisionPresentation,

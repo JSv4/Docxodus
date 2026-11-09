@@ -67,6 +67,10 @@ internal sealed record HtmlConversionOptions
     /// </summary>
     public bool SemanticLists { get; init; }
 
+    /// <summary>In semantic lists, use CSS for familiar bullet shapes even when their source
+    /// formatting differs. Preserves numbered/custom markers and checkboxes. Default false.</summary>
+    public bool NormalizeBulletMarkers { get; init; }
+
     /// <summary>
     /// Wrap PAGE / NUMPAGES field results in <c>&lt;span data-field&gt;</c>, including flow
     /// output and block renders. Preserves cached results; clients can replace them later.
@@ -185,6 +189,7 @@ internal static class HtmlConversionOps
             StampAnchors = options.StampAnchors,
             StampCanonicalSourceAnchors = options.StampAnchors || renderPagination,
             SemanticLists = options.SemanticLists,
+            NormalizeBulletMarkers = options.NormalizeBulletMarkers,
             StampPageNumberFields = options.StampPageNumberFields,
             AuthorColors = options.AuthorColors is null ? null : new Dictionary<string, string>(options.AuthorColors),
             // Embed images as base64 data URIs — no SkiaSharp needed (WASM-safe).

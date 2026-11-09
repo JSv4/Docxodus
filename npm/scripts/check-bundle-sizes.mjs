@@ -87,7 +87,9 @@ const budgetsKiB = {
   'embed.bundle.js': 158.2,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
-  'embed.iife.js': 158.2,
+  // The appended bullet-normalization option adds 29 gzip bytes (161996 -> 162025).
+  // Only IIFE exhausts its gate; increase it by 0.1 KiB.
+  'embed.iife.js': 158.3,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
   'editor.bundle.js': 137.4,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.

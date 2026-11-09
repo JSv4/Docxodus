@@ -932,7 +932,8 @@ export async function convertDocxToHtml(
       options?.semanticLists ?? false,
       hiddenRevisionKinds(options),
       options?.stampPageNumberFields ?? false,
-      options?.renderHeaderFooterRegistry ?? false
+      options?.renderHeaderFooterRegistry ?? false,
+      options?.normalizeBulletMarkers ?? false
     );
   }
   // Use pagination-aware method when pagination is requested
