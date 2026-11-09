@@ -288,6 +288,10 @@ export interface ConversionOptions {
   renderFootnotesAndEndnotes?: boolean;
   /** Whether to render document headers and footers (default: false) */
   renderHeadersAndFooters?: boolean;
+  /** In flow HTML, emit active header/footer variants for every section in the hidden
+   * #document-hf-registry instead of a visible default pair. Requires renderHeadersAndFooters.
+   * Default: false. Paginated output keeps its existing registry. */
+  renderHeaderFooterRegistry?: boolean;
   /** Preserve PAGE / NUMPAGES fields as data-field spans in flow HTML, including empty results.
    * Cached text and formatting are retained; this does not calculate page numbers.
    * Default: false. Paginated output always marks these fields. */
@@ -1575,7 +1579,8 @@ export interface DocxodusWasmExports {
       revisionPresentation: number,
       semanticLists?: boolean,
       hiddenRevisionKinds?: number,
-      stampPageNumberFields?: boolean
+      stampPageNumberFields?: boolean,
+      renderHeaderFooterRegistry?: boolean
     ) => string;
     GetAnnotations: (bytes: Uint8Array) => string;
     AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;

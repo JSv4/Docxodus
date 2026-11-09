@@ -46,8 +46,18 @@ def test_flow_inherits_the_nearest_default_story(empty_final: bool) -> None:
     data = stream.getvalue()
     with open_session(data) as session:
         for convert in (session.to_html, lambda options: convert_docx_to_html(data, options)):
-            html = ET.fromstring(convert(HtmlOptions(render_headers_and_footers=True)))
-            for kind in ("header", "footer"):
-                stories = html.findall(f".//{{http://www.w3.org/1999/xhtml}}{kind}")
-                assert len(stories) == 1
-                assert "".join(stories[0].itertext()).strip() == ("Old " if empty_final else "Current ") + kind
+            for registry in (False, True):
+                html = ET.fromstring(convert(HtmlOptions(
+                    render_headers_and_footers=True, render_header_footer_registry=registry)))
+                for kind in ("header", "footer"):
+                    stories = html.findall(f".//{{http://www.w3.org/1999/xhtml}}{kind}")
+                    assert len(stories) == (0 if registry else 1)
+                    if not registry:
+                        assert "".join(stories[0].itertext()).strip() == ("Old " if empty_final else "Current ") + kind
+                entries = html.findall(".//*[@data-hf-type]")
+                assert len(entries) == (6 if registry else 0)
+                for entry in entries:
+                    section = entry.attrib["data-section"]
+                    name = "Old" if section == "0" or (empty_final and section == "2") else "Current"
+                    kind = entry.attrib["data-hf-type"].split("-")[0]
+                    assert "".join(entry.itertext()).strip() == name + " " + kind

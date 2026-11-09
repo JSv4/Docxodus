@@ -34,6 +34,11 @@ internal sealed record HtmlConversionOptions
     public string AnnotationCssClassPrefix { get; init; } = "annot-";
     public bool RenderFootnotesAndEndnotes { get; init; }
     public bool RenderHeadersAndFooters { get; init; }
+    /// <summary>
+    /// Full flow renders only: put each section's active header/footer variants in a hidden
+    /// registry instead of rendering one default pair. Requires <see cref="RenderHeadersAndFooters"/>.
+    /// </summary>
+    public bool RenderHeaderFooterRegistry { get; init; }
     public bool RenderTrackedChanges { get; init; }
     public bool ShowFormattingChanges { get; init; } = true;
     public bool ShowInsertionsAndDeletions { get; init; } = true;
@@ -165,6 +170,7 @@ internal static class HtmlConversionOps
             IncludeAnnotationMetadata = true,
             RenderFootnotesAndEndnotes = options.RenderFootnotesAndEndnotes,
             RenderHeadersAndFooters = options.RenderHeadersAndFooters,
+            RenderHeaderFooterRegistry = options.RenderHeaderFooterRegistry,
             RenderTrackedChanges = options.RenderTrackedChanges,
             ShowFormattingChanges = options.ShowFormattingChanges,
             ShowInsertionsAndDeletions = options.ShowInsertionsAndDeletions,

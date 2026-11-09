@@ -753,6 +753,7 @@ internal static partial class Dispatcher
             DocumentLanguage = StrOptNullable("documentLanguage", defaults.DocumentLanguage),
             SemanticLists = BoolOpt("semanticLists", defaults.SemanticLists),
             StampPageNumberFields = BoolOpt("stampPageNumberFields", defaults.StampPageNumberFields),
+            RenderHeaderFooterRegistry = BoolOpt("renderHeaderFooterRegistry", defaults.RenderHeaderFooterRegistry),
         };
     }
 

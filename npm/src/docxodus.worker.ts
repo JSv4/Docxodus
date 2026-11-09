@@ -403,7 +403,8 @@ function handleConvert(
         options?.revisionPresentation ?? 0,
         options?.semanticLists ?? false,
         hiddenRevisionKinds(options),
-        options?.stampPageNumberFields ?? false
+        options?.stampPageNumberFields ?? false,
+        options?.renderHeaderFooterRegistry ?? false
       );
     } else if (
       options?.paginationMode !== undefined &&

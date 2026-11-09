@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Flow HTML can expose every section's active header/footer variants in a hidden registry with `renderHeaderFooterRegistry` in npm or `render_header_footer_registry` in Python. Body layout and semantic lists remain in flow mode; existing default-story output is unchanged unless requested (#1620).
+
 - **Flow HTML page-field markers** (#1621): `stampPageNumberFields` in npm and
   `stamp_page_number_fields` in Python preserve `PAGE` / `NUMPAGES` fields as `data-field`
   spans without pagination. Cached text and formatting remain intact, including empty results;

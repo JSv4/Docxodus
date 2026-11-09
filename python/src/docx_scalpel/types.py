@@ -4249,6 +4249,10 @@ class HtmlOptions:
     ``stamp_page_number_fields`` preserves PAGE / NUMPAGES fields as ``data-field``
     spans in flow HTML, including empty results. Cached text and formatting stay;
     this does not calculate page numbers. Paginated output always marks them.
+
+    ``render_header_footer_registry`` puts every section's active header/footer variants
+    in hidden ``#document-hf-registry`` instead of one visible default pair in flow HTML.
+    Requires ``render_headers_and_footers``; paginated output keeps its existing registry.
     """
 
     page_title: str = "Document"
@@ -4275,6 +4279,7 @@ class HtmlOptions:
     show_formatting_changes: bool = True
     show_insertions_and_deletions: bool = True
     stamp_page_number_fields: bool = False
+    render_header_footer_registry: bool = False
 
     def to_wire(self) -> dict[str, Any]:
         """camelCase keys the host dispatcher's ``ParseHtmlOptions`` reads."""
@@ -4302,6 +4307,7 @@ class HtmlOptions:
             "renderUnsupportedContentPlaceholders": self.render_unsupported_content_placeholders,
             "semanticLists": self.semantic_lists,
             "stampPageNumberFields": self.stamp_page_number_fields,
+            "renderHeaderFooterRegistry": self.render_header_footer_registry,
         }
         if self.document_language is not None:
             wire["documentLanguage"] = self.document_language

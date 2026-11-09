@@ -931,7 +931,8 @@ export async function convertDocxToHtml(
       options?.revisionPresentation ?? RevisionPresentation.Docxodus,
       options?.semanticLists ?? false,
       hiddenRevisionKinds(options),
-      options?.stampPageNumberFields ?? false
+      options?.stampPageNumberFields ?? false,
+      options?.renderHeaderFooterRegistry ?? false
     );
   }
   // Use pagination-aware method when pagination is requested
