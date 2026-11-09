@@ -38,7 +38,7 @@ interface HostBatchRequest {
   artifactRequestIds: string[];
   options: Omit<
     RenderBatchOptions,
-    "browser" | "browserExecutablePath" | "fontDirectories" | "signal"
+    "browser" | "browserExecutablePath" | "fontDirectories" | "fontSources" | "signal"
   >;
 }
 

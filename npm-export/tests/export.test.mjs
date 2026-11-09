@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
+  mkdtemp,
   mkdir,
   readFile,
   readdir,
@@ -42,6 +43,8 @@ const successArtifacts = join(artifacts, "success");
 const failureArtifacts = join(artifacts, "failure");
 const cliEntry = join(packageRoot, "dist", "cli.js");
 const hostEntry = join(packageRoot, "dist", "host.js");
+const temporaryEnvironment = new Map(["TMPDIR", "TEMP", "TMP"].map(key => [key, process.env[key]]));
+let runtimeTemporaryDirectory;
 const baseOptions = Object.freeze({
   reviewProfile: "final",
   commentProfile: "hidden",
@@ -369,6 +372,10 @@ function parseFrames(buffer) {
 }
 
 before(async () => {
+  // Each test file runs in its own process. Isolate both in-process and CLI
+  // browsers so other files cannot change the cleanup assertions' directory set.
+  runtimeTemporaryDirectory = await mkdtemp(join(tmpdir(), "docx-export-"));
+  for (const key of temporaryEnvironment.keys()) process.env[key] = runtimeTemporaryDirectory;
   await rm(artifacts, { recursive: true, force: true });
   await mkdir(successArtifacts, { recursive: true });
   await mkdir(failureArtifacts, { recursive: true });
@@ -377,8 +384,16 @@ before(async () => {
 });
 
 after(async () => {
-  await browser?.close();
-  await writeViewer();
+  try {
+    await browser?.close();
+    await writeViewer();
+  } finally {
+    for (const [key, value] of temporaryEnvironment) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    if (runtimeTemporaryDirectory) await rm(runtimeTemporaryDirectory, { recursive: true, force: true });
+  }
 });
 
 describe("@docxodus/export", { concurrency: false }, () => {

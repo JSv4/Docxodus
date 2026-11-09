@@ -78,6 +78,8 @@ export interface NodeExportRuntime {
   browserExecutablePath?: string;
   /** Ordered font directories searched for configured faces; order is policy. */
   fontDirectories?: readonly string[];
+  /** Opt in to lazy discovery of exact faces in the machine’s standard font locations. */
+  fontSources?: readonly "local"[];
   fontLicenseAttestations?: readonly FontLicenseAttestation[];
   environmentAttestation?: RenderEnvironmentAttestation;
   /** Built by the host from `fontDirectories`; exposed to the page as a binding. */

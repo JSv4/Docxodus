@@ -83,7 +83,7 @@ export type FontResolutionStatus =
   | "missing"
   | "load_failed"
   | "unverified";
-export type FontResolutionSource = "browser" | "configured" | "attested";
+export type FontResolutionSource = "browser" | "configured" | "attested" | "local";
 export type FontFaceMatch = "exact" | "synthesized";
 export type FontGlyphCoverage = "complete" | "partial" | "unverified";
 export type FontEmbeddingKind = "installable" | "previewPrint" | "editable" | "attested";
@@ -103,6 +103,8 @@ export interface FontRequest {
 }
 
 export interface FontResolverRequest {
+  /** Previously returned local faces that the browser could not decode. */
+  rejectedFaceIds?: readonly string[];
   schemaVersion: typeof FONT_RESOLVER_SCHEMA_VERSION;
   requests: readonly FontRequest[];
 }
@@ -117,6 +119,8 @@ export interface FontLicenseEvidence {
 /** Immutable configured bytes and metadata returned to the browser coordinator. */
 export interface FontResolverFace {
   id: string;
+  /** Machine-local bytes selected by the opt-in Node runtime. Omitted for configured sources. */
+  source?: "local";
   resolvedFamily: string;
   postscriptName?: string;
   version: string;
@@ -145,6 +149,8 @@ export interface FontResolverOutcome {
 }
 
 export interface FontResolverResponse {
+  /** Keep rejected named fonts out of the browser fallback stack. */
+  fallback?: "generic";
   schemaVersion: typeof FONT_RESOLVER_SCHEMA_VERSION;
   resolverContract: typeof FONT_RESOLVER_CONTRACT_ID;
   substitutionContractVersion: typeof FONT_SUBSTITUTION_CONTRACT_VERSION;

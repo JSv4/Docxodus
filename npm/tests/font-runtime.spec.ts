@@ -299,6 +299,44 @@ async function convertWithAdversarialResolver(
 test.describe('browser configured font runtime', () => {
   test.beforeEach(async ({ page }) => ready(page));
 
+  test('local fallback policy removes rejected named faces even when a face fails to decode', async ({ page }) => {
+    const outcomes = await page.evaluate(async ({ bytes, contract, broken }) => {
+      const api = (window as any).DocxodusStandalone;
+      const results = [];
+      for (const mode of ['default-missing', 'generic-missing', 'generic-corrupt']) {
+        const result = await api.convert(bytes, { reviewProfile: 'final', commentProfile: 'hidden', fontResolver: (request: any) => ({
+          ...contract,
+          ...(mode.startsWith('generic') ? { fallback: 'generic' } : {}),
+          faces: mode === 'generic-corrupt' && !request.rejectedFaceIds?.length ? request.requests.map((item: any) => ({
+            ...broken, id: item.id, resolvedFamily: item.familyStack[0], version: '1',
+            source: 'local', style: item.style, weight: item.weight, stretch: item.stretch,
+            licenseEvidence: { kind: 'installable', identity: 'a'.repeat(64), noSubsetting: false },
+          })) : [],
+          outcomes: request.requests.map((item: any) => mode === 'generic-corrupt' && !request.rejectedFaceIds?.length ? {
+            requestId: item.id, status: 'resolved', faceId: item.id, faceMatch: 'exact', glyphCoverage: 'complete',
+          } : { requestId: item.id, status: 'missing' }),
+        }) });
+        const doc = new DOMParser().parseFromString(result.html, 'text/html');
+        const styles = Array.from(doc.querySelectorAll<HTMLElement>('[data-docx-font-request]'), node => node.style.fontFamily);
+        results.push({ mode, styles, statuses: result.renderReport.fonts.map((font: any) => font.status), fingerprint: result.rendererFingerprint });
+      }
+      return results;
+    }, { bytes: Array.from(generateInlineFontDocx()), contract: {
+      schemaVersion: FONT_RESOLVER_SCHEMA_VERSION, resolverContract: FONT_RESOLVER_CONTRACT_ID,
+      substitutionContractVersion: FONT_SUBSTITUTION_CONTRACT_VERSION, substitutionContractDigest,
+    }, broken: { format: 'woff2', mediaType: 'font/woff2', byteLength: corruptFont.length,
+      sha256: digest(corruptFont), bytesBase64: corruptFont.toString('base64') } });
+    for (const outcome of outcomes) {
+      expect(outcome.styles.length).toBeGreaterThan(0);
+      if (outcome.mode.startsWith('generic')) {
+        expect(outcome.styles.every((family: string) => family && !family.includes('Docxodus Requested'))).toBe(true);
+      }
+    }
+    expect(outcomes[1].statuses.every((status: string) => status === 'missing')).toBe(true);
+    expect(outcomes[2].statuses.every((status: string) => status === 'missing')).toBe(true);
+    expect(outcomes[0].fingerprint).not.toBe(outcomes[1].fingerprint);
+  });
+
   test('MathML inventory covers rendered italic identifiers and implicit radical glyphs', async ({ page }) => {
     const requests = await page.evaluate(() => (window as any).DocxodusStandalone.inventoryFontFixture(
       '<math style="font-family:MathFace"><mi>x</mi><mi>h</mi><mi>Α</mi><mi>ϴ</mi><mi>α</mi><mi>ϵ</mi>'

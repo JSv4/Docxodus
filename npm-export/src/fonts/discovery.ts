@@ -13,15 +13,17 @@ import {
   type FontMediaType,
 } from "docxodus/export-browser";
 import { canonicalJson, sha256 } from "../canonical.js";
+import { collectionFaces } from "./sfnt.js";
 import type { FontLicenseAttestation, RenderOutput } from "../contracts.js";
 import { DocxodusExportError, exportError } from "../contracts.js";
 
-const FONT_EXTENSIONS = new Set([".ttf", ".otf", ".woff", ".woff2"]);
+const FONT_EXTENSIONS = new Set([".ttf", ".otf", ".woff", ".woff2", ".ttc", ".otc"]);
 const WIDTH_CLASS_PERCENT = Object.freeze([0, 50, 62.5, 75, 87.5, 100, 112.5, 125, 150, 200]);
-const FONT_CATALOG_CODE_POINTS_MAX = 0x11_0000;
+export const FONT_CATALOG_CODE_POINTS_MAX = 0x11_0000;
 
 export interface ConfiguredFontFace {
   id: string;
+  source?: "local";
   directoryIndex: number;
   discoveryIndex: number;
   family: string;
@@ -66,7 +68,7 @@ interface DirectorySnapshot {
   identity: BigIntStats;
 }
 
-function sameIdentity(left: BigIntStats, right: BigIntStats): boolean {
+export function sameIdentity(left: BigIntStats, right: BigIntStats): boolean {
   return left.dev === right.dev
     && left.ino === right.ino
     && left.size === right.size
@@ -74,7 +76,7 @@ function sameIdentity(left: BigIntStats, right: BigIntStats): boolean {
     && left.ctimeNs === right.ctimeNs;
 }
 
-function underRoot(root: string, candidate: string): boolean {
+export function underRoot(root: string, candidate: string): boolean {
   const fromRoot = relative(root, candidate);
   return fromRoot === "" || (fromRoot !== ".." && !fromRoot.startsWith(`..${sep}`)
     && !isAbsolute(fromRoot));
@@ -262,11 +264,29 @@ function fontStretch(face: fontkit.Font): number {
     : 100;
 }
 
-function faceKey(face: Pick<ConfiguredFontFace, "familyKey" | "style" | "weight" | "stretch">): string {
+export function faceKey(face: Pick<ConfiguredFontFace, "familyKey" | "style" | "weight" | "stretch">): string {
   return `${face.familyKey}\u0000${face.style}\u0000${face.weight}\u0000${face.stretch}`;
 }
 
-async function readStableFontFile(
+export function fontMetadata(face: fontkit.Font): Pick<ConfiguredFontFace,
+  "family" | "familyKey" | "postscriptName" | "version" | "style" | "weight" | "stretch"> {
+  const family = safeMetadata(face.familyName, "family name")!;
+  const postscriptName = safeMetadata(face.postscriptName, "PostScript name", false);
+  return {
+    family, familyKey: fontFamilyKey(family),
+    ...(postscriptName ? { postscriptName } : {}),
+    version: safeMetadata(face.version, "version")!,
+    style: fontStyle(face), weight: fontWeight(face), stretch: fontStretch(face),
+  };
+}
+
+export function openFontFile(path: string): ReturnType<typeof open> {
+  // A regular file can become a FIFO between lstat and open. Nonblocking mode
+  // lets the post-open type check reject it without stranding an I/O worker.
+  return open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+}
+
+export async function readStableFontFile(
   path: string,
   root: string,
   label: string,
@@ -280,8 +300,7 @@ async function readStableFontFile(
       fontError(`Configured ${label} is not a regular, non-symlink file.`,
         "Remove symlinks and non-regular entries from font directories.");
     }
-    const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
-    handle = await open(path, constants.O_RDONLY | noFollow);
+    handle = await openFontFile(path);
     const realPathBefore = await realpath(path);
     if (!underRoot(root, realPathBefore)) {
       fontError(`Configured ${label} resolves outside its font directory.`,
@@ -365,6 +384,105 @@ async function directoryEntries(
     await directory?.close().catch(() => undefined);
   }
   return entries.sort((left, right) => compareNames(left.name, right.name));
+}
+
+export function decodeFontFace(
+  bytes: Uint8Array,
+  extension: string,
+  directoryIndex: number,
+  discoveryIndex: number,
+  attestation?: FontLicenseAttestation,
+): ConfiguredFontFace {
+  const decoded = decodedFormat(bytes, extension);
+  const fileSha256 = sha256(bytes);
+  let parsed: fontkit.Font | fontkit.FontCollection;
+  try {
+    parsed = fontkit.create(Buffer.from(
+      bytes.buffer,
+      bytes.byteOffset,
+      bytes.byteLength,
+    ));
+  } catch (cause) {
+    fontError("A font could not be parsed.",
+      "Replace the font with a valid, bounded OpenType or webfont file.", fileSha256, cause);
+  }
+  try {
+    if ("fonts" in parsed) {
+      fontError("A font collection must be extracted before face decoding.",
+        "Provide separate TTF, OTF, WOFF, or WOFF2 face files.", fileSha256);
+    }
+    if (Object.keys(parsed.variationAxes ?? {}).length > 0) {
+      fontError("A font has unsupported variable axes.",
+        "Provide static face files with explicit style, weight, and stretch.", fileSha256);
+    }
+    const family = safeMetadata(parsed.familyName, "family name")!;
+    const postscriptName = safeMetadata(parsed.postscriptName, "PostScript name", false);
+    const version = safeMetadata(parsed.version, "version")!;
+    const os2License = os2LicenseEvidence(parsed, fileSha256);
+    const attested = attestedLicenseEvidence(attestation, os2License.evidence);
+    const requiresAttestation = decoded.format === "woff" || decoded.format === "woff2";
+    const licenseEvidence = os2License.prohibited
+      ? undefined
+      : attested ?? (requiresAttestation ? undefined : os2License.evidence);
+    const licenseFailure = os2License.prohibited
+      ? os2License.failure
+      : requiresAttestation && !attested
+        ? "A WOFF/WOFF2 font requires an exact embedding-rights attestation."
+        : !licenseEvidence ? os2License.failure : undefined;
+    // licenseEvidence/licenseFailure above are always exactly one-or-the-other, never
+    // both and never neither — every branch of os2LicenseEvidence() and the two
+    // requiresAttestation checks maintain that. Express it once here rather than
+    // leaving every consumer to re-derive "did licensing succeed" from two independently
+    // optional fields.
+    const license = licenseEvidence
+      ? { ok: true as const, evidence: Object.freeze({ ...licenseEvidence }) }
+      : { ok: false as const, failure: licenseFailure! };
+    const codePoints: number[] = [];
+    let priorCodePoint = -1;
+    for (const codePoint of parsed.characterSet) {
+      if (!Number.isSafeInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff
+        || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+        fontError("A font has an invalid character map.",
+          "Replace the malformed font file.", fileSha256);
+      }
+      if (codePoint === priorCodePoint) continue;
+      if (codePoint < priorCodePoint) {
+        fontError("A font has an unsorted character map.",
+          "Replace the malformed font file.", fileSha256);
+      }
+      codePoints.push(codePoint);
+      priorCodePoint = codePoint;
+    }
+    return Object.freeze({
+      id: `font-${fileSha256}`,
+      directoryIndex,
+      discoveryIndex,
+      family,
+      familyKey: fontFamilyKey(family),
+      ...(postscriptName ? { postscriptName } : {}),
+      version,
+      style: fontStyle(parsed),
+      weight: fontWeight(parsed),
+      stretch: fontStretch(parsed),
+      format: decoded.format,
+      mediaType: decoded.mediaType,
+      byteLength: bytes.byteLength,
+      expandedByteLength: decoded.expandedByteLength,
+      sha256: fileSha256,
+      bytes,
+      codePoints: Object.freeze(codePoints),
+      permittedOutputs: Object.freeze([
+        ...(attestation?.permittedOutputs.includes("html") ? ["html" as const] : []),
+        ...(attestation?.permittedOutputs.includes("pdf") ? ["pdf" as const] : []),
+        ...(!attestation && licenseEvidence ? ["html" as const, "pdf" as const] : []),
+      ]),
+      license,
+    });
+  } catch (cause) {
+    if (cause instanceof DocxodusExportError) throw cause;
+    fontError("A font has unreadable metadata.",
+      "Replace the font with a valid, bounded OpenType or webfont file.", fileSha256, cause);
+  }
 }
 
 export async function discoverFontCatalog(
@@ -495,133 +613,59 @@ export async function discoverFontCatalog(
         );
         totalBytes += snapshot.bytes.byteLength;
         enforceLimit("fontTotalBytes", totalBytes, limitSnapshot.fontTotalBytes);
-        const decoded = decodedFormat(snapshot.bytes, extension);
-        enforceLimit("fontFileBytes", decoded.expandedByteLength, limitSnapshot.fontFileBytes);
-        totalExpandedBytes += decoded.expandedByteLength;
-        enforceLimit("fontTotalBytes", totalExpandedBytes, limitSnapshot.fontTotalBytes);
-        const fileSha256 = sha256(snapshot.bytes);
-        const existing = seenFacesByDigest.get(fileSha256);
-        if (existing) {
-          const key = faceKey(existing);
-          const conflict = directoryFaces.get(key);
-          if (conflict && conflict.sha256 !== fileSha256) {
-            fontError(`fontDirectory[${directoryIndex}] contains ambiguous files for one family and face.`,
-              "Keep one byte identity for each family/style/weight/stretch combination.",
-              `${conflict.sha256},${fileSha256}`);
-          }
-          directoryFaces.set(key, existing);
-          continue;
-        }
+        const isCollection = extension === ".ttc" || extension === ".otc";
+        const sourceSha256 = sha256(snapshot.bytes);
+        try {
+          const programs = isCollection
+            ? collectionFaces(snapshot.bytes, limitSnapshot.fontFileBytes, limitSnapshot.fontFiles)
+            : [snapshot.bytes];
+          for (const bytes of programs) {
+            if (signal?.aborted) throw signal.reason;
+            const decoded = decodedFormat(bytes, isCollection
+              ? Buffer.from(bytes.subarray(0, 4)).toString("ascii") === "OTTO" ? ".otf" : ".ttf"
+              : extension);
+            enforceLimit("fontFileBytes", decoded.expandedByteLength, limitSnapshot.fontFileBytes);
+            totalExpandedBytes += decoded.expandedByteLength;
+            enforceLimit("fontTotalBytes", totalExpandedBytes, limitSnapshot.fontTotalBytes);
+            const fileSha256 = sha256(bytes);
+            const existing = seenFacesByDigest.get(fileSha256);
+            if (existing) {
+              const key = faceKey(existing);
+              const conflict = directoryFaces.get(key);
+              if (conflict && conflict.sha256 !== fileSha256) {
+                fontError(`fontDirectory[${directoryIndex}] contains ambiguous files for one family and face.`,
+                  "Keep one byte identity for each family/style/weight/stretch combination.",
+                  `${conflict.sha256},${fileSha256}`);
+              }
+              directoryFaces.set(key, existing);
+              continue;
+            }
 
-        let parsed: fontkit.Font | fontkit.FontCollection;
-        try {
-          parsed = fontkit.create(Buffer.from(
-            snapshot.bytes.buffer,
-            snapshot.bytes.byteOffset,
-            snapshot.bytes.byteLength,
-          ));
-        } catch (cause) {
-          fontError(`fontDirectory[${directoryIndex}] contains a malformed font.`,
-            "Replace the font with a valid, bounded OpenType or webfont file.", fileSha256, cause);
-        }
-        let face: ConfiguredFontFace;
-        try {
-          if ("fonts" in parsed) {
-            fontError(`fontDirectory[${directoryIndex}] contains an unsupported font collection.`,
-              "Provide separate TTF, OTF, WOFF, or WOFF2 face files.", fileSha256);
-          }
-          if (Object.keys(parsed.variationAxes ?? {}).length > 0) {
-            fontError(`fontDirectory[${directoryIndex}] contains an unsupported variable font.`,
-              "Provide static face files with explicit style, weight, and stretch.", fileSha256);
-          }
-          const family = safeMetadata(parsed.familyName, "family name")!;
-          const postscriptName = safeMetadata(parsed.postscriptName, "PostScript name", false);
-          const version = safeMetadata(parsed.version, "version")!;
-          const os2License = os2LicenseEvidence(parsed, fileSha256);
-          const attestation = attestationByDigest.get(fileSha256);
-          const attested = attestedLicenseEvidence(attestation, os2License.evidence);
-          const requiresAttestation = decoded.format === "woff" || decoded.format === "woff2";
-          const licenseEvidence = os2License.prohibited
-            ? undefined
-            : attested ?? (requiresAttestation ? undefined : os2License.evidence);
-          const licenseFailure = os2License.prohibited
-            ? os2License.failure
-            : requiresAttestation && !attested
-              ? "A WOFF/WOFF2 font requires an exact embedding-rights attestation."
-              : !licenseEvidence ? os2License.failure : undefined;
-          // licenseEvidence/licenseFailure above are always exactly one-or-the-other, never
-          // both and never neither — every branch of os2LicenseEvidence() and the two
-          // requiresAttestation checks maintain that. Express it once here rather than
-          // leaving every consumer to re-derive "did licensing succeed" from two independently
-          // optional fields.
-          const license = licenseEvidence
-            ? { ok: true as const, evidence: Object.freeze({ ...licenseEvidence }) }
-            : { ok: false as const, failure: licenseFailure! };
-          const codePoints: number[] = [];
-          let priorCodePoint = -1;
-          for (const codePoint of parsed.characterSet) {
-            if (!Number.isSafeInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff
-              || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
-              fontError(`fontDirectory[${directoryIndex}] contains an invalid character map.`,
-                "Replace the malformed font file.", fileSha256);
+            const face = decodeFontFace(bytes, `.${decoded.format}`, directoryIndex, discoveryIndex++,
+              attestationByDigest.get(sourceSha256));
+            totalCodePoints += face.codePoints.length;
+            if (totalCodePoints > FONT_CATALOG_CODE_POINTS_MAX) {
+              exportError("resource_limit", "font_loading",
+                `Configured font character maps exceed ${FONT_CATALOG_CODE_POINTS_MAX} entries.`,
+                "Use a smaller set of static font faces.");
             }
-            if (codePoint === priorCodePoint) continue;
-            if (codePoint < priorCodePoint) {
-              fontError(`fontDirectory[${directoryIndex}] contains an unsorted character map.`,
-                "Replace the malformed font file.", fileSha256);
+            const key = faceKey(face);
+            const conflict = directoryFaces.get(key);
+            if (conflict && conflict.sha256 !== face.sha256) {
+              fontError(`fontDirectory[${directoryIndex}] contains ambiguous files for one family and face.`,
+                "Keep one byte identity for each family/style/weight/stretch combination.",
+                `${conflict.sha256},${face.sha256}`);
             }
-            codePoints.push(codePoint);
-            priorCodePoint = codePoint;
+            directoryFaces.set(key, face);
+            seenFacesByDigest.set(fileSha256, face);
+            faces.push(face);
           }
-          totalCodePoints += codePoints.length;
-          if (totalCodePoints > FONT_CATALOG_CODE_POINTS_MAX) {
-            exportError(
-              "resource_limit",
-              "font_loading",
-              `Configured font character maps exceed ${FONT_CATALOG_CODE_POINTS_MAX} entries.`,
-              "Use a smaller set of static font faces.",
-            );
-          }
-          face = Object.freeze({
-            id: `font-${fileSha256}`,
-            directoryIndex,
-            discoveryIndex: discoveryIndex++,
-            family,
-            familyKey: fontFamilyKey(family),
-            ...(postscriptName ? { postscriptName } : {}),
-            version,
-            style: fontStyle(parsed),
-            weight: fontWeight(parsed),
-            stretch: fontStretch(parsed),
-            format: decoded.format,
-            mediaType: decoded.mediaType,
-            byteLength: snapshot.bytes.byteLength,
-            expandedByteLength: decoded.expandedByteLength,
-            sha256: fileSha256,
-            bytes: snapshot.bytes,
-            codePoints: Object.freeze(codePoints),
-            permittedOutputs: Object.freeze([
-              ...(attestation?.permittedOutputs.includes("html") ? ["html" as const] : []),
-              ...(attestation?.permittedOutputs.includes("pdf") ? ["pdf" as const] : []),
-              ...(!attestation && licenseEvidence ? ["html" as const, "pdf" as const] : []),
-            ]),
-            license,
-          });
         } catch (cause) {
           if (cause instanceof DocxodusExportError) throw cause;
-          fontError(`fontDirectory[${directoryIndex}] contains unreadable font metadata.`,
-            "Replace the font with a valid, bounded OpenType or webfont file.", fileSha256, cause);
+          fontError("A configured font collection could not be decoded.",
+            "Provide a valid, bounded TTC or OTC collection.",
+            cause instanceof Error ? cause.message : undefined);
         }
-        const key = faceKey(face);
-        const conflict = directoryFaces.get(key);
-        if (conflict && conflict.sha256 !== face.sha256) {
-          fontError(`fontDirectory[${directoryIndex}] contains ambiguous files for one family and face.`,
-            "Keep one byte identity for each family/style/weight/stretch combination.",
-            `${conflict.sha256},${face.sha256}`);
-        }
-        directoryFaces.set(key, face);
-        seenFacesByDigest.set(fileSha256, face);
-        faces.push(face);
       }
       const afterProcessing = await stat(current.path, { bigint: true }).catch(() =>
         fontError(`fontDirectory[${directoryIndex}] changed during traversal.`,
