@@ -386,6 +386,7 @@ public partial class DocumentConverter
     /// <param name="revisionPresentation">How tracked changes look: 0 = Docxodus style (default), 1 = Word's All Markup style</param>
     /// <param name="semanticLists">Emit Word lists as ol/ul/li (ignored by paginated output)</param>
     /// <param name="stampPageNumberFields">Mark PAGE / NUMPAGES fields in flow output, preserving cached results</param>
+    /// <param name="renderHeaderFooterRegistry">Put active flow header/footer variants in a hidden registry</param>
     /// <returns>HTML string or JSON error object</returns>
     [JSExport]
     public static string ConvertDocxToHtmlComplete(
@@ -413,7 +414,8 @@ public partial class DocumentConverter
         int revisionPresentation = 0,
         bool semanticLists = false,
         int hiddenRevisionKinds = 0,
-        bool stampPageNumberFields = false)
+        bool stampPageNumberFields = false,
+        bool renderHeaderFooterRegistry = false)
     {
         if (docxBytes == null || docxBytes.Length == 0)
         {
@@ -427,6 +429,7 @@ public partial class DocumentConverter
                 StampAnchors = stampAnchors,
                 SemanticLists = semanticLists,
                 StampPageNumberFields = stampPageNumberFields,
+                RenderHeaderFooterRegistry = renderHeaderFooterRegistry,
                 RevisionPresentation = revisionPresentation,
                 PageTitle = pageTitle ?? "Document",
                 CssClassPrefix = cssPrefix ?? "docx-",

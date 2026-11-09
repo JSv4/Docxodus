@@ -201,6 +201,12 @@ namespace Docxodus
         public bool RenderHeadersAndFooters;
 
         /// <summary>
+        /// In flow output, emit active section header/footer variants in a hidden registry
+        /// instead of one visible default pair. Requires RenderHeadersAndFooters; default false.
+        /// </summary>
+        public bool RenderHeaderFooterRegistry;
+
+        /// <summary>
         /// If true, render comments in HTML output.
         /// If false (default), comments are stripped from the output.
         /// </summary>
@@ -436,6 +442,7 @@ namespace Docxodus
             RenderMoveOperations = htmlConverterSettings.RenderMoveOperations;
             RenderFootnotesAndEndnotes = htmlConverterSettings.RenderFootnotesAndEndnotes;
             RenderHeadersAndFooters = htmlConverterSettings.RenderHeadersAndFooters;
+            RenderHeaderFooterRegistry = htmlConverterSettings.RenderHeaderFooterRegistry;
             RenderComments = htmlConverterSettings.RenderComments;
             CommentRenderMode = htmlConverterSettings.CommentRenderMode;
             CommentCssClassPrefix = htmlConverterSettings.CommentCssClassPrefix;
@@ -527,6 +534,12 @@ namespace Docxodus
         /// If false (default), headers and footers are not rendered.
         /// </summary>
         public bool RenderHeadersAndFooters;
+
+        /// <summary>
+        /// In flow output, emit active section header/footer variants in a hidden registry
+        /// instead of one visible default pair. Requires RenderHeadersAndFooters; default false.
+        /// </summary>
+        public bool RenderHeaderFooterRegistry;
 
         /// <summary>
         /// If true, render comments in HTML output.
@@ -3620,19 +3633,24 @@ namespace Docxodus
             {
                 var bodyContent = new List<object>();
 
-                // In pagination mode, headers/footers are rendered into the registry
-                // and cloned per-page by the client-side pagination engine.
-                // Only render document-level headers when NOT using pagination.
-                bool usePaginatedHeadersFooters =
+                // Pagination always uses the registry; flow consumers can opt into the same
+                // section/variant structure instead of the final section's visible default pair.
+                bool useHeaderFooterRegistry =
                     settings.RenderHeadersAndFooters &&
-                    settings.RenderPagination == PaginationMode.Paginated;
+                    (settings.RenderPagination == PaginationMode.Paginated || settings.RenderHeaderFooterRegistry);
 
                 // Add headers at the top if enabled (non-paginated mode only)
-                if (settings.RenderHeadersAndFooters && !usePaginatedHeadersFooters)
+                if (settings.RenderHeadersAndFooters && !useHeaderFooterRegistry)
                 {
                     var headersSection = RenderHeadersSection(wordDoc, settings);
                     if (headersSection != null)
                         bodyContent.Add(headersSection);
+                }
+
+                if (useHeaderFooterRegistry && settings.RenderPagination != PaginationMode.Paginated)
+                {
+                    var registry = RenderHeaderFooterRegistry(wordDoc, settings, "document-hf-registry");
+                    if (registry != null) bodyContent.Add(registry);
                 }
 
                 // Get main document content
@@ -3693,7 +3711,7 @@ namespace Docxodus
                 }
 
                 // Add footers at the bottom if enabled (non-paginated mode only)
-                if (settings.RenderHeadersAndFooters && !usePaginatedHeadersFooters)
+                if (settings.RenderHeadersAndFooters && !useHeaderFooterRegistry)
                 {
                     var footersSection = RenderFootersSection(wordDoc, settings);
                     if (footersSection != null)
@@ -4902,15 +4920,16 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Renders headers and footers into a hidden registry for pagination mode.
+        /// Renders active headers and footers into a hidden registry for pagination or flow consumers.
         /// Each header/footer is stored with section index and type metadata for client-side cloning.
         /// </summary>
-        private static XElement? RenderPaginatedHeaderFooterRegistry(
+        private static XElement? RenderHeaderFooterRegistry(
             WordprocessingDocument wordDoc,
-            WmlToHtmlConverterSettings settings)
+            WmlToHtmlConverterSettings settings,
+            string registryId = "pagination-hf-registry")
         {
             var registry = new XElement(Xhtml.div,
-                new XAttribute("id", "pagination-hf-registry"),
+                new XAttribute("id", registryId),
                 new XAttribute("style", "display:none"));
 
             var sectionProperties = wordDoc.MainDocumentPart!.GetXDocument().Root
@@ -7304,13 +7323,16 @@ namespace Docxodus
 
         private static object CreateSectionDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element)
         {
-            // Group elements by section. In pagination mode, we preserve section boundaries.
-            // Without pagination, adjacent sections with identical formatting are conflated.
+            // A registry needs the source section identity even when adjacent properties match.
+            // Plain flow output can still combine sections with identical formatting.
             var groupedIntoDivs = element
                 .Elements()
                 .GroupAdjacent(e => {
-                    var sectAnnotation = e.Annotation<SectionAnnotation>();
-                    return sectAnnotation != null ? sectAnnotation.SectionElement!.ToString() : "";
+                    var section = e.Annotation<SectionAnnotation>()?.SectionElement;
+                    return settings.RenderHeadersAndFooters && settings.RenderHeaderFooterRegistry
+                        && settings.RenderPagination != PaginationMode.Paginated
+                        ? (object?)section ?? ""
+                        : section?.ToString() ?? "";
                 });
 
             int sectionIndex = 0;
@@ -7411,7 +7433,7 @@ namespace Docxodus
                 // Add header/footer registry if headers/footers are enabled
                 if (settings.RenderHeadersAndFooters)
                 {
-                    var hfRegistry = RenderPaginatedHeaderFooterRegistry(wordDoc, settings);
+                    var hfRegistry = RenderHeaderFooterRegistry(wordDoc, settings);
                     if (hfRegistry != null)
                         stagingContent.Add(hfRegistry);
                 }

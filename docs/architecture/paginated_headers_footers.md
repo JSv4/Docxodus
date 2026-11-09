@@ -160,6 +160,23 @@ Inheritance is orthogonal to *visibility*: an inherited or explicit `first`/`eve
 reference is still inert unless `w:titlePg` / the document-global
 `w:evenAndOddHeaders` switch it on (see Limitations).
 
+### Flow header/footer registry
+
+With `RenderHeadersAndFooters`, full flow conversion can set `RenderHeaderFooterRegistry`
+(`renderHeaderFooterRegistry` in npm, `render_header_footer_registry` in Python) to emit
+the same active section/variant entries in hidden `#document-hf-registry` (#1620).
+This replaces the visible default header/footer pair. Each entry carries `data-section`
+and `data-hf-type` (`header-default`, `header-first`, `header-even`, and the footer equivalents).
+Body `data-section-index` values preserve source section identity, even when adjacent
+sections have identical properties and anchor stamping is disabled.
+Inheritance and first/even visibility rules are shared with pagination, including empty
+active first/even stories. Unreferenced or inactive package stories are not exported.
+
+The body remains flow HTML, including `SemanticLists`; no page boxes are introduced.
+All stories share the conversion's CSS classes. Combine with `StampPageNumberFields` to
+retain page-field markers. The option defaults to false, requires header/footer rendering,
+does not apply to block renders, and leaves paginated output's existing registry unchanged.
+
 ### Margin Model
 
 Word's page margins include header/footer space:
@@ -226,15 +243,16 @@ div.Add(new XAttribute("data-footer-height", PageGeometryValue(dims.FooterPt)));
 
 #### 2. Header/Footer Registry
 
-When both pagination AND headers/footers are enabled, render into registry instead of document-level:
+Pagination and the opt-in flow registry share the same section/variant renderer:
 
 ```csharp
-private static XElement RenderPaginatedHeaderFooterRegistry(
+private static XElement RenderHeaderFooterRegistry(
     WordprocessingDocument wordDoc,
-    WmlToHtmlConverterSettings settings)
+    WmlToHtmlConverterSettings settings,
+    string registryId = "pagination-hf-registry")
 {
     var registry = new XElement(Xhtml.div,
-        new XAttribute("id", "pagination-hf-registry"),
+        new XAttribute("id", registryId),
         new XAttribute("style", "display:none"));
 
     // Get all sections and their headers/footers
