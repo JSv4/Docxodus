@@ -7330,6 +7330,7 @@ namespace Docxodus
                 .GroupAdjacent(e => {
                     var section = e.Annotation<SectionAnnotation>()?.SectionElement;
                     return settings.RenderHeadersAndFooters && settings.RenderHeaderFooterRegistry
+                        && settings.RenderPagination != PaginationMode.Paginated
                         ? (object?)section ?? ""
                         : section?.ToString() ?? "";
                 });

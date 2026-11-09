@@ -11,10 +11,7 @@ namespace Docxodus.Tests;
 
 public class FlowHeaderFooterRegistryTests
 {
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void BodyIndicesMatchRegistryWhenAdjacentSectionsHaveEqualProperties(bool anchors)
+    private static byte[] RepeatedSections()
     {
         using var stream = new MemoryStream();
         stream.Write(Document(false, false));
@@ -31,7 +28,29 @@ public class FlowHeaderFooterRegistryTests
             body.GetFirstChild<Wp.SectionProperties>()!.PrependChild(
                 new Wp.HeaderReference { Type = Wp.HeaderFooterValues.Default, Id = main.GetIdOfPart(header) });
         }
-        var html = XDocument.Parse(HtmlConversionOps.ConvertToHtml(stream.ToArray(), new HtmlConversionOptions
+        return stream.ToArray();
+    }
+
+    [Fact]
+    public void DirectCorePaginatedGroupingIgnoresTheFlowRegistryOption()
+    {
+        var groups = new[] { false, true }.Select(registry =>
+            WmlToHtmlConverter.ConvertToHtml(new WmlDocument("sections.docx", RepeatedSections()),
+                new WmlToHtmlConverterSettings
+                {
+                    RenderHeadersAndFooters = true, RenderHeaderFooterRegistry = registry,
+                    RenderPagination = PaginationMode.Paginated,
+                }).Descendants().Attributes("data-section-index").Select(a => a.Value).ToArray()).ToList();
+        Assert.Equal(new[] { "0", "1", "2" }, groups[0]);
+        Assert.Equal(groups[0], groups[1]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BodyIndicesMatchRegistryWhenAdjacentSectionsHaveEqualProperties(bool anchors)
+    {
+        var html = XDocument.Parse(HtmlConversionOps.ConvertToHtml(RepeatedSections(), new HtmlConversionOptions
         { RenderHeadersAndFooters = true, RenderHeaderFooterRegistry = true, StampAnchors = anchors }));
         var headers = html.Descendants().Where(e => (string?)e.Attribute("data-hf-type") == "header-default").ToList();
         Assert.Equal(new[] { "header-default", "header-default", "header-default", "Final header" }, headers.Select(e => e.Value));

@@ -167,6 +167,8 @@ With `RenderHeadersAndFooters`, full flow conversion can set `RenderHeaderFooter
 the same active section/variant entries in hidden `#document-hf-registry` (#1620).
 This replaces the visible default header/footer pair. Each entry carries `data-section`
 and `data-hf-type` (`header-default`, `header-first`, `header-even`, and the footer equivalents).
+Body `data-section-index` values preserve source section identity, even when adjacent
+sections have identical properties and anchor stamping is disabled.
 Inheritance and first/even visibility rules are shared with pagination, including empty
 active first/even stories. Unreferenced or inactive package stories are not exported.
 
@@ -247,7 +249,6 @@ Pagination and the opt-in flow registry share the same section/variant renderer:
 private static XElement RenderHeaderFooterRegistry(
     WordprocessingDocument wordDoc,
     WmlToHtmlConverterSettings settings,
-    XElement bodyElement,
     string registryId = "pagination-hf-registry")
 {
     var registry = new XElement(Xhtml.div,
