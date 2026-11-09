@@ -6,7 +6,8 @@ import struct
 
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
-from fontTools.ttLib import TTFont
+from fontTools.pens.t2CharStringPen import T2CharStringPen
+from fontTools.ttLib import TTCollection, TTFont
 
 
 ROOT = Path(__file__).resolve().parent
@@ -70,6 +71,31 @@ def woff_from_ttf(source: Path, destination: Path) -> None:
     font.save(destination, reorderTables=False)
 
 
+def build_cff() -> TTFont:
+    builder = FontBuilder(1000, isTTF=False)
+    order = [".notdef", *(glyph_name(character) for character in CHARACTERS)]
+    builder.setupGlyphOrder(order)
+    builder.setupCharacterMap({ord(character): glyph_name(character) for character in CHARACTERS})
+    builder.setupHorizontalMetrics({name: (600, 0) for name in order})
+    builder.setupHorizontalHeader(ascent=800, descent=-200)
+    builder.setupNameTable({"familyName": "Docxodus CFF Test", "styleName": "Regular",
+                           "psName": "DocxodusCFFTest-Regular", "version": "Version 1.000"})
+    builder.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200,
+                     fsType=8, usWeightClass=400, usWidthClass=5)
+    outlines = {}
+    for name in order:
+        pen = T2CharStringPen(600, None)
+        if name != "space":
+            pen.moveTo((60, 0)); pen.lineTo((540, 0)); pen.lineTo((300, 700)); pen.closePath()
+        outlines[name] = pen.getCharString()
+    builder.setupCFF("DocxodusCFFTest-Regular", {"FullName": "Docxodus CFF Test Regular",
+                     "FamilyName": "Docxodus CFF Test", "Weight": "Regular"}, outlines, {})
+    builder.setupPost()
+    builder.setupMaxp()
+    builder.font["head"].created = builder.font["head"].modified = 2_082_844_800
+    return builder.font
+
+
 def load_failure_from_ttf(source: Path, destination: Path) -> None:
     data = bytearray(source.read_bytes())
     table_count = struct.unpack_from(">H", data, 4)[0]
@@ -89,6 +115,7 @@ def main() -> None:
     policy = ROOT / "docxodus-policy-base.ttf"
     metric = ROOT / "docxodus-metric-test.ttf"
     build_ttf(carlito, "Carlito", "SyntheticCarlito-Regular")
+    build_ttf(ROOT / "synthetic-calibri.ttf", "Calibri", "SyntheticCalibri-Regular")
     build_ttf(ROOT / "synthetic-carlito-narrow.ttf", "Carlito", "SyntheticCarlitoNarrow-Regular", 0.5)
     build_ttf(ROOT / "synthetic-carlito-wide.ttf", "Carlito", "SyntheticCarlitoWide-Regular", 1.6)
     build_ttf(policy, "Docxodus Policy Test", "DocxodusPolicyTest-Regular")
@@ -98,6 +125,11 @@ def main() -> None:
     build_ttf(load_base, "Docxodus Load Failure", "DocxodusLoadFailure-Regular")
     load_failure_from_ttf(load_base, ROOT / "docxodus-load-failure.ttf")
     load_base.unlink()
+    collection = TTCollection()
+    collection.fonts = [TTFont(path, recalcTimestamp=False) for path in (policy, metric)]
+    collection.save(ROOT / "docxodus-test-collection.ttc")
+    collection.fonts = [TTFont(policy, recalcTimestamp=False), build_cff()]
+    collection.save(ROOT / "docxodus-test-collection.otc")
 
 
 if __name__ == "__main__":

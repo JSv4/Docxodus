@@ -19,6 +19,7 @@ import { checkExportEnvironment } from "./environment.js";
 import { humanDiagnostic } from "./diagnostics.js";
 import { writeDiagnosticNoReplace } from "./files.js";
 import { decodeStrictUtf8, strictJsonParse } from "./strict-json.js";
+import { inspectCommonFonts } from "./fonts/doctor.js";
 
 const MAX_CONFIGURATION_BYTES = 1_048_576;
 
@@ -50,6 +51,7 @@ Options:
   --timeout <milliseconds>
   --browser-executable <path>        Or DOCXODUS_CHROMIUM_PATH
   --font-directory <path>            Repeatable; verified font sources
+  --use-local-fonts                  Search installed fonts lazily (opt-in)
   --font-license-attestations <path>
   --environment-attestation <path>
   --limit <name=integer>              Repeatable; values may only lower defaults
@@ -174,6 +176,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
         timeout: { type: "string" },
         "browser-executable": { type: "string" },
         "font-directory": { type: "string", multiple: true },
+        "use-local-fonts": { type: "boolean", default: false },
         "font-license-attestations": { type: "string" },
         "environment-attestation": { type: "string" },
         limit: { type: "string", multiple: true },
@@ -202,6 +205,13 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       process.stderr.write(report.ok
         ? "ok: this host is expected to launch the sandboxed export browser.\n"
         : "not ok: fix the FAIL findings above before serving conversions.\n");
+      const fonts = await inspectCommonFonts(parsed.values["font-directory"], {
+        warn: warning => process.stderr.write(`note: ${warning.message}\n`),
+      });
+      for (const font of fonts) process.stderr.write(`font ${font.requestedFamily}: `
+        + (font.status === "resolved" ? "present"
+          : font.status === "substituted" ? `substituted by ${font.resolvedFamily}`
+          : "missing; browser generic fallback") + "\n");
       return report.ok ? 0 : 1;
     }
     if (parsed.positionals.length !== 2 || parsed.positionals[0] !== "convert") {
@@ -270,6 +280,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       browserExecutablePath: parsed.values["browser-executable"]
         ?? configuredExecutable,
       fontDirectories: parsed.values["font-directory"],
+      fontSources: parsed.values["use-local-fonts"] ? ["local"] : [],
       fontLicenseAttestations,
       environmentAttestation,
       limits: parseLimits(parsed.values.limit),
@@ -293,6 +304,10 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       `Rendered ${result.pageCount} page${result.pageCount === 1 ? "" : "s"}; `
       + `fingerprint ${result.rendererFingerprint}.\n`,
     );
+    if (!parsed.values["use-local-fonts"] && result.renderReport.fonts.some(font =>
+      font.status === "substituted" || font.status === "missing" || font.status === "unverified")) {
+      process.stderr.write("Font fallback was used. Try --use-local-fonts to search this machine for exact installed faces.\n");
+    }
     return 0;
   } catch (error) {
     if (reportPath && error instanceof DocxodusExportError && error.report) {

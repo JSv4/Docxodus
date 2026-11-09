@@ -1059,6 +1059,33 @@ records include family stack, PostScript face, style, weight, stretch, glyph cov
 identity/version, substitution decision, and license evidence; these normalized records, not local
 paths, enter the report and fingerprint.
 
+`NodeExportRuntime.fontSources: ["local"]` adds a lazy index of standard user,
+system and Word font folders; the CLI spelling is `--use-local-fonts`. It is off
+by default. The index reads bounded SFNT metadata, and snapshots/hashes only
+candidate files for requested families. Exact configured faces precede exact local
+faces, then the existing substitution contract and named fallback families. The
+local index never uses substring or filename matching. Identical local faces
+deduplicate; disagreeing bytes for the same face are skipped, as are unsafe aliases,
+unreadable files and unsuitable embedding rights. Warnings name the family and
+reason without paths; strict mode fails. Preview-and-print local faces are not
+embedded in reusable HTML, and no-subsetting faces cannot enter Chromium PDF.
+
+Both discovery paths accept TTC/OTC collections. Shared tables are read at absolute
+collection offsets and repacked as standalone SFNT faces with new offsets/checksums
+and no stale DSIG. Source and expanded byte limits apply. Explicit attestations
+bind the source collection hash; selected-face hashes bind the emitted programs.
+Local report entries use `source: "local"`, and the existing font identity digest
+includes that source, family, version, bytes and rights. The resolver's optional
+`fallback: "generic"` policy prevents rejected named faces from reappearing through
+CSS fallback, including after a browser decode failure. It changes neither the
+reported missing status nor strict-font verification. Generic fallback remains
+unverified. The framed host does not grant requests local-font filesystem authority.
+If Chromium rejects selected local bytes, the coordinator retries with bounded
+`rejectedFaceIds`. The host accepts only previously offered local identities,
+discards them from selection, warns (or fails in strict mode), and tries the next
+face or substitute. Caller cancellation, the render deadline and cleanup abort
+the same host resolver signal across all attempts.
+
 The versioned browser `FontResolver` contract used by `fontResolver` has bounded request/result
 records and an `AbortSignal`; Node constructs the same resolver from `fontDirectories`. A
 configured root's order is policy and is preserved. Duplicate resolved roots or ambiguous faces

@@ -9,8 +9,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
+import { syncBuiltinESMExports } from "node:module";
 import { chromium } from "playwright-core";
 import { renderDocxArtifacts } from "../dist/index.js";
+import { LocalFontIndex } from "../dist/fonts/local.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = dirname(here);
@@ -81,7 +84,7 @@ function storedZip(entries) {
 
 // Requests "Docxodus Canvas Mono" — the exact family the fixture webfont declares — so a
 // correctly-wired resolver resolves it exactly rather than falling through to substitution.
-function generateFontDirectoryDocx() {
+function generateFontDirectoryDocx(family = "Docxodus Canvas Mono", text = "Configured font round trip.") {
   return storedZip([
     {
       name: "[Content_Types].xml",
@@ -103,7 +106,7 @@ function generateFontDirectoryDocx() {
       name: "word/document.xml",
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="${W_NS}"><w:body>
-  <w:p><w:r><w:rPr><w:rFonts w:ascii="Docxodus Canvas Mono" w:hAnsi="Docxodus Canvas Mono"/></w:rPr><w:t>Configured font round trip.</w:t></w:r></w:p>
+  <w:p><w:r><w:rPr><w:rFonts w:ascii="${family}" w:hAnsi="${family}"/></w:rPr><w:t>${text}</w:t></w:r></w:p>
   <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
 </w:body></w:document>`),
     },
@@ -191,5 +194,114 @@ describe("fontDirectories end to end", { concurrency: false }, () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  test("opt-in local fonts reach HTML and PDF with path-free identity and unchanged default behavior", async t => {
+    if (process.platform !== "linux" && process.platform !== "darwin") return t.skip("uses a POSIX user-font location");
+    const root = await mkdtemp(join(tmpdir(), "docxodus-private-local-"));
+    const originalHome = os.homedir;
+    // Isolate the standard user-font root without installing a font or changing HOME.
+    os.homedir = () => root;
+    syncBuiltinESMExports();
+    try {
+      const directory = join(root, process.platform === "darwin" ? "Library/Fonts" : ".local/share/fonts");
+      await mkdir(directory, { recursive: true });
+      const font = await readFile(join(here, "fixtures/docxodus-policy-base.ttf"));
+      const path = join(directory, "private.ttf");
+      await writeFile(path, font);
+      const source = generateFontDirectoryDocx("Docxodus Policy Test", "ALDER BIRCH CEDAR");
+      const options = { ...baseOptions, browser, outputs: ["html", "pdf"] };
+      const defaultResult = await renderDocxArtifacts(source, options);
+      const disabled = await renderDocxArtifacts(source, { ...options, fontSources: [] });
+      assert.equal(defaultResult.html, disabled.html);
+      assert.equal(defaultResult.rendererFingerprint, disabled.rendererFingerprint);
+      assert.equal(defaultResult.renderReport.fonts[0].source, "browser");
+
+      const local = await renderDocxArtifacts(source, { ...options, fontSources: ["local"], strictFonts: true });
+      const resolved = local.renderReport.fonts.find(face => face.requestedFamily === "Docxodus Policy Test");
+      assert.equal(resolved.source, "local");
+      assert.equal(resolved.version, "Version 1.000");
+      assert.equal(resolved.fileSha256, digest(font));
+      assert.equal(resolved.verified, true);
+      assert.ok(local.pdf.length > 0);
+      assert.match(local.html, /data:font\/ttf;base64,/);
+      assert.equal(JSON.stringify(local.renderReport).includes(root), false);
+      assert.equal(JSON.stringify(local.renderReport).includes("private.ttf"), false);
+
+      const changed = Buffer.concat([font, Buffer.from([0, 0, 0, 0])]);
+      await writeFile(path, changed);
+      const updated = await renderDocxArtifacts(source, { ...options, fontSources: ["local"], strictFonts: true });
+      assert.notEqual(local.rendererFingerprint, updated.rendererFingerprint);
+      assert.equal(updated.renderReport.fonts[0].fileSha256, digest(changed));
+    } finally {
+      os.homedir = originalHome;
+      syncBuiltinESMExports();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("extracted configured collection faces load in Chromium and reach PDF", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "docxodus-collection-browser-"));
+    try {
+      await writeFile(join(directory, "fonts.otc"), await readFile(join(here, "fixtures/docxodus-test-collection.otc")));
+      const result = await renderDocxArtifacts(generateFontDirectoryDocx("Docxodus CFF Test", "MAPLE OAK ASH"), {
+        ...baseOptions, browser, outputs: ["html", "pdf"], fontDirectories: [directory], strictFonts: true,
+      });
+      assert.ok(result.pdf.length > 0);
+      assert.equal(result.renderReport.fonts[0].source, "configured");
+      assert.equal(result.renderReport.fonts[0].verified, true);
+      assert.equal(result.renderReport.fonts[0].resolvedFamily, "Docxodus CFF Test");
+      assert.equal(result.renderReport.fonts[0].format, "otf");
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  test("a browser-rejected local face falls through to the configured substitute", async t => {
+    if (process.platform !== "linux" && process.platform !== "darwin") return t.skip("uses a POSIX user-font location");
+    const root = await mkdtemp(join(tmpdir(), "docxodus-local-retry-"));
+    const originalHome = os.homedir;
+    os.homedir = () => root;
+    syncBuiltinESMExports();
+    try {
+      const directory = join(root, process.platform === "darwin" ? "Library/Fonts" : ".local/share/fonts");
+      const configured = join(root, "configured");
+      await mkdir(directory, { recursive: true }); await mkdir(configured);
+      const invalid = await readFile(join(here, "fixtures/synthetic-calibri.ttf"));
+      for (let index = 0; index < invalid.readUInt16BE(4); index++) {
+        const record = 12 + index * 16;
+        if (invalid.toString("ascii", record, record + 4) === "head") invalid.writeUInt32BE(0, invalid.readUInt32BE(record + 8) + 12);
+      }
+      await writeFile(join(directory, "calibri.ttf"), invalid);
+      await writeFile(join(configured, "carlito.ttf"), await readFile(join(here, "fixtures/synthetic-carlito.ttf")));
+      const source = generateFontDirectoryDocx("Calibri", "ALDER BIRCH CEDAR");
+      const options = { ...baseOptions, browser, outputs: ["html", "pdf"], fontDirectories: [configured], fontSources: ["local"] };
+      const result = await renderDocxArtifacts(source, options);
+      assert.equal(result.renderReport.fonts[0].status, "substituted");
+      assert.equal(result.renderReport.fonts[0].resolvedFamily, "Carlito");
+      assert.equal(result.renderReport.fonts[0].source, "configured");
+      assert.ok(result.renderReport.warnings.some(warning => warning.code === "local_font_skipped" && /Calibri.*browser could not decode/.test(warning.message)));
+      await assert.rejects(renderDocxArtifacts(source, { ...options, strictFonts: true }), error =>
+        error.code === "resource_policy_failure" && /Calibri.*browser could not decode/.test(error.message));
+    } finally {
+      os.homedir = originalHome; syncBuiltinESMExports();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the render deadline aborts host-side local discovery", { timeout: 20_000 }, async t => {
+    let observedSignal, release;
+    t.mock.method(LocalFontIndex.prototype, "prepare", (_limits, signal) => {
+      observedSignal = signal;
+      return new Promise(resolve => {
+        release = resolve;
+        signal.addEventListener("abort", resolve, { once: true });
+      });
+    });
+    try {
+      await assert.rejects(renderDocxArtifacts(generateFontDirectoryDocx("Calibri", "ALDER"), {
+        ...baseOptions, browser, outputs: ["html"], fontSources: ["local"], timeoutMs: 5000,
+      }), error => error.code === "readiness_timeout");
+      assert.ok(observedSignal, "the local index was reached before the deadline");
+      assert.equal(observedSignal.aborted, true);
+    } finally { release?.(); }
   });
 });

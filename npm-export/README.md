@@ -173,6 +173,39 @@ their embedded licensing flags alone; WOFF and WOFF2 files additionally require 
 embedding attestation (`--font-license-attestations`). A font whose embedded license forbids
 embedding is never used — the export fails rather than silently substituting.
 
+For fonts installed on the current machine, opt in with `fontSources: ["local"]` in
+the Node options or `--use-local-fonts` on `docxodus convert`. The default stays off.
+An exact configured family wins, followed by an exact local family, the existing
+substitution table, then generic fallback. Matching uses normalized complete family
+names, not filename guesses or partial names.
+
+Local discovery checks Linux's `~/.local/share/fonts`, `~/.fonts`,
+`/usr/local/share/fonts` and `/usr/share/fonts`; macOS's user/system Fonts folders
+and Word's `Contents/Resources/{DFonts,Fonts}` under `/Applications` and
+`~/Applications`; and Windows's `%WINDIR%\Fonts`, per-user Windows Fonts folder,
+and `%LOCALAPPDATA%\Microsoft\FontCache\4\CloudFonts`. It reads bounded name/face
+metadata first. Only matching candidates are fully read and hashed; unused local
+files do not consume `fontFiles`. Directory-entry and byte limits still apply.
+
+TTC/OTC faces are extracted in memory with standalone checksums, including mixed
+TrueType/CFF collections. Explicit directory attestations bind the collection's
+original SHA-256; reports bind each extracted face's bytes. Local discovery accepts
+static TTF/OTF/TTC/OTC fonts and follows aliases only within known font roots.
+
+Unreadable, restricted, ambiguous or unsafe local candidates are skipped with a
+`local_font_skipped` warning naming the family and reason. `strictFonts` makes a
+skipped candidate an error. Rejected named faces are removed from the browser's
+fallback stack. Generic fallback remains unverified. Local preview-and-print
+fonts are PDF-only; no-subsetting fonts are HTML-only; restricted or bitmap-only
+embedding is never admitted. Nothing is installed or copied to another font
+directory. Permitted bytes reach only the selected document output.
+
+Reports identify selected local faces as `source: "local"`, with family, version,
+SHA-256 and license evidence. These fields enter the renderer fingerprint; paths
+are omitted. `docxodus doctor` checks regular faces for common Word families using
+the same PDF embedding policy and lists exact matches, substitutions and missing
+families. The CLI suggests local search when conversion used fallback without it.
+
 ## Framed host
 
 `docxodus-export-host` is the non-shell integration boundary used by delivery adapters. Protocol v1

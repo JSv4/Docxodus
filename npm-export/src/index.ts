@@ -9,6 +9,7 @@ import {
   type ExportResourceLimits,
   type PaginatedHtmlOptions,
   type PaginatedHtmlResult,
+  type RenderWarning,
 } from "docxodus/export-browser";
 import { canonicalJson, canonicalJsonBytes, sha256 } from "./canonical.js";
 import {
@@ -261,15 +262,17 @@ function withFontResolver(
   runtime: NodeExportRuntime,
   options: NodeExportOptions,
   outputs: readonly RenderOutput[],
+  warn: (warning: RenderWarning) => void,
 ): NodeExportRuntime {
-  if (!runtime.fontDirectories?.length) return runtime;
+  if (!runtime.fontDirectories?.length && !runtime.fontSources?.includes("local")) return runtime;
   return {
     ...runtime,
     fontResolver: createNodeFontRuntime(
-      runtime.fontDirectories,
+      runtime.fontDirectories ?? [],
       runtime.fontLicenseAttestations ?? [],
       { ...DEFAULT_EXPORT_RESOURCE_LIMITS, ...options.limits },
       outputs,
+      runtime.fontSources?.includes("local") ? { strict: options.strictFonts, warn } : undefined,
     ).resolver,
   };
 }
@@ -305,6 +308,11 @@ function validateRuntime(runtime: NodeExportRuntime): NodeExportRuntime {
       "browserExecutablePath must be a non-empty absolute path.",
       "Provide an absolute Chromium executable path or omit it to use the pinned browser.",
     );
+  }
+  const fontSources = runtime.fontSources === undefined ? [] : runtime.fontSources;
+  if (!Array.isArray(fontSources) || fontSources.length > 1 || fontSources.some(source => source !== "local")) {
+    exportError("invalid_argument", "input_validation", 'fontSources must be [] or ["local"].',
+      'Omit fontSources for curated directories only, or opt in with ["local"].');
   }
   const fontDirectories = runtime.fontDirectories ?? [];
   if (!Array.isArray(fontDirectories) || !fontDirectories.every((entry) =>
@@ -408,6 +416,7 @@ function validateRuntime(runtime: NodeExportRuntime): NodeExportRuntime {
     browser: runtime.browser,
     browserExecutablePath: runtime.browserExecutablePath,
     fontDirectories: [...fontDirectories],
+    fontSources: [...fontSources],
     fontLicenseAttestations: [...attestations],
     environmentAttestation: validateEnvironmentAttestation(runtime.environmentAttestation),
   };
@@ -442,6 +451,7 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
     "browser",
     "browserExecutablePath",
     "fontDirectories",
+    "fontSources",
     "fontLicenseAttestations",
     "environmentAttestation",
     ...(allowOutputs ? ["outputs"] : []),
@@ -675,6 +685,7 @@ function snapshotNodeOptions<T extends NodeExportOptions>(options: T): T {
     ...(options.limits && typeof options.limits === "object" && !Array.isArray(options.limits)
       ? { limits: { ...options.limits } }
       : {}),
+    ...(Array.isArray(options.fontSources) ? { fontSources: [...options.fontSources] } : {}),
     ...(Array.isArray(options.fontDirectories)
       ? { fontDirectories: [...options.fontDirectories] }
       : {}),
@@ -831,7 +842,7 @@ function runtimeEnvironment(
   // exported until de-obfuscation and embedding-license policy exist. A node-verified font
   // environment is one the host itself configured, or one the caller attested to.
   const nodeFontsVerified = report.fonts.every((font) =>
-    font.status === "resolved" && (font.source === "configured" || font.source === "attested"));
+    font.status === "resolved" && (font.source === "configured" || font.source === "attested" || font.source === "local"));
   const baselineVerification = runtime.launchMode !== "injected" && nodeFontsVerified
     ? "nodeVerified"
     : "browserObserved";
@@ -972,7 +983,13 @@ async function renderOwned(
   const requested = validateOutputs(outputs);
   nodeOptionsPreflight(options, allowOutputs);
   sourcePreflight(sourceBytes, options);
-  const runtime = withFontResolver(validateRuntime(options), options, requested);
+  const localWarnings: RenderWarning[] = [];
+  const diagnosticLimit = options.limits?.renderDiagnostics ?? DEFAULT_EXPORT_RESOURCE_LIMITS.renderDiagnostics;
+  const runtime = withFontResolver(validateRuntime(options), options, requested, warning => {
+    if (localWarnings.length >= diagnosticLimit) exportError("resource_limit", "font_loading",
+      "Local font warnings exceed renderDiagnostics limit.", "Resolve skipped local fonts or configure an explicit font directory.");
+    localWarnings.push(warning);
+  });
   const timeoutMs = normalizedTimeout(options);
   const deadline = Date.now() + timeoutMs;
   const pdfLimit = options.limits?.pdfOutputBytes
@@ -994,6 +1011,12 @@ async function renderOwned(
     verifyBrowserOutcome(browser, requested);
     const attestation = runtime.environmentAttestation;
     report = structuredClone(browser.materialization.renderReport);
+    if (localWarnings.length) {
+      const diagnostics = report.warnings.length + report.resources.length + report.unsupportedContent.length + report.fonts.length;
+      if (diagnostics + localWarnings.length > diagnosticLimit) exportError("resource_limit", "output_verification",
+        "Local font warnings exceed renderDiagnostics limit.", "Resolve skipped local fonts or configure an explicit font directory.");
+      report.warnings.push(...localWarnings);
+    }
     report.fontObservation = browser.fontObservation;
     report.fontObservationDigest = materialDigest("docxodus:font-observation:v1", browser.fontObservation);
     if (browser.fontObservation.status === "unavailable" && browser.fontObservation.reason === "diagnostic_limit") {

@@ -9,6 +9,13 @@ frozen Calibri substitution contract can be exercised without redistributing
 or modifying the Reserved Font Name Carlito software. It is not a copy or
 derivative of the Carlito typeface. The narrow and wide variants deliberately
 change only test-outline advance widths to prove PageMap reflow from one source.
+`synthetic-calibri.ttf` likewise uses an invented outline and the family name
+`Calibri` solely to test exact local selection before the Carlito substitution.
+
+`docxodus-test-collection.ttc` combines the original policy and metric faces,
+sharing tables where FontTools permits. `docxodus-test-collection.otc` combines
+the policy face with a new CFF face made of original triangles. The CFF face's
+OS/2 flags deliberately declare editable embedding for the rights tests.
 
 `docxodus-policy-base.ttf` is copied to a private temporary directory and its
 OS/2 `fsType` bits are changed in-memory by the tests for restricted-license
@@ -25,6 +32,9 @@ python3 npm-export/tests/fixtures/generate-font-fixtures.py
 Expected SHA-256 digests:
 
 - `synthetic-carlito.ttf`: `3013ff0d837c3cd054eb8987896087087fe8c0023e5d375fd05c1fc6abe2db6d`
+- `synthetic-calibri.ttf`: `7eb32a233be381eda72ac6c4997cdfd35de567c6906a99a7648b2100669ea8c9`
+- `docxodus-test-collection.ttc`: `7536a0c6691afbacc0407d1aebd4616c76d49ccafbe5d594f40e9cb529d4f9d6`
+- `docxodus-test-collection.otc`: `0ebfdefb550af2cb02ed7716642dc9d7442ff74105d9940b4e5f29d6ca1f898b`
 - `synthetic-carlito-narrow.ttf`: `45b4c534c7cdfcd66421d48a18cd9473663a850a5fd237e4d522d8926deed39d`
 - `synthetic-carlito-wide.ttf`: `6f5efcfc8a950b9dd19f08c7cfb8ac2506c6f05998d757e5f6be1ef3622ad5dd`
 - `docxodus-policy-base.ttf`: `97a5c18c38e9d155651cc52f98fbe5a3e010363ead3c2d782041a499bcb0a43e`

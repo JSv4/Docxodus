@@ -132,7 +132,7 @@ export function chromiumSandboxUnavailable(cause: unknown): boolean {
   );
 }
 
-function timeoutError(phase: "browser_launch" | "wasm_initialization" | "pdf_print" | "output_verification", pending: string) {
+function timeoutError(phase: ExportPhase, pending: string) {
   return new DocxodusExportError(
     "readiness_timeout",
     phase,
@@ -143,7 +143,7 @@ function timeoutError(phase: "browser_launch" | "wasm_initialization" | "pdf_pri
 }
 
 function cancellationError(
-  phase: "browser_launch" | "wasm_initialization" | "pdf_print" | "output_verification",
+  phase: ExportPhase,
   pending: string,
 ): DocxodusExportError {
   return new DocxodusExportError(
@@ -853,6 +853,12 @@ export async function renderInBrowser(
   const recordReadiness = (entry: ReadinessOutcome): void => {
     (materialization?.renderReport.readiness ?? hostReadiness).push(entry);
   };
+  const fontController = new AbortController();
+  const cancelFonts = (): void => fontController.abort(cancellationError("font_loading", "host font resolution"));
+  if (signal?.aborted) cancelFonts();
+  else signal?.addEventListener("abort", cancelFonts, { once: true });
+  const fontDeadline = runtime.fontResolver ? setTimeout(() =>
+    fontController.abort(timeoutError("font_loading", "host font resolution")), Math.max(0, deadline - Date.now())) : undefined;
 
   try {
     launch = await withReadiness(
@@ -991,9 +997,12 @@ export async function renderInBrowser(
             request: FontResolverRequest,
           ): Promise<FontBindingResponse> => {
             try {
-              return { ok: true, result: await fontResolver(request, signal ?? new AbortController().signal) };
+              fontController.signal.throwIfAborted();
+              return { ok: true, result: await fontResolver(request, fontController.signal) };
             } catch (error) {
-              const normalized = error instanceof DocxodusExportError
+              const normalized = fontController.signal.aborted
+                ? fontController.signal.reason as DocxodusExportError
+                : error instanceof DocxodusExportError
                 ? error
                 : new DocxodusExportError(
                   "resource_policy_failure",
@@ -1283,6 +1292,9 @@ export async function renderInBrowser(
       );
     primaryError = attachFailedReport(normalized, materialization?.renderReport);
   } finally {
+    clearTimeout(fontDeadline);
+    signal?.removeEventListener("abort", cancelFonts);
+    cancelFonts();
     const cleanupStarted = performance.now();
     const cleanupFailures: unknown[] = [];
     if (printContext) {

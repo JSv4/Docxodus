@@ -880,7 +880,8 @@
               "enum": [
                 "browser",
                 "configured",
-                "attested"
+                "attested",
+                "local"
               ]
             },
             "format": {

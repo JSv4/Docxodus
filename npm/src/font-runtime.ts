@@ -670,7 +670,7 @@ function snapshotResolverResponse(
 ): Readonly<Record<string, unknown>> {
   const response = snapshotFields(value, [
     "schemaVersion", "resolverContract", "substitutionContractVersion",
-    "substitutionContractDigest", "outcomes", "faces",
+    "substitutionContractDigest", "outcomes", "faces", "fallback",
   ], "font resolver response");
   const faceValues = response.faces;
   if (!Array.isArray(faceValues)) {
@@ -688,7 +688,7 @@ function snapshotResolverResponse(
     const value = faceValues[index];
     const face = snapshotFields(value, [
       "id", "resolvedFamily", "postscriptName", "version", "style", "weight", "stretch",
-      "format", "mediaType", "byteLength", "sha256", "bytesBase64", "licenseEvidence",
+      "format", "mediaType", "byteLength", "sha256", "bytesBase64", "licenseEvidence", "source",
     ], `faces[${index}]`);
     const evidence = snapshotFields(
       face.licenseEvidence,
@@ -750,6 +750,9 @@ async function validateResolverResponse(
     || record.substitutionContractDigest !== expectedContractDigest) {
     throw new BrowserFontError("invalid_response", "The font resolver response uses a different contract identity.");
   }
+  if (record.fallback !== undefined && record.fallback !== "generic") {
+    throw new BrowserFontError("invalid_response", "The font resolver fallback policy is invalid.");
+  }
   const faceValues = record.faces as readonly Readonly<Record<string, unknown>>[];
   const faces = new Map<string, ValidatedFace>();
   let totalBytes = 0;
@@ -809,8 +812,12 @@ async function validateResolverResponse(
       identity: digestString(evidence.identity, `faces[${index}].licenseEvidence.identity`),
       noSubsetting: evidence.noSubsetting,
     }) as FontResolverFace["licenseEvidence"];
+    if (face.source !== undefined && face.source !== "local") {
+      throw new BrowserFontError("invalid_response", `faces[${index}].source is invalid.`);
+    }
     const resolved: FontResolverFace = Object.freeze({
       id,
+      ...(face.source === "local" ? { source: "local" as const } : {}),
       resolvedFamily: normalizeFontFamilyName(shortString(
         face.resolvedFamily,
         `faces[${index}].resolvedFamily`,
@@ -966,6 +973,7 @@ async function validateResolverResponse(
       resolverContract: FONT_RESOLVER_CONTRACT_ID,
       substitutionContractVersion: FONT_SUBSTITUTION_CONTRACT_VERSION,
       substitutionContractDigest: expectedContractDigest,
+      ...(record.fallback === "generic" ? { fallback: "generic" as const } : {}),
       outcomes: Object.freeze(outcomes),
       faces: Object.freeze(faceRecords),
     }),
@@ -1006,6 +1014,7 @@ function responseIdentityMaterial(response: ValidatedResponse["response"]): unkn
     resolverContract: response.resolverContract,
     substitutionContractVersion: response.substitutionContractVersion,
     substitutionContractDigest: response.substitutionContractDigest,
+    ...(response.fallback ? { fallback: response.fallback } : {}),
     outcomes: response.outcomes,
     faces: response.faces.map(({ bytesBase64: _bytes, ...face }) => face),
   };
@@ -1151,8 +1160,6 @@ async function configuredFonts(
   signal: AbortSignal,
   contractDigest: string,
 ): Promise<BrowserFontResult> {
-  pending.add("resolver");
-  let responseValue: FontResolverResponse;
   const resolverRequests = Object.freeze(inventory.requests.map((request) => Object.freeze({
     id: request.id,
     familyStack: Object.freeze([...request.familyStack]),
@@ -1162,61 +1169,76 @@ async function configuredFonts(
     stretch: request.stretch,
     sampleCodePoints: Object.freeze([...request.sampleCodePoints]),
   })));
-  const resolverRequest = Object.freeze({
-    schemaVersion: FONT_RESOLVER_SCHEMA_VERSION,
-    requests: resolverRequests,
-  });
-  try {
-    responseValue = await abortable(resolver(resolverRequest, signal), signal);
-  } catch (cause) {
-    if (signal.aborted) throw cause;
-    // The resolver is a trusted caller policy authority, not necessarily this validated
-    // wire contract — a Node-backed resolver's own filesystem/policy failure crosses here
-    // with its original code/phase/remediation intact (see reconstructDocxodusExportError
-    // in export-browser.ts); preserve it as `cause` so rethrowBrowserFontError can report
-    // the real failure instead of a generic "fix your resolver" message.
-    throw new BrowserFontError(
-      "invalid_response",
-      `The configured font resolver failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-      undefined,
-      cause,
-    );
-  } finally {
-    pending.delete("resolver");
+  const view = document.defaultView;
+  if (!view) throw new BrowserFontError("invalid_response", "The render document has no font realm.");
+  let validated: ValidatedResponse;
+  const successfulFaces = new Set<string>();
+  const faceLoadFailures = new Map<string, string>();
+  const rejectedFaceIds = new Set<string>();
+  while (true) {
+    const resolverRequest = Object.freeze({
+      schemaVersion: FONT_RESOLVER_SCHEMA_VERSION,
+      requests: resolverRequests,
+      ...(rejectedFaceIds.size ? { rejectedFaceIds: Object.freeze([...rejectedFaceIds]) } : {}),
+    });
+    pending.add("resolver");
+    let responseValue: FontResolverResponse;
+    try {
+      responseValue = await abortable(resolver(resolverRequest, signal), signal);
+    } catch (cause) {
+      if (signal.aborted) throw cause;
+      // The resolver is a trusted caller policy authority, not necessarily this validated
+      // wire contract — a Node-backed resolver's own filesystem/policy failure crosses here
+      // with its original code/phase/remediation intact (see reconstructDocxodusExportError
+      // in export-browser.ts); preserve it as `cause` so rethrowBrowserFontError can report
+      // the real failure instead of a generic "fix your resolver" message.
+      throw new BrowserFontError(
+        "invalid_response",
+        `The configured font resolver failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        undefined,
+        cause,
+      );
+    } finally {
+      pending.delete("resolver");
+    }
+    validated = await validateResolverResponse(responseValue, inventory.requests, limits, contractDigest);
+    successfulFaces.clear();
+    faceLoadFailures.clear();
+    for (const id of validated.faces.keys()) pending.add(`face:${id}`);
+    await forEachBounded(Array.from(validated.faces), async ([id, face]) => {
+      try {
+        const candidate = new view.FontFace("__DocxodusValidation", new Uint8Array(face.bytes).buffer, {
+          style: face.record.style,
+          weight: String(face.record.weight),
+          stretch: `${face.record.stretch}%`,
+        });
+        await abortable(candidate.load(), signal);
+        successfulFaces.add(id);
+      } catch (error) {
+        if (signal.aborted) throw error;
+        // The Font Loading API's own reason (SyntaxError for undecodable bytes, NetworkError,
+        // ...) is the one piece of information that tells a caller *why* a face failed — it
+        // never otherwise reaches the render report.
+        faceLoadFailures.set(id, error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : String(error));
+      } finally {
+        pending.delete(`face:${id}`);
+      }
+    });
+    const rejected = [...validated.faces].filter(([id, face]) =>
+      face.record.source === "local" && !successfulFaces.has(id));
+    if (validated.response.fallback !== "generic" || !rejected.length) break;
+    for (const [id] of rejected) {
+      if (rejectedFaceIds.has(id)) throw new BrowserFontError("invalid_response", "The resolver returned a rejected local face again.");
+      rejectedFaceIds.add(id);
+    }
+    if (rejectedFaceIds.size > limits.fontFiles) throw new BrowserFontError("resource_limit",
+      "Local font decode retries exceed fontFiles limit.", "fontFiles");
   }
-  const validated = await validateResolverResponse(responseValue, inventory.requests, limits, contractDigest);
   const resolverDigest = await digestJson({
     requests: inventory.requests,
     response: responseIdentityMaterial(validated.response),
-  });
-  // A missing document realm is an engine invariant break, not a per-face decode failure —
-  // check it once, outside the per-face catch below, so it fails loud instead of being
-  // silently reclassified as "this one font is corrupt" for every face in flight.
-  const view = document.defaultView;
-  if (!view) throw new BrowserFontError("invalid_response", "The render document has no font realm.");
-  const successfulFaces = new Set<string>();
-  const faceLoadFailures = new Map<string, string>();
-  for (const id of validated.faces.keys()) pending.add(`face:${id}`);
-  await forEachBounded(Array.from(validated.faces), async ([id, face]) => {
-    try {
-      const candidate = new view.FontFace("__DocxodusValidation", new Uint8Array(face.bytes).buffer, {
-        style: face.record.style,
-        weight: String(face.record.weight),
-        stretch: `${face.record.stretch}%`,
-      });
-      await abortable(candidate.load(), signal);
-      successfulFaces.add(id);
-    } catch (error) {
-      if (signal.aborted) throw error;
-      // The Font Loading API's own reason (SyntaxError for undecodable bytes, NetworkError,
-      // ...) is the one piece of information that tells a caller *why* a face failed — it
-      // never otherwise reaches the render report.
-      faceLoadFailures.set(id, error instanceof Error
-        ? `${error.name}: ${error.message}`
-        : String(error));
-    } finally {
-      pending.delete(`face:${id}`);
-    }
   });
 
   const outcomeById = new Map(validated.response.outcomes.map((outcome) => [outcome.requestId, outcome]));
@@ -1260,15 +1282,23 @@ async function configuredFonts(
     list.push(use);
     usesByRequest.set(use.requestKey, list);
   }
-  for (const request of inventory.requests) {
-    const synthetic = syntheticByRequest.get(request.id);
-    if (!synthetic) continue;
+  const fallbackRequest = (request: FontRequest): FontRequest => {
+    if (validated.response.fallback !== "generic") return request;
+    const families = request.familyStack.filter((_, index) => request.familyKinds[index] === "generic");
+    if (!families.length) families.push("serif");
+    return { ...request, familyStack: families, familyKinds: families.map(() => "generic") };
+  };
+  const applyFamily = (request: FontRequest, synthetic?: string): void => {
+    const fallback = fallbackRequest(request);
     for (const use of usesByRequest.get(request.id) ?? []) {
-      use.element.style.setProperty(
-        "font-family",
-        `${cssString(synthetic)}, ${serializeFamilyStack(request.familyStack, request.familyKinds)}`,
-        "important",
-      );
+      if (!synthetic && validated.response.fallback !== "generic") { restoreUse(use); continue; }
+      use.element.style.setProperty("font-family",
+        (synthetic ? `${cssString(synthetic)}, ` : "") + serializeFamilyStack(fallback.familyStack, fallback.familyKinds), "important");
+    }
+  };
+  for (const request of inventory.requests) {
+    if (syntheticByRequest.has(request.id) || validated.response.fallback === "generic") {
+      applyFamily(request, syntheticByRequest.get(request.id));
     }
   }
 
@@ -1288,15 +1318,16 @@ async function configuredFonts(
             requestLoadFailures.set(request.id, "The face decoded, but the browser did not apply it to the requested style.");
             successfulRequests.delete(request.id);
             syntheticByRequest.delete(request.id);
-            for (const use of usesByRequest.get(request.id) ?? []) restoreUse(use);
+            applyFamily(request);
           }
         } else {
-          const specification = fontSpecification(request, request.familyStack, request.familyKinds);
+          const fallback = fallbackRequest(request);
+          const specification = fontSpecification(fallback, fallback.familyStack, fallback.familyKinds);
           const sample = String.fromCodePoint(...request.sampleCodePoints.slice(0, 4096)) || " ";
           // document.fonts.check() cannot answer this — see familyAvailable() above for why.
           // Measure the same way observedFonts() does instead of asking check().
           await abortable(document.fonts.load(specification, sample), signal);
-          fallbackAvailable.set(request.id, requestedFamilyAvailable(document, request));
+          fallbackAvailable.set(request.id, requestedFamilyAvailable(document, fallbackRequest(request)));
         }
       } catch (error) {
         if (signal.aborted) throw error;
@@ -1308,7 +1339,7 @@ async function configuredFonts(
         fallbackAvailable.set(request.id, false);
         successfulRequests.delete(request.id);
         syntheticByRequest.delete(request.id);
-        for (const use of usesByRequest.get(request.id) ?? []) restoreUse(use);
+        applyFamily(request);
       } finally {
         pending.delete(`request:${request.id}`);
       }
@@ -1352,7 +1383,7 @@ async function configuredFonts(
       // it cannot turn an explicit resolver miss into a verified resolution.
       status: loadFailed ? "load_failed" : outcome.status,
       source: selected
-        ? selected.licenseEvidence.kind === "attested" ? "attested" : "configured"
+        ? selected.source ?? (selected.licenseEvidence.kind === "attested" ? "attested" : "configured")
         : "browser",
       ...(selected ? {
         format: selected.format,
