@@ -70,20 +70,19 @@ test('a spec with no recorded duration counts as the median', () => {
 });
 
 test('--split=i/N becomes that shard\'s file filters and is not passed on to Playwright', () => {
-  const files = Object.keys(specDurations).slice(0, 3);
-  const runs = planLaneRuns(['--split=1/1', '--reporter=blob'], { lanes: ['pool'], specFiles: files });
-  const filters = files.map(file => `/${file.replace(/\./g, '\\.')}$`);
+  const runs = planLaneRuns(['--split=1/1', '--reporter=blob'], { lanes: ['pool'], specFiles: ['a.spec.ts', 'b.spec.ts'] });
   assert.deepEqual(runs, [{
     lane: 'pool',
     env: { DOCXODUS_PLAYWRIGHT_LANE: 'pool' },
-    args: ['test', ...filters, '--reporter=blob', '--pass-with-no-tests'],
+    args: ['test', '/a\\.spec\\.ts$', '/b\\.spec\\.ts$', '--reporter=blob', '--pass-with-no-tests'],
   }]);
 });
 
 test('a split never deals a spec that CI runs in a job of its own', () => {
   const files = [...five, ...separateJobSpecs];
   const dealt = [1, 2].flatMap(index => planLaneRuns([`--split=${index}/2`], { lanes: ['pool'], specFiles: files })[0].args);
-  for (const own of separateJobSpecs) assert.ok(!dealt.some(arg => arg.includes(own.replace(/\./g, '\\.'))), own);
+  assert.deepEqual(separateJobSpecs, ['history-client.spec.ts']);
+  assert.ok(!dealt.includes('/history-client\\.spec\\.ts$'));
   assert.equal(dealt.filter(arg => arg.startsWith('/')).length, five.length);
 });
 
