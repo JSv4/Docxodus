@@ -4,6 +4,11 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { generateVerticalMergeDocx } from './docx-vertical-merge-fixture.js';
 
+// This file's tests are independent (each gets its own page and writes only to its own output
+// path), and together they outlast a CI pool shard's share of the suite, so they spread across
+// the shard's workers instead of running in order on one.
+test.describe.configure({ mode: 'parallel' });
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const TEST_FILES_DIR = path.join(__dirname, '../../TestFiles');

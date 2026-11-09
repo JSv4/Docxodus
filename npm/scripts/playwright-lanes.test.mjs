@@ -6,10 +6,11 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { planLaneRuns, serialLaneSpecs, splitSpecFiles } from './playwright-lanes.mjs';
+import { planLaneRuns, separateJobSpecs, serialLaneSpecs, specDurations, splitSpecFiles } from './playwright-lanes.mjs';
 
 const npmDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const playwrightCli = createRequire(join(npmDir, 'package.json')).resolve('@playwright/test/cli');
+const allSpecFiles = new Set(readdirSync(join(npmDir, 'tests')).filter(name => name.endsWith('.spec.ts')));
 
 test('a bare run plans the pool lane and then the serial lane, both strict', () => {
   const runs = planLaneRuns([]);
@@ -43,19 +44,51 @@ test('options alone do not narrow a run, so an empty lane still fails', () => {
 
 const five = ['a.spec.ts', 'b.spec.ts', 'c.spec.ts', 'd.spec.ts', 'e.spec.ts'];
 
-test('a split hands each spec file to exactly one shard, round-robin, in a stable order', () => {
-  const shards = [1, 2, 3].map(index => splitSpecFiles(five, index, 3));
-  assert.deepEqual(shards, [['a.spec.ts', 'd.spec.ts'], ['b.spec.ts', 'e.spec.ts'], ['c.spec.ts']]);
+const seconds = { 'a.spec.ts': 10, 'b.spec.ts': 70, 'c.spec.ts': 40, 'd.spec.ts': 30, 'e.spec.ts': 30 };
+
+test('a split deals the longest files first, each to the least-loaded shard', () => {
+  const shards = [1, 2, 3].map(index => splitSpecFiles(five, index, 3, seconds));
+  // b (70) -> 1; c (40) -> 2; d (30) -> 3; e (30) -> 3 (30 < 40); a (10) -> 2 (40 < 60, 70).
+  assert.deepEqual(shards, [['b.spec.ts'], ['a.spec.ts', 'c.spec.ts'], ['d.spec.ts', 'e.spec.ts']]);
   assert.deepEqual(shards.flat().sort(), five);
 });
 
+test('a split hands each spec file to exactly one shard, in a stable order', () => {
+  for (const total of [1, 2, 5, 12]) {
+    const shards = Array.from({ length: total }, (_, i) => splitSpecFiles(five, i + 1, total, seconds));
+    assert.deepEqual(shards.flat().sort(), five, `${total} shards`);
+    for (const shard of shards) assert.deepEqual(shard, five.filter(file => shard.includes(file)));
+  }
+});
+
+test('a spec with no recorded duration counts as the median', () => {
+  const recorded = { 'a.spec.ts': 10, 'b.spec.ts': 70, 'c.spec.ts': 40 };
+  // The median of 10, 40 and 70 is 40, so d and e count 40 each:
+  // b (70) -> 1; c (40) -> 2; d (40) -> 2 (40 < 70); e (40) -> 1 (70 < 80); a (10) -> 2 (80 < 110).
+  const shards = [1, 2].map(index => splitSpecFiles(five, index, 2, recorded));
+  assert.deepEqual(shards, [['b.spec.ts', 'e.spec.ts'], ['a.spec.ts', 'c.spec.ts', 'd.spec.ts']]);
+});
+
 test('--split=i/N becomes that shard\'s file filters and is not passed on to Playwright', () => {
-  const runs = planLaneRuns(['--split=2/3', '--reporter=blob'], { lanes: ['pool'], specFiles: five });
+  const runs = planLaneRuns(['--split=1/1', '--reporter=blob'], { lanes: ['pool'], specFiles: ['a.spec.ts', 'b.spec.ts'] });
   assert.deepEqual(runs, [{
     lane: 'pool',
     env: { DOCXODUS_PLAYWRIGHT_LANE: 'pool' },
-    args: ['test', '/b\\.spec\\.ts$', '/e\\.spec\\.ts$', '--reporter=blob', '--pass-with-no-tests'],
+    args: ['test', '/a\\.spec\\.ts$', '/b\\.spec\\.ts$', '--reporter=blob', '--pass-with-no-tests'],
   }]);
+});
+
+test('a split never deals a spec that CI runs in a job of its own', () => {
+  const files = [...five, ...separateJobSpecs];
+  const dealt = [1, 2].flatMap(index => planLaneRuns([`--split=${index}/2`], { lanes: ['pool'], specFiles: files })[0].args);
+  assert.deepEqual(separateJobSpecs, ['history-client.spec.ts']);
+  assert.ok(!dealt.includes('/history-client\\.spec\\.ts$'));
+  assert.equal(dealt.filter(arg => arg.startsWith('/')).length, five.length);
+});
+
+test('every recorded duration names a spec file that exists', () => {
+  const missing = Object.keys(specDurations).filter(file => !allSpecFiles.has(file));
+  assert.deepEqual(missing, [], 'refresh playwright-spec-durations.json with scripts/record-spec-durations.mjs');
 });
 
 test('a malformed split is refused', () => {
@@ -92,7 +125,6 @@ function listSpecFiles(lane) {
   return filesByProject;
 }
 
-const allSpecFiles = new Set(readdirSync(join(npmDir, 'tests')).filter(name => name.endsWith('.spec.ts')));
 
 test('the pool and serial lanes partition the spec files between their Chromium projects', () => {
   const pool = listSpecFiles('pool');
@@ -107,6 +139,8 @@ test('the pool and serial lanes partition the spec files between their Chromium 
   assert.deepEqual(inBoth, [], 'a spec file must belong to one lane');
   const inNeither = [...allSpecFiles].filter(file => !poolFiles.has(file) && !serialFiles.has(file));
   assert.deepEqual(inNeither, [], 'every spec file must be run by one lane');
+  // The specs CI runs in their own job are pool specs: the job runs them in the pool lane.
+  for (const own of separateJobSpecs) assert.ok(poolFiles.has(own), `${own} must be a pool spec`);
   // A misspelt entry would match no file and quietly leave that spec in the pool.
   assert.deepEqual([...serial.get('chromium-serial')].sort(), [...serialLaneSpecs].sort(),
     'the serial lane runs exactly the listed specs');
