@@ -529,7 +529,7 @@ the run-aware path and its conservative following-text reservations. Leader rule
 ### Images
 
 Images require an `ImageHandler` callback. PNG, GIF and JPEG retain their encoded bytes.
-The shared DrawingML/VML path in `WmlToHtmlConverter.Images.cs` normalizes two bounded subsets
+The shared DrawingML/VML path in `WmlToHtmlConverter.Images.cs` normalizes three bounded subsets
 before invoking that callback, identically in native and WASM builds:
 
 - Classic, single-page TIFF: chunky unsigned 8-bit RGB/RGBA, uncompressed or PackBits strips,
@@ -542,22 +542,30 @@ before invoking that callback, identically in native and WASM builds:
   in logical coordinates; window mapping and later picture sizing stretch the complete painted
   graphic, including its outline. Visible zero-width device pens, collapsed bounds and unknown
   records reject the whole image; text, bitmaps, clipping and other map modes remain unsupported.
+- Base-header EMF (`image/x-emf`): MM_TEXT rectangle/ellipse records with stock or explicit
+  solid cosmetic/geometric pens and solid/null brushes. Playback maps reference-device pixels
+  through the physical Frame; Frame does not clip artwork. Generated inline SVG retains the
+  authored picture extent while allowing paint outside it. Cosmetic outlines use one CSS pixel
+  (96 dpi); geometric outlines scale with the picture. This is browser playback, not a claim
+  of matching a particular Word printer's hairline width. Null-pen shapes, extended headers,
+  transforms, clipping, text, bitmaps and other records retain whole-image diagnostics.
 
 Input is limited to 64 MiB; normalized dimensions are limited to 32,768 per axis and
-16 megapixels. Source EMF and SVG image parts retain their existing placeholders. Generated
-WMF SVG contains only numeric geometry and paint attributes, with no external resources.
+16 megapixels. Source SVG image parts retain their existing placeholders. Generated
+metafile SVG contains only numeric geometry and paint attributes, with no external resources.
 `ImageInfo.ContentType` names the output encoding and `ImageBytes` holds those encoded bytes;
-`Bitmap` can be null for vector output. Handlers should preserve the encoded resource.
+`Bitmap` can be null for vector output. Handlers should use `ImageInfo.CreateHtmlImage(source)`:
+it returns the usual `img` for raster/WMF resources, and inline SVG for EMF (ignoring `source`).
+An external SVG image clips overflow, so legacy handlers returning `img` for EMF receive an
+unsupported-content fallback. A handler returning null still suppresses the image.
 
 **Example ImageHandler:**
 
 ```csharp
 settings.ImageHandler = imageInfo =>
 {
-    return new XElement(Xhtml.img,
-        new XAttribute("src", $"data:{imageInfo.ContentType};base64,{Convert.ToBase64String(imageInfo.ImageBytes!)}"),
-        new XAttribute("alt", imageInfo.AltText ?? ""),
-        imageInfo.ImgStyleAttribute);
+    return imageInfo.CreateHtmlImage(
+        $"data:{imageInfo.ContentType};base64,{Convert.ToBase64String(imageInfo.ImageBytes!)}");
 };
 ```
 
@@ -834,7 +842,7 @@ Only **HYPERLINK** fields are converted to `<a>` elements. All other field types
 ### Image Limitations
 
 - **TIFF/WMF subsets only** - Unsupported encodings or records produce explicit diagnostics
-- **EMF not supported** - Not in allowed content types
+- **EMF beyond the static subset** - Text, bitmap and transformation records remain unsupported
 - **SVG not supported** - Not in allowed content types
 - **Requires ImageHandler** - Returns `null` without callback
 

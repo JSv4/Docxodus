@@ -32,8 +32,9 @@ public static partial class WmlToHtmlConverter
                 placeholder?.SetAttributeValue("title", contentType + ": " + reason);
             return placeholder;
         }
-        if (!ImageContentTypes.Contains(contentType) && imageType != UnsupportedContentType.WmfImage) return Unsupported();
+        if (!ImageContentTypes.Contains(contentType) && imageType is not (UnsupportedContentType.WmfImage or UnsupportedContentType.EmfImage)) return Unsupported();
         byte[] imageBytes;
+        EmfImage? emf = null;
         try
         {
             using var input = part.GetStream();
@@ -49,6 +50,12 @@ public static partial class WmlToHtmlConverter
             imageBytes = buffer.ToArray();
             if (contentType == "image/tiff") { imageBytes = new TiffImage(imageBytes).ToPng(); contentType = "image/png"; }
             else if (imageType == UnsupportedContentType.WmfImage) { imageBytes = WmfImage.ToSvg(imageBytes); contentType = "image/svg+xml"; }
+            else if (imageType == UnsupportedContentType.EmfImage)
+            {
+                emf = EmfImage.Read(imageBytes);
+                imageBytes = System.Text.Encoding.UTF8.GetBytes(emf.Drawing.ToString(SaveOptions.DisableFormatting));
+                contentType = "image/svg+xml";
+            }
         }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException)
         {
@@ -60,11 +67,16 @@ public static partial class WmlToHtmlConverter
         catch (Exception) { /* A custom handler can still use the encoded resource. */ }
         using (bitmap)
 #endif
-        return handler(new ImageInfo {
+        {
+        var image = handler(new ImageInfo {
 #if !WASM_BUILD
             Bitmap = bitmap,
 #endif
-            ImageBytes = imageBytes, ContentType = contentType, DrawingElement = element,
+            ImageBytes = imageBytes, ContentType = contentType, DrawingElement = element, InlineVector = emf,
             ImgStyleAttribute = style, AltText = alt });
+        if (emf == null || image == null) return image;
+        return image.DescendantsAndSelf().Any(e => ReferenceEquals(e.Annotation<EmfImage>(), emf))
+            ? image : Unsupported("EMF paint overflow requires ImageInfo.CreateHtmlImage in the image handler.");
+        }
     }
 }

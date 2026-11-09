@@ -1406,16 +1406,7 @@ internal static class HtmlConversionOps
             var base64 = Convert.ToBase64String(imageInfo.ImageBytes);
             var dataUri = $"data:{mimeType};base64,{base64}";
 
-            var imgElement = new XElement(XhtmlNoNamespace.img,
-                new XAttribute("src", dataUri));
-
-            if (imageInfo.ImgStyleAttribute != null)
-                imgElement.Add(imageInfo.ImgStyleAttribute);
-
-            if (!string.IsNullOrEmpty(imageInfo.AltText))
-                imgElement.Add(new XAttribute("alt", imageInfo.AltText));
-
-            return imgElement;
+            return imageInfo.CreateHtmlImage(dataUri);
         };
     }
 }

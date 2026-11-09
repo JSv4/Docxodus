@@ -2202,23 +2202,7 @@ public partial class DocumentConverter
             var base64 = Convert.ToBase64String(imageInfo.ImageBytes);
             var dataUri = $"data:{mimeType};base64,{base64}";
 
-            // Create img element with data URI
-            var imgElement = new XElement(XhtmlNoNamespace.img,
-                new XAttribute("src", dataUri));
-
-            // Add style attribute if available (contains width/height)
-            if (imageInfo.ImgStyleAttribute != null)
-            {
-                imgElement.Add(imageInfo.ImgStyleAttribute);
-            }
-
-            // Add alt text if available
-            if (!string.IsNullOrEmpty(imageInfo.AltText))
-            {
-                imgElement.Add(new XAttribute("alt", imageInfo.AltText));
-            }
-
-            return imgElement;
+            return imageInfo.CreateHtmlImage(dataUri);
         };
     }
 
