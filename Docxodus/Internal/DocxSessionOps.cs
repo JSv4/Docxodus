@@ -1339,6 +1339,10 @@ internal static class DocxSessionOps
         Mutate(handle, preconditions, cellAnchorId,
             s => s.SetColumnWidths(cellAnchorId, DocxSessionJson.ParseIntArray(widthsJson)));
 
+    public static string SetTableStyle(int handle, string anchorId, string styleId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetTableStyle(anchorId, styleId));
+
     /// <summary><paramref name="specJson"/> is a TableBorderSpec object
     /// ({ scope?: "all"|"outside"|"inside", style?, size?, color? }); "" uses the defaults.</summary>
     public static string SetTableBorders(int handle, string cellAnchorId, string specJson,

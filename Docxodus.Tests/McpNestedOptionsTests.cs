@@ -245,6 +245,51 @@ public sealed class McpNestedOptionsTests : IDisposable
         Assert.Equal("dotted", (string?)rule.Attribute(W + "val"));
     }
 
+    [Theory]
+    [InlineData("atomic")]
+    [InlineData("preview")]
+    public void TableStyle_UsesNestedInsertionOptionsAndBatchOrPreview(string mode)
+    {
+        using var source = DocxSessionClonedRevisionTests.Open("<w:p/>", TrackedChangeMode.Accept,
+            stylesXml: DocxSessionTableStyleTests.Styles);
+        var sid = Open(source.Save());
+        var p = Paragraph(sid, "Before");
+        Succeeds(sid, "docxodus_table", A(("action", "insert"), ("anchorId", p),
+            ("rows", 1), ("columns", 1), ("options", new { styleId = "TableA" })));
+        var table = Session(sid).Project().AnchorIndex.Values.First(a => a.Anchor.Kind == "tbl").Anchor.Id;
+        var version = Session(sid).Version;
+        var batch = J(Dispatcher.Call(_store, "docxodus_mutations", J(new
+        {
+            sessionId = sid,
+            mode,
+            steps = new[] { new { tool = "docxodus_table", args = new { action = "set_style", anchorId = table, styleId = "TableB" } } },
+        })));
+        Assert.True(batch.GetProperty("success").GetBoolean(), batch.ToString());
+        Assert.Equal(mode == "preview" ? "TableA" : "TableB", (string?)Document(sid).Descendants(W + "tblStyle").Single().Attribute(W + "val"));
+        Assert.Equal(mode == "preview" ? version : version + 1, Session(sid).Version);
+    }
+
+    [Fact]
+    public void MalformedInsertionStyle_IsRejectedBeforeBatchMutation()
+    {
+        var sid = Open();
+        var p = Paragraph(sid, "Before");
+        var version = Session(sid).Version;
+        var batch = J(Dispatcher.Call(_store, "docxodus_mutations", J(new
+        {
+            sessionId = sid,
+            steps = new object[]
+            {
+                new { tool = "docxodus_edit", args = new { action = "replace_text", anchorId = p, markdown = "changed" } },
+                new { tool = "docxodus_table", args = new { action = "insert", anchorId = p, rows = 1, columns = 1, options = new { styleId = 42 } } },
+            },
+        })));
+        Assert.False(batch.GetProperty("success").GetBoolean(), batch.ToString());
+        Assert.Equal("invalid_batch_step", batch.GetProperty("failure").GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal(version, Session(sid).Version);
+        Assert.Equal("Before", Text(sid, p));
+    }
+
     // ─── insertTable (docxodus_create and docxodus_table) ───────────────
 
     [Theory]

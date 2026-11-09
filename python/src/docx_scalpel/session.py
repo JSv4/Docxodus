@@ -2547,6 +2547,12 @@ class DocxSession:
             "cellAnchorId": cell_anchor_id, "widths": list(widths),
         }))
 
+    def set_table_style(self, anchor_id: str, style_id: str) -> EditResult:
+        """Apply an existing table style at a table or cell anchor, recording it when tracking."""
+        return EditResult._from_wire(self._call("set_table_style", {
+            "anchorId": anchor_id, "styleId": style_id,
+        }))
+
     def set_table_borders(
         self, cell_anchor_id: str, spec: TableBorderSpec | None = None,
     ) -> EditResult:

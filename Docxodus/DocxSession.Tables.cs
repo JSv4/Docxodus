@@ -1278,6 +1278,48 @@ public sealed partial class DocxSession
         }
     }
 
+    private EditResult? ValidateTableStyle(string styleId, string anchorId) =>
+        !string.IsNullOrEmpty(styleId) && _doc!.MainDocumentPart?.StyleDefinitionsPart?.GetXDocument()
+            .Root?.Elements(W.style).Any(style => (string?)style.Attribute(W.styleId) == styleId
+                && (string?)style.Attribute(W.type) == "table") == true
+            ? null
+            : EditResult.Fail(EditErrorCode.UnknownStyle, $"table style id not found: {styleId}", anchorId);
+
+    /// <summary>Apply an existing table style to a canonical table or cell anchor. Direct
+    /// formatting is preserved. Recording emits a reversible <c>w:tblPrChange</c>.</summary>
+    public EditResult SetTableStyle(string anchorId, string styleId)
+    {
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
+        var target = FindAnchor(anchorId);
+        var table = target?.Anchor.Kind == "tbl" ? target.Resolve(_doc!) : null;
+        if (table is null && ResolveCell(anchorId, out _, out _, out _, out table, out target) is { } error)
+            return error;
+        if (ValidateTableStyle(styleId, anchorId) is { } styleError) return styleError;
+
+        var properties = table!.Element(W.tblPr);
+        if ((string?)properties?.Element(W.tblStyle)?.Attribute(W.val) == styleId)
+            return new EditResult { Success = true };
+        if (RefuseNestedTrackedPropertyChange(new[] { (properties, W.tblPrChange) }, anchorId) is { } pending)
+            return pending;
+        var tracked = _trackedChanges == TrackedChangeMode.RenderInline;
+        var before = tracked ? new XElement(properties ?? new XElement(W.tblPr)) : null;
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            properties = GetOrCreateTblPr(table);
+            SetChildInOrder(properties, new XElement(W.tblStyle, new XAttribute(W.val, styleId)), TblPrChildOrder);
+            if (tracked)
+                TrackPropertyMutation(properties, before!, W.tblPrChange,
+                    _revisionAuthor ?? "docxodus", NextTrackedFormatRevisionDate());
+            return TableStyleResult(target!);
+        }
+        catch (Exception ex)
+        {
+            return FailInternal(ex, anchorId);
+        }
+    }
+
     /// <summary>
     /// Set the table-level borders (<c>w:tblPr/w:tblBorders</c>) of the table containing
     /// <paramref name="cellAnchorId"/>. Only the edges named by <see cref="TableBorderSpec.Scope"/>

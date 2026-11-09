@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Tables can use existing document table styles through `SetTableStyle` and `TableInsertOptions.StyleId`, including npm, Python and MCP. Style changes preserve direct formatting and record reversible property revisions; styled insertion inherits borders unless explicitly borderless (#1627).
+
 - Semantic flow lists can normalize familiar bullet shapes with `normalizeBulletMarkers` (npm) or `normalize_bullet_markers` (Python). Symbol bullets and Courier New circles become CSS markers; checkbox content and numbered/custom markers remain intact. Opt-in because marker formatting and line height may change (#1623).
 
 - Node export can opt into installed fonts with `fontSources: ["local"]` or `--use-local-fonts`. Discovery reads metadata first, loads requested faces, checks embedding rights, and records path-free font identities. Explicit font directories also accept TTC/OTC collections; `docxodus doctor` reports common Word families (#1573).

@@ -103,3 +103,54 @@ def test_table_metadata_resolution_and_all_mutations(tour_plan_bytes: bytes) -> 
         reopened_metadata = reopened.get_table_metadata(table_id)
         assert reopened_metadata.success and reopened_metadata.metadata is not None
         assert tuple(column.anchor.id for column in reopened_metadata.metadata.columns) == retained_column_ids
+
+
+def test_table_style_options_tracking_and_stale_preconditions(tour_plan_bytes: bytes) -> None:
+    import io
+    import zipfile
+    import xml.etree.ElementTree as ET
+    from docx_scalpel import EditErrorCode, MutationPreconditions, TrackedChangeMode
+
+    # Independent style IDs with a real table border, added to the existing test document.
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(tour_plan_bytes)) as source, zipfile.ZipFile(output, "w") as target:
+        for entry in source.infolist():
+            data = source.read(entry)
+            if entry.filename == "word/styles.xml":
+                styles = ET.fromstring(data)
+                for style_id in ("PythonTableA", "PythonTableB"):
+                    style = ET.SubElement(styles, ns + "style", {ns + "type": "table", ns + "styleId": style_id})
+                    ET.SubElement(style, ns + "name", {ns + "val": style_id})
+                    borders = ET.SubElement(ET.SubElement(style, ns + "tblPr"), ns + "tblBorders")
+                    ET.SubElement(borders, ns + "top", {ns + "val": "single", ns + "sz": "8"})
+                data = ET.tostring(styles)
+            target.writestr(entry, data)
+    with open_session(output.getvalue()) as session:
+        paragraph = next(a for a in session.project().anchor_index.values() if a.scope == "body" and a.kind == "p")
+        inserted = session.insert_table(paragraph.id, Position.AFTER, 1, 1, TableInsertOptions(style_id="PythonTableA"))
+        assert inserted.success
+        table = next(a.anchor.id for a in inserted.table_anchors.added if a.entity_kind is TableAnchorEntityKind.TABLE)
+        before = session.raw.get_xml(table)
+        assert 'PythonTableA' in before
+        version = session.get_version()
+        with session.preconditioned(MutationPreconditions(expected_version=version - 1)):
+            refused = session.set_table_style(table, "PythonTableB")
+        assert not refused.success
+        assert refused.error.code is EditErrorCode.PRECONDITION_FAILED
+        assert session.get_version() == version
+        assert session.raw.get_xml(table) == before
+        session.set_tracked_changes(TrackedChangeMode.RENDER_INLINE)
+        assert session.set_table_style(table, "PythonTableB").success
+        revisions = session.list_revisions()
+        assert len(revisions) == 1 and revisions[0].family == "properties_change"
+        assert session.reject_revision(revisions[0].id).success
+        # Property resolution renews internal property identities; content and formatting must restore.
+        def without_internal_ids(xml: str) -> bytes:
+            root = ET.fromstring(xml)
+            for element in root.iter():
+                for key in list(element.attrib):
+                    if key == "{http://powertools.codeplex.com/2011}Unid":
+                        del element.attrib[key]
+            return ET.tostring(root)
+        assert without_internal_ids(session.raw.get_xml(table)) == without_internal_ids(before)

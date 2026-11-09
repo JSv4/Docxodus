@@ -988,6 +988,11 @@ export class DocxSession {
     ) as EditResult;
   }
 
+  /** Apply an existing table style at a canonical tbl or tc anchor; records a property revision when tracking. */
+  setTableStyle(anchorId: string, styleId: string): EditResult {
+    return JSON.parse(this.wasm.SetTableStyle(this.handle, anchorId, styleId)) as EditResult;
+  }
+
   /**
    * Set the table-level borders (`w:tblPr/w:tblBorders`) of the table containing the anchor.
    * Only the edges named by `spec.scope` are written; the rest are left untouched. Style

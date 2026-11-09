@@ -910,6 +910,7 @@ internal static class DocxSessionJson
         }
         return new TableInsertOptions
         {
+            StyleId = TryGetString(root, "styleId", null),
             Borderless = TryGetBool(root, "borderless", false),
             CellContents = cells,
             CellAlignment = align,

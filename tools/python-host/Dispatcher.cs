@@ -343,6 +343,7 @@ internal static partial class Dispatcher
         "unmerge_cells" => DocxSessionOps.UnmergeCells(Handle(args), Str(args, "cellAnchorId")),
         "set_column_widths" => DocxSessionOps.SetColumnWidths(
             Handle(args), Str(args, "cellAnchorId"), RawArray(args, "widths")),
+        "set_table_style" => DocxSessionOps.SetTableStyle(Handle(args), Str(args, "anchorId"), Str(args, "styleId")),
         "set_table_borders" => DocxSessionOps.SetTableBorders(
             Handle(args), Str(args, "cellAnchorId"), RawObjectOrEmpty(args, "spec")),
         "set_cell_shading" => DocxSessionOps.SetCellShading(
@@ -1162,7 +1163,7 @@ internal static partial class Dispatcher
         or "apply_format" or "apply_format_by_substring" or "set_paragraph_style"
         or "set_paragraph_format" or "set_list_level" or "remove_list_membership"
         or "apply_list_format" or "apply_list_format_range" or "set_list_start_override"
-        or "clear_list_start_override" or "replace_cell_content"
+        or "clear_list_start_override" or "replace_cell_content" or "set_table_style"
         or "raw_insert_xml" or "raw_replace_xml"
         or "add_annotation" or "remove_annotation" or "update_annotation" or "move_annotation"
         or "undo" or "redo";

@@ -182,6 +182,22 @@
       }
     },
     {
+      "op": "setTableStyle",
+      "facade": "SetTableStyle",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "styleId", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetTableStyle" },
+        "npm": { "method": "setTableStyle" },
+        "python": { "method": "set_table_style" },
+        "stdio": { "op": "set_table_style" },
+        "mcp": { "tool": "docxodus_table", "action": "set_style" }
+      }
+    },
+    {
       "op": "setTableBorders",
       "facade": "SetTableBorders",
       "result": "EditResult",

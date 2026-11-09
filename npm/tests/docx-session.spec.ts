@@ -86,6 +86,32 @@ test.describe('DocxSession (WASM bridge)', () => {
     expect(result.errorCode).toBe('table_insert_not_supported');
   });
 
+  test('table styles round-trip through typed options and tracked property edits', async ({ page }) => {
+    const result = await page.evaluate((bytes: number[]) => {
+      const session = (window as any).Docxodus.openTypedSession(new Uint8Array(bytes)) as DocxSession;
+      try {
+        const anchor = Object.entries(session.project().anchorIndex).find(([, a]) => a.scope === 'body' && a.kind === 'p')![0];
+        const inserted = session.insertTable(anchor, 'after', 1, 1, { styleId: 'TableNormal' });
+        if (!inserted.success) throw new Error(JSON.stringify(inserted.error));
+        const table = inserted.tableAnchors!.added.find(a => a.entityKind === 'table')!.anchor.id;
+        const before = session.raw.getXml(table);
+        session.setTrackedChanges(1); // TrackedChangeMode.RenderInline
+        const changed = session.setTableStyle(table, 'TableGrid');
+        const revisions = session.listRevisions();
+        const after = session.raw.getXml(table);
+        const rejected = session.rejectRevision(revisions[0].id);
+        return { changed: changed.success, family: revisions.map(r => r.family),
+          before, after, rejected: rejected.success, restored: session.raw.getXml(table).replace(/\s+\w+:Unid="[^"]*"/g, '') === before.replace(/\s+\w+:Unid="[^"]*"/g, '') };
+      } finally { session.close(); }
+    }, Array.from(readTestFile('HC001-5DayTourPlanTemplate.docx')));
+    expect(result.changed).toBe(true);
+    expect(result.family).toEqual(['properties_change']);
+    expect(result.before).toContain('TableNormal');
+    expect(result.after).toContain('TableGrid');
+    expect(result.rejected).toBe(true);
+    expect(result.restored).toBe(true);
+  });
+
   test('block insertion refuses cell anchors before recording history', async ({ page }) => {
     const results = await page.evaluate((bytes: number[]) => {
       const open = (input: Uint8Array) => (window as any).Docxodus.openTypedSession(input) as DocxSession;

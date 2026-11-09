@@ -1898,6 +1898,7 @@ export interface DocxodusWasmExports {
     MergeCells: (handle: number, cellAnchor: string, rowSpan: number, colSpan: number, content: string) => string;
     UnmergeCells: (handle: number, cellAnchor: string) => string;
     SetColumnWidths: (handle: number, cellAnchor: string, widthsJson: string) => string;
+    SetTableStyle: (handle: number, anchorId: string, styleId: string) => string;
     SetTableBorders: (handle: number, cellAnchor: string, specJson: string) => string;
     SetCellShading: (handle: number, cellAnchor: string, fill: string, scope: string) => string;
     SetRepeatHeaderRow: (handle: number, cellAnchor: string, repeat: boolean | null) => string;
@@ -3018,6 +3019,8 @@ export interface EditorRenderOptions {
 
 /** Options for `DocxSession.insertTable`. */
 export interface TableInsertOptions {
+  /** Existing table style id. Borders inherit from it unless borderless is true. */
+  styleId?: string;
   /** Emit an invisible layout table (explicit "none" borders) — the S-1 multi-column blocks. */
   borderless?: boolean;
   /** Row-major markdown for each cell (row 0 left→right, then row 1, …). Short/omitted ⇒ empty cells. */
