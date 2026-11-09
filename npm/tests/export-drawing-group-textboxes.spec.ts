@@ -6,6 +6,11 @@ import { readFileSync } from 'node:fs';
 import { renderDocxArtifacts, type FontLicenseAttestation } from '../../npm-export/dist/index.js';
 import { drawingGroupDocx, drawingGroupLabels, type DrawingGroupOrientation } from './docx-drawing-group-fixture.js';
 
+// This file's tests are independent (each gets its own page and writes only to its own output
+// path), and together they outlast a CI pool shard's share of the suite, so they spread across
+// the shard's workers instead of running in order on one.
+test.describe.configure({ mode: 'parallel' });
+
 const fontDirectories = [fileURLToPath(new URL('../../docs/demo/fonts', import.meta.url))];
 const fontLicenseAttestations: FontLicenseAttestation[] = [{
   schemaVersion: 1, usage: 'standalone-document-font-embedding',

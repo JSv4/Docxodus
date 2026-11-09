@@ -18,6 +18,11 @@ import { generateVerticalMergeDocx } from './docx-vertical-merge-fixture.js';
 import { wordToleratedPackageDocx } from './docx-tolerant-package-fixture.js';
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
+// This file's tests are independent (each gets its own page and writes only to its own output
+// path), and together they outlast a CI pool shard's share of the suite, so they spread across
+// the shard's workers instead of running in order on one.
+test.describe.configure({ mode: 'parallel' });
+
 const here = dirname(fileURLToPath(import.meta.url));
 const testFiles = join(here, '..', '..', 'TestFiles');
 

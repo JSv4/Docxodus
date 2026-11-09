@@ -18,8 +18,8 @@ concurrency:
 # builds the package and every lane job downloads that build: the pool lane runs the ordinary
 # specs on several workers and across shards, the serial lane runs the latency and frame-rate
 # specs alone on one worker (npm/playwright.config.ts decides which is which from
-# DOCXODUS_PLAYWRIGHT_LANE), and the export and delivery checks run beside them. A final job
-# merges the lanes' reports into the one HTML report reviewers had before.
+# DOCXODUS_PLAYWRIGHT_LANE), and the export, delivery and history-file checks run beside them.
+# When a lane fails, a final job merges the lanes' reports into one HTML report.
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -147,10 +147,11 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      # Six shards: with four, each shard's test step was ~5 minutes on top of a ~1-minute
-      # setup and the ~5-minute build it waits for; more shards shorten only the first of those.
+      # Twelve shards of ~930 recorded test-seconds each, ~4 minutes on four workers. Six left
+      # each shard ~8 minutes; more shards shorten only the test step, not the ~1-minute setup
+      # or the build every shard waits for.
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
     steps:
       - name: Checkout
@@ -187,9 +188,10 @@ jobs:
       - name: Permit Chromium's unprivileged user-namespace sandbox
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      # The lane runner's `--split` deals the spec files round-robin, so the heavy and
-      # alphabetically adjacent export specs spread across the shards; Playwright's own `--shard`
-      # hands each shard a contiguous run of files and left one shard three times another's work.
+      # The lane runner's `--split` deals the spec files by recorded duration
+      # (npm/scripts/playwright-spec-durations.json), so each shard gets about the same work;
+      # Playwright's own `--shard` hands each shard a contiguous run of files and left one shard
+      # three times another's work. It leaves out the spec the history job runs.
       - name: Run the pool lane, shard ${{ matrix.shard }} of ${{ strategy.job-total }}
         env:
           DOCXODUS_PLAYWRIGHT_LANE: pool
@@ -280,6 +282,91 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
+  # history-client.spec.ts writes the browser history archive that fresh Python and native hosts
+  # must then reopen, so that spec and that check run here, beside the shards, instead of the
+  # check waiting for every shard to finish.
+  history:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            npm/package-lock.json
+            npm-export/package-lock.json
+
+      - name: Install npm dependencies
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+        run: |
+          (cd npm && npm ci)
+          (cd npm-export && npm ci --ignore-scripts)
+
+      - name: Download the built package
+        uses: actions/download-artifact@v8
+        with:
+          name: docxodus-build
+
+      - name: Install Playwright browsers
+        uses: ./.github/actions/playwright-browsers
+
+      - name: Permit Chromium's unprivileged user-namespace sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Run the history-client spec
+        env:
+          DOCXODUS_PLAYWRIGHT_LANE: pool
+          PLAYWRIGHT_BLOB_OUTPUT_FILE: blob-report/history.zip
+        run: cd npm && node scripts/playwright-lanes.mjs '/history-client\.spec\.ts$' --reporter=blob
+
+      - name: Verify browser history files in fresh Python/native hosts
+        env:
+          DOCXODUS_HISTORY_BROWSER_ARTIFACT_DIR: ${{ github.workspace }}/npm/test-results
+        run: |
+          dotnet build tools/python-host/pyhost.csproj -c Release
+          python3 -m pip install -e './python[test]'
+          mkdir -p history-artifacts
+          python3 -m pytest python/tests/test_history_browser_artifacts.py -q -s --basetemp=history-artifacts/python
+
+      - name: Collect this job's report and test output
+        if: always()
+        run: |
+          mkdir -p lane-output
+          [ -d npm/blob-report ] && mv npm/blob-report lane-output/
+          [ -d npm/test-results ] && mv npm/test-results lane-output/
+          true
+
+      - name: Upload this job's report and test output
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: playwright-lane-history
+          path: lane-output
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Upload the history-file check's artifacts
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: history-artifacts
+          path: history-artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
   export:
     needs: build
     runs-on: ubuntu-24.04
@@ -349,22 +436,18 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # Runs after the lanes whether or not they passed, so a failing run still publishes the report
-  # that explains it; skipped only when there was no build to test or the run was cancelled.
+  # Runs only when a lane failed, so that a failing run publishes the one report that explains it
+  # without a passing run waiting on it; each lane's blob report is uploaded either way
+  # (`npx playwright merge-reports` turns them into the same report locally).
   report:
-    needs: [build, pool, serial]
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    needs: [build, pool, serial, history]
+    if: ${{ failure() && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: '10.0.x'
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -388,17 +471,6 @@ jobs:
       - name: Merge the lanes' reports into one HTML report
         run: cd npm && npx playwright merge-reports --reporter html ./blob-report
 
-      # The history example spec runs in the pool lane and leaves its browser-written history
-      # files under npm/test-results, which the merged download above reassembles.
-      - name: Verify browser history files in fresh Python/native hosts
-        env:
-          DOCXODUS_HISTORY_BROWSER_ARTIFACT_DIR: ${{ github.workspace }}/npm/test-results
-        run: |
-          dotnet build tools/python-host/pyhost.csproj -c Release
-          python3 -m pip install -e './python[test]'
-          mkdir -p history-artifacts
-          python3 -m pytest python/tests/test_history_browser_artifacts.py -q -s --basetemp=history-artifacts/python
-
       - name: Upload Playwright report and test artifacts
         uses: actions/upload-artifact@v7
         if: always()
@@ -408,6 +480,5 @@ jobs:
             npm/playwright-report/
             npm/test-results/
             npm/test-results-serial/
-            history-artifacts/
           if-no-files-found: ignore
           retention-days: 7

@@ -3,6 +3,11 @@ import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { renderDocxArtifacts } from '../../npm-export/dist/index.js';
 import { customPathDocx } from './docx-custom-path-fixture.js';
 
+// This file's tests are independent (each gets its own page and writes only to its own output
+// path), and together they outlast a CI pool shard's share of the suite, so they spread across
+// the shard's workers instead of running in order on one.
+test.describe.configure({ mode: 'parallel' });
+
 test.use({ launchOptions: {
   chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}),
