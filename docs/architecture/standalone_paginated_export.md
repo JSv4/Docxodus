@@ -1641,8 +1641,8 @@ paragraphs with explicit breaks retain their existing policies. The original Wor
 for the 16pt minimum on 10pt text. Uniform enlarged minima use the final baseline probe to place
 the text at the resolved height minus its natural descent, without changing pagination geometry.
 This measured Word behavior differs from the Open XML documentation's centered-leading wording;
-it is a compatibility observation, not a restatement of that specification. Marker transitions,
-blank-break lines and mixed minimum transitions remain tracked by #1565 and #1566.
+it is a compatibility observation, not a restatement of that specification. Mixed minimum transitions and continuations have public PDF regressions. Marker transitions
+and blank-break lines remain tracked by #1565.
 
 The browser's font-unit boundary is not a complete Word fitting contract. In #1564 the author
 [confirmed that Word fits the 65-character Liberation Mono prefix into 468pt](https://github.com/JSv4/Docxodus/issues/1564#issuecomment-6701328774),
