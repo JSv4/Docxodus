@@ -188,6 +188,45 @@ const uniformMarker = '<span data-list-marker="true" style="display:inline-flex;
   + '<span><span>1.</span></span><span style="display:inline-block;flex:1">'
   + '<span data-docx-tab="left" style="display:inline-block;width:100%;height:0"></span></span></span>';
 
+for (const [name, minimum, prefix, runStyle, height, corrected] of [
+  ['small minimum', 13, '', '', 'normal', true],
+  ['original 16pt minimum', 16, '', '', '16pt', true],
+  ['large minimum', 32, '', '', '32pt', true],
+  ['uniform marker', 16, uniformMarker, '', '16pt', true],
+  ['explicit override', 16, '', '', '18pt', false],
+  ['raised run', 16, '', 'vertical-align:super', '16pt', false],
+  ['positioned run', 16, '', 'position:relative;top:2px', '16pt', false],
+] as const) test(`Word minimum baseline preserves ${name}`, async ({ page }) => {
+  await page.goto('/test-harness.html');
+  const result = await page.evaluate(async ({ minimum, prefix, runStyle, height }) => {
+    const url = 'http://localhost:8083/line-metrics.js';
+    const api = await import(url), root = document.createElement('main');
+    root.innerHTML = `<p style="font:10pt/${height} Liberation Serif;--docx-min-line-height:${minimum}pt;margin:0">`
+      + prefix + `<span id="ink" style="${runStyle}">Every autumn.</span></p>`;
+    document.body.append(root);
+    api.applyUnroundedNormalLineHeights(root);
+    const paragraph = root.querySelector('p')!, before = paragraph.getBoundingClientRect().height;
+    const count = api.alignBaselinesToWord(root), once = root.innerHTML;
+    const repeated = api.alignBaselinesToWord(root);
+    const unchanged = once === root.innerHTML;
+    const marker = document.createElement('span');
+    marker.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
+    root.querySelector('#ink')!.append(marker);
+    const offset = marker.getBoundingClientRect().bottom - paragraph.getBoundingClientRect().top;
+    const baseline = offset * .75;
+    marker.remove();
+    return { count, repeated, unchanged, baseline, before, after:paragraph.getBoundingClientRect().height,
+      carrierTops:Array.from(paragraph.children).map(child => getComputedStyle(child).top) };
+  }, { minimum, prefix, runStyle, height });
+  expect(result.after).toBe(result.before);
+  expect(result.repeated).toBe(0); expect(result.unchanged).toBe(true);
+  if (corrected) {
+    expect(result.count).toBe(prefix ? 2 : 1);
+    expect(Math.abs(result.baseline - (minimum - 443 / 2048 * 10))).toBeLessThan(.03);
+    if (prefix) expect(new Set(result.carrierTops).size).toBe(1);
+  } else expect(result.count).toBe(0);
+});
+
 for (const [name, marker, restored] of [
   ['flat number', '<span data-list-marker="true">1.</span>', true],
   ['uniform number', uniformMarker, true],

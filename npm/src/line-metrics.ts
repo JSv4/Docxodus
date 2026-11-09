@@ -215,7 +215,7 @@ function applyUniformLineMinimums(paragraphs: HTMLElement[], ratioFor: (style: P
       if (!naturalHeights.has(element)) changed++;
     }
     // Only a below-natural minimum is equivalent to single spacing. Enlarged
-    // lines retain the existing centered baseline policy for minimum spacing.
+    // lines retain their authored minimum for the final baseline pass.
     if (restoreNatural) paragraph.style.setProperty('--docx-auto-line-spacing', '1');
   }
   return changed;
@@ -376,7 +376,9 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
       const last = line.pieces.at(-1)!;
       const natural = line.ascent + line.descent;
       const height = minimum ? Math.max(minimum, natural) : natural * multiple;
-      const descent = line.descent + (height - natural) * (minimum ? .5 : 1);
+      // Word puts minimum-height surplus above the baseline; automatic multiples
+      // put their surplus below it. Both retain the font's natural descent.
+      const descent = line.descent + (minimum ? 0 : height - natural);
       const range = document.createRange(); range.setStart(last.node, last.end); range.collapse(true);
       const strut = document.createElement('span');
       strut.dataset.docxLineMetric = minimum ? 'minimum' : 'auto';
@@ -426,7 +428,7 @@ export function isMixedLineMetric(element: HTMLElement): boolean {
   const style = element.isConnected ? element.ownerDocument.defaultView!.getComputedStyle(element) : element.style;
   const natural = Number(element.dataset.docxLineNatural), descent = Number(element.dataset.docxLineDescent);
   const height = Number.parseFloat(style.height);
-  const extra = (height - natural) * (element.dataset.docxLineMetric === 'minimum' ? .5 : 1);
+  const extra = element.dataset.docxLineMetric === 'minimum' ? 0 : height - natural;
   return natural > 0 && descent > 0 && descent < natural && Number.isFinite(natural)
     && style.display === 'inline-block' && style.position === 'static' && style.transform === 'none'
     && style.float === 'none' && style.width === '0px' && height > 0 && Number.isFinite(height)
@@ -742,10 +744,19 @@ export function alignBaselinesToWord(root: Element): number {
     if (!first) continue;
     const lineHeight = Number.parseFloat(style.lineHeight);
     const fontSize = Number.parseFloat(style.fontSize);
-    // Word's placement is recorded for natural line heights (single spacing and auto multiples, which the
-    // converter builds on the paragraph's natural height), not for exact or at-least ones.
+    const natural = ratioFor(style, LATIN_PROBE) * fontSize;
+    const minimum = Number.parseFloat(style.getPropertyValue('--docx-min-line-height')) * 4 / 3;
+    // The original Word 16pt-on-10pt capture places the baseline at H - descent,
+    // putting the enlarged minimum's surplus above the text. Admit only uniform
+    // authored minima, retaining explicit overrides and exact/mixed-run handling.
+    const minimumRuns = minimum >= natural && Math.abs(lineHeight - minimum) < .01
+      && !Number.parseFloat(style.getPropertyValue('--docx-exact-line-height'))
+      && !Number.parseFloat(style.getPropertyValue('--docx-line-grid'))
+      && !BEYOND_LATIN.test(paragraph.textContent ?? '')
+      ? uniformParagraphRuns(paragraph, true) : undefined;
+    const uniformMinimum = minimumRuns?.every(run => view.getComputedStyle(run).lineHeight === style.lineHeight);
     if (!(lineHeight > 0) || !(fontSize > 0) ||
-      Math.abs(lineHeight - ratioFor(style, LATIN_PROBE) * fontSize) > 0.01) continue;
+      !uniformMinimum && Math.abs(lineHeight - natural) > 0.01) continue;
     const descent = descentRatio(style);
     if (!(descent > 0)) continue;
     const childStyle = view.getComputedStyle(first);
@@ -756,7 +767,8 @@ export function alignBaselinesToWord(root: Element): number {
     // puts above: a fraction of the line. Half a line or more means the font does not follow this model.
     if (!Number.isFinite(shift) || Math.abs(shift) < 1 / 64 || Math.abs(shift) >= lineHeight / 2) continue;
     for (const child of Array.from(paragraph.children))
-      if (child instanceof view.HTMLElement && movable(child, view)) {
+      if (child instanceof view.HTMLElement && (movable(child, view)
+        || uniformMinimum && minimumRuns!.includes(child))) {
         // Compose with the offset the child already has (a run's w:position, or the lift of an auto multiple),
         // which may come from a stylesheet rule rather than its own style attribute.
         const top = Number.parseFloat(view.getComputedStyle(child).top);

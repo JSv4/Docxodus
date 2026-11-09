@@ -60,6 +60,11 @@ for (const [kind, value, tall, count] of [
         }
         expect(lines.length).toBeGreaterThan(4);
         for (const line of lines) expect(Math.max(...line.ys) - Math.min(...line.ys)).toBeLessThanOrEqual(.75);
+        if (kind === 'atLeast') {
+          const size = lines[0].large ? 20 : 10;
+          const first = 792 - 72 - Math.max(value / 20, natural(size)) + 443 / 2048 * size;
+          expect.soft(Math.abs(lines[0].y - first)).toBeLessThan(.76);
+        }
         const ordinary = lines.filter(line => !line.large).map(line => line.y);
         const pitch = kind === 'auto' ? natural(10) * value / 240 : Math.max(natural(10), value / 20);
         for (let index = 1; index < ordinary.length; index++)
@@ -69,7 +74,7 @@ for (const [kind, value, tall, count] of [
           const metrics = (large: boolean) => {
             const size = large ? 20 : 10, n = natural(size);
             const h = kind === 'atLeast' ? Math.max(value / 20, n) : n * value / 240;
-            const descent = 443 / 2048 * size + (h - n) * (kind === 'atLeast' ? .5 : 1);
+            const descent = 443 / 2048 * size + (kind === 'atLeast' ? 0 : h - n);
             return { ascent: h - descent, descent };
           };
           const expected = metrics(lines[index - 1].large).descent + metrics(lines[index].large).ascent;
