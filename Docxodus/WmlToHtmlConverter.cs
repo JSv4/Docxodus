@@ -1447,6 +1447,7 @@ namespace Docxodus
             // This matches LibreOffice's output behavior and ensures that HTML formatting
             // (newlines/indentation) doesn't create visible spaces between adjacent elements.
             NormalizeInlineWhitespace(xhtml);
+            CoalesceTextSpans(xhtml);
 
             CloseEmptyNonVoidElements(xhtml);
 
@@ -2092,6 +2093,48 @@ namespace Docxodus
                 foreach (var node in nodesToRemove)
                 {
                     node.Remove();
+                }
+            }
+        }
+
+        private static void CoalesceTextSpans(XElement root)
+        {
+            // Compare the rendered result: source run properties can differ only in bookkeeping
+            // (Unids) or properties unused by this script. Keep semantic markers and layout boxes.
+            static bool IsTextSpan(XElement span) => !span.HasElements && span.Nodes().Any() &&
+                span.Nodes().All(n => n is XText) &&
+                span.Attributes().All(a => a.Name == "class" || a.Name == "style" ||
+                    a.Name == "lang" || a.Name == XNamespace.Xml + "space") &&
+                span.Annotation<Dictionary<string, string>>() is { } style &&
+                style.All(s => s.Key.StartsWith("font-", StringComparison.Ordinal) ||
+                    s.Key.StartsWith("text-", StringComparison.Ordinal) ||
+                    s.Key is "color" or "background" or "vertical-align" or "line-height" or
+                        "letter-spacing" or "white-space" or "PtStyleName" ||
+                    s.Key is "margin" or "padding" && s.Value == "0");
+
+            foreach (var parent in root.Descendants(Xhtml.span).Select(s => s.Parent!).Distinct().ToList())
+            {
+                // Detach once: removing individual spans repeatedly scans preceding siblings.
+                var children = parent.Nodes().ToList();
+                parent.RemoveNodes();
+                XElement? previous = null;
+                foreach (var child in children)
+                {
+                    if (child is not XElement span || span.Name != Xhtml.span || !IsTextSpan(span))
+                    { parent.Add(child); previous = null; continue; }
+                    var attributes = span.Attributes().Where(a => a.Name != XNamespace.Xml + "space").ToList();
+                    if (previous != null &&
+                        previous.Attributes().Count(a => a.Name != XNamespace.Xml + "space") == attributes.Count &&
+                        attributes.All(a => (string?)previous.Attribute(a.Name) == a.Value))
+                    {
+                        if ((string?)span.Attribute(XNamespace.Xml + "space") == "preserve")
+                            previous.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+                        // Move nodes rather than copying their Value: XEntity must keep its serializer.
+                        var nodes = span.Nodes().ToList();
+                        span.RemoveNodes();
+                        previous.Add(nodes);
+                    }
+                    else { parent.Add(span); previous = span; }
                 }
             }
         }

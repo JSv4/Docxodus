@@ -319,6 +319,12 @@ report an export error instead of discarding the remaining content.
 
 ### Runs (Text Formatting)
 
+After CSS generation, adjacent ordinary text spans with identical output attributes join.
+This avoids splitting words because source runs had different bookkeeping IDs or properties
+with no HTML effect (#1624). Text nodes, including directional entities, move intact; block
+anchors remain unchanged. Fields, bookmarks, other semantic markers, exact-line metadata,
+custom-property styles and spans defining layout boxes retain their boundaries.
+
 Run properties (`w:rPr`) map to CSS:
 
 | Word Property | CSS Property | Notes |
