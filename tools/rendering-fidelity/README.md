@@ -42,15 +42,35 @@ eight cases. Strict Word CI measurement is required before merge readiness.
 The Word reference pack is published in `JSv4/docx-fidelity-bench` and pinned by
 URL, size and SHA-256 in the policy. CI registers it in each measurement environment.
 Both provider reports, comparisons and registered references are retained in the
-rendering artifact. Main's exact build is cached separately; the candidate is
-always built fresh. The two pinned harnesses have byte-identical build recipes
+rendering artifact. The two pinned harnesses have byte-identical build recipes
 and metric source, verified before sharing source-bound renderer builds.
+
+## Cached measurements
+
+The pinned baseline never changes and main changes once per merge, so the
+`warm` job measures them on each push to main and caches, in main's scope, the
+LibreOffice reference, the registered Word bundle, the baseline result and
+main's two results. A pull request restores them and builds and measures only
+its candidate, which is always built fresh.
+
+- Every key carries `measurement-key.py`'s environment key: the benches' own
+  environment contract (tool versions and hashes, resolved font file hashes) for
+  both suites, the LibreOffice reference build, the runner image and the
+  measurement packages. Main's results are keyed under the reference they were
+  measured against. A miss of either measures it live, exactly as before.
+- The benches refuse to compare results whose measurement contracts differ, and
+  LibreOffice is recalibrated live against the cached reference in every run.
+- The `canary` job re-measures the cached baseline live beside every pull
+  request; `check-cached-results.py` fails unless it reproduces exactly, apart
+  from PDF byte hashes (PDFs embed per-run metadata).
+- Bump `CACHE_VERSION` in the workflow to discard every cached entry, or run
+  the workflow with `mode: warm` from main to re-measure main.
 
 Run the gate contract tests with the pinned Word harness on `PYTHONPATH`:
 
 ```sh
 PYTHONPATH=/path/to/docx-fidelity-bench python3 -m unittest discover \
-  -s tools/rendering-fidelity -p test_provider_regressions.py -v
+  -s tools/rendering-fidelity -p 'test_*.py' -v
 ```
 
 Future actual Word and LibreOffice renderer modes will each need their own

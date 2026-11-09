@@ -1,0 +1,106 @@
+name: Provision the rendering-fidelity measurement host
+description: >-
+  Install the measurement tools, open fonts and the signed LibreOffice reference runtime, validate
+  both pinned benches, unpack the immutable Word capture pack, and compute the key that identifies
+  this measurement environment. Expects the repository at the workspace root, the LibreOffice
+  oracle in `oracle/` and the Word harness in `word-oracle/`, and the workflow's BENCH_LIBREOFFICE,
+  ORACLE_REF, WORD_ORACLE_REF and BASELINE_COMMIT environment.
+inputs:
+  renderer:
+    description: >-
+      Checkout of the renderer whose pinned Playwright decides the Chromium system packages. They
+      include fonts, so they are installed before anything measures or identifies the environment.
+    required: true
+outputs:
+  key:
+    description: Measurement-environment key (see tools/rendering-fidelity/measurement-key.py).
+    value: ${{ steps.key.outputs.key }}
+runs:
+  using: composite
+  steps:
+    - name: Provision measurement tools and open fonts
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libreoffice-writer poppler-utils qpdf fontconfig fonts-liberation2
+
+    - name: Install signed LibreOffice 25.8.7.3 reference runtime
+      shell: bash
+      run: |
+        install_dir="$RUNNER_TEMP/lo-reference-install"
+        mkdir -p "$install_dir"
+        archive_url='https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz'
+        curl --fail --location --retry 5 --retry-all-errors --proto '=https' --tlsv1.2 "$archive_url" -o "$install_dir/runtime.tar.gz"
+        curl --fail --location --retry 5 --proto '=https' --tlsv1.2 "$archive_url.asc" -o "$install_dir/runtime.asc"
+        curl --fail --location --retry 5 --proto '=https' --tlsv1.2 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xC2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3' -o "$install_dir/signing-key.asc"
+        mkdir "$install_dir/keyring"
+        chmod 700 "$install_dir/keyring"
+        gpg --homedir "$install_dir/keyring" --batch --import "$install_dir/signing-key.asc"
+        fingerprint=$(gpg --homedir "$install_dir/keyring" --with-colons --fingerprint C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3 | awk -F: '$1 == "fpr" {print $10; exit}')
+        test "$fingerprint" = 'C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3'
+        gpg --homedir "$install_dir/keyring" --batch --verify "$install_dir/runtime.asc" "$install_dir/runtime.tar.gz"
+        tar -xzf "$install_dir/runtime.tar.gz" -C "$install_dir"
+        sudo dpkg -i "$install_dir"/LibreOffice_*/DEBS/*.deb
+        sudo find /opt/libreoffice25.8/share/fonts -type f -iname '*.ttf' -delete
+        "$BENCH_LIBREOFFICE" --version
+
+    - name: Provision the Chromium sandbox host packages
+      shell: bash
+      env:
+        RENDERER: ${{ inputs.renderer }}
+      run: |
+        version=$(node -p "require('./$RENDERER/npm/package-lock.json').packages['node_modules/playwright'].version")
+        npx --yes "playwright@$version" install-deps chromium
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+    - name: Validate unchanged oracle
+      shell: bash
+      working-directory: oracle
+      run: |
+        python3 -m bench.audit
+        python3 -m unittest discover -s tests
+        node --test tests/test-adapter.mjs
+        python3 -m bench validate
+
+    - name: Validate Word harness, provider gate and cache tools
+      shell: bash
+      working-directory: word-oracle
+      run: |
+        cmp bench/build.py ../oracle/bench/build.py
+        cmp bench/metrics.py ../oracle/bench/metrics.py
+        python3 -m bench.audit
+        python3 -m unittest discover -s ../tools/rendering-fidelity -p 'test_*.py' -v
+
+    - name: Retrieve immutable reviewed Word reference pack
+      shell: bash
+      run: |
+        python3 - <<'PY'
+        import hashlib, json, os, subprocess
+        from pathlib import Path
+        from zipfile import ZipFile
+        policy = json.loads(Path('tools/rendering-fidelity/word-reference-policy.json').read_text())
+        assert policy['benchmarkCommit'] == os.environ['WORD_ORACLE_REF']
+        assert policy['libreOfficeOracleCommit'] == os.environ['ORACLE_REF']
+        assert policy['libreOfficeBaselineCommit'] == os.environ['BASELINE_COMMIT']
+        pack = policy['capturePack']
+        target = Path(os.environ['RUNNER_TEMP']) / 'word-text-precision-v1.zip'
+        subprocess.run(['curl', '--fail', '--location', '--retry', '3', '--proto', '=https', '--tlsv1.2',
+                        pack['url'], '-o', str(target)], check=True)
+        assert target.stat().st_size == pack['bytes']
+        assert hashlib.sha256(target.read_bytes()).hexdigest() == pack['sha256']
+        with ZipFile(target) as archive:
+            assert archive.testzip() is None
+            assert all(n == 'CAPTURE-PACK-MANIFEST.json' or
+                       (n.startswith('references/word-text-precision-v1/') and '..' not in Path(n).parts)
+                       for n in archive.namelist())
+            assert not any(n.startswith('references/word-text-precision-v1/registered/') for n in archive.namelist())
+            archive.extractall('word-oracle')
+        PY
+
+    - name: Identify this measurement environment
+      id: key
+      shell: bash
+      run: |
+        key=$(python3 tools/rendering-fidelity/measurement-key.py --oracle oracle --suite core-ci-v2 \
+          --word-oracle word-oracle --word-manifest references/word-text-precision-v1/registry.json)
+        echo "key=$key" >> "$GITHUB_OUTPUT"
