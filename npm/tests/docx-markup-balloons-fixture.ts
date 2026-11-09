@@ -31,16 +31,19 @@ export const markedParagraph = (id: number, mark: 'ins' | 'del', content: string
 /** An original one-section document with the given body, comments and optional default header. */
 export function balloonDocx(options: {
   body: string; comments?: FixtureComment[]; header?: string; paper?: 'letter' | 'a4';
+  bodyFont?: string; balloonFont?: string; fontTable?: string;
 }): Uint8Array {
   const [width, height] = options.paper === 'a4' ? [11906, 16838] : [12240, 15840];
   const comments = options.comments ?? [];
+  const bodyFont = options.bodyFont ?? 'Liberation Serif';
+  const balloonFont = options.balloonFont ?? 'Liberation Sans';
   const paraId = (id: number) => (0x10000000 + id).toString(16).toUpperCase();
   const parts: Record<string, string> = {
     'word/document.xml': `<w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"><w:body>${options.body}<w:sectPr>` +
       `${options.header ? '<w:headerReference w:type="default" r:id="rheader"/>' : ''}<w:pgSz w:w="${width}" w:h="${height}"/>` +
       '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>' +
       '</w:sectPr></w:body></w:document>',
-    'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:styleId="BalloonText"><w:name w:val="Balloon Text"/><w:rPr><w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/><w:sz w:val="18"/></w:rPr></w:style></w:styles>`,
+    'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${bodyFont}" w:hAnsi="${bodyFont}"/><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:styleId="BalloonText"><w:name w:val="Balloon Text"/><w:rPr><w:rFonts w:ascii="${balloonFont}" w:hAnsi="${balloonFont}"/><w:sz w:val="18"/></w:rPr></w:style></w:styles>`,
     'word/settings.xml': `<w:settings xmlns:w="${W_NS}"/>`,
     'word/comments.xml': `<w:comments xmlns:w="${W_NS}" xmlns:w14="${W14}">${comments.map(({ id, author, initials, text }) =>
       `<w:comment w:id="${id}" w:author="${author}" w:initials="${initials}" ${DATE}><w:p w14:paraId="${paraId(id)}">` +
@@ -48,13 +51,14 @@ export function balloonDocx(options: {
     'word/commentsExtended.xml': `<w15:commentsEx xmlns:w15="${W15}">${comments.map(({ id, parent }) =>
       `<w15:commentEx w15:paraId="${paraId(id)}"${parent === undefined ? '' : ` w15:paraIdParent="${paraId(parent)}"`}/>`).join('')}</w15:commentsEx>`,
     ...(options.header ? { 'word/header1.xml': `<w:hdr xmlns:w="${W_NS}">${options.header}</w:hdr>` } : {}),
+    ...(options.fontTable ? { 'word/fontTable.xml': `<w:fonts xmlns:w="${W_NS}">${options.fontTable}</w:fonts>` } : {}),
   };
   const overrides = Object.keys(parts).map((path) => {
     const part = path.slice('word/'.length, -'.xml'.length);
     const type = part === 'document' ? 'document.main' : part === 'header1' ? 'header' : part;
     return `<Override PartName="/${path}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${type}+xml"/>`;
   }).join('');
-  const relationships = ['styles', 'settings', 'comments'].map((p) =>
+  const relationships = ['styles', 'settings', 'comments', ...(options.fontTable ? ['fontTable'] : [])].map((p) =>
     `<Relationship Id="r${p}" Type="${R_NS}/${p}" Target="${p}.xml"/>`).join('') +
     `<Relationship Id="rTopology" Type="http://schemas.microsoft.com/office/2011/relationships/commentsExtended" Target="commentsExtended.xml"/>` +
     (options.header ? `<Relationship Id="rheader" Type="${R_NS}/header" Target="header1.xml"/>` : '');

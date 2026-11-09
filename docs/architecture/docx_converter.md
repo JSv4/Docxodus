@@ -758,12 +758,21 @@ Hex colors (e.g., `FF0000`) are output as `#FF0000`.
 
 ### Font Families
 
-Common fonts include CSS fallbacks:
+Named `w:altName` substitutes lead the CSS fallback chain. The generic family then uses
+the document's `fontTable.xml`: fixed `w:pitch`, followed by `w:family` (`swiss` →
+sans-serif, `roman` → serif, `modern` → monospace), then Latin text/display `w:panose1`.
+Script/decorative families keep the name-based rules. Missing or malformed descriptors
+fall back to the existing name patterns and finally serif. PANOSE byte positions and
+class values follow [Microsoft's definitions](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/6063ca18-7f12-41bf-9e6b-eaaecdc315a0).
+
+Theme fonts resolve to their actual family before this lookup. All story roots share
+the font-table context, including the tab-width estimator. Markup balloon labels,
+comment text and overflow appendix carry the same resolved stacks as body text (#1574).
 
 ```css
-font-family: 'Arial', 'sans-serif'
-font-family: 'Times New Roman', 'serif'
-font-family: 'Courier New'
+font-family: 'Arial', sans-serif
+font-family: 'Times New Roman', serif
+font-family: 'Courier New', monospace
 ```
 
 ## Math equations
