@@ -60,6 +60,7 @@ When manipulating the returned tree, preserve its stylesheet nodes rather than r
 | `ListItemImplementations` | `Dictionary<string, Func<...>>` | Default implementations | Custom list item text generators |
 | `ImageHandler` | `Func<ImageInfo, XElement>` | `null` | **Required for images** - callback to process embedded images |
 | `SemanticLists` | `bool` | `false` | Emit Word lists as `ol`/`ul`/`li` instead of paragraphs (see [Lists](#lists)); ignored by paginated output |
+| `NormalizeBulletMarkers` | `bool` | `false` | With semantic lists, draw familiar bullets through CSS even when marker formatting differs |
 | `StampPageNumberFields` | `bool` | `false` | Preserve `PAGE` / `NUMPAGES` as `data-field` spans in flow output, including empty results; retain cached text, formatting and `data-field-format` switches without calculating page numbers. Paginated output always marks these fields. Exposed as npm `stampPageNumberFields` and Python `stamp_page_number_fields`. |
 | `ShowFormattingChanges` | `bool` | `true` | With `RenderTrackedChanges`, show formatting-change annotations; current formatting remains when false |
 | `ShowInsertionsAndDeletions` | `bool` | `true` | With `RenderTrackedChanges`, show text/structural revisions; false displays current text and structure without accepting revisions |
@@ -621,6 +622,14 @@ With `SemanticLists` on (issue #895), lists come out as lists:
   and get `start` (and `value` where the count jumps). Every other list (`(a)`, `1)`, `1.1.`, a
   marker in another font, a lettered list past `z`, where Word and CSS count differently) keeps its
   marker spans under `list-style-type: none`, and its items stay `display: block`.
+- **Optional bullet normalization.** `NormalizeBulletMarkers` (`normalizeBulletMarkers` in npm,
+  `normalize_bullet_markers` in Python) lets familiar bullet shapes use CSS despite different
+  marker formatting. Symbol's mapped `•` becomes `disc`, Courier New's exact `o` becomes `circle`,
+  and filled square bullets become `square`. All items in that list must map to the same CSS type,
+  with a suffix tab and hanging indent. Empty/checked boxes, unknown glyphs and numbered lists
+  retain their existing handling. This trades exact marker font, size, colour and possible
+  first-line height for clean list-item text; it does not promise visual parity. The default
+  preserves the rules above. It has no effect without `SemanticLists` or in paginated output.
 - **Geometry.** Each item keeps its own leading and trailing indents, measured from the item it is
   nested in rather than from the page, so nested indents don't compound. `ol`/`ul` get no margin,
   padding or text indent of their own, and a nested list resets `text-align` and `line-height` so its
@@ -631,7 +640,7 @@ With `SemanticLists` on (issue #895), lists come out as lists:
 - **Known limit.** A nested list sits inside its parent item's box, so a parent item's shading
   (`w:shd`) or a Word-style revision change bar extends down beside its nested items.
 
-Rendered in a standards-mode page, the list form of every `TestFiles/` fixture places each block's
+With normalization off, rendered in a standards-mode page, the list form of every `TestFiles/` fixture places each block's
 first character exactly where the paragraph form does. In a page without a doctype (quirks mode),
 Chromium lays a list item's line out slightly differently, and a CSS-marked item can sit up to
 1.4 px higher. The marker font rule above exists because a `::marker` takes the item's font: where

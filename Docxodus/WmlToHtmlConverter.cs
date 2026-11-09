@@ -338,6 +338,14 @@ namespace Docxodus
         public bool SemanticLists;
 
         /// <summary>
+        /// With SemanticLists, use CSS disc/circle/square markers for familiar bullet shapes,
+        /// including Symbol bullets and Courier New "o", even when marker formatting differs.
+        /// Marker font, size, colour and line-box metrics may change. Numbered lists, custom
+        /// glyphs and checkboxes retain their markers. Ignored by pagination; default false.
+        /// </summary>
+        public bool NormalizeBulletMarkers;
+
+        /// <summary>
         /// Optional canonical anchor identity provider used alongside <see cref="StampAnchors"/>.
         /// The legacy <c>data-anchor</c> value is intentionally the bare Unid for editor
         /// compatibility; this provider stamps the collision-safe full
@@ -1457,7 +1465,7 @@ namespace Docxodus
                 RemoveUnresolvableNoteLinks(xhtml);
 
             if (EmitsSemanticLists(htmlConverterSettings))
-                GroupSemanticLists(xhtml);
+                GroupSemanticLists(xhtml, htmlConverterSettings.NormalizeBulletMarkers);
 
             FinalizeShapeAnchors(xhtml, htmlConverterSettings);
             ReifyStylesAndClasses(htmlConverterSettings, xhtml, wordDoc);

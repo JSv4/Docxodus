@@ -336,6 +336,12 @@ export interface ConversionOptions {
    * `list-style-type: none`. Ignored by paginated output. Default: false.
    */
   semanticLists?: boolean;
+  /**
+   * With semanticLists, draw familiar bullets with CSS disc/circle/square, including Symbol
+   * bullets and Courier New "o". Marker formatting and line height may change. Numbered/custom
+   * markers and checkboxes remain intact. Ignored by paginated output. Default: false.
+   */
+  normalizeBulletMarkers?: boolean;
 }
 
 /**
@@ -1580,7 +1586,8 @@ export interface DocxodusWasmExports {
       semanticLists?: boolean,
       hiddenRevisionKinds?: number,
       stampPageNumberFields?: boolean,
-      renderHeaderFooterRegistry?: boolean
+      renderHeaderFooterRegistry?: boolean,
+      normalizeBulletMarkers?: boolean
     ) => string;
     GetAnnotations: (bytes: Uint8Array) => string;
     AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;

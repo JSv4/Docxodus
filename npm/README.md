@@ -459,6 +459,7 @@ interface ConversionOptions {
   renderHeadersAndFooters?: boolean;      // Include headers and footers
   renderTrackedChanges?: boolean;         // Show insertions/deletions visually
   semanticLists?: boolean;                // Emit lists as <ol>/<ul>/<li> (ignored when paginated)
+  normalizeBulletMarkers?: boolean;       // Opt-in CSS bullets; requires semanticLists, may change marker formatting
 }
 ```
 

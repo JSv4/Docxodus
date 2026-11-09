@@ -4244,7 +4244,9 @@ class HtmlOptions:
 
     ``semantic_lists`` emits Word lists as ``<ol>``/``<ul>``/``<li>`` instead of paragraphs.
     CSS draws a marker only where it reproduces Word's exactly; other lists keep their
-    generated marker spans. Paginated output ignores it.
+    generated marker spans. Paginated output ignores it. With ``normalize_bullet_markers``,
+    familiar bullet shapes use CSS even when their formatting differs (font/line height may
+    change). Numbered/custom markers and checkboxes remain intact. Both flags default false.
 
     ``stamp_page_number_fields`` preserves PAGE / NUMPAGES fields as ``data-field``
     spans in flow HTML, including empty results. Cached text and formatting stay;
@@ -4280,6 +4282,7 @@ class HtmlOptions:
     show_insertions_and_deletions: bool = True
     stamp_page_number_fields: bool = False
     render_header_footer_registry: bool = False
+    normalize_bullet_markers: bool = False
 
     def to_wire(self) -> dict[str, Any]:
         """camelCase keys the host dispatcher's ``ParseHtmlOptions`` reads."""
@@ -4306,6 +4309,7 @@ class HtmlOptions:
             "revisionPresentation": self.revision_presentation,
             "renderUnsupportedContentPlaceholders": self.render_unsupported_content_placeholders,
             "semanticLists": self.semantic_lists,
+            "normalizeBulletMarkers": self.normalize_bullet_markers,
             "stampPageNumberFields": self.stamp_page_number_fields,
             "renderHeaderFooterRegistry": self.render_header_footer_registry,
         }

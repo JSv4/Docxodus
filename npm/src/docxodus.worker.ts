@@ -404,7 +404,8 @@ function handleConvert(
         options?.semanticLists ?? false,
         hiddenRevisionKinds(options),
         options?.stampPageNumberFields ?? false,
-        options?.renderHeaderFooterRegistry ?? false
+        options?.renderHeaderFooterRegistry ?? false,
+        options?.normalizeBulletMarkers ?? false
       );
     } else if (
       options?.paginationMode !== undefined &&

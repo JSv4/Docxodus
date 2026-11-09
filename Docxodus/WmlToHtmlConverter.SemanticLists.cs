@@ -51,7 +51,7 @@ namespace Docxodus
         /// a sibling list. Anything else between two items (a plain paragraph, a table) ends the run,
         /// so a list never crosses a cell, a note or a section.
         /// </summary>
-        private static void GroupSemanticLists(XElement root)
+        private static void GroupSemanticLists(XElement root, bool normalizeBullets)
         {
             var parents = root.DescendantsAndSelf()
                 .Where(e => e.Elements().Any(c => c.Annotation<SemanticListItem>() != null))
@@ -64,9 +64,9 @@ namespace Docxodus
                     if (node is XElement element && element.Annotation<SemanticListItem>() != null)
                         run.Add(element);
                     else if (node is not XText text || !string.IsNullOrWhiteSpace(text.Value))
-                        BuildLists(run);
+                        BuildLists(run, normalizeBullets);
                 }
-                BuildLists(run);
+                BuildLists(run, normalizeBullets);
             }
         }
 
@@ -80,7 +80,7 @@ namespace Docxodus
         }
 
         /// <summary>Replaces one run of adjacent list paragraphs with the lists they form, and empties the run.</summary>
-        private static void BuildLists(List<XElement> run)
+        private static void BuildLists(List<XElement> run, bool normalizeBullets)
         {
             if (run.Count == 0)
                 return;
@@ -123,7 +123,7 @@ namespace Docxodus
                     open.List.Add(item);
             // Outer lists first, so a nested list measures its items from its parent item's final indent.
             foreach (var open in all)
-                FinishList(open);
+                FinishList(open, normalizeBullets);
             run.Clear();
         }
 
@@ -134,7 +134,7 @@ namespace Docxodus
         /// marker hangs in its item's hanging indent before a tab; otherwise every item keeps its
         /// generated marker spans and the list draws none.
         /// </summary>
-        private static void FinishList(OpenList open)
+        private static void FinishList(OpenList open, bool normalizeBullets)
         {
             var listStyle = Style(open.List);
             listStyle["margin-top"] = "0";
@@ -151,7 +151,7 @@ namespace Docxodus
             }
 
             var container = open.ParentItem is { } parent ? IndentsPoints(parent) : (Leading: 0m, Trailing: 0m);
-            var types = open.Items.Select(i => CssMarkerType(i.Item, i.Info)).Distinct().ToList();
+            var types = open.Items.Select(i => CssMarkerType(i.Item, i.Info, normalizeBullets)).Distinct().ToList();
             var cssType = types.Count == 1 ? types[0] : null;
             listStyle["list-style-type"] = cssType ?? "none";
 
@@ -232,8 +232,9 @@ namespace Docxodus
         /// stand in only when the marker is followed by a tab, hangs in a hanging indent (a negative
         /// first-line indent), and its text is exactly what the type generates for the item's value:
         /// a number in one of CSS's counter styles followed by a period, or a bullet glyph CSS draws.
+        /// Explicit bullet normalization also accepts Courier New's "o" and permits formatting changes.
         /// </summary>
-        private static string? CssMarkerType(XElement item, SemanticListItem info)
+        private static string? CssMarkerType(XElement item, SemanticListItem info, bool normalizeBullets)
         {
             var wrapper = item.Elements().FirstOrDefault();
             if (wrapper == null || !IsMarkerWrapper(wrapper))
@@ -241,25 +242,32 @@ namespace Docxodus
             if (item.Annotation<Dictionary<string, string>>() is not { } style ||
                 !style.TryGetValue("text-indent", out var textIndent) || !textIndent.StartsWith("-", StringComparison.Ordinal))
                 return null;
-            // A ::marker takes the item's own formatting, so the marker run must already look like
-            // the item: same family, size, weight, style, colour and decoration. And where the marker
-            // run's font differs from the text's, its line box can be the tallest on the first line
-            // (Word counts it too), so dropping the span would shorten the line.
+            var marker = wrapper.Value.Trim().Trim('\u200e', '\u200f');
+            // The final tagged span can be only the suffix tab. Normalization needs the glyph's
+            // own font and visibility, independently of the item's largest run or the tab's font.
+            var glyph = normalizeBullets ? wrapper.DescendantsAndSelf(Xhtml.span).LastOrDefault(s =>
+                (string?)s.Attribute("data-list-marker") == "true" && !string.IsNullOrWhiteSpace(s.Value)) : null;
+            var bulletType = marker switch
+            {
+                "\u2022" => "disc",
+                "\u25e6" => "circle",
+                "\u25aa" or "\u25a0" => "square",
+                "o" when normalizeBullets && string.Equals(
+                    EffectiveFormat(glyph, style).Family?.Split(',')[0].Trim().Trim('\'', '"'), "Courier New", StringComparison.OrdinalIgnoreCase) => "circle",
+                _ => null,
+            };
+            if (!info.Ordered && normalizeBullets && bulletType != null)
+                return glyph == null || glyph.AncestorsAndSelf().TakeWhile(e => e != item).Any(e =>
+                    e.Annotation<Dictionary<string, string>>()?.GetValueOrDefault("display") == "none") ? null : bulletType;
+            // Outside explicit bullet normalization, a ::marker must retain the source formatting.
+            // A differently sized/fonted marker can also set the first line's height.
             var markerFormat = EffectiveFormat(MarkerTextSpan(wrapper), style);
             var textFormat = EffectiveFormat(item.Elements().Skip(1).FirstOrDefault(e => e.Name == Xhtml.span && e.Value.Trim().Length > 0), style);
             if (markerFormat != EffectiveFormat(null, style) ||
                 markerFormat.Family != textFormat.Family || markerFormat.Size != textFormat.Size)
                 return null;
-            var marker = wrapper.Value.Trim().Trim('\u200e', '\u200f');
-
             if (!info.Ordered)
-                return marker switch
-                {
-                    "\u2022" => "disc",
-                    "\u25e6" => "circle",
-                    "\u25aa" or "\u25a0" => "square",
-                    _ => null,
-                };
+                return bulletType;
 
             if (info.Value is not { } value || value < 1)
                 return null;

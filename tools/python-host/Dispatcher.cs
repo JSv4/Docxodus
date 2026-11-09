@@ -752,6 +752,7 @@ internal static partial class Dispatcher
             RenderUnsupportedContentPlaceholders = BoolOpt("renderUnsupportedContentPlaceholders", defaults.RenderUnsupportedContentPlaceholders),
             DocumentLanguage = StrOptNullable("documentLanguage", defaults.DocumentLanguage),
             SemanticLists = BoolOpt("semanticLists", defaults.SemanticLists),
+            NormalizeBulletMarkers = BoolOpt("normalizeBulletMarkers", defaults.NormalizeBulletMarkers),
             StampPageNumberFields = BoolOpt("stampPageNumberFields", defaults.StampPageNumberFields),
             RenderHeaderFooterRegistry = BoolOpt("renderHeaderFooterRegistry", defaults.RenderHeaderFooterRegistry),
         };

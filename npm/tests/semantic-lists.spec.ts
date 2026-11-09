@@ -2,6 +2,7 @@ import { test, expect, Page } from "@playwright/test";
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import { storedZip, xml, W_NS, R_NS } from "./docx-zip.js";
 
 /**
  * Semantic lists (issue #895): `semanticLists` turns Word list paragraphs into <ol>/<ul>/<li>, through
@@ -66,3 +67,57 @@ test.describe("semantic lists (#895)", () => {
     expect(await shape(page, html)).toMatchObject({ lists: 3, items: 9, itemsOutsideLists: 0 });
   });
 });
+
+// Original two-level Word-style bullets followed by a checkbox control.
+function familiarBullets(): number[] {
+  const level = (depth: number, glyph: string, family: string) => `<w:lvl w:ilvl="${depth}"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="${glyph}"/><w:pPr><w:ind w:left="${720 * (depth + 1)}" w:hanging="360"/></w:pPr><w:rPr><w:rFonts w:ascii="${family}" w:hAnsi="${family}"/></w:rPr></w:lvl>`;
+  const item = (id: number, depth: number, text: string) => `<w:p><w:pPr><w:numPr><w:ilvl w:val="${depth}"/><w:numId w:val="${id}"/></w:numPr></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
+  const parts: Record<string, string> = {
+    'document': `<w:document xmlns:w="${W_NS}"><w:body>${item(1, 0, 'Harbor')}${item(1, 1, 'Ledger')}${item(2, 0, 'Confirm')}<w:sectPr/></w:body></w:document>`,
+    'styles': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>`,
+    'settings': `<w:settings xmlns:w="${W_NS}"/>`,
+    'numbering': `<w:numbering xmlns:w="${W_NS}"><w:abstractNum w:abstractNumId="0">${level(0, '\uf0b7', 'Symbol')}${level(1, 'o', 'Courier New')}</w:abstractNum><w:abstractNum w:abstractNumId="1">${level(0, '☐', 'Liberation Serif')}</w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num></w:numbering>`,
+  };
+  return Array.from(storedZip(Object.entries({
+    ...Object.fromEntries(Object.entries(parts).map(([name, content]) => [`word/${name}.xml`, content])),
+    'word/_rels/document.xml.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${['styles', 'settings', 'numbering'].map(name => `<Relationship Id="${name}" Type="${R_NS}/${name}" Target="${name}.xml"/>`).join('')}</Relationships>`,
+    '_rels/.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="document" Type="${R_NS}/officeDocument" Target="word/document.xml"/></Relationships>`,
+    '[Content_Types].xml': `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>${Object.keys(parts).map(name => `<Override PartName="/word/${name}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${name === 'document' ? 'document.main' : name}+xml"/>`).join('')}</Types>`,
+  }).map(([name, value]) => ({ name, data: xml(value) }))));
+}
+
+for (const worker of [false, true]) {
+  test(`familiar bullets normalize only on request through ${worker ? 'worker' : 'core'}`, async ({ page }) => {
+    await page.goto('/worker-test-harness.html');
+    const results = await page.evaluate(async ({ input, worker }) => {
+      const moduleUrl = 'http://localhost:8083/core.js';
+      const api = worker ? await (window as any).createDocxodusWorker() : await import(moduleUrl);
+      if (!worker) await api.initialize(`${location.origin}/`);
+      const results = [];
+      for (const normalizeBulletMarkers of [false, true]) {
+        const html = await api.convertDocxToHtml(new Uint8Array(input), {
+          semanticLists: true, normalizeBulletMarkers, fabricateCssClasses: false, stampAnchors: true,
+        });
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const items = Array.from(doc.querySelectorAll('li'));
+        results.push({
+          types: Array.from(doc.querySelectorAll('ul')).map(e => e.style.listStyleType),
+          markers: items.map(e => !!e.querySelector(':scope > [data-list-marker]')),
+          anchors: items.every(e => !!e.dataset.anchor),
+          text: items.map(e => Array.from(e.childNodes).filter(n => !(n instanceof Element && n.matches('ul')))
+            .map(n => n.textContent).join('').trim()),
+        });
+      }
+      if (worker) api.terminate();
+      return results;
+    }, { input: familiarBullets(), worker });
+    expect(results[0].types).toEqual(['none', 'none', 'none']);
+    expect(results[0].markers).toEqual([true, true, true]);
+    expect(results[1].types).toEqual(['disc', 'circle', 'none']);
+    expect(results[1].markers).toEqual([false, false, true]);
+    expect(results.every(r => r.anchors)).toBe(true);
+    expect(results[1].text.slice(0, 2)).toEqual(['Harbor', 'Ledger']);
+    expect(results[1].text[2]).toContain('☐');
+    expect(results[1].text[2]).toContain('Confirm');
+  });
+}
