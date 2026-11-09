@@ -86,14 +86,15 @@ for (const source of observations.cases) {
 
 for (const mode of [14, 15]) {
   for (const indent of [0, 36]) {
-    test(`mode ${mode} retains the browser font boundary with ${indent}pt indent`, async ({ page }) => {
+    test(`mode ${mode} distinguishes raw font and fixed-cell boundaries with ${indent}pt indent`, async ({ page }) => {
       // Liberation Mono advances are 1229/2048 em: 128 glyphs at 12pt = 921.75pt exactly.
       // Word fits the issue's 65-glyph prefix into 468pt despite its 468.076171875pt
-      // raw advance. This browser-boundary control does not establish that native fitting rule.
+      // raw advance. Preserve the browser control and separately test the inferred
+      // 144-twip fixed-cell policy: 128 cells occupy 921.6pt.
       const prefix = 'Copper '.repeat(18) + 'ox';
       await page.setContent(`<style>p{font:12pt 'Liberation Mono',monospace;line-height:18px;margin:0;
         --docx-auto-line-spacing:1;text-indent:${indent}pt}span{white-space:pre-wrap;font-kerning:none;line-height:18px}</style>
-        <main data-docx-compatibility-mode="${mode}">${[921.70, 921.75, 921.80].map(width =>
+        <main data-docx-compatibility-mode="${mode}">${[921.55, 921.6, 921.65, 921.70, 921.75, 921.80].map(width =>
           `<p style="width:${width + indent}pt"><span>${prefix} TAIL</span></p>`).join('')}</main>`);
       await page.addScriptTag({ content: wordText });
       await page.evaluate(() => document.fonts.ready);
@@ -115,9 +116,10 @@ for (const mode of [14, 15]) {
         return { width: context.measureText(prefix).width, before, after: lines(), prepared };
       }, prefix);
       expect(facts.width).toBe(1229);
-      expect(facts.prepared).toBe(3);
-      expect(facts.before).toEqual([[prefix.slice(0, -3), 'ox TAIL'], [prefix, 'TAIL'], [prefix, 'TAIL']]);
-      expect(facts.after).toEqual(facts.before);
+      expect(facts.prepared).toBe(6);
+      expect(facts.before).toEqual([...Array.from({length:4}, () => [prefix.slice(0, -3), 'ox TAIL']),
+        [prefix, 'TAIL'], [prefix, 'TAIL']]);
+      expect(facts.after).toEqual([[prefix.slice(0, -3), 'ox TAIL'], ...Array.from({length:5}, () => [prefix, 'TAIL'])]);
     });
   }
 }
