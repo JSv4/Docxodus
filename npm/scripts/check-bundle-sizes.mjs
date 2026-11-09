@@ -82,8 +82,8 @@ const budgetsKiB = {
   // Word-confirmed minimum baseline placement adds 90–108 gzip bytes:
   // embed/IIFE/editor/pagination 161840/161902/140611/55989 bytes.
   // Round only these exhausted gates to the next 0.1 KiB.
-  // Shared declared font stacks in balloons/appendices add 42/50 gzip bytes here and
-  // in pagination (161915/56039 bytes). Raise only these exhausted gates by 0.1 KiB.
+  // Shared declared font stacks in balloons/appendices add 61/50 gzip bytes here and
+  // in pagination (161934/56039 bytes). Raise only these exhausted gates by 0.1 KiB.
   'embed.bundle.js': 158.2,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
