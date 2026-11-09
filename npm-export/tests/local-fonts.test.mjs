@@ -83,6 +83,20 @@ test("explicit faces win over local candidates and local matching is exact", asy
   assert.deepEqual(warnings, []);
 });
 
+test("repeated over-budget requests do not retain rejected local faces", async t => {
+  const root = await folder(t);
+  for (const name of ["docxodus-policy-base.ttf", "docxodus-metric-test.ttf", "synthetic-calibri.ttf", "synthetic-carlito.ttf"]) {
+    await copyFile(new URL(name, fixtures), join(root, name));
+  }
+  const { resolve } = runtime([root], { limits: { fontFiles: 1 } });
+  const first = await resolve("Docxodus Policy Test");
+  for (const family of ["Docxodus Metric Test", "Calibri", "Carlito", "Docxodus Metric Test"]) {
+    await assert.rejects(resolve(family), error => error.code === "resource_limit"
+      && error.message === "fontFiles limit exceeded (2 > 1).");
+  }
+  assert.deepEqual(await resolve("Docxodus Policy Test"), first);
+});
+
 test("skips forbidden local faces with a path-free warning, and strict mode fails", async t => {
   const root = await folder(t);
   await writeFile(join(root, "private-font.ttf"), fsType(policy, 2));

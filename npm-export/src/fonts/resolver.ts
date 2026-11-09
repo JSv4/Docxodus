@@ -445,21 +445,23 @@ export function createNodeFontRuntime(
               index.warning(candidate.family, "duplicate files disagree for the same family and face");
               match = undefined;
             }
+            if (match) {
+              const cached = [...matchedGroups.values()].flatMap(value => value ? [value] : []).concat(match);
+              const localFiles = new Map(cached.map(value => [value.path, value.size]));
+              const codePoints = [...catalog.faces, ...cached.map(value => value.face)].reduce((sum, face) => sum + face.codePoints.length, 0);
+              if (codePoints > FONT_CATALOG_CODE_POINTS_MAX) exportError("resource_limit", "font_loading",
+                `Font character maps exceed ${FONT_CATALOG_CODE_POINTS_MAX} entries.`, "Use fewer font faces in the document.");
+              const count = catalog.fileCount + localFiles.size;
+              if (count > limitSnapshot.fontFiles) limitError("fontFiles", count, limitSnapshot.fontFiles);
+              const bytes = catalog.totalBytes + [...localFiles.values()].reduce((sum, size) => sum + size, 0);
+              const expanded = catalog.totalExpandedBytes + cached.reduce((sum, value) => sum + value.face.expandedByteLength, 0);
+              if (Math.max(bytes, expanded) > limitSnapshot.fontTotalBytes) limitError("fontTotalBytes", Math.max(bytes, expanded), limitSnapshot.fontTotalBytes);
+            }
             matchedGroups.set(groupKey, match);
           }
           const match = matchedGroups.get(groupKey);
           if (!match) continue;
           localFaces.set(match.face.id, match.face);
-          const cached = [...matchedGroups.values()].flatMap(match => match ? [match] : []);
-          const localFiles = new Map(cached.map(match => [match.path, match.size]));
-          const codePoints = [...catalog.faces, ...cached.map(match => match.face)].reduce((sum, face) => sum + face.codePoints.length, 0);
-          if (codePoints > FONT_CATALOG_CODE_POINTS_MAX) exportError("resource_limit", "font_loading",
-            `Font character maps exceed ${FONT_CATALOG_CODE_POINTS_MAX} entries.`, "Use fewer font faces in the document.");
-          const count = catalog.fileCount + localFiles.size;
-          if (count > limitSnapshot.fontFiles) limitError("fontFiles", count, limitSnapshot.fontFiles);
-          const bytes = catalog.totalBytes + [...localFiles.values()].reduce((sum, size) => sum + size, 0);
-          const expanded = catalog.totalExpandedBytes + cached.reduce((sum, match) => sum + match.face.expandedByteLength, 0);
-          if (Math.max(bytes, expanded) > limitSnapshot.fontTotalBytes) limitError("fontTotalBytes", Math.max(bytes, expanded), limitSnapshot.fontTotalBytes);
           selected = true;
           break;
         }
@@ -478,11 +480,11 @@ export function createNodeFontRuntime(
       if (rejectedFaces.has(id)) continue;
       const group = [...matchedGroups].find(([, match]) => match?.face.id === id);
       if (!local || !group) policyError("The browser rejected an unknown local font face.", "Reject only a previously returned local face.");
+      if (rejectedFaces.size >= limitSnapshot.fontFiles) limitError("fontFiles", rejectedFaces.size + 1, limitSnapshot.fontFiles);
       const index = await localPromise!;
       index.warning(group[1]!.face.family, "browser could not decode the selected font bytes");
       matchedGroups.set(group[0], undefined);
       rejectedFaces.add(id);
-      if (rejectedFaces.size > limitSnapshot.fontFiles) limitError("fontFiles", rejectedFaces.size, limitSnapshot.fontFiles);
     }
     const catalog = await withLocalFaces(await waitForCatalog(signal), requests, signal);
     if (signal.aborted) throw signal.reason;
