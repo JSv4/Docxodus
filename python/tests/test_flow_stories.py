@@ -3,10 +3,13 @@ from io import BytesIO
 from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 
+import pytest
+
 from docx_scalpel import HtmlOptions, convert_docx_to_html, open_session
 
 
-def test_flow_inherits_the_nearest_default_story() -> None:
+@pytest.mark.parametrize("empty_final", [False, True])
+def test_flow_inherits_the_nearest_default_story(empty_final: bool) -> None:
     w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
     types = "http://schemas.openxmlformats.org/package/2006/content-types"
@@ -27,7 +30,10 @@ def test_flow_inherits_the_nearest_default_story() -> None:
             relationships += f'<Relationship Id="{part}" Type="{r}/{kind}" Target="{part}.xml"/>'
             references += f'<w:{kind}Reference w:type="default" r:id="{part}"/>'
         paragraphs += f'<w:p><w:pPr><w:sectPr>{references}</w:sectPr></w:pPr><w:r><w:t>{name} section</w:t></w:r></w:p>'
-    parts["word/document.xml"] = f'<w:document xmlns:w="{w}" xmlns:r="{r}"><w:body>{paragraphs}<w:p><w:r><w:t>Final section</w:t></w:r></w:p><w:sectPr/></w:body></w:document>'
+    final = ('<w:sectPr><w:headerReference w:type="default" r:id="headerOld"/>'
+             '<w:footerReference w:type="default" r:id="footerOld"/></w:sectPr>' if empty_final else
+             '<w:p><w:r><w:t>Final section</w:t></w:r></w:p><w:sectPr/>')
+    parts["word/document.xml"] = f'<w:document xmlns:w="{w}" xmlns:r="{r}"><w:body>{paragraphs}{final}</w:body></w:document>'
     parts["word/_rels/document.xml.rels"] = f'<Relationships xmlns="{rels}">{relationships}</Relationships>'
     parts["_rels/.rels"] = f'<Relationships xmlns="{rels}"><Relationship Id="document" Type="{r}/officeDocument" Target="word/document.xml"/></Relationships>'
     parts["[Content_Types].xml"] = f'<Types xmlns="{types}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' + "".join(
@@ -44,4 +50,4 @@ def test_flow_inherits_the_nearest_default_story() -> None:
             for kind in ("header", "footer"):
                 stories = html.findall(f".//{{http://www.w3.org/1999/xhtml}}{kind}")
                 assert len(stories) == 1
-                assert "".join(stories[0].itertext()).strip() == "Current " + kind
+                assert "".join(stories[0].itertext()).strip() == ("Old " if empty_final else "Current ") + kind

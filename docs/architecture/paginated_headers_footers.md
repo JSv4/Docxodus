@@ -152,6 +152,10 @@ when the default is absent (#1619). A section with no `w:sectPr` at all (`Collec
 documented `null` ⇒ defaults contract) records nothing and leaves the inherited
 references untouched.
 
+The converter captures this ordered section list before paragraph annotation relocates
+the body-level `sectPr`. That preserves a final section with no body paragraph, even
+when the preceding paragraph already carries the previous section's properties.
+
 Inheritance is orthogonal to *visibility*: an inherited or explicit `first`/`even`
 reference is still inert unless `w:titlePg` / the document-global
 `w:evenAndOddHeaders` switch it on (see Limitations).

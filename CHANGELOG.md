@@ -15,7 +15,7 @@ All notable changes to this project will be documented in this file.
 
 - Adjacent ordinary HTML text spans with identical rendered attributes now join, including when anchor stamping or unused run properties prevented source runs from coalescing. Text, block anchors, field/bookmark boundaries and layout boxes are preserved (#1624).
 
-- Flow HTML headers and footers now use the final section's inherited default references. First/even-only and unreferenced package parts no longer appear as document-wide stories (#1619).
+- Flow HTML headers and footers now use the final section's inherited default references, including an empty final section. First/even-only and unreferenced package parts no longer appear as document-wide stories (#1619).
 
 - Static EMF rectangle/ellipse pictures render as inline SVG in HTML and PDF, preserving their authored frames and overflowing artwork. Cosmetic outlines use one browser pixel; geometric outlines scale with the picture. Unsupported records retain the whole-image placeholder and strict-export diagnostics (#1554).
 
