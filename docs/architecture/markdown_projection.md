@@ -162,6 +162,11 @@ Legal numbering (`1.1`, `1.1.1`, …) and other multi-level formats render verba
 
 ## Tables
 
+Accepted and deletion-stripped projections omit rows carrying `w:trPr/w:del`, including wrapped
+rows and their textboxes. GFM eligibility, headers and opaque dimensions use the remaining rows;
+a table with no remaining rows contributes no Markdown block. The anchor index still contains
+the source rows/cells for revision review, and `RenderInline` retains its existing row view.
+
 GFM pipe tables when:
 
 - No merged cells (`w:gridSpan`, `w:vMerge`)

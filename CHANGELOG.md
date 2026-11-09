@@ -19,6 +19,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Markdown projection omits pending deleted table rows in accepted and deletion-stripped views, including opaque summaries and textboxes carried by those rows. Source anchors remain available for review and rejection (#1628).
+
 - Missing fonts now use the document's declared pitch, family and PANOSE class for generic fallbacks. Body text, running stories, markup balloons and their appendix share the same font stack; tab-stop estimation also honors declared fixed pitch (#1574).
 
 - Adjacent ordinary HTML text spans with identical rendered attributes now join, including when anchor stamping or unused run properties prevented source runs from coalescing. Text, block anchors, field/bookmark boundaries and layout boxes are preserved (#1624).
