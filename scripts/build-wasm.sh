@@ -102,23 +102,27 @@ fi
 # exactly as before. gzip is deliberately NOT precompressed — gzip-capable hosts
 # compress on the fly, while brotli-11 is too slow for that.
 echo ""
+# The assets compress concurrently on libuv's thread pool, sized to the machine; the output is
+# byte-identical to compressing them one at a time.
 echo "Precompressing framework assets (brotli -11)..."
-node -e '
-const fs = require("fs"), zlib = require("zlib"), path = require("path");
+UV_THREADPOOL_SIZE="$(node -p 'require("os").availableParallelism()')" node -e '
+const fs = require("fs"), zlib = require("zlib"), path = require("path"), { promisify } = require("util");
+const compress = promisify(zlib.brotliCompress);
 const dir = process.argv[1];
-let raw = 0, br = 0, n = 0;
-for (const f of fs.readdirSync(dir)) {
+const files = fs.readdirSync(dir).filter(f => !f.endsWith(".br") && fs.statSync(path.join(dir, f)).isFile());
+Promise.all(files.map(async f => {
   const p = path.join(dir, f);
-  if (!fs.statSync(p).isFile() || f.endsWith(".br")) continue;
   const buf = fs.readFileSync(p);
-  const c = zlib.brotliCompressSync(buf, { params: {
+  const c = await compress(buf, { params: {
     [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
     [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length } });
   fs.writeFileSync(p + ".br", c);
-  raw += buf.length; br += c.length; n++;
-}
-console.log(`  ${n} assets: ${(raw/1048576).toFixed(2)} MB raw -> ${(br/1048576).toFixed(2)} MB brotli`);
-fs.writeFileSync(path.join(dir, ".wire-size"), String(br));
+  return [buf.length, c.length];
+})).then(sizes => {
+  const raw = sizes.reduce((sum, [r]) => sum + r, 0), br = sizes.reduce((sum, [, b]) => sum + b, 0);
+  console.log(`  ${sizes.length} assets: ${(raw/1048576).toFixed(2)} MB raw -> ${(br/1048576).toFixed(2)} MB brotli`);
+  fs.writeFileSync(path.join(dir, ".wire-size"), String(br));
+});
 ' "$WASM_DIST/_framework"
 
 # Report sizes
