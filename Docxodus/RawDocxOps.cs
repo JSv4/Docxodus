@@ -1,5 +1,3 @@
-#nullable enable
-
 // Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -9,6 +7,10 @@ namespace Docxodus;
 /// Raw OOXML escape hatch for cases the markdown subset can't express
 /// (complex tables, math, drawings, content controls, custom XML).
 /// Accessed via <see cref="DocxSession.Raw"/>.
+/// Insert and replace refuse with <see cref="EditErrorCode.TrackedOperationUnsupported"/>
+/// while recording changes: arbitrary XML fragments are not automatically diffed into revisions.
+/// Use a supported tracked operation, or explicitly call <see cref="DocxSession.SetTrackedChanges"/>
+/// with <see cref="TrackedChangeMode.Accept"/> for an intentional untracked import.
 /// </summary>
 public sealed class RawDocxOps
 {

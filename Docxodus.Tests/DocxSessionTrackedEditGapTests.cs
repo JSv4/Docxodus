@@ -15,6 +15,58 @@ namespace Docxodus.Tests;
 /// </summary>
 public class DocxSessionTrackedEditGapTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RawMutation_WhileRecording_RefusesWithoutChangingDocumentOrHistory(bool insert)
+    {
+        using var session = Open(TwoParagraphs, TrackedChangeMode.Accept);
+        session.SetTrackedChanges(TrackedChangeMode.RenderInline);
+        var anchor = FirstParagraph(session);
+        Assert.True(session.ReplaceText(anchor, "Reviewed").Success);
+        var before = Body(session).ToString();
+        var revisions = session.ListRevisions().Select(r => r.Id).ToArray();
+        var xml = insert ? $"<w:p xmlns:w=\"{W.w}\"><w:r><w:t>Unreviewed</w:t></w:r></w:p>"
+            : session.Raw.GetXml(anchor).Replace("Reviewed", "Unreviewed");
+
+        var result = insert ? session.Raw.InsertXml(anchor, Position.After, xml)
+            : session.Raw.ReplaceXml(anchor, xml);
+
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.TrackedOperationUnsupported, result.Error!.Code);
+        Assert.Equal(before, Body(session).ToString());
+        Assert.Equal(revisions, session.ListRevisions().Select(r => r.Id));
+        Assert.True(session.Undo()); // The refusal must not consume the preceding edit's undo.
+        Assert.Empty(session.ListRevisions());
+        Assert.False(session.Undo());
+        Assert.True(session.Redo());
+        Assert.Equal(before, Body(session).ToString());
+    }
+
+    [Theory]
+    [InlineData(false, TrackedChangeMode.Accept)]
+    [InlineData(true, TrackedChangeMode.Accept)]
+    [InlineData(false, TrackedChangeMode.StripDeletions)]
+    [InlineData(true, TrackedChangeMode.StripDeletions)]
+    public void RawMutation_WithoutRecording_RemainsUndoable(bool insert, TrackedChangeMode mode)
+    {
+        using var session = Open(TwoParagraphs, TrackedChangeMode.RenderInline);
+        session.SetTrackedChanges(mode);
+        var anchor = FirstParagraph(session);
+        var before = Body(session).ToString();
+        var xml = insert ? $"<w:p xmlns:w=\"{W.w}\"><w:r><w:t>Replacement.</w:t></w:r></w:p>"
+            : session.Raw.GetXml(anchor).Replace("First.", "Replacement.");
+
+        var result = insert ? session.Raw.InsertXml(anchor, Position.After, xml)
+            : session.Raw.ReplaceXml(anchor, xml);
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Contains("Replacement.", session.Project().Markdown);
+        Assert.Empty(session.ListRevisions());
+        Assert.True(session.Undo());
+        Assert.Equal(before, Body(session).ToString());
+    }
+
     // ─── InsertCrossReference ──────────────────────────────────────────────
 
     private const string CrossReferenceBody =
