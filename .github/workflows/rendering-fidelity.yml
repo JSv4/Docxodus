@@ -1,31 +1,210 @@
 name: Independent rendering fidelity
+
+# Every pull request is measured against the pinned historical baseline and against its base
+# commit on main, by the LibreOffice oracle and by the registered Word references, all at zero
+# tolerance. The baseline never changes and main changes once per merge, so their measurements are
+# made once, by the `warm` job on each push to main, and cached in main's scope where every pull
+# request can restore them. A pull request then builds and measures only its own candidate.
+#
+# Cached measurements are only reused in the environment that produced them: every cache key
+# carries the measurement-environment key (tools/rendering-fidelity/measurement-key.py), and the
+# benches themselves refuse to compare results whose measurement contracts differ. On any miss the
+# pull request measures baseline and main live, exactly as before. The `canary` job re-measures the
+# cached baseline live beside every pull request and fails unless it reproduces exactly.
 on:
   pull_request:
     paths:
       - 'Docxodus/**'
-      - 'Docxodus.Tests/**'
+      - 'wasm/**'
+      - 'scripts/build-wasm.sh'
+      - 'Directory.Build.props'
+      - 'Directory.Build.targets'
+      - 'global.json'
       - 'npm/**'
+      - '!npm/tests/**'
       - 'npm-export/**'
+      - '!npm-export/tests/**'
       - 'tools/rendering-fidelity/**'
+      - '.github/actions/fidelity-measurement-host/**'
       - '.github/workflows/rendering-fidelity.yml'
+  # Every push to main, whatever it touched: a pull request based on that commit needs its
+  # measurements, and the results bind the exact commit they measured.
+  push:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'compare: measure this commit as a candidate against itself; warm: measure and cache this commit as main'
+        type: choice
+        options: [compare, warm]
+        default: compare
 permissions:
   contents: read
+# Warm runs on one ref are serialized, so two of them never capture competing references for the
+# same key. A newer push to a pull request supersedes the comparison in flight.
 concurrency:
-  group: rendering-fidelity-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  group: rendering-fidelity-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'pull_request' && 'compare' || inputs.mode || 'warm' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  BENCH_LIBREOFFICE: /opt/libreoffice25.8/program/soffice
+  BASELINE_COMMIT: 2283bb60c838643d0916e79ca72fc1f9fc7507b7
+  ORACLE_REF: 4455081baa3fc4481a71f62d3c7a0e340475ace7
+  WORD_ORACLE_REF: af8a42a4f559e8f1021924ee499f7dcd9a4e90d1
+  NODE_VERSION: '22.23.3'
+  # Bump to discard every cached reference, measurement and build.
+  CACHE_VERSION: v1
 jobs:
-  compare:
+  # Measures the baseline (once per environment) and this commit as main, and caches both.
+  warm:
+    if: github.event_name == 'push' || inputs.mode == 'warm'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      BENCH_LIBREOFFICE: /opt/libreoffice25.8/program/soffice
-      BASELINE_COMMIT: 2283bb60c838643d0916e79ca72fc1f9fc7507b7
+      MAIN_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Checkout immutable independent oracle
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: JSv4/docx-fidelity-bench
+          ref: ${{ env.ORACLE_REF }}
+          path: oracle
+      - name: Checkout pinned Word reference harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: JSv4/docx-fidelity-bench
+          ref: ${{ env.WORD_ORACLE_REF }}
+          path: word-oracle
+      - name: Checkout baseline renderer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.BASELINE_COMMIT }}
+          path: baseline-source
+      - name: Checkout main renderer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.MAIN_COMMIT }}
+          path: main-source
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # The renderer build is the longest step and needs none of the measurement host, so it runs
+      # in the background while the host is provisioned.
+      - name: Start the main renderer build
+        run: |
+          { ( set -e; dotnet workload install wasm-tools
+              cd oracle && python3 -m bench build-docxodus --source ../main-source --commit "$MAIN_COMMIT"
+            ) > "$RUNNER_TEMP/build.log" 2>&1; echo $? > "$RUNNER_TEMP/build.status"; } &
+      - name: Provision the measurement host
+        id: host
+        uses: ./.github/actions/fidelity-measurement-host
+        with:
+          renderer: main-source
+      - name: Restore the cached references and baseline measurement
+        id: reference
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            oracle/references/shared
+            word-oracle/references/word-text-precision-v1/registered
+            oracle/runs/baseline
+          key: fidelity-reference-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ env.ORACLE_REF }}-${{ env.WORD_ORACLE_REF }}-${{ env.BASELINE_COMMIT }}-${{ steps.host.outputs.key }}
+      - name: Capture references in this measurement environment
+        if: steps.reference.outputs.cache-hit != 'true'
+        run: |
+          (cd word-oracle && python3 -m bench reference import --manifest references/word-text-precision-v1/registry.json \
+            --metadata references/word-text-precision-v1/metadata.json \
+            --pdf-dir references/word-text-precision-v1/native \
+            --out references/word-text-precision-v1/registered)
+          (cd oracle && python3 -m bench reference libreoffice --suite core-ci-v2 --out references/shared)
+      - name: Calibrate LibreOffice against the reference
+        working-directory: oracle
+        run: |
+          python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter libreoffice --candidate reference-calibration --out runs/calibration --gate close
+          python3 -c 'import json; r=json.load(open("runs/calibration/result.json")); assert r["summary"]["score"] == 100, r["summary"]'
+      # Also the canary's input, so it is saved whenever missing, not only with a new reference.
+      - name: Restore the baseline renderer build
+        id: baseline-build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            baseline-source/npm/dist
+            baseline-source/npm/node_modules
+            baseline-source/npm-export/dist
+            baseline-source/npm-export/node_modules
+            baseline-source/.docx-bench-build.json
+          key: fidelity-baseline-build-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ env.BASELINE_COMMIT }}-oracle-${{ env.ORACLE_REF }}-node-${{ env.NODE_VERSION }}
+      - name: Wait for the main renderer build
+        timeout-minutes: 30
+        run: |
+          while [ ! -f "$RUNNER_TEMP/build.status" ]; do sleep 5; done
+          cat "$RUNNER_TEMP/build.log"
+          exit "$(cat "$RUNNER_TEMP/build.status")"
+      - name: Build the baseline renderer
+        if: steps.baseline-build.outputs.cache-hit != 'true'
+        working-directory: oracle
+        run: python3 -m bench build-docxodus --source ../baseline-source --commit "$BASELINE_COMMIT"
+      # A restored build skipped `npm ci`, so its export companion's pinned Chromium is installed here.
+      - name: Install the renderers' Chromium builds
+        run: |
+          npm --prefix main-source/npm exec -- playwright install chromium
+          npm --prefix baseline-source/npm-export rebuild @playwright/browser-chromium
+      - name: Measure the baseline
+        if: steps.reference.outputs.cache-hit != 'true'
+        working-directory: oracle
+        run: |
+          export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/baseline-source"
+          export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
+          python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter docxodus --candidate "$BASELINE_COMMIT" --out runs/baseline --gate report
+      - name: Measure main against both references
+        run: |
+          export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/main-source"
+          export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
+          (cd oracle && python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter docxodus \
+            --candidate "$MAIN_COMMIT" --out runs/main --gate report) &
+          (cd word-oracle && python3 -m bench run --manifest references/word-text-precision-v1/registry.json \
+            --reference references/word-text-precision-v1/registered/bundle.json --adapter docxodus \
+            --candidate "$MAIN_COMMIT" --out runs/word-main --gate report) &
+          wait -n && wait -n
+      - name: Save the references and baseline measurement
+        if: steps.reference.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            oracle/references/shared
+            word-oracle/references/word-text-precision-v1/registered
+            oracle/runs/baseline
+          key: ${{ steps.reference.outputs.cache-primary-key }}
+      - name: Save the main measurements
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            oracle/runs/main
+            word-oracle/runs/word-main
+          key: ${{ steps.reference.outputs.cache-primary-key }}-main-${{ env.MAIN_COMMIT }}
+      - name: Preserve the main measurements
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rendering-fidelity-main
+          path: |
+            oracle/runs/
+            oracle/references/
+            word-oracle/runs/
+            word-oracle/references/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  compare:
+    if: github.event_name == 'pull_request' || inputs.mode == 'compare'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
       CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-      ORACLE_REF: 4455081baa3fc4481a71f62d3c7a0e340475ace7
-      WORD_ORACLE_REF: af8a42a4f559e8f1021924ee499f7dcd9a4e90d1
       WORD_BASELINE_COMMIT: ${{ github.event.pull_request.base.sha || github.sha }}
-      NODE_VERSION: '22.23.3'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Checkout immutable independent oracle
@@ -61,81 +240,65 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Provision measurement tools and open fonts
+      # The candidate is always built fresh, in the background while the host is provisioned.
+      - name: Start the candidate renderer build
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libreoffice-writer poppler-utils qpdf fontconfig fonts-liberation2
-          dotnet workload install wasm-tools
-      - name: Install signed LibreOffice 25.8.7.3 reference runtime
+          { ( set -e; dotnet workload install wasm-tools
+              cd oracle && python3 -m bench build-docxodus --source ../candidate-source --commit "$CANDIDATE_COMMIT"
+            ) > "$RUNNER_TEMP/build.log" 2>&1; echo $? > "$RUNNER_TEMP/build.status"; } &
+      - name: Provision the measurement host
+        id: host
+        uses: ./.github/actions/fidelity-measurement-host
+        with:
+          renderer: candidate-source
+      - name: Restore the cached references and baseline measurement
+        id: reference
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            oracle/references/shared
+            word-oracle/references/word-text-precision-v1/registered
+            oracle/runs/baseline
+          key: fidelity-reference-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ env.ORACLE_REF }}-${{ env.WORD_ORACLE_REF }}-${{ env.BASELINE_COMMIT }}-${{ steps.host.outputs.key }}
+      # Main's measurements are only valid against the reference they were measured with.
+      - name: Restore the cached main measurements
+        id: main-results
+        if: steps.reference.outputs.cache-hit == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            oracle/runs/main
+            word-oracle/runs/word-main
+          key: ${{ steps.reference.outputs.cache-primary-key }}-main-${{ env.WORD_BASELINE_COMMIT }}
+      - name: Report what is measured live
         run: |
-          install_dir="$RUNNER_TEMP/lo-reference-install"
-          mkdir -p "$install_dir"
-          archive_url='https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz'
-          curl --fail --location --retry 5 --retry-all-errors --proto '=https' --tlsv1.2 "$archive_url" -o "$install_dir/runtime.tar.gz"
-          curl --fail --location --retry 5 --proto '=https' --tlsv1.2 "$archive_url.asc" -o "$install_dir/runtime.asc"
-          curl --fail --location --retry 5 --proto '=https' --tlsv1.2 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xC2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3' -o "$install_dir/signing-key.asc"
-          mkdir "$install_dir/keyring"
-          chmod 700 "$install_dir/keyring"
-          gpg --homedir "$install_dir/keyring" --batch --import "$install_dir/signing-key.asc"
-          fingerprint=$(gpg --homedir "$install_dir/keyring" --with-colons --fingerprint C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3 | awk -F: '$1 == "fpr" {print $10; exit}')
-          test "$fingerprint" = 'C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3'
-          gpg --homedir "$install_dir/keyring" --batch --verify "$install_dir/runtime.asc" "$install_dir/runtime.tar.gz"
-          tar -xzf "$install_dir/runtime.tar.gz" -C "$install_dir"
-          sudo dpkg -i "$install_dir"/LibreOffice_*/DEBS/*.deb
-          sudo find /opt/libreoffice25.8/share/fonts -type f -iname '*.ttf' -delete
-          "$BENCH_LIBREOFFICE" --version
-      - name: Validate unchanged oracle
-        working-directory: oracle
+          [ '${{ steps.reference.outputs.cache-hit }}' = 'true' ] && echo 'Baseline: cached' || echo 'Baseline and references: measured live (no cached measurement for this environment)'
+          [ '${{ steps.main-results.outputs.cache-hit }}' = 'true' ] && echo "Main $WORD_BASELINE_COMMIT: cached" || echo "Main $WORD_BASELINE_COMMIT: measured live"
+      - name: Capture references in this measurement environment
+        if: steps.reference.outputs.cache-hit != 'true'
         run: |
-          python3 -m bench.audit
-          python3 -m unittest discover -s tests
-          node --test tests/test-adapter.mjs
-          python3 -m bench validate
-      - name: Validate Word harness and provider gate
-        working-directory: word-oracle
-        run: |
-          cmp bench/build.py ../oracle/bench/build.py
-          cmp bench/metrics.py ../oracle/bench/metrics.py
-          python3 -m bench.audit
-          python3 -m unittest discover -s ../tools/rendering-fidelity -p test_provider_regressions.py -v
-      - name: Retrieve immutable reviewed Word reference pack
-        run: |
-          python3 - <<'PY'
-          import hashlib, json, os, subprocess
-          from pathlib import Path
-          from zipfile import ZipFile
-          policy = json.loads(Path('tools/rendering-fidelity/word-reference-policy.json').read_text())
-          assert policy['benchmarkCommit'] == os.environ['WORD_ORACLE_REF']
-          assert policy['libreOfficeOracleCommit'] == os.environ['ORACLE_REF']
-          assert policy['libreOfficeBaselineCommit'] == os.environ['BASELINE_COMMIT']
-          pack = policy['capturePack']
-          target = Path(os.environ['RUNNER_TEMP']) / 'word-text-precision-v1.zip'
-          subprocess.run(['curl', '--fail', '--location', '--retry', '3', '--proto', '=https', '--tlsv1.2',
-                          pack['url'], '-o', str(target)], check=True)
-          assert target.stat().st_size == pack['bytes']
-          assert hashlib.sha256(target.read_bytes()).hexdigest() == pack['sha256']
-          with ZipFile(target) as archive:
-              assert archive.testzip() is None
-              assert all(n == 'CAPTURE-PACK-MANIFEST.json' or
-                         (n.startswith('references/word-text-precision-v1/') and '..' not in Path(n).parts)
-                         for n in archive.namelist())
-              archive.extractall('word-oracle')
-          PY
-      - name: Register exact Word captures in this measurement environment
-        working-directory: word-oracle
-        run: |
-          python3 -m bench reference import --manifest references/word-text-precision-v1/registry.json \
+          (cd word-oracle && python3 -m bench reference import --manifest references/word-text-precision-v1/registry.json \
             --metadata references/word-text-precision-v1/metadata.json \
             --pdf-dir references/word-text-precision-v1/native \
-            --out references/word-text-precision-v1/registered
-      # The baseline is a pinned commit built by a pinned oracle recipe on a pinned Node, so its
-      # build is the same every run and is kept between runs: everything `bench build-docxodus`
-      # writes, including its source-bound build record. A cache entry is only ever written by
-      # a run with this exact key, and a pull request's own entries are visible only to it. The
-      # candidate is built fresh every time.
+            --out references/word-text-precision-v1/registered)
+          (cd oracle && python3 -m bench reference libreoffice --suite core-ci-v2 --out references/shared)
+      # Against a cached reference this is a live check that this runner's LibreOffice, tools and
+      # fonts still reproduce it.
+      - name: Calibrate LibreOffice against the reference
+        working-directory: oracle
+        run: |
+          python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter libreoffice --candidate reference-calibration --out runs/calibration --gate close
+          python3 -c 'import json; r=json.load(open("runs/calibration/result.json")); assert r["summary"]["score"] == 100, r["summary"]'
+      - name: Wait for the candidate renderer build
+        timeout-minutes: 30
+        run: |
+          while [ ! -f "$RUNNER_TEMP/build.status" ]; do sleep 5; done
+          cat "$RUNNER_TEMP/build.log"
+          exit "$(cat "$RUNNER_TEMP/build.status")"
       - name: Restore the baseline renderer build
         id: baseline-build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        if: steps.reference.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             baseline-source/npm/dist
@@ -143,70 +306,56 @@ jobs:
             baseline-source/npm-export/dist
             baseline-source/npm-export/node_modules
             baseline-source/.docx-bench-build.json
-          key: fidelity-baseline-${{ runner.os }}-${{ env.BASELINE_COMMIT }}-oracle-${{ env.ORACLE_REF }}-node-${{ env.NODE_VERSION }}
-      - name: Restore current main renderer build
-        id: main-build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: |
-            main-source/npm/dist
-            main-source/npm/node_modules
-            main-source/npm-export/dist
-            main-source/npm-export/node_modules
-            main-source/.docx-bench-build.json
-          key: fidelity-main-${{ runner.os }}-${{ env.WORD_BASELINE_COMMIT }}-oracle-${{ env.ORACLE_REF }}-node-${{ env.NODE_VERSION }}
-      - name: Build both exact renderer commits
+          key: fidelity-baseline-build-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ env.BASELINE_COMMIT }}-oracle-${{ env.ORACLE_REF }}-node-${{ env.NODE_VERSION }}
+      - name: Build the uncached renderers
         working-directory: oracle
         run: |
-          if [ "${{ steps.baseline-build.outputs.cache-hit }}" != 'true' ]; then
+          if [ '${{ steps.reference.outputs.cache-hit }}' != 'true' ] && [ '${{ steps.baseline-build.outputs.cache-hit }}' != 'true' ]; then
             python3 -m bench build-docxodus --source ../baseline-source --commit "$BASELINE_COMMIT"
           fi
-          if [ "${{ steps.main-build.outputs.cache-hit }}" != 'true' ]; then
+          if [ '${{ steps.main-results.outputs.cache-hit }}' != 'true' ]; then
             python3 -m bench build-docxodus --source ../main-source --commit "$WORD_BASELINE_COMMIT"
           fi
-          python3 -m bench build-docxodus --source ../candidate-source --commit "$CANDIDATE_COMMIT"
-      - name: Provision Chromium sandbox host
+      # A restored baseline build skipped `npm ci`, so its export companion's pinned Chromium is
+      # installed here.
+      - name: Install the renderers' Chromium builds
         run: |
-          npm --prefix candidate-source/npm exec -- playwright install --with-deps chromium
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: Capture one shared reference and calibrate
-        working-directory: oracle
+          npm --prefix candidate-source/npm exec -- playwright install chromium
+          if [ -d baseline-source/npm-export/node_modules ]; then
+            npm --prefix baseline-source/npm-export rebuild @playwright/browser-chromium
+          fi
+      - name: Measure the uncached baseline and main
         run: |
-          python3 -m bench reference libreoffice --suite core-ci-v2 --out references/shared
-          python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter libreoffice --candidate reference-calibration --out runs/calibration --gate close
-          python3 -c 'import json; r=json.load(open("runs/calibration/result.json")); assert r["summary"]["score"] == 100, r["summary"]'
-      - name: Measure baseline and cumulative candidate
-        working-directory: oracle
+          if [ '${{ steps.reference.outputs.cache-hit }}' != 'true' ]; then
+            (cd oracle
+             export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/baseline-source"
+             export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
+             python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter docxodus --candidate "$BASELINE_COMMIT" --out runs/baseline --gate report)
+          fi
+          if [ '${{ steps.main-results.outputs.cache-hit }}' != 'true' ]; then
+            export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/main-source"
+            export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
+            (cd oracle && python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter docxodus --candidate "$WORD_BASELINE_COMMIT" --out runs/main --gate report)
+            (cd word-oracle && python3 -m bench run --manifest references/word-text-precision-v1/registry.json \
+              --reference references/word-text-precision-v1/registered/bundle.json --adapter docxodus \
+              --candidate "$WORD_BASELINE_COMMIT" --out runs/word-main --gate report)
+          fi
+      - name: Measure the candidate against both references
         run: |
-          export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/baseline-source"
-          export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
-          python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter docxodus --candidate "$BASELINE_COMMIT" --out runs/baseline --gate report
           export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/candidate-source"
           export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
-          python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter docxodus --candidate "$CANDIDATE_COMMIT" --out runs/candidate --gate report
-          export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/main-source"
-          export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
-          python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter docxodus --candidate "$WORD_BASELINE_COMMIT" --out runs/main --gate report
-      - name: Measure main and candidate against the same Word references
-        working-directory: word-oracle
-        run: |
-          export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/main-source"
-          export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
-          python3 -m bench run --manifest references/word-text-precision-v1/registry.json \
+          (cd oracle && python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter docxodus \
+            --candidate "$CANDIDATE_COMMIT" --out runs/candidate --gate report) &
+          (cd word-oracle && python3 -m bench run --manifest references/word-text-precision-v1/registry.json \
             --reference references/word-text-precision-v1/registered/bundle.json --adapter docxodus \
-            --candidate "$WORD_BASELINE_COMMIT" --out runs/word-main --gate report
-          export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/candidate-source"
-          export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
-          python3 -m bench run --manifest references/word-text-precision-v1/registry.json \
-            --reference references/word-text-precision-v1/registered/bundle.json --adapter docxodus \
-            --candidate "$CANDIDATE_COMMIT" --out runs/word-candidate --gate report
-          python3 -m bench compare runs/word-main/result.json runs/word-candidate/result.json --tolerance 0 > runs/word-comparison.txt || test "$?" = 1
-          cat runs/word-comparison.txt
+            --candidate "$CANDIDATE_COMMIT" --out runs/word-candidate --gate report) &
+          wait -n && wait -n
       - name: Record all oracle comparison findings
-        working-directory: oracle
         run: |
-          python3 -m bench compare runs/baseline/result.json runs/candidate/result.json --tolerance 0 > runs/comparison.txt || test "$?" = 1
-          cat runs/comparison.txt
+          (cd word-oracle && python3 -m bench compare runs/word-main/result.json runs/word-candidate/result.json --tolerance 0 > runs/word-comparison.txt || test "$?" = 1)
+          cat word-oracle/runs/word-comparison.txt
+          (cd oracle && python3 -m bench compare runs/baseline/result.json runs/candidate/result.json --tolerance 0 > runs/comparison.txt || test "$?" = 1)
+          cat oracle/runs/comparison.txt
       - name: Require separate provider regressions and exact input equivalence
         env:
           PYTHONPATH: ${{ github.workspace }}/word-oracle
@@ -236,3 +385,82 @@ jobs:
             word-oracle/references/
           retention-days: 30
           if-no-files-found: error
+
+  # Re-measures the cached baseline live beside the comparison. Every cached measurement a pull
+  # request relies on came from another runner; this fails unless one of them reproduces exactly
+  # here. It has nothing to check when there is no cached measurement for this environment, because
+  # the comparison then measures everything live.
+  canary:
+    if: github.event_name == 'pull_request' || inputs.mode == 'compare'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Checkout immutable independent oracle
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: JSv4/docx-fidelity-bench
+          ref: ${{ env.ORACLE_REF }}
+          path: oracle
+      - name: Checkout pinned Word reference harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: JSv4/docx-fidelity-bench
+          ref: ${{ env.WORD_ORACLE_REF }}
+          path: word-oracle
+      - name: Checkout baseline renderer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.BASELINE_COMMIT }}
+          path: baseline-source
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Provision the measurement host
+        id: host
+        uses: ./.github/actions/fidelity-measurement-host
+        with:
+          renderer: baseline-source
+      - name: Restore the cached references and baseline measurement
+        id: reference
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            oracle/references/shared
+            word-oracle/references/word-text-precision-v1/registered
+            oracle/runs/baseline
+          key: fidelity-reference-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ env.ORACLE_REF }}-${{ env.WORD_ORACLE_REF }}-${{ env.BASELINE_COMMIT }}-${{ steps.host.outputs.key }}
+      - name: Restore the baseline renderer build
+        id: baseline-build
+        if: steps.reference.outputs.cache-hit == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            baseline-source/npm/dist
+            baseline-source/npm/node_modules
+            baseline-source/npm-export/dist
+            baseline-source/npm-export/node_modules
+            baseline-source/.docx-bench-build.json
+          key: fidelity-baseline-build-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ env.BASELINE_COMMIT }}-oracle-${{ env.ORACLE_REF }}-node-${{ env.NODE_VERSION }}
+      - name: Report what the canary checks
+        run: |
+          if [ '${{ steps.reference.outputs.cache-hit }}' != 'true' ]; then
+            echo 'No cached measurement for this environment: the comparison measures everything live.'
+          elif [ '${{ steps.baseline-build.outputs.cache-hit }}' != 'true' ]; then
+            echo '::warning::The cached baseline build is missing, so the cached baseline measurement cannot be re-checked.'
+          else
+            echo 'Re-measuring the cached baseline live.'
+          fi
+      - name: Install the baseline's Chromium build
+        if: steps.baseline-build.outputs.cache-hit == 'true'
+        run: npm --prefix baseline-source/npm-export rebuild @playwright/browser-chromium
+      - name: Re-measure the baseline live
+        if: steps.baseline-build.outputs.cache-hit == 'true'
+        working-directory: oracle
+        run: |
+          export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/baseline-source"
+          export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
+          python3 -m bench run --suite core-ci-v2 --reference references/shared/bundle.json --adapter docxodus --candidate "$BASELINE_COMMIT" --out runs/baseline-live --gate report
+      - name: Require the cached baseline to reproduce exactly
+        if: steps.baseline-build.outputs.cache-hit == 'true'
+        run: python3 tools/rendering-fidelity/check-cached-results.py oracle/runs/baseline/result.json oracle/runs/baseline-live/result.json
