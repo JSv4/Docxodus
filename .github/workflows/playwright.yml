@@ -49,24 +49,46 @@ jobs:
       - name: Install npm dependencies
         run: cd npm && npm ci
 
-      - name: Build npm package (WASM + TypeScript)
-        run: cd npm && npm run build
+      # The WASM build (compile, AOT, link and brotli: ~4 minutes of this job) depends only on
+      # the .NET sources, the build script and the toolchain, so a commit that changes none of
+      # them reuses the last build of the same inputs. The key names every input that reaches the
+      # Release WASM output; the toolchain is read from the runner, because setup-dotnet's
+      # `10.0.x` floats.
+      - name: Identify the WASM build inputs
+        id: wasm-inputs
+        run: echo "toolchain=$({ dotnet --version; dotnet workload list; } | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the WASM build
+        id: wasm-build
+        uses: actions/cache/restore@v6
+        with:
+          path: npm/dist/wasm
+          key: wasm-build-v1-${{ runner.os }}-${{ steps.wasm-inputs.outputs.toolchain }}-${{ hashFiles('Docxodus/**', 'wasm/**', 'scripts/build-wasm.sh', 'global.json', 'Directory.Build.props', 'Directory.Build.targets', 'rules.ruleset', '.editorconfig') }}
+
+      - name: Build the WASM runtime
+        if: steps.wasm-build.outputs.cache-hit != 'true'
+        run: cd npm && npm run build:wasm
+
+      # Saved before the TypeScript build writes anything else under dist/wasm.
+      - name: Save the WASM build
+        if: steps.wasm-build.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: npm/dist/wasm
+          key: ${{ steps.wasm-build.outputs.cache-primary-key }}
+
+      - name: Build the TypeScript package
+        run: cd npm && npm run build:js
 
       - name: Install and build the Node export companion
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
         run: cd npm-export && npm ci --ignore-scripts && npm run build
 
-      # Stages the test pages into dist/site, fetches the arcade IWAD into dist/wasm/vendor,
-      # type-checks the specs and checks bundle sizes and the package boundary: once, here,
-      # so that no lane repeats it.
-      - name: Stage test pages and run the pre-test checks
-        run: cd npm && npm run pretest
-
-      # The lanes must partition the spec files: a spec in both lanes runs twice, one in neither
-      # never runs. Listing the specs loads them, so this needs the export companion built above.
-      - name: Check the Playwright lane split
-        run: cd npm && npm run test:lanes
+      # Stages the test pages into dist/site and fetches the arcade IWAD into dist/wasm/vendor:
+      # once, here, so that no lane repeats it. The pre-test checks run beside the lanes.
+      - name: Stage test pages
+        run: cd npm && npm run pretest:stage
 
       - name: Upload the built package for the lanes
         uses: actions/upload-artifact@v7
@@ -78,6 +100,46 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
+
+  # The checks `npm test` runs before the suite (spec type-checking, bundle sizes, the package
+  # boundary, the demo logic) and the lane split, beside the lanes rather than before them. The
+  # lanes must partition the spec files: a spec in both lanes runs twice, one in neither never
+  # runs. Listing the specs loads them, so this needs the built export companion.
+  checks:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            npm/package-lock.json
+            npm-export/package-lock.json
+
+      - name: Install npm dependencies
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+        run: |
+          (cd npm && npm ci)
+          (cd npm-export && npm ci --ignore-scripts)
+
+      - name: Download the built package
+        uses: actions/download-artifact@v8
+        with:
+          name: docxodus-build
+
+      - name: Run the pre-test checks
+        run: cd npm && npm run pretest:checks
+
+      - name: Check the Playwright lane split
+        run: cd npm && npm run test:lanes
 
   pool:
     needs: build
