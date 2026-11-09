@@ -2112,24 +2112,30 @@ namespace Docxodus
                         "letter-spacing" or "white-space" or "PtStyleName" ||
                     s.Key is "margin" or "padding" && s.Value == "0");
 
-            XElement? previous = null;
-            foreach (var span in root.Descendants(Xhtml.span).ToList())
+            foreach (var parent in root.Descendants(Xhtml.span).Select(s => s.Parent!).Distinct().ToList())
             {
-                if (!IsTextSpan(span)) { previous = null; continue; }
-                var attributes = span.Attributes().Where(a => a.Name != XNamespace.Xml + "space").ToList();
-                if (previous?.NextNode == span &&
-                    previous.Attributes().Count(a => a.Name != XNamespace.Xml + "space") == attributes.Count &&
-                    attributes.All(a => (string?)previous.Attribute(a.Name) == a.Value))
+                // Detach once: removing individual spans repeatedly scans preceding siblings.
+                var children = parent.Nodes().ToList();
+                parent.RemoveNodes();
+                XElement? previous = null;
+                foreach (var child in children)
                 {
-                    if ((string?)span.Attribute(XNamespace.Xml + "space") == "preserve")
-                        previous.SetAttributeValue(XNamespace.Xml + "space", "preserve");
-                    // Move nodes rather than copying their Value: XEntity must keep its serializer.
-                    var nodes = span.Nodes().ToList();
-                    span.RemoveNodes();
-                    previous.Add(nodes);
-                    span.Remove();
+                    if (child is not XElement span || span.Name != Xhtml.span || !IsTextSpan(span))
+                    { parent.Add(child); previous = null; continue; }
+                    var attributes = span.Attributes().Where(a => a.Name != XNamespace.Xml + "space").ToList();
+                    if (previous != null &&
+                        previous.Attributes().Count(a => a.Name != XNamespace.Xml + "space") == attributes.Count &&
+                        attributes.All(a => (string?)previous.Attribute(a.Name) == a.Value))
+                    {
+                        if ((string?)span.Attribute(XNamespace.Xml + "space") == "preserve")
+                            previous.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+                        // Move nodes rather than copying their Value: XEntity must keep its serializer.
+                        var nodes = span.Nodes().ToList();
+                        span.RemoveNodes();
+                        previous.Add(nodes);
+                    }
+                    else { parent.Add(span); previous = span; }
                 }
-                else previous = span;
             }
         }
 
