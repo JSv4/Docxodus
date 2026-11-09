@@ -42,7 +42,7 @@ const html = await convertDocxToHtml(docxBytes, {
 | Content Type | XML Element(s) | Placeholder Text | CSS Class |
 |--------------|----------------|------------------|-----------|
 | WMF Image | `image/x-wmf` | `[WMF IMAGE]` | `unsupported-image` |
-| EMF Image | `image/x-emf` | `[EMF IMAGE]` | `unsupported-image` |
+| Unsupported EMF records/embedding | `image/x-emf` outside the [static subset](docx_converter.md#images) | `[EMF IMAGE]` | `unsupported-image` |
 | SVG Image | `image/svg+xml` | `[SVG IMAGE]` | `unsupported-image` |
 | Math Equation | Unsupported `m:oMath`, `m:oMathPara` structures/properties | `[MATH]` | `unsupported-math` |
 | Checkbox | `w:ffData` with `w:checkBox` | `[CHECKBOX]` | `unsupported-form` |

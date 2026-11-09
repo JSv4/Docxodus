@@ -6634,3 +6634,38 @@ their existing guards. The final export/viewer baseline pass validates uniform a
 minima and places their text at the resolved height minus the natural descent. Mixed
 line metrics use the same descent policy separately for each line. Neither correction
 changes the line's reserved height or overrides an explicit unrelated CSS height.
+
+## EMF Frame maps coordinates but does not clip the drawing (#1554)
+
+The issue's one-rectangle EMF has a base 88-byte header, Frame `(0,0,2646,2646)`
+in hundredths of a millimeter, a 1024×768 reference device measuring 320×240mm,
+and `EMR_RECTANGLE(10,10,90,90)`. Its picture is 72×72pt. MM_TEXT maps each
+logical pixel to 31.25 frame units, so the rectangle extends beyond Frame.
+The independently authored Iris benchmark uses a 2400×1800 Frame, a 1200×900
+reference device measuring 360×270mm, and rectangle `(12,9,92,68)` in a
+96×72pt picture anchored at `(72,90)`pt. Its right/bottom edges are
+182.4/171.6pt; the picture frame ends at 168/162pt.
+
+| Renderer | Iris rectangle |
+| --- | --- |
+| Word | No capture of this input; adjudication pending |
+| LibreOffice 25.8.7.3 | Correct mapping, but paint clipped at the picture frame |
+| Docxodus before this fix | Whole-image unsupported placeholder |
+| Docxodus with this fix | Inline SVG preserves the mapping and visible overflow |
+
+[MS-EMF Header](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-emf/e4a35c41-e8e3-43f9-bc07-a18e99bb866d)
+separates reference-device pixels from physical Frame units. The
+[rectangle record](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-emf/3c471238-0a02-4992-90a2-bfd2afd98f2a)
+stores inclusive bounds: playback does not subtract another endpoint pixel.
+`Internal/EmfImage.cs` applies the device mapping and keeps SVG overflow visible;
+`ImageInfo.CreateHtmlImage` preserves it through the native, CLI and WASM handlers.
+The browser contract paints cosmetic pens at one CSS pixel, including resized
+pictures; this is not a claim about Word printer hairline thickness.
+
+The benchmark retains direct LibreOffice captures and uses explicitly labeled
+expanded-frame controls for the two overflowing cases. Multiplying Frame and
+picture dimensions by 5/4 leaves every painted coordinate unchanged while fitting
+the entire drawing inside LibreOffice's clip. The proof limits the control to
+uncropped, unrotated, nonwrapping page anchors and compares all other package bytes.
+Unknown EMF records still reject the entire image and retain the existing
+placeholder/strict-refusal behavior.

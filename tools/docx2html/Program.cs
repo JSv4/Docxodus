@@ -194,8 +194,7 @@ class Program
                             File.WriteAllBytes(imageFileName, imageInfo.ImageBytes);
                             source = Path.GetFileName(imageDirectoryName) + "/" + Path.GetFileName(imageFileName);
                         }
-                        return new XElement(Xhtml.img, new XAttribute(NoNamespace.src, source), imageInfo.ImgStyleAttribute,
-                            imageInfo.AltText != null ? new XAttribute(NoNamespace.alt, imageInfo.AltText) : null);
+                        return imageInfo.CreateHtmlImage(source);
                     }
                     catch { return null; }
                 }

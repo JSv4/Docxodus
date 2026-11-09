@@ -1,10 +1,27 @@
 import { R_NS as r, W_NS as w, storedZip, xml } from './docx-zip.js';
 import { encodePng } from './visual-parity/png.js';
 
-export type StaticImage = 'png' | 'tiff' | 'wmf' | 'anisotropic-wmf' | 'tiny-wmf' | 'hairline-wmf' | 'wide-wmf' | 'tall-wmf' | 'group-wmf' | 'unsupported-tiff' | 'unsupported-wmf';
+export type StaticImage = 'png' | 'tiff' | 'wmf' | 'anisotropic-wmf' | 'tiny-wmf' | 'hairline-wmf' | 'wide-wmf' | 'tall-wmf' | 'group-wmf' | 'unsupported-tiff' | 'unsupported-wmf'
+  | 'emf' | 'wide-emf' | 'tall-emf' | 'anchored-emf' | 'vml-emf' | 'group-emf' | 'geometric-emf' | 'unsupported-emf';
 
 /** Six original color pixels and a separate authored WMF rectangle/ellipse. */
 function imageBytes(kind: StaticImage): Buffer {
+  if (kind.endsWith('emf')) {
+    const record = (type: number, ...values: number[]) => {
+      const b = Buffer.alloc(8 + values.length * 4); b.writeUInt32LE(type); b.writeUInt32LE(b.length, 4);
+      values.forEach((v, i) => b.writeUInt32LE(v, 8 + i * 4)); return b;
+    };
+    const records = kind === 'geometric-emf' ? [record(38, 1, 0x10000, 2, 0, 0), record(37, 1)] : [];
+    records.push(record(43, 10, 10, 90, 90));
+    if (kind === 'unsupported-emf') records.push(record(99));
+    records.push(record(14, 0, 20, 20));
+    const h = Buffer.alloc(88);
+    [1, 88, 0, 0, 100, 100, 0, 0, 2646, 2646, 0x464d4520, 0x10000, 88 + records.reduce((n, b) => n + b.length, 0), records.length + 1]
+      .forEach((v, i) => h.writeUInt32LE(v, i * 4));
+    h.writeUInt16LE(kind === 'geometric-emf' ? 2 : 1, 56);
+    [1024, 768, 320, 240].forEach((v, i) => h.writeUInt32LE(v, 72 + i * 4));
+    return Buffer.concat([h, ...records]);
+  }
   const rgb = Buffer.from([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0, 255, 0, 255, 0, 255, 255]);
   if (kind === 'png') return encodePng({ width: 2, height: 3,
     data: Uint8Array.from(Array.from({ length: 6 }, (_, i) => [...rgb.subarray(i * 3, i * 3 + 3), 255]).flat()) });
@@ -40,10 +57,10 @@ function imageBytes(kind: StaticImage): Buffer {
 export function staticImageDocx(kind: StaticImage, header: boolean): Uint8Array {
   const a = 'http://schemas.openxmlformats.org/drawingml/2006/main', pic = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
   const wp = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
-  const format = kind.split('-').at(-1)!, mime = format === 'wmf' ? 'image/x-wmf' : `image/${format}`;
-  const width = kind === 'wide-wmf' ? 1828800 : 914400, height = kind === 'tall-wmf' ? 1219200 : 609600;
+  const format = kind.split('-').at(-1)!, mime = format === 'wmf' || format === 'emf' ? `image/x-${format}` : `image/${format}`;
+  const width = kind.startsWith('wide-') ? 1828800 : 914400, height = kind.startsWith('tall-') ? 1219200 : 609600;
   const namespaces = `xmlns:w="${w}" xmlns:r="${r}" xmlns:a="${a}" xmlns:pic="${pic}" xmlns:wp="${wp}"`;
-  const drawing = kind === 'group-wmf' ? `<w:p><w:r><w:pict><v:group xmlns:v="urn:schemas-microsoft-com:vml"
+  let drawing = kind.startsWith('group-') ? `<w:p><w:r><w:pict><v:group xmlns:v="urn:schemas-microsoft-com:vml"
     style="width:144pt;height:48pt" coordsize="96,64"><v:shape id="CypressGroupImage" style="left:0;top:0;width:96;height:64">
     <v:imagedata r:id="picture"/></v:shape></v:group></w:pict></w:r></w:p>`
     : `<w:p><w:r><w:drawing><wp:inline><wp:extent cx="${width}" cy="${height}"/><wp:docPr id="1" name="Cypress image"/>
@@ -51,6 +68,12 @@ export function staticImageDocx(kind: StaticImage, header: boolean): Uint8Array 
     <pic:blipFill><a:blip r:embed="picture"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
     <pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${width}" cy="${height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>
     </pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+  if (kind === 'vml-emf') drawing = `<w:p><w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml" id="CypressEmf"
+    style="width:72pt;height:48pt"><v:imagedata r:id="picture"/></v:shape></w:pict></w:r></w:p>`;
+  if (kind === 'anchored-emf') drawing = drawing.replace('<wp:inline>', `<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="0" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
+    <wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="page"><wp:posOffset>914400</wp:posOffset></wp:positionH>
+    <wp:positionV relativeFrom="page"><wp:posOffset>1828800</wp:posOffset></wp:positionV>`)
+    .replace('<wp:docPr', '<wp:wrapNone/><wp:docPr').replace('</wp:inline>', '</wp:anchor>');
   const rels = (body: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${body}</Relationships>`;
   const imageRelation = `<Relationship Id="picture" Type="${r}/image" Target="media/cypress.${format}"/>`;
   const entries = [

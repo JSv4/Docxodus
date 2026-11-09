@@ -705,6 +705,24 @@ namespace Docxodus
         public string? ContentType;
         public XElement? DrawingElement;
         public string? AltText;
+        internal Docxodus.Internal.EmfImage? InlineVector;
+
+        /// <summary>Creates the image element, retaining generated vector overflow when required.
+        /// Use this from image handlers after choosing an embedded or external resource URL.
+        /// Generated EMF drawings are inline SVG and do not use <paramref name="source"/>.</summary>
+        public XElement CreateHtmlImage(string source)
+        {
+            var image = InlineVector == null ? new XElement(XhtmlNoNamespace.img, new XAttribute("src", source))
+                : new XElement(InlineVector.Drawing);
+            if (InlineVector != null) image.AddAnnotation(InlineVector);
+            if (ImgStyleAttribute != null) image.Add(new XAttribute(ImgStyleAttribute));
+            if (!string.IsNullOrEmpty(AltText))
+            {
+                if (InlineVector == null) image.SetAttributeValue("alt", AltText);
+                else { image.SetAttributeValue("role", "img"); image.SetAttributeValue("aria-label", AltText); }
+            }
+            return image;
+        }
 
         public const int EmusPerInch = 914400;
         public const int EmusPerCm = 360000;
@@ -13439,7 +13457,8 @@ namespace Docxodus
                 // an absent extent keeps the handler's intrinsic dimension instead of collapsing it.
                 var imageSize = string.Join(" ", new[] { "width", "height" }
                     .Where(frameStyle.ContainsKey).Select(dimension => dimension + ":100%;"));
-                foreach (var image in positioned.Descendants().Where(e => e.Name.LocalName == "img"))
+                foreach (var image in positioned.Descendants().Where(e => e.Attribute("data-docx-vector-frame") != null
+                    || e.Name.LocalName == "img" && !e.Ancestors().Any(a => a.Attribute("data-docx-vector-frame") != null)))
                     image.SetAttributeValue("style", ((string?)image.Attribute("style") ?? "") + ";" + imageSize);
                 positioned.AddAnnotation(frameStyle);
                 return positioned;

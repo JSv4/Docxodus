@@ -21,6 +21,80 @@ public class HtmlImageNormalizationTests
     [InlineData(false, true)]
     [InlineData(true, false)]
     [InlineData(true, true)]
+    public void EmfUsesItsPhysicalFrameWithoutClippingItsRectangle(bool header, bool vml)
+    {
+        var html = Render(Emf(), "image/x-emf", header, vml);
+        var svg = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-docx-vector-frame") == "emf");
+        Assert.Equal("0 0 2646 2646", (string?)svg.Attribute("viewBox"));
+        Assert.Equal("visible", (string?)svg.Attribute("overflow"));
+        Assert.Equal("scale(31.25 31.25)", (string?)Assert.Single(svg.Elements()).Attribute("transform"));
+        var rectangle = Assert.Single(svg.Descendants(), e => e.Name.LocalName == "rect");
+        Assert.Equal("80", (string?)rectangle.Attribute("width"));
+        Assert.Equal("non-scaling-stroke", (string?)rectangle.Attribute("vector-effect"));
+        Assert.Contains(vml ? "width: 72pt" : "width: 1in", (string?)svg.Attribute("style"));
+        Assert.DoesNotContain("[EMF IMAGE]", html.Value);
+    }
+
+    [Theory]
+    [InlineData("record")]
+    [InlineData("truncated")]
+    [InlineData("record-count")]
+    [InlineData("frame")]
+    [InlineData("device")]
+    [InlineData("huge")]
+    public void InvalidOrUnsupportedEmfRetainsTheWholePlaceholder(string defect)
+    {
+        var bytes = Emf();
+        if (defect == "record") Array.Copy(BitConverter.GetBytes(99), 0, bytes, 88, 4);
+        if (defect == "truncated") bytes = bytes[..^1];
+        if (defect == "record-count") Array.Copy(BitConverter.GetBytes(4), 0, bytes, 52, 4);
+        if (defect == "frame") Array.Copy(BitConverter.GetBytes(0), 0, bytes, 32, 4);
+        if (defect == "device") Array.Copy(BitConverter.GetBytes(0), 0, bytes, 72, 4);
+        if (defect == "huge") Array.Copy(BitConverter.GetBytes(int.MaxValue), 0, bytes, 104, 4);
+        var html = Render(bytes, "image/x-emf");
+        Assert.DoesNotContain(html.Descendants(), e => e.Attribute("data-docx-vector-frame") != null);
+        Assert.Contains("[EMF IMAGE]", html.Value);
+        Assert.Contains("CypressAfter", html.Value);
+    }
+
+    [Theory]
+    [InlineData("factory")]
+    [InlineData("null")]
+    [InlineData("legacy")]
+    public void EmfHonorsTheImageHandlerAndRequiresOverflowCapableEmbedding(string mode)
+    {
+        using var stream = new MemoryStream(); stream.Write(Package(Emf(), "image/x-emf"));
+        using var doc = WordprocessingDocument.Open(stream, true);
+        int calls = 0;
+        var html = WmlToHtmlConverter.ConvertToHtml(doc, new WmlToHtmlConverterSettings {
+            RenderUnsupportedContentPlaceholders = true,
+            ImageHandler = info => {
+                calls++;
+                Assert.Equal("image/svg+xml", info.ContentType);
+                Assert.NotEmpty(info.ImageBytes!);
+                return mode == "null" ? null! : mode == "legacy" ? new XElement("img", new XAttribute("src", "custom.svg"))
+                    : new XElement("a", new XAttribute("href", "#image"), info.CreateHtmlImage("custom.svg"));
+            } });
+        Assert.Equal(1, calls);
+        Assert.Equal(mode == "legacy", html.Value.Contains("[EMF IMAGE]", StringComparison.Ordinal));
+        Assert.Equal(mode == "factory", html.Descendants().Any(e => e.Attribute("data-docx-vector-frame") != null));
+    }
+
+    private static byte[] Emf()
+    {
+        // Issue #1554's original one-rectangle metafile, including its unequal frame/device mapping.
+        using var stream = new MemoryStream(); using var w = new BinaryWriter(stream);
+        foreach (int value in new[] { 1, 88, 0, 0, 100, 100, 0, 0, 2646, 2646, 0x464d4520, 0x10000, 132, 3 }) w.Write(value);
+        w.Write((ushort)1); w.Write((ushort)0);
+        foreach (int value in new[] { 0, 0, 0, 1024, 768, 320, 240, 43, 24, 10, 10, 90, 90, 14, 20, 0, 20, 20 }) w.Write(value);
+        return stream.ToArray();
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
     public void TiffNormalizesToPngInBodyAndHeaderPictures(bool header, bool vml)
     {
         var image = Picture(Render(Tiff(), "image/tiff", header, vml));
