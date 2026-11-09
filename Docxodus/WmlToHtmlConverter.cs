@@ -1353,6 +1353,12 @@ namespace Docxodus
             AnnotateOwningContentParts(wordDoc);
             XElement rootElement = wordDoc.MainDocumentPart!.GetXDocument().Root!;
             FieldRetriever.AnnotateWithFieldInfo(wordDoc.MainDocumentPart!);
+            // Complex running-story fields need the same grouping in flow and paginated output.
+            if (htmlConverterSettings.RenderHeadersAndFooters &&
+                (htmlConverterSettings.RenderPagination == PaginationMode.Paginated || htmlConverterSettings.StampPageNumberFields))
+                foreach (var part in wordDoc.MainDocumentPart!.HeaderParts.Cast<OpenXmlPart>()
+                    .Concat(wordDoc.MainDocumentPart.FooterParts))
+                    FieldRetriever.AnnotateWithFieldInfo(part);
             AnnotateForSections(wordDoc);
 
             // Load comments if rendering is enabled and store as annotation
@@ -5128,11 +5134,6 @@ namespace Docxodus
             if (headerRoot == null || !headerRoot.Elements().Any())
                 return null;
 
-            // Complex fields are grouped from these annotations, and only the main part is annotated
-            // up front — without this a PAGE field in a running head is just five unrelated runs, so
-            // it could never be marked for per-page substitution.
-            FieldRetriever.AnnotateWithFieldInfo(headerPart);
-
             // Convert the content of the header
             return CreateBorderDivs(wordDoc, settings, headerRoot.Elements());
         }
@@ -5161,10 +5162,6 @@ namespace Docxodus
 
             if (footerRoot == null || !footerRoot.Elements().Any())
                 return null;
-
-            // See RenderHeaderReference: fields are grouped from these annotations, and only the
-            // main part is annotated up front.
-            FieldRetriever.AnnotateWithFieldInfo(footerPart);
 
             // Convert the content of the footer
             return CreateBorderDivs(wordDoc, settings, footerRoot.Elements());

@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Flow HTML page-field markers** (#1621): `stampPageNumberFields` in npm and
+  `stamp_page_number_fields` in Python preserve `PAGE` / `NUMPAGES` fields as `data-field`
+  spans without pagination. Cached text and formatting remain intact, including empty results;
+  defaults are unchanged.
+
 ### Fixed
 
 - Static EMF rectangle/ellipse pictures render as inline SVG in HTML and PDF, preserving their authored frames and overflowing artwork. Cosmetic outlines use one browser pixel; geometric outlines scale with the picture. Unsupported records retain the whole-image placeholder and strict-export diagnostics (#1554).

@@ -288,6 +288,10 @@ export interface ConversionOptions {
   renderFootnotesAndEndnotes?: boolean;
   /** Whether to render document headers and footers (default: false) */
   renderHeadersAndFooters?: boolean;
+  /** Preserve PAGE / NUMPAGES fields as data-field spans in flow HTML, including empty results.
+   * Cached text and formatting are retained; this does not calculate page numbers.
+   * Default: false. Paginated output always marks these fields. */
+  stampPageNumberFields?: boolean;
   /** Whether to render tracked changes visually (insertions/deletions) (default: false) */
   renderTrackedChanges?: boolean;
   /** Show formatting revision annotations while keeping current formatting (default: true). */
@@ -1570,7 +1574,8 @@ export interface DocxodusWasmExports {
       stampAnchors: boolean,
       revisionPresentation: number,
       semanticLists?: boolean,
-      hiddenRevisionKinds?: number
+      hiddenRevisionKinds?: number,
+      stampPageNumberFields?: boolean
     ) => string;
     GetAnnotations: (bytes: Uint8Array) => string;
     AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;

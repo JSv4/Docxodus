@@ -21,6 +21,7 @@ export const COMPLETE_ONLY_CONVERSION_OPTIONS = [
   "stampAnchors",
   "revisionPresentation",
   "semanticLists",
+  "stampPageNumberFields",
 ] as const satisfies readonly (keyof ConversionOptions)[];
 
 /** Appended WASM mask: zero keeps the default display, including for older callers. */
