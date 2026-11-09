@@ -145,10 +145,16 @@ explicitly replaced. Only the first section starts with blank stories.
 
 `EffectiveHeaderFooterReferences` (in `WmlToHtmlConverter.cs`) carries the
 effective reference per story type as sections are visited in document order,
-and is the single owner of that rule for both the paginated registry and
-`GetDocumentMetadata`. A section with no `w:sectPr` at all (`CollectSectionData`'s
+and is the single owner of that rule for the paginated registry, flow HTML and
+`GetDocumentMetadata`. Flow HTML renders the final section's effective default header
+and footer once; it never substitutes a first/even story or an unreferenced package part
+when the default is absent (#1619). A section with no `w:sectPr` at all (`CollectSectionData`'s
 documented `null` ⇒ defaults contract) records nothing and leaves the inherited
 references untouched.
+
+The converter captures this ordered section list before paragraph annotation relocates
+the body-level `sectPr`. That preserves a final section with no body paragraph, even
+when the preceding paragraph already carries the previous section's properties.
 
 Inheritance is orthogonal to *visibility*: an inherited or explicit `first`/`even`
 reference is still inert unless `w:titlePg` / the document-global

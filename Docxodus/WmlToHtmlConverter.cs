@@ -1359,6 +1359,12 @@ namespace Docxodus
                 foreach (var part in wordDoc.MainDocumentPart!.HeaderParts.Cast<OpenXmlPart>()
                     .Concat(wordDoc.MainDocumentPart.FooterParts))
                     FieldRetriever.AnnotateWithFieldInfo(part);
+            // Keep source sections before annotation moves the final sectPr onto a paragraph.
+            // That paragraph can already end another section, including an empty final section.
+            rootElement.RemoveAnnotations<HeaderFooterSections>();
+            if (htmlConverterSettings.RenderHeadersAndFooters && rootElement.Element(W.body) is { } sourceBody)
+                rootElement.AddAnnotation(new HeaderFooterSections(
+                    CollectSectionData(sourceBody).Select(s => s.sectPr).ToList()));
             AnnotateForSections(wordDoc);
 
             // Load comments if rendering is enabled and store as annotation
@@ -1689,6 +1695,11 @@ namespace Docxodus
                         if (sectPr != null)
                             CloseSection(sectPr);
                     }
+                    else if (element.Name == W.customXml || element.Name == W.tr || element.Name == W.tc)
+                    {
+                        // Custom XML wraps main-story blocks without changing their section.
+                        WalkMainStory(element, atBodyLevel);
+                    }
                     else if (element.Name == W.tbl)
                     {
                         // Only body-level tables count toward the table total; a nested table is part
@@ -1696,11 +1707,8 @@ namespace Docxodus
                         if (atBodyLevel)
                             currentTables.Add(element);
 
-                        // Descend into the table's cells so section breaks and paragraphs inside them
-                        // are attributed in document order.
-                        foreach (var row in element.Elements(W.tr))
-                            foreach (var cell in row.Elements(W.tc))
-                                WalkMainStory(cell, atBodyLevel: false);
+                        // The same walk handles transparent custom XML around rows and cells.
+                        WalkMainStory(element, atBodyLevel: false);
                     }
                     else if (element.Name == W.sectPr && atBodyLevel)
                     {
@@ -4861,134 +4869,36 @@ namespace Docxodus
             return number;
         }
 
+        private sealed record HeaderFooterSections(List<XElement?> Properties);
+
+        private static EffectiveHeaderFooterReferences FinalSectionHeaderFooterReferences(WordprocessingDocument wordDoc)
+        {
+            var references = new EffectiveHeaderFooterReferences();
+            var sections = wordDoc.MainDocumentPart!.GetXDocument().Root?.Annotation<HeaderFooterSections>();
+            if (sections != null)
+                foreach (var section in sections.Properties)
+                    references.Update(section);
+            return references;
+        }
+
         private static XElement? RenderHeadersSection(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings)
         {
-            var headerParts = wordDoc.MainDocumentPart!.HeaderParts.ToList();
-            if (!headerParts.Any())
-                return null;
-
-            // Get the section properties from the document body or last sectPr
-            var mainDoc = wordDoc.MainDocumentPart!.GetXDocument();
-            var body = mainDoc.Root?.Element(W.body);
-            var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
-
-            // Find the default header reference
-            var defaultHeaderRef = sectPr?.Elements(W.headerReference)
-                .FirstOrDefault(hr => (string?)hr.Attribute(W.type) == "default");
-
-            if (defaultHeaderRef == null)
-            {
-                // If no default header, try to get the first header
-                defaultHeaderRef = sectPr?.Elements(W.headerReference).FirstOrDefault();
-            }
-
-            if (defaultHeaderRef == null && headerParts.Any())
-            {
-                // Just use the first header part if no reference found
-                var firstHeaderPart = headerParts.First();
-                return RenderHeaderPart(wordDoc, settings, firstHeaderPart);
-            }
-
-            if (defaultHeaderRef != null)
-            {
-                var headerId = (string?)defaultHeaderRef.Attribute(R.id);
-                if (headerId != null)
-                {
-                    var headerPart = wordDoc.MainDocumentPart!.GetPartById(headerId) as HeaderPart;
-                    if (headerPart != null)
-                    {
-                        return RenderHeaderPart(wordDoc, settings, headerPart);
-                    }
-                }
-            }
-
-            return null;
-        }
-
-        private static XElement? RenderHeaderPart(WordprocessingDocument wordDoc,
-            WmlToHtmlConverterSettings settings, HeaderPart headerPart)
-        {
-            var headerXDoc = headerPart.GetXDocument();
-            var headerRoot = headerXDoc.Root;
-
-            if (headerRoot == null || !headerRoot.Elements().Any())
-                return null;
-
-            // Convert the content of the header
-            var content = CreateBorderDivs(wordDoc, settings, headerRoot.Elements());
-
-            if (!content.Any())
-                return null;
-
-            return new XElement(Xhtml.header,
-                new XAttribute("class", "document-header"),
-                content);
+            var reference = FinalSectionHeaderFooterReferences(wordDoc).GetHeader("default");
+            var content = (IEnumerable<object?>?)RenderHeaderReference(wordDoc, settings, reference);
+            return content?.Any() == true
+                ? new XElement(Xhtml.header, new XAttribute("class", "document-header"), content)
+                : null;
         }
 
         private static XElement? RenderFootersSection(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings)
         {
-            var footerParts = wordDoc.MainDocumentPart!.FooterParts.ToList();
-            if (!footerParts.Any())
-                return null;
-
-            // Get the section properties from the document body or last sectPr
-            var mainDoc = wordDoc.MainDocumentPart!.GetXDocument();
-            var body = mainDoc.Root?.Element(W.body);
-            var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
-
-            // Find the default footer reference
-            var defaultFooterRef = sectPr?.Elements(W.footerReference)
-                .FirstOrDefault(fr => (string?)fr.Attribute(W.type) == "default");
-
-            if (defaultFooterRef == null)
-            {
-                // If no default footer, try to get the first footer
-                defaultFooterRef = sectPr?.Elements(W.footerReference).FirstOrDefault();
-            }
-
-            if (defaultFooterRef == null && footerParts.Any())
-            {
-                // Just use the first footer part if no reference found
-                var firstFooterPart = footerParts.First();
-                return RenderFooterPart(wordDoc, settings, firstFooterPart);
-            }
-
-            if (defaultFooterRef != null)
-            {
-                var footerId = (string?)defaultFooterRef.Attribute(R.id);
-                if (footerId != null)
-                {
-                    var footerPart = wordDoc.MainDocumentPart!.GetPartById(footerId) as FooterPart;
-                    if (footerPart != null)
-                    {
-                        return RenderFooterPart(wordDoc, settings, footerPart);
-                    }
-                }
-            }
-
-            return null;
-        }
-
-        private static XElement? RenderFooterPart(WordprocessingDocument wordDoc,
-            WmlToHtmlConverterSettings settings, FooterPart footerPart)
-        {
-            var footerXDoc = footerPart.GetXDocument();
-            var footerRoot = footerXDoc.Root;
-
-            if (footerRoot == null || !footerRoot.Elements().Any())
-                return null;
-
-            // Convert the content of the footer
-            var content = CreateBorderDivs(wordDoc, settings, footerRoot.Elements());
-
-            if (!content.Any())
-                return null;
-
-            return new XElement(Xhtml.footer,
-                new XAttribute("class", "document-footer"),
-                content);
+            var reference = FinalSectionHeaderFooterReferences(wordDoc).GetFooter("default");
+            var content = (IEnumerable<object?>?)RenderFooterReference(wordDoc, settings, reference);
+            return content?.Any() == true
+                ? new XElement(Xhtml.footer, new XAttribute("class", "document-footer"), content)
+                : null;
         }
 
         /// <summary>
@@ -4997,37 +4907,14 @@ namespace Docxodus
         /// </summary>
         private static XElement? RenderPaginatedHeaderFooterRegistry(
             WordprocessingDocument wordDoc,
-            WmlToHtmlConverterSettings settings,
-            XElement bodyElement)
+            WmlToHtmlConverterSettings settings)
         {
             var registry = new XElement(Xhtml.div,
                 new XAttribute("id", "pagination-hf-registry"),
                 new XAttribute("style", "display:none"));
 
-            // Collect all section properties from the document
-            var sectionProperties = new List<XElement>();
-
-            // Get section properties from paragraph annotations
-            foreach (var para in bodyElement.Descendants(W.p))
-            {
-                var sectAnnotation = para.Annotation<SectionAnnotation>();
-                if (sectAnnotation?.SectionElement != null)
-                {
-                    var sectPr = sectAnnotation.SectionElement;
-                    if (!sectionProperties.Contains(sectPr))
-                        sectionProperties.Add(sectPr);
-                }
-            }
-
-            // If no sections found from annotations, get from document body
-            if (sectionProperties.Count == 0)
-            {
-                var mainDoc = wordDoc.MainDocumentPart!.GetXDocument();
-                var body = mainDoc.Root?.Element(W.body);
-                var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
-                if (sectPr != null)
-                    sectionProperties.Add(sectPr);
-            }
+            var sectionProperties = wordDoc.MainDocumentPart!.GetXDocument().Root
+                ?.Annotation<HeaderFooterSections>()?.Properties ?? new List<XElement?>();
 
             // A missing reference does not mean an empty story: each story type is linked to the
             // preceding section until that type is explicitly replaced. The first section starts
@@ -5047,7 +4934,7 @@ namespace Docxodus
                 effectiveReferences.Update(sectPr);
 
                 // Check if section has different first page headers/footers
-                var titlePage = sectPr.Element(W.titlePg);
+                var titlePage = sectPr?.Element(W.titlePg);
                 bool hasTitlePage = IsOnOffPropertyEnabled(titlePage);
 
                 // Render default header
@@ -7524,7 +7411,7 @@ namespace Docxodus
                 // Add header/footer registry if headers/footers are enabled
                 if (settings.RenderHeadersAndFooters)
                 {
-                    var hfRegistry = RenderPaginatedHeaderFooterRegistry(wordDoc, settings, element);
+                    var hfRegistry = RenderPaginatedHeaderFooterRegistry(wordDoc, settings);
                     if (hfRegistry != null)
                         stagingContent.Add(hfRegistry);
                 }
