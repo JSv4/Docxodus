@@ -930,7 +930,8 @@ export async function convertDocxToHtml(
       options?.stampAnchors ?? false,
       options?.revisionPresentation ?? RevisionPresentation.Docxodus,
       options?.semanticLists ?? false,
-      hiddenRevisionKinds(options)
+      hiddenRevisionKinds(options),
+      options?.stampPageNumberFields ?? false
     );
   }
   // Use pagination-aware method when pagination is requested

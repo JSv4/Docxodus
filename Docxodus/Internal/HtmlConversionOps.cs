@@ -63,10 +63,9 @@ internal sealed record HtmlConversionOptions
     public bool SemanticLists { get; init; }
 
     /// <summary>
-    /// Block renders only: wrap PAGE / NUMPAGES field results in <c>&lt;span data-field&gt;</c>
-    /// (the marker the paginated full render emits) so a client that paginates the block itself
-    /// can substitute each page's number. Off by default so the pinned block-render output is
-    /// untouched; the editor profile sets it from its <c>paginated</c> flag.
+    /// Wrap PAGE / NUMPAGES field results in <c>&lt;span data-field&gt;</c>, including flow
+    /// output and block renders. Preserves cached results; clients can replace them later.
+    /// Off by default; full paginated renders always emit these markers.
     /// </summary>
     public bool StampPageNumberFields { get; init; }
 
@@ -180,6 +179,7 @@ internal static class HtmlConversionOps
             StampAnchors = options.StampAnchors,
             StampCanonicalSourceAnchors = options.StampAnchors || renderPagination,
             SemanticLists = options.SemanticLists,
+            StampPageNumberFields = options.StampPageNumberFields,
             AuthorColors = options.AuthorColors is null ? null : new Dictionary<string, string>(options.AuthorColors),
             // Embed images as base64 data URIs — no SkiaSharp needed (WASM-safe).
             ImageHandler = CreateBase64ImageHandler(),

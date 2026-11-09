@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
-from docx_scalpel import HtmlOptions, convert_docx_to_html, docx_diff_compare, open_session
+from docx_scalpel import HtmlOptions, PageNumberField, convert_docx_to_html, docx_diff_compare, open_session
+from docx_scalpel.enums import HeaderFooterKind
 
 
 def _document_order(markdown: str, anchor_id: str) -> int:
@@ -122,3 +123,18 @@ def test_th010_existing_positional_html_options_keep_their_meaning() -> None:
     assert wire["semanticLists"] is True
     assert wire["showFormattingChanges"] is True
     assert wire["showInsertionsAndDeletions"] is True
+
+
+def test_th011_flow_page_fields_cross_stateless_and_session_apis(tour_plan_bytes) -> None:
+    with open_session(tour_plan_bytes) as session:
+        anchor = next(a for a in session.project().anchor_index if a.startswith("p:body:"))
+        footer = session.set_footer_text(anchor, HeaderFooterKind.DEFAULT, "Page ")
+        assert footer.success
+        assert session.insert_page_number_field(footer.created[0].id, PageNumberField.CURRENT_PAGE).success
+        saved = session.save()
+        for convert in (session.to_html, lambda options: convert_docx_to_html(saved, options)):
+            for stamp in (False, True):
+                html = ET.fromstring(convert(HtmlOptions(
+                    render_headers_and_footers=True, stamp_page_number_fields=stamp)))
+                fields = [node.attrib["data-field"] for node in html.iter() if "data-field" in node.attrib]
+                assert fields == (["PAGE"] if stamp else [])

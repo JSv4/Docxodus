@@ -60,6 +60,7 @@ When manipulating the returned tree, preserve its stylesheet nodes rather than r
 | `ListItemImplementations` | `Dictionary<string, Func<...>>` | Default implementations | Custom list item text generators |
 | `ImageHandler` | `Func<ImageInfo, XElement>` | `null` | **Required for images** - callback to process embedded images |
 | `SemanticLists` | `bool` | `false` | Emit Word lists as `ol`/`ul`/`li` instead of paragraphs (see [Lists](#lists)); ignored by paginated output |
+| `StampPageNumberFields` | `bool` | `false` | Preserve `PAGE` / `NUMPAGES` as `data-field` spans in flow output, including empty results; retain cached text, formatting and `data-field-format` switches without calculating page numbers. Paginated output always marks these fields. Exposed as npm `stampPageNumberFields` and Python `stamp_page_number_fields`. |
 | `ShowFormattingChanges` | `bool` | `true` | With `RenderTrackedChanges`, show formatting-change annotations; current formatting remains when false |
 | `ShowInsertionsAndDeletions` | `bool` | `true` | With `RenderTrackedChanges`, show text/structural revisions; false displays current text and structure without accepting revisions |
 

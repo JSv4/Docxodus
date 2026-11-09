@@ -4245,6 +4245,10 @@ class HtmlOptions:
     ``semantic_lists`` emits Word lists as ``<ol>``/``<ul>``/``<li>`` instead of paragraphs.
     CSS draws a marker only where it reproduces Word's exactly; other lists keep their
     generated marker spans. Paginated output ignores it.
+
+    ``stamp_page_number_fields`` preserves PAGE / NUMPAGES fields as ``data-field``
+    spans in flow HTML, including empty results. Cached text and formatting stay;
+    this does not calculate page numbers. Paginated output always marks them.
     """
 
     page_title: str = "Document"
@@ -4270,6 +4274,7 @@ class HtmlOptions:
     semantic_lists: bool = False
     show_formatting_changes: bool = True
     show_insertions_and_deletions: bool = True
+    stamp_page_number_fields: bool = False
 
     def to_wire(self) -> dict[str, Any]:
         """camelCase keys the host dispatcher's ``ParseHtmlOptions`` reads."""
@@ -4296,6 +4301,7 @@ class HtmlOptions:
             "revisionPresentation": self.revision_presentation,
             "renderUnsupportedContentPlaceholders": self.render_unsupported_content_placeholders,
             "semanticLists": self.semantic_lists,
+            "stampPageNumberFields": self.stamp_page_number_fields,
         }
         if self.document_language is not None:
             wire["documentLanguage"] = self.document_language

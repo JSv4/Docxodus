@@ -1,7 +1,8 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
-using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml;using DocumentFormat.OpenXml.Packaging;
 using Docxodus.Internal;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 using Xunit;
@@ -13,23 +14,42 @@ namespace Docxodus.Tests;
 public class SimplePageFieldRenderingTests
 {
     // Authored here from original literal content; no template or input DOCX is loaded.
-    private static byte[] AuthoredDocument()
+    private static byte[] AuthoredDocument(bool complex = false, bool cached = true)
     {
-        static Wp.SimpleField Field(string instruction, string cached) =>
-            new(new Wp.Run(new Wp.RunProperties(new Wp.Italic()), new Wp.Text(cached))) { Instruction = instruction };
+        IEnumerable<OpenXmlElement> Field(string instruction, string value)
+        {
+            var result = cached
+                ? new[] { new Wp.Run(new Wp.RunProperties(new Wp.Italic()), new Wp.Text(value)) }
+                : System.Array.Empty<Wp.Run>();
+            if (!complex)
+            {
+                yield return new Wp.SimpleField(result) { Instruction = instruction };
+                yield break;
+            }
+            yield return new Wp.Run(new Wp.FieldChar { FieldCharType = Wp.FieldCharValues.Begin });
+            yield return new Wp.Run(new Wp.FieldCode(instruction));
+            yield return new Wp.Run(new Wp.FieldChar { FieldCharType = Wp.FieldCharValues.Separate });
+            foreach (var run in result) yield return run;
+            yield return new Wp.Run(new Wp.FieldChar { FieldCharType = Wp.FieldCharValues.End });
+        }
+
+        Wp.Paragraph Fields() => new Wp.Paragraph(
+            Field(" PAGE \\* Arabic ", "1")
+                .Concat(new[] { new Wp.Run(new Wp.Text(" of ") { Space = SpaceProcessingModeValues.Preserve }) })
+                .Concat(Field(" NUMPAGES ", "1")));
 
         using var stream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(stream,
                    DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
         {
             var main = document.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
             var header = main.AddNewPart<HeaderPart>();
-            header.Header = new Wp.Header(new Wp.Paragraph(
-                Field(" PAGE \\* Arabic ", "1"), new Wp.Run(new Wp.Text(" of ") { Space = DocumentFormat.OpenXml.SpaceProcessingModeValues.Preserve }),
-                Field(" NUMPAGES ", "1")));
+            header.Header = new Wp.Header(Fields());
             main.Document = new Wp.Document(new Wp.Body(
                 new Wp.Paragraph(new Wp.Run(new Wp.Text("Maple register "))),
-                new Wp.Paragraph(Field(" AUTHOR ", "Cedar")),
+                new Wp.Paragraph(new Wp.SimpleField(new Wp.Run(new Wp.Text("Cedar"))) { Instruction = " AUTHOR " }),
                 new Wp.SectionProperties(new Wp.HeaderReference
                 {
                     Type = Wp.HeaderFooterValues.Default, Id = main.GetIdOfPart(header),
@@ -41,6 +61,27 @@ public class SimplePageFieldRenderingTests
             main.Document.Save();
         }
         return stream.ToArray();
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void FlowPageFieldsCanBeMarkedWithoutChangingTheirCachedResults(bool complex, bool cached)
+    {
+        var bytes = AuthoredDocument(complex, cached);
+        XDocument Render(bool stamp) => XDocument.Parse(HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { RenderHeadersAndFooters = true, StampPageNumberFields = stamp }));
+        var plain = Render(false);
+        var marked = Render(true);
+        var fields = marked.Descendants().Where(e => e.Attribute("data-field") != null).ToList();
+
+        Assert.Equal(new[] { "PAGE", "NUMPAGES" }, fields.Select(f => (string?)f.Attribute("data-field")));
+        Assert.Equal(new[] { "Arabic", null }, fields.Select(f => (string?)f.Attribute("data-field-format")));
+        Assert.All(fields, field => Assert.Equal(cached ? "1" : "", field.Value));
+        Assert.DoesNotContain(plain.Descendants(), e => e.Attribute("data-field") != null);
+        Assert.Equal(plain.Descendants(Xhtml.body).Single().Value, marked.Descendants(Xhtml.body).Single().Value);
     }
 
     private static XDocument Convert(int paginationMode) =>

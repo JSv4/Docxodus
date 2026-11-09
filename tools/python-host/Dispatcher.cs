@@ -752,6 +752,7 @@ internal static partial class Dispatcher
             RenderUnsupportedContentPlaceholders = BoolOpt("renderUnsupportedContentPlaceholders", defaults.RenderUnsupportedContentPlaceholders),
             DocumentLanguage = StrOptNullable("documentLanguage", defaults.DocumentLanguage),
             SemanticLists = BoolOpt("semanticLists", defaults.SemanticLists),
+            StampPageNumberFields = BoolOpt("stampPageNumberFields", defaults.StampPageNumberFields),
         };
     }
 

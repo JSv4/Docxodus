@@ -385,6 +385,7 @@ public partial class DocumentConverter
     /// <param name="stampAnchors">Stamp block elements with data-anchor ids</param>
     /// <param name="revisionPresentation">How tracked changes look: 0 = Docxodus style (default), 1 = Word's All Markup style</param>
     /// <param name="semanticLists">Emit Word lists as ol/ul/li (ignored by paginated output)</param>
+    /// <param name="stampPageNumberFields">Mark PAGE / NUMPAGES fields in flow output, preserving cached results</param>
     /// <returns>HTML string or JSON error object</returns>
     [JSExport]
     public static string ConvertDocxToHtmlComplete(
@@ -411,7 +412,8 @@ public partial class DocumentConverter
         bool stampAnchors = false,
         int revisionPresentation = 0,
         bool semanticLists = false,
-        int hiddenRevisionKinds = 0)
+        int hiddenRevisionKinds = 0,
+        bool stampPageNumberFields = false)
     {
         if (docxBytes == null || docxBytes.Length == 0)
         {
@@ -424,6 +426,7 @@ public partial class DocumentConverter
             {
                 StampAnchors = stampAnchors,
                 SemanticLists = semanticLists,
+                StampPageNumberFields = stampPageNumberFields,
                 RevisionPresentation = revisionPresentation,
                 PageTitle = pageTitle ?? "Document",
                 CssClassPrefix = cssPrefix ?? "docx-",

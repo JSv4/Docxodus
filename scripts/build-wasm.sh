@@ -140,18 +140,14 @@ echo ""
 echo "Total WASM directory size:"
 du -sh "$WASM_DIST"
 
-# Wire-size budget gate. The brotli total is what a negotiation-capable host actually
-# sends to boot the runtime. Budget 5904 KiB (measured 5.44 MiB after adding full editor
-# mounts, conversion options, and external annotation creation to the AOT profile).
-# The additional 286.5 KiB buys a sustained ~2–3x annotation speedup (#783). If this
-# trips, something re-rooted an assembly, a dependency grew, or a re-recorded profile
-# got much wider; see benchmarks/aot-coverage/README.md and
-# docs/architecture/wasm-packaging.md before raising it.
-# Canvas diagnostics on the CI runtime 10.0.14 crossed 5888 KiB by less than 1 KiB;
-# allow 8 KiB of measured feature/toolchain headroom without changing roots or AOT coverage.
-# Resizing-box placement proofs measured 6,040,293 bytes on CI runtime 10.0.14
-# (6,029,778 locally on 10.0.9), requiring another 8 KiB; roots/profile are unchanged.
-WIRE_BUDGET_BYTES=$((5904 * 1024))
+# Wire-size budget gate. The brotli total is what a negotiation-capable host sends
+# to boot the runtime. The expanded editor/annotation AOT profile buys a sustained
+# ~2–3x annotation speedup (#783); keep that coverage when evaluating payload growth.
+# Flow page-field forwarding measured 6,047,829 bytes on CI runtime 10.0.14 versus
+# 6,042,349 on its base. The 4 KiB budget increase covers the 2,133-byte overage;
+# assembly roots, dependencies and AOT profile are unchanged. Before raising again,
+# inspect benchmarks/aot-coverage/README.md and docs/architecture/wasm-packaging.md.
+WIRE_BUDGET_BYTES=$((5908 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""
