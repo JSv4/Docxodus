@@ -98,7 +98,9 @@ const budgetsKiB = {
   // tall-row splitting and linked text-box overflow (#1558) and section-grid line heights (#1551),
   // merged together, measure 163388/163455/142035/57417 gzip bytes for embed/IIFE/editor/pagination.
   // Round only these four exhausted gates to the next 0.1 KiB.
-  'embed.bundle.js': 159.6,
+  // The at-least minimum kept for unmeasured grid lines (#1551) adds 23 gzip bytes (163418 ->
+  // 163441), 11 over this gate. Round only this exhausted gate to the next 0.1 KiB.
+  'embed.bundle.js': 159.7,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
   // The appended bullet-normalization option adds 29 gzip bytes (161996 -> 162025).

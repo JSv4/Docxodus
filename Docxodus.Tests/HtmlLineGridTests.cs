@@ -26,7 +26,7 @@ public class HtmlLineGridTests
     [InlineData("cell", false)]
     [InlineData("header", false)]
     [InlineData("content-control", false)]
-    [InlineData("revision", false)]
+    [InlineData("revision", true)]
     public void OriginalSectionGridAndResolvedFlagsAgreeAcrossRenderPaths(string kind, bool enabled)
     {
         var bytes = Create(kind);
@@ -60,42 +60,75 @@ public class HtmlLineGridTests
         }
     }
 
-    // Word 2024 (#1551): a line of beforeLines/afterLines is the grid pitch, also in cells and
-    // unsnapped paragraphs, or 12pt without a line grid (also for a docGrid with no type). A
-    // positive count replaces the twip value beside it; a zero count keeps it.
+    // Word 2024 (#1551): a line of beforeLines/afterLines is the grid pitch, also in cells,
+    // unsnapped paragraphs and revision-bearing documents, or 12pt without a line grid (also for a
+    // docGrid with no type) and in a header. A positive count replaces the twip value beside it; a
+    // zero count keeps it.
     [Theory]
     [InlineData("lines", "beforeLines", 100, "margin-top:18pt", "")]
     [InlineData("lines", "afterLines", 50, "margin-bottom:9pt", "")]
     [InlineData("lines", "beforeLines", 100, "margin-top:18pt", "cell")]
     [InlineData("lines", "beforeLines", 100, "margin-top:18pt", "unsnapped")]
+    [InlineData("lines", "beforeLines", 100, "margin-top:18pt", "revision")]
+    [InlineData("lines", "beforeLines", 100, "margin-top:12pt", "header")]
     [InlineData(null, "beforeLines", 100, "margin-top:12pt", "")]
     [InlineData(null, "afterLines", 50, "margin-bottom:6pt", "")]
     [InlineData("lines", "beforeLines", 0, "margin-top:3pt", "")]
     [InlineData("lines", null, 0, "margin-top:3pt", "")]
-    public void LineCountSpacingIsHundredthsOfTheGridPitch(string? grid, string? attribute, int hundredths, string expected, string where)
+    public void LineCountSpacingIsHundredthsOfTheGridPitch(string? grid, string? attribute, int hundredths, string expected, string where) =>
+        Assert.Contains(expected + ";", StyleOf(grid, new XElement(W.spacing, new XAttribute(W.before, 60), new XAttribute(W.after, 60),
+            attribute == null ? null : new XAttribute(W.w + attribute, hundredths)), where));
+
+    // Word 2024 (#1551): an at-least line is max(whole grid lines, minimum), so a minimum no taller
+    // than the 18pt pitch is sized as a grid line; a taller one keeps its minimum, and exact ignores the grid.
+    [Theory]
+    [InlineData("atLeast", 300, true)]
+    [InlineData("atLeast", 360, true)]
+    [InlineData("atLeast", 400, false)]
+    [InlineData("exact", 300, false)]
+    public void AtLeastLinesNoTallerThanThePitchAreGridLines(string rule, int line, bool gridLine)
+    {
+        var style = StyleOf("lines", new XElement(W.spacing, new XAttribute(W.line, line), new XAttribute(W.lineRule, rule)), "");
+        Assert.Equal(gridLine, style.Contains("--docx-line-grid:18pt;", StringComparison.Ordinal));
+        // A grid line drops the fixed line height that would hold it at the minimum.
+        Assert.Equal(!gridLine, style.Contains($"line-height:{line / 20m:0.0}pt;", StringComparison.Ordinal));
+    }
+
+    /// <summary>The style of a "Cedar" paragraph on an 18pt section grid: in the body, a table cell
+    /// (<c>cell</c>), the default header (<c>header</c>) or a tracked insertion (<c>revision</c>,
+    /// rendered as markup), or with snapping off (<c>unsnapped</c>).</summary>
+    private static string StyleOf(string? grid, XElement spacing, string where)
     {
         using var stream = new MemoryStream();
         stream.Write(DocxSession.CreateBlankDocxBytes());
         using (var doc = WordprocessingDocument.Open(stream, true))
         {
             var main = doc.MainDocumentPart!;
-            var paragraph = new XElement(W.p, new XElement(W.pPr,
-                where == "unsnapped" ? new XElement(W.snapToGrid, new XAttribute(W.val, "0")) : null,
-                new XElement(W.spacing, new XAttribute(W.before, 60), new XAttribute(W.after, 60),
-                    attribute == null ? null : new XAttribute(W.w + attribute, hundredths))), new XElement(W.r, new XElement(W.t, "Cedar")));
+            var run = new XElement(W.r, new XElement(W.t, "Cedar"));
+            XElement paragraph = new(W.p, new XElement(W.pPr,
+                where == "unsnapped" ? new XElement(W.snapToGrid, new XAttribute(W.val, "0")) : null, spacing),
+                where == "revision" ? new XElement(W.ins, new XAttribute(W.id, 1), new XAttribute(W.author, "Editor"), run) : run);
+            var section = new XElement(W.sectPr, new XElement(W.docGrid, grid == null ? null : new XAttribute(W.type, grid),
+                new XAttribute(W.linePitch, 360)));
+            if (where == "header")
+            {
+                var header = main.AddNewPart<HeaderPart>();
+                header.PutXDocument(new XDocument(new XElement(W.hdr, paragraph)));
+                section.AddFirst(new XElement(W.headerReference, new XAttribute(W.type, "default"),
+                    new XAttribute(R.id, main.GetIdOfPart(header))));
+                paragraph = new XElement(W.p);
+            }
             main.GetXDocument().Root!.Element(W.body)!.ReplaceNodes(where != "cell" ? paragraph
                     : new XElement(W.tbl, new XElement(W.tblPr), new XElement(W.tblGrid, new XElement(W.gridCol, new XAttribute(W._w, 9360))),
                         new XElement(W.tr, new XElement(W.tc, paragraph))),
-                where == "cell" ? new XElement(W.p) : null,
-                new XElement(W.sectPr, new XElement(W.docGrid, grid == null ? null : new XAttribute(W.type, grid),
-                    new XAttribute(W.linePitch, 360))));
+                where == "cell" ? new XElement(W.p) : null, section);
             main.PutXDocument();
         }
         var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("grid.docx", stream.ToArray()),
-            new WmlToHtmlConverterSettings { FabricateCssClasses = false });
-        var style = ((string?)html.Descendants().Single(e => e.Name.LocalName == "p" && e.Value == "Cedar").Attribute("style") ?? "")
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, RenderHeadersAndFooters = where == "header",
+                RenderTrackedChanges = where == "revision" });
+        return ((string?)html.Descendants().Single(e => e.Name.LocalName == "p" && e.Value == "Cedar").Attribute("style") ?? "")
             .Replace(" ", "", StringComparison.Ordinal);
-        Assert.Contains(expected + ";", style);
     }
 
     private static byte[] Create(string kind)

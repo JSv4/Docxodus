@@ -6,7 +6,11 @@ using DocumentFormat.OpenXml.Packaging;
 
 namespace Docxodus.Internal;
 
-/// <summary>The original main-body section grid, before block shells or conversion rewrites.</summary>
+/// <summary>
+/// The original main-body section grid, before block shells or conversion rewrites. Only body
+/// paragraphs carry it: Word 2024 snaps no header or footer line and counts their line-count
+/// spacing in 12pt lines, whatever the section's grid (#1551).
+/// </summary>
 internal sealed class ParagraphLineGrid
 {
     private static readonly XName Pitch = XNamespace.Get("urn:docxodus:rendering") + "lineGrid";
@@ -17,8 +21,7 @@ internal sealed class ParagraphLineGrid
     internal ParagraphLineGrid(WordprocessingDocument document)
     {
         var body = document.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
-        if (body == null || !body.Descendants(W.docGrid).Any(SnapsLines)
-            || RevisionAccepter.HasTrackedRevisions(document)) return;
+        if (body == null || !body.Descendants(W.docGrid).Any(SnapsLines)) return;
         XElement? section = null;
         // A break belongs to the section it ends. One reverse walk avoids a forward
         // governing-section search for every paragraph in a long document.
@@ -65,24 +68,34 @@ internal sealed class ParagraphLineGrid
     {
         if (!int.TryParse((string?)spacing?.Attribute(lines), NumberStyles.Integer, CultureInfo.InvariantCulture,
             out var hundredths) || hundredths <= 0) return twips;
-        var points = pitch == null ? 12m : decimal.Parse(pitch[..^2], CultureInfo.InvariantCulture);
-        return hundredths * points / 5m;
+        return hundredths * (pitch == null ? 12m : Points(pitch)) / 5m;
     }
+
+    private static decimal Points(string pitch) => decimal.Parse(pitch[..^2], CultureInfo.InvariantCulture);
 
     /// <summary>The pitch a source paragraph's line-count spacing counts, or null for 12pt.</summary>
     internal string? UnitOf(XElement paragraph) =>
         paragraph.AncestorsAndSelf().FirstOrDefault(e => e.Parent?.Name == W.body) is { } block
             ? _pitches.GetValueOrDefault(block) : null;
 
+    /// <summary>
+    /// Word 2024 gives an <c>atLeast</c> line <c>max(whole grid lines, minimum)</c> and ignores the grid
+    /// for an <c>exact</c> one (#1551). A minimum no taller than the pitch never wins, so that line is
+    /// sized like a single-spaced grid line; a taller minimum keeps its own line.
+    /// </summary>
     internal static void AddStyle(XElement paragraph, Dictionary<string, string> style)
     {
         var pitch = (string?)paragraph.Attribute(Pitch);
         var properties = paragraph.Element(W.pPr);
         var spacing = properties?.Element(W.spacing);
+        var rule = (string?)spacing?.Attribute(W.lineRule) ?? "auto";
         if (pitch == null || pitch == "0" || properties?.Element(W.snapToGrid)?.Attribute(W.val).ToBoolean() == false
-            || ((string?)spacing?.Attribute(W.lineRule) ?? "auto") != "auto"
+            || !(rule == "auto" || rule == "atLeast"
+                && (WordprocessingMLUtil.AttributeToTwips(spacing?.Attribute(W.line)) ?? 0) <= Points(pitch) * 20)
             || properties?.Elements().Any(e => e.Name == W.framePr || e.Name == W.pBdr) == true
             || paragraph.Descendants().Attributes(PtOpenXml.ListItemRun).Any()) return;
         style["--docx-line-grid"] = pitch;
+        // The grid line measures its text. The minimum stays for lines the grid cannot measure.
+        if (rule == "atLeast") style.Remove("line-height");
     }
 }

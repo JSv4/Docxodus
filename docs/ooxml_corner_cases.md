@@ -6678,8 +6678,9 @@ Docxodus applies the `auto` rule, the three grid types and the line-count spacin
 spacing line is) and `applyParagraphLineGrids` in `npm/src/line-metrics.ts` (the height), so the
 HTML line box, the paginator and the PDF share one value; `lastLineTrailingLeadingPt` in
 `npm/src/pagination.ts` admits the half-slot overrun. Tested by `HtmlLineGridTests` and
-`npm/tests/pagination-line-grid.spec.ts`. The `atLeast` rule below the pitch is not applied yet:
-its line height is resolved outside the natural-height pass.
+`npm/tests/pagination-line-grid.spec.ts`. The `atLeast` rule, headers, footers and documents with
+tracked changes are covered in "Line grids: at-least lines, running stories and tracked changes"
+below.
 
 ## Unrelated content changed paragraph fitting and kerning (#1550, #1562)
 
@@ -7475,6 +7476,49 @@ advances. When Word condenses a line, only that
 line's ordinary spaces narrow, by the overflow the browser measures for it; HTML still lays out and
 paints the paragraph. Public PDF regressions pin each placement with its left-aligned and mode-14
 controls.
+
+## Line grids: at-least lines, running stories and tracked changes (#1551)
+
+Measured from Word 2024's own PDF export (`ExportAsFixedFormat`, the final view and the inline
+markup view), with 12pt Times New Roman, single spacing and zero paragraph spacing in
+`w:pPrDefault`, compatibility mode 15, Letter, one-inch margins and `w:header`/`w:footer` of 720.
+Running stories hold three one-line paragraphs over a five-line body; other bodies have 120 lines.
+Columns are line step / lines on page 1 / pages; Docxodus is its own PDF export.
+
+| Case | Word 2024 | Docxodus before | After |
+| --- | --- | --- | --- |
+| Header lines, single, on an 18pt `lines` grid, or no grid | 13.8pt | same | same |
+| Header lines, 1.5 lines / `atLeast` 15pt, 18pt grid | 20.7pt / 15pt | same | same |
+| Header `w:beforeLines="100"`, on an 18pt grid, a 12pt grid or none | 12pt before | same | same |
+| Footer lines, single / `w:beforeLines="100"`, 18pt grid | 13.8pt / 12pt before | same | same |
+| Body `atLeast` 12pt or 15pt, 18pt grid | 18pt / 36 / 4 | 13.8pt / 46 / 3; 15pt / 43 / 3 | 18pt / 36 / 4 |
+| Body `atLeast` 20pt, 18pt grid; `atLeast` 15pt, no grid | 20pt / 32 / 4; 15pt / 43 / 3 | same | same |
+| Document with a tracked insertion, 18pt grid, single (markup view) | 18pt / 36 / 4 | 13.8pt / 46 / 3 | 18pt / 36 / 4 |
+| Same, `w:beforeLines="100"` / `atLeast` 15pt (markup view) | 36pt / 18 / 7; 18pt / 36 / 4 | 25.8pt / 25 / 5; 15pt / 43 / 3 | as Word |
+
+Word lays out the final and markup views of the tracked documents identically. So:
+
+- Header and footer lines never snap to the section's grid, and a line of `w:beforeLines` or
+  `w:afterLines` there is 12pt, as in a body without a grid.
+- Tracked changes don't take a document off its grid.
+- An `atLeast` value no taller than the pitch never wins `max(whole grid lines, value)`: the line
+  is a single-spaced grid line.
+
+`Docxodus/Internal/ParagraphLineGrid.cs` stamps the section's pitch on body paragraphs only, and now
+also when the document has tracked changes (the stamp survives revision acceptance). `AddStyle` puts
+an `atLeast` line no taller than the pitch on the grid and drops the fixed line height of its
+minimum, so `applyParagraphLineGrids` in `npm/src/line-metrics.ts` sizes it with the one grid rule;
+text that pass cannot measure (a bold word, mixed fonts) falls back to the minimum. Tested by
+`HtmlLineGridTests`, `npm/tests/export-line-grid.spec.ts` and `npm/tests/pagination-line-grid.spec.ts`.
+
+Still different from Word:
+
+- A minimum taller than the pitch keeps `max(natural, value)`, which differs from Word's rule only
+  when the text is taller than the pitch: 24pt text with `atLeast` 30pt on an 18pt grid is 36pt in
+  Word and 30pt in Docxodus.
+- In the markup view, a paragraph that itself shows an insertion or deletion keeps its natural line
+  height (13.8pt where Word gives 18pt): its runs sit inside the revision markup, which the grid
+  pass does not measure.
 
 ## Word kerns and ligates only on request (#1562)
 
