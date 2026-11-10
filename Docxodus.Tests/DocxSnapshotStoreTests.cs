@@ -41,6 +41,31 @@ public class DocxSnapshotStoreTests
     }
 
     [Fact]
+    public async Task FileBlobStore_ReadsABlobWhileAnotherHandleMayRenameOrDeleteIt()
+    {
+        // A concurrent writer's File.Move holds the published blob open with delete access for a moment.
+        // Windows refused to open it beside that handle unless the reader also shares delete, so a
+        // racing writer of the same content failed with "being used by another process" (issue #1659,
+        // found by DocxVersionModelFuzzTests). Here a DeleteOnClose handle holds that access instead.
+        var directory = Directory.CreateTempSubdirectory("docxodus-blobs-").FullName;
+        try
+        {
+            var store = new FileHistoryBlobStore(directory);
+            var bytes = new byte[] { 1, 2, 3, 4 };
+            var reference = await HistoryBlobIO.PutBytesAsync(store, bytes, CancellationToken.None);
+            var path = Directory.GetFiles(directory, "*.blob").Single();
+            using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1,
+                       FileOptions.DeleteOnClose))
+            {
+                Assert.Equal(reference, await HistoryBlobIO.PutBytesAsync(store, bytes, CancellationToken.None));
+                await using var read = await store.OpenReadAsync(reference);
+                Assert.Equal(bytes.Length, read!.Length);
+            }
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
     public async Task CaptureOwnsBytesBeforeAwaitingHostStorage()
     {
         var blobs = new RecordingStore { PauseWrites = true };
