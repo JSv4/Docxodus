@@ -6878,7 +6878,7 @@ at 8 pt / 1.16. Likewise no-spacing → wide rejects to single spacing in Word (
 change Word's Reject All left the revised spacing in place). Those values match Word's
 blank-document defaults (`WordStockDocDefaults.ModernXml`), and may come from the
 installation's Normal template. This is a rendering question independent of comparison and is
-not changed here.
+not changed here; it is tracked as #1652.
 
 ### Code and tests
 
