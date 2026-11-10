@@ -6990,3 +6990,61 @@ not changed here; it is tracked as #1652.
   the `Normal`-style pairs as controls.
 - `DocxDiffStyleParentTests.ParentChange_ArchivesBothPropertySlices`: the changed-parent path,
   with a run-property change as the control.
+
+---
+## An empty paragraph that only carries a section break (#1572)
+
+```xml
+<w:p><w:r><w:t>Line above.</w:t></w:r></w:p>
+<w:p><w:pPr><w:sectPr>…</w:sectPr></w:pPr></w:p>   <!-- no runs: it only ends the section -->
+<w:p><w:r><w:t>Line below.</w:t></w:r></w:p>
+```
+
+The specification says nothing about the height of this paragraph. Word 2024 sets its mark at the
+end of the preceding paragraph's last line (`Range.Information` puts it at that line's y, right of
+its text), so it has no line of its own. Its spacing before and after, its run size and the type of
+the next section make no difference. With no paragraph line before it, it keeps a line: first in the
+body, directly after a table, or first on the new page its own next-page section opens. A page break
+paragraph's last line is the break's line, so an empty next-page mark after a page break stays on
+that page and the next section starts on the following one. Measured from Word's PDFs (Times New
+Roman 12 pt, Letter, compatibility mode 15 unless stated; a single line steps 13.80 pt):
+
+| Fixture (next section) | Word 2024 | Docxodus before | Docxodus after |
+| --- | ---: | ---: | ---: |
+| No paragraph between (control) | 13.80 | 13.80 | 13.80 |
+| Plain empty paragraph between (control) | 27.60 | 27.59 | 27.59 |
+| Text paragraph carrying the break (control) | 13.80 twice | 13.80 twice | 13.80 twice |
+| Empty mark (continuous) | 13.80 | 27.59 | 13.84 |
+| Empty mark, 8 pt after and 1.08 lines, all three paragraphs (continuous) | 22.92 | 45.78 | 22.94 |
+| Empty mark with 12 pt before (continuous) | 13.80 | 39.59 | 13.84 |
+| Empty mark with a 28 pt mark run (continuous) | 13.80 | 45.99 | 13.84 |
+| Empty mark holding only a bookmark (continuous) | 13.80 | 27.59 | 13.84 |
+| Empty mark (continuous, two columns) | 13.80 | 27.59 | 13.84 |
+| Empty mark ending a one-line two-column section (continuous) | 13.80 | 13.80 | 13.80 |
+| The same section with the break on its one line (control) | 13.80 | 7.04 | 13.80 |
+| Empty mark directly after a table: cell line to next line | 27.60 | 27.83 | 27.83 |
+| Empty mark first in the body: next line's top | one line | one line | one line |
+| Two empty marks, the second opening a next-page section | 2 pages, second mark a line | same | same |
+| Page break, empty mark (next page), twice; modes 12 and 15 | 3 pages | 5 pages | 3 pages |
+| Empty marks only (next page, control) | 3 pages | 3 pages | 3 pages |
+| Page break, mark with text (next page, control) | 5 pages | 5 pages | 5 pages |
+| Page break, empty mark (continuous) | 2 pages, next line tops page 2 | 2 pages, a blank line first | 2 pages, next line first |
+
+Docxodus recognises the paragraph in `InsertAppropriateNonbreakingSpacesTransform`, where empty
+paragraphs are already found, before the body's final `w:sectPr` is moved onto the last paragraph,
+so only a break inside the body qualifies (`IsSectionMarkOnly`). It marks it as a structural
+paragraph, which `ConvertParagraph` already lays out as a one-twip box with no margins (the same
+treatment as a nested table's cell-end paragraph), so every renderer gets the same zero-height
+paragraph. The paginated output also flags it `data-section-mark`, and the paginator flows a flagged
+mark ahead of an explicit page break that directly precedes it, which keeps it on the break's page.
+A paragraph with a list number has content and keeps its line. Two cases are unmeasured and keep
+their line: a mark directly after a block-level content control, and a mark after another
+section's mark when its own section is continuous. The one-twip box is 0.04 pt more than Word.
+
+The two-column rows exposed a separate PDF export fault. The export replaces each line with vector
+text and fixes the paragraph's height, so the box no longer holds lines and a balanced column
+container can split it between the columns when it rebalances. A section whose columns hold one
+line therefore sent the next section's first line 7.04 pt down instead of one line. Before the
+change, the empty mark's own line filled the second column and hid this. Vector paragraphs in
+columns now set `break-inside: avoid` (`npm/src/word-text.ts`); the vectoriser already skips
+paragraphs that were split across columns.
