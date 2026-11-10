@@ -25,7 +25,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- PDF export no longer fails with "body content is clipped" on a table row whose minimum height (`w:trHeight` without `w:hRule="exact"`) is taller than the page. As in Word, the row starts on a fresh page and ends at the foot of its body, where Word draws its bottom border, and the rest of its minimum height is not carried to the next page. An exact row still runs to the paper edge (#1558).
+- PDF export no longer fails with "body content is clipped" on a table row whose minimum height (`w:trHeight` without `w:hRule="exact"`) is taller than the page. As in Word, the row starts on a fresh page and ends at the foot of its body, where Word draws its bottom border, and the rest of its minimum height is not carried to the next page. An exact row still runs to the paper edge. A minimum-height row whose content is taller than a page now splits inside a paragraph like a row without a declared height, and, as in Word, each page's part keeps the row's minimum, capped at the page (#1558).
 
 - A line break inside a hanging-indent list item no longer keeps the item's lines at the paragraph's largest size; each line takes its own text's height there too (#1565).
 

@@ -3678,12 +3678,14 @@ export class PaginationEngine {
     host.remove();
     let capped = false;
     minimums.forEach((row, index) => {
+      // A quarter point more keeps layout rounding from pushing a part filled to the cap past the band.
       const excess = chrome + heights[index] - maximumHeight;
       if (!(excess > 0)) return;
-      row.style.setProperty("height", `${Math.max(0, heights[index] - excess)}pt`, "important");
+      const lower = excess + 0.25;
+      row.style.setProperty("height", `${Math.max(0, heights[index] - lower)}pt`, "important");
       // The export's border layout recomputes each fragment's row heights from the source height.
       const source = row.dataset.docxSourceRowHeight;
-      if (source) row.dataset.docxSourceRowHeight = String(Math.max(0, Number(source) - excess));
+      if (source) row.dataset.docxSourceRowHeight = String(Math.max(0, Number(source) - lower));
       capped = true;
     });
     return capped;
@@ -5489,7 +5491,10 @@ export class PaginationEngine {
     if (!row || !ends.includes(headers.length + 1) || (row.dataset.docxCantSplit === "true" && !freshBody)
       || (!relaxKeeps && rows.length > headers.length + 1 && this.rowKeepsWithNext(row))
       || row.dataset.docxHeaderRow === "true"
-      || row.dataset.docxRowHeightRule || row.style.height || row.style.minHeight
+      // Word gives each page's part of a minimum-height row that minimum, capped at the page (see
+      // capMinimumRowHeights); both parts below are copies of the row, so both keep it.
+      || (row.dataset.docxRowHeightRule ? row.dataset.docxRowHeightRule !== "atLeast"
+        : row.style.height || row.style.minHeight)
       || Array.from(row.cells).some(cell => cell.rowSpan !== 1
         || this.view.getComputedStyle(cell).verticalAlign !== "top")) return fallback();
 

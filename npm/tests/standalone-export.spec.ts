@@ -1156,6 +1156,27 @@ test.describe('standalone paginated HTML', () => {
     });
   }
 
+  test('continues a minimum-height row its content makes taller than a page', async ({ page }) => {
+    // Word 2024 moves the row to a fresh page, breaks it across pages 2 and 3, and gives the part on
+    // page 3 the same capped minimum, so the next paragraph starts page 4 (issue #1558). Word breaks
+    // after line 54, which exactly fills the band; Docxodus breaks after 53 even without a minimum.
+    const source = bodyFillDocx({ paragraphs: 3, fontHalfPoints: 20, lineTwips: 240,
+      exactRowTableTwips: 15000, tallRowRule: 'atLeast', tallRowLines: 70 });
+    const result = await convert(page, source, false, { commentProfile: 'hidden' });
+    expect(result.renderReport.status).toBe('complete');
+    const pages = await page.evaluate((html) => {
+      const parsed = new DOMParser().parseFromString(html, 'text/html');
+      return Array.from(parsed.querySelectorAll('.page-box'), box =>
+        box.querySelector('.page-content')?.textContent?.match(/(Row line|Line) \d+/g) ?? []);
+    }, result.html);
+    expect(pages).toHaveLength(4);
+    expect(pages[0]).toEqual(['Line 1']);
+    expect(pages[1][0]).toBe('Row line 1');
+    expect(pages[1].length).toBeGreaterThanOrEqual(53);
+    expect([...pages[1], ...pages[2]]).toEqual(Array.from({ length: 70 }, (_, i) => `Row line ${i + 1}`));
+    expect(pages[3]).toEqual(['Line 2', 'Line 3']);
+  });
+
   test('continues an oversized minimum-height merged group within the page limit', async ({ page, context }) => {
     const source = generateVerticalMergeDocx({ mergeSpan: 18 });
     const result = await convert(page, source, false, { commentProfile: 'hidden', limits: { finalPages: 2 } });

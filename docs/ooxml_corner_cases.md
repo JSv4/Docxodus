@@ -4165,7 +4165,7 @@ Measured with Word 2024 (Range.Information and its own PDF; Letter, 1in margins,
 
 | Case | Word 2024 | Docxodus before | Docxodus after |
 |---|---|---|---|
-| 800pt minimum, row first | 2 pages; row 72pt to 720pt with its bottom border at 719.6pt; nothing of it on page 2; Closing line at 72pt on page 2 | `Page 1 body content is clipped` | 2 pages; row 72.2pt to 719.7pt |
+| 800pt minimum, row first | 2 pages; row 72pt to 720pt with its bottom border at 719.6pt; nothing of it on page 2; Closing line at 72pt on page 2 | `Page 1 body content is clipped` | 2 pages; row 72.2pt to 719.5pt |
 | same, after one line or 25 sentences | row moves to the top of page 2, ends at the body foot; Closing on page 3 | clipped | 3 pages, same placement |
 | same, as the second row | first row on page 1, tall row alone on page 2 | clipped | 3 pages, same placement |
 | 800pt exact (control) | row runs to 872pt, past the paper edge, no bottom border | 2 pages | unchanged |
@@ -4177,6 +4177,21 @@ in `capMinimumRowHeights` (`npm/src/pagination.ts`): when an oversized table rea
 has its minimum lowered until it fits, both in its used style and in the `data-docx-source-row-height`
 that the export's border layout recomputes fragment rows from. The table is then placed whole, or
 split at rows as before. An exact row's `findOversizedExactRow` clip is unchanged.
+
+When content makes such a row taller than a page, Word splits it and gives each page's part the same
+minimum, capped at the page:
+
+| Case (one paragraph of `w:br` lines, 12pt exact) | Word 2024 | Docxodus before | Docxodus after |
+|---|---|---|---|
+| 750pt minimum, 70 lines (840pt), `w:cantSplit`, after one line | row moves to page 2; lines 1-54 on page 2, 55-70 on page 3, whose part still fills the page; next paragraph on page 4 | `Page 2 body content is clipped` | 4 pages, same placement (break after line 53, as without a minimum) |
+| same with no `w:trHeight` (control) | lines 55-70 on page 3, next paragraph right after them on page 3 | 3 pages | unchanged |
+| 800pt minimum, ~30 wrapped sentences, row first | both parts fill their page; next paragraph on page 3 | clipped | 3 pages |
+| 300pt minimum, ~30 sentences, after half a page | the row does not start in the 200pt left; it moves to page 2 and splits to page 3 | clipped | 3 pages |
+
+`splitTableContent` had refused every row with a declared height. It now accepts `atLeast` rows: the
+head and tail it builds are copies of the row, so both keep its minimum, which also stops a part
+from starting in less room than the minimum. The cap leaves a quarter point of margin, since a part
+filled exactly to it could otherwise round past the band. Exact rows keep their guard.
 
 ## Tables: nothing separates a table from the block above it (issue #1244)
 
