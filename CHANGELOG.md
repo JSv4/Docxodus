@@ -25,6 +25,8 @@ All notable changes to this project will be documented in this file.
 
 - HTML and PDF conversion no longer fail on a bare fractional border width (`w:sz` in paragraph, table and cell borders), `w:gridCol` width or section column spacing. These read through the same invariant measure parser as other twip values and keep its whole-number truncation; exponents, NaN, comma decimals and out-of-range values still fail. The `w:gridCol` failure was a 15.1.0 regression (#1622).
 
+- Comparing documents whose default paragraph spacing differs no longer shrinks the text when the redline is rejected in Word. The tracked spacing change on a style now also archives that style's run properties, because Word's Reject All resets an unarchived slice to its built-in 10 pt. Docxodus's own accept and reject output is unchanged (#1576).
+
 - Raw XML insertion and replacement now refuse with `tracked_operation_unsupported` while recording changes, preserving the document and undo history instead of silently applying an unreviewable edit (#1625).
 
 - Markdown projection omits pending deleted table rows in accepted and deletion-stripped views, including opaque summaries and textboxes carried by those rows. Source anchors remain available for review and rejection (#1628).
