@@ -4148,6 +4148,31 @@ A header row (`w:tblHeader`) repeats at the top of each page the table continues
 `w:hRule` (reported for Word in issue #1171; not yet measured here). Docxodus repeated no header row,
 whatever its rule, before that issue.
 
+## A centered or bottom-aligned row taller than a page still splits (issue #1558)
+
+`w:vAlign` does not stop Word from breaking a row across pages. A cell whose content is short is
+aligned within the part of the row on the row's first page, not within the whole row:
+
+```xml
+<w:tr>
+  <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><!-- ~90 sentences, about 4 pages --></w:p></w:tc>
+  <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:r><w:t>Right</w:t></w:r></w:p></w:tc>
+</w:tr>
+```
+
+| Case (Letter, 1in margins) | Word 2024 | Docxodus before | Docxodus after |
+|---|---|---|---|
+| `center`, row first on the page | 5 pages; the page-1 part runs 72.5pt to 711.9pt and "Right" sits at 381pt, centered in it | `Page 2 body content is clipped` | 5 pages; "Right" at 383pt |
+| `bottom`, row first | "Right" at 688pt, the foot of the page-1 part | clipped | "Right" at 694pt |
+| `center`, after half a page of text | the row starts on page 1 (part 528pt to 704pt) and "Right" is centered there (605pt) | clipped | starts on page 1; "Right" centered in that part |
+| `top` (control) | splits | splits | unchanged |
+
+Docxodus's row-content splitter (`splitTableContent` in `npm/src/pagination.ts`) had refused any
+row with a non-top cell, so such a row fell back to the indivisible-block path and was clipped. The
+splitter fills each cell's first part with what fits, so a short cell's content stays in the first
+part, and each part's cells keep their CSS `vertical-align`. That is Word's placement, so the guard
+was removed. Vertically merged cells and declared row heights keep their guard.
+
 ## Tables: nothing separates a table from the block above it (issue #1244)
 
 Word starts a table's first row where the block above it ends. A paragraph's own after-spacing is the

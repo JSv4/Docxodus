@@ -1,13 +1,14 @@
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
-export function longBodyCellDocx(shape: 'paragraph' | 'nested-table', count = 73): Uint8Array {
+export function longBodyCellDocx(shape: 'paragraph' | 'nested-table', count = 73,
+  vAlign: 'top' | 'center' | 'bottom' = 'top'): Uint8Array {
   const lines = Array.from({ length: count }, (_, index) => `Umber${String(index + 1).padStart(3, '0')} shipment logged.`);
   const paragraph = (runs: string) => `<w:p><w:pPr><w:keepLines w:val="0"/><w:widowControl w:val="0"/>
     <w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="exact"/></w:pPr>${runs}</w:p>`;
   const run = (text: string) => `<w:r><w:rPr><w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/>
     <w:sz w:val="22"/></w:rPr><w:t>${text}</w:t></w:r>`;
   const cell = (content: string, width: number) => `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>
-    <w:vAlign w:val="top"/></w:tcPr>${content}</w:tc>`;
+    <w:vAlign w:val="${vAlign}"/></w:tcPr>${content}</w:tc>`;
   const table = (rows: string, widths: number[]) => `<w:tbl><w:tblPr><w:tblW w:w="${widths.reduce((a,b) => a+b,0)}" w:type="dxa"/>
     <w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="20" w:type="dxa"/><w:bottom w:w="20" w:type="dxa"/>
       <w:left w:w="40" w:type="dxa"/><w:right w:w="40" w:type="dxa"/></w:tblCellMar></w:tblPr>
