@@ -23,7 +23,8 @@ export const FONT_CATALOG_CODE_POINTS_MAX = 0x11_0000;
 
 export interface ConfiguredFontFace {
   id: string;
-  source?: "local";
+  /** Omitted for an explicit font directory; `document` is a face embedded in the DOCX. */
+  source?: "local" | "document";
   directoryIndex: number;
   discoveryIndex: number;
   family: string;
@@ -262,6 +263,19 @@ function fontStretch(face: fontkit.Font): number {
   return Number.isSafeInteger(widthClass) && widthClass >= 1 && widthClass <= 9
     ? WIDTH_CLASS_PERCENT[widthClass]
     : 100;
+}
+
+/**
+ * Why a face found outside the explicit font directories (installed locally, or embedded in
+ * the document) cannot serve the requested outputs, or undefined when it can. Such a face is
+ * skipped with a warning rather than failing the export the way a configured face does.
+ */
+export function embeddingRefusal(face: ConfiguredFontFace, outputs: readonly RenderOutput[]): string | undefined {
+  if (!face.license.ok) return face.license.failure.replace(/\.$/, "");
+  if (outputs.some(output => !face.permittedOutputs.includes(output))) return "embedding rights do not allow the requested output";
+  if (outputs.includes("html") && face.license.evidence.kind === "previewPrint") return "preview-and-print rights do not allow a reusable HTML font";
+  if (outputs.includes("pdf") && face.license.evidence.noSubsetting) return "embedding rights forbid PDF subsetting";
+  return undefined;
 }
 
 export function faceKey(face: Pick<ConfiguredFontFace, "familyKey" | "style" | "weight" | "stretch">): string {

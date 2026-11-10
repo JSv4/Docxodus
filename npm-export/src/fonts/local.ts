@@ -5,7 +5,7 @@ import { extname, join, posix, win32 } from "node:path";
 import * as fontkit from "fontkit";
 import { fontFamilyKey, type ExportResourceLimits, type RenderWarning } from "docxodus/export-browser";
 import { DocxodusExportError, exportError, type RenderOutput } from "../contracts.js";
-import { decodeFontFace, faceKey, fontMetadata, openFontFile, readStableFontFile, sameIdentity, underRoot,
+import { decodeFontFace, embeddingRefusal, faceKey, fontMetadata, openFontFile, readStableFontFile, sameIdentity, underRoot,
   type ConfiguredFontFace } from "./discovery.js";
 import { collectionOffsets, packSfnt, sfntTables } from "./sfnt.js";
 
@@ -204,11 +204,8 @@ export class LocalFontIndex {
         ? error.message.replace(/\.$/, "") : "file could not be read safely or changed after indexing");
       return undefined;
     }
-    const reason = !face.license.ok ? face.license.failure
-      : outputs.some(output => !face.permittedOutputs.includes(output)) ? "embedding rights do not allow the requested output"
-      : outputs.includes("html") && face.license.evidence.kind === "previewPrint" ? "preview-and-print rights do not allow a reusable HTML font"
-      : outputs.includes("pdf") && face.license.evidence.noSubsetting ? "embedding rights forbid PDF subsetting" : undefined;
-    if (reason) { this.warning(entry.family, reason.replace(/\.$/, "")); return undefined; }
+    const reason = embeddingRefusal(face, outputs);
+    if (reason) { this.warning(entry.family, reason); return undefined; }
     return Object.freeze({ ...face, source: "local" });
   }
 }

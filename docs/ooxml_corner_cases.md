@@ -7051,6 +7051,43 @@ not changed here; it is tracked as #1652.
 - `DocxDiffStyleParentTests.ParentChange_ArchivesBothPropertySlices`: the changed-parent path,
   with a run-property change as the control.
 
+## Embedded fonts (#1575)
+
+```xml
+<w:font w:name="Packaged Probe">
+  <w:embedRegular r:id="rIdF" w:fontKey="{6F1D2A10-3B4C-4D5E-8F60-718293A4B5C6}"/>
+</w:font>  <!-- word/fonts/font1.odttf: the program, its first 32 bytes XOR the reversed GUID -->
+```
+
+Measured in desktop Word 2024 (Windows, `ExportAsFixedFormat`, PDF fonts read with PyMuPDF) on the
+one-line "Tide tables for the north quay" document at 12pt. The probe font's glyphs advance 0.9em,
+so the embedded face prints the line 324.0pt wide.
+
+| Variant | Word prints | Line width | Docxodus before | Docxodus after |
+|---|---|---|---|---|
+| The issue's font (no name ID 4, OS/2 code pages 0) | Calibri | 145.33pt | Times New Roman | embedded face |
+| Same with a full name (ID 4) only | Arial | 156.1pt | substitute | embedded face |
+| Full name and Latin-1 code page bit | embedded face (`___WRD_EMBED_SUB_45`) | 324.0pt | substitute | embedded face |
+| No `w:fontKey`, plain program in the part | embedded face | 324.0pt | substitute | embedded face |
+| No `w:embedTrueTypeFonts` in settings | embedded face | 324.0pt | substitute | embedded face |
+| Wrong key, or part truncated to 200 bytes | Calibri | 145.33pt | substitute | warning, then fallback |
+| Four slots, advances 0.9/0.7/0.5/0.3em | each slot in its style | 118.8/67.2/60.0/54.0pt | substitute | each slot in its style |
+| A different same-name font installed per user (0.4em) | the installed font, every style | 144.0pt | (local: installed) | local, when enabled |
+
+**Analysis.** Word does use embedded fonts, whatever `w:embedTrueTypeFonts` says (that setting
+only controls saving), and binds each `w:embed*` slot to its style. Two of its rules are not
+OOXML's. First, an installed family beats the document's copy entirely: with only an installed
+regular, Word synthesized bold and italic from it rather than use the embedded bold and italic
+faces. Second, Windows will not load an embedded program without a full name (name ID 4), and
+font mapping rejects one whose OS/2 code page bits miss the `w:charset` it is used for, so the
+issue's synthetic font prints in a fallback. Real embeddings come from installed fonts that have
+both, so Docxodus does not reproduce those two load checks; it applies its own decoding and OS/2
+embedding-rights checks instead.
+
+**Code.** `npm-export/src/fonts/document.ts` reads and de-obfuscates the parts;
+`npm-export/src/fonts/resolver.ts` (`withDocumentFaces`, `withLocalFaces`) places them after an
+explicit directory and an enabled local family, and before substitution.
+
 ---
 ## An empty paragraph that only carries a section break (#1572)
 
