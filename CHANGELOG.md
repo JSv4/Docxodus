@@ -43,6 +43,8 @@ All notable changes to this project will be documented in this file.
 
 - Comparing documents whose default paragraph spacing differs no longer shrinks the text when the redline is rejected in Word. The tracked spacing change on a style now also archives that style's run properties, because Word's Reject All resets an unarchived slice to its built-in 10 pt. Docxodus's own accept and reject output is unchanged (#1576).
 
+- Text is kerned and ligated only where the document asks, on every rendering path: the layout stylesheet turns browser kerning and ligatures off, a run's resolved `w:kern` enables kerning from that size up (a minimum of `0` now means off, as in Word), and `w14:ligatures` enables its OpenType ligature sets. Mixed-run paragraphs no longer wrap later than Word because the browser kerned them, and the export's text fitter measures with the same features (#1562).
+
 - Standalone export condenses justified lines the way Word does in every paragraph structure, not only single-run paragraphs: mixed runs, hyperlinks, list items and fixed-grid table cells and paragraphs that state no line spacing take Word's compatibility-mode-15 line choices while keeping their HTML layout and paint. Word measurements show a bold word that widens the line can correctly keep the earlier break; left-aligned text and mode 14 are unchanged (#1550).
 
 - Raw XML insertion and replacement now refuse with `tracked_operation_unsupported` while recording changes, preserving the document and undo history instead of silently applying an unreviewable edit (#1625).

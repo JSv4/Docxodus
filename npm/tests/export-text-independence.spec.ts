@@ -12,6 +12,13 @@ for (const neighbor of ['plain', 'bold', 'table', 'list', 'link'] as FitNeighbor
     check(alignment, neighbor, undefined, alignment === 'justify' ? 'pier as' : 'Where');
 for (const owner of ['run', 'defaults', 'style'] as const)
   for (const halfPoints of [16, 28]) check('left', 'bold', { owner, halfPoints }, halfPoints === 16 ? 'Where Water' : 'Where');
+// Word kerns 12pt text from a w:kern minimum of 12pt (24), not 12.5pt or 0, and only on request,
+// whether the paragraph holds one run or several (#1562).
+for (const [halfPoints, ending] of [[24, 'Where Water'], [25, 'Where'], [0, 'Where']] as const)
+  check('left', 'bold', { owner: 'run', halfPoints }, ending);
+check('left', 'plain', undefined, 'Where', 'bold-last');
+check('left', 'plain', { owner: 'run', halfPoints: 2 }, 'Where Water', 'bold-last');
+check('justify', 'plain', undefined, 'pier as', 'bold-last');
 // Where Word ends line 1 of the justified paragraph in each placement (#1550), beside the
 // left-aligned and compatibility-mode-14 controls that keep natural spaces.
 for (const [target, justified, natural] of [
@@ -29,7 +36,8 @@ for (const [target, justified, natural] of [
 
 function check(alignment: keyof typeof fitTexts, neighbor: FitNeighbor,
   kern: Parameters<typeof textFitDocx>[2], ending: string, target: FitTarget = 'paragraph', mode = 15): void {
-  const name = target === 'paragraph' ? `with ${neighbor}, kerning ${JSON.stringify(kern)}` : `in a ${target} target, mode ${mode}`;
+  const name = target === 'paragraph' ? `with ${neighbor}, kerning ${JSON.stringify(kern)}`
+    : `in a ${target} target, mode ${mode}${kern ? `, kerning ${JSON.stringify(kern)}` : ''}`;
   test(`${alignment} PDF ${name}`, async ({ browser }) => {
     test.setTimeout(120_000);
     const result = await renderDocxArtifacts(textFitDocx(alignment, neighbor, kern, target, mode), { browser,
