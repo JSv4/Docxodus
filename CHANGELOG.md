@@ -23,6 +23,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The paginated view keeps a page's last double- or 1.5-spaced line when its text fits above the bottom margin, as Word does, instead of moving it to the next page because its extra spacing does not (#1571). Whole paragraphs and paragraph fragments share one fit height, the block's height less the multiple's leading below its last line's text, and a block that fits only by that height ends there. Spacing after is unchanged. The standalone export still keeps such a line off the page for uniform paragraphs whose text it lays out for its own painter.
 - HTML and PDF conversion no longer fail on a bare fractional border width (`w:sz` in paragraph, table and cell borders), `w:gridCol` width or section column spacing. These read through the same invariant measure parser as other twip values and keep its whole-number truncation; exponents, NaN, comma decimals and out-of-range values still fail. The `w:gridCol` failure was a 15.1.0 regression (#1622).
 
 - Raw XML insertion and replacement now refuse with `tracked_operation_unsupported` while recording changes, preserving the document and undo history instead of silently applying an unreviewable edit (#1625).

@@ -6763,6 +6763,35 @@ next paragraph. `DocxSession.InsertTable` refuses that shape (`SplitsPendingPara
 table after a paragraph holding only inserted runs (directly or in a hyperlink) is fine,
 because rejecting empties that paragraph and removes it.
 
+## The last line on a page needs only its text height (#1571)
+
+Word puts an auto multiple's extra leading below the text (#908) and lets it run past the bottom
+margin. The issue's fixtures (12pt Times New Roman, one-line paragraphs, `w:line="480"` or `"360"`,
+text area = 23 or 31 full pitches plus a remainder set through `w:pgMar/@w:bottom`) and 0.05pt
+variants were exported from Word 2024 (`ExportAsFixedFormat`) and counted on page 1.
+
+| Fixture (remainder) | Word 2024 | Docxodus before | Paginated view after |
+| --- | ---: | ---: | ---: |
+| double, 13 / 13.25 / 13.5 / 13.7pt | 23 | 23 | 23 |
+| double, 13.75 / 13.8 / 14 / 15 / 20 / 25pt | 24 | 23 | 24 (15pt tested) |
+| 1.5-spaced, 13.7pt / 13.75pt / 15pt | 31 / 32 / 32 | 31 at 15pt | 32 at 15pt |
+| one double-spaced paragraph of 1399 words, 13.5pt / 13.75pt / 15pt | 23 / 24 / 24 | 23 at 15pt | 24 at 15pt |
+| single + 10pt after, 13.75pt / 13.85pt / 15pt | 26 / 27 / 27 | 27 / 27 / 27 | unchanged |
+
+The threshold is the line's natural single-line height, unrounded: 2355/2048 x 12 = 13.7988pt for
+Times New Roman. With that value, and pitches of 2 x and 1.5 x it, every remainder in the table
+sorts the same way Word does. Bottom margins are whole twips, so no finer bisection is possible.
+Whole paragraphs and fragments split inside a paragraph follow the same rule. Spacing after is a
+separate allowance: a single-spaced line still needs its full 13.8pt (26 lines at 13.75pt). Docxodus
+fits 27 there, a separate sub-twip difference in its line height that this fix does not address.
+
+`PaginationEngine` measures `MeasuredBlock.trailingLeadingPt`, the leading below the last line's
+text, for converter runs that carry the automatic-spacing lift. It uses that one fit height for
+whole blocks and for fragment heads, and a block placed by it gets a declared
+`--docx-word-text-height`, so its box ends at the text. The export's Word-text pass removes the lift
+from uniform runs before pagination, and its pre-paint clip check would then see glyphs below the
+band. Those paragraphs keep the full-line test, and the export still prints 23 lines.
+
 ## Fractional whole-number measures truncate in Word (#1622)
 
 The schema types are whole numbers (`w:sz` is ST_EighthPointMeasure; `w:gridCol/@w:w`,
