@@ -16,6 +16,7 @@ internal sealed class AutomaticParagraphSpacing
     private readonly bool _enabled;
     private readonly Dictionary<XElement, (bool Eligible, int? List)> _facts = new();
     private readonly Dictionary<XElement, (XElement? Previous, XElement? Next)> _neighbors = new();
+    private readonly HashSet<XElement> _stories = new();
 
     internal AutomaticParagraphSpacing(WordprocessingDocument document)
     {
@@ -50,14 +51,15 @@ internal sealed class AutomaticParagraphSpacing
     {
         var own = Facts(paragraph);
         if (!own.Eligible || Story(paragraph) is not { } story) return "-";
-        if (!_neighbors.ContainsKey(paragraph))
+        if (_stories.Add(story))
         {
             var blocks = Blocks(story).ToList();
             for (int i = 0; i < blocks.Count; i++)
                 if (blocks[i].Name == W.p)
                     _neighbors[blocks[i]] = (i > 0 ? blocks[i - 1] : null, i + 1 < blocks.Count ? blocks[i + 1] : null);
         }
-        var (previous, next) = _neighbors[paragraph];
+        if (!_neighbors.TryGetValue(paragraph, out var neighbors)) return "-";
+        var (previous, next) = neighbors;
         // Word prints no automatic space at the start or end of the body or a table cell.
         if ((before ? previous : next) is not { } neighbor) return "0";
         if (neighbor.Name == W.tbl)

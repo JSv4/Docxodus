@@ -39,9 +39,10 @@ for (const legacy of [false, true]) for (const [contextual, implicitDefault] of 
 }
 
 for (const story of ['body', 'DrawingML', 'VML']) for (const entry of [
-  { name: 'first only', flags: [true, false, false, false], steps: [18, 21, 21] },
-  { name: 'second only', flags: [false, true, false, false], steps: [21, 18, 21] },
-  { name: 'inherited on with direct off', flags: [false, true, false, true], steps: [21, 18, 21], inherited: true },
+  // The 9pt after a flagged paragraph gives up still absorbs the next 6pt before (Word, #1553).
+  { name: 'first only', flags: [true, false, false, false], steps: [12, 21, 21] },
+  { name: 'second only', flags: [false, true, false, false], steps: [21, 12, 21] },
+  { name: 'inherited on with direct off', flags: [false, true, false, true], steps: [21, 12, 21], inherited: true },
   { name: 'all enabled control', flags: [true, true, true, true], steps: [12, 12, 12] },
   { name: 'all disabled control', flags: [false, false, false, false], steps: [21, 21, 21] },
 ]) {
