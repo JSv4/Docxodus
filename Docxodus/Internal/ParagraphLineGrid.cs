@@ -57,14 +57,22 @@ internal sealed class ParagraphLineGrid
     /// value. Word 2024 counts that line as the section's grid pitch, or 12pt without a line grid,
     /// whatever the font, also in cells and unsnapped paragraphs; a zero count keeps the twips (#1551).
     /// </summary>
-    internal static decimal? Spacing(XElement? spacing, XName lines, decimal? twips)
+    internal static decimal? Spacing(XElement? spacing, XName lines, decimal? twips) =>
+        Spacing(spacing, lines, twips, (string?)spacing?.Parent?.Parent?.Attribute(Unit));
+
+    /// <summary>The same, for a source paragraph's resolved spacing, with <see cref="UnitOf"/>'s pitch.</summary>
+    internal static decimal? Spacing(XElement? spacing, XName lines, decimal? twips, string? pitch)
     {
         if (!int.TryParse((string?)spacing?.Attribute(lines), NumberStyles.Integer, CultureInfo.InvariantCulture,
             out var hundredths) || hundredths <= 0) return twips;
-        var pitch = (string?)spacing?.Parent?.Parent?.Attribute(Unit);
         var points = pitch == null ? 12m : decimal.Parse(pitch[..^2], CultureInfo.InvariantCulture);
         return hundredths * points / 5m;
     }
+
+    /// <summary>The pitch a source paragraph's line-count spacing counts, or null for 12pt.</summary>
+    internal string? UnitOf(XElement paragraph) =>
+        paragraph.AncestorsAndSelf().FirstOrDefault(e => e.Parent?.Name == W.body) is { } block
+            ? _pitches.GetValueOrDefault(block) : null;
 
     internal static void AddStyle(XElement paragraph, Dictionary<string, string> style)
     {

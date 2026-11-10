@@ -3986,19 +3986,69 @@ Gaps are PDF baseline steps less 16pt.
 | Bordered paragraph (equals the explicit-280 control) | 14pt | 5pt → 14pt |
 | Paragraph holding a tracked run insertion | 14pt | 5pt → 14pt |
 | First paragraph of a header, then between header paragraphs | 0, then 14pt | 5pt (unchanged) |
-| `doNotUseHTMLParagraphAutoSpacing`: flags ignored, explicit 5pt kept | 5pt edges, **10pt** between | 5pt edges, 5pt between (unchanged) |
+| `doNotUseHTMLParagraphAutoSpacing`: flags ignored, explicit 5pt kept | 5pt edges, **10pt** between | 5pt edges, 5pt → 10pt between (next section) |
 
 `AutomaticParagraphSpacing` now finds each paragraph's neighbors in its body or table-cell block
 sequence (content controls and custom XML are transparent; bookmarks and other markup are skipped):
 no neighbor gives 0, a table gives 14pt. Frames, floating tables and tracked paragraph marks or
 rows keep their explicit values, as do headers, footers, notes and text boxes.
 
-Still open: the compatibility setting is not about the automatic value. With it on, Word *adds* space
-after and space before between any two paragraphs (explicit 14pt + 14pt gave 28pt), where the default
-takes the larger. Docxodus always takes the larger. Header and footer automatic spacing is unhandled.
+Still open: header and footer automatic spacing is unhandled.
 
 Tests: `HtmlAutomaticSpacingTests`, `DenseTextParagraphTests`, and
 `npm/tests/export-automatic-spacing.spec.ts`.
+
+### `w:doNotUseHTMLParagraphAutoSpacing` adds the two spaces (#1553)
+
+```xml
+<w:settings><w:compat><w:doNotUseHTMLParagraphAutoSpacing/></w:compat></w:settings>
+<!-- document.xml -->
+<w:p><w:pPr><w:spacing w:before="280" w:after="280"/></w:pPr><w:r><w:t>First</w:t></w:r></w:p>
+<w:p><w:pPr><w:spacing w:before="280" w:after="280"/></w:pPr><w:r><w:t>Second</w:t></w:r></w:p>
+```
+
+The setting (Word's "Don't use HTML paragraph auto spacing", written into files converted from
+Word 97-2003) does not change the automatic value. Word ignores both automatic flags and keeps the
+cascaded explicit values, and between two paragraphs it **adds** the first one's space after to the
+second one's space before, where it otherwise takes the larger. Measured in Word 2024 (November 2026)
+with the fixtures above: Times New Roman 12pt, exact 16pt lines, gap = PDF baseline step less 16pt.
+Docxodus is its own PDF export.
+
+| Boundary, under the setting | Word gap | Docxodus before → after |
+|---|---:|---:|
+| 14pt after, then 14pt before | 28pt | 14pt → 28pt |
+| 5pt + 5pt with both flags on, also between items of one list | 10pt | 5pt → 10pt |
+| Space after or before cascaded from `w:docDefaults` (10pt after, 3pt before) | 13pt | 10pt → 13pt |
+| Across a bookmark, a block content control or a continuous section break (14 + 14) | 28pt | 14pt → 28pt |
+| Section break onto a new page (14 + 14): space before at the top of the new page | 14pt | 14pt (unchanged) |
+| `w:pageBreakBefore` paragraph at the top of the page | 0 | 0 (unchanged) |
+| Next to a table, 5pt on each side | 5pt | 5pt (unchanged) |
+| First paragraph of the document or a cell, last of a cell (5pt explicit) | 5pt | 5pt (unchanged) |
+| Contextual 5pt after, then 14pt before (same style) | 14pt | 9pt → 14pt |
+| Contextual 14pt after, then 5pt before | 5pt | 0 → 5pt |
+| 5pt after, then contextual 14pt before | 5pt | 5pt (unchanged) |
+| Flags on, no values and no `w:pPrDefault` | 0 before, 8pt after | 0 (#1652) |
+
+So contextual spacing still removes the flagged paragraph's own space, but the space after it gives
+up no longer absorbs the next paragraph's space before. The last row is Word's own default paragraph
+spacing for a styles part without `w:pPrDefault` (#1652), not a property of this setting.
+
+`Internal/AutomaticParagraphSpacing.cs` resolves the setting once. For each paragraph whose original
+neighbor above, in the same body or cell, is an eligible paragraph, it records that paragraph's
+resolved space after before the markup is rewritten; after formatting assembly the value is added to
+the paragraph's own space before. A table, a frame, a tracked paragraph mark, or a section break whose
+next section is not continuous ends the sum. Every renderer, CSS and the paginator alike, collapses
+adjacent margins to the larger one, and `max(after, after + before)` is the sum, so no renderer
+changes. In a table cell the sum reads the space after of the paragraph rendered above, because a
+table style can set it and the style cascade read before assembly does not include table styles.
+The contextual rule then applies to the summed value, which gives the rows above.
+
+Known gap: a bordered paragraph keeps its own spacing inside its border box, where it does not
+collapse with the neighbor's, so under this setting the space after next to a bordered paragraph
+counts twice.
+
+Tests: `HtmlAutomaticSpacingTests` (`CompatibilitySpacingAddsTheSpaceAfterAbove`,
+`CompatibilitySpacingInACellAddsTheRenderedSpaceAfter`) and `npm/tests/export-automatic-spacing.spec.ts`.
 
 ### Contextual spacing belongs to each paragraph (#1553)
 
