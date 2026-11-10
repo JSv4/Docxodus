@@ -36,7 +36,10 @@ delivery/verification subsystems, and pagination. The AOT tier then moved
 `dotnet.native.wasm`: the compiled methods live there, while the assemblies keep their size
 (the IL bodies of AOT-compiled methods are zeroed in place, which is why they cost nothing
 after compression). The guardrail that matters is the brotli wire total, which
-`scripts/build-wasm.sh` prints and holds under a 5908 KiB budget. Flow page-field
+`scripts/build-wasm.sh` prints and holds under a 5912 KiB budget. Main after the section
+line-grid work (#1551) measured 6,049,876 bytes on CI runtime 10.0.15, 84 bytes over the
+prior 5908 KiB, covered by 4 KiB more; roots, dependencies and the AOT profile are unchanged.
+Before that, flow page-field
 forwarding (#1621) measured 6,047,829 bytes on CI runtime 10.0.14 versus 6,042,349
 on its base, a 5,480-byte increase. It exceeded the prior 5904 KiB limit by 2,133
 bytes, covered by 4 KiB of additional budget. The local runtime 10.0.9 build measured

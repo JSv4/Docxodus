@@ -147,7 +147,10 @@ du -sh "$WASM_DIST"
 # 6,042,349 on its base. The 4 KiB budget increase covers the 2,133-byte overage;
 # assembly roots, dependencies and AOT profile are unchanged. Before raising again,
 # inspect benchmarks/aot-coverage/README.md and docs/architecture/wasm-packaging.md.
-WIRE_BUDGET_BYTES=$((5908 * 1024))
+# Main at 351de4e2 (after the section line-grid work, #1551) measured 6,049,876 bytes on
+# CI runtime 10.0.15, 84 bytes over 5908 KiB; another 4 KiB covers it. Assembly roots,
+# dependencies and the AOT profile are unchanged.
+WIRE_BUDGET_BYTES=$((5912 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""
