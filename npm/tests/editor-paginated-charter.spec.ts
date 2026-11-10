@@ -50,8 +50,12 @@ const FOOTER_TAB_STOP_PX = 312;
  * 54 since #1151, measured: among other changes, consecutive numbered paragraphs keep their 12pt
  * spacing after, as in LibreOffice. The paginated view, which splits paragraphs, takes 49 pages
  * against LibreOffice's 48.
+ *
+ * 52 since #1565, measured: each line of a mixed paragraph takes its own text's height in any
+ * alignment and around line breaks, and a list marker no longer sets every line of its item.
+ * Desktop Word 2024 prints this file on 49 pages.
  */
-const PAGES = 54;
+const PAGES = 52;
 const FOOTNOTE_CITATIONS = 94;
 const SECTIONS = 4;
 /** Body-scope blocks the editor makes addressable. Header, footer and note blocks are not these. */

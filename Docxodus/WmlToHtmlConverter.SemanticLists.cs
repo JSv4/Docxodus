@@ -284,9 +284,11 @@ namespace Docxodus
             return text != null && marker == text + "." ? type : null;
         }
 
-        /// <summary>The innermost marker span: the one holding the marker text.</summary>
+        /// <summary>The innermost marker span holding the marker text, not the suffix tab after it: a
+        /// mapped symbol bullet sets its own fallback family there (#1565).</summary>
         private static XElement? MarkerTextSpan(XElement wrapper) =>
-            wrapper.Descendants(Xhtml.span).LastOrDefault(s => (string?)s.Attribute("data-list-marker") == "true");
+            wrapper.Descendants(Xhtml.span).LastOrDefault(s => (string?)s.Attribute("data-list-marker") == "true" &&
+                !string.IsNullOrWhiteSpace(s.Value));
 
         /// <summary>A span's text formatting, each property falling back to the item's own and then
         /// to the CSS initial value; with no span, the item's own formatting.</summary>

@@ -6542,6 +6542,76 @@ within the host paragraph, excludes hidden text and conservatively excludes web-
 in both views. It is cached once per source paragraph to avoid quadratic scans. Mixed visible
 fonts and blank-break baseline policy remain outside this partial resolution.
 
+## A line's height comes from the text on it: breaks, list numbers, alignment (#1565)
+
+Desktop Word 2024 printed every fixture attached to #1565, plus variants, in Times New Roman,
+Arial and Courier New (the metric twins of the Liberation fonts in the issue's generators).
+Word puts baselines on a 0.12pt (1/600in) grid; steps are baseline to baseline, in points.
+Docxodus figures are public PDF exports, whose glyph origins round to 0.75pt. Two of the
+reproducers, under a 12pt Times New Roman default with `<w:spacing w:line="240" w:lineRule="auto"/>`:
+
+```xml
+<w:p><w:r><w:t>First line at twelve points.</w:t></w:r>
+  <w:r><w:rPr><w:sz w:val="16"/></w:rPr><w:br/></w:r><w:r><w:rPr><w:sz w:val="16"/></w:rPr><w:br/></w:r>
+  <w:r><w:t>Third line after an empty line.</w:t></w:r></w:p>
+<!-- numbering.xml: the level's number is 18pt over 12pt item text -->
+<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:rPr><w:sz w:val="36"/></w:rPr></w:lvl>
+```
+
+| Fixture | Word | Docxodus before | Docxodus after |
+| --- | --- | --- | --- |
+| 16pt word opening 9pt text | 11.88 out of the tall line, then 10.32–10.44 | 12.07, then 10.50/9.75 | Unchanged |
+| The same, centered or justified | 11.88, then 10.32–10.44 | 18.00–18.75 on every line | 12.07, then 10.50/9.75 |
+| 16pt word ending 9pt text | 16.92 into the tall line, 11.88 out | 16.50, 12.08 | Unchanged |
+| 16pt lead word, 1.15 multiple | 14.64, then 11.88–12.00 | 14.31, then 12.00 | Unchanged |
+| Two 8pt breaks between 12pt lines | 23.04 across the empty line | 27.75 | 23.25 |
+| Two 20pt breaks, then a 20pt break ending a text line | 36.84, then 13.80 | 45.75, then 23.25 | 36.75, then 13.50 |
+| Two 8pt breaks, 1.15 multiple | 26.40, then 15.96 | 33.00, then 17.25 | 26.25, then 15.75 |
+| 9pt text after breaks, 16pt lead word | 11.88, then 10.44 | 18.00, then 18.75 | 12.07, then 10.50 |
+| Two 12pt breaks (control) | 27.60 | 27.75 | Unchanged |
+| 18pt list number, 12pt text | 19.44 into the item, 13.80 out of its first line | 19.55, then 15.00 | 19.50, then 13.50–14.25 |
+| 18pt list number, 1.15 multiple | 21.48 into the item, 15.84 out | 21.75, then 18.00 | 21.75, then 15.75 |
+| 18pt list number, 16pt minimum | 19.44 into the item, 15.96 out | Not captured | 19.50, then 15.75–16.50 |
+| 18pt list number, 22pt minimum | 21.96 on every line | Not captured | 21.75–22.50 |
+| 18pt list number, double spacing | 33.24 into the item, 27.60 out | Not captured | 33.00–33.75, then 27.00–27.75 |
+| 16pt "•" bullet in the 12pt text's Arial | 17.52–17.64 per item, 13.80 when wrapped | 17.25–18.75 | 17.25–18.00 |
+| 12pt or 8pt list number (controls) | 13.80 | 13.50–14.25 | Unchanged |
+
+A line's height is its text's largest ascent, line gap included, plus its largest descent, and
+an automatic multiple scales that. Three rules complete the picture. A generated list number
+raises only its line's ascent: 19.44 is the previous descent plus the 18pt ascent, but the step
+out of that line is the 12pt text's 13.80, and at 1.15 the extra 2.07 is 0.15 of the text's own
+13.80, not of the taller line; double spacing adds the same 13.80 below the text, so the steps
+are 27.60 out and 33.24 into the next item. A minimum is applied to the line with the number's
+ascent included: 16pt still yields 19.44, and 22pt holds every line at 22. The same holds for a
+bullet in the text's own face, so the rule is the marker's, not the font's: a 16pt Arial "•" over
+12pt Arial gives 17.55, its 15.01pt ascent plus the text's 2.54pt descent, not 18.40. A break run
+sizes a line only when nothing else is on it: the empty line between two 8pt breaks is 9.20 tall
+(2.60 + 9.20 + 11.20 = 23.00 before Word's rounding to 23.04), but a 20pt break
+ending a line of 12pt text leaves the next step at 13.80. Alignment changes nothing. The empty
+14pt run, the 12pt space among 10pt text and the larger paragraph mark already matched Word.
+
+`prepareMixedLineHeights` (`npm/src/line-metrics.ts`), the paginated and export pass that gives
+each visual line its own height, refused centered, right and justified paragraphs and any
+paragraph with a `<br>` or a bullet beyond Latin (every "•"), which kept the converter's CSS strut
+(the largest run) under every line. It also counted a list number's descent. It now admits any
+alignment, a marker glyph beyond Latin (only its font's ascent is used) and the converter's breaks,
+which stay inside their runs followed by a direction mark: that mark sizes a line only when the
+line holds nothing else. A marker's ascent is kept apart from the text's and raises the line
+outside the multiple. `DefineStrutFont` (`WmlToHtmlConverter.cs`) also stopped taking the
+paragraph font from a generated marker, the first run of the largest size, so a larger number
+no longer sizes every line of its item where CSS alone lays the paragraph out; a mapped symbol
+bullet keeps the generic family it rendered in before. Flow HTML, tables, notes, running stories,
+fields and columns keep the CSS approximation, whose strut is still the largest text run.
+
+A 46-line paragraph of 12pt lines and empty 8pt break lines breaks after its 38th line in both
+Word and the export, and every step on both pages matches. Its first export failed the offline
+PageMap check: an empty 8pt line is 12.265638px, which CSS serializes as 12.2656px, one 1/64px
+layout unit shorter, so the saved page's twelve empty lines came back 0.14pt shorter than the
+live fragment. Line boxes now carry only the six significant digits CSS keeps. One difference remains: after
+a paragraph's final break, Word sizes the last, empty line by the paragraph mark (13.80 for a 12pt
+mark after an 8pt break), where the export uses the break's size.
+
 ## Character width was ignored inside fixed table cells (#1564)
 
 Wrapping the same uniform paragraph in a fixed 468pt table cell discarded its character

@@ -221,7 +221,16 @@ function applyUniformLineMinimums(paragraphs: HTMLElement[], ratioFor: (style: P
   return changed;
 }
 
-/** Give mixed ordinary text one shared ascent, descent and spacing floor per visual line. */
+/** The converter's direction mark after a `<br>`: it holds an otherwise empty line's font. */
+const BREAK_CARRIER = /^\u200e+$/u;
+
+/**
+ * Give mixed ordinary text one shared ascent, descent and spacing floor per visual line (#1565).
+ * Word's line is its text's largest ascent plus largest descent, and an automatic multiple of that.
+ * A generated list marker only raises its own line's ascent: Word adds neither its descent nor a
+ * multiple of it. A break's direction mark sizes only a line that holds nothing else, so an empty
+ * line made by `w:br` takes the break's own font.
+ */
 export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => void): number {
   const document = root.ownerDocument, view = document.defaultView!;
   const ratioFor = naturalLineHeightRatios(document), probeSize = fontProbeSize(document);
@@ -266,13 +275,14 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
     if (Number(section?.dataset.cols ?? 1) > 1 || section?.querySelector(
       '[data-docx-text-frame], [data-docx-wrap-text], [data-docx-edge-picture]')) continue;
     if (style.direction !== 'ltr' || style.writingMode !== 'horizontal-tb'
-      || !['left', 'start'].includes(style.textAlign) || multiple < 1
+      || multiple < 1
       || Number.parseFloat(style.getPropertyValue('--docx-line-grid')) > 0
       || Number.parseFloat(style.getPropertyValue('--docx-exact-line-height')) > 0
-      || /[^\u0020-\u024f]/u.test(paragraph.textContent ?? '')
       || Array.from(paragraph.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim())) continue;
     const marker = paragraph.firstElementChild?.getAttribute('data-list-marker') === 'true'
       ? paragraph.firstElementChild : null;
+    // A bullet's glyph may lie beyond Latin: only its font's ascent counts, and its own line height is zero.
+    if (/[^\u0020-\u024f\u200e]/u.test((paragraph.textContent ?? '').slice(marker?.textContent?.length ?? 0))) continue;
     if (paragraph.querySelector('[data-field], [data-footnote-id], [data-endnote-id], [data-comment-id], '
       + '[data-docx-fit-text-group], [data-docx-word-line], [data-docx-ruby]')) continue;
     // The converter's number and suffix tab occupy two baseline-aligned flex items.
@@ -293,7 +303,11 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
         sides: [css.left, css.right], bottom: css.bottom, float: css.cssFloat };
     });
     const paragraphFont = owned ? undefined : measure(style, Number.parseFloat(style.fontSize));
-    if (!runs.length || paragraph.querySelector('*:not(span)') || fonts.some(f =>
+    // Converter line breaks stay inside their run, followed by the run's direction mark.
+    const contained = (child: Element) => child.matches('br[data-docx-break]')
+      || owned && child.hasAttribute('data-docx-line-metric');
+    if (!runs.length || paragraph.querySelector('*:not(span):not(br[data-docx-break])')
+      || Array.from(paragraph.children).some(child => child.localName === 'br') || fonts.some(f =>
       !(f.size > 0) || f.transform !== 'none' || !['static', 'relative'].includes(f.position)
       || f.float !== 'none' || f.sides.some(side => !['auto', '0px'].includes(side))
       || !['auto', '0px'].includes(f.bottom) && !(f.position === 'relative'
@@ -307,7 +321,7 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
       || f.display !== (f.run === marker ? 'inline-flex' : f.run.parentElement === marker ? 'block'
         : marker?.contains(f.run) && f.run.hasAttribute('data-docx-tab') ? 'inline-block' : 'inline')
       || f.align !== 'baseline'
-      || !marker?.contains(f.run) && f.run.children.length > (owned ? f.run.querySelectorAll('[data-docx-line-metric]').length : 0))
+      || !marker?.contains(f.run) && Array.from(f.run.children).some(child => !contained(child)))
       || !owned && style.lineHeight !== 'normal'
         && !(minimum >= 14 * 4 / 3 && Math.abs(Number.parseFloat(style.lineHeight) - minimum) < .02)
       || !owned && new Set(fonts.map(f => `${f.size}|${f.family}|${f.weight}|${f.style}`)).size < 2) continue;
@@ -322,7 +336,8 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
       const pieces: Array<{ node: Text; start: number; end: number; left: number; width: number; top: number }> = [];
       const walker = document.createTreeWalker(paragraph, view.NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null)
-        for (const match of node.data.matchAll(/\S+/gu)) {
+        // The marker is measured by its font alone: its glyph may render in a fallback face.
+        for (const match of marker?.contains(node) ? [] : node.data.matchAll(/\S+/gu)) {
           const range = document.createRange();
           range.setStart(node, match.index); range.setEnd(node, match.index + match[0].length);
           if (range.getClientRects().length !== 1) return undefined;
@@ -349,13 +364,15 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
       paragraph.style.setProperty(property, style.getPropertyValue(property));
     paragraph.style.fontSize = '0'; paragraph.style.lineHeight = '0';
     type Piece = { node: Text; start: number; end: number; left: number; width: number; run: HTMLElement };
-    type Line = { pieces: Piece[]; ascent: number; descent: number; baseline: number };
+    // A marker or a break's direction mark keeps its own maxima: neither sizes a line of text.
+    type Extent = { ascent: number; descent: number };
+    type Line = Extent & { pieces: Piece[]; baseline: number; marker: number; carrier: Extent };
     const lines: Line[] = [];
     let simple = true;
     const walker = document.createTreeWalker(paragraph, view.NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
       const run = node.parentElement!, metric = metrics.get(run);
-      if (!metric) continue;
+      if (!metric || marker?.contains(run)) continue;
       for (const match of node.data.matchAll(/\S+/gu)) {
         checkpoint?.();
         const range = document.createRange();
@@ -364,21 +381,34 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
         if (range.getClientRects().length !== 1) simple = false;
         const baseline = box.top + metric.offset;
         if (!lines.length || Math.abs(baseline - lines.at(-1)!.baseline) > .05)
-          lines.push({ pieces: [], ascent: 0, descent: 0, baseline });
+          lines.push({ pieces: [], ascent: 0, descent: 0, baseline, marker: 0, carrier: { ascent: 0, descent: 0 } });
         const line = lines.at(-1)!;
         line.pieces.push({ node, start: match.index, end: match.index + match[0].length, left: box.left, width: box.width, run });
-        line.ascent = Math.max(line.ascent, metric.ascent); line.descent = Math.max(line.descent, metric.descent);
+        const extent = BREAK_CARRIER.test(match[0]) ? line.carrier : line;
+        extent.ascent = Math.max(extent.ascent, metric.ascent); extent.descent = Math.max(extent.descent, metric.descent);
       }
     }
     for (const run of runs) run.style.lineHeight = '0';
+    // The marker opens the first line, which it raises by its font's ascent alone.
+    const markerText = document.createTreeWalker(marker ?? paragraph, view.NodeFilter.SHOW_TEXT);
+    for (let node = marker && markerText.nextNode(); node && lines.length; node = markerText.nextNode())
+      if (node.textContent?.trim()) lines[0].marker = Math.max(lines[0].marker, metrics.get(node.parentElement!)?.ascent ?? 0);
+    // A line holding only a break's direction mark takes that break's font.
+    for (const line of lines) if (!line.descent) Object.assign(line, line.carrier);
+    // Lengths keep only the six significant digits CSS serializes, so a saved page lays out
+    // alike: 12.265638px reopened as 12.2656px is one 1/64px layout unit shorter.
+    const css = (value: number) => Number(value.toPrecision(6));
     const inserted: HTMLElement[] = [];
     for (const line of [...lines].reverse()) {
       const last = line.pieces.at(-1)!;
-      const natural = line.ascent + line.descent;
-      const height = minimum ? Math.max(minimum, natural) : natural * multiple;
+      const text = line.ascent + line.descent;
+      // The marker raises its line's ascent outside any multiple of the text's own height.
+      const natural = css(Math.max(line.ascent, line.marker) + line.descent);
+      const height = css(minimum ? Math.max(minimum, natural) : natural + text * (multiple - 1));
       // Word puts minimum-height surplus above the baseline; automatic multiples
       // put their surplus below it. Both retain the font's natural descent.
-      const descent = line.descent + (minimum ? 0 : height - natural);
+      line.descent = css(line.descent);
+      const descent = css(line.descent + (minimum ? 0 : height - natural));
       const range = document.createRange(); range.setStart(last.node, last.end); range.collapse(true);
       const strut = document.createElement('span');
       strut.dataset.docxLineMetric = minimum ? 'minimum' : 'auto';
@@ -404,7 +434,10 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
       const baseline = box.bottom + Number.parseFloat(strut.style.verticalAlign);
       return line.pieces.every(() => Math.abs(observed[pieceIndex++]?.baseline - baseline) < .05);
     });
-    const valid = pristine && simple && lines.length > 0 && ownsLines && membership && sourceText === paragraph.textContent && observed.length === pristine.length
+    const markerBox = marker?.getBoundingClientRect(), firstLine = inserted[0]?.getBoundingClientRect();
+    const markerOnFirstLine = !markerBox || !!firstLine
+      && markerBox.top >= firstLine.top - .05 && markerBox.bottom <= firstLine.bottom + .05;
+    const valid = pristine && simple && lines.length > 0 && lines.every(line => line.descent > 0) && markerOnFirstLine && ownsLines && membership && sourceText === paragraph.textContent && observed.length === pristine.length
       && pristine.every((piece, index) => Math.abs(piece.left - observed[index].left) < 1 / 32
         && Math.abs(piece.width - observed[index].width) < 1 / 32)
       && inserted.every((strut, index) => index === 0 || strut.getBoundingClientRect().top > inserted[index - 1].getBoundingClientRect().top);

@@ -8461,19 +8461,22 @@ namespace Docxodus
         /// size, so the strut is never taller than that run's own line (issue #940). Taking the family from the
         /// paragraph mark and the size from the largest run paired, say, the default Calibri with the 12 pt of
         /// Arial runs, and the strut outgrew every line. A paragraph with no runs keeps its mark's font.
+        /// A generated list marker sits on its first line only, so it sizes the paragraph only when
+        /// nothing else does (#1565): a larger number, or a bullet in a symbol font, set every line.
         /// </summary>
         private static void DefineStrutFont(Dictionary<string, string> style, XElement paragraph)
         {
             XElement? strutRun = null;
             decimal? sz = null;
-            foreach (var run in paragraph.DescendantsTrimmed(W.txbxContent).Where(e => e.Name == W.r))
+            // Empty text does not size a nonempty paragraph. Blank paragraphs retain
+            // their existing mark/placeholder metrics, as do structural runs.
+            var runs = paragraph.DescendantsTrimmed(W.txbxContent).Where(e => e.Name == W.r &&
+                ((bool?)paragraph.Attribute(PtOpenXml.EmptyParagraph) == true ||
+                 !(e.Elements().All(c => c.Name == W.rPr || (c.Name == W.t && c.Value.Length == 0)) ||
+                   IsOrdinarySpaceRun(e)))).ToList();
+            var content = runs.Where(run => run.Attribute(PtOpenXml.ListItemRun) == null).ToList();
+            foreach (var run in content.Count > 0 ? content : runs)
             {
-                // Empty text does not size a nonempty paragraph. Blank paragraphs retain
-                // their existing mark/placeholder metrics, as do structural runs.
-                if ((bool?)paragraph.Attribute(PtOpenXml.EmptyParagraph) != true &&
-                    (run.Elements().All(e => e.Name == W.rPr || (e.Name == W.t && e.Value.Length == 0)) ||
-                     IsOrdinarySpaceRun(run)))
-                    continue;
                 var runSize = GetFontSize(run);
                 if (runSize != null && (sz == null || runSize > sz))
                 {
@@ -8653,9 +8656,10 @@ namespace Docxodus
 
             // List-marker glyphs in a symbol font (e.g. Word's default bullet U+F0B7 in Symbol, or
             // U+F0A7 in Wingdings) render as a blank box without the proprietary font installed. Map
-            // them to their Unicode equivalents and drop the symbol font so they render in the page's
-            // normal font. Scoped to markers (FormattingAssembler's ListItemRun) so body-text symbol
-            // runs are untouched; if nothing maps, the original text + font are left as-is.
+            // them to their Unicode equivalents and drop the symbol face, keeping the rest of its
+            // stack, so they render in the generic family the font declared. Scoped to markers
+            // (FormattingAssembler's ListItemRun) so body-text symbol runs are untouched; if nothing
+            // maps, the original text + font are left as-is.
             object content;
             if (isListMarker && style.TryGetValue("font-family", out var markerFont) &&
                 Internal.SymbolFontMapper.IsSymbolFont(markerFont))
@@ -8668,7 +8672,14 @@ namespace Docxodus
                     if (mapped != e.Value) mappedAny = true;
                     return (object)new XText(mapped);
                 }).ToList();
-                if (mappedAny) style.Remove("font-family");
+                if (mappedAny)
+                {
+                    // The paragraph no longer takes its font from this marker (#1565), so the glyph
+                    // keeps the generic family it fell back to before rather than the text's font.
+                    var fallback = Internal.SymbolFontMapper.FallbackFamilies(markerFont);
+                    if (fallback == null) style.Remove("font-family");
+                    else style["font-family"] = fallback;
+                }
             }
             else
             {

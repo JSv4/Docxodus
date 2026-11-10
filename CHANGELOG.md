@@ -23,6 +23,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Each line of a mixed-size paragraph is as tall as the text on it in paginated output and PDF export, now also for centered, right-aligned and justified paragraphs and for lines around `w:br` breaks. An empty line made by a break takes the break's own size. A larger list number or bullet raises only its own line's ascent, as Word does, without its descent or a multiple of it, and no longer sets the paragraph font that every line of the item was sized by; bulleted paragraphs are now measured per line too. Per-line heights keep the precision CSS serializes, so such paragraphs continuing on the next page pass the export's offline PageMap check. Steps match desktop Word 2024 prints within the PDF's 0.75pt rounding (#1565).
+
 - HTML and PDF conversion no longer fail on a bare fractional border width (`w:sz` in paragraph, table and cell borders), `w:gridCol` width or section column spacing. These read through the same invariant measure parser as other twip values and keep its whole-number truncation; exponents, NaN, comma decimals and out-of-range values still fail. The `w:gridCol` failure was a 15.1.0 regression (#1622).
 
 - Raw XML insertion and replacement now refuse with `tracked_operation_unsupported` while recording changes, preserving the document and undo history instead of silently applying an unreviewable edit (#1625).

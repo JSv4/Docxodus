@@ -2444,9 +2444,55 @@ public class HtmlConversionOpsTests
         Assert.Contains("font-family: 'Calibri'", style);
     }
 
+    // Issue #1565: a generated list marker sits on its item's first line only. A larger number, or Word's
+    // default bullet in Symbol (the first run of the largest size), gave the <p> its font, a floor under every
+    // line of the item. The mapped bullet keeps the generic family it rendered in when it was the strut.
+    [Theory]
+    [InlineData("decimal", "%1.", null, "36", "18pt", "Calibri")]
+    [InlineData("bullet", "", "Symbol", "24", "12pt", "serif")]
+    [InlineData("decimal", "%1.", null, null, "11pt", "Calibri")]
+    public void HCO102_ListMarker_DoesNotSizeTheParagraphStrut(string format, string text,
+        string? markerFont, string? markerSize, string glyphSize, string glyphFamily)
+    {
+        var level = new Wp.Level(new Wp.StartNumberingValue { Val = 1 },
+            new Wp.NumberingFormat { Val = format == "bullet" ? Wp.NumberFormatValues.Bullet : Wp.NumberFormatValues.Decimal },
+            new Wp.LevelText { Val = text },
+            new Wp.PreviousParagraphProperties(new Wp.Indentation { Left = "720", Hanging = "360" }),
+            new Wp.NumberingSymbolRunProperties(new DocumentFormat.OpenXml.OpenXmlElement?[]
+            {
+                markerFont == null ? null : new Wp.RunFonts { Ascii = markerFont, HighAnsi = markerFont },
+                markerSize == null ? null : new Wp.FontSize { Val = markerSize },
+            }.OfType<DocumentFormat.OpenXml.OpenXmlElement>())) { LevelIndex = 0 };
+        var paragraph = ConvertParagraph(new Wp.Paragraph(
+            new Wp.ParagraphProperties(new Wp.NumberingProperties(
+                new Wp.NumberingLevelReference { Val = 0 }, new Wp.NumberingId { Val = 1 })),
+            new Wp.Run(new Wp.RunProperties(new Wp.RunFonts { Ascii = "Arial", HighAnsi = "Arial" },
+                new Wp.FontSize { Val = "24" }), new Wp.Text("Item text"))),
+            new Wp.Numbering(new Wp.AbstractNum(level) { AbstractNumberId = 0 },
+                new Wp.NumberingInstance(new Wp.AbstractNumId { Val = 0 }) { NumberID = 1 }));
+        var style = (string?)paragraph.Attribute("style") ?? string.Empty;
+        var glyph = paragraph.Descendants().First(e => (string?)e.Attribute("data-list-marker") == "true"
+            && e.Elements().Any() == false && e.Value.Length > 0);
+
+        Assert.Contains("font-family: 'Arial'", style);
+        Assert.Contains("font-size: 12pt", style);
+        Assert.Contains($"font-size: {glyphSize}", (string?)glyph.Attribute("style"));
+        Assert.Equal(glyphFamily, FontFamily(glyph));
+    }
+
+    /// <summary>The primary family an element renders in: its own declaration or its nearest ancestor's.</summary>
+    private static string? FontFamily(XElement element) => element.AncestorsAndSelf()
+        .Select(e => ((string?)e.Attribute("style"))?.Split(';').Select(d => d.Trim())
+            .FirstOrDefault(d => d.StartsWith("font-family:", StringComparison.Ordinal)))
+        .FirstOrDefault(d => d != null)?["font-family:".Length..].Split(',')[0].Trim().Trim('\'');
+
     /// <summary>Converts one paragraph whose mark has no run properties, under a Calibri 11 pt default, and
     /// returns the &lt;p&gt;'s inline style.</summary>
-    private static string ParagraphStyle(Wp.Paragraph paragraph)
+    private static string ParagraphStyle(Wp.Paragraph paragraph) =>
+        (string?)ConvertParagraph(paragraph).Attribute("style") ?? string.Empty;
+
+    /// <summary>Converts one paragraph, with optional numbering definitions, and returns its &lt;p&gt;.</summary>
+    private static XElement ConvertParagraph(Wp.Paragraph paragraph, Wp.Numbering? numbering = null)
     {
         using var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -2460,12 +2506,13 @@ public class HtmlConversionOpsTests
                             new Wp.RunFonts { Ascii = "Calibri", HighAnsi = "Calibri", ComplexScript = "Calibri" },
                             new Wp.FontSize { Val = "22" }))));
             main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            if (numbering != null)
+                main.AddNewPart<NumberingDefinitionsPart>().Numbering = numbering;
             main.Document.Save();
         }
 
         var html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions { FabricateCssClasses = false });
-        var p = XElement.Parse(html).Descendants().Single(e => e.Name.LocalName == "p");
-        return (string?)p.Attribute("style") ?? string.Empty;
+        return XElement.Parse(html).Descendants().Single(e => e.Name.LocalName == "p");
     }
     // Issues #941 and #948: Word grows a line to make room for a raised run (w:position > 0), moving the line's
     // baseline down by the raise, and for a lowered run (w:position < 0), growing the line downward by the drop.
