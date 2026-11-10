@@ -21,6 +21,7 @@ for (const mode of ['flow', 'fitting', 'unlinked', 'image', 'cross-page', 'tab']
       if (mode === 'tab') expect(text.match(/CedarClosing/g)).toHaveLength(1);
       expect(text.match(/Alder\d+/g)).toEqual(Array.from({ length: 70 }, (_, i) => `Alder${String(i).padStart(3, '0')}`));
     } finally { await task.destroy(); }
+    expect(result.renderReport.warnings.filter(warning => warning.code === 'linked_textbox_overflow')).toEqual([]);
     expect(result.pageMap.pages).toHaveLength(mode === 'cross-page' ? 2 : 1);
     await page.setContent(result.html!);
     if (mode === 'image') {
@@ -47,3 +48,27 @@ for (const mode of ['flow', 'fitting', 'unlinked', 'image', 'cross-page', 'tab']
     } else if (mode === 'fitting') expect(values[1].text?.trim()).toBe('');
   });
 }
+
+// Word 2024 shows what a linked story's frames hold and hides the rest; it does not refuse the
+// document (issue #1558). Export keeps the hidden text in the last frame and warns about it.
+test('a linked story longer than its frames hides the rest in its last frame', async ({ browser, page }) => {
+  test.setTimeout(120_000);
+  const result = await renderDocxArtifacts(linkedTextBoxDocx('overflow'), { browser, outputs: ['html', 'pdf'],
+    reviewProfile: 'markup', commentProfile: 'hidden', timeoutMs: 120_000 });
+  const warnings = result.renderReport.warnings;
+  const overflow = warnings.filter(warning => warning.code === 'linked_textbox_overflow');
+  const hidden = warnings.filter(warning => warning.code === 'source_text_clipped').map(warning => warning.anchorId);
+  expect(overflow).toHaveLength(1);
+  expect(hidden.length).toBeGreaterThan(0);
+  const mapped = new Set(result.pageMap.fragments.map(fragment => fragment.anchorId));
+  expect(mapped.has(overflow[0].anchorId!)).toBe(true);
+  expect(hidden.filter(anchorId => mapped.has(anchorId!))).toEqual([]);
+  await page.setContent(result.html!);
+  const frames = await page.locator('.page-box [data-docx-textbox]').evaluateAll(boxes => boxes.map(box => ({
+    words: box.textContent?.match(/Alder\d+/g) ?? [], overflow: box.scrollHeight - box.clientHeight })));
+  expect(frames).toHaveLength(2);
+  expect(frames.flatMap(frame => frame.words))
+    .toEqual(Array.from({ length: 70 }, (_, i) => `Alder${String(i).padStart(3, '0')}`));
+  expect(frames[0].overflow).toBeLessThanOrEqual(1);
+  expect(frames[1].overflow).toBeGreaterThan(1);
+});

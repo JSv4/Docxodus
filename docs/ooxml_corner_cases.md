@@ -4148,6 +4148,30 @@ A header row (`w:tblHeader`) repeats at the top of each page the table continues
 `w:hRule` (reported for Word in issue #1171; not yet measured here). Docxodus repeated no header row,
 whatever its rule, before that issue.
 
+## A linked text-box story longer than its frames: Word hides the rest (issue #1558)
+
+```xml
+<!-- frame 1 (144pt x 72pt, a:noAutofit) owns the story -->
+<wps:txbx id="37"><w:txbxContent><w:p><w:r><w:t>Alder000 … Alder199</w:t></w:r></w:p></w:txbxContent></wps:txbx>
+<!-- frame 2 (same size) continues it -->
+<wps:linkedTxbx id="37" seq="1"/>
+```
+
+| Fixture (Word 2024, its own PDF) | Word | Docxodus before | Docxodus after |
+|---|---|---|---|
+| one 200-word paragraph, two frames | frame 1 shows Alder000-007, frame 2 Alder008-015; the rest is not drawn; no error | `Linked text-box content does not fit its declared continuation frames` | frames show Alder000-017; the rest is clipped in frame 2; `linked_textbox_overflow` warning |
+| five 6-word paragraphs, two frames | Alder000-013 shown; paragraphs 4 and 5 not drawn | same failure | Alder000-015 shown; paragraphs 4 and 5 hidden, each with `source_text_clipped` |
+| three 4-word paragraphs (control) | all 12 words shown | exports | unchanged, no warning |
+| a single fixed box with the 200 words (control) | 8 words shown, the rest hidden | exports | unchanged |
+
+Word treats the chain's last frame like a single fixed text box: what does not fit is hidden.
+Docxodus had refused the document because a partly visible paragraph still has a PageMap fragment,
+so the map alone cannot show that its end is hidden. `flowLinkedTextBoxes` (`npm/src/pagination.ts`)
+now appends the rest of the story to the last frame and marks it `data-docx-textbox-overflow`; the
+PageMap admits a paragraph wholly outside that frame (`hiddenPastLinkedStoryEnd`), and the export
+names the first hidden paragraph in a `linked_textbox_overflow` warning. The one- or two-word
+differences in how much each frame holds are line-fitting differences, not part of this rule.
+
 ## Tables: nothing separates a table from the block above it (issue #1244)
 
 Word starts a table's first row where the block above it ends. A paragraph's own after-spacing is the

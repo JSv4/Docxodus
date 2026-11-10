@@ -677,6 +677,16 @@ function clippedAwayByExactRow(element: HTMLElement, rect: DOMRect): boolean {
   return false;
 }
 
+/**
+ * Whether `element` (layout box `rect`) lies wholly outside the last frame of a linked text-box
+ * story that cannot hold the story, where Word hides it too (issue #1558).
+ */
+function hiddenPastLinkedStoryEnd(element: HTMLElement, rect: DOMRect): boolean {
+  const frame = element.parentElement?.closest('[data-docx-textbox-overflow="true"]')?.getBoundingClientRect();
+  return frame !== undefined && (rect.top >= frame.bottom || rect.bottom <= frame.top
+    || rect.left >= frame.right || rect.right <= frame.left);
+}
+
 /** A blank paragraph outside its fixed source text box's painted area has no line to map. */
 function blankLineClippedByTextBox(view: Window, element: HTMLElement, rect: DOMRect, page: DOMRect): boolean {
   if (!rendersOnlyItsLine(element) || !(rect.height > 0) || rect.width < 0) return false;
@@ -980,6 +990,7 @@ export class PaginationEngine {
   private sourceTextPlacement = new Map<string, { identity: string; bounds: number[] }>();
   private lastClippedTextAnchors: string[] = [];
   private lastClippedTableContentAnchors: string[] = [];
+  private linkedTextBoxOverflowAnchors: string[] = [];
   private state: "ready" | "running" | "complete" | "failed" = "ready";
   private runningStyleSources: StyleReferenceSource[] = [];
   private runningStyleContexts = new Map<string, RunningStyleContext>();
@@ -1214,6 +1225,7 @@ export class PaginationEngine {
     this.sourceTextPlacement.clear();
     this.lastClippedTextAnchors = [];
     this.lastClippedTableContentAnchors = [];
+    this.linkedTextBoxOverflowAnchors = [];
 
     // Parse the header/footer registry if present
     this.hfRegistry = this.parseHeaderFooterRegistry();
@@ -1773,7 +1785,8 @@ export class PaginationEngine {
           const collapsedBlankLine = rect.height === 0 && style.fontSize === "0px" && rendersOnlyItsLine(element);
           if (collapsedBlankLine || clippedAwayByExactRow(element, rect) || blankLineClippedByTextBox(this.view, element, rect, sourceFrame.paper))
             unpaintedAnchorIds.add(anchorId);
-          else if (this.isInitiallyClippedText(element, sourceFrame, page.element, partialTextBoxInk)) {
+          else if (this.isInitiallyClippedText(element, sourceFrame, page.element, partialTextBoxInk)
+            || hiddenPastLinkedStoryEnd(element, rect)) {
             unpaintedAnchorIds.add(anchorId);
             if (/\S/.test(element.textContent ?? '')) clippedTextAnchorIds.add(anchorId);
           }
@@ -1917,6 +1930,11 @@ export class PaginationEngine {
   /** Source text or visuals cut by the paper edge in an authored fixed-width table. */
   getClippedTableContentAnchors(): readonly string[] {
     return [...this.lastClippedTableContentAnchors];
+  }
+
+  /** The first paragraph of each linked text-box story that its last frame cannot hold. */
+  getLinkedTextBoxOverflowAnchors(): readonly string[] {
+    return [...this.linkedTextBoxOverflowAnchors];
   }
 
   private collectClippedTableContent(page: HTMLElement, paper: DOMRect, anchors: Set<string>): void {
@@ -7820,9 +7838,17 @@ export class PaginationEngine {
           break;
         }
       }
-      // A partially visible paragraph still has a measurable source anchor. That alone cannot
-      // detect lost text, so an exhausted linked story must fail rather than serialize its clip.
-      if (next < pending.length) throw new Error("Linked text-box content does not fit its declared continuation frames");
+      // Word hides what a story's last frame cannot hold, as it hides a fixed box's overflow
+      // (issue #1558). Keep it there, clipped, and report it: a partially visible paragraph still
+      // has a measurable fragment, so the PageMap cannot tell that its end is hidden.
+      if (next < pending.length) {
+        const last = boxes[boxes.length - 1];
+        last.append(...pending.slice(next));
+        last.dataset.docxTextboxOverflow = "true";
+        const first = pending[next], anchored = "[data-source-anchor-id]";
+        const hidden = first.matches(anchored) ? first : first.querySelector<HTMLElement>(anchored);
+        if (hidden?.dataset.sourceAnchorId) this.linkedTextBoxOverflowAnchors.push(hidden.dataset.sourceAnchorId);
+      }
     }
   }
 
