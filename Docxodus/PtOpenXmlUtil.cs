@@ -957,14 +957,24 @@ namespace Docxodus
             return StringToDecimalTwips(attribute.Value);
         }
 
+        /// <summary>
+        /// A border's eighth-point width, <c>w:sz</c> (ST_EighthPointMeasure), read with the twip
+        /// measures' invariant number syntax but no unit suffix; zero when it is omitted.
+        /// </summary>
+        internal static int BorderSize(XElement? border) =>
+            border?.Attribute(W.sz) is { } size ? (int)ParseMeasureNumber(size.Value) : 0;
+
+        // The number syntax every imported measure shares: optional sign and decimal point, invariant
+        // culture, no exponent, NaN or infinity. Out-of-range integer casts still throw.
+        private static decimal ParseMeasureNumber(string value) =>
+            decimal.Parse(value, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint |
+                NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite, CultureInfo.InvariantCulture);
+
         private static decimal StringToDecimalTwips(string value)
         {
             var unit = value.Length >= 2 ? value.Substring(value.Length - 2) : string.Empty;
             var hasUnit = unit is "cm" or "mm" or "in" or "pt" or "pc" or "pi";
-            var number = decimal.Parse(hasUnit ? value.Substring(0, value.Length - 2) : value,
-                NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint |
-                NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite,
-                CultureInfo.InvariantCulture);
+            var number = ParseMeasureNumber(hasUnit ? value.Substring(0, value.Length - 2) : value);
             // Multiply before dividing to preserve exact values such as 12.7mm.
             return unit switch
             {

@@ -6601,7 +6601,7 @@ namespace Docxodus
                 var borderType = (string?)border?.Attribute(W.val);
                 var halfBorder = border == null || borderType is "nil" or "none"
                     ? 0m
-                    : BorderWidthInPoints(borderType, (int?)border.Attribute(W.sz) ?? 0) / 2m;
+                    : BorderWidthInPoints(borderType, WordprocessingMLUtil.BorderSize(border)) / 2m;
                 var cellMargin = legacyIndent == "text" && firstCell != null ? CellMarginTwips(firstCell, leadingSide) / 20m : 0m;
                 if (halfBorder + cellMargin != 0m)
                     leadingEdge = (indent ?? 0m) - halfBorder - cellMargin;
@@ -6986,7 +6986,7 @@ namespace Docxodus
         {
             var border = cell.Element(W.tcPr)?.Element(W.tcBorders)?.Element(side);
             var type = (string?)border?.Attribute(W.val);
-            return border == null || type is null or "nil" or "none" ? 0m : ((int?)border.Attribute(W.sz) ?? 0) / 8m;
+            return border == null || type is null or "nil" or "none" ? 0m : WordprocessingMLUtil.BorderSize(border) / 8m;
         }
 
         /// <summary>The width a browser lays out for a converted cell's CSS border on
@@ -7414,7 +7414,7 @@ namespace Docxodus
                     if (colsNum > 1)
                     {
                         // colsNum > 1 above is only possible when cols is non-null.
-                        var colGapPt = ((int?)cols!.Attribute(W.space) ?? 720) / 20m;
+                        var colGapPt = (WordprocessingMLUtil.AttributeToTwips(cols!.Attribute(W.space)) ?? 720) / 20m;
                         var colGap = PageGeometryValue(colGapPt);
                         div.Add(new XAttribute("data-cols", colsNum));
                         div.Add(new XAttribute("data-col-gap", colGap));
@@ -11492,7 +11492,7 @@ namespace Docxodus
             {
                 var border = pBdr?.Element(side);
                 var type = (string?)border?.Attribute(W.val);
-                var sz = (int?)border?.Attribute(W.sz) ?? 0;
+                var sz = WordprocessingMLUtil.BorderSize(border);
                 if (type is not ("single" or "dashed") || sz <= 0)
                     continue;
                 style["--docx-border-" + side.LocalName + "-width"] = PointsCss(Math.Min(96, Math.Max(2, sz)) / 8m);
@@ -11547,7 +11547,7 @@ namespace Docxodus
             if (side == null || type == "nil" || type == "none")
                 return 0m;
             return ((decimal?)side.Attribute(W.space) ?? 0m)
-                + ParagraphBorderLayoutWidthInPoints(type, (int?)side.Attribute(W.sz) ?? 0);
+                + ParagraphBorderLayoutWidthInPoints(type, WordprocessingMLUtil.BorderSize(side));
         }
 
         /// <summary>
@@ -11598,7 +11598,7 @@ namespace Docxodus
                 // CT_Border/@sz is optional with an application-defined default
                 // (ECMA-376-1 §17.3.4). Default to zero, consistent with Word's
                 // documented bar default, before the existing width mapping/minimum.
-                var sz = (int?)side.Attribute(W.sz) ?? 0;
+                var sz = WordprocessingMLUtil.BorderSize(side);
                 var space = (decimal?)side.Attribute(W.space) ?? 0;
                 // `w:color` is a CACHE of the last theme resolution, not the authority: when
                 // `w:themeColor` is present the theme entry (plus any tint/shade) is what the
