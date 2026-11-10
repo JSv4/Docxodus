@@ -19,7 +19,7 @@ internal sealed class AutomaticParagraphSpacing
     // ignores the flags and adds space after to the next paragraph's space before.
     private readonly bool _automatic;
     private readonly bool _additive;
-    private readonly Dictionary<XElement, (bool Eligible, int? List, decimal After)> _facts = new();
+    private readonly Dictionary<XElement, (bool Eligible, int? List)> _facts = new();
     private readonly Dictionary<XElement, (XElement? Previous, XElement? Next)> _neighbors = new();
     private readonly HashSet<XElement> _stories = new();
     private readonly ParagraphLineGrid? _lineGrid;
@@ -58,7 +58,8 @@ internal sealed class AutomaticParagraphSpacing
 
     private string Gap(XElement paragraph, bool before)
     {
-        if (!_automatic || Neighbors(paragraph) is not (var previous, var next)) return "-";
+        if (!_automatic || !Neighbors(paragraph, out var neighbors)) return "-";
+        var (previous, next) = neighbors;
         // Word prints no automatic space at the start or end of the body or a table cell.
         if ((before ? previous : next) is not { } neighbor) return "0";
         if (neighbor.Name == W.tbl)
@@ -70,9 +71,14 @@ internal sealed class AutomaticParagraphSpacing
 
     // The previous paragraph's space after, which Word adds to this paragraph's space before. A
     // section break onto a new page leaves only this paragraph's space before at the top of it.
-    private string? AddedBefore(XElement paragraph) =>
-        _additive && Neighbors(paragraph)?.Previous is { } previous && Facts(previous).Eligible
-            && !StartsPage(previous) ? Facts(previous).After.ToString(CultureInfo.InvariantCulture) : null;
+    private string? AddedBefore(XElement paragraph)
+    {
+        if (!_additive || !Neighbors(paragraph, out var neighbors) || neighbors.Previous is not { } previous
+            || !Facts(previous).Eligible || StartsPage(previous)) return null;
+        var spacing = FormattingAssembler.ResolveEffectiveParagraphProperties(_document, previous).Element(W.spacing);
+        return (ParagraphLineGrid.Spacing(spacing, W.afterLines, WordprocessingMLUtil.AttributeToDecimalTwips(
+            spacing?.Attribute(W.after)), _lineGrid?.UnitOf(previous)) ?? 0).ToString(CultureInfo.InvariantCulture);
+    }
 
     private bool StartsPage(XElement paragraph)
     {
@@ -82,9 +88,10 @@ internal sealed class AutomaticParagraphSpacing
         return (string?)following?.Element(W.type)?.Attribute(W.val) != "continuous";
     }
 
-    private (XElement? Previous, XElement? Next)? Neighbors(XElement paragraph)
+    private bool Neighbors(XElement paragraph, out (XElement? Previous, XElement? Next) neighbors)
     {
-        if (Story(paragraph) is not { } story || !Facts(paragraph).Eligible) return null;
+        neighbors = default;
+        if (Story(paragraph) is not { } story || !Facts(paragraph).Eligible) return false;
         if (_stories.Add(story))
         {
             var blocks = Blocks(story).ToList();
@@ -92,7 +99,7 @@ internal sealed class AutomaticParagraphSpacing
                 if (blocks[i].Name == W.p)
                     _neighbors[blocks[i]] = (i > 0 ? blocks[i - 1] : null, i + 1 < blocks.Count ? blocks[i + 1] : null);
         }
-        return _neighbors.TryGetValue(paragraph, out var neighbors) ? neighbors : null;
+        return _neighbors.TryGetValue(paragraph, out neighbors);
     }
 
     // The body or table cell whose block sequence holds the paragraph. Content controls and
@@ -111,7 +118,7 @@ internal sealed class AutomaticParagraphSpacing
         : e.Name == W.sdt ? e.Elements(W.sdtContent).SelectMany(Blocks)
         : e.Name == W.customXml ? Blocks(e) : Enumerable.Empty<XElement>());
 
-    private (bool Eligible, int? List, decimal After) Facts(XElement paragraph)
+    private (bool Eligible, int? List) Facts(XElement paragraph)
     {
         if (_facts.TryGetValue(paragraph, out var facts)) return facts;
         if (!_automatic && !_additive || paragraph.Name != W.p) return default;
@@ -137,10 +144,8 @@ internal sealed class AutomaticParagraphSpacing
         var mark = paragraph.Element(W.pPr)?.Element(W.rPr);
         var revised = mark?.Elements().Any(e => e.Name == W.ins || e.Name == W.del
             || e.Name == W.moveFrom || e.Name == W.moveTo) == true;
-        var spacing = properties?.Element(W.spacing);
         facts = (!revised && properties?.Element(W.framePr) == null && levelProperties?.Element(W.framePr) == null,
-            list?.NumId, ParagraphLineGrid.Spacing(spacing, W.afterLines,
-                WordprocessingMLUtil.AttributeToDecimalTwips(spacing?.Attribute(W.after)), _lineGrid?.UnitOf(paragraph)) ?? 0);
+            list?.NumId);
         _facts.Add(paragraph, facts);
         return facts;
     }
