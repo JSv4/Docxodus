@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Regenerate the tiny ligature test font used by tests/export-ligatures.spec.ts; written to ligature/ (#1562).
 
-Original rectangle outlines for space and A-Z, 600 units each in a 1000-unit em, plus one
-standard ligature: F F becomes a 700-unit F_F glyph, 500 units narrower than the pair. No host
-font or third-party outline is used; the repository MIT license applies.
+Original rectangle outlines: A-Z at 625 units and space at 250 in a 1000-unit em, whole pixels at
+12pt (16px), so hinted layouts round nothing. One standard ligature: F F becomes a 750-unit F_F
+glyph, 500 units narrower than the pair. No host font or third-party outline is used; the
+repository MIT license applies.
 """
 
 from pathlib import Path
@@ -27,7 +28,7 @@ def box(width):
 
 
 order = [".notdef", "space", *LETTERS, "F_F"]
-widths = {".notdef": 600, "space": 250, "F_F": 700, **{letter: 600 for letter in LETTERS}}
+widths = {".notdef": 625, "space": 250, "F_F": 750, **{letter: 625 for letter in LETTERS}}
 builder = FontBuilder(1000, isTTF=True)
 builder.setupGlyphOrder(order)
 builder.setupCharacterMap({32: "space", **{ord(letter): letter for letter in LETTERS}})

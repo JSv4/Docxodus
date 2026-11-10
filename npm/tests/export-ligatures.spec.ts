@@ -8,9 +8,9 @@ test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}),
 } });
 
-// An original test face (fixtures/fonts/generate-ligature-font.py): 7.2pt letters, 3pt spaces
-// and one standard ligature, F F, which is 6pt narrower than the pair at 12pt. Fourteen of these
-// words fit a 468pt line unligated (442.2pt); eighteen fit ligated (461.4pt).
+// An original test face (fixtures/fonts/generate-ligature-font.py): 7.5pt letters, 3pt spaces
+// and one standard ligature, F F, which is 6pt narrower than the pair at 12pt. Every advance is a
+// whole pixel. Fourteen of these words fit a 468pt line unligated (459pt); seventeen fit ligated (456pt).
 const fonts = fileURLToPath(new URL('./fixtures/fonts/ligature/', import.meta.url));
 const words = Array.from('ABCDEGHIJKLMNOPQRSTUVWXYZ', letter => `${letter}FF${letter}`);
 
@@ -39,7 +39,7 @@ function ligatureDocx(ligatures: string | null): Uint8Array {
 }
 
 // Word 2024 forms no ligatures without w14:ligatures and forms them with it (#1562).
-for (const [ligatures, count] of [[null, 14], ['none', 14], ['standard', 18], ['all', 18]] as const) {
+for (const [ligatures, count] of [[null, 14], ['none', 14], ['standard', 17], ['all', 17]] as const) {
   test(`w14:ligatures ${ligatures ?? 'absent'} puts ${count} words on the first PDF line`, async ({ browser }) => {
     test.setTimeout(120_000);
     const result = await renderDocxArtifacts(ligatureDocx(ligatures), { browser, outputs: ['pdf'],
