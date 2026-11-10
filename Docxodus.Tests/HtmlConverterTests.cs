@@ -4420,6 +4420,9 @@ namespace Docxodus.Tests
             Assert.Contains("body, body * {", htmlString);
             Assert.Contains("-webkit-text-size-adjust: 100%;", htmlString);
             Assert.Contains("text-size-adjust: 100%;", htmlString);
+            // Word kerns and ligates only the runs that ask (#1562).
+            Assert.Contains("font-kerning: none;", htmlString);
+            Assert.Contains("font-variant-ligatures: none;", htmlString);
         }
 
         /// <summary>

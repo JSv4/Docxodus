@@ -6,14 +6,14 @@ export const fitTexts = {
 };
 export type FitNeighbor = 'plain' | 'bold' | 'table' | 'list' | 'link';
 /**
- * Where the fitted text sits: an ordinary paragraph, one with a bold word (the issue's ` harb`, or
- * the first `the`), one with a hyperlinked word, a numbered list item, a table cell with Word's
- * default cell margins, or a paragraph that states no line spacing.
+ * Where the fitted text sits: an ordinary paragraph, one with a bold word (the issue's ` harb`, the
+ * first `the`, or the last word), one with a hyperlinked word, a numbered list item, a table cell
+ * with Word's default cell margins, or a paragraph that states no line spacing.
  */
-export type FitTarget = 'paragraph' | 'bold' | 'bold-the' | 'link' | 'list' | 'cell' | 'unspaced';
-/** An ordinary paragraph's text follows its alignment; every other target holds the justified text. */
+export type FitTarget = 'paragraph' | 'bold' | 'bold-the' | 'bold-last' | 'link' | 'list' | 'cell' | 'unspaced';
+/** An ordinary or last-word-bold paragraph's text follows its alignment; other targets hold the justified text. */
 export const fitText = (alignment: keyof typeof fitTexts, target: FitTarget = 'paragraph') =>
-  fitTexts[target === 'paragraph' ? alignment : 'justify'];
+  fitTexts[target === 'paragraph' || target === 'bold-last' ? alignment : 'justify'];
 
 export function textFitDocx(alignment: keyof typeof fitTexts, neighbor: FitNeighbor,
   kern?: { owner: 'run' | 'defaults' | 'style'; halfPoints: number }, target: FitTarget = 'paragraph',
@@ -25,9 +25,12 @@ export function textFitDocx(alignment: keyof typeof fitTexts, neighbor: FitNeigh
   const text = fitText(alignment, target), props = kern?.owner === 'run' ? kerning : '';
   const split = (at: number, length: number, wrap: (runs: string) => string) =>
     run(text.slice(0, at), props) + wrap(run(text.slice(at, at + length), props)) + run(text.slice(at + length), props);
+  const bold = (at: number, length: number) => split(at, length, () => run(text.slice(at, at + length), props + '<w:b/>'));
+  const last = text.lastIndexOf(' ') + 1;
   const runs = {
-    bold: split(40, 5, () => run(text.slice(40, 45), props + '<w:b/>')),
-    'bold-the': split(13, 3, () => run(text.slice(13, 16), props + '<w:b/>')),
+    bold: bold(40, 5),
+    'bold-the': bold(13, 3),
+    'bold-last': bold(last, text.length - last),
     link: split(40, 5, inner => `<w:hyperlink r:id="link">${inner}</w:hyperlink>`),
   }[target as string] ?? run(text, props);
   const jc = `<w:jc w:val="${alignment === 'justify' ? 'both' : 'left'}"/>`;
