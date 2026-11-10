@@ -625,6 +625,8 @@ export interface PaginatedDocumentProps {
   pageGap?: number;
   /** Read-only comments appear beside the page by default; margin keeps physical citations. */
   commentColumnPlacement?: PaginationOptions["commentColumnPlacement"];
+  /** Under the balloon placement, Word's balloon setting. Default: "mixed". */
+  markupMode?: PaginationOptions["markupMode"];
   /** Outside column width in points. Default: 144. */
   commentColumnWidthPt?: number;
   /** Gap from the page in points. Default: 12. */
@@ -704,6 +706,7 @@ export function usePagination(
     cssPrefix = "page-",
     fragmentParagraphs = true,
     commentColumnPlacement = "outside",
+    markupMode,
     commentColumnWidthPt,
     commentColumnGapPt,
     layoutToken,
@@ -745,6 +748,7 @@ export function usePagination(
         cssPrefix,
         fragmentParagraphs,
         commentColumnPlacement,
+        markupMode,
         commentColumnWidthPt,
         commentColumnGapPt,
         layoutToken,
@@ -768,6 +772,7 @@ export function usePagination(
     cssPrefix,
     fragmentParagraphs,
     commentColumnPlacement,
+    markupMode,
     commentColumnWidthPt,
     commentColumnGapPt,
     layoutToken?.documentVersion,
@@ -826,6 +831,7 @@ export function PaginatedDocument({
   pageGap = 20,
   fragmentParagraphs = true,
   commentColumnPlacement,
+  markupMode,
   commentColumnWidthPt,
   commentColumnGapPt,
   layoutToken,
@@ -848,6 +854,7 @@ export function PaginatedDocument({
     cssPrefix,
     fragmentParagraphs,
     commentColumnPlacement,
+    markupMode,
     commentColumnWidthPt,
     commentColumnGapPt,
     layoutToken,
@@ -858,6 +865,7 @@ export function PaginatedDocument({
     cssPrefix,
     fragmentParagraphs,
     commentColumnPlacement,
+    markupMode,
     commentColumnWidthPt,
     commentColumnGapPt,
     layoutToken?.documentVersion,

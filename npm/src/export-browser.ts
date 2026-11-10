@@ -14,7 +14,7 @@ import { preserveClippedExactRowText } from "./exact-row-text.js";
 import { prepareParagraphBorders, paintParagraphBorders } from "./paragraph-borders.js";
 import { prepareTableBorders, paintTableBorders, refreshTableBorderLayout } from "./table-borders.js";
 import { measureRenderedSource, findOversizedExactRow, PaginationEngine, type PageMap } from "./pagination.js";
-import { scopeMarkupBalloons } from "./markup-balloons.js";
+import { MARKUP_MODES, scopeMarkupBalloons, type MarkupMode } from "./markup-balloons.js";
 export { renderedSourceMeasurerExpression } from "./pagination.js";
 import {
   createWorkerDocxodus,
@@ -96,6 +96,7 @@ export type CommentColumnPlacement = "margin" | "balloons";
  * (Word's Print to PDF).
  */
 export type BalloonOverflow = "truncate" | "appendix";
+export type { MarkupMode };
 export type UnsupportedContentPolicy = "warn" | "strict";
 
 export type ExportPhase =
@@ -220,6 +221,12 @@ export interface PaginatedHtmlOptions {
    * prints every cut comment in full on pages added after the last, so the PDF gains pages.
    */
   balloonOverflow?: BalloonOverflow;
+  /**
+   * Only with the balloon layout; default "mixed", Word's own default setting, "Show Only Comments
+   * and Formatting in Balloons". "inline" is Word's "Show All Revisions Inline": the balloons hold
+   * comments only, so a document whose only markup is formatting changes prints at full size.
+   */
+  markupMode?: MarkupMode;
   title?: string;
   /** CSS appended to the converter stylesheet before pagination. */
   additionalCss?: string;
@@ -292,6 +299,8 @@ export interface RenderReportBase {
     commentColumnPlacement?: "balloons";
     /** Present only when the balloon layout printed cut comments in full after the last page. */
     balloonOverflow?: "appendix";
+    /** Present only when the balloon layout used Word's "Show All Revisions Inline" setting. */
+    markupMode?: "inline";
     title: string;
     /** Present only when a nonempty additional stylesheet was applied. */
     additionalCss?: string;
@@ -567,6 +576,7 @@ interface NormalizedOptions {
   commentProfile: CommentProfile;
   commentColumnPlacement: CommentColumnPlacement;
   balloonOverflow: BalloonOverflow;
+  markupMode: MarkupMode;
   title: string;
   additionalCss: string;
   unsupportedContent: UnsupportedContentPolicy;
@@ -754,6 +764,14 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     fail("invalid_argument", "input_validation", "balloonOverflow appendix needs the balloon layout.",
       "Set commentColumnPlacement to balloons, or omit balloonOverflow.");
   }
+  const markupMode = options.markupMode ?? "mixed";
+  if (!MARKUP_MODES.includes(markupMode)) {
+    fail("invalid_argument", "input_validation", "markupMode is invalid.", "Use mixed or inline.");
+  }
+  if (markupMode !== "mixed" && commentColumnPlacement !== "balloons") {
+    fail("invalid_argument", "input_validation", "markupMode inline needs the balloon layout.",
+      "Set commentColumnPlacement to balloons, or omit markupMode.");
+  }
   const unsupportedContent = options.unsupportedContent ?? "warn";
   if (!ALLOWED_UNSUPPORTED_POLICIES.has(unsupportedContent)) {
     fail("invalid_argument", "input_validation", "unsupportedContent is invalid.",
@@ -853,6 +871,7 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     commentProfile: options.commentProfile,
     commentColumnPlacement,
     balloonOverflow,
+    markupMode,
     title,
     additionalCss,
     unsupportedContent,
@@ -3188,7 +3207,7 @@ function automaticResourceCount(document: Document): { count: number; bytes: num
 }
 
 type PresentationFields = Pick<RenderReportBase["options"],
-  "markupPresentation" | "markupVisibility" | "commentColumnPlacement" | "balloonOverflow" | "additionalCss">;
+  "markupPresentation" | "markupVisibility" | "commentColumnPlacement" | "balloonOverflow" | "markupMode" | "additionalCss">;
 
 /** Record non-default presentation settings in both the report and layout digest. */
 function presentationFields(options: NormalizedOptions): PresentationFields {
@@ -3197,6 +3216,7 @@ function presentationFields(options: NormalizedOptions): PresentationFields {
     ...(Object.keys(options.markupVisibility).length ? { markupVisibility: options.markupVisibility } : {}),
     ...(options.commentColumnPlacement === "balloons" ? { commentColumnPlacement: "balloons" as const } : {}),
     ...(options.balloonOverflow === "appendix" ? { balloonOverflow: "appendix" as const } : {}),
+    ...(options.markupMode === "inline" ? { markupMode: "inline" as const } : {}),
     ...(options.additionalCss ? { additionalCss: options.additionalCss } : {}),
   };
 }
@@ -3907,7 +3927,8 @@ export async function convertDocxToPaginatedHtml(
           // would be a second full forced-layout pass whose result is immediately overwritten.
           deferFragmentIdentities: true,
           ...(options.commentColumnPlacement === "balloons"
-            ? { commentColumnPlacement: "balloons" as const, balloonOverflow: options.balloonOverflow, deferMarkupBalloons: true }
+            ? { commentColumnPlacement: "balloons" as const, balloonOverflow: options.balloonOverflow,
+              markupMode: options.markupMode, deferMarkupBalloons: true }
             : {}),
           bodyBudgetReductionsPt,
           checkCancellation: () => {

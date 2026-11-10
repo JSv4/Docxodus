@@ -53,6 +53,7 @@ interface ExportOptions {
   commentProfile: CommentProfile;
   commentColumnPlacement?: "margin" | "balloons"; // default "margin"
   balloonOverflow?: "truncate" | "appendix"; // balloons only; default "truncate"
+  markupMode?: "mixed" | "inline"; // balloons only; Word's balloon setting; default "mixed"
   title?: string;
   additionalCss?: string; // appended before pagination; default empty
   unsupportedContent?: "warn" | "strict";
@@ -892,7 +893,12 @@ reported in a `comment_balloon_truncated` warning. Their text is printed nowhere
 with Word's Save as PDF; `balloonOverflow: "appendix"` (CLI `--balloon-overflow appendix`) numbers
 each cut comment's box and prints the comments in full on pages added after the last, as Word's Print
 to PDF does, so the PDF and the PageMap gain pages. It needs the balloon layout, and the report and
-layout digest name it only when it is `appendix`.
+layout digest name it only when it is `appendix`. `markupMode` names Word's balloon setting:
+`mixed` (the default) is Word's own default, Show Only Comments and Formatting in Balloons, and
+`inline` (CLI `--markup-mode inline`) is Show All Revisions Inline, whose balloons hold comments only,
+so a document whose only markup is formatting changes prints at full size. It also needs the balloon
+layout, and the report and layout digest name it only when it is `inline`
+([`all_markup_layout.md`](all_markup_layout.md), issue #1552).
 
 Comments are orthogonal: `hidden`, `inline`, `endnotes`, or `margin`. A visible profile retains
 range, body, author, and date in body, headers, footers, footnotes, and endnotes, and draws the

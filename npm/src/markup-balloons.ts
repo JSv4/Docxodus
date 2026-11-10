@@ -60,6 +60,16 @@ const WORD = {
   paleFills: { "#0078D4": "#D5EDFF", "#D13438": "#F8DCDD" } as Record<string, string>,
 };
 
+/**
+ * Word's balloon setting (View.MarkupMode), which decides what the balloons hold. `"mixed"` is
+ * Word's default, "Show Only Comments and Formatting in Balloons": comments and formatting changes.
+ * `"inline"` is "Show All Revisions Inline": comments only, so a formatting change keeps its change
+ * bar and gets no balloon, and a page with no comment prints at full size. Word's third setting,
+ * "Show Revisions in Balloons", also moves deletions into balloons; it is not reproduced.
+ */
+export type MarkupMode = "mixed" | "inline";
+export const MARKUP_MODES: readonly MarkupMode[] = ["mixed", "inline"];
+
 /** The balloon font when the document names none: Word's own. */
 export interface MarkupBalloonFont { family: string; sizePt: number; stack?: string }
 export const DEFAULT_BALLOON_FONT: MarkupBalloonFont = WORD.font;
@@ -217,19 +227,24 @@ export function layoutMarkupBalloons(options: {
   font?: MarkupBalloonFont;
   /** Number each cut comment's box, "… [n]", for a listing of their full text (Word's Print to PDF). */
   numberCutBoxes?: boolean;
+  /** Word's balloon setting; default "mixed". */
+  markupMode?: MarkupMode;
 }): MarkupBalloonResult {
   const { document, pages, comments, commentPrefix, cssPrefix } = options;
+  const formattingInBalloons = (options.markupMode ?? "mixed") === "mixed";
   const result: MarkupBalloonResult = { truncatedCommentIds: [], truncatedFormatting: 0, unplacedCommentIds: [], cutComments: [] };
   const font: MarkupBalloonFont = options.font && options.font.sizePt > 0 ? options.font : WORD.font;
   // The registry lists a root before its replies, so each reply's thread is already known.
   const thread = new Map<string, string>();
   for (const { id, parentId } of comments) thread.set(id, parentId !== undefined && thread.has(parentId) ? thread.get(parentId)! : id);
   // Comment anchors count only for comments the balloons show; comments listed as endnotes have
-  // anchors too, but no balloon.
+  // anchors too, but no balloon. Formatting changes count only under the setting that puts them in
+  // balloons.
   const anchored = pages.map((page) =>
     Array.from(page.element.querySelectorAll<HTMLElement>("[data-comment-id], [data-format-description]"))
-      .filter((element) => element.dataset.formatDescription !== undefined || thread.has(element.dataset.commentId ?? "")));
-  // Word prints a document without comments or formatting changes as it is.
+      .filter((element) => element.dataset.formatDescription !== undefined
+        ? formattingInBalloons : thread.has(element.dataset.commentId ?? "")));
+  // Word prints a document with nothing for its balloons as it is, at full size.
   if (anchored.every((elements) => elements.length === 0)) return result;
 
   const byId = new Map(comments.map((comment) => [comment.id, comment]));

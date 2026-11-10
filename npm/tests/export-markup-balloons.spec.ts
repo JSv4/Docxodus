@@ -278,3 +278,25 @@ test('the appendix overflow without the balloon layout is an invalid argument', 
     browser, outputs: ['html'], reviewProfile: 'final', commentProfile: 'margin', balloonOverflow: 'appendix', timeoutMs: 60_000,
   })).rejects.toHaveProperty('code', 'invalid_argument');
 });
+
+// Word's "Show All Revisions Inline" balloon setting (issue #1552): a document whose only markup is a
+// formatting change prints at full size, and the report names the setting; Word's default does not.
+test('markupMode inline prints a formatting-only document at full size and names the setting', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const fixture = balloonDocx({ body: `<w:p>${formatted(1, 'buyer')}</w:p>${plain('Closing line.')}` });
+  const options = { browser, outputs: ['html'] as Array<'html'>, reviewProfile: 'markup' as const,
+    markupPresentation: 'word' as const, commentProfile: 'margin' as const, commentColumnPlacement: 'balloons' as const,
+    timeoutMs: 120_000 };
+  const inline = await renderDocxArtifacts(fixture, { ...options, markupMode: 'inline' });
+  expect(inline.renderReport.options.markupMode).toBe('inline');
+  expect(inline.html).not.toContain('data-docx-markup-scale');
+  const mixed = await renderDocxArtifacts(fixture, options);
+  expect('markupMode' in mixed.renderReport.options).toBe(false);
+  expect(mixed.html).toContain('data-docx-markup-scale');
+});
+
+test('markupMode inline without the balloon layout is an invalid argument', async ({ browser }) => {
+  await expect(renderDocxArtifacts(markupBalloonsFixture(), {
+    browser, outputs: ['html'], reviewProfile: 'final', commentProfile: 'margin', markupMode: 'inline', timeoutMs: 60_000,
+  })).rejects.toHaveProperty('code', 'invalid_argument');
+});

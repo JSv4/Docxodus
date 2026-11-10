@@ -446,6 +446,7 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
     "commentProfile",
     "commentColumnPlacement",
     "balloonOverflow",
+    "markupMode",
     "title",
     "additionalCss",
     "unsupportedContent",
@@ -525,6 +526,13 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
   if (options.balloonOverflow === "appendix" && options.commentColumnPlacement !== "balloons") {
     exportError("invalid_argument", "input_validation", "balloonOverflow appendix needs the balloon layout.",
       "Set commentColumnPlacement to balloons, or omit balloonOverflow.");
+  }
+  if (options.markupMode !== undefined && options.markupMode !== "mixed" && options.markupMode !== "inline") {
+    exportError("invalid_argument", "input_validation", "markupMode is invalid.", "Use mixed or inline.");
+  }
+  if (options.markupMode === "inline" && options.commentColumnPlacement !== "balloons") {
+    exportError("invalid_argument", "input_validation", "markupMode inline needs the balloon layout.",
+      "Set commentColumnPlacement to balloons, or omit markupMode.");
   }
   if (options.reviewProfileAlreadyApplied === true && options.reviewProfile === "markup") {
     exportError(
@@ -809,6 +817,7 @@ function browserOptions(options: NodeExportOptions): Omit<PaginatedHtmlOptions, 
     markupVisibility: options.markupVisibility,
     commentColumnPlacement: options.commentColumnPlacement,
     balloonOverflow: options.balloonOverflow,
+    markupMode: options.markupMode,
     commentProfile: options.commentProfile,
     title: options.title,
     additionalCss: options.additionalCss,

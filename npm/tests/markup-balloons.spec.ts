@@ -15,8 +15,9 @@ async function open(page: Page) {
 }
 
 /** Converts in the Word presentation and paginates into a fresh host, in the page's current document. */
-async function paginate(page: Page, bytes: Uint8Array, placement: 'balloons' | 'margin', stripBalloonData = false) {
-  return page.evaluate(({ bytes, placement, stripBalloonData, balloonData }) => {
+async function paginate(page: Page, bytes: Uint8Array, placement: 'balloons' | 'margin', stripBalloonData = false,
+  markupMode?: 'mixed' | 'inline') {
+  return page.evaluate(({ bytes, placement, stripBalloonData, balloonData, markupMode }) => {
     // Word presentation (last argument), margin comments (2), paginated, headers rendered.
     const html: string = (window as any).Docxodus.DocumentConverter.ConvertDocxToHtmlComplete(
       new Uint8Array(bytes), 'Cedar markup', 'docx-', false, '', 2, 'comment-',
@@ -33,7 +34,7 @@ async function paginate(page: Page, bytes: Uint8Array, placement: 'balloons' | '
     document.body.innerHTML = '<div id="host"></div>';
     const host = document.querySelector<HTMLElement>('#host')!;
     (window as any).DocxodusPagination.paginateHtml(parsed.body.innerHTML, host, {
-      showPageNumbers: false, commentColumnPlacement: placement,
+      showPageNumbers: false, commentColumnPlacement: placement, markupMode,
     });
     const pt = (px: number) => px * 0.75;
     const pages = Array.from(host.querySelectorAll<HTMLElement>('.page-box'));
@@ -68,7 +69,7 @@ async function paginate(page: Page, bytes: Uint8Array, placement: 'balloons' | '
         return clone.innerHTML;
       })(),
     };
-  }, { bytes: Array.from(bytes), placement, stripBalloonData, balloonData: BALLOON_DATA });
+  }, { bytes: Array.from(bytes), placement, stripBalloonData, balloonData: BALLOON_DATA, markupMode });
 }
 
 function expectNoOverlap(balloons: Array<{ page: number; top: number; bottom: number }>) {
@@ -114,6 +115,35 @@ test('balloons hold comments, replies and formatting changes in Word\'s wording,
   // Word prints no comment reference marks.
   expect(result.markerWidths.length).toBeGreaterThan(0);
   for (const width of result.markerWidths) expect(width).toBe(0);
+});
+
+// Word's prints of one bold change under each balloon setting (issue #1552): its default, "Show Only
+// Comments and Formatting in Balloons", shrinks the page beside a "Formatted" balloon; "Show All
+// Revisions Inline" prints the page at full size, and still puts comments in balloons.
+const formattingOnly = () => balloonDocx({ body: `<w:p>${formatted(1, 'buyer')}</w:p>${plain('Closing line.')}` });
+for (const [markupMode, scaled, balloons] of [
+  [undefined, true, ['Formatted: Font: Bold']], ['mixed', true, ['Formatted: Font: Bold']], ['inline', false, []],
+] as const) {
+  test(`a document whose only markup is formatting, under markupMode ${markupMode ?? 'by default'}`, async ({ page }) => {
+    await open(page);
+    const result = await paginate(page, formattingOnly(), 'balloons', false, markupMode);
+    expect(result.pages[0].scale < 1).toBe(scaled);
+    expect(result.balloons.map(b => b.text)).toEqual(balloons);
+  });
+}
+
+test('under markupMode inline, comments keep their balloons and formatting changes get none', async ({ page }) => {
+  await open(page);
+  const result = await paginate(page, markupBalloonsFixture(), 'balloons', false, 'inline');
+  expect(result.pages[0].scale).toBeLessThan(1);
+  expect(result.balloons.map(b => b.text)).toEqual([
+    'Commented [AA1]: Is delivery the right trigger?',
+    'Commented [BB2R1]: Yes, it matches the risk clause.',
+    'Commented [BB3]: One.',
+    'Commented [AA4]: Two.',
+    'Commented [BB5]: Three.',
+  ]);
+  expect(result.leaders).toBe(result.balloons.length);
 });
 
 test('point, empty-range and ranged comments all get balloons', async ({ page }) => {

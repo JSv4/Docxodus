@@ -44,6 +44,9 @@ Options:
                                      With balloons, where the rest of a cut-short comment goes
                                      (default truncate: nowhere, as Word's Save as PDF; appendix:
                                      in full after the last page, as Word's Print to PDF)
+  --markup-mode <mixed|inline>       With balloons, Word's balloon setting (default mixed: Show
+                                     Only Comments and Formatting in Balloons; inline: Show All
+                                     Revisions Inline, comments only)
   --document-version <integer>       Immutable source version (default: 0)
   --expected-source-digest <sha256>  Required source digest
   --unsupported-content <warn|strict>
@@ -168,6 +171,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
         "hide-comments": { type: "boolean" },
         "comment-column-placement": { type: "string" },
         "balloon-overflow": { type: "string" },
+        "markup-mode": { type: "string" },
         comments: { type: "string" },
         "document-version": { type: "string" },
         "expected-source-digest": { type: "string" },
@@ -268,6 +272,9 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       }),
       ...(parsed.values["balloon-overflow"] === undefined ? {} : {
         balloonOverflow: oneOf(parsed.values["balloon-overflow"], ["truncate", "appendix"] as const, "--balloon-overflow"),
+      }),
+      ...(parsed.values["markup-mode"] === undefined ? {} : {
+        markupMode: oneOf(parsed.values["markup-mode"], ["mixed", "inline"] as const, "--markup-mode"),
       }),
       documentVersion: integer(parsed.values["document-version"], "--document-version"),
       expectedSourceDigest: parsed.values["expected-source-digest"],

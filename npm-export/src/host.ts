@@ -269,6 +269,7 @@ function validateRequest(value: unknown): HostRequest {
       "commentProfile",
       "commentColumnPlacement",
       "balloonOverflow",
+      "markupMode",
       "title",
       "additionalCss",
       "unsupportedContent",
