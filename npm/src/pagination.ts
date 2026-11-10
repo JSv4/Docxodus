@@ -107,6 +107,11 @@ export interface MeasuredBlock {
   sectionIndex: number;
   /** Measured height in points (content + padding + border, excluding margins) */
   heightPt: number;
+  /**
+   * Extra leading in points that an auto line-spacing multiple adds below the last line's text.
+   * Word lets it run past the bottom margin (issue #1571), so the block fits by `heightPt` less this.
+   */
+  trailingLeadingPt?: number;
   /** Inline frame paint's furthest bottom from this block's top, independent of its flow height. */
   frameExtentPt?: number;
   /** Extra source-flow gap imposed by preceding floats, after ordinary margin collapse. */
@@ -2373,6 +2378,7 @@ export class PaginationEngine {
         element: child,
         sectionIndex,
         heightPt,
+        trailingLeadingPt: this.lastLineTrailingLeadingPt(child),
         marginTopPt,
         marginBottomPt,
         keepWithNext: child.dataset.keepWithNext === "true",
@@ -3012,6 +3018,7 @@ export class PaginationEngine {
       element,
       sectionIndex,
       heightPt,
+      trailingLeadingPt: this.lastLineTrailingLeadingPt(measuredElement),
       clearancePt,
       frameExtentPt: frameBottoms.length ? Math.max(0, pxToPt(Math.max(...frameBottoms))) : undefined,
       marginTopPt: pxToPt(margins.topPx),
@@ -3095,6 +3102,44 @@ export class PaginationEngine {
     return element.tagName === "P" || /^H[1-6]$/.test(element.tagName);
   }
 
+  /**
+   * The extra leading an auto line-spacing multiple puts below the text of a laid-out paragraph's
+   * last line. Word puts that leading below the text (issue #908), and a page's last line needs
+   * only its text height: the leading may run past the bottom margin (issue #1571). Only text the
+   * converter's lift holds at the top of its line box qualifies; a run laid out with CSS's split
+   * leading would paint below its text height, and pictures, bottom borders and padding keep the
+   * full line. The smallest run bounds the leading below every run's text.
+   */
+  private lastLineTrailingLeadingPt(paragraph: HTMLElement): number {
+    const style = this.view.getComputedStyle(paragraph);
+    const multiple = parseFloat(style.getPropertyValue("--docx-auto-line-spacing"));
+    if (!(multiple > 1) || !this.isWordParagraphElement(paragraph) || paragraph.querySelector("img, svg")
+      || parseFloat(style.paddingBottom) > 0 || parseFloat(style.borderBottomWidth) > 0) return 0;
+    let leading = Infinity;
+    let checked: Element | null = null;
+    const walker = this.document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+    for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+      if (!/\S/.test(text.textContent ?? "")) continue;
+      let run = text.parentElement!;
+      while (run !== paragraph && run.parentElement !== paragraph) run = run.parentElement!;
+      if (run === checked) continue;
+      checked = run;
+      const runStyle = this.view.getComputedStyle(run);
+      const height = parseFloat(runStyle.lineHeight);
+      const natural = height / multiple;
+      // The lift is `top: (natural - height) / 2`; anything else leaves the text elsewhere in its line.
+      if (runStyle.position !== "relative" || !(Math.abs(parseFloat(runStyle.top) - (natural - height) / 2) < 0.01))
+        return 0;
+      leading = Math.min(leading, height - natural);
+    }
+    return Number.isFinite(leading) ? pxToPt(leading) : 0;
+  }
+
+  /** The height a block needs above the bottom of the page; see `MeasuredBlock.trailingLeadingPt`. */
+  private fitHeightPt(block: MeasuredBlock): number {
+    return Math.max(0, block.heightPt - (block.trailingLeadingPt ?? 0));
+  }
+
   private shouldSuppressPageTopSpacing(
     block: MeasuredBlock,
     isFirstOnPage: boolean,
@@ -3127,9 +3172,15 @@ export class PaginationEngine {
   private cloneBlockForPage(
     block: MeasuredBlock,
     isFirstOnPage: boolean,
-    pageInSection: number
+    pageInSection: number,
+    availablePt = Infinity,
   ): HTMLElement {
     const clone = block.element.cloneNode(true) as HTMLElement;
+    // A last line that fits only by its text height ends the block there; its leading runs past.
+    if (block.heightPt > availablePt) {
+      clone.style.setProperty("--docx-word-text-height", `${this.fitHeightPt(block)}pt`);
+      clone.style.height = "var(--docx-word-text-height)";
+    }
     // Freeze the measured column band. Chromium print can omit the first line of
     // later columns when their extent is expressed only as max-height.
     if (clone.dataset.paginationSequentialColumns === "true" && clone.style.columnFill === "auto"
@@ -4810,7 +4861,7 @@ export class PaginationEngine {
       // note-aware split breaks only where a line starts: the citing line moves whole.
       const fits = (head: HTMLElement) => {
         const measured = this.measureElement(head, dims, block.sectionIndex, prefix);
-        return effectiveMarginTopPt + measured.heightPt <= headLimitPt
+        return effectiveMarginTopPt + this.fitHeightPt(measured) <= headLimitPt
           && (!notesStart || notesStart(this.extractFootnoteRefs(head), measured.heightPt));
       };
       split = this.splitParagraphAtLargestFit(paragraph, fits, {
@@ -7113,7 +7164,7 @@ export class PaginationEngine {
       // Note: bottom margin is NOT included in the fit check because the last block's
       // bottom margin extends beyond the content area and is clipped by overflow:hidden.
       // It is still tracked in remainingHeight for correct margin collapsing with the next block.
-      const requiredHeight = Math.max(block.heightPt, block.frameExtentPt ?? 0);
+      const requiredHeight = Math.max(this.fitHeightPt(block), block.frameExtentPt ?? 0);
       const blockSpace = effectiveMarginTop + requiredHeight + additionalFootnoteHeight;
 
       // Effective remaining height (content area minus footnotes already on page)
@@ -7147,7 +7198,7 @@ export class PaginationEngine {
       // oversized fallback so the cloned head participates in the same margin
       // and footnote accounting as every other block. Only the paragraph's own lines decide
       // this: notes too tall for the page are split or moved by the note placement below.
-      if (effectiveMarginTop + block.heightPt > effectiveRemainingHeight) {
+      if (effectiveMarginTop + this.fitHeightPt(block) > effectiveRemainingHeight) {
         const fragments = this.tryFragmentParagraph(
           block,
           blockDimensions,
@@ -7194,6 +7245,7 @@ export class PaginationEngine {
           block,
           isFirstOnPage,
           pageInSection(block.sectionIndex),
+          effectiveRemainingHeight - effectiveMarginTop - additionalFootnoteHeight,
         ));
         remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
         prevMarginBottomPt = block.marginBottomPt;
@@ -7250,6 +7302,7 @@ export class PaginationEngine {
             block,
             isFirstOnPage,
             pageInSection(block.sectionIndex),
+            effectiveRemainingHeight - effectiveMarginTop,
           ));
           remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
           prevMarginBottomPt = block.marginBottomPt;
