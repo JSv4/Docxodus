@@ -210,8 +210,10 @@ data-URL media type. An unresolved or unsafe automatic resource is
 a typed warning or error according to policy; it is never silently retained as an online
 dependency. Fixed page boxes preserve page count and physical geometry across hosts; exact visual
 and text-flow reproduction additionally requires the same fingerprinted font environment or
-license-permitted embedded webfonts. Schema v1 does not claim that arbitrary system or
-OOXML-embedded fonts are portable.
+license-permitted embedded webfonts. Schema v1 does not claim that arbitrary system fonts are
+portable. Fonts embedded in the DOCX itself travel with the document: the Node adapter
+de-obfuscates them and offers them to the font resolver (see "Fonts embedded in the document"
+below), so they are portable whenever their own embedding bits permit the requested output.
 
 The offline reopen waits for the same final resource barrier, re-inventories every page and source
 fragment, and compares the canonical PageMap (allowing only the documented point tolerance), not
@@ -1047,8 +1049,7 @@ their family/face metadata, hashes them, and injects license-permitted files as 
 the isolated page. That works for owned and caller-owned browsers on all supported hosts. System
 fonts may be used when no directory supplies a family, but an exact file/version must come from a
 caller environment attestation or the render is marked `font_environment_unverified`; strict mode
-rejects it. OOXML embedded fonts are not exported until de-obfuscation and embedding-license policy
-is implemented. For TTF/OTF, OS/2 `fsType` restricted-license bits forbid injection. WOFF/WOFF2 or
+rejects it. OOXML embedded fonts are a resolver source of their own, described below. For TTF/OTF, OS/2 `fsType` restricted-license bits forbid injection. WOFF/WOFF2 or
 caller-supplied files whose embedding rights cannot be derived require an explicit caller licensing
 attestation recorded in the report; absence is a policy error, not assumed permission. A license
 record is scoped to its permitted HTML/PDF outputs and states whether subsetting is permitted.
@@ -1085,6 +1086,34 @@ If Chromium rejects selected local bytes, the coordinator retries with bounded
 discards them from selection, warns (or fails in strict mode), and tries the next
 face or substitute. Caller cancellation, the render deadline and cleanup abort
 the same host resolver signal across all attempts.
+
+#### Fonts embedded in the document
+
+A DOCX can carry its own faces: `w:fontTable` links a family's `w:embedRegular`, `w:embedBold`,
+`w:embedItalic` and `w:embedBoldItalic` to font parts, each normally obfuscated with its
+`w:fontKey` GUID (the GUID's 16 bytes, in reverse order, XOR the first 32 bytes of the program).
+The Node adapter reads them from the source package once per export
+(`npm-export/src/fonts/document.ts`), reverses the obfuscation, and decodes each program with the
+same face decoder as a configured file, so the OS/2 embedding bits, the no-subsetting rule, and
+the per-file, file-count, aggregate-byte and character-map limits are the ones every other source
+obeys. The slot, not the font's own style bits, decides the face: bold is weight 700, italic is
+`italic`. A face is offered only for that document, and only under the family name the font
+table gives it. A part with no `w:fontKey` is read as a plain program, as Word reads it.
+
+Precedence is per family, in this order: an explicit font directory, a local (installed) font when
+`--use-local-fonts` is on, the document's embedded faces, the substitution table, then the generic
+fallback. Word itself prints an installed family in preference to the document's copy of it, even
+when only the installed regular exists and the document embeds a bold (see
+`docs/ooxml_corner_cases.md`, "Embedded fonts"), which is why a local family outranks an embedded
+one. A missing, truncated, wrongly keyed, oversized or rights-restricted embedding is skipped with a
+`document_font_skipped` warning and the family falls through to the next source; it never fails the
+export, even under `strictFonts`, which then judges only the face the family actually resolved to.
+As in directory discovery, every embedding read counts against `fontFiles` and every byte read
+against `fontTotalBytes`, used or not, and exceeding either is a `resource_limit` error. The report records a used embedded face with `source: "document"`, its program's SHA-256
+and its rights evidence, so the font identity digest and renderer fingerprint cover it, and a
+document-sourced face counts as host-verified. A document with usable embedded faces gets a resolver
+even when no font directory is configured; its other families are then reported `missing` by that
+resolver rather than `unverified` by the browser.
 
 The versioned browser `FontResolver` contract used by `fontResolver` has bounded request/result
 records and an `AbortSignal`; Node constructs the same resolver from `fontDirectories`. A
@@ -1609,11 +1638,12 @@ The same line selector handles plain exact-spaced justified text in compatibilit
 Only ordinary spaces change advance, per selected line; a naturally fitting final line keeps its
 spaces. Each continuation retains the full exact pitch. Admission requires the font's ascent and
 descent to fit that line's 80%/20% bands, so overlapping ink keeps the existing inline overflow path.
-Hard breaks, tabs, bidi, mixed runs, pictures and columns retain their existing layout. Eligibility
+Hard breaks, tabs, bidi, pictures and columns retain their existing layout; mixed runs take the
+HTML-painted line choices described below. Eligibility
 is paragraph-local: neighboring rich text, tables, lists, links or different line-spacing rules
 do not change an otherwise eligible paragraph's fitting, kerning or paint policy. Exact paragraphs
-retain HTML paint; automatic paragraphs retain the vector painter. Table/list contents, notes,
-comments, textboxes and frames remain excluded, while ordinary running-story paragraphs still
+retain HTML paint; automatic paragraphs retain the vector painter. Notes, comments, textboxes
+and frames remain excluded, and table/list contents keep HTML paint, while ordinary running-story paragraphs still
 qualify. The vector keeps the positioned paint phase of baseline-adjusted HTML runs, preserving
 PDF text order around tables and other unprepared content. Graphics, wrapping frames and unsupported
 picture flow retain the document-level guard
@@ -1631,6 +1661,20 @@ its block geometry in either compatibility mode. The precision fitter replaces t
 when its line choices differ or an authored character-width scale requires owned lines. Vector paint derives word positions from the same resolved advances
 in both paths: matching line breaks do not establish that the browser's hinted word advances match
 the font. Natural final lines, alignment and repeated ordinary spaces retain their own rules.
+Justified paragraphs the precision fitter does not own keep HTML layout and paint but take the
+same line choices (#1550): mixed runs, hyperlinks, list items (the marker, its tab and the
+indents narrow only the first line, as measured from the first word's position), unscaled text
+in fixed-grid table cells, and paragraphs that state no automatic multiple (Word's implicit single
+spacing, or a minimum). The selector measures each word across its runs with each run's own
+font. A line that fits at natural spacing is already the browser's choice and nothing changes.
+When Word condenses a line, that line's text segments are wrapped in
+`[data-docx-condensed-line]` spans whose negative `word-spacing` removes exactly the overflow the
+browser measures for the line unwrapped (plus 1/16 px); the browser still justifies it, so glyphs,
+run elements and source text are untouched. The change commits only if every resulting line
+matches Word's inventory, and is otherwise undone. Inline fields, comment anchors, tabs, pictures,
+breaks, character scaling, letter or word spacing, raised text, columns and graphics retain the
+existing flow; left-aligned text and compatibility modes below 15 without `w:wpJustification`
+never condense.
 
 The converter retains resolved `w:w` percentages as `--docx-character-scale`, including an explicit
 100% reset of inherited formatting. For plain automatically spaced body paragraphs, resolved fixed-width cells and running

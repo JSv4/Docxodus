@@ -174,7 +174,9 @@ function uniformParagraphRuns(paragraph: HTMLElement, allowStructuralWrappers = 
     || runs.some(child => {
       const inMarker = marker?.contains(child);
       if (!(child instanceof view.HTMLElement) || child.localName !== "span"
-        || (!inMarker && ((child !== note && child.children.length) || !child.textContent?.trim()))) return true;
+        // A condensed justified line (word-text.ts) narrows spaces inside its run, nothing else.
+        || (!inMarker && ((child !== note && child.querySelector(':scope > :not([data-docx-condensed-line])'))
+          || !child.textContent?.trim()))) return true;
       const run = view.getComputedStyle(child);
       // Converter list prefixes are an inline flex box with two flex items: the
       // number and its tab suffix. Their uniform metrics must move together.

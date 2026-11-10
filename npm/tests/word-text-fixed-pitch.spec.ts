@@ -3,7 +3,7 @@ import { wordTextScript } from './word-text-script.js';
 
 const prefix = 'Copper lanterns swing above the quiet harbor wall while gulls nap';
 const style = `p{font:12pt 'Liberation Mono';line-height:18px;margin:0;--docx-auto-line-spacing:1}
-  span{white-space:pre-wrap;line-height:18px;--docx-font-kerning:none}`;
+  span{white-space:pre-wrap;line-height:18px;font-kerning:none}`;
 
 test('fixed cells distinguish an exact fit from a twip-narrower band and an extra character', async ({page}) => {
   await page.setContent(`<style>${style}</style><main data-docx-compatibility-mode="14">
@@ -52,7 +52,7 @@ test('fallback glyphs and an explicitly kerned run retain measured advances', as
     @font-face{font-family:PartialMono;src:local('Liberation Mono');unicode-range:U+20-59,U+5B-7E}
     </style><main data-docx-compatibility-mode="14">
     <p style="width:79.2pt;font-family:PartialMono,'Liberation Sans'"><span>Copper ZZZZ TAIL</span></p>
-    <p style="width:468pt"><span style="--docx-font-kerning:normal">${prefix} TAIL</span></p></main>`);
+    <p style="width:468pt"><span style="font-kerning:normal">${prefix} TAIL</span></p></main>`);
   await page.evaluate(() => document.fonts.ready);
   await page.addScriptTag({content:wordTextScript});
   const lines = await page.evaluate(() => {

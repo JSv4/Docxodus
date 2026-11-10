@@ -6196,8 +6196,8 @@ export class PaginationEngine {
     holder.style.cssText = `position:absolute;visibility:hidden;width:${(right - left) / scale}px`;
     paragraph.parentElement!.appendChild(holder);
     let remaining: HTMLElement | null = source.cloneNode(true) as HTMLElement;
-    // Precision lines chosen at full width are provisional when this page has exclusions.
-    for (const line of Array.from(remaining.querySelectorAll<HTMLElement>('[data-docx-word-line]'))) {
+    // Precision and condensed lines chosen at full width are provisional when this page has exclusions.
+    for (const line of Array.from(remaining.querySelectorAll<HTMLElement>('[data-docx-word-line], [data-docx-condensed-line]'))) {
       line.parentElement!.removeAttribute('data-docx-word-fit');
       line.replaceWith(...Array.from(line.childNodes));
     }

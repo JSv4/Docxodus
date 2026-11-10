@@ -6943,9 +6943,12 @@ fits 27 there, a separate sub-twip difference in its line height that this fix d
 `PaginationEngine` measures `MeasuredBlock.trailingLeadingPt`, the leading below the last line's
 text, for converter runs that carry the automatic-spacing lift. It uses that one fit height for
 whole blocks and for fragment heads, and a block placed by it gets a declared
-`--docx-word-text-height`, so its box ends at the text. The export's Word-text pass removes the lift
-from uniform runs before pagination, and its pre-paint clip check would then see glyphs below the
-band. Those paragraphs keep the full-line test, and the export still prints 23 lines.
+`--docx-word-text-height`, so its box ends at the text. The export's Word-text pass used to remove
+the lift from the uniform runs it fits, so those paragraphs kept the full-line test and standalone
+PDF export printed 23 lines at the 15pt remainder. It now keeps every run's converter offset, for
+unchanged and for re-wrapped lines, because the vector painter places baselines from the paragraph
+box whatever the DOM offset is. The shared fit applies in export too: 24 lines at 15pt and 23 at
+13pt, pinned by `export-last-line-leading.spec.ts`.
 
 ## Fractional whole-number measures truncate in Word (#1622)
 
@@ -7076,6 +7079,43 @@ not changed here; it is tracked as #1652.
 - `DocxDiffStyleParentTests.ParentChange_ArchivesBothPropertySlices`: the changed-parent path,
   with a run-property change as the control.
 
+## Embedded fonts (#1575)
+
+```xml
+<w:font w:name="Packaged Probe">
+  <w:embedRegular r:id="rIdF" w:fontKey="{6F1D2A10-3B4C-4D5E-8F60-718293A4B5C6}"/>
+</w:font>  <!-- word/fonts/font1.odttf: the program, its first 32 bytes XOR the reversed GUID -->
+```
+
+Measured in desktop Word 2024 (Windows, `ExportAsFixedFormat`, PDF fonts read with PyMuPDF) on the
+one-line "Tide tables for the north quay" document at 12pt. The probe font's glyphs advance 0.9em,
+so the embedded face prints the line 324.0pt wide.
+
+| Variant | Word prints | Line width | Docxodus before | Docxodus after |
+|---|---|---|---|---|
+| The issue's font (no name ID 4, OS/2 code pages 0) | Calibri | 145.33pt | Times New Roman | embedded face |
+| Same with a full name (ID 4) only | Arial | 156.1pt | substitute | embedded face |
+| Full name and Latin-1 code page bit | embedded face (`___WRD_EMBED_SUB_45`) | 324.0pt | substitute | embedded face |
+| No `w:fontKey`, plain program in the part | embedded face | 324.0pt | substitute | embedded face |
+| No `w:embedTrueTypeFonts` in settings | embedded face | 324.0pt | substitute | embedded face |
+| Wrong key, or part truncated to 200 bytes | Calibri | 145.33pt | substitute | warning, then fallback |
+| Four slots, advances 0.9/0.7/0.5/0.3em | each slot in its style | 118.8/67.2/60.0/54.0pt | substitute | each slot in its style |
+| A different same-name font installed per user (0.4em) | the installed font, every style | 144.0pt | (local: installed) | local, when enabled |
+
+**Analysis.** Word does use embedded fonts, whatever `w:embedTrueTypeFonts` says (that setting
+only controls saving), and binds each `w:embed*` slot to its style. Two of its rules are not
+OOXML's. First, an installed family beats the document's copy entirely: with only an installed
+regular, Word synthesized bold and italic from it rather than use the embedded bold and italic
+faces. Second, Windows will not load an embedded program without a full name (name ID 4), and
+font mapping rejects one whose OS/2 code page bits miss the `w:charset` it is used for, so the
+issue's synthetic font prints in a fallback. Real embeddings come from installed fonts that have
+both, so Docxodus does not reproduce those two load checks; it applies its own decoding and OS/2
+embedding-rights checks instead.
+
+**Code.** `npm-export/src/fonts/document.ts` reads and de-obfuscates the parts;
+`npm-export/src/fonts/resolver.ts` (`withDocumentFaces`, `withLocalFaces`) places them after an
+explicit directory and an enabled local family, and before substitution.
+
 ---
 ## An empty paragraph that only carries a section break (#1572)
 
@@ -7133,3 +7173,83 @@ line therefore sent the next section's first line 7.04 pt down instead of one li
 change, the empty mark's own line filled the second column and hid this. Vector paragraphs in
 columns now set `break-inside: avoid` (`npm/src/word-text.ts`); the vectoriser already skips
 paragraphs that were split across columns.
+
+## Word condenses justified lines in every paragraph structure (#1550)
+
+Word 2024 measured with `Range.Information` line positions, one hidden instance per batch, on
+copies of the issue's generator output with Liberation Serif renamed to its metric twin Times New
+Roman. Every paragraph holds the same 12pt justified text in a 468pt column at compatibility
+mode 15; at natural spacing its first line overflows by about 3pt.
+
+| Fixture | Word line 1 ends | Docxodus before | Docxodus after |
+| --- | --- | --- | --- |
+| `plain.docx` | `pier as` | `pier as` | `pier as` |
+| `bold-elsewhere`, `table-elsewhere`, `list-elsewhere`, `link-elsewhere` | `pier as` | `pier as` | `pier as` |
+| `no-explicit-line-spacing.docx` (no `w:spacing` anywhere) | `pier as` | `pier` | `pier as` |
+| `bold-same-paragraph.docx` (` harb` bold) | `pier` | `pier` | `pier` |
+| first `the` bold in the paragraph | `pier as` | `pier` | `pier as` |
+| ` harb` inside a hyperlink | `pier as` | `pier` | `pier as` |
+| numbered item, empty marker, no indent | `pier as` | `pier` | `pier as` |
+| numbered item `1.`, 0.5in hanging indent | `northern` | `our` | `northern` |
+| fixed 468pt cell, zero cell margins | `pier as` | `pier` | `pier as` |
+| fixed 468pt cell, default 0.075in cell margins | `pier` | `northern` | `pier` |
+| left-aligned controls (plain, bold, list `1.`, cell margins) | `pier`, `pier`, `our`, `northern` | same | same |
+| compatibility mode 14 controls (plain, bold, no spacing) | `pier` | `pier` | `pier` |
+
+The issue expected `pier as` for `bold-same-paragraph.docx`, but Word breaks after `pier`: the bold
+` harb` adds 3.35pt, so condensing 474.51pt into 468pt costs more strain (2 × 6.51 / 48pt of gaps = 0.271) than
+expanding the 461.51pt line without `as` (6.49 / 45 = 0.144). That is the same least-strain rule
+`fitWordLines` already uses for plain text, applied to each run's own font. Bolding a narrow word
+(`the`, +0.6pt) keeps the condensed `pier as` line, as Word shows.
+
+The `w:wpJustification` condensing limit is the MS-OE376 selection band, not a gap budget. In Courier
+New 12pt (7.2pt cells, 65 cells to the column) with mode 14 and the option set, Word keeps a 66- or
+67-cell first line (482.4pt, within 468 × (1 + 281/7200) = 486.27pt) and wraps a 68- or 69-cell line,
+with 10 gaps and with only 2. Without the option, the 66-cell line wraps. Docxodus matches all nine
+fixtures.
+
+Paragraphs the precision fitter does not own (mixed runs, links, list items, unscaled cells and
+paragraphs that state no line spacing) now run the same line selector over every run's measured
+advances. When Word condenses a line, only that
+line's ordinary spaces narrow, by the overflow the browser measures for it; HTML still lays out and
+paints the paragraph. Public PDF regressions pin each placement with its left-aligned and mode-14
+controls.
+
+## Word kerns and ligates only on request (#1562)
+
+Word 2024 measured with `Range.Information` line positions on the issue's generator output, with
+Liberation Serif renamed to Times New Roman. The 12pt left-aligned paragraph sits in a 468pt column;
+through `Water` it is 471.15pt unkerned, so `Water` fits only when `We`, `Wa`, `Va` and the other
+pairs are kerned.
+
+| Fixture | Word line 1 ends | Docxodus before | Docxodus after |
+| --- | --- | --- | --- |
+| `plain.docx`, `bold-elsewhere.docx` | `Where` | `Where` | `Where` |
+| bold `Tawny` in the same paragraph, no `w:kern` | `Where` | `Water` | `Where` |
+| `w:kern w:val="28"` (14pt) on 12pt text | `Where` | `Where` | `Where` |
+| `w:kern w:val="25"` (12.5pt) | `Where` | `Where` | `Where` |
+| `w:kern w:val="24"` (12pt) | `Water` | `Water` | `Water` |
+| `w:kern w:val="2"` in the run, defaults or a paragraph style | `Water` | `Water` | `Water` |
+| `w:kern w:val="2"` with bold `Tawny` in the same paragraph | `Water` | `Water` | `Water` |
+| `w:kern w:val="0"` in the run, also over `w:kern w:val="2"` defaults | `Where` | `Water` | `Where` |
+| justified, no `w:kern` | `Water` | `Water` | `Water` |
+
+ECMA-376 17.3.2.19 makes `w:val` the smallest kerned size, which would read `0` as every size.
+Word instead treats `0` as kerning off, the value it writes to cancel inherited kerning. The
+justified row keeps `Water` because modern justification condenses the 3.15pt overflow.
+
+Ligatures were compared on the issue's Calibri `ligature-*.docx` line with `Range.Information`
+x positions (0.5pt resolution). Without `w14:ligatures`, the plain and bold-elsewhere copies are
+identical: `staff` spans 72–92pt and the `ffi` of `office` starts at 100.5, 103.5 and 107pt. With
+`w14:ligatures w14:val="standard"` the same characters sit at 72–91.5pt and 100, 103 and 106pt, and
+`all` narrows further (`st` begins 0.5pt earlier). Word forms no ligatures by default.
+
+The converter's layout stylesheet now sets `font-kerning: none` and `font-variant-ligatures: none`
+on `body`. A run whose resolved `w:kern` is positive and no larger than its size gets
+`font-kerning: normal`; a `w14:ligatures` value maps each named set to its OpenType feature
+(`standard` liga, `contextual` clig, `historical` hlig, `discretional` dlig) in
+`font-feature-settings`. Every rendering path, flow HTML as well as the paginated export, inherits
+the same rule, so it no longer depends on which renderer owns a paragraph. The export's text fitter
+measures with the same kerning and ligatures (canvas `textRendering: optimizeSpeed` disables
+ligatures without touching kerning, matching the DOM); runs that request specific ligature features
+keep the browser's own line layout.

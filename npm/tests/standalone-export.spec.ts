@@ -158,7 +158,7 @@ test('freezes the closed render-report v2 schema and exact resource-limit vocabu
   expect(fontEntry.properties.status.enum).toEqual([
     'resolved', 'substituted', 'missing', 'load_failed', 'unverified',
   ]);
-  expect(fontEntry.properties.source.enum).toEqual(['browser', 'configured', 'attested', 'local']);
+  expect(fontEntry.properties.source.enum).toEqual(['browser', 'configured', 'attested', 'local', 'document']);
   expect(fontEntry.properties.licenseEvidence.required).toEqual(
     ['kind', 'identity', 'noSubsetting'],
   );

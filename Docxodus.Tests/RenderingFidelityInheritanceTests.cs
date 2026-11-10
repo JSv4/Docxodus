@@ -169,33 +169,45 @@ public class RenderingFidelityInheritanceTests
         Assert.All(blanks, p => Assert.DoesNotContain("line-height: 0.05pt", (string?)p.Attribute("style")));
     }
 
+    // Word 2024 on 11pt text: a 11pt minimum kerns; 11.5pt, 14pt and 0 do not (#1562).
     [Theory]
-    [InlineData("<w:kern w:val=\"28\"/>", "none")]
-    [InlineData("<w:kern w:val=\"22\"/>", "normal")]
-    [InlineData("<w:kern w:val=\"0\"/>", "normal")]
-    public void KerningIntentResolvesTheSourceMinimumSize(string properties, string expected)
+    [InlineData("<w:kern w:val=\"22\"/>", true)]
+    [InlineData("<w:kern w:val=\"23\"/>", false)]
+    [InlineData("<w:kern w:val=\"28\"/>", false)]
+    [InlineData("<w:kern w:val=\"0\"/>", false)]
+    [InlineData("", false)]
+    public void KerningAppliesOnlyFromItsMinimumSize(string properties, bool kerned)
     {
         var html = Render($"<w:p><w:r><w:rPr>{properties}</w:rPr><w:t>AV A</w:t></w:r></w:p>");
         var run = html.Descendants().Single(e => e.Name.LocalName == "span" && e.Value == "AV A");
-        Assert.Contains($"--docx-font-kerning: {expected}", (string?)run.Attribute("style"));
+        Assert.Equal(kerned, ((string?)run.Attribute("style") ?? "").Contains("font-kerning: normal"));
     }
 
     [Fact]
-    public void KerningIntentInheritsDefaultsAndHonorsARunOverride()
+    public void KerningInheritsDefaultsAndHonorsARunOverride()
     {
-        var html = Render("<w:p><w:r><w:t>Inherited</w:t></w:r><w:r><w:rPr><w:kern w:val=\"28\"/></w:rPr><w:t>Overridden</w:t></w:r></w:p>",
-            runDefaults: "<w:kern w:val=\"22\"/>");
+        var html = Render("<w:p><w:r><w:t>Inherited</w:t></w:r><w:r><w:rPr><w:kern w:val=\"0\"/></w:rPr><w:t>Overridden</w:t></w:r></w:p>",
+            runDefaults: "<w:kern w:val=\"2\"/>");
         var runs = html.Descendants().Where(e => e.Name.LocalName == "span").ToList();
-        Assert.Contains("--docx-font-kerning: normal", (string?)runs.Single(e => e.Value == "Inherited").Attribute("style"));
-        Assert.Contains("--docx-font-kerning: none", (string?)runs.Single(e => e.Value == "Overridden").Attribute("style"));
+        Assert.Contains("font-kerning: normal", (string?)runs.Single(e => e.Value == "Inherited").Attribute("style"));
+        Assert.DoesNotContain("font-kerning", (string?)runs.Single(e => e.Value == "Overridden").Attribute("style") ?? "");
     }
 
-    [Fact]
-    public void AbsentKerningLeavesLegacyRunStylesUnchanged()
+    // Word 2024 forms no ligatures without w14:ligatures; each named set enables its own feature.
+    [Theory]
+    [InlineData("", null)]
+    [InlineData("none", null)]
+    [InlineData("standard", "\"liga\" 1")]
+    [InlineData("standardContextual", "\"liga\" 1, \"clig\" 1")]
+    [InlineData("historicalDiscretional", "\"hlig\" 1, \"dlig\" 1")]
+    [InlineData("all", "\"liga\" 1, \"clig\" 1, \"hlig\" 1, \"dlig\" 1")]
+    public void LigaturesFollowTheRunsOwnSets(string value, string? features)
     {
-        var html = Render("<w:p><w:r><w:t>Default kerning</w:t></w:r></w:p>");
-        var run = html.Descendants().Single(e => e.Name.LocalName == "span" && e.Value == "Default kerning");
-        Assert.DoesNotContain("--docx-font-kerning", (string?)run.Attribute("style"));
+        var ligatures = value == "" ? "" : $"<w14:ligatures xmlns:w14=\"{W14.w14}\" w14:val=\"{value}\"/>";
+        var html = Render($"<w:p><w:r><w:rPr>{ligatures}</w:rPr><w:t>office</w:t></w:r></w:p>");
+        var style = (string?)html.Descendants().Single(e => e.Name.LocalName == "span" && e.Value == "office").Attribute("style") ?? "";
+        if (features == null) Assert.DoesNotContain("font-feature-settings", style);
+        else Assert.Contains($"font-feature-settings: {features}", style);
     }
 
     [Theory]
