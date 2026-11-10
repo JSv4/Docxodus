@@ -8531,6 +8531,25 @@ namespace Docxodus
                 e.Name == W.shadow || e.Name == W.rPrChange);
         }
 
+        /// <summary>
+        /// An empty, zero-width box <paramref name="ascent"/> ems tall standing on the baseline: it gives
+        /// a mapped symbol marker's line the ascent of the font the glyph no longer renders in, which
+        /// Word sizes that line by, and no descent (#1567). The layout pass reads it as marker ascent.
+        /// </summary>
+        private static XElement GlyphAscentBox(decimal ascent)
+        {
+            var box = new XElement(Xhtml.span,
+                new XAttribute("data-docx-glyph-ascent", ascent.ToString("0.####", NumberFormatInfo.InvariantInfo)),
+                new XAttribute("aria-hidden", "true"), new XText(string.Empty));
+            box.AddAnnotation(new Dictionary<string, string>
+            {
+                { "display", "inline-block" }, { "width", "0" },
+                { "height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}em", ascent) },
+                { "vertical-align", "baseline" },
+            });
+            return box;
+        }
+
         private static void DefineLineHeight(Dictionary<string, string> style, XElement paragraph)
         {
             // Don't set a default line-height. LibreOffice doesn't set explicit line-height,
@@ -8685,6 +8704,12 @@ namespace Docxodus
                     var fallback = Internal.SymbolFontMapper.FallbackFamilies(markerFont);
                     if (fallback == null) style.Remove("font-family");
                     else style["font-family"] = fallback;
+                    // Word still lifts the marker's line to the replaced font's ascent (#1567). An empty
+                    // box that tall, standing on the baseline, keeps it wherever the glyph renders. An
+                    // exact line never grows, so it gets none.
+                    if (!paragraphHasExactLineHeight)
+                        content = new object?[] { GlyphAscentBox(Internal.SymbolFontMapper.Ascent(markerFont)) }
+                            .Concat((List<object?>)content).ToList();
                 }
             }
             else

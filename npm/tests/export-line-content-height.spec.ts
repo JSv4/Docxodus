@@ -44,14 +44,15 @@ const numbering = (markerProps: string, format = 'decimal', text = '%1.') => '<w
 const face = (font: string) => `<w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:cs="${font}"/>`;
 const tasks = ['Repaint the harbor signs', 'Count the coils of rope', 'Check the slipway winch', 'Log the tide tables',
   'Grease the ferry ramp', 'Sweep the pier planks', 'Trim the lantern wick', 'Store the storm shutters'];
-/** Eight one-line Liberation Sans items and a wrapped ninth, as in the #1567 generator. */
-const bullets = (font: string, glyph: string, props = '', spacing = single) => docx(
-  paragraph(run('Opening line.', face('Liberation Sans')))
-  + [...tasks, 'Repaint the harbor signs before the storms reach our northern pier while the gulls complain '
+/** One-line Liberation Sans items and a wrapped last one, as in the #1567 generator; no font, no list. */
+const bullets = (font: string | null, glyph: string, props = '', spacing = single, items = tasks,
+  text = 'Liberation Sans') => docx(
+  paragraph(run('Opening line.', face(text)))
+  + [...items, 'Repaint the harbor signs before the storms reach our northern pier while the gulls complain '
     + 'about the noise all afternoon long and nobody on the slipway minds at all.']
-    .map(task => paragraph(run(task, face('Liberation Sans')), numbered + spacing)).join('')
-  + paragraph(run('Closing line.', face('Liberation Sans'))),
-  numbering(`<w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:hint="default"/>${props}`, 'bullet', glyph));
+    .map(task => paragraph(run(task, face(text)), (font ? numbered : '') + spacing)).join('')
+  + paragraph(run('Closing line.', face(text))),
+  font ? numbering(`<w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:hint="default"/>${props}`, 'bullet', glyph) : '');
 
 /** A one-page Letter document in 12pt Liberation Serif, as the issue's generators write it. */
 function docx(body: string, numberingXml = ''): Uint8Array {
@@ -108,6 +109,29 @@ const cases: Array<{ name: string; source: Uint8Array; steps: number[] }> = [
   numbering(size(18))), steps: [13.80, 19.32, 13.80, 19.44, 13.80, 19.44, 13.80] },
   { name: 'a 16pt bullet in the text face', source: bullets('Liberation Sans', '\u2022', size(16)),
     steps: [17.52, 17.52, 17.64, 17.52, 17.52, 17.52, 17.64, 17.52, 17.52, 13.83, 13.80, 13.80] },
+  // Issue #1567: a mapped symbol bullet still lifts its line to the replaced font's ascent (Symbol
+  // 2059/2048, Wingdings 1841/2048 of an em) over the text's descent; wrapped lines are unchanged.
+  { name: 'a 12pt Symbol bullet', source: bullets('Symbol', '\uf0b7'),
+    steps: [14.64, 14.52, 14.64, 14.64, 14.64, 14.52, 14.64, 14.64, 14.64, 13.80, 13.80, 13.83] },
+  { name: 'a 16pt Symbol bullet', source: bullets('Symbol', '\uf0b7', size(16)),
+    steps: [18.60, 18.60, 18.60, 18.72, 18.60, 18.60, 18.60, 18.72, 18.63, 13.80, 13.80, 13.80] },
+  { name: 'a 16pt Wingdings bullet', source: bullets('Wingdings', '\uf0a7', size(16)),
+    steps: [...Array(9).fill(16.92), 13.83, 13.80, 13.80] },
+  { name: 'a 12pt Symbol bullet at 1.15', source: bullets('Symbol', '\uf0b7', '', multiple, [...tasks, ...tasks, ...tasks, ...tasks]),
+    steps: [14.64, ...[16.68, 16.68, 16.68, 16.68, 16.68, 16.68, 16.68, 16.68, 16.71, 16.68, 16.68, 16.68, 16.68, 16.68,
+      16.68, 16.68, 16.68, 16.68, 16.70, 16.68, 16.68, 16.56, 16.68, 16.68, 16.68, 16.68, 16.68, 16.68, 16.71, 16.68,
+      16.68, 16.68], 15.84, 15.84, 15.96] },
+  // Over Liberation Serif the bullet's fallback face matches the text, but Symbol's ascent still counts.
+  { name: 'a 12pt Symbol bullet over Liberation Serif', source: bullets('Symbol', '\uf0b7', '', single,
+    [...tasks, ...tasks, ...tasks, ...tasks], 'Liberation Serif'),
+  steps: [14.64, 14.64, 14.64, 14.64, 14.76, 14.64, 14.64, 14.64, 14.64, 14.76, 14.64, 14.67, 14.64, 14.64,
+    14.64, 14.76, 14.64, 14.64, 14.64, 14.64, 14.64, 14.76, 14.66, 14.64, 14.64, 14.64, 14.64, 14.76, 14.64,
+    14.64, 14.64, 14.64, 14.64, 13.95, 13.80] },
+  { name: 'a 12pt Wingdings bullet, no taller than the text', source: bullets('Wingdings', '\uf0a7'),
+    steps: [...Array(11).fill(13.80), 13.83] },
+  { name: 'control: a text-face bullet', source: bullets('Liberation Sans', '\u2022'),
+    steps: [...Array(11).fill(13.80), 13.83] },
+  { name: 'control: no bullets', source: bullets(null, ''), steps: Array(11).fill(13.80) },
   // Alignment does not change how tall a line is.
   { name: 'a centered 16pt lead word', source: docx(leadIn(`${single}<w:jc w:val="center"/>`)),
     steps: [11.88, 10.44, 10.32, 10.32] },

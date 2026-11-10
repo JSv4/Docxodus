@@ -1673,7 +1673,9 @@ One empty metric box after each line's final word reserves its maximum ascent pl
 minimum spacing adds its surplus above the baseline once per line, and automatic spacing adds its surplus below
 the baseline. A generated list marker only raises its first line's ascent: desktop Word adds
 neither its descent nor a multiple of it, so an automatic multiple applies to the text's own
-height. Converter line breaks stay in their runs; the direction mark after a break sizes a line
+height. A bullet mapped from Symbol or Wingdings carries the converter's empty
+`data-docx-glyph-ascent` box, as tall as the replaced font's ascent, which counts as the
+marker's ascent (#1567). Converter line breaks stay in their runs; the direction mark after a break sizes a line
 only when the line holds nothing else, so an empty line made by `w:br` takes the break's font and
 a break ending a line of text does not size it. The shared paginator uses
 these boundaries for continuations, retaining minimum heights and trimming only trailing automatic
