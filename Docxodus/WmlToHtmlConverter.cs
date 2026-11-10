@@ -8388,7 +8388,8 @@ namespace Docxodus
         {
             if (spacing == null) return;
 
-            var spacingBefore = WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.before));
+            var spacingBefore = Internal.ParagraphLineGrid.Spacing(spacing, W.beforeLines,
+                WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.before)));
             if (absorbedSpaceBefore > 0) spacingBefore = Math.Max(0, (spacingBefore ?? 0) - absorbedSpaceBefore);
             if (spacingBefore != null && elementName != Xhtml.span)
                 style.AddIfMissing("margin-top",
@@ -8436,7 +8437,8 @@ namespace Docxodus
                     style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0#}pt", points));
             }
 
-            var spacingAfter = suppressTrailingWhiteSpace ? 0 : WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.after));
+            var spacingAfter = suppressTrailingWhiteSpace ? 0 : Internal.ParagraphLineGrid.Spacing(spacing, W.afterLines,
+                WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.after)));
             if (spacingAfter != null)
                 style.AddIfMissing("margin-bottom",
                     spacingAfter > 0m
@@ -11462,7 +11464,8 @@ namespace Docxodus
                 if (e.Name != W.p) return ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft);
                 var previous = Beside(i, -1);
                 var absorbed = previous == null ? 0 : Contextual(e) ? int.MaxValue : Contextual(previous)
-                    ? WordprocessingMLUtil.AttributeToTwips(previous.Element(W.pPr)?.Element(W.spacing)?.Attribute(W.after)) ?? 0
+                    ? (int)(Internal.ParagraphLineGrid.Spacing(previous.Element(W.pPr)?.Element(W.spacing), W.afterLines,
+                        WordprocessingMLUtil.AttributeToTwips(previous.Element(W.pPr)?.Element(W.spacing)?.Attribute(W.after))) ?? 0)
                     : 0;
                 return ConvertToHtmlTransform(wordDoc, settings, e, Contextual(e) && Beside(i, 1) != null,
                     currentMarginLeft, absorbedSpaceBefore: absorbed);
