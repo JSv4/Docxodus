@@ -56,7 +56,7 @@ function withFsType(bytes, value) {
 }
 
 /** A package whose "Packaged Probe" entry embeds `slots`: [element, part bytes, fontKey?]. */
-function packageWith(slots) {
+function packageWith(slots, family = "Packaged Probe") {
   const xml = text => Buffer.from(text, "utf8");
   const embeds = slots.map(([element, , key], i) =>
     `<w:${element} r:id="f${i}"${key ? ` w:fontKey="${key}"` : ""}/>`).join("");
@@ -76,7 +76,7 @@ function packageWith(slots) {
       + '<w:rPr><w:rFonts w:ascii="Packaged Probe" w:hAnsi="Packaged Probe"/></w:rPr><w:t>TIDE TABLES</w:t></w:r></w:p>'
       + "</w:body></w:document>") },
     { name: "word/fontTable.xml", data: xml(`<w:fonts xmlns:w="${W}" xmlns:r="${R}">`
-      + `<w:font w:name="Packaged Probe">${embeds}</w:font></w:fonts>`) },
+      + `<w:font w:name="${family}">${embeds}</w:font></w:fonts>`) },
     { name: "word/_rels/fontTable.xml.rels", data: xml(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
       + slots.map((_, i) => `<Relationship Id="f${i}" Type="${R}/font" Target="fonts/font${i}.odttf"/>`).join("")
       + "</Relationships>") },
@@ -102,6 +102,15 @@ test("de-obfuscates the issue fixture's embedded regular face with its w:fontKey
   assert.equal(face.sha256, PROBE_SHA256);
   assert.deepEqual([face.source, face.family, face.style, face.weight, face.postscriptName],
     ["document", "Packaged Probe", "normal", 400, "PackagedProbe-Regular"]);
+});
+
+test("an out-of-range character reference in the font table is kept literally, never an error", () => {
+  const embed = [["embedRegular", obfuscate(probe), KEY]];
+  // Control: a valid reference decodes.
+  assert.equal(extract(packageWith(embed, "Packaged&#x20;Probe")).faces[0]?.family, "Packaged Probe");
+  // Past U+10FFFF there is no character; String.fromCodePoint would throw a RangeError.
+  const { faces } = extract(packageWith(embed, "Probe &#99999999; &#x110000;"));
+  assert.equal(faces[0]?.family, "Probe &#99999999; &#x110000;");
 });
 
 test("a wrong key or a truncated part is skipped with a warning, never an error", () => {

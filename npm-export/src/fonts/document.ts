@@ -61,10 +61,13 @@ function readEntry(bytes: Buffer, entry: ZipEntry, maximumBytes: number): Buffer
 }
 
 function decodeXml(value: string): string {
-  return value.replace(/&(#x[0-9a-f]+|#[0-9]+|amp|lt|gt|quot|apos);/giu, (_, entity: string) =>
-    entity[0] === "#" ? String.fromCodePoint(Number.parseInt(entity.slice(entity[1] === "x" || entity[1] === "X" ? 2 : 1),
-      entity[1] === "x" || entity[1] === "X" ? 16 : 10))
-      : ({ amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'" } as Record<string, string>)[entity.toLowerCase()]);
+  return value.replace(/&(#x[0-9a-f]+|#[0-9]+|amp|lt|gt|quot|apos);/giu, (reference, entity: string) => {
+    if (entity[0] !== "#") return ({ amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'" } as Record<string, string>)[entity.toLowerCase()];
+    const hex = entity[1] === "x" || entity[1] === "X";
+    const codePoint = Number.parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
+    // A reference past U+10FFFF names no character; keep it literally rather than throw.
+    return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : reference;
+  });
 }
 
 /** Attributes by local name, so any namespace prefix the producer chose is accepted. */
