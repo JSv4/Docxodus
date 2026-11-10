@@ -12,10 +12,16 @@ for (const entry of [
   { pitch: 12, step: 24, lines: 27, pages: 5 },
   { pitch: 18, snap: false, step: 2355 / 2048 * 12, lines: 46, pages: 3 },
   { pitch: 0, step: 2355 / 2048 * 12, lines: 46, pages: 3 },
-]) test(`single spacing PDF grid=${entry.pitch}, snap=${entry.snap !== false}`, async ({ browser }) => {
+  // Word 2024 (#1551): an at-least line is max(whole grid lines, minimum).
+  { pitch: 18, spacing: '<w:spacing w:line="300" w:lineRule="atLeast"/>', step: 18, lines: 36, pages: 4 },
+  { pitch: 0, spacing: '<w:spacing w:line="300" w:lineRule="atLeast"/>', step: 15, lines: 43, pages: 3 },
+  // A revision-bearing document keeps its grid in markup, and one line before is one pitch (12pt without a grid).
+  { pitch: 18, spacing: '<w:spacing w:beforeLines="100"/>', tracked: true, step: 36, lines: 18, pages: 7 },
+  { pitch: 0, spacing: '<w:spacing w:beforeLines="100"/>', tracked: true, step: 2355 / 2048 * 12 + 12, lines: 25, pages: 5 },
+]) test(`single spacing PDF grid=${entry.pitch}, snap=${entry.snap !== false} ${entry.spacing ?? ''}${entry.tracked ? ' markup' : ''}`, async ({ browser }) => {
   test.setTimeout(120_000);
-  const result = await renderDocxArtifacts(lineGridDocx(entry.pitch, entry.snap), { browser, outputs: ['pdf'],
-    reviewProfile: 'final', commentProfile: 'hidden', timeoutMs: 120_000 });
+  const result = await renderDocxArtifacts(lineGridDocx(entry.pitch, entry.snap, entry.spacing, entry.tracked), { browser,
+    outputs: ['pdf'], reviewProfile: entry.tracked ? 'markup' : 'final', commentProfile: 'hidden', timeoutMs: 120_000 });
   expect(result.pageCount).toBe(entry.pages);
   const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
   try {

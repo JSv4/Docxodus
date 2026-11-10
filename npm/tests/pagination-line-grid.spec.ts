@@ -126,3 +126,25 @@ test('unmeasured mixed, raised, nested, and exact lines keep their existing geom
   });
   for (const [control, grid] of controls) { expect(grid).toEqual(control); expect(grid.grid).toBe(''); }
 });
+
+// Word 2024 (#1551): 15pt at least on an 18pt grid is one 18pt grid line. The converter leaves the
+// minimum off such a line, and text the grid pass cannot measure falls back to that minimum.
+test('at-least lines below the pitch take the grid, or their minimum when unmeasured', async ({ page }) => {
+  await page.goto('/test-harness.html');
+  // Standards mode, as the harness and export pages render: quirks mode ignores the paragraph's own
+  // line height on a line that holds only inline elements.
+  await page.setContent(`<!doctype html><style>p {font:12pt/normal 'Liberation Serif';margin:0;--docx-line-grid:18pt}</style><main></main>`);
+  const heights = await page.evaluate(async () => {
+    const moduleUrl = 'http://localhost:8083/line-metrics.js';
+    const { applyUnroundedNormalLineHeights } = await import(moduleUrl);
+    const root = document.querySelector('main')!;
+    const paragraphs = ['<span>Plain</span>', '<span>Plain</span><b>Bold</b>'].flatMap(content => ['15pt', ''].map(minimum => {
+      const paragraph = document.createElement('p'); paragraph.innerHTML = content;
+      if (minimum) paragraph.style.setProperty('--docx-min-line-height', minimum);
+      root.append(paragraph); return paragraph;
+    }));
+    applyUnroundedNormalLineHeights(root);
+    return paragraphs.map(p => p.getBoundingClientRect().height * .75);
+  });
+  expect(heights.map(height => Math.round(height * 10) / 10)).toEqual([18, 18, 15, 13.8]);
+});
