@@ -4148,6 +4148,36 @@ A header row (`w:tblHeader`) repeats at the top of each page the table continues
 `w:hRule` (reported for Word in issue #1171; not yet measured here). Docxodus repeated no header row,
 whatever its rule, before that issue.
 
+## Minimum-height rows taller than a page end at the foot of the body (issue #1558)
+
+A row's `w:trHeight` without `w:hRule="exact"` is a minimum. When that minimum is taller than the
+page body, Word does not split the row's empty height across pages, and it does not clip it at the
+paper edge as it clips an exact row:
+
+```xml
+<w:tr><w:trPr><w:trHeight w:val="16000"/></w:trPr><!-- 800pt; Letter body is 648pt -->
+  <w:tc><w:p><w:r><w:t>Left</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Right</w:t></w:r></w:p></w:tc>
+</w:tr>
+<!-- then <w:p>Closing line.</w:p> -->
+```
+
+Measured with Word 2024 (Range.Information and its own PDF; Letter, 1in margins, borders on):
+
+| Case | Word 2024 | Docxodus before | Docxodus after |
+|---|---|---|---|
+| 800pt minimum, row first | 2 pages; row 72pt to 720pt with its bottom border at 719.6pt; nothing of it on page 2; Closing line at 72pt on page 2 | `Page 1 body content is clipped` | 2 pages; row 72.2pt to 719.7pt |
+| same, after one line or 25 sentences | row moves to the top of page 2, ends at the body foot; Closing on page 3 | clipped | 3 pages, same placement |
+| same, as the second row | first row on page 1, tall row alone on page 2 | clipped | 3 pages, same placement |
+| 800pt exact (control) | row runs to 872pt, past the paper edge, no bottom border | 2 pages | unchanged |
+| three 450pt minimum rows | one row per page; the empty height is never split | 3 pages | unchanged |
+
+So Word caps a minimum at the body of the fresh page the row starts on. The paginator does the same
+in `capMinimumRowHeights` (`npm/src/pagination.ts`): when an oversized table reaches
+`trySplitSimpleOversizedTable`, each `atLeast` row whose empty clone is taller than the page's body
+has its minimum lowered until it fits, both in its used style and in the `data-docx-source-row-height`
+that the export's border layout recomputes fragment rows from. The table is then placed whole, or
+split at rows as before. An exact row's `findOversizedExactRow` clip is unchanged.
+
 ## Tables: nothing separates a table from the block above it (issue #1244)
 
 Word starts a table's first row where the block above it ends. A paragraph's own after-spacing is the

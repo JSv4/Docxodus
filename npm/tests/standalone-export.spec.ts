@@ -1127,24 +1127,34 @@ test.describe('standalone paginated HTML', () => {
     expect(hidden.html).not.toContain('No, it was superseded.');
   });
 
-  test('exports an oversized exact row at the paper edge', async ({ page }) => {
-    const source = bodyFillDocx({
-      paragraphs: 3, fontHalfPoints: 20, lineTwips: 240, exactRowTableTwips: 15000,
+  // Word starts either row taller than a page on a fresh page. It clips an exact row at the paper
+  // edge and ends a minimum-height row at the foot of the body (issue #1558).
+  for (const [tallRowRule, overhangPx] of [['exact', 136], ['atLeast', 0]] as const) {
+    test(`exports an oversized ${tallRowRule} row alone on its page`, async ({ page, context }) => {
+      const source = bodyFillDocx({
+        paragraphs: 3, fontHalfPoints: 20, lineTwips: 240, exactRowTableTwips: 15000, tallRowRule,
+      });
+      const result = await convert(page, source, false, { commentProfile: 'hidden' });
+      expect(result.renderReport.status).toBe('complete');
+      expect(result.pageCount).toBe(3);
+      const paragraphs = await page.evaluate((html) => {
+        const parsed = new DOMParser().parseFromString(html, 'text/html');
+        return Array.from(parsed.querySelectorAll('.page-box'), box =>
+          Array.from(box.querySelectorAll('.page-content p')).map(p => p.textContent?.trim()));
+      }, result.html);
+      expect(paragraphs).toEqual([
+        ['Line 1 of the body, typography and spacing.'],
+        ['Tall row'],
+        ['Line 2 of the body, typography and spacing.', 'Line 3 of the body, typography and spacing.'],
+      ]);
+      const offline = await context.newPage();
+      await offline.setContent(result.html);
+      const overhang = await offline.locator('.page-content table').evaluate(table =>
+        table.getBoundingClientRect().bottom - table.closest('.page-content')!.getBoundingClientRect().bottom);
+      await offline.close();
+      expect(Math.abs(overhang - overhangPx)).toBeLessThanOrEqual(2);
     });
-    const result = await convert(page, source, false, { commentProfile: 'hidden' });
-    expect(result.renderReport.status).toBe('complete');
-    expect(result.pageCount).toBe(3);
-    const paragraphs = await page.evaluate((html) => {
-      const parsed = new DOMParser().parseFromString(html, 'text/html');
-      return Array.from(parsed.querySelectorAll('.page-box'), box =>
-        Array.from(box.querySelectorAll('.page-content p')).map(p => p.textContent?.trim()));
-    }, result.html);
-    expect(paragraphs).toEqual([
-      ['Line 1 of the body, typography and spacing.'],
-      ['Tall row'],
-      ['Line 2 of the body, typography and spacing.', 'Line 3 of the body, typography and spacing.'],
-    ]);
-  });
+  }
 
   test('continues an oversized minimum-height merged group within the page limit', async ({ page, context }) => {
     const source = generateVerticalMergeDocx({ mergeSpan: 18 });

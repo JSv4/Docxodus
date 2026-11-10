@@ -3412,6 +3412,13 @@ export class PaginationEngine {
     if (maximumFragmentHeight <= 0) {
       return null;
     }
+    // Word ends a minimum-height row taller than a fresh page at the foot of that page's body
+    // and does not carry the rest of its height over (issue #1558). Retry the capped table whole.
+    if (this.capMinimumRowHeights(wrapper, table, body, rows, dims, maximumFragmentHeight)) {
+      const capped = this.measureElement(wrapper, dims, block.sectionIndex);
+      if (capped.heightPt <= maximumFragmentHeight) return [{ ...block, ...capped, keepWithNext: false,
+        keepLines: false, pageBreakBefore: false, isPageBreak: false }];
+    }
 
     if (this.fragmentParagraphs) {
       const recovered = this.recoverOversizedMergedGroups(wrapper, table, body, rows,
@@ -3640,6 +3647,46 @@ export class PaginationEngine {
       }
     }
     return recovered;
+  }
+
+  /**
+   * Lowers the minimum of each `atLeast` row whose minimum alone makes the row taller than
+   * `maximumHeight` until it fits, and reports whether any changed. Content still sets its height.
+   */
+  private capMinimumRowHeights(
+    wrapper: HTMLElement,
+    table: HTMLTableElement,
+    body: HTMLTableSectionElement,
+    rows: HTMLTableRowElement[],
+    dims: PageDimensions,
+    maximumHeight: number,
+  ): boolean {
+    const minimums = rows.filter(row => row.dataset.docxRowHeightRule === "atLeast");
+    if (minimums.length === 0) return false;
+    // Without their content, the rows are as tall as their minimums. One layout measures them all.
+    const empty = minimums.map(row => {
+      const clone = row.cloneNode(false) as HTMLTableRowElement;
+      for (const cell of Array.from(row.cells)) clone.appendChild(cell.cloneNode(false));
+      return clone;
+    });
+    const host = this.document.createElement("div");
+    host.style.cssText = `position:absolute;visibility:hidden;left:-9999px;width:${dims.contentWidth}pt`;
+    const probe = host.appendChild(this.createSimpleTableFragment(wrapper, table, body, empty, false));
+    this.stagingElement.appendChild(host);
+    const heights = Array.from(this.blockTable(probe)!.rows, row => pxToPt(row.getBoundingClientRect().height));
+    const chrome = pxToPt(probe.getBoundingClientRect().height) - heights.reduce((sum, height) => sum + height, 0);
+    host.remove();
+    let capped = false;
+    minimums.forEach((row, index) => {
+      const excess = chrome + heights[index] - maximumHeight;
+      if (!(excess > 0)) return;
+      row.style.setProperty("height", `${Math.max(0, heights[index] - excess)}pt`, "important");
+      // The export's border layout recomputes each fragment's row heights from the source height.
+      const source = row.dataset.docxSourceRowHeight;
+      if (source) row.dataset.docxSourceRowHeight = String(Math.max(0, Number(source) - excess));
+      capped = true;
+    });
+    return capped;
   }
 
   /**

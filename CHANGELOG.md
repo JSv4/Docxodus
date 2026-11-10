@@ -25,6 +25,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- PDF export no longer fails with "body content is clipped" on a table row whose minimum height (`w:trHeight` without `w:hRule="exact"`) is taller than the page. As in Word, the row starts on a fresh page and ends at the foot of its body, where Word draws its bottom border, and the rest of its minimum height is not carried to the next page. An exact row still runs to the paper edge (#1558).
+
 - A line break inside a hanging-indent list item no longer keeps the item's lines at the paragraph's largest size; each line takes its own text's height there too (#1565).
 
 - A list item whose bullet is mapped from Symbol or Wingdings to a Unicode glyph keeps the replaced font's height on its first line, as Word does: a zero-width box as tall as that font's ascent sits beside the glyph, which renders as before. A 12pt Symbol bullet over 12pt Arial now steps 14.61pt per item instead of 13.80pt; wrapped lines and exact spacing are unchanged (#1567).
