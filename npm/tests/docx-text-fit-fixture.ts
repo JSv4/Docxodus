@@ -5,13 +5,38 @@ export const fitTexts = {
   left: 'We Took A Yellow Wagon To Avery Valley, Past Your Tower, Toward Lake Vale, Where Water Waits.',
 };
 export type FitNeighbor = 'plain' | 'bold' | 'table' | 'list' | 'link';
+/**
+ * Where the fitted text sits: an ordinary paragraph, one with a bold word (the issue's ` harb`, or
+ * the first `the`), one with a hyperlinked word, a numbered list item, a table cell with Word's
+ * default cell margins, or a paragraph that states no line spacing.
+ */
+export type FitTarget = 'paragraph' | 'bold' | 'bold-the' | 'link' | 'list' | 'cell' | 'unspaced';
+/** An ordinary paragraph's text follows its alignment; every other target holds the justified text. */
+export const fitText = (alignment: keyof typeof fitTexts, target: FitTarget = 'paragraph') =>
+  fitTexts[target === 'paragraph' ? alignment : 'justify'];
 
 export function textFitDocx(alignment: keyof typeof fitTexts, neighbor: FitNeighbor,
-  kern?: { owner: 'run' | 'defaults' | 'style'; halfPoints: number }): Uint8Array {
+  kern?: { owner: 'run' | 'defaults' | 'style'; halfPoints: number }, target: FitTarget = 'paragraph',
+  compatibilityMode = 15): Uint8Array {
   const wml = 'application/vnd.openxmlformats-officedocument.wordprocessingml';
   const run = (text: string, props = '') => `<w:r><w:rPr>${props}</w:rPr><w:t xml:space="preserve">${text}</w:t></w:r>`;
   const p = (runs: string, props = '') => `<w:p><w:pPr>${props}</w:pPr>${runs}</w:p>`;
   const kerning = kern ? `<w:kern w:val="${kern.halfPoints}"/>` : '';
+  const text = fitText(alignment, target), props = kern?.owner === 'run' ? kerning : '';
+  const split = (at: number, length: number, wrap: (runs: string) => string) =>
+    run(text.slice(0, at), props) + wrap(run(text.slice(at, at + length), props)) + run(text.slice(at + length), props);
+  const runs = {
+    bold: split(40, 5, () => run(text.slice(40, 45), props + '<w:b/>')),
+    'bold-the': split(13, 3, () => run(text.slice(13, 16), props + '<w:b/>')),
+    link: split(40, 5, inner => `<w:hyperlink r:id="link">${inner}</w:hyperlink>`),
+  }[target as string] ?? run(text, props);
+  const jc = `<w:jc w:val="${alignment === 'justify' ? 'both' : 'left'}"/>`;
+  const fitted = target === 'list' ? p(runs, '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>' + jc)
+    : target === 'cell' ? '<w:tbl><w:tblPr><w:tblW w:w="9360" w:type="dxa"/><w:tblLayout w:type="fixed"/>' +
+      '<w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr>' +
+      '<w:tblGrid><w:gridCol w:w="9360"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="9360" w:type="dxa"/></w:tcPr>' +
+      p(runs, jc) + '</w:tc></w:tr></w:tbl>'
+    : p(runs, jc);
   const closing = {
     plain: p(run('Closing note.')),
     bold: p(run('A short ') + run('closing', '<w:b/>') + run(' note.')),
@@ -33,16 +58,16 @@ export function textFitDocx(alignment: keyof typeof fitTexts, neighbor: FitNeigh
       <Relationship Id="link" Type="${R_NS}/hyperlink" Target="https://example.com/" TargetMode="External"/></Relationships>`,
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>
       <w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/>${kern?.owner === 'defaults' ? kerning : ''}<w:sz w:val="24"/>
-      </w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>
+      </w:rPr></w:rPrDefault><w:pPrDefault><w:pPr>${target === 'unspaced' ? ''
+        : '<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>'}
       </w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal">
       <w:name w:val="Normal"/><w:rPr>${kern?.owner === 'style' ? kerning : ''}</w:rPr></w:style></w:styles>`,
     'word/settings.xml': `<w:settings xmlns:w="${W_NS}"><w:compat><w:compatSetting w:name="compatibilityMode"
-      w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`,
+      w:uri="http://schemas.microsoft.com/office/word" w:val="${compatibilityMode}"/></w:compat></w:settings>`,
     'word/numbering.xml': `<w:numbering xmlns:w="${W_NS}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/>
       <w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/>
       </w:pPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>`,
-    'word/document.xml': `<w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"><w:body>` +
-      p(run(fitTexts[alignment], kern?.owner === 'run' ? kerning : ''), `<w:jc w:val="${alignment === 'justify' ? 'both' : 'left'}"/>`) + closing +
+    'word/document.xml': `<w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"><w:body>` + fitted + closing +
       '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>',
   };
   return storedZip(Object.entries(parts).map(([name, value]) => ({ name, data: xml(value) })));

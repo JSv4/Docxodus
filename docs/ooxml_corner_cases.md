@@ -7145,3 +7145,44 @@ line therefore sent the next section's first line 7.04 pt down instead of one li
 change, the empty mark's own line filled the second column and hid this. Vector paragraphs in
 columns now set `break-inside: avoid` (`npm/src/word-text.ts`); the vectoriser already skips
 paragraphs that were split across columns.
+
+## Word condenses justified lines in every paragraph structure (#1550)
+
+Word 2024 measured with `Range.Information` line positions, one hidden instance per batch, on
+copies of the issue's generator output with Liberation Serif renamed to its metric twin Times New
+Roman. Every paragraph holds the same 12pt justified text in a 468pt column at compatibility
+mode 15; at natural spacing its first line overflows by about 3pt.
+
+| Fixture | Word line 1 ends | Docxodus before | Docxodus after |
+| --- | --- | --- | --- |
+| `plain.docx` | `pier as` | `pier as` | `pier as` |
+| `bold-elsewhere`, `table-elsewhere`, `list-elsewhere`, `link-elsewhere` | `pier as` | `pier as` | `pier as` |
+| `no-explicit-line-spacing.docx` (no `w:spacing` anywhere) | `pier as` | `pier` | `pier as` |
+| `bold-same-paragraph.docx` (` harb` bold) | `pier` | `pier` | `pier` |
+| first `the` bold in the paragraph | `pier as` | `pier` | `pier as` |
+| ` harb` inside a hyperlink | `pier as` | `pier` | `pier as` |
+| numbered item, empty marker, no indent | `pier as` | `pier` | `pier as` |
+| numbered item `1.`, 0.5in hanging indent | `northern` | `our` | `northern` |
+| fixed 468pt cell, zero cell margins | `pier as` | `pier` | `pier as` |
+| fixed 468pt cell, default 0.075in cell margins | `pier` | `northern` | `pier` |
+| left-aligned controls (plain, bold, list `1.`, cell margins) | `pier`, `pier`, `our`, `northern` | same | same |
+| compatibility mode 14 controls (plain, bold, no spacing) | `pier` | `pier` | `pier` |
+
+The issue expected `pier as` for `bold-same-paragraph.docx`, but Word breaks after `pier`: the bold
+` harb` adds 3.35pt, so condensing 474.51pt into 468pt costs more strain (2 × 6.51 / 48pt of gaps = 0.271) than
+expanding the 461.51pt line without `as` (6.49 / 45 = 0.144). That is the same least-strain rule
+`fitWordLines` already uses for plain text, applied to each run's own font. Bolding a narrow word
+(`the`, +0.6pt) keeps the condensed `pier as` line, as Word shows.
+
+The `w:wpJustification` condensing limit is the MS-OE376 selection band, not a gap budget. In Courier
+New 12pt (7.2pt cells, 65 cells to the column) with mode 14 and the option set, Word keeps a 66- or
+67-cell first line (482.4pt, within 468 × (1 + 281/7200) = 486.27pt) and wraps a 68- or 69-cell line,
+with 10 gaps and with only 2. Without the option, the 66-cell line wraps. Docxodus matches all nine
+fixtures.
+
+`prepareWordText` treats a paragraph that states no line spacing as Word's single automatic spacing.
+Paragraphs the precision fitter does not own (mixed runs, links, list items, unscaled cells) now
+run the same line selector over every run's measured advances. When Word condenses a line, only that
+line's ordinary spaces narrow, by the overflow the browser measures for it; HTML still lays out and
+paints the paragraph. Public PDF regressions pin each placement with its left-aligned and mode-14
+controls.
