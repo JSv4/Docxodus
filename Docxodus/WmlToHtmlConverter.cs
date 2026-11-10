@@ -3593,6 +3593,31 @@ namespace Docxodus
             decimal currentMarginLeft,
             int absorbedSpaceBefore)
         {
+            // Tables and content containers nest, and every level passes through here. Dispatch them
+            // before ConvertOtherContent, whose frame is several KB in unoptimized code (Debug builds,
+            // and tier-0 JIT on a first conversion): kept on the stack once per level, it overflowed a
+            // 1 MB stack inside the depth door's limit (issue #1659). None of the field markers
+            // ConvertOtherContent checks first is ever set on these elements.
+            if (node is XElement container)
+            {
+                if (container.Name == W.tbl) return ProcessTable(wordDoc, settings, container, currentMarginLeft);
+                if (container.Name == W.tr) return ProcessTableRow(wordDoc, settings, container, currentMarginLeft);
+                if (container.Name == W.tc) return ProcessTableCell(wordDoc, settings, container);
+                // Render the content of controls and custom XML through the same container path.
+                if (container.Name == W.sdt || container.Name == W.customXml)
+                    return ProcessContentContainer(wordDoc, settings, container, currentMarginLeft);
+            }
+
+            return ConvertOtherContent(wordDoc, settings, node, suppressTrailingWhiteSpace, currentMarginLeft,
+                absorbedSpaceBefore);
+        }
+
+        private static object? ConvertOtherContent(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XNode node,
+            bool suppressTrailingWhiteSpace,
+            decimal currentMarginLeft,
+            int absorbedSpaceBefore)
+        {
             var element = node as XElement;
             if (element == null) return null;
             if (element.Attribute(HiddenFieldInstructionAttribute) != null) return null;
@@ -3862,24 +3887,6 @@ namespace Docxodus
             if (element.Name == W.noBreakHyphen || element.Name == W.softHyphen)
                 return new XText(DocxSession.TextOf(element));
 
-            // Transform w:tbl to h:tbl.
-            if (element.Name == W.tbl)
-            {
-                return ProcessTable(wordDoc, settings, element, currentMarginLeft);
-            }
-
-            // Transform w:tr to h:tr.
-            if (element.Name == W.tr)
-            {
-                return ProcessTableRow(wordDoc, settings, element, currentMarginLeft);
-            }
-
-            // Transform w:tc to h:td.
-            if (element.Name == W.tc)
-            {
-                return ProcessTableCell(wordDoc, settings, element);
-            }
-
             // Transform images
             if (element.Name == W.drawing || element.Name == W.pict || element.Name == W._object)
             {
@@ -3895,12 +3902,6 @@ namespace Docxodus
             if (element.Name == MC.AlternateContent)
             {
                 return ProcessAlternateContent(wordDoc, settings, element, currentMarginLeft);
-            }
-
-            // Render the content of controls and custom XML through the same container path.
-            if (element.Name == W.sdt || element.Name == W.customXml)
-            {
-                return ProcessContentContainer(wordDoc, settings, element, currentMarginLeft);
             }
 
             // A simple PAGE / NUMPAGES field carries the same page-number marker as its complex
@@ -11278,10 +11279,23 @@ namespace Docxodus
             foreach (var group in groups)
             {
                 if (group.Key == string.Empty)
-                {
                     result.Add(CreateBorderDivsCore(wordDoc, settings, group));
-                    continue;
-                }
+                else if (CreateTextFrame(wordDoc, settings, group, result.LastOrDefault() as XElement) is { } placeholder)
+                    result.Add(placeholder);
+            }
+            // Flatten nested projections once, then detach before their final insertion. Letting
+            // XElement clone parented nodes would discard the style annotations on these elements.
+            var container = new XElement(Xhtml.div, result);
+            var content = container.Elements().ToList();
+            container.RemoveNodes();
+            return content;
+
+            // A frame's placeholder, or null when it joined the exclusion grid of the preceding one. A
+            // function of its own because its temporaries are KBs of stack in unoptimized code, which
+            // CreateBorderDivs would otherwise hold at every nesting level of the document (issue #1659).
+            static XElement? CreateTextFrame(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+                IGrouping<string, XElement> group, XElement? preceding)
+            {
                 var frame = group.First().Element(W.pPr)!.Element(W.framePr)!;
                 var inline = (string?)frame.Attribute(W.yAlign) == "inline";
                 var wrap = (string?)frame.Attribute(W.wrap) ?? "auto";
@@ -11340,12 +11354,11 @@ namespace Docxodus
                     // Distinct adjacent frames share the following ordinary anchor. Overlay
                     // their exclusions in one grid so their union, rather than summed widths,
                     // determines the available line width; each frame keeps its own identity.
-                    var preceding = result.LastOrDefault() as XElement;
                     var shared = preceding?.Elements().FirstOrDefault(e => e.Attribute("data-docx-frame-exclusion") != null);
                     if (shared != null)
                     {
                         shared.Add(rendered);
-                        continue;
+                        return null;
                     }
                     var exclusion = new XElement(Xhtml.div, new XAttribute("data-docx-frame-exclusion", "true"), rendered);
                     exclusion.AddAnnotation(new Dictionary<string, string>
@@ -11374,14 +11387,8 @@ namespace Docxodus
                     }
                 }
                 placeholder.AddAnnotation(placeholderStyle);
-                result.Add(placeholder);
+                return placeholder;
             }
-            // Flatten nested projections once, then detach before their final insertion. Letting
-            // XElement clone parented nodes would discard the style annotations on these elements.
-            var container = new XElement(Xhtml.div, result);
-            var content = container.Elements().ToList();
-            container.RemoveNodes();
-            return content;
         }
 
         private static object CreateBorderDivsCore(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements)

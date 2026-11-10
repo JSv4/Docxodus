@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
@@ -199,6 +201,60 @@ public class DocxSessionDeepNestingTests
                 new WmlDocument("d.docx", bytes), new WmlToHtmlConverterSettings()).ToString());
         });
     }
+
+    [Fact]
+    public void HtmlRender_EachNestingLevelCostsLittleStack()
+    {
+        // Every level of nested content passes through the converter's element dispatch, whose frame
+        // was several KB in unoptimized code: the story limit overflowed a 1 MB stack on Windows
+        // (issue #1659). This measures the stack under an image at the bottom of a 100-level and a
+        // 20-level chain of custom XML in one render. The deep chain renders first, so a JIT tier-up
+        // between the two can only overstate the cost. Per level on Windows x64: unoptimized code
+        // 8.5 KB before the fix and 1.7 KB after; tiered-up Release code 1.9 KB before, 0.5 KB after.
+        static XElement Chain(int levels, string text)
+        {
+            var element = LargeDocuments.Paragraph(text);
+            for (int i = 0; i < levels; i++)
+                element = new XElement(W.customXml, new XAttribute(W.element, "wrap"), element);
+            return element;
+        }
+        static long Address(ref byte local) => (long)Unsafe.ByteOffset(ref Unsafe.NullRef<byte>(), ref local);
+
+        var bytes = LargeDocuments.Build(new[] { Chain(100, "Deep text"), Chain(20, "Shallow text") });
+        using (var session = new DocxSession(bytes))
+        {
+            foreach (var text in new[] { "Deep text", "Shallow text" })
+                Assert.True(session.InsertImage(Assert.Single(session.Grep(text)).EnclosingAnchor.Anchor.Id, 0, OnePixelPng).Success);
+            bytes = session.Save();
+        }
+        bool unoptimized = typeof(WmlToHtmlConverter).Assembly.GetCustomAttribute<DebuggableAttribute>()?.IsJITOptimizerDisabled == true;
+        long budget = unoptimized ? 4096 : 1024, perLevel = long.MaxValue;
+        // Release code runs at tier 0 until tiered compilation has optimized the converter, a few renders in.
+        for (var clock = Stopwatch.StartNew(); perLevel > budget && clock.Elapsed < TimeSpan.FromSeconds(20);)
+        {
+            DocxDepthLimitSweepTests.OnThread(8192, () =>
+            {
+                byte top = 0;
+                var origin = Address(ref top);
+                var used = new List<long>();
+                WmlToHtmlConverter.ConvertToHtml(new WmlDocument("d.docx", bytes), new WmlToHtmlConverterSettings
+                {
+                    ImageHandler = _ =>
+                    {
+                        byte here = 0;
+                        used.Add(origin - Address(ref here));
+                        return new XElement("img");
+                    },
+                });
+                Assert.Equal(2, used.Count);
+                perLevel = (used[0] - used[1]) / 80;
+            });
+        }
+        Assert.True(perLevel <= budget, $"{perLevel} bytes of stack per nesting level; the budget is {budget}");
+    }
+
+    private static readonly byte[] OnePixelPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==");
 
     [Fact]
     public void RefusingAnOverDeepDocument_StopsReadingAtTheLimit()
