@@ -73,6 +73,21 @@ public class DocxDiffStyleParentTests
         AssertClean(result);
     }
 
+    /// <summary>A parent change that moves only spacing still archives the style's run properties: Word's
+    /// Reject All resets a style slice that has no property-change marker to Word's built-ins (issue #1576).
+    /// The italic case, where the run properties change too, is the control.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ParentChange_ArchivesBothPropertySlices(bool italic)
+    {
+        var result = DocxCompare.Compare(Document("Compact", false, false, 0), Document("Airy", italic, false, 0));
+        var normal = Read(result).Elements(W + "style").Single(s => (string?)s.Attribute(W + "styleId") == "Normal");
+        Assert.NotNull(normal.Element(W + "pPr")?.Element(W + "pPrChange"));
+        Assert.Equal("22", (string?)normal.Element(W + "rPr")?.Element(W + "rPrChange")?.Element(W + "rPr")
+            ?.Element(W + "sz")?.Attribute(W + "val"));
+    }
+
     private static bool EffectiveBold(XElement styles, string id)
     {
         var bold = false;

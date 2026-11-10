@@ -8946,10 +8946,10 @@ internal static partial class IrMarkupRenderer
             rightRPr, paragraphAxis: false);
         NormalizeStylePropertyOrder(rightPPr, StylePPrChildOrder);
         NormalizeStylePropertyOrder(rightRPr, StyleRPrChildOrder);
-        if (paragraphChanged)
-            rightPPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), new XElement(leftPPr)));
-        if (runChanged)
-            rightRPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), new XElement(leftRPr)));
+        // Archive both slices, as ApplyDocDefaultsStyleProjection does: Word's Reject All resets an
+        // unarchived style slice to its built-ins.
+        rightPPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), new XElement(leftPPr)));
+        rightRPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), new XElement(leftRPr)));
         ReplaceStyleProperties(outputStyle, type == "paragraph" ? rightPPr : null, rightRPr);
     }
 
@@ -8970,13 +8970,14 @@ internal static partial class IrMarkupRenderer
         NormalizeStylePropertyOrder(leftRPr, StyleRPrChildOrder);
         NormalizeStylePropertyOrder(rightRPr, StyleRPrChildOrder);
 
-        bool projectPPr = string.Equals(type, "paragraph", StringComparison.Ordinal) &&
-            !XNode.DeepEquals(leftPPr, rightPPr);
-        bool projectRPr = (string.Equals(type, "paragraph", StringComparison.Ordinal) ||
-                           string.Equals(type, "character", StringComparison.Ordinal)) &&
-            !XNode.DeepEquals(leftRPr, rightRPr);
-        if (!projectPPr && !projectRPr)
+        bool projectPPr = string.Equals(type, "paragraph", StringComparison.Ordinal);
+        bool projectRPr = projectPPr || string.Equals(type, "character", StringComparison.Ordinal);
+        if (!(projectPPr && !XNode.DeepEquals(leftPPr, rightPPr)) &&
+            !(projectRPr && !XNode.DeepEquals(leftRPr, rightRPr)))
             return;
+        // Once a style is revised, every slice it owns is archived, unchanged ones included: Word's Reject
+        // All restores a style from its pPrChange and rPrChange together and resets a slice that has no
+        // marker to Word's built-ins (a spacing-only revision came back with 10 pt text; issue #1576).
 
         XElement? currentPPr = null;
         if (projectPPr)

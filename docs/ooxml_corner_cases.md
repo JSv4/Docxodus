@@ -6858,3 +6858,106 @@ while the column group had always used `AttributeToTwips`. Border sizes now read
 units; grid widths and column spacing use `AttributeToTwips`. Exponents, NaN, infinities, comma
 decimals and values outside the Int32 range still fail. Row heights keep the fractional twips adopted
 for #1436, a sub-twip (under 0.05pt) difference from Word's truncation.
+
+## Compare: documents with different default paragraph spacing (#1576)
+
+Two documents carry the same three paragraphs, one word apart, and differ in default paragraph
+spacing. `wide-spacing` declares it in the document defaults, `tight-spacing` declares the
+built-in values there, and `no-spacing` has no `w:pPrDefault` at all:
+
+```xml
+<!-- wide-spacing: styles.xml -->
+<w:docDefaults>
+  <w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr></w:rPrDefault>
+  <w:pPrDefault><w:pPr><w:spacing w:after="200" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>
+</w:docDefaults>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+<!-- tight-spacing: the same, with w:after="0" w:line="240"; no-spacing: no w:pPrDefault -->
+```
+
+The `normal-*` variants move the same two spacings from the document defaults into the
+`Normal` style. The `*-4p` variant adds a fourth paragraph to the revised document, and
+`*-same` removes the word change, so spacing is the only difference.
+
+### What Word's Compare produces
+
+Word 2024, `Application.CompareDocuments` with the Review > Compare defaults (new document,
+word level, every comparison option on). Spacing is shown as after / line; y is the top of
+paragraphs 1–3 in points, from `Range.Information`. The no-spacing document lays out at
+8 pt / 1.16 lines in Word (see below).
+
+| Original → revised | Result `w:docDefaults` | Style revision | Review view | Accept All | Reject All |
+| --- | --- | --- | --- | --- | --- |
+| wide → tight | revised's (`<w:pPrDefault/>`) | none | 0 / single, y 72, 86, 99.5 | same | same |
+| tight → wide | revised's (200 / 276) | none | 10 pt / 1.15, y 72, 98, 123.5 | same | same |
+| wide → no-spacing | revised's, as Word reads it (160 / 278) | none | 8 pt / 1.16, y 72, 96, 120 | same | same |
+| no-spacing → wide | revised's (200 / 276) | none | 10 pt / 1.15 | same | same |
+| wide → tight-4p, tight-4p → wide | revised's | none | revised spacing | revised | revised |
+| wide → tight-same, tight-same → wide | revised's | none; 0 revisions | revised spacing | revised | revised |
+| normal-wide → normal-tight | Word's stock (160 / 278) | `Normal`: `w:pPrChange` (old 200 / 276) and `w:rPrChange` (old sz 24) | revised | revised | original |
+| normal-tight → normal-wide | Word's stock | `Normal`: both markers, revision type 13 "Style Definition" | revised | revised | original |
+| no `w:docDefaults` → wide | revised's (200 / 276) | `Normal` (its definition differs): old = 160 / 278 and Word's stock run properties | revised | revised | original |
+
+No paragraph receives direct spacing and no `w:pPrChange` appears in `document.xml`. Settings
+carry Word's usual compatibility list and no `w:trackRevisions`.
+
+Word's rule, stated in the documents' properties: the result takes the **revised** document's
+`w:docDefaults` and records nothing for them. A style whose definition differs is tracked as a
+style-definition revision whose old payload is the original's effective formatting (both
+`w:pPrChange` and `w:rPrChange`, values resolved through the original's defaults). The rule does
+not depend on which side has more paragraphs; swapping the roles swaps the result. When only the
+document defaults differ, Word's Reject All therefore keeps the revised spacing.
+
+### What Docxodus does, and why it does not copy Word
+
+`DocxCompare` keeps the original's `w:docDefaults` and records the difference on the styles
+that use them: `Normal`'s current properties state the revised spacing and its `w:pPrChange`
+holds the original's (`IrMarkupRenderer.ApplyDocDefaultsStyleProjection`; differing definitions
+take the raw-payload branch of `TrackStyleDefinitionChanges`). The review view and Accept All
+therefore match Word's: both show the revised document's spacing. Reject All deliberately
+differs. Copying Word's untracked adoption would make Reject All return the revised spacing,
+which breaks the guarantee that rejecting every change gives back the original. Where the definitions
+differ, Word tracks the change too, and the two outputs agree.
+
+Opening Docxodus's redlines in Word showed one real defect. Word's Reject All restores a style
+from its `w:pPrChange` and `w:rPrChange` together, and a style with only a `w:pPrChange` has its
+run properties reset to Word's built-ins. After Reject All, Word had written
+`<w:rPr><w:sz w:val="20"/></w:rPr>` on `Normal`: the original's spacing came back, but at
+10 pt (y 72, 95, 118.5 against the original's 72, 98, 123.5). Docxodus's own
+`RevisionProcessor` was unaffected. The raw-payload branch already wrote both markers, which is
+why the `normal-*` pairs rejected correctly. The docDefaults projection and the changed-parent
+path (`TrackStyleParentChange`) wrote only the marker for the slice that changed. Both now
+archive every slice a revised style owns, as Word's own output does.
+
+| Docxodus redline opened in Word | Review | Accept All | Reject All, before | Reject All, after |
+| --- | --- | --- | --- | --- |
+| wide → tight | 72, 86, 99.5 | 72, 86, 99.5 | 72, 95, 118.5 (10 pt) | 72, 98, 123.5 (12 pt), as the original |
+| tight → wide | 72, 98, 123.5 | 72, 98, 123.5 | 72, 83.5, 95 (10 pt) | 72, 86, 99.5 (12 pt), as the original |
+| wide → tight-4p | 72, 86, 99.5, 113.5 | same | 72, 95, 118.5 (10 pt) | 72, 98, 123.5 (12 pt), as the original |
+| normal-wide → normal-tight (control) | 72, 86, 99.5 | 72, 86, 99.5 | 72, 98, 123.5 | unchanged |
+
+### A styles part without `w:pPrDefault` is not single-spaced in Word
+
+Word lays out `no-spacing` at 8 pt after and 1.16 lines (y 72, 96, 120), and writes
+`w:after="160" w:line="278"` into the compare result. The same happens with no
+`w:docDefaults` at all, with no compatibility setting, and in compatibility mode 14. An
+empty `<w:pPrDefault/>` or `<w:pPrDefault><w:pPr/></w:pPrDefault>` gives 0 / single. Docxodus
+reads a missing `w:pPrDefault` as 0 / single, as the schema's defaults say, so the wide →
+no-spacing redline accepts to single spacing in Word while Word shows the revised document
+at 8 pt / 1.16. Likewise no-spacing → wide rejects to single spacing in Word (before this
+change Word's Reject All left the revised spacing in place). Those values match Word's
+blank-document defaults (`WordStockDocDefaults.ModernXml`), and may come from the
+installation's Normal template. This is a rendering question independent of comparison and is
+not changed here; it is tracked as #1652.
+
+### Code and tests
+
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs`: `ApplyDocDefaultsStyleProjection` and
+  `TrackStyleParentChange` archive both property slices of a revised paragraph style.
+- `DocxCompareDefaultSpacingTests`: for every pair above, through `DocxCompare.Compare`, the
+  redline's current formatting and Accept All give the revised spacing, Reject All gives the
+  original's, and the package validates; the same with a paragraph added.
+  `SpacingRevisionArchivesTheOriginalsRunPropertiesToo` pins both markers on `Normal`, with
+  the `Normal`-style pairs as controls.
+- `DocxDiffStyleParentTests.ParentChange_ArchivesBothPropertySlices`: the changed-parent path,
+  with a run-property change as the control.
