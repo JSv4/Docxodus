@@ -1666,22 +1666,27 @@ percentage scales retain their existing rendering. The original single-word 100p
 compression control follow the documented width contract; they do not establish Word's treatment
 of oversized regions or its exact-fit rounding threshold.
 
-Left/start-aligned mixed Latin body paragraphs use `prepareMixedLineHeights` before resolving
+Mixed Latin body paragraphs, in any alignment, use `prepareMixedLineHeights` before resolving
 uniform natural heights, for automatic multiples of at least one and minimum line spacing.
 Browser text ranges determine each visual line without changing its horizontal layout.
 One empty metric box after each line's final word reserves its maximum ascent plus maximum descent;
 minimum spacing adds its surplus above the baseline once per line, and automatic spacing adds its surplus below
-the baseline. Generated list markers contribute only to their first line. The shared paginator uses
+the baseline. A generated list marker only raises its first line's ascent: desktop Word adds
+neither its descent nor a multiple of it, so an automatic multiple applies to the text's own
+height. Converter line breaks stay in their runs; the direction mark after a break sizes a line
+only when the line holds nothing else, so an empty line made by `w:br` takes the break's font and
+a break ending a line of text does not size it. The shared paginator uses
 these boundaries for continuations, retaining minimum heights and trimming only trailing automatic
 surplus. Width changes remove old metric boxes and reconstruct the lines from the retained source.
-Custom positioning, fields, notes, tables, columns, float-dependent flow, exact/grid spacing and
-paragraphs with explicit breaks retain their existing policies. The original Word PDFs in
+Custom positioning, fields, notes, tables, columns, float-dependent flow and exact/grid spacing
+retain their existing policies. The original Word PDFs in
 `TestFiles/LineSpacingWord` confirm surplus below for the mixed 16/9pt1.15 case and surplus above
 for the 16pt minimum on 10pt text. Uniform enlarged minima use the final baseline probe to place
 the text at the resolved height minus its natural descent, without changing pagination geometry.
 This measured Word behavior differs from the Open XML documentation's centered-leading wording;
-it is a compatibility observation, not a restatement of that specification. Mixed minimum transitions and continuations have public PDF regressions. Marker transitions
-and blank-break lines remain tracked by #1565.
+it is a compatibility observation, not a restatement of that specification. Mixed minimum transitions and continuations have public PDF regressions. Desktop Word 2024
+prints of the #1565 fixtures confirm the marker, break and alignment rules; their measured steps
+are in `docs/ooxml_corner_cases.md` and `npm/tests/export-line-content-height.spec.ts`.
 
 The browser's font-unit boundary is not a complete Word fitting contract. In #1564 the author
 [confirmed that Word fits the 65-character Liberation Mono prefix into 468pt](https://github.com/JSv4/Docxodus/issues/1564#issuecomment-6701328774),
