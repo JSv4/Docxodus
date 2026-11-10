@@ -1695,6 +1695,8 @@ resolution replay) still strips it (DS430/DS434 vs DS418).
 | Apply untracked | Comments and annotations, which are not revisions, by design |
 
 Anything that writes package state under recording belongs in exactly one of those three rows.
+`Raw.InsertXml` and `Raw.ReplaceXml` also refuse: arbitrary caller-authored fragments are not
+automatically diffed into revisions (issue #1625).
 The failure #614 fixed was a fourth, unwritten one — writing content that reject-all could not
 take back — which is the worst of the three, because the redline looks complete and only fails
 when somebody actually rejects it.
@@ -2582,6 +2584,11 @@ Same order of magnitude as `Grep`: one concatenation pass + one regex pass per s
 ## The Raw escape hatch
 
 `session.Raw` exposes three operations: `GetXml(anchorId)` returns the element's OOXML as a string (useful as a template), `InsertXml(anchor, position, xml)` inserts a sibling fragment, `ReplaceXml(anchor, xml)` swaps the element for a fragment. Newly-inserted elements automatically get Unids and become addressable on the next projection.
+
+While recording (`RenderInline`), both writes return `TrackedOperationUnsupported` before changing
+the document or history. Arbitrary XML is not automatically diffed into native revisions. Use a
+supported typed operation to record the edit; for an intentional untracked import, explicitly call
+`SetTrackedChanges(TrackedChangeMode.Accept)` first. `GetXml` remains available in every mode.
 
 The validation pipeline is short-circuit ordered: well-formedness (`MalformedXml`), namespace whitelist check (`DisallowedNamespace` — only `w:`, `m:` for math, `wp:`/`a:` for drawing, `r:`, and our own PtOpenXml namespace are allowed), structural slot check (`IncompatibleElementType`). Setting `Settings.ValidateRawOps = true` additionally runs `OpenXmlValidator` before and after the op and rolls back via the snapshot if the post-op error count is greater than the pre-op count. Pre-existing schema issues in the input document are tolerated (the validator is only used to detect deltas, not to gate the document overall), and the projector's internal `PtOpenXml:Unid` attributes are filtered out before counting since they are not in the OOXML schema by design. Slower than the default path but bulletproof for untrusted agent input.
 

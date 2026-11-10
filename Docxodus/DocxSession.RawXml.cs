@@ -94,6 +94,7 @@ public sealed partial class DocxSession
     internal EditResult RawInsertXmlInternal(string anchorId, Position pos, string xml)
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
+        if (RefuseTrackedRawMutation(anchorId) is { } trackedRefusal) return trackedRefusal;
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
@@ -145,6 +146,7 @@ public sealed partial class DocxSession
     internal EditResult RawReplaceXmlInternal(string anchorId, string xml)
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
+        if (RefuseTrackedRawMutation(anchorId) is { } trackedRefusal) return trackedRefusal;
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
@@ -227,6 +229,13 @@ public sealed partial class DocxSession
             return FailInternal(ex, anchorId);
         }
     }
+
+    private EditResult? RefuseTrackedRawMutation(string anchorId) =>
+        _trackedChanges == TrackedChangeMode.RenderInline
+            ? EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
+                "Raw XML mutations do not record revisions; use a supported tracked operation or explicitly switch tracking off before importing XML. No changes were made.",
+                anchorId)
+            : null;
 
     private static (XElement? parsed, EditError? err) ParseRawXml(string xml)
     {

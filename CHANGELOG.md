@@ -21,6 +21,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Raw XML insertion and replacement now refuse with `tracked_operation_unsupported` while recording changes, preserving the document and undo history instead of silently applying an unreviewable edit (#1625).
+
 - Markdown projection omits pending deleted table rows in accepted and deletion-stripped views, including opaque summaries and textboxes carried by those rows. Source anchors remain available for review and rejection (#1628).
 
 - Missing fonts now use the document's declared pitch, family and PANOSE class for generic fallbacks. Body text, running stories, markup balloons and their appendix share the same font stack; tab-stop estimation also honors declared fixed pitch (#1574).
