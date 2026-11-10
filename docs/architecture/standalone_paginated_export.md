@@ -572,6 +572,14 @@ map permits an unmapped paragraph only when it remains present, unchanged and wh
 that same box. Newly clipped or removed paragraphs still fail completeness. Linked stories,
 auto-fit boxes, partial geometry and active percentage sizing cannot use this allowance.
 
+A linked story has its own rule (issue #1558). Pagination flows it through its frames in order;
+when the last frame cannot hold the rest, Word hides that rest, so pagination appends it to the
+last frame (clipped there) and marks the frame `data-docx-textbox-overflow`. A paragraph wholly
+outside that frame is admitted like the fixed-box case above and warned as `source_text_clipped`.
+Because the first hidden paragraph is usually still partly visible, and so mapped, each such story
+also produces one `linked_textbox_overflow` warning naming it. `unsupportedContent: "strict"`
+rejects both.
+
 A separate source-position marker admits a paragraph whose original ink is wholly off paper,
 even when part of its fixed box intersects the paper. DrawingML fit resolves from the selected
 shape's body properties through the theme's text, line and shape defaults; ambiguous contexts

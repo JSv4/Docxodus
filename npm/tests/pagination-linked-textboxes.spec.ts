@@ -28,12 +28,19 @@ for (const mode of ['flow', 'repeat', 'overset', 'wide', 'duplicate', 'disabled'
       try {
         const result = new (window as any).DocxodusPagination.PaginationEngine(document.getElementById('staging'), document.getElementById('container'),
           { fragmentParagraphs: enabled, showPageNumbers: false, cssPrefix: custom ? 'leaf-' : undefined }).paginate();
-        return { pages: result.totalPages, boxes: Array.from(document.querySelectorAll('#container [data-docx-textbox-linked]'), box => box.textContent), error: null };
-      } catch (error) { return { pages: 0, boxes: [], error: String(error) }; }
+        const boxes = Array.from(document.querySelectorAll<HTMLElement>('#container [data-docx-textbox-linked]'));
+        return { pages: result.totalPages, boxes: boxes.map(box => box.textContent), error: null,
+          overflow: boxes.map(box => box.dataset.docxTextboxOverflow === 'true') };
+      } catch (error) { return { pages: 0, boxes: [], error: String(error), overflow: [] }; }
     }, { enabled: mode !== 'disabled', custom: mode === 'repeat-custom' });
-    if (mode === 'overset' || mode === 'wide') expect(result.error).toContain('does not fit');
-    else if (mode === 'duplicate') expect(result.error).toContain('repeated frame sequence');
-    else {
+    // Word hides what a story's last frame cannot hold (issue #1558): the rest stays there, clipped.
+    if (mode === 'duplicate') expect(result.error).toContain('repeated frame sequence');
+    else if (mode === 'wide') {
+      expect(result.error).toBeNull();
+      expect(result.boxes[1]).toContain('BirchXXX');
+      expect(result.overflow).toEqual([false, true]);
+    } else {
+      expect(result.overflow).toEqual(result.boxes.map((_, i) => mode === 'overset' && i === result.boxes.length - 1));
       expect(result.error).toBeNull();
       expect(result.pages).toBe(repeat ? 2 : 1);
       const all = result.boxes.join(' ').match(/Birch\d+/g);

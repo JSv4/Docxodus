@@ -4132,6 +4132,15 @@ export async function convertDocxToPaginatedHtml(
         remediation: "Move an off-paper text box onto the page; for internal overflow, enlarge the box or enable auto-fit.",
       });
     }
+    for (const anchorId of engine.getLinkedTextBoxOverflowAnchors()) {
+      policyWarning(state, options, {
+        code: "linked_textbox_overflow",
+        phase: "output_verification",
+        anchorId,
+        message: "A linked text-box story does not fit its frames. From this paragraph on, its text is hidden in the last frame, as Word hides it.",
+        remediation: "Enlarge the linked text boxes, add a frame to the chain, or shorten the story.",
+      });
+    }
     for (const anchorId of engine.getClippedTableContentAnchors()) {
       policyWarning(state, options, {
         code: "source_table_content_clipped",
