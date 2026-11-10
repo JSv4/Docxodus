@@ -66,8 +66,22 @@ public class HtmlTextBoxSpacingTests
             firstContextual: first, secondContextual: !first);
         Assert.Contains("margin-top: 6pt;", (string?)paragraphs[0].Attribute("style"));
         Assert.Contains($"margin-bottom: {(first ? "0" : "9pt")};", (string?)paragraphs[0].Attribute("style"));
-        Assert.Contains($"margin-top: {(first ? "6pt" : "0")};", (string?)paragraphs[1].Attribute("style"));
+        // The 9pt the flagged first paragraph gives up still absorbs the second's 6pt (Word, #1553).
+        Assert.Contains("margin-top: 0;", (string?)paragraphs[1].Attribute("style"));
         Assert.Contains("margin-bottom: 9pt;", (string?)paragraphs[1].Attribute("style"));
+    }
+
+    [Theory]
+    [InlineData(true, "0", "9pt")]
+    [InlineData(false, "5pt", "0")]
+    public void SpaceGivenUpByAContextualParagraphStillAbsorbsTheNextBefore(bool first, string after, string before)
+    {
+        // Word: 5pt after, then 14pt before. Flagging the first paragraph leaves a 9pt gap;
+        // flagging the second leaves the first's 5pt (#1553).
+        var paragraphs = Render(false, contextual: false, differentStyle: false, inBox: false,
+            firstContextual: first, secondContextual: !first, spacing: "w:before=\"280\" w:after=\"100\"");
+        Assert.Contains($"margin-bottom: {after};", (string?)paragraphs[0].Attribute("style"));
+        Assert.Contains($"margin-top: {before};", (string?)paragraphs[1].Attribute("style"));
     }
 
     [Theory]
@@ -96,17 +110,19 @@ public class HtmlTextBoxSpacingTests
     }
 
     [Fact]
-    public void ContextualSpacingPreservesInterveningBookmarks()
+    public void ContextualSpacingLooksThroughInterveningBookmarks()
     {
+        // Word prints no gap across a bookmark between two flagged paragraphs (#1553).
         var paragraphs = Render(false, contextual: true, differentStyle: false, inBox: false,
             between: "<w:bookmarkStart w:id=\"1\" w:name=\"Mark\"/><w:bookmarkEnd w:id=\"1\"/>");
-        Assert.Contains("margin-bottom: 9pt;", (string?)paragraphs[0].Attribute("style"));
-        Assert.Contains("margin-top: 6pt;", (string?)paragraphs[1].Attribute("style"));
+        Assert.Contains("margin-bottom: 0;", (string?)paragraphs[0].Attribute("style"));
+        Assert.Contains("margin-top: 0;", (string?)paragraphs[1].Attribute("style"));
         Assert.Contains(paragraphs[0].Ancestors().Last().Descendants(), e => (string?)e.Attribute("id") == "Mark");
     }
 
     private static XElement[] Render(bool legacy, bool contextual, bool differentStyle, bool implicitDefault = false,
-        bool inBox = true, bool? firstContextual = null, bool? secondContextual = null, string between = "")
+        bool inBox = true, bool? firstContextual = null, bool? secondContextual = null, string between = "",
+        string spacing = "w:before=\"120\" w:after=\"180\"")
     {
         string Paragraph(string text, string style, bool? direct) =>
             "<w:p><w:pPr>" + (implicitDefault && text == "Swift copper lantern"
@@ -137,7 +153,7 @@ public class HtmlTextBoxSpacingTests
             using (var writer = new StreamWriter(main.AddNewPart<StyleDefinitionsPart>().GetStream(FileMode.Create, FileAccess.Write)))
                 writer.Write($"<w:styles xmlns:w=\"{W}\">" + string.Concat(new[] { "Swift", "Other" }.Select(id =>
                     $"<w:style w:type=\"paragraph\" w:styleId=\"{id}\"" + (id == "Swift" ? " w:default=\"1\"" : "") + $"><w:name w:val=\"{id}\"/>" +
-                    "<w:pPr><w:spacing w:before=\"120\" w:after=\"180\"/>" +
+                    $"<w:pPr><w:spacing {spacing}/>" +
                     (contextual ? "<w:contextualSpacing/>" : "") + "</w:pPr></w:style>")) + "</w:styles>");
             main.AddNewPart<DocumentSettingsPart>().Settings = new DocumentFormat.OpenXml.Wordprocessing.Settings();
             document.Save();
