@@ -99,7 +99,7 @@ Five calls are expected to fail, and the harness treats a success there as the d
 | Probe | Result |
 |---|---|
 | `add_bookmark` while tracking | `tracked_operation_unsupported` — bookmark mutations have no faithful tracked encoding |
-| `insert_table` while tracking | `tracked_operation_unsupported` — no reversible tracked encoding on this document shape |
+| `add_hyperlink` while tracking | `tracked_operation_unsupported` — hyperlink mutations have no faithful tracked encoding (this probe was `insert_table` until tracked table insertion gained its native encoding, #1626) |
 | Bookmark endpoints at offsets 33–40 inside the name's `w:ins`, under direct recording | `unsupported_inline_boundary` |
 | Stale `expectedVersion` | `precondition_failed`, reporting the true `currentVersion` |
 | Atomic batch with a bad anchor at index 2 | `status: failed`, `rolledBack: true`, `editsApplied: 0`, `failure.index: 2`, `failure.error.code: anchor_not_found` |
@@ -116,9 +116,10 @@ comments, tracked revisions, run and paragraph formatting, section introspection
 citations, undo/redo, atomic batches, preconditions, transaction identity.
 
 Link and table work runs in its own untracked batch, reached with
-`docxodus_track_changes set_mode` — the engine refuses those families under tracked
+`docxodus_track_changes set_mode` — the engine refuses bookmarks and hyperlinks under tracked
 recording rather than emitting markup it cannot reverse, and switching mode mid-workflow is
-the supported path (#304).
+the supported path (#304). (A tracked table insert now records native revisions, #1626; the
+batch keeps the table untracked so the workflow's revision list is unchanged.)
 
 Not applicable, with rationale:
 

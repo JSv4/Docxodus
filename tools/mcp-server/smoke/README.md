@@ -66,7 +66,7 @@ The order the engine enumerates them in is not part of the contract, so the fixt
 them as members (see `expectMembers` below) keyed on type, text, part and scope.
 
 Five calls are *supposed* to fail, and the runner treats a success there as the defect
-(`unexpectedSuccesses`): a bookmark and a table insert refused under tracked recording, a
+(`unexpectedSuccesses`): a bookmark and a hyperlink refused under tracked recording, a
 bookmark endpoint refused inside a tracked insertion under direct recording, a stale
 precondition, and the batch that rolls back. The engine failing those closed is the property
 under test.

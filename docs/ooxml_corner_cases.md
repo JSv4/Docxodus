@@ -6707,6 +6707,62 @@ in face; the monospace captures differ in class too. The named controls remain
 references only for their own inputs. Eligible declared-input scoring and Word parity
 are pending. The standalone export's existing strict-font resolution policy is unchanged.
 
+## A tracked inserted table and the paragraph that closes it (#1626)
+
+Word records a table inserted with Track Changes on as inserted rows with inserted content,
+and inserts the empty paragraph that has to follow the table along with it. From the
+Word-authored `TestFiles/RP/RP001-Tracked-Revisions-01.docx` (`Application: Microsoft Office
+Word`; rsids and run properties trimmed):
+
+```xml
+<w:tbl>
+  <w:tblPr>…</w:tblPr>                     <!-- no w:tblPrChange, no w:tblGridChange -->
+  <w:tblGrid>…</w:tblGrid>
+  <w:tr>
+    <w:trPr><w:trHeight w:val="377"/><w:ins w:id="4" w:author="Author"/></w:trPr>
+    <w:tc>…<w:p>
+      <w:pPr><w:rPr><w:ins w:id="5" w:author="Author"/></w:rPr></w:pPr>
+      <w:ins w:id="6" w:author="Author"><w:r><w:t>Name of the preparations</w:t></w:r></w:ins>
+    </w:p></w:tc>…
+  </w:tr>…                                  <!-- every row: trPr/ins, content ins, mark ins -->
+</w:tbl>
+<w:p><w:pPr>…<w:rPr><w:ins w:id="38" w:author="Author"/></w:rPr></w:pPr></w:p>  <!-- empty, inserted -->
+```
+
+The same file deletes a table the mirror-image way: every row `w:trPr/w:del` and the empty
+paragraph after it `w:pPr/w:rPr/w:del`.
+
+| | Tracked `InsertTable` | Closing paragraph's revision |
+|---|---|---|
+| Word | rows, runs and marks inserted, as above | inserted with the table |
+| Docxodus before #1626 | refused with `tracked_operation_unsupported` on every document | — |
+| Docxodus with #1626 | the same encoding | inserted, and listed inside the table's one `RowInsert` revision |
+
+Why the closing paragraph matters: a table cannot end a table cell or the body, and two tables
+with nothing between them read as one table. So the paragraph after an inserted table often
+exists only because of the table, and resolving the table's rows without it can leave a cell
+ending in a table, a body ending in a table, or two tables fused. Docxodus now recognises that
+paragraph (`RevisionOps.ClosesTable`: directly after a table, with only the end of its
+container, the section properties or another table after it) and uses it twice. The revision
+registry attaches an empty closing paragraph whose mark the same edit revised to the row
+revision of the wholly revised table before it (`ClosingTableGroup`; never a section-break
+paragraph, another author's, or a blank line the table does not need). And resolving any
+revision keeps a closing paragraph while its table survives, stripping only the mark. Across
+the 102 revision-bearing documents in `TestFiles/`, accept-all and reject-all produce
+byte-identical bodies and the same revision counts before and after the change. In RP001
+the paragraph after the inserted table is followed by more text, so it is not a closing
+paragraph in this sense and stays its own revision.
+
+One placement has no reversible encoding: right after a paragraph whose mark is a pending
+insertion and which keeps something once it is rejected, such as the first half of a pending
+tracked split. Rejecting that mark has to merge the paragraph into the next one, and
+Docxodus's resolver cannot merge a paragraph across a table: after a tracked split of `Bravo`
+and a tracked table between `Br` and `avo`, reject-all left `Br | avo` instead of `Bravo`, and
+a bookmark in an inserted paragraph before such a table was dropped instead of moving into the
+next paragraph. `DocxSession.InsertTable` refuses that shape (`SplitsPendingParagraphJoin`). A
+table after a paragraph holding only inserted runs (directly or in a hyperlink) is fine,
+because rejecting empties that paragraph and removes it.
+
 ## Fractional whole-number measures truncate in Word (#1622)
 
 The schema types are whole numbers (`w:sz` is ST_EighthPointMeasure; `w:gridCol/@w:w`,

@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `InsertTable` now records a tracked insertion while recording changes (`RenderInline`) instead of refusing with `tracked_operation_unsupported`: every row and its content is inserted, the encoding Word writes, and the empty paragraph the insert adds after a table that would otherwise end its cell or the body or touch another table is inserted with it. The revision list shows the whole table, that paragraph included, as one `row_insert` revision, also for Word-authored tables of the same shape; accepting it gives exactly the untracked insert and rejecting it the original document. Resolving any revision now keeps the paragraph a surviving table needs after it (stripping only its mark), so a cell or the body never ends in a table. The insert still refuses right after a paragraph whose pending inserted mark a rejection must merge across the table, such as the first half of a pending tracked split (#1626).
+
 - Tables can use existing document table styles through `SetTableStyle` and `TableInsertOptions.StyleId`, including npm, Python and MCP. Style changes preserve direct formatting and record reversible property revisions; styled insertion inherits borders unless explicitly borderless (#1627).
 
 - Semantic flow lists can normalize familiar bullet shapes with `normalizeBulletMarkers` (npm) or `normalize_bullet_markers` (Python). Symbol bullets and Courier New circles become CSS markers; checkbox content and numbered/custom markers remain intact. Opt-in because marker formatting and line height may change (#1623).

@@ -551,19 +551,16 @@
     }
   },
   {
-    "id": "table_insert_is_refused_while_tracking",
-    "name": "docxodus_create",
+    "id": "hyperlink_is_refused_while_tracking",
+    "name": "docxodus_links",
     "arguments": {
       "sessionId": "$session_id",
-      "action": "insert_table",
-      "anchorId": "$certify_anchor",
-      "position": "after",
-      "rows": 2,
-      "columns": 2,
-      "cellContents": [
-        "Class",
-        "Authorized Shares"
-      ]
+      "action": "add_hyperlink",
+      "anchorId": "$list_anchor",
+      "startOffset": 0,
+      "length": 8,
+      "kind": "external",
+      "target": "https://delcode.delaware.gov/title8/c001/"
     },
     "expectFailure": true,
     "expect": {

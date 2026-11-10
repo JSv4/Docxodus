@@ -1690,8 +1690,8 @@ resolution replay) still strips it (DS430/DS434 vs DS418).
 
 | Under `RenderInline` | Operations |
 |---|---|
-| Record as native revisions | `ReplaceText` (and `ReplaceMatch`/`ReplaceInner`/`ReplaceTextAtSpan`), `DeleteBlock`, `DeleteRange`, `DeleteSection`, `InsertParagraph`, `SplitParagraph`, `MergeParagraphs` (a deleted first paragraph mark, issue #1313), `MoveBlock`, `InsertHorizontalRule`, `InsertFootnote`, `InsertEndnote`, `InsertCrossReference` (the REF field's complex-field runs in one `w:ins`, issue #1313), the formatting ops (`*PrChange`), the table row/column ops, and `ReplaceCellContent` (issue #1311), which records the cell's old content as a deletion and the new as an insertion the way `SetHeaderText` does a story: the cell's last paragraph keeps its mark and takes the new last paragraph's runs and paragraph properties, so reject gives back exactly the old cell and accept the new content. As when typing over a cell in Word, what a deletion does not remove survives an accept: the kept mark and its run formatting, bookmark/comment/permission range markers, and the empty shell of an inline content control. The running-story and section ops record too (issue #1299): `InsertPageNumberField` puts the field's runs in one `w:ins`, as Word records an inserted field; `SetHeaderText`/`SetFooterText` record the new story content as an insertion and any existing content as a deletion (the story's final paragraph mark is kept, so reject gives back exactly the old story and accept exactly the new one); and `SetPageSetup`, `SetPageNumbering`, `ClearPageNumbering` and the first-page flag (`EnsureHeaderFooterVisible`/`SetHeaderFooterKindEnabled` with `First`, or writing a first-page story) record a `w:sectPrChange`. A section that already has a pending `w:sectPrChange` keeps it, so its stored before-image stays the original section; an edit that puts the section back the way it was resolves it. When that pending change is another author's and the edit actually changes the properties, the fold re-credits it to the latest editor (this edit's author and date, a fresh id) while the stored baseline stays the original; a fold into the session author's own pending change keeps its id and takes the edit's date |
-| Refuse with `TrackedOperationUnsupported` | `InsertTable`, `ApplyListFormatRange`, a `MergeParagraphs` whose first paragraph ends a section, and every image mutation — no reversible native encoding exists, so nothing is written rather than something that cannot be taken back. Also every change to "Different odd and even pages" (`EnsureHeaderFooterVisible`/`SetHeaderFooterKindEnabled` with `Even`, or a `SetHeaderText`/`SetFooterText` even story while the setting is off): `w:evenAndOddHeaders` is a document setting in `settings.xml`, and OOXML has no revision element for settings. A tracked `SetHeaderText`/`SetFooterText` is refused the same way when the existing story does not end in a paragraph (for example a story ending in a block content control), when its last paragraph holds bookmark markers (the condition tracked `ReplaceText` refuses), or when the section has no story of that kind of its own but inherits one from an earlier section — giving it its own adds a header/footer reference, and no revision can record that, so a reject could never bring the inherited story back. A tracked `ReplaceCellContent` is refused when the cell holds a block beside its paragraphs (a nested table or a block-level content control: the untracked edit replaces only the direct paragraphs and keeps that block, which the tracked replacement would delete) or when its last paragraph holds bookmark markers. Each refusal writes nothing |
+| Record as native revisions | `ReplaceText` (and `ReplaceMatch`/`ReplaceInner`/`ReplaceTextAtSpan`), `DeleteBlock`, `DeleteRange`, `DeleteSection`, `InsertParagraph`, `SplitParagraph`, `MergeParagraphs` (a deleted first paragraph mark, issue #1313), `MoveBlock`, `InsertHorizontalRule`, `InsertFootnote`, `InsertEndnote`, `InsertCrossReference` (the REF field's complex-field runs in one `w:ins`, issue #1313), the formatting ops (`*PrChange`), the table row/column ops, `InsertTable` (issue #1626: every row and its content inserted, as Word records a table inserted with Track Changes on, plus the empty paragraph the insert adds after a table that would otherwise end its cell or the body or touch another table; see [Tracked table insertion](#tracked-table-insertion-issue-1626)), and `ReplaceCellContent` (issue #1311), which records the cell's old content as a deletion and the new as an insertion the way `SetHeaderText` does a story: the cell's last paragraph keeps its mark and takes the new last paragraph's runs and paragraph properties, so reject gives back exactly the old cell and accept the new content. As when typing over a cell in Word, what a deletion does not remove survives an accept: the kept mark and its run formatting, bookmark/comment/permission range markers, and the empty shell of an inline content control. The running-story and section ops record too (issue #1299): `InsertPageNumberField` puts the field's runs in one `w:ins`, as Word records an inserted field; `SetHeaderText`/`SetFooterText` record the new story content as an insertion and any existing content as a deletion (the story's final paragraph mark is kept, so reject gives back exactly the old story and accept exactly the new one); and `SetPageSetup`, `SetPageNumbering`, `ClearPageNumbering` and the first-page flag (`EnsureHeaderFooterVisible`/`SetHeaderFooterKindEnabled` with `First`, or writing a first-page story) record a `w:sectPrChange`. A section that already has a pending `w:sectPrChange` keeps it, so its stored before-image stays the original section; an edit that puts the section back the way it was resolves it. When that pending change is another author's and the edit actually changes the properties, the fold re-credits it to the latest editor (this edit's author and date, a fresh id) while the stored baseline stays the original; a fold into the session author's own pending change keeps its id and takes the edit's date |
+| Refuse with `TrackedOperationUnsupported` | `InsertTable` between the halves of a pending tracked split (rejecting the split must merge the halves across the table), `ApplyListFormatRange`, a `MergeParagraphs` whose first paragraph ends a section, and every image mutation — no reversible native encoding exists, so nothing is written rather than something that cannot be taken back. Also every change to "Different odd and even pages" (`EnsureHeaderFooterVisible`/`SetHeaderFooterKindEnabled` with `Even`, or a `SetHeaderText`/`SetFooterText` even story while the setting is off): `w:evenAndOddHeaders` is a document setting in `settings.xml`, and OOXML has no revision element for settings. A tracked `SetHeaderText`/`SetFooterText` is refused the same way when the existing story does not end in a paragraph (for example a story ending in a block content control), when its last paragraph holds bookmark markers (the condition tracked `ReplaceText` refuses), or when the section has no story of that kind of its own but inherits one from an earlier section — giving it its own adds a header/footer reference, and no revision can record that, so a reject could never bring the inherited story back. A tracked `ReplaceCellContent` is refused when the cell holds a block beside its paragraphs (a nested table or a block-level content control: the untracked edit replaces only the direct paragraphs and keeps that block, which the tracked replacement would delete) or when its last paragraph holds bookmark markers. Each refusal writes nothing |
 | Apply untracked | Comments and annotations, which are not revisions, by design |
 
 Anything that writes package state under recording belongs in exactly one of those three rows.
@@ -1700,6 +1700,48 @@ automatically diffed into revisions (issue #1625).
 The failure #614 fixed was a fourth, unwritten one — writing content that reject-all could not
 take back — which is the worst of the three, because the redline looks complete and only fails
 when somebody actually rejects it.
+
+### Tracked table insertion (issue #1626)
+
+A tracked `InsertTable` builds exactly the table the untracked call builds, then marks it the way
+a tracked table move marks its destination (`MarkTableRowsAsTrackedRevision`, shared with
+`MoveBlock`): every row gets `w:trPr/w:ins`, every run in its cells is wrapped in `w:ins`, and
+every cell paragraph mark gets `w:pPr/w:rPr/w:ins`. When the untracked call would add an empty
+paragraph after the table — the table would otherwise end the body or a cell, or sit directly
+against another table — that paragraph's mark is inserted too, so a reject leaves nothing
+behind.
+
+That closing paragraph is what `RevisionOps.ClosesTable` recognises: a paragraph directly after
+a table with only the end of its container, the section properties or another table after it.
+Two rules hang off it:
+
+- **Grouping.** The registry already groups consecutive inserted rows with one stamp into a
+  single `RowInsert` revision, with their cell content attached. It also attaches an empty
+  closing paragraph whose mark the same edit revised (`ClosingTableGroup`), when that revision
+  covers every row of the table and the paragraph does not end a section. So a tracked table
+  insert lists as one revision wherever it lands. A blank paragraph the table does not need (one
+  followed by more text), another author's, or an inserted section break stays its own revision.
+- **Resolution.** Rejecting (or accepting the deletion of) an empty paragraph's mark removes the
+  paragraph, except one that closes a surviving table: there only the mark goes. Rejecting the
+  table's own revision removes the rows first, so its closing paragraph no longer closes a table
+  and goes with it. Without this rule, accepting the table and later rejecting a paragraph that
+  had been edited into its closing paragraph left a cell or the body ending in a table.
+
+Accepting the insert yields exactly the untracked insert; rejecting it gives back the original.
+
+One shape still refuses with `TrackedOperationUnsupported`: right after a paragraph whose mark is
+a pending insertion (a tracked split, or Enter typed with tracking on) and which keeps something
+once that insertion is rejected — text, or a bookmark or comment marker — with a paragraph
+right after the insertion point. Rejecting that mark has to merge the paragraph into the next
+one, carrying what it keeps, and a table between them blocks the merge, so reject-all would
+leave the paragraph split (or drop its markers). After a paragraph holding only inserted runs,
+directly or inside a hyperlink, simple field or smart tag (a tracked `InsertParagraph`), the
+table is fine: rejecting empties that paragraph and removes it. The ribbon's Enter-then-table
+flow under tracking meets this refusal, since Enter is a tracked split; inserting the table after
+an existing paragraph, or resolving the split first, avoids it.
+
+Markdown inserts still refuse GFM tables (`TableInsertNotSupported`); that limit is in the
+payload parser, not the tracking path.
 
 ## Reference fields: TOC / TOF / TOA (issue #607)
 
