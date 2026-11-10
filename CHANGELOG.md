@@ -25,6 +25,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Saved packages are byte-identical on Windows and Linux. `ZipArchive` writes the OS it runs on into every central-directory header (0 on Windows, 3 elsewhere) and gives a new entry a Unix mode only on Unix, so a DOCX saved or compared on Windows differed from the same output on Linux by a byte or two per entry. The output normalizer and the buffered history packages now record Unix as the host on every OS. An entry with no mode now gets the regular-file mode `0100644`, where Linux used to write bare `0644` for entries carried over from Word-authored input (#1659).
 - A line break inside a hanging-indent list item no longer keeps the item's lines at the paragraph's largest size; each line takes its own text's height there too (#1565).
 
 - A list item whose bullet is mapped from Symbol or Wingdings to a Unicode glyph keeps the replaced font's height on its first line, as Word does: a zero-width box as tall as that font's ascent sits beside the glyph, which renders as before. A 12pt Symbol bullet over 12pt Arial now steps 14.61pt per item instead of 13.80pt; wrapped lines and exact spacing are unchanged (#1567).

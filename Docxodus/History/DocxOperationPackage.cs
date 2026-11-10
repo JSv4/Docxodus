@@ -119,9 +119,12 @@ internal static class DocxOperationPackage
             {
                 var entry = zip.CreateEntry(pair.Value.Name, CompressionLevel.NoCompression);
                 entry.LastWriteTime = new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
+                entry.ExternalAttributes = ZipPackageOutputNormalizer.RegularFilePermissions;
                 using var stream = entry.Open(); stream.Write(pair.Value.Bytes);
             }
-        return output.ToArray();
+        var bytes = output.ToArray();
+        ZipPackageOutputNormalizer.StampUnixHost(bytes);
+        return bytes;
     }
 
     private static PackageManifest Manifest(byte[] package, PackageManifestOptions? options)
