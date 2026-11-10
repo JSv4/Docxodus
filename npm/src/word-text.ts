@@ -243,12 +243,9 @@ function contourRows(image: HTMLImageElement, paragraph: HTMLElement, run: HTMLE
   const pitch = Number.parseFloat(style.lineHeight);
   const nativeHeight = Number.parseFloat(style.getPropertyValue('--docx-word-native-height'));
   if (!(nativeHeight > 0) || !(pitch > 0) || !(picture.width > 0) || !(picture.height > 0)) return null;
-  const context = paragraph.ownerDocument.createElement('canvas').getContext('2d');
+  const context = fontContext(paragraph.ownerDocument, style);
   if (!context) return null;
   const measureScale = Number.parseFloat(style.fontSize) / 10000;
-  context.font = `${style.fontStyle} ${style.fontWeight} 10000px ${style.fontFamily}`;
-  context.fontKerning = style.fontKerning as CanvasFontKerning;
-  if (!context.font.includes('10000px')) return null;
   const words = Array.from(run.textContent!.matchAll(/\S+\s*/gu), (match, index) => {
     if ((index & 63) === 0) checkpoint?.();
     return { text: match[0], width: context.measureText(match[0].trimEnd()).width * measureScale,
@@ -292,14 +289,25 @@ function characterScale(style: CSSStyleDeclaration): number {
   return Number.isFinite(scale) && scale > 0 ? scale : 1;
 }
 
+/**
+ * A canvas at a large em with the run's own kerning and ligatures. Canvas can only turn ligatures
+ * off (`optimizeSpeed`) or keep the browser's defaults, so a finer feature request is unmeasurable.
+ */
+function fontContext(document: Document, style: CSSStyleDeclaration): CanvasRenderingContext2D | null {
+  const context = document.createElement('canvas').getContext('2d');
+  if (!context || !['none', 'normal'].includes(style.fontVariantLigatures) || style.fontFeatureSettings !== 'normal')
+    return null;
+  context.font = `${style.fontStyle} ${style.fontWeight} 10000px ${style.fontFamily}`;
+  context.fontKerning = style.fontKerning as CanvasFontKerning;
+  context.textRendering = style.fontVariantLigatures === 'none' ? 'optimizeSpeed' : 'auto';
+  return context.font.includes('10000px') ? context : null;
+}
+
 /** Measure advances at a large em to avoid CSS-pixel font hinting in line positions. */
 function wordMeasure(run: HTMLElement, exactHeight = 0): { (text: string): number; raw: (text: string) => number } | null {
   const style = run.ownerDocument.defaultView!.getComputedStyle(run);
-  const context = run.ownerDocument.createElement('canvas').getContext('2d');
+  const context = fontContext(run.ownerDocument, style);
   if (!context) return null;
-  context.font = `${style.fontStyle} ${style.fontWeight} 10000px ${style.fontFamily}`;
-  context.fontKerning = style.fontKerning as CanvasFontKerning;
-  if (!context.font.includes('10000px')) return null;
   const scale = Number.parseFloat(style.fontSize) / 10000;
   // Owned block lines cannot use the inline-only exact-ink overflow path. Keep
   // overlapping/tight exact text there until its ink has a fitted-line model.
@@ -437,13 +445,6 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
     }
     if (offset === text.length && rows.length === measured.length &&
         rows.every((row, index) => row.text === measured[index])) {
-      // The painter owns vertical baselines. Removing a baseline-only relative
-      // offset leaves inline flow and word X positions intact, while allowing
-      // the existing safe-fragment guard to handle this otherwise plain run.
-      if (runStyle.position === 'relative' && runStyle.left === '0px' && runStyle.right === '0px') {
-        run.style.position = 'static';
-        run.style.top = '0';
-      }
       run.setAttribute(FITTED_RUN, '0');
       if (modernJustification || wordPerfect) run.style.setProperty('--docx-word-space-compression', `${-space / 4}px`);
       return 'unchanged';
@@ -469,8 +470,8 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
     fragment.append(line);
     return line;
   });
-  run.style.position = 'static';
-  run.style.top = '0';
+  // The run keeps the converter's vertical offset: automatic spacing puts its text at the top of
+  // each line, as Word does, so pagination can fit a page's last line by its text height (#1571).
   run.style.wordSpacing = '0px';
   run.replaceChildren(fragment);
   for (let index = 0; index < lines.length; index++) {
@@ -605,7 +606,7 @@ function condenseLines(paragraphs: HTMLElement[], modernJustification: boolean, 
   const measurers = new Map<string, ((text: string) => number) | null>();
   const measureFor = (run: HTMLElement) => {
     const s = run.ownerDocument.defaultView!.getComputedStyle(run);
-    const key = [s.fontStyle, s.fontWeight, s.fontSize, s.fontFamily, s.fontKerning].join('|');
+    const key = [s.fontStyle, s.fontWeight, s.fontSize, s.fontFamily, s.fontKerning, s.fontVariantLigatures, s.fontFeatureSettings].join('|');
     if (!measurers.has(key)) {
       const measure = wordMeasure(run), widths = new Map<string, number>();
       measurers.set(key, measure && (text => widths.get(text) ?? widths.set(text, measure(text)).get(text)!));
@@ -854,13 +855,14 @@ function prepareText(root: HTMLElement, checkpoint: (() => void) | undefined, ow
     // Unscaled cell text keeps HTML paint until the general table line-breaking
     // policy is resolved. Scaled text needs both fitted lines and paint.
     if (table && scale === 1) { condense(); continue; }
-    const kerning = runStyle.getPropertyValue('--docx-font-kerning').trim() || 'none';
+    // Word kerns only on request; the converter states it as `font-kerning: normal`.
+    const kerning = runStyle.fontKerning === 'normal' ? 'normal' : 'none';
     // A unit multiple leaves the run at `line-height: normal`; the export's unrounded
     // normal-line pass (line-metrics.ts) has already resolved it to a length.
     const height = Number.parseFloat(runStyle.lineHeight);
     // Implicit or minimum line spacing has no precision line model; it keeps HTML paint too.
     if (!(multiple > 0) && !exact) { condense(); continue; }
-    if (!(height > 0) || !['none', 'normal'].includes(kerning)) continue;
+    if (!(height > 0)) continue;
     // Keep the resolved font height's precision through the spacing multiple.
     // Rounding the natural height to twips and flooring the product shortens
     // every line; native Word controls show the loss accumulating down a page.
@@ -1046,7 +1048,8 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
       }
       line.setAttribute('y', String((box.top - band.top + dy + lost + baseline + index * pitch) * 4));
       line.setAttribute('xml:space', 'preserve');
-      for (const property of ['font-family', 'font-weight', 'font-style', 'font-stretch', 'font-kerning'])
+      for (const property of ['font-family', 'font-weight', 'font-style', 'font-stretch', 'font-kerning',
+        'font-variant-ligatures', 'font-feature-settings'])
         line.style.setProperty(property, style.getPropertyValue(property));
       line.style.fontSize = `${fontSize * 4}px`;
       line.style.fill = style.color;

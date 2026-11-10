@@ -6942,9 +6942,12 @@ fits 27 there, a separate sub-twip difference in its line height that this fix d
 `PaginationEngine` measures `MeasuredBlock.trailingLeadingPt`, the leading below the last line's
 text, for converter runs that carry the automatic-spacing lift. It uses that one fit height for
 whole blocks and for fragment heads, and a block placed by it gets a declared
-`--docx-word-text-height`, so its box ends at the text. The export's Word-text pass removes the lift
-from uniform runs before pagination, and its pre-paint clip check would then see glyphs below the
-band. Those paragraphs keep the full-line test, and the export still prints 23 lines.
+`--docx-word-text-height`, so its box ends at the text. The export's Word-text pass used to remove
+the lift from the uniform runs it fits, so those paragraphs kept the full-line test and standalone
+PDF export printed 23 lines at the 15pt remainder. It now keeps every run's converter offset, for
+unchanged and for re-wrapped lines, because the vector painter places baselines from the paragraph
+box whatever the DOM offset is. The shared fit applies in export too: 24 lines at 15pt and 23 at
+13pt, pinned by `export-last-line-leading.spec.ts`.
 
 ## Fractional whole-number measures truncate in Word (#1622)
 
@@ -7210,3 +7213,42 @@ advances. When Word condenses a line, only that
 line's ordinary spaces narrow, by the overflow the browser measures for it; HTML still lays out and
 paints the paragraph. Public PDF regressions pin each placement with its left-aligned and mode-14
 controls.
+
+## Word kerns and ligates only on request (#1562)
+
+Word 2024 measured with `Range.Information` line positions on the issue's generator output, with
+Liberation Serif renamed to Times New Roman. The 12pt left-aligned paragraph sits in a 468pt column;
+through `Water` it is 471.15pt unkerned, so `Water` fits only when `We`, `Wa`, `Va` and the other
+pairs are kerned.
+
+| Fixture | Word line 1 ends | Docxodus before | Docxodus after |
+| --- | --- | --- | --- |
+| `plain.docx`, `bold-elsewhere.docx` | `Where` | `Where` | `Where` |
+| bold `Tawny` in the same paragraph, no `w:kern` | `Where` | `Water` | `Where` |
+| `w:kern w:val="28"` (14pt) on 12pt text | `Where` | `Where` | `Where` |
+| `w:kern w:val="25"` (12.5pt) | `Where` | `Where` | `Where` |
+| `w:kern w:val="24"` (12pt) | `Water` | `Water` | `Water` |
+| `w:kern w:val="2"` in the run, defaults or a paragraph style | `Water` | `Water` | `Water` |
+| `w:kern w:val="2"` with bold `Tawny` in the same paragraph | `Water` | `Water` | `Water` |
+| `w:kern w:val="0"` in the run, also over `w:kern w:val="2"` defaults | `Where` | `Water` | `Where` |
+| justified, no `w:kern` | `Water` | `Water` | `Water` |
+
+ECMA-376 17.3.2.19 makes `w:val` the smallest kerned size, which would read `0` as every size.
+Word instead treats `0` as kerning off, the value it writes to cancel inherited kerning. The
+justified row keeps `Water` because modern justification condenses the 3.15pt overflow.
+
+Ligatures were compared on the issue's Calibri `ligature-*.docx` line with `Range.Information`
+x positions (0.5pt resolution). Without `w14:ligatures`, the plain and bold-elsewhere copies are
+identical: `staff` spans 72–92pt and the `ffi` of `office` starts at 100.5, 103.5 and 107pt. With
+`w14:ligatures w14:val="standard"` the same characters sit at 72–91.5pt and 100, 103 and 106pt, and
+`all` narrows further (`st` begins 0.5pt earlier). Word forms no ligatures by default.
+
+The converter's layout stylesheet now sets `font-kerning: none` and `font-variant-ligatures: none`
+on `body`. A run whose resolved `w:kern` is positive and no larger than its size gets
+`font-kerning: normal`; a `w14:ligatures` value maps each named set to its OpenType feature
+(`standard` liga, `contextual` clig, `historical` hlig, `discretional` dlig) in
+`font-feature-settings`. Every rendering path, flow HTML as well as the paginated export, inherits
+the same rule, so it no longer depends on which renderer owns a paragraph. The export's text fitter
+measures with the same kerning and ligatures (canvas `textRendering: optimizeSpeed` disables
+ligatures without touching kerning, matching the DOM); runs that request specific ligature features
+keep the browser's own line layout.
