@@ -23,6 +23,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- HTML and PDF conversion no longer fail on a bare fractional border width (`w:sz` in paragraph, table and cell borders), `w:gridCol` width or section column spacing. These read through the same invariant measure parser as other twip values and keep its whole-number truncation; exponents, NaN, comma decimals and out-of-range values still fail. The `w:gridCol` failure was a 15.1.0 regression (#1622).
+
 - Raw XML insertion and replacement now refuse with `tracked_operation_unsupported` while recording changes, preserving the document and undo history instead of silently applying an unreviewable edit (#1625).
 
 - Markdown projection omits pending deleted table rows in accepted and deletion-stripped views, including opaque summaries and textboxes carried by those rows. Source anchors remain available for review and rejection (#1628).

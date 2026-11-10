@@ -18,7 +18,7 @@ public static partial class WmlToHtmlConverter
         public int Start { get; } = start;
         public int End { get; } = end;
         public XElement Border { get; } = border;
-        public decimal Width => Math.Clamp((int?)Border.Attribute(W.sz) ?? 0, 2, 96) / 8m;
+        public decimal Width => Math.Clamp(WordprocessingMLUtil.BorderSize(Border), 2, 96) / 8m;
     }
 
     private sealed class ExactTableCellBorders
@@ -57,7 +57,7 @@ public static partial class WmlToHtmlConverter
     {
         table.RemoveAnnotations<ExactTableBorders>();
         var rows = WordprocessingMLUtil.TableRows(table).ToList();
-        var widths = table.Element(W.tblGrid)?.Elements(W.gridCol).Select(c => (int?)c.Attribute(W._w) ?? 0).ToList();
+        var widths = table.Element(W.tblGrid)?.Elements(W.gridCol).Select(c => WordprocessingMLUtil.AttributeToTwips(c.Attribute(W._w)) ?? 0).ToList();
         if (!IsFixedLayoutTable(table) || widths == null || widths.Count == 0 || widths.Any(w => w <= 0)
             || rows.Count == 0) return false;
         var grids = rows.Select(TableGridModel.RowGrid).ToList();
@@ -65,7 +65,7 @@ public static partial class WmlToHtmlConverter
         if (grids.Any(r => r.Any(c => c.End > widths.Count))) return false;
         var borders = grids.SelectMany(r => r).SelectMany(c => c.Cell.Element(W.tcPr)?.Element(W.tcBorders)?.Elements()
             ?? Enumerable.Empty<XElement>()).Where(b => (string?)b.Attribute(W.val) is not (null or "nil" or "none")).ToList();
-        if (borders.Count == 0 || borders.Any(b => (string?)b.Attribute(W.val) != "single" || (int?)b.Attribute(W.sz) is not > 0))
+        if (borders.Count == 0 || borders.Any(b => (string?)b.Attribute(W.val) != "single" || WordprocessingMLUtil.BorderSize(b) <= 0))
             return false;
 
         var model = new ExactTableBorders();

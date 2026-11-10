@@ -1918,10 +1918,10 @@ namespace Docxodus
             // borderless layout table — the standard S-1 cover pattern). Only "nil" is special-cased
             // above, so a "none" border falls through to here; read sz null-safe (missing = 0 width)
             // instead of (int)Attribute(...) which throws ArgumentNullException on the missing attr.
-            if (((int?)inside1.Attribute(W.sz) ?? 0) > ((int?)sideToReplace.Attribute(W.sz) ?? 0))
+            if (WordprocessingMLUtil.BorderSize(inside1) > WordprocessingMLUtil.BorderSize(sideToReplace))
                 return inside1;
 
-            if (((int?)sideToReplace.Attribute(W.sz) ?? 0) > ((int?)inside1.Attribute(W.sz) ?? 0))
+            if (WordprocessingMLUtil.BorderSize(sideToReplace) > WordprocessingMLUtil.BorderSize(inside1))
                 return sideToReplace;
 
             if (BorderTypePriority.ContainsKey(inside1Val) &&
@@ -1935,10 +1935,10 @@ namespace Docxodus
                     return sideToReplace;
             }
 
-            if (((int?)inside1.Attribute(W.sz) ?? 0) > ((int?)sideToReplace.Attribute(W.sz) ?? 0))
+            if (WordprocessingMLUtil.BorderSize(inside1) > WordprocessingMLUtil.BorderSize(sideToReplace))
                 return inside1;
 
-            if (((int?)sideToReplace.Attribute(W.sz) ?? 0) > ((int?)inside1.Attribute(W.sz) ?? 0))
+            if (WordprocessingMLUtil.BorderSize(sideToReplace) > WordprocessingMLUtil.BorderSize(inside1))
                 return sideToReplace;
 
             var color1str = (string?)inside1.Attribute(W.color);
