@@ -6739,19 +6739,26 @@ paragraph after it `w:pPr/w:rPr/w:del`.
 | Docxodus with #1626 | the same encoding | inserted, and listed inside the table's one `RowInsert` revision |
 
 Why the closing paragraph matters: a table cannot end a table cell or the body, and two tables
-with nothing between them are one table to Word. So the paragraph after an inserted table often
-exists only because of the table, and resolving the table's rows without it can leave a
-cell ending in a table, a body ending in a table, or two tables fused. The session's revision
-registry (`RevisionOps.ClosingTableGroup`) therefore attaches an empty paragraph whose mark is
-revised by the same edit to the row revision of the wholly revised table directly before it.
-Across the 102 revision-bearing documents in `TestFiles/`, accept-all and reject-all produce
-byte-identical bodies before and after that grouping change, and the revision counts are
-unchanged; only which revision the closing paragraph belongs to moves.
+with nothing between them read as one table. So the paragraph after an inserted table often
+exists only because of the table, and resolving the table's rows without it can leave a cell
+ending in a table, a body ending in a table, or two tables fused. Docxodus now recognises that
+paragraph (`RevisionOps.ClosesTable`: directly after a table, with only the end of its
+container, the section properties or another table after it) and uses it twice. The revision
+registry attaches an empty closing paragraph whose mark the same edit revised to the row
+revision of the wholly revised table before it (`ClosingTableGroup`; never a section-break
+paragraph, another author's, or a blank line the table does not need). And resolving any
+revision keeps a closing paragraph while its table survives, stripping only the mark. Across
+the 102 revision-bearing documents in `TestFiles/`, accept-all and reject-all produce
+byte-identical bodies and the same revision counts before and after the change. In RP001
+the paragraph after the inserted table is followed by more text, so it is not a closing
+paragraph in this sense and stays its own revision.
 
-One placement has no reversible encoding: between the halves of a pending tracked split.
-Rejecting the split's inserted paragraph mark has to merge the first half into the second, and
-Docxodus's resolver cannot merge a paragraph across a
-table, so after a tracked split of `Bravo` and a tracked table between `Br` and `avo`,
-reject-all left `Br | avo` instead of `Bravo`. `DocxSession.InsertTable` refuses that shape
-(`SplitsPendingParagraphJoin`); a table after a wholly inserted paragraph is fine, because
-rejecting empties that paragraph and removes it.
+One placement has no reversible encoding: right after a paragraph whose mark is a pending
+insertion and which keeps something once it is rejected, such as the first half of a pending
+tracked split. Rejecting that mark has to merge the paragraph into the next one, and
+Docxodus's resolver cannot merge a paragraph across a table: after a tracked split of `Bravo`
+and a tracked table between `Br` and `avo`, reject-all left `Br | avo` instead of `Bravo`, and
+a bookmark in an inserted paragraph before such a table was dropped instead of moving into the
+next paragraph. `DocxSession.InsertTable` refuses that shape (`SplitsPendingParagraphJoin`). A
+table after a paragraph holding only inserted runs (directly or in a hyperlink) is fine,
+because rejecting empties that paragraph and removes it.
