@@ -111,12 +111,13 @@ namespace Docxodus.Tests
             // Every caller converts GetTextWidth from 96-DPI pixels. Measuring at the point size made
             // each installed font three quarters as wide as Word sets it (issue #1659): Word 2024 sets
             // this text in 10 pt Times New Roman 233.5 pt wide, which a host with the font measured as
-            // 175 pt. Where the font is missing, Skia substitutes the same fallback on both sides.
+            // 175 pt. Where the font is missing, Skia substitutes the same fallback on both sides; with
+            // no font at all (Linux CI) it measures nothing, and the 0.6 em estimate must be pixels too.
             const string text = "the parties agree that the supplier shall deliver the services";
             using var typeface = SkiaSharp.SKTypeface.FromFamilyName("Times New Roman");
             using var tenPoints = new SkiaSharp.SKFont(typeface, 10f);
-            var points = tenPoints.MeasureText(text);
-            Assert.True(points > 0, "no font to measure with");
+            var measured = tenPoints.MeasureText(text);
+            var points = measured > 0 ? measured : text.Length * 10f * 0.6f;
 
             var pixels = MetricsGetter.GetTextWidth("Times New Roman", false, false, 20m, text);
             Assert.InRange(pixels, (int)(points * 96 / 72) - 1, (int)(points * 96 / 72) + 1);
