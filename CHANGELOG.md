@@ -27,6 +27,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `FileHistoryBlobStore` on Windows no longer fails a concurrent write of a blob that already exists with "being used by another process". The write verifies the existing blob, but it opened that file without sharing delete access, which Windows refuses while another writer's `File.Move` still holds the file. Blobs are now opened sharing delete, as `FileHistoryHeadStore` already does (#1659).
 - A line break inside a hanging-indent list item no longer keeps the item's lines at the paragraph's largest size; each line takes its own text's height there too (#1565).
 
 - A list item whose bullet is mapped from Symbol or Wingdings to a Unicode glyph keeps the replaced font's height on its first line, as Word does: a zero-width box as tall as that font's ascent sits beside the glyph, which renders as before. A 12pt Symbol bullet over 12pt Arial now steps 14.61pt per item instead of 13.80pt; wrapped lines and exact spacing are unchanged (#1567).
@@ -44,6 +45,8 @@ All notable changes to this project will be documented in this file.
 - HTML and PDF conversion no longer fail on a bare fractional border width (`w:sz` in paragraph, table and cell borders), `w:gridCol` width or section column spacing. These read through the same invariant measure parser as other twip values and keep its whole-number truncation; exponents, NaN, comma decimals and out-of-range values still fail. The `w:gridCol` failure was a 15.1.0 regression (#1622).
 
 - Comparing documents whose default paragraph spacing differs no longer shrinks the text when the redline is rejected in Word. The tracked spacing change on a style now also archives that style's run properties, because Word's Reject All resets an unarchived slice to its built-in 10 pt. Docxodus's own accept and reject output is unchanged (#1576).
+
+- Text is kerned and ligated only where the document asks, on every rendering path: the layout stylesheet turns browser kerning and ligatures off, a run's resolved `w:kern` enables kerning from that size up (a minimum of `0` now means off, as in Word), and `w14:ligatures` enables its OpenType ligature sets. Mixed-run paragraphs no longer wrap later than Word because the browser kerned them, and the export's text fitter measures with the same features (#1562).
 
 - Standalone export condenses justified lines the way Word does in every paragraph structure, not only single-run paragraphs: mixed runs, hyperlinks, list items and fixed-grid table cells and paragraphs that state no line spacing take Word's compatibility-mode-15 line choices while keeping their HTML layout and paint. Word measurements show a bold word that widens the line can correctly keep the earlier break; left-aligned text and mode 14 are unchanged (#1550).
 

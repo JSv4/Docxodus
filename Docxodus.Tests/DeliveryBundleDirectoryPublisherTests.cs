@@ -329,7 +329,7 @@ public sealed class DeliveryBundleDirectoryPublisherTests
                 Path.Combine(temporary.Path, "missing", "delivery")));
     }
 
-    [Fact]
+    [SymlinkFact]
     public void Publish_RejectsDanglingTargetSymlinkWithoutTouchingItsDestination()
     {
         using var temporary = new TemporaryDirectory();
@@ -345,7 +345,7 @@ public sealed class DeliveryBundleDirectoryPublisherTests
         AssertNoStageDirectories(temporary.Path);
     }
 
-    [Fact]
+    [SymlinkFact]
     public void Publish_RejectsSymlinkedTargetParent()
     {
         using var temporary = new TemporaryDirectory();
@@ -362,7 +362,7 @@ public sealed class DeliveryBundleDirectoryPublisherTests
         AssertNoStageDirectories(temporary.Path);
     }
 
-    [Fact]
+    [SymlinkFact]
     public void Publish_RejectsSymlinkInjectedIntoOwnedStageAndDoesNotWriteOutside()
     {
         using var temporary = new TemporaryDirectory();
