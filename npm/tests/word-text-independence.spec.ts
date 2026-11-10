@@ -114,3 +114,61 @@ for (const exact of [false, true]) test(`${exact ? 'exact' : 'automatic'} text k
   expect(results[0].svg).toBe(exact ? 0 : 1);
   expect(results[0].text).toBe(justified);
 });
+
+for (const align of ['justify', 'left'] as const) test(`a ${align} mixed-run paragraph keeps its runs and text while taking Word's lines`, async ({ page }) => {
+  await page.setContent(`<style>p{font:12pt/normal 'Liberation Serif';margin:0;--docx-auto-line-spacing:1}
+    span{white-space:pre-wrap}</style><main data-docx-compatibility-mode="15" style="width:468pt">
+    <p id="target" style="text-align:${align}"><span>${justified.slice(0, 13)}</span><span
+      style="font-weight:bold">${justified.slice(13, 16)}</span><span>${justified.slice(16)}</span></p></main>`);
+  await page.addScriptTag({ content: metrics });
+  await page.addScriptTag({ content: wordTextScript });
+  const result = await page.evaluate(async () => {
+    await document.fonts.ready;
+    const root = document.querySelector('main')!, target = document.getElementById('target')!, api = window as any;
+    api.applyUnroundedNormalLineHeights(root);
+    api.prepareWordText(root);
+    const words: Array<{ text: string; top: number }> = [];
+    const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) for (const word of node.textContent!.matchAll(/\S+/g)) {
+      const range = document.createRange();
+      range.setStart(node, word.index!); range.setEnd(node, word.index! + word[0].length);
+      words.push({ text: word[0], top: Math.round(range.getBoundingClientRect().top) });
+    }
+    const condensed = Array.from(target.querySelectorAll<HTMLElement>('[data-docx-condensed-line]'));
+    return { first: words.filter(word => word.top === words[0].top).map(word => word.text).join(' '),
+      text: target.textContent, runs: Array.from(target.children, run => run.getAttribute('style') ?? ''),
+      tops: [...new Set(condensed.map(line => Math.round(line.getBoundingClientRect().top)))], top: words[0].top,
+      spacing: condensed.map(line => Number.parseFloat(getComputedStyle(line).wordSpacing)) };
+  });
+  expect(result.first).toMatch(align === 'justify' ? /pier as$/ : /pier$/);
+  expect(result.text).toBe(justified);
+  expect(result.runs).toHaveLength(3);
+  expect(result.runs[1]).toContain('font-weight: bold');
+  // Only the line Word condenses narrows its ordinary spaces.
+  expect(result.tops).toEqual(align === 'justify' ? [result.top] : []);
+  for (const spacing of result.spacing) expect(spacing).toBeLessThan(0);
+});
+
+test('a condensed line keeps the Word baseline of its uniform runs under an enlarged minimum', async ({ page }) => {
+  const paragraph = (id: string, align: string) => `<p id="${id}" style="text-align:${align};line-height:24pt;
+    --docx-min-line-height:24pt"><span>${justified.slice(0, 60)}</span><span>${justified.slice(60)}</span></p>`;
+  await page.setContent(`<style>p{font:12pt 'Liberation Serif';margin:0}span{white-space:pre-wrap}</style>
+    <main data-docx-compatibility-mode="15" style="width:468pt">${paragraph('justified', 'justify')}${paragraph('left', 'left')}</main>`);
+  await page.addScriptTag({ content: metrics });
+  await page.addScriptTag({ content: wordTextScript });
+  const result = await page.evaluate(async () => {
+    await document.fonts.ready;
+    const api = window as any, root = document.querySelector('main')!;
+    api.prepareWordText(root);
+    api.alignBaselinesToWord(root);
+    return ['justified', 'left'].map(id => {
+      const p = document.getElementById(id)!;
+      return { condensed: p.querySelectorAll('[data-docx-condensed-line]').length,
+        tops: Array.from(p.children, run => getComputedStyle(run).top) };
+    });
+  });
+  expect(result[0].condensed).toBeGreaterThan(0);
+  expect(result[1].condensed).toBe(0);
+  expect(result[0].tops).toEqual(result[1].tops);
+  expect(result[0].tops[0]).not.toBe('auto');
+});

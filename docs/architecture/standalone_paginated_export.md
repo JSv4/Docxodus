@@ -1638,11 +1638,12 @@ The same line selector handles plain exact-spaced justified text in compatibilit
 Only ordinary spaces change advance, per selected line; a naturally fitting final line keeps its
 spaces. Each continuation retains the full exact pitch. Admission requires the font's ascent and
 descent to fit that line's 80%/20% bands, so overlapping ink keeps the existing inline overflow path.
-Hard breaks, tabs, bidi, mixed runs, pictures and columns retain their existing layout. Eligibility
+Hard breaks, tabs, bidi, pictures and columns retain their existing layout; mixed runs take the
+HTML-painted line choices described below. Eligibility
 is paragraph-local: neighboring rich text, tables, lists, links or different line-spacing rules
 do not change an otherwise eligible paragraph's fitting, kerning or paint policy. Exact paragraphs
-retain HTML paint; automatic paragraphs retain the vector painter. Table/list contents, notes,
-comments, textboxes and frames remain excluded, while ordinary running-story paragraphs still
+retain HTML paint; automatic paragraphs retain the vector painter. Notes, comments, textboxes
+and frames remain excluded, and table/list contents keep HTML paint, while ordinary running-story paragraphs still
 qualify. The vector keeps the positioned paint phase of baseline-adjusted HTML runs, preserving
 PDF text order around tables and other unprepared content. Graphics, wrapping frames and unsupported
 picture flow retain the document-level guard
@@ -1660,6 +1661,20 @@ its block geometry in either compatibility mode. The precision fitter replaces t
 when its line choices differ or an authored character-width scale requires owned lines. Vector paint derives word positions from the same resolved advances
 in both paths: matching line breaks do not establish that the browser's hinted word advances match
 the font. Natural final lines, alignment and repeated ordinary spaces retain their own rules.
+Justified paragraphs the precision fitter does not own keep HTML layout and paint but take the
+same line choices (#1550): mixed runs, hyperlinks, list items (the marker, its tab and the
+indents narrow only the first line, as measured from the first word's position), unscaled text
+in fixed-grid table cells, and paragraphs that state no automatic multiple (Word's implicit single
+spacing, or a minimum). The selector measures each word across its runs with each run's own
+font. A line that fits at natural spacing is already the browser's choice and nothing changes.
+When Word condenses a line, that line's text segments are wrapped in
+`[data-docx-condensed-line]` spans whose negative `word-spacing` removes exactly the overflow the
+browser measures for the line unwrapped (plus 1/16 px); the browser still justifies it, so glyphs,
+run elements and source text are untouched. The change commits only if every resulting line
+matches Word's inventory, and is otherwise undone. Inline fields, comment anchors, tabs, pictures,
+breaks, character scaling, letter or word spacing, raised text, columns and graphics retain the
+existing flow; left-aligned text and compatibility modes below 15 without `w:wpJustification`
+never condense.
 
 The converter retains resolved `w:w` percentages as `--docx-character-scale`, including an explicit
 100% reset of inherited formatting. For plain automatically spaced body paragraphs, resolved fixed-width cells and running
