@@ -18,6 +18,7 @@ All notable changes to this project will be documented in this file.
 
 - Flow HTML can expose every section's active header/footer variants in a hidden registry with `renderHeaderFooterRegistry` in npm or `render_header_footer_registry` in Python. Body layout and semantic lists remain in flow mode; existing default-story output is unchanged unless requested (#1620).
 
+- The All Markup balloon layout names the Word balloon setting it reproduces with `markupMode` (#1552), on the paginator, the React viewer and the export (CLI `--markup-mode`). `"mixed"`, the default, is Word's own default, Show Only Comments and Formatting in Balloons, so callers that pass nothing keep their output. `"inline"` is Show All Revisions Inline: comments keep their balloons, formatting changes keep only their change bars, and a document without comments prints at full size. Word 2024 prints of each setting are recorded in `all_markup_layout.md`.
 - **Flow HTML page-field markers** (#1621): `stampPageNumberFields` in npm and
   `stamp_page_number_fields` in Python preserve `PAGE` / `NUMPAGES` fields as `data-field`
   spans without pagination. Cached text and formatting remain intact, including empty results;

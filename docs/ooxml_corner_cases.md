@@ -4605,6 +4605,33 @@ Then print or save as PDF with All Markup and "Show only comments and formatting
 **Docxodus.** `Internal/WordFormatWording.cs` writes the wording, `npm/src/markup-balloons.ts` lays
 the balloons out, and `docs/architecture/all_markup_layout.md` gives the design.
 
+### Which balloon setting draws the markup area (issue #1552)
+
+**Reproducer.** Issue #1552's `formatting-change.docx`: three Letter paragraphs, the middle one with one
+tracked bold run and no comment. Controls: the same text with one tracked insertion, one tracked
+deletion, or one comment. Printed from Word 2024 with All Markup, through Save as PDF and Print to PDF.
+
+| Balloon setting (`View.MarkupMode`) | Bold change only | Insertion only | Deletion only | Comment |
+|---|---|---|---|---|
+| Show Revisions in Balloons (0) | Shrunk, `Formatted` balloon | Full size | Shrunk, `Deleted` balloon | Shrunk |
+| Show All Revisions Inline (1) | Full size, change bar | Full size | Full size | Shrunk |
+| Show Only Comments and Formatting in Balloons (2, a fresh Word's value) | Shrunk, `Formatted` balloon | Full size | Full size | Shrunk |
+| Setting 2 with Show Markup > Formatting off | Full size, no change bar | Full size | Full size | Shrunk |
+
+**Analysis.** Word's default draws the markup area for a formatting change, so Docxodus keeps that as
+its default and adds the inline setting by name. Comments stay in balloons under every setting. A
+document's own `w:revisionView w:formatting="0"` also turns formatting markup off for Save as PDF.
+
+**Automation trap.** `ExportAsFixedFormat` reuses the layout of the last `PrintOut`. A changed
+`MarkupMode` reaches it only after one print. Without that print, all three settings export alike.
+
+| | Word | Docxodus before | Docxodus now |
+|---|---|---|---|
+| Bold change only, default setting | Shrunk, balloon | Shrunk, balloon | Unchanged |
+| Bold change only, Show All Revisions Inline | Full size, change bar | Not selectable | `markupMode: "inline"`: full size, change bar |
+
+**Docxodus.** `markupMode` on the paginator and the export (`npm/src/markup-balloons.ts`).
+
 ### When a page's balloons cannot all fit beside it
 
 **Reproducer.** One Letter page of short paragraphs, each carrying a long comment, 25 of them. In the

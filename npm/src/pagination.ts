@@ -24,8 +24,10 @@ import {
   marginNoteRegistry,
   readMarkupBalloonComments,
   scopeMarkupBalloons,
+  MARKUP_MODES,
   type MarkupBalloonComment,
   type MarkupBalloonResult,
+  type MarkupMode,
 } from "./markup-balloons.js";
 import { BalloonAppendix } from "./balloon-appendix.js";
 import { isFitTextInlineBox, prepareSectionTextWidths } from "./word-text.js";
@@ -367,6 +369,13 @@ export interface PaginationOptions {
    * as Word's Print to PDF does; those pages join the result and the PageMap.
    */
   balloonOverflow?: "truncate" | "appendix";
+  /**
+   * Under "balloons", Word's balloon setting that decides what they hold. "mixed" (the default) is
+   * Word's own default, "Show Only Comments and Formatting in Balloons". "inline" is "Show All
+   * Revisions Inline": comments only, so a document whose only markup is formatting changes prints
+   * at full size, the changes keeping their change bars.
+   */
+  markupMode?: MarkupMode;
   /** Outside comment-column width in points. Default: 144 (2 inches). */
   commentColumnWidthPt?: number;
   /** Gap between the page and an outside comment column, in points. Default: 12. */
@@ -941,6 +950,7 @@ export class PaginationEngine {
   private commentOverflow: "scroll" | "appendix";
   private deferMarkupBalloons: boolean;
   private balloonOverflow: "truncate" | "appendix";
+  private markupMode: MarkupMode;
   private markupBalloons?: { comments: MarkupBalloonComment[]; commentPrefix: string; result?: MarkupBalloonLayout };
   private commentColumnWidthPt: number;
   private commentColumnGapPt: number;
@@ -1050,6 +1060,8 @@ export class PaginationEngine {
     if (this.balloonOverflow !== "truncate" && this.balloonOverflow !== "appendix") {
       throw new RangeError("balloonOverflow must be one of truncate, appendix");
     }
+    this.markupMode = options.markupMode ?? "mixed";
+    if (!MARKUP_MODES.includes(this.markupMode)) throw new RangeError(`markupMode must be one of ${MARKUP_MODES.join(", ")}`);
     if (!Number.isFinite(this.commentColumnWidthPt) || this.commentColumnWidthPt <= 0) {
       throw new RangeError("commentColumnWidthPt must be a finite positive number");
     }
@@ -1660,6 +1672,7 @@ export class PaginationEngine {
       cssPrefix: this.cssPrefix,
       font,
       numberCutBoxes: appendix,
+      markupMode: this.markupMode,
     });
     const appendedPages: PageInfo[] = [];
     if (appendix && layout.cutComments.length > 0) {

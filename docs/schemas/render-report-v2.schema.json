@@ -679,6 +679,10 @@
             "description": "Present only when the balloon layout printed every comment cut short to fit beside its page in full, on pages added after the last (Word's Print to PDF); absent means the rest of a cut comment is printed nowhere (Word's Save as PDF).",
             "const": "appendix"
           },
+          "markupMode": {
+            "description": "Present only when the balloon layout used Word's \"Show All Revisions Inline\" balloon setting (issue #1552): the balloons held comments only, so formatting changes kept their change bars without balloons; absent means Word's default, \"Show Only Comments and Formatting in Balloons\".",
+            "const": "inline"
+          },
           "commentProfile": {
             "enum": [
               "hidden",

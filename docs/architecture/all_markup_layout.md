@@ -47,6 +47,40 @@ validates them as follows:
   formatting balloons only.
 - With the markup review profile it also needs `markupPresentation: "word"`.
 
+## Balloon setting (`markupMode`, issue #1552)
+
+What the balloons hold is a Word view setting (Review > Show Markup > Balloons, `View.MarkupMode`).
+It is not stored in the document, so the export names the one it reproduces. Word 2024's Save as PDF
+and Print to PDF of issue #1552's fixtures gave the following. A fresh Word reports the third setting,
+so that one is Word's default.
+
+| Document | Show Revisions in Balloons | Show All Revisions Inline | Show Only Comments and Formatting in Balloons (default) |
+|---|---|---|---|
+| One bold change, no comment | Shrunk, `Formatted: Font: Bold` balloon | Full size, change bar, no balloon | Shrunk, `Formatted: Font: Bold` balloon |
+| One insertion | Full size, inline | Full size, inline | Full size, inline |
+| One deletion | Shrunk, `Deleted:` balloon | Full size, inline | Full size, inline |
+| One comment | Shrunk, comment balloon | Shrunk, comment balloon | Shrunk, comment balloon |
+
+With Show Markup > Formatting turned off, the bold change prints at full size with no change bar.
+That is `markupVisibility: { formatting: false }`. The document can store this setting itself
+(`w:revisionView w:formatting="0"`), and Word's Save as PDF follows it.
+
+`markupMode` selects the setting:
+
+- `"mixed"` (default): Show Only Comments and Formatting in Balloons, Word's default and the layout
+  this page describes. Callers that pass nothing keep their output.
+- `"inline"`: Show All Revisions Inline. Comments keep their balloons. Formatting changes get none,
+  so they keep only their change bars, and a document without comments prints at full size.
+- Show Revisions in Balloons is not reproduced: Docxodus draws no deletion balloons.
+
+The rule depends only on the setting and on what the document contains. `markupMode` needs
+`commentColumnPlacement: "balloons"`, and the report and layout digest name it only when it is
+`"inline"`.
+
+**Automation note.** Setting `View.MarkupMode` from automation changes the next `PrintOut`, but
+`ExportAsFixedFormat` keeps using the layout from the previous print. A script must print once under the
+new setting before it exports. Without that print, every setting appears to export the same layout.
+
 ## Responsibilities
 
 ### Converter: records, never lays out
@@ -117,8 +151,9 @@ with another placement removes the attribute from its containers, so the rules n
 
 After the page tree is final, `layoutMarkupBalloons()` runs. It is called at the end of `paginate()`,
 or explicitly with `deferMarkupBalloons` after the export's text and border painting. If the
-document has no formatting change and no comment that the balloons show (comments listed as endnotes
-have anchors, but no balloon), the pages are left as they are. Otherwise:
+document has nothing for the balloons to show, the pages are left as they are. Comments listed as
+endnotes have anchors, but no balloon, and formatting changes count only under `markupMode: "mixed"`.
+Otherwise:
 
 **Sheet.**
 
@@ -253,6 +288,9 @@ with `"outside"`. Comment citations are therefore unavailable under this placeme
   `--balloon-overflow`. The report and the layout digest name it only when it is `"appendix"`. The
   pages the appendix adds are released from the viewer's compositing hints and named for print like
   the rest, after the page tree was finalized.
+- `markupMode` (`"mixed"`, the default, or `"inline"`) is validated in both places too, and
+  `"inline"` without the balloon layout is `invalid_argument`. The CLI flag is `--markup-mode`, and
+  the React viewer takes it as a prop.
 - No C#, WASM, stdio-host, Python or MCP surface changes: `RevisionPresentation` already flows
   through all of them.
 
@@ -326,3 +364,4 @@ own and is not described. A move to another level of the same list is left undes
 | Appendix | `npm/src/balloon-appendix.ts`; bundle budgets in `npm/scripts/check-bundle-sizes.mjs` rose 2 KiB |
 | Specs | `markup-balloons.spec.ts`, `export-markup-balloons.spec.ts`; existing change-bar expectations moved to 30pt |
 | Bundle budget | `pagination.bundle.js` is 27.6 KiB gzip; its budget rose from 25 to 29 KiB |
+| Balloon setting (#1552) | `markupMode` in `markup-balloons.ts`, `pagination.ts`, `react.ts`, `export-browser.ts`, `npm-export/src/{index,host,cli}.ts`, the report schema; `npm-export/tests/markup-mode-options.test.mjs` |
