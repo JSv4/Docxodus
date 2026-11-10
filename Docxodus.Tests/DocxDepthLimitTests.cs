@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
@@ -199,6 +201,72 @@ public class DocxSessionDeepNestingTests
                 new WmlDocument("d.docx", bytes), new WmlToHtmlConverterSettings()).ToString());
         });
     }
+
+    [Fact]
+    public void HtmlRender_EachNestingLevelCostsLittleStack()
+    {
+        // Every level of nested content passes through the converter's element dispatch, whose frame
+        // was several KB in unoptimized code: the story limit overflowed a 1 MB stack on Windows
+        // (issue #1659). This measures the stack under an image at the bottom of a 100-level and a
+        // 20-level chain of custom XML in one render. The deep chain renders first, so a JIT tier-up
+        // between the two can only overstate the cost. Per level on Windows x64, before the fix and
+        // after: unoptimized (Debug) 8.5 KB and 1.7 KB; tier-0 Release 6.0 KB and 1.4 KB; tiered-up
+        // Release 1.9 KB and 0.5 KB. A test run that keeps JIT-compiling new tests defers tier-up, so
+        // the Release budget allows either tier; NestingPathMethods_StaySmall pins the cause in both.
+        static XElement Chain(int levels, string text)
+        {
+            var element = LargeDocuments.Paragraph(text);
+            for (int i = 0; i < levels; i++)
+                element = new XElement(W.customXml, new XAttribute(W.element, "wrap"), element);
+            return element;
+        }
+        static long Address(ref byte local) => (long)Unsafe.ByteOffset(ref Unsafe.NullRef<byte>(), ref local);
+
+        var bytes = LargeDocuments.Build(new[] { Chain(100, "Deep text"), Chain(20, "Shallow text") });
+        using (var session = new DocxSession(bytes))
+        {
+            foreach (var text in new[] { "Deep text", "Shallow text" })
+                Assert.True(session.InsertImage(Assert.Single(session.Grep(text)).EnclosingAnchor.Anchor.Id, 0, OnePixelPng).Success);
+            bytes = session.Save();
+        }
+        bool unoptimized = typeof(WmlToHtmlConverter).Assembly.GetCustomAttribute<DebuggableAttribute>()?.IsJITOptimizerDisabled == true;
+        long budget = unoptimized ? 4096 : 3072, perLevel = 0;
+        DocxDepthLimitSweepTests.OnThread(8192, () =>
+        {
+            byte top = 0;
+            var origin = Address(ref top);
+            var used = new List<long>();
+            WmlToHtmlConverter.ConvertToHtml(new WmlDocument("d.docx", bytes), new WmlToHtmlConverterSettings
+            {
+                ImageHandler = _ =>
+                {
+                    byte here = 0;
+                    used.Add(origin - Address(ref here));
+                    return new XElement("img");
+                },
+            });
+            Assert.Equal(2, used.Count);
+            perLevel = (used[0] - used[1]) / 80;
+        });
+        Assert.True(perLevel <= budget, $"{perLevel} bytes of stack per nesting level; the budget is {budget}");
+    }
+
+    [Theory]
+    [InlineData("ConvertToHtmlContent")]
+    [InlineData("CreateBorderDivs")]
+    public void NestingPathMethods_StaySmall(string method)
+    {
+        // Each nesting level of tables and content containers runs both methods, so their frames are
+        // paid once per level. In unoptimized code (Debug, tier-0 JIT) a frame grows with the method
+        // body, whatever branch runs: these were 3970 and 2287 bytes of IL, and are 159 and 175 since
+        // the large branches moved out (issue #1659). Unlike stack use, IL size does not depend on the JIT.
+        var body = typeof(WmlToHtmlConverter).GetMethod(method, BindingFlags.NonPublic | BindingFlags.Static)!.GetMethodBody()!;
+        Assert.True(body.GetILAsByteArray()!.Length <= 512,
+            $"{method} has {body.GetILAsByteArray()!.Length} bytes of IL; move large branches into methods of their own");
+    }
+
+    private static readonly byte[] OnePixelPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==");
 
     [Fact]
     public void RefusingAnOverDeepDocument_StopsReadingAtTheLimit()
