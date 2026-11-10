@@ -51,6 +51,9 @@ public sealed partial class DocxVersionHistory
     {
         var entry = zip.CreateEntry(name, CompressionLevel.Optimal);
         entry.LastWriteTime = new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        // The host byte in the central directory still names the writing OS: this archive streams to
+        // the caller, so unlike buffered packages it cannot be stamped after writing (issue #1659).
+        entry.ExternalAttributes = ZipPackageOutputNormalizer.RegularFilePermissions;
         return entry.Open();
     }
 }

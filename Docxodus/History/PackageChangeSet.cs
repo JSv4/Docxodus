@@ -171,6 +171,7 @@ public sealed class PackageChangeSet
                 // expansion limits on its next replay. Storage/export owns compression policy.
                 var entry = output.CreateEntry(name, CompressionLevel.NoCompression);
                 entry.LastWriteTime = ZipEpoch;
+                entry.ExternalAttributes = ZipPackageOutputNormalizer.RegularFilePermissions;
                 using var destination = entry.Open();
                 if (change?.AfterDigest is { } digest)
                     destination.Write(_payloads[digest]);
@@ -183,6 +184,7 @@ public sealed class PackageChangeSet
         }
 
         var result = buffer.ToArray();
+        ZipPackageOutputNormalizer.StampUnixHost(result);
         var resultManifest = Inspect(result, options);
         if (resultManifest.OrderedOpcContentDigest != AfterDigest)
             throw new PackageChangeException(PackageChangeError.ResultMismatch,

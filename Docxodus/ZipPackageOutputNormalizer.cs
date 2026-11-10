@@ -4,6 +4,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System;
+using System.Buffers.Binary;
 using System.IO;
 using System.IO.Compression;
 
@@ -30,8 +31,10 @@ namespace Docxodus;
 /// </remarks>
 internal static class ZipPackageOutputNormalizer
 {
-    private const int RegularFilePermissions = 0x1A4 << 16; // -rw-r--r-- (0644)
-    private const int DirectoryPermissions = 0x1ED << 16;   // drwxr-xr-x (0755)
+    // Unix mode bits for an entry that carries none: what ZipArchive gives a new entry on Linux and
+    // macOS, and so on Windows too since the host is fixed (issue #1659).
+    internal const int RegularFilePermissions = 0x81A4 << 16; // -rw-r--r-- (0100644)
+    private const int DirectoryPermissions = 0x41ED << 16;   // drwxr-xr-x (0040755)
 
     // Word pins every OPC entry to the ZIP DOS epoch. System.IO.Packaging already emits
     // epoch stamps, but the session's checkpoint clone serializes through ZipArchive,
@@ -81,11 +84,51 @@ internal static class ZipPackageOutputNormalizer
                 }
             }
 
-            return targetStream.ToArray();
+            var normalized = targetStream.ToArray();
+            StampUnixHost(normalized);
+            return normalized;
         }
         catch (InvalidDataException)
         {
             return packageBytes;
+        }
+    }
+
+    /// <summary>
+    /// Records every entry of a finished archive as made on Unix. <see cref="ZipArchive"/> writes the
+    /// host it runs on into each central-directory header (0, MS-DOS, on Windows; 3, Unix, elsewhere)
+    /// and offers no way to choose it, so the same package differed by a byte per entry between hosts
+    /// (issue #1659). Unix, with the permissions <see cref="NormalizedExternalAttributes"/> sets, is
+    /// what Linux and macOS already wrote.
+    /// </summary>
+    internal static void StampUnixHost(byte[] zip)
+    {
+        const byte Unix = 3;
+        var bytes = zip.AsSpan();
+        // The end-of-central-directory record: the last 22 bytes before an archive comment of at most 64 KB.
+        int end = bytes.Length - 22, floor = Math.Max(0, end - 0xFFFF);
+        while (end >= floor && BinaryPrimitives.ReadUInt32LittleEndian(bytes[end..]) != 0x06054b50) end--;
+        if (end < floor) return;
+        long count = BinaryPrimitives.ReadUInt16LittleEndian(bytes[(end + 10)..]);
+        long offset = BinaryPrimitives.ReadUInt32LittleEndian(bytes[(end + 16)..]);
+        if ((count == 0xFFFF || offset == 0xFFFFFFFF) && end >= 20
+            && BinaryPrimitives.ReadUInt32LittleEndian(bytes[(end - 20)..]) == 0x07064b50)
+        {
+            // Zip64: the locator names the zip64 record, which holds the real count and offset.
+            var record = BinaryPrimitives.ReadInt64LittleEndian(bytes[(end - 12)..]);
+            if (record < 0 || record + 56 > end) return;
+            bytes[(int)record + 13] = Unix;
+            count = BinaryPrimitives.ReadInt64LittleEndian(bytes[((int)record + 32)..]);
+            offset = BinaryPrimitives.ReadInt64LittleEndian(bytes[((int)record + 48)..]);
+        }
+        for (long i = 0; i < count && offset >= 0 && offset + 46 <= bytes.Length; i++)
+        {
+            var header = bytes[(int)offset..];
+            if (BinaryPrimitives.ReadUInt32LittleEndian(header) != 0x02014b50) return;
+            header[5] = Unix; // "version made by": the specification version, then the host
+            offset += 46 + BinaryPrimitives.ReadUInt16LittleEndian(header[28..])
+                + BinaryPrimitives.ReadUInt16LittleEndian(header[30..])
+                + BinaryPrimitives.ReadUInt16LittleEndian(header[32..]);
         }
     }
 
@@ -125,9 +168,6 @@ internal static class ZipPackageOutputNormalizer
 
     private static int NormalizedExternalAttributes(ZipArchiveEntry entry)
     {
-        if (OperatingSystem.IsWindows())
-            return entry.ExternalAttributes;
-
         int permissionBits = (entry.ExternalAttributes >> 16) & 0x1FF;
         if (permissionBits != 0)
             return entry.ExternalAttributes;

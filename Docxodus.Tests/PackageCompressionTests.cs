@@ -133,6 +133,47 @@ public sealed class PackageCompressionTests
             FormatDeltas(deltas));
     }
 
+    [Fact]
+    public void PKG1659_SessionSave_RecordsTheSameHostAndModeOnEveryOs()
+    {
+        // ZipArchive writes the OS it runs on into each central-directory header (0, MS-DOS, on
+        // Windows; 3, Unix, elsewhere) and gives a new entry a Unix mode only on Unix, so the same
+        // save differed by host (issue #1659). Every entry now records Unix and a mode.
+        using var session = new DocxSession(LoadFixture(RegressionFixture));
+        var saved = session.Save();
+
+        Assert.All(CentralDirectoryHosts(saved), host => Assert.Equal(3, host));
+        using var zip = new ZipArchive(new MemoryStream(saved), ZipArchiveMode.Read);
+        Assert.All(zip.Entries, entry => Assert.NotEqual(0, (entry.ExternalAttributes >> 16) & 0x1FF));
+    }
+
+    [Fact]
+    public void PKG1659_StampUnixHost_RewritesEveryCentralDirectoryHost()
+    {
+        // Linux and macOS already write host 3, so forge a Windows-written archive to test the stamp anywhere.
+        using var buffer = new MemoryStream();
+        using (var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            archive.Comment = "an archive comment";
+            foreach (var name in new[] { "a.xml", "b/c.xml" })
+                using (var stream = archive.CreateEntry(name).Open()) stream.WriteByte(1);
+        }
+        var bytes = buffer.ToArray();
+        foreach (var header in CentralDirectoryHeaders(bytes)) bytes[header + 5] = 0;
+
+        ZipPackageOutputNormalizer.StampUnixHost(bytes);
+
+        Assert.Equal(new[] { 3, 3 }, CentralDirectoryHosts(bytes));
+        using var reread = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
+        Assert.Equal(new[] { "a.xml", "b/c.xml" }, reread.Entries.Select(entry => entry.FullName));
+    }
+
+    private static IEnumerable<int> CentralDirectoryHeaders(byte[] zip) => Enumerable.Range(0, zip.Length - 3)
+        .Where(i => zip[i] == 0x50 && zip[i + 1] == 0x4B && zip[i + 2] == 1 && zip[i + 3] == 2);
+
+    private static int[] CentralDirectoryHosts(byte[] zip) =>
+        CentralDirectoryHeaders(zip).Select(i => (int)zip[i + 5]).ToArray();
+
     private static byte[] LoadFixture(string name) =>
         File.ReadAllBytes(Path.Combine("../../../../TestFiles", name));
 
