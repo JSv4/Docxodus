@@ -23,8 +23,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A line break inside a hanging-indent list item no longer keeps the item's lines at the paragraph's largest size; each line takes its own text's height there too (#1565).
+
+- A list item whose bullet is mapped from Symbol or Wingdings to a Unicode glyph keeps the replaced font's height on its first line, as Word does: a zero-width box as tall as that font's ascent sits beside the glyph, which renders as before. A 12pt Symbol bullet over 12pt Arial now steps 14.61pt per item instead of 13.80pt; wrapped lines and exact spacing are unchanged (#1567).
+
 - The paginated view keeps a page's last double- or 1.5-spaced line when its text fits above the bottom margin, as Word does, instead of moving it to the next page because its extra spacing does not (#1571). Whole paragraphs and paragraph fragments share one fit height, the block's height less the multiple's leading below its last line's text, and a block that fits only by that height ends there. Spacing after is unchanged. The standalone export still keeps such a line off the page for uniform paragraphs whose text it lays out for its own painter.
+
+
 - Automatic paragraph spacing (`w:beforeAutospacing`/`w:afterAutospacing`) now follows Word 2024 at the edges it previously skipped: no space before the document's first paragraph or at the top and bottom of a table cell, 14 pt between paragraphs inside a cell and next to a table, and 14 pt across bookmarks, content controls, section breaks, paragraph borders and tracked run changes. Contextual spacing now looks through bookmarks, and the space after a paragraph that `w:contextualSpacing` suppresses still absorbs that much of the next paragraph's space before, as Word prints it (part of #1553).
+
 - Each line of a mixed-size paragraph is as tall as the text on it in paginated output and PDF export, now also for centered, right-aligned and justified paragraphs and for lines around `w:br` breaks. An empty line made by a break takes the break's own size. A larger list number or bullet raises only its own line's ascent, as Word does, without its descent or a multiple of it, and no longer sets the paragraph font that every line of the item was sized by; bulleted paragraphs are now measured per line too. Per-line heights keep the precision CSS serializes, so such paragraphs continuing on the next page pass the export's offline PageMap check. Steps match desktop Word 2024 prints within the PDF's 0.75pt rounding (#1565).
 
 - An empty paragraph that only carries a section break no longer takes a line in HTML and PDF output when a paragraph comes before it. Word sets its mark on that paragraph's last line, so its own spacing and run size go too, and a page break directly before an empty next-page section mark no longer adds a blank page. An empty mark first in the body, after a table, or first on its section's new page keeps its line, as in Word. PDF export also no longer splits a line between the columns of a balanced two-column section that holds one line, which placed the next section's first line half a line too high (#1572).

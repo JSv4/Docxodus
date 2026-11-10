@@ -6638,6 +6638,40 @@ live fragment. Line boxes now carry only the six significant digits CSS keeps. O
 a paragraph's final break, Word sizes the last, empty line by the paragraph mark (13.80 for a 12pt
 mark after an 8pt break), where the export uses the break's size.
 
+## A mapped symbol bullet keeps the replaced font's ascent (#1567)
+
+Word's default bullet is U+F0B7 in Symbol. The converter maps it to U+2022 and drops the Symbol
+face, because a browser without Symbol shows a blank box, so the glyph's line lost Symbol's height.
+Desktop Word 2024 prints of the issue's fixtures and variants, eight or 32 one-line 12pt Arial
+items and a wrapped ninth, in points per item:
+
+| Marker | Word | Docxodus before | Docxodus after |
+| --- | --- | --- | --- |
+| None, or "•" in Arial (controls) | 13.80 | 13.80 | 13.80 |
+| 12pt Symbol bullet | 14.52–14.64, mean 14.61 | 13.80 (issue, Linux); 15.00 here, with Symbol installed | 14.25–15.00, mean 14.62 |
+| 16pt Symbol bullet | 18.60–18.72, mean 18.63 | 19.50–20.25 | 18.00–18.75, mean 18.56 |
+| 12pt Symbol bullet, 1.15 multiple | 16.56–16.71, mean 16.68 | Not captured | 16.50–17.25, mean 16.66 |
+| 12pt Symbol bullet over Courier New | 15.60–15.75, mean 15.67 | Mean 15.09 | Mean 15.66 |
+| 12pt Symbol bullet over Times New Roman | 14.64–14.76, mean 14.66 | Mean 14.02 | Mean 14.66 |
+| 12pt Wingdings bullet | 13.80 | 13.50–14.25 | 13.50–14.25 |
+| 16pt Wingdings bullet | 16.92 | Not captured | 16.50–17.25, mean 16.88 |
+
+Wrapped lines stay at 13.80 (15.84–15.96 at 1.15). Each item is Symbol's ascent, 2059/2048 of an
+em, plus the text's descent: 12.06 + 2.54 = 14.61, and 16.09 + 2.54 = 18.63 at 16pt. Symbol's own
+descent (450/2048) does not count, which is why the issue's 14.7pt estimate, ascent plus descent,
+is 0.1pt high; the same ascent-only rule holds for every list marker (#1565). Wingdings' ascent,
+1841/2048, is below Arial's ascent with its line gap at 12pt, so it changes nothing there, and
+16pt gives 14.38 + 2.54 = 16.92. Under Courier New the text's deeper descent counts instead.
+
+`SymbolFontMapper` now records each symbol font's ascent (hhea ascender, equal to OS/2 winAscent;
+none has a line gap), read from the Windows 11 copies of Symbol, Wingdings, Wingdings 2 and 3 and
+Webdings. When it maps a marker glyph, `ConvertRun` puts an empty, zero-width inline-block of
+that many ems, standing on the baseline, before the glyph: CSS line layout lifts the line by it
+in every view, and `prepareMixedLineHeights` reads it as the marker's ascent in place of the
+fallback face the glyph renders in, even when every run shares one font. Exact spacing gets
+no box, since its lines never grow. The glyph itself still renders in the generic family the
+Symbol declaration names.
+
 ## Character width was ignored inside fixed table cells (#1564)
 
 Wrapping the same uniform paragraph in a fixed 468pt table cell discarded its character

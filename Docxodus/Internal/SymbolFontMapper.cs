@@ -1,5 +1,3 @@
-#nullable enable
-
 using System.Collections.Generic;
 using System.Text;
 
@@ -29,9 +27,14 @@ internal static class SymbolFontMapper
         { ("wingdings", 0xF0D8), "➢" }, // ➢ three-d arrowhead
     };
 
-    private static readonly HashSet<string> SymbolFonts = new()
+    // Each symbol font's ascent in ems: its hhea ascender, equal to its OS/2 winAscent, over 2048 units
+    // per em (Windows 11 copies; none has a line gap). Word lifts a list marker's line to its font's
+    // ascent and ignores its descent, so a mapped glyph keeps the ascent of the font it replaces
+    // (#1567): a 12pt Symbol bullet over 12pt Arial makes a 14.61pt line, not Arial's 13.80pt.
+    private static readonly Dictionary<string, decimal> Ascents = new()
     {
-        "symbol", "wingdings", "wingdings 2", "wingdings 3", "webdings",
+        { "symbol", 2059m / 2048m }, { "wingdings", 1841m / 2048m }, { "wingdings 2", 1727m / 2048m },
+        { "wingdings 3", 1900m / 2048m }, { "webdings", 1638m / 2048m },
     };
 
     /// <summary>The lowercased primary family of a CSS font-family value (drops quotes + fallbacks).</summary>
@@ -51,7 +54,10 @@ internal static class SymbolFontMapper
 
     /// <summary>True if <paramref name="fontFamily"/>'s primary family is a known symbol font.</summary>
     public static bool IsSymbolFont(string? fontFamily) =>
-        fontFamily != null && SymbolFonts.Contains(PrimaryFamily(fontFamily));
+        fontFamily != null && Ascents.ContainsKey(PrimaryFamily(fontFamily));
+
+    /// <summary>The ascent, in ems, of the symbol font <paramref name="fontFamily"/> names first.</summary>
+    public static decimal Ascent(string fontFamily) => Ascents[PrimaryFamily(fontFamily)];
 
     /// <summary>
     /// Map each character of <paramref name="text"/> from <paramref name="fontFamily"/> to Unicode.
