@@ -168,11 +168,13 @@ function numbered(prefix = marker) {
     + prefix + `<span data-docx-font-request="font-0001" style="font-size:12pt">${words}</span></p></section>`;
 }
 
-test('a converter marker contributes only to its first line and retains its identity', async ({ page }) => {
+test('a converter marker raises only its first line ascent and retains its identity', async ({ page }) => {
   const result = await exercise(page, numbered());
   expect(result.count).toBe(1);
   expect(result.after.struts.length).toBeGreaterThan(2);
-  expect(Math.abs(result.after.struts[0].height - natural(18))).toBeLessThan(1 / 32);
+  // Word (#1565): the 18pt number's ascent with line gap over the 12pt text's descent.
+  const markerLine = (1912 / 2048 * 18 + 443 / 2048 * 12) * 4 / 3;
+  expect(Math.abs(result.after.struts[0].height - markerLine)).toBeLessThan(1 / 32);
   for (const strut of result.after.struts.slice(1)) expect(Math.abs(strut.height - natural(12))).toBeLessThan(1 / 32);
   expect(horizontal(result.after.tokens)).toEqual(horizontal(result.before.tokens));
   expect(result.after.tokens.filter(token => token.text === '1.')).toHaveLength(1);

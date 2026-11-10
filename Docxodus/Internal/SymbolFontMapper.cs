@@ -38,6 +38,17 @@ internal static class SymbolFontMapper
     private static string PrimaryFamily(string fontFamily) =>
         fontFamily.Split(',')[0].Trim().Trim('\'', '"').ToLowerInvariant();
 
+    /// <summary>
+    /// The families after the primary one in a CSS font-family value, or null when there are none:
+    /// what a mapped glyph renders in once the symbol face is dropped.
+    /// </summary>
+    public static string? FallbackFamilies(string fontFamily)
+    {
+        var comma = fontFamily.IndexOf(',');
+        var rest = comma < 0 ? "" : fontFamily[(comma + 1)..].Trim();
+        return rest.Length == 0 ? null : rest;
+    }
+
     /// <summary>True if <paramref name="fontFamily"/>'s primary family is a known symbol font.</summary>
     public static bool IsSymbolFont(string? fontFamily) =>
         fontFamily != null && SymbolFonts.Contains(PrimaryFamily(fontFamily));
