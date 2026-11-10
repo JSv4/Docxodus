@@ -117,7 +117,7 @@ export function documentFontFaces(
     let xml: string | undefined;
     try { xml = part(posix.join(posix.dirname(source), "_rels", `${posix.basename(source)}.rels`), limits.xmlPartBytes)?.toString("utf8"); }
     catch { return []; }
-    return [...(xml ?? "").matchAll(/<(?:[\w.-]+:)?Relationship\b([^>]*)>/gu)].map(match => {
+    return [...(xml ?? "").matchAll(/<(?:[\w.-]+:)?Relationship\b([^<>]*)>/gu)].map(match => {
       const record = attributes(match[1]);
       const target = record.get("Target") ?? "";
       record.set("Target", posix.normalize(target.startsWith("/") ? target.slice(1) : posix.join(posix.dirname(source), target)));
@@ -142,12 +142,14 @@ export function documentFontFaces(
     if (actual > limits[name]) exportError("resource_limit", "font_loading", `${name} limit exceeded (${actual} > ${limits[name]}).`,
       "Use a document with fewer or smaller embedded fonts.");
   };
-  const fonts = tableXml.replace(/<!--[\s\S]*?-->/gu, "")
-    .matchAll(/<(?:([\w.-]+):)?font\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\1:)?font\s*>)/gu);
-  for (const [, , fontAttributes, body] of fonts) {
-    const family = normalizeFontFamilyName(attributes(fontAttributes).get("name") ?? "");
+  // w:font elements do not nest, so each one's children lie between its tag and the next: one
+  // linear pass with no closing-tag search a hostile part could make quadratic.
+  const fonts = [...tableXml.matchAll(/<(?:[\w.-]+:)?font\b([^<>]*)>/gu)];
+  for (const [index, font] of fonts.entries()) {
+    const family = normalizeFontFamilyName(attributes(font[1]).get("name") ?? "");
     if (!family || family.length > 256 || /[\u0000-\u001f\u007f]/u.test(family)) continue;
-    for (const [, slot, slotAttributes] of (body ?? "").matchAll(/<(?:[\w.-]+:)?(embed(?:Regular|Bold|Italic|BoldItalic))\b([^>]*)>/gu)) {
+    const body = tableXml.slice(font.index + font[0].length, fonts[index + 1]?.index ?? tableXml.length);
+    for (const [, slot, slotAttributes] of body.matchAll(/<(?:[\w.-]+:)?(embed(?:Regular|Bold|Italic|BoldItalic))\b([^<>]*)>/gu)) {
       const skip = (reason: string): void => warn({ code: "document_font_skipped", severity: "warning",
         phase: "font_loading", message: `Embedded font ${family} (${slot}): ${reason}.`, resource: family,
         remediation: "Re-embed the font from Word, or configure a font directory that supplies the family." });
