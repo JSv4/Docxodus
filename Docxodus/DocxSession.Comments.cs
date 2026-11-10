@@ -688,7 +688,9 @@ public sealed partial class DocxSession
             return EditResult.Fail(EditErrorCode.MalformedMarkdown,
                 $"ColumnWidths must have one positive width per column ({cols}); got {colWidths.Count}", anchorId);
         if (_trackedChanges == TrackedChangeMode.RenderInline && SplitsPendingParagraphJoin(element, pos))
-            return TrackedStructureUnsupported("InsertTable", anchorId);
+            return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
+                "InsertTable would sit between the halves of a pending tracked paragraph split, which rejecting "
+                + "the split could not rejoin; resolve the split first. No changes were made", anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try

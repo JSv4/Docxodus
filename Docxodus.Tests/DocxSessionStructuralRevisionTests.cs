@@ -812,6 +812,7 @@ public class DocxSessionStructuralRevisionTests
         }
         Assert.False(result.Success);
         Assert.Equal(EditErrorCode.TrackedOperationUnsupported, result.Error!.Code);
+        Assert.Contains("split", result.Error.Message, StringComparison.Ordinal);
         Assert.True(XNode.DeepEquals(MainRoot(before), MainRoot(session.Save())));
         Assert.True(session.Undo());
         Assert.Empty(session.ListRevisions());
