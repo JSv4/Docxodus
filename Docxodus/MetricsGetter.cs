@@ -95,8 +95,8 @@ namespace Docxodus
         /// <summary>
         /// Character-class-aware text-width estimate for LIST-MARKER runs whose font cannot be
         /// measured with real metrics (WASM builds, and hosts where the font is not installed).
-        /// Returns width in font-size units — (summed per-character em fractions) × (sz / 2)
-        /// points — the same unit convention the measurement path returns.
+        /// Returns width in points — (summed per-character em fractions) × (sz / 2) — where
+        /// <see cref="GetTextWidth"/> returns 96-DPI pixels; callers convert.
         ///
         /// The general fallback (a flat 0.6 em per character) roughly doubles the width of
         /// narrow-glyph markers such as "(a)"/"(iii)", pushing the computed pen position of a
@@ -143,46 +143,44 @@ namespace Docxodus
             }
         }
 
+        /// <summary>A run's half-point size <c>sz</c> is <c>sz / 2</c> points, <c>sz * 2 / 3</c> 96-DPI pixels.</summary>
+        private static float SizeInPixels(decimal sz) => (float)sz / 2f * 96f / 72f;
+
+        /// <summary>The flat fallback: about 0.6 em per character, in 96-DPI pixels.</summary>
+        private static int EstimatePixels(decimal sz, string text) =>
+            string.IsNullOrEmpty(text) ? 0 : (int)(text.Length * SizeInPixels(sz) * 0.6f);
+
         private static int _getTextWidth(string fontName, bool bold, bool italic, decimal sz, string text)
         {
 #if WASM_BUILD
-            // In WASM builds, return an estimate based on character count and font size
-            // This is a rough approximation since we don't have SkiaSharp for text measurement
-            if (string.IsNullOrEmpty(text))
-                return 0;
-            // Approximate character width: ~0.6 of the font size for most fonts
-            float charWidth = (float)sz * 0.6f / 2f;
-            return (int)(text.Length * charWidth);
+            // No SkiaSharp in the browser build: estimate from the character count.
+            return EstimatePixels(sz, text);
 #else
             try
             {
                 var weight = bold ? SKFontStyleWeight.Bold : SKFontStyleWeight.Normal;
                 var slant = italic ? SKFontStyleSlant.Italic : SKFontStyleSlant.Upright;
                 using var typeface = SKTypeface.FromFamilyName(fontName, weight, SKFontStyleWidth.Normal, slant);
-                using var font = new SKFont(typeface, (float)sz / 2f);
+                using var font = new SKFont(typeface, SizeInPixels(sz));
 
                 var result = (int)font.MeasureText(text);
 
                 // If measurement returns 0 (font unavailable), use estimation
-                if (result == 0 && !string.IsNullOrEmpty(text))
-                {
-                    float charWidth = (float)sz * 0.6f / 2f;
-                    return (int)(text.Length * charWidth);
-                }
-
-                return result;
+                return result == 0 ? EstimatePixels(sz, text) : result;
             }
             catch
             {
                 // Fallback to estimation on any error
-                if (string.IsNullOrEmpty(text))
-                    return 0;
-                float charWidth = (float)sz * 0.6f / 2f;
-                return (int)(text.Length * charWidth);
+                return EstimatePixels(sz, text);
             }
 #endif
         }
 
+        /// <summary>
+        /// The width of <paramref name="text"/> set in a font at half-point size <paramref name="sz"/>,
+        /// in 96-DPI pixels, the unit every caller converts from. Measuring at the point size instead
+        /// made every installed font measure three quarters of its width (issue #1659).
+        /// </summary>
         public static int GetTextWidth(string fontName, bool bold, bool italic, decimal sz, string text)
         {
             try
@@ -214,10 +212,7 @@ namespace Docxodus
             {
                 // This happened on Azure but interestingly enough not while testing locally.
                 // Use estimation instead of returning 0
-                if (string.IsNullOrEmpty(text))
-                    return 0;
-                float charWidth = (float)sz * 0.6f / 2f;
-                return (int)(text.Length * charWidth);
+                return EstimatePixels(sz, text);
             }
         }
 
