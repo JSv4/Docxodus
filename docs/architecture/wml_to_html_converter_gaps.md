@@ -299,7 +299,6 @@ Unsupported run properties:
 - `em` (emphasis mark)
 - `emboss`, `imprint`
 - `fitText`
-- `kern` (kerning)
 - `outline`, `shadow`
 - `w` (character width expansion)
 

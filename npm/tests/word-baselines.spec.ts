@@ -15,7 +15,7 @@ for (const paragraph of observations.paragraphs) {
     // comparison uses the exact declared Times New Roman and Arial fonts.
     await page.setContent(`<style>p{font:${paragraph.fontSizePt}pt '${paragraph.cssFont}',serif;
       line-height:normal;margin:0;width:${paragraph.widthPt}pt;--docx-auto-line-spacing:${paragraph.multiple}}
-      .run{white-space:pre-wrap;position:static;line-height:calc(1lh * ${paragraph.multiple});--docx-font-kerning:none}
+      .run{white-space:pre-wrap;position:static;line-height:calc(1lh * ${paragraph.multiple});font-kerning:none}
       </style><main data-docx-compatibility-mode="15"><p><span class="run">${escape(paragraph.text)}</span></p></main>`);
     await page.addScriptTag({ content: lineMetrics });
     await page.addScriptTag({ content: wordText });

@@ -10,7 +10,7 @@ const geometry = `data-section-index="0" data-page-width="444" data-page-height=
   data-margin-bottom="72" data-margin-left="72" data-margin-right="72"`;
 const words = Array.from({ length: 150 }, (_, i) => `word${i}`).join('  ');
 const styles = `<style>p{font:11pt 'Liberation Serif',serif;line-height:normal;margin:0 0 6pt;--docx-auto-line-spacing:1.15}
-  span.run{line-height:calc(1lh * 1.15);position:relative;top:min(0px,calc(1lh * (1/1.15 - 1)/2));--docx-font-kerning:none}</style>`;
+  span.run{line-height:calc(1lh * 1.15);position:relative;top:min(0px,calc(1lh * (1/1.15 - 1)/2));font-kerning:none}</style>`;
 
 test('fractional paragraph paint preserves every character, block box and PageMap anchor', async ({ page }) => {
   await page.setContent(`${styles}<div id="staging"><section ${geometry}>
@@ -135,7 +135,7 @@ test(`a ${band} convex both-sides contour places short text before the picture a
 
 test('the source kerning choice overrides the Word default', async ({ page }) => {
   await page.setContent(`${styles}<main><p><span class="run">AV A</span></p>
-    <p><span class="run" style="--docx-font-kerning:normal">AV A</span></p></main>`);
+    <p><span class="run" style="font-kerning:normal">AV A</span></p></main>`);
   await page.addScriptTag({ content: lineMetrics });
   await page.addScriptTag({ content: wordText });
   const result = await page.evaluate(() => {
@@ -203,7 +203,7 @@ for (const mode of [14, 15]) {
   test(`mode ${mode} fits words with its measured space limit and paints natural final-line spaces`, async ({ page }) => {
     await page.setContent(`<style>
       p { font: 12px monospace; line-height:normal; margin:0; text-align:justify; --docx-auto-line-spacing:1 }
-      .run { white-space:pre-wrap; line-height:normal; --docx-font-kerning:none }
+      .run { white-space:pre-wrap; line-height:normal; font-kerning:none }
       </style><main data-docx-compatibility-mode="${mode}"><p><span class="run">WWWW WWWW WWWW WWWW WWWW</span></p></main>`);
     await page.addScriptTag({ content: lineMetrics });
     await page.addScriptTag({ content: wordText });
