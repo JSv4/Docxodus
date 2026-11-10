@@ -7092,6 +7092,26 @@ embedding-rights checks instead.
 explicit directory and an enabled local family, and before substitution.
 
 ---
+## Installed fonts measured three quarters of their width (#1659)
+
+Where a run's font is installed, `MetricsGetter.GetTextWidth` measures it with SkiaSharp. It set the
+Skia font size to the run's point size, so it returned points, while its three callers
+(`WmlToHtmlConverter`, `WordprocessingMLUtil.CalcWidthOfRunInTwips` and `HtmlToWmlConverter`) convert
+from 96-DPI pixels, as the System.Drawing measurement it replaced returned. Every installed font
+therefore measured 72/96 of its width. A missing font takes the character estimate instead, which
+already converted points to pixels. So the same document laid out differently on a host with the font
+(Windows, with Times New Roman) than on Linux CI, where the font is missing.
+
+| Text, 10 pt Times New Roman | Word 2024 | Docxodus, font installed, before | after |
+| --- | --- | --- | --- |
+| "the parties agree that the supplier shall deliver the services" | 233.5 pt (`Range.Information` x after minus x before) | 175 pt | 233.25 pt (311 px) |
+
+Before the fix, a tab after that text in a 3-inch column was laid out as though the text fit on one
+line. Skia now measures at the pixel size (`sz / 2 * 96 / 72`), and the fallback estimates inside
+`GetTextWidth` use the same unit. `MgTests.MG004` pins the unit on any host, and
+`TabAfterWrappingTextTests` and `RightTabLeaderLineTests` now pass with the font installed as well as
+without it.
+
 ## An empty paragraph that only carries a section break (#1572)
 
 ```xml
@@ -7228,23 +7248,3 @@ the same rule, so it no longer depends on which renderer owns a paragraph. The e
 measures with the same kerning and ligatures (canvas `textRendering: optimizeSpeed` disables
 ligatures without touching kerning, matching the DOM); runs that request specific ligature features
 keep the browser's own line layout.
-
-## Installed fonts measured three quarters of their width (#1659)
-
-Where a run's font is installed, `MetricsGetter.GetTextWidth` measures it with SkiaSharp. It set the
-Skia font size to the run's point size, so it returned points, while its three callers
-(`WmlToHtmlConverter`, `WordprocessingMLUtil.CalcWidthOfRunInTwips` and `HtmlToWmlConverter`) convert
-from 96-DPI pixels, as the System.Drawing measurement it replaced returned. Every installed font
-therefore measured 72/96 of its width. A missing font takes the character estimate instead, which
-already converted points to pixels. So the same document laid out differently on a host with the font
-(Windows, with Times New Roman) than on Linux CI, where the font is missing.
-
-| Text, 10 pt Times New Roman | Word 2024 | Docxodus, font installed, before | after |
-| --- | --- | --- | --- |
-| "the parties agree that the supplier shall deliver the services" | 233.5 pt (`Range.Information` x after minus x before) | 175 pt | 233.25 pt (311 px) |
-
-Before the fix, a tab after that text in a 3-inch column was laid out as though the text fit on one
-line. Skia now measures at the pixel size (`sz / 2 * 96 / 72`), and the fallback estimates inside
-`GetTextWidth` use the same unit. `MgTests.MG004` pins the unit on any host, and
-`TabAfterWrappingTextTests` and `RightTabLeaderLineTests` now pass with the font installed as well as
-without it.
