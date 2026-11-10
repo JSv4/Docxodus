@@ -35,10 +35,21 @@ internal sealed class AutomaticParagraphSpacing
         _additive = compatibility != null && compatibility.Attribute(W.val).ToBoolean() != false;
         _lineGrid = _additive ? new ParagraphLineGrid(document) : null;
         _automatic = !_additive
-            && new[] { main.GetXDocument(), main.StyleDefinitionsPart?.GetXDocument(),
-                main.NumberingDefinitionsPart?.GetXDocument() }.Any(x => x?.Descendants(W.spacing)
+            && new[] { main.StyleDefinitionsPart?.GetXDocument(), main.NumberingDefinitionsPart?.GetXDocument() }
+                .Concat(Roots(document).Select(root => root.Document)).Any(x => x?.Descendants(W.spacing)
                     .Any(s => s.Attribute(W.beforeAutospacing).ToBoolean() == true
                         || s.Attribute(W.afterAutospacing).ToBoolean() == true) == true);
+    }
+
+    // The body, header and footer stories, whose paragraphs this resolves.
+    private static IEnumerable<XElement> Roots(WordprocessingDocument document) =>
+        new OpenXmlPart[] { document.MainDocumentPart! }.Concat(document.MainDocumentPart!.HeaderParts)
+            .Concat(document.MainDocumentPart.FooterParts).Select(part => part.GetXDocument().Root).OfType<XElement>();
+
+    /// <summary>Stamps every paragraph of the document's own stories.</summary>
+    internal void Stamp()
+    {
+        foreach (var root in Roots(_document)) Stamp(root, root);
     }
 
     internal void Stamp(XElement source, XElement clone)
@@ -60,8 +71,10 @@ internal sealed class AutomaticParagraphSpacing
     {
         if (!_automatic || !Neighbors(paragraph, out var neighbors)) return "-";
         var (previous, next) = neighbors;
-        // Word prints no automatic space at the start or end of the body or a table cell.
-        if ((before ? previous : next) is not { } neighbor) return "0";
+        // Word prints no automatic space at the start of a story or the end of the body or a cell,
+        // but keeps it below the last paragraph of a header or footer.
+        if ((before ? previous : next) is not { } neighbor)
+            return !before && Story(paragraph)?.Name is { } story && (story == W.hdr || story == W.ftr) ? "280" : "0";
         if (neighbor.Name == W.tbl)
             return neighbor.Element(W.tblPr)?.Element(W.tblpPr) == null
                 && !neighbor.Descendants(W.trPr).Elements().Any(e => e.Name == W.ins || e.Name == W.del) ? "280" : "-";
@@ -102,15 +115,16 @@ internal sealed class AutomaticParagraphSpacing
         return _neighbors.TryGetValue(paragraph, out neighbors);
     }
 
-    // The body or table cell whose block sequence holds the paragraph. Content controls and
-    // custom XML are transparent; text boxes, notes and other stories are not measured.
-    private XElement? Story(XElement paragraph)
+    // The body, header, footer or table cell in one of them whose block sequence holds the paragraph.
+    // Content controls and custom XML are transparent; text boxes, notes and other stories are not measured.
+    private static XElement? Story(XElement paragraph)
     {
         var parent = paragraph.Parent;
         while (parent != null && (parent.Name == W.sdtContent || parent.Name == W.sdt || parent.Name == W.customXml))
             parent = parent.Parent;
-        return parent != null && (parent == _body || parent.Name == W.tc && parent.Document == _body?.Document
-            && !parent.Ancestors(W.txbxContent).Any()) ? parent : null;
+        var root = parent?.Document?.Root?.Name;
+        return (root == W.document || root == W.hdr || root == W.ftr) && (parent!.Name == W.body || parent.Name == root
+            || parent.Name == W.tc && !parent.Ancestors(W.txbxContent).Any()) ? parent : null;
     }
 
     private static IEnumerable<XElement> Blocks(XElement container) => container.Elements().SelectMany(e =>
@@ -150,7 +164,13 @@ internal sealed class AutomaticParagraphSpacing
         return facts;
     }
 
-    internal static void Apply(XElement root)
+    /// <summary>Applies the stamps to the assembled body, header and footer stories.</summary>
+    internal static void Apply(WordprocessingDocument document)
+    {
+        foreach (var root in Roots(document)) Apply(root);
+    }
+
+    private static void Apply(XElement root)
     {
         foreach (var paragraph in root.DescendantsAndSelf(W.p))
         {

@@ -24,6 +24,11 @@ for (const story of ['header', 'footer'] as const) {
       const text = content.items.filter(item => 'str' in item).map(item => item.str).join(' ');
       expect(text.match(/Observatory label \d/g)).toEqual(Array.from({ length: 4 }, (_, i) => `Observatory label ${i}`));
       expect(text.match(/Night log caption\./g)).toEqual(['Night log caption.']);
+      // Word 2024 collapses each 18pt after with the next 18pt before (#1553): 12pt lines step 30pt.
+      const labels = content.items.filter(item => 'str' in item).filter(item => /^Observatory label \d$/.test(item.str));
+      expect(labels).toHaveLength(4);
+      for (let i = 1; i < labels.length; i++)
+        expect(Math.abs(labels[i - 1].transform[5] - labels[i].transform[5] - 30)).toBeLessThanOrEqual(.5);
     } finally { await task.destroy(); }
   });
 }

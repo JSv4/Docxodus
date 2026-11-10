@@ -114,7 +114,9 @@ const budgetsKiB = {
   // paginator to 47,629 bytes (46.513 KiB), 13 bytes over the old gate. Round only this gate up.
   // Page-remainder table splitting and its keep guards add 203 gzip bytes over 9dd93836.
   // Round only this exhausted gate up by 0.5 KiB (CI measures 47.1 KiB).
-  'pagination.bundle.js': 56.1,
+  // Collapsing running-story paragraph spacing in one block adds 59 bytes (57,388 -> 57,447 on
+  // current main), one byte over the old gate; round it up by 0.1 KiB.
+  'pagination.bundle.js': 56.2,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,

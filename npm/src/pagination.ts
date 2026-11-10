@@ -6509,8 +6509,8 @@ export class PaginationEngine {
     measureContainer.style.visibility = "hidden";
     measureContainer.style.width = `${dims.contentWidth}pt`;
     measureContainer.style.left = "-9999px";
-    // Final running-story bands are flex columns: adjoining paragraph margins add rather than
-    // collapse. Measure in that same formatting context or later paragraphs can be clipped away.
+    // Final running-story bands are flex columns, whose items never collapse their margins.
+    // Measure in that same formatting context or later paragraphs can be clipped away.
     measureContainer.style.display = "flex";
     measureContainer.style.flexDirection = "column";
 
@@ -6542,6 +6542,15 @@ export class PaginationEngine {
         slot.appendChild(child);
         flow.appendChild(slot);
       }
+      measureContainer.appendChild(flow);
+    } else if (!measureContainer.querySelector('[data-docx-frame-story],[data-docx-story-flow]')) {
+      // Word collapses adjoining paragraph spacing in a header or footer as in the body (#1553),
+      // but a flex column never collapses its items' margins. The paragraphs therefore share one
+      // block, which the page copies clone; as the band's only item it still holds the first
+      // paragraph's space before and the last one's space after inside the band.
+      const flow = this.document.createElement('div');
+      flow.dataset.docxStoryFlow = 'true';
+      flow.append(...Array.from(measureContainer.childNodes));
       measureContainer.appendChild(flow);
     }
 

@@ -201,10 +201,17 @@ public class HtmlAutomaticSpacingTests
         Assert.Contains($"margin-top: {before};", styles["AshSecond"]);
     }
 
+    // Word 2024 prints 14pt between the paragraphs of a cell, header or footer, nothing before a
+    // story's first paragraph, and 14pt after the last paragraph of a header or footer, where a
+    // cell, like the body, has none (#1553). Under doNotUseHTMLParagraphAutoSpacing a header keeps
+    // its explicit values and adds them.
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void CellParagraphsUseTheirCellNeighborsButHeadersKeepExplicitSpacing(bool header)
+    [InlineData("cell", "14pt", "14pt", "0", "0")]
+    [InlineData("header", "14pt", "14pt", "0", "14pt")]
+    [InlineData("footer", "14pt", "14pt", "0", "14pt")]
+    [InlineData("header-cell", "14pt", "14pt", "0", "0")]
+    [InlineData("compatibility-header", "5pt", "10pt", "5pt", "5pt")]
+    public void StoryParagraphsUseTheirStoryNeighborsAndEdges(string story, string after, string before, string first, string last)
     {
         var bytes = Create(0, 0, doc =>
         {
@@ -212,18 +219,38 @@ public class HtmlAutomaticSpacingTests
             var body = main.GetXDocument().Root!.Element(W.body)!;
             var paragraphs = body.Elements(W.p).Skip(1).Take(2).ToArray();
             paragraphs.Remove();
-            if (header)
+            var table = new XElement(W.tbl, new XElement(W.tblPr), new XElement(W.tblGrid,
+                new XElement(W.gridCol, new XAttribute(W._w, "6000"))), new XElement(W.tr, new XElement(W.tc, paragraphs)));
+            if (story == "cell") body.AddFirst(table);
+            else
             {
-                var part = main.AddNewPart<HeaderPart>();
-                part.PutXDocument(new XDocument(new XElement(W.hdr, paragraphs)));
-                body.Element(W.sectPr)!.AddFirst(new XElement(W.headerReference,
+                var footer = story == "footer";
+                OpenXmlPart part = footer ? main.AddNewPart<FooterPart>() : main.AddNewPart<HeaderPart>();
+                part.PutXDocument(new XDocument(new XElement(footer ? W.ftr : W.hdr,
+                    story == "header-cell" ? new object[] { table, new XElement(W.p) } : paragraphs)));
+                body.Element(W.sectPr)!.AddFirst(new XElement(footer ? W.footerReference : W.headerReference,
                     new XAttribute(W.type, "default"), new XAttribute(R.id, main.GetIdOfPart(part))));
             }
-            else body.AddFirst(new XElement(W.tbl, new XElement(W.tblPr), new XElement(W.tblGrid,
-                new XElement(W.gridCol, new XAttribute(W._w, "6000"))), new XElement(W.tr, new XElement(W.tc, paragraphs))));
+            if (story.StartsWith("compatibility"))
+                main.DocumentSettingsPart!.PutXDocument(new XDocument(new XElement(W.settings,
+                    new XElement(W.compat, new XElement(W.doNotUseHTMLParagraphAutoSpacing)))));
             main.PutXDocument();
         });
-        VerifyGaps(bytes, header ? "5pt" : "14pt", header ? "5pt" : "14pt");
+        VerifyGaps(bytes, after, before);
+        VerifyEdges(bytes, first, last);
+    }
+
+    private static void VerifyEdges(byte[] bytes, string first, string last)
+    {
+        var options = new HtmlConversionOptions { FabricateCssClasses = false, StampAnchors = true,
+            RenderHeadersAndFooters = true, PaginationMode = (int)PaginationMode.Paginated };
+        var paragraphs = XElement.Parse(HtmlConversionOps.ConvertToHtml(bytes, options)).Descendants()
+            .Where(e => e.Name.LocalName == "p" && e.Value is "AshFirst" or "AshSecond").ToArray();
+        foreach (var (paragraph, expected) in new[] { (paragraphs[0], $"margin-top: {first};"), (paragraphs[1], $"margin-bottom: {last};") })
+        {
+            Assert.Contains(expected, (string?)paragraph.Attribute("style"));
+            Assert.Contains(expected, HtmlConversionOps.RenderBlockHtml(bytes, (string)paragraph.Attribute("data-anchor")!, options));
+        }
     }
 
     private static void VerifyGaps(byte[] bytes, string after, string before, bool windowed = true)
@@ -282,16 +309,7 @@ public class HtmlAutomaticSpacingTests
             main.PutXDocument();
         });
         VerifyGaps(bytes, "14pt", "14pt");
-        var options = new HtmlConversionOptions { FabricateCssClasses = false, StampAnchors = true };
-        var paragraphs = XElement.Parse(HtmlConversionOps.ConvertToHtml(bytes, options)).Descendants()
-            .Where(e => e.Name.LocalName == "p" && e.Value is "AshFirst" or "AshSecond").ToArray();
-        foreach (var (paragraph, side) in new[] { (paragraphs[0], "top"), (paragraphs[1], "bottom") })
-        {
-            var expected = $"margin-{side}: 0;";
-            Assert.Contains(expected, (string?)paragraph.Attribute("style"));
-            Assert.Contains(expected, HtmlConversionOps.RenderBlockHtml(bytes,
-                (string)paragraph.Attribute("data-anchor")!, options));
-        }
+        VerifyEdges(bytes, "0", "0");
     }
 
     [Theory]
