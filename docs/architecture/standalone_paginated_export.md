@@ -1661,13 +1661,11 @@ its block geometry in either compatibility mode. The precision fitter replaces t
 when its line choices differ or an authored character-width scale requires owned lines. Vector paint derives word positions from the same resolved advances
 in both paths: matching line breaks do not establish that the browser's hinted word advances match
 the font. Natural final lines, alignment and repeated ordinary spaces retain their own rules.
-A paragraph that states no line spacing has Word's default, single automatic spacing, and is
-fitted exactly like explicit single spacing (#1550).
-
 Justified paragraphs the precision fitter does not own keep HTML layout and paint but take the
 same line choices (#1550): mixed runs, hyperlinks, list items (the marker, its tab and the
-indents narrow only the first line, as measured from the first word's position) and unscaled text
-in fixed-grid table cells. The selector measures each word across its runs with each run's own
+indents narrow only the first line, as measured from the first word's position), unscaled text
+in fixed-grid table cells, and paragraphs that state no automatic multiple (Word's implicit single
+spacing, or a minimum). The selector measures each word across its runs with each run's own
 font. A line that fits at natural spacing is already the browser's choice and nothing changes.
 When Word condenses a line, that line's text segments are wrapped in
 `[data-docx-condensed-line]` spans whose negative `word-spacing` removes exactly the overflow the

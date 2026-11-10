@@ -42,7 +42,7 @@ All notable changes to this project will be documented in this file.
 
 - Comparing documents whose default paragraph spacing differs no longer shrinks the text when the redline is rejected in Word. The tracked spacing change on a style now also archives that style's run properties, because Word's Reject All resets an unarchived slice to its built-in 10 pt. Docxodus's own accept and reject output is unchanged (#1576).
 
-- Standalone export condenses justified lines the way Word does in every paragraph structure, not only single-run paragraphs: mixed runs, hyperlinks, list items and fixed-grid table cells take Word's compatibility-mode-15 line choices while keeping their HTML layout and paint, and a paragraph with no stated line spacing is fitted as single-spaced. Word measurements show a bold word that widens the line can correctly keep the earlier break; left-aligned text and mode 14 are unchanged (#1550).
+- Standalone export condenses justified lines the way Word does in every paragraph structure, not only single-run paragraphs: mixed runs, hyperlinks, list items and fixed-grid table cells and paragraphs that state no line spacing take Word's compatibility-mode-15 line choices while keeping their HTML layout and paint. Word measurements show a bold word that widens the line can correctly keep the earlier break; left-aligned text and mode 14 are unchanged (#1550).
 
 - Raw XML insertion and replacement now refuse with `tracked_operation_unsupported` while recording changes, preserving the document and undo history instead of silently applying an unreviewable edit (#1625).
 

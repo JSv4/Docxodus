@@ -7180,9 +7180,9 @@ New 12pt (7.2pt cells, 65 cells to the column) with mode 14 and the option set, 
 with 10 gaps and with only 2. Without the option, the 66-cell line wraps. Docxodus matches all nine
 fixtures.
 
-`prepareWordText` treats a paragraph that states no line spacing as Word's single automatic spacing.
-Paragraphs the precision fitter does not own (mixed runs, links, list items, unscaled cells) now
-run the same line selector over every run's measured advances. When Word condenses a line, only that
+Paragraphs the precision fitter does not own (mixed runs, links, list items, unscaled cells and
+paragraphs that state no line spacing) now run the same line selector over every run's measured
+advances. When Word condenses a line, only that
 line's ordinary spaces narrow, by the overflow the browser measures for it; HTML still lays out and
 paints the paragraph. Public PDF regressions pin each placement with its left-aligned and mode-14
 controls.

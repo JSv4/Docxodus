@@ -834,11 +834,8 @@ function prepareText(root: HTMLElement, checkpoint: (() => void) | undefined, ow
       owners !== 'notes' && paragraph.closest('[data-footnote-id]')) continue;
     const style = view.getComputedStyle(paragraph);
     if (owners === 'notes' && style.display !== 'block') continue;
-    const declared = (property: string) => Number.parseFloat(style.getPropertyValue(property)) > 0;
-    // A paragraph that states no line spacing has Word's default, single automatic spacing.
-    const multiple = Number(style.getPropertyValue('--docx-auto-line-spacing'))
-      || (declared('--docx-exact-line-height') || declared('--docx-min-line-height') ? 0 : 1);
-    const exact = mode >= 15 && declared('--docx-exact-line-height');
+    const multiple = Number(style.getPropertyValue('--docx-auto-line-spacing'));
+    const exact = mode >= 15 && Number.parseFloat(style.getPropertyValue('--docx-exact-line-height')) > 0;
     const inColumns = () => {
       for (let ancestor = paragraph.parentElement; ancestor && ancestor !== root; ancestor = ancestor.parentElement)
         if (Number(view.getComputedStyle(ancestor).columnCount) > 1) return true;
@@ -861,7 +858,9 @@ function prepareText(root: HTMLElement, checkpoint: (() => void) | undefined, ow
     // A unit multiple leaves the run at `line-height: normal`; the export's unrounded
     // normal-line pass (line-metrics.ts) has already resolved it to a length.
     const height = Number.parseFloat(runStyle.lineHeight);
-    if ((!(multiple > 0) && !exact) || !(height > 0) || !['none', 'normal'].includes(kerning)) continue;
+    // Implicit or minimum line spacing has no precision line model; it keeps HTML paint too.
+    if (!(multiple > 0) && !exact) { condense(); continue; }
+    if (!(height > 0) || !['none', 'normal'].includes(kerning)) continue;
     // Keep the resolved font height's precision through the spacing multiple.
     // Rounding the natural height to twips and flooring the product shortens
     // every line; native Word controls show the loss accumulating down a page.
