@@ -881,7 +881,8 @@
                 "browser",
                 "configured",
                 "attested",
-                "local"
+                "local",
+                "document"
               ]
             },
             "format": {

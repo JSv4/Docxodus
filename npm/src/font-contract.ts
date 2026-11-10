@@ -83,7 +83,7 @@ export type FontResolutionStatus =
   | "missing"
   | "load_failed"
   | "unverified";
-export type FontResolutionSource = "browser" | "configured" | "attested" | "local";
+export type FontResolutionSource = "browser" | "configured" | "attested" | "local" | "document";
 export type FontFaceMatch = "exact" | "synthesized";
 export type FontGlyphCoverage = "complete" | "partial" | "unverified";
 export type FontEmbeddingKind = "installable" | "previewPrint" | "editable" | "attested";
@@ -119,8 +119,11 @@ export interface FontLicenseEvidence {
 /** Immutable configured bytes and metadata returned to the browser coordinator. */
 export interface FontResolverFace {
   id: string;
-  /** Machine-local bytes selected by the opt-in Node runtime. Omitted for configured sources. */
-  source?: "local";
+  /**
+   * Machine-local bytes selected by the opt-in Node runtime (`local`), or a face embedded in the
+   * DOCX being rendered (`document`). Omitted for configured sources.
+   */
+  source?: "local" | "document";
   resolvedFamily: string;
   postscriptName?: string;
   version: string;

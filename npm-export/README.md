@@ -200,6 +200,14 @@ fonts are PDF-only; no-subsetting fonts are HTML-only; restricted or bitmap-only
 embedding is never admitted. Nothing is installed or copied to another font
 directory. Permitted bytes reach only the selected document output.
 
+Fonts the DOCX embeds (`w:embedRegular`, `w:embedBold`, `w:embedItalic`,
+`w:embedBoldItalic`) are de-obfuscated with their `w:fontKey` and used for that
+document, after an explicit directory or installed local font of the same
+family, as Word does, and before substitution. The same embedding-rights rules
+and limits apply. A corrupt, wrongly keyed or restricted embedding is skipped
+with a `document_font_skipped` warning; reports record used faces with
+`source: "document"`.
+
 Reports identify selected local faces as `source: "local"`, with family, version,
 SHA-256 and license evidence. These fields enter the renderer fingerprint; paths
 are omitted. `docxodus doctor` checks regular faces for common Word families using

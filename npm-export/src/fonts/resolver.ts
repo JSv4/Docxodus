@@ -354,6 +354,31 @@ export function resolveCatalogRequests(
   };
 }
 
+/**
+ * Adds the document's embedded faces after every configured root, so a configured family wins
+ * and the shared count, byte and character-map budgets cover both sources.
+ */
+function withDocumentFaces(
+  catalog: FontCatalog,
+  faces: readonly ConfiguredFontFace[],
+  limits: Readonly<ExportResourceLimits>,
+): FontCatalog {
+  if (faces.length === 0) return catalog;
+  const fileCount = catalog.fileCount + faces.length;
+  const totalBytes = faces.reduce((sum, face) => sum + face.byteLength, catalog.totalBytes);
+  const totalExpandedBytes = faces.reduce((sum, face) => sum + face.expandedByteLength, catalog.totalExpandedBytes);
+  const all = [...catalog.faces, ...faces.map((face, discoveryIndex) =>
+    Object.freeze({ ...face, directoryIndex: catalog.directoryCount, discoveryIndex }))];
+  if (fileCount > limits.fontFiles) limitError("fontFiles", fileCount, limits.fontFiles);
+  const bytes = Math.max(totalBytes, totalExpandedBytes);
+  if (bytes > limits.fontTotalBytes) limitError("fontTotalBytes", bytes, limits.fontTotalBytes);
+  if (all.reduce((sum, face) => sum + face.codePoints.length, 0) > FONT_CATALOG_CODE_POINTS_MAX) {
+    exportError("resource_limit", "font_loading", `Font character maps exceed ${FONT_CATALOG_CODE_POINTS_MAX} entries.`,
+      "Use fewer font faces in the document.");
+  }
+  return { ...catalog, faces: all, fileCount, totalBytes, totalExpandedBytes };
+}
+
 export interface NodeFontRuntime {
   readonly resolver: FontResolver;
   prepare(signal?: AbortSignal): Promise<void>;
@@ -365,6 +390,7 @@ export function createNodeFontRuntime(
   limits: Readonly<ExportResourceLimits>,
   outputs: readonly RenderOutput[] = ["html"],
   local?: LocalFontOptions,
+  documentFaces: readonly ConfiguredFontFace[] = [],
 ): NodeFontRuntime {
   const directorySnapshot = Object.freeze([...directories]);
   const attestationSnapshot = Object.freeze(attestations.map((entry) => Object.freeze({
@@ -380,7 +406,7 @@ export function createNodeFontRuntime(
       attestationSnapshot,
       limitSnapshot,
       signal,
-    ).catch((error) => {
+    ).then(catalog => withDocumentFaces(catalog, documentFaces, limitSnapshot)).catch((error) => {
       catalogPromise = undefined;
       throw error;
     });
@@ -411,9 +437,13 @@ export function createNodeFontRuntime(
   const withLocalFaces = async (catalog: FontCatalog, requests: readonly FontRequest[], signal: AbortSignal): Promise<FontCatalog> => {
     if (!local) return catalog;
     localFaces.clear();
+    // Word prints an installed family in preference to the document's embedded faces of it, so a
+    // local family takes precedence over a document one and only a configured family skips it.
+    const supplies = (family: string, document: boolean): boolean => catalog.faces.some(face =>
+      (face.source === "document") === document && face.familyKey === fontFamilyKey(family));
     for (const request of requests) {
       for (const candidate of familyCandidates(request)) {
-        if (bestFace(catalog, candidate.family, request)) break;
+        if (supplies(candidate.family, false)) break;
         localPromise ??= (async () => {
           const index = new LocalFontIndex(local);
           await index.prepare(limitSnapshot, signal);
@@ -465,10 +495,12 @@ export function createNodeFontRuntime(
           selected = true;
           break;
         }
-        if (selected) break;
+        if (selected || supplies(candidate.family, true)) break;
       }
     }
-    return { ...catalog, faces: [...catalog.faces, ...localFaces.values()] };
+    const localFamilies = new Set([...localFaces.values()].map(face => face.familyKey));
+    return { ...catalog, faces: [...catalog.faces.filter(face =>
+      face.source !== "document" || !localFamilies.has(face.familyKey)), ...localFaces.values()] };
   };
   const rejectedFaces = new Set<string>();
   const resolver = async (
