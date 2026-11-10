@@ -6918,9 +6918,12 @@ fits 27 there, a separate sub-twip difference in its line height that this fix d
 `PaginationEngine` measures `MeasuredBlock.trailingLeadingPt`, the leading below the last line's
 text, for converter runs that carry the automatic-spacing lift. It uses that one fit height for
 whole blocks and for fragment heads, and a block placed by it gets a declared
-`--docx-word-text-height`, so its box ends at the text. The export's Word-text pass removes the lift
-from uniform runs before pagination, and its pre-paint clip check would then see glyphs below the
-band. Those paragraphs keep the full-line test, and the export still prints 23 lines.
+`--docx-word-text-height`, so its box ends at the text. The export's Word-text pass used to remove
+the lift from the uniform runs it fits, so those paragraphs kept the full-line test and standalone
+PDF export printed 23 lines at the 15pt remainder. It now keeps every run's converter offset, for
+unchanged and for re-wrapped lines, because the vector painter places baselines from the paragraph
+box whatever the DOM offset is. The shared fit applies in export too: 24 lines at 15pt and 23 at
+13pt, pinned by `export-last-line-leading.spec.ts`.
 
 ## Fractional whole-number measures truncate in Word (#1622)
 
