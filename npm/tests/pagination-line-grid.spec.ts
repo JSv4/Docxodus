@@ -66,12 +66,15 @@ for (const presentation of ['editor', 'viewer', 'export']) for (const entry of [
   expect(result.repeated).toBe(true);
 });
 
-for (const entry of [{ table: false }, { table: true }, { table: true, shifted: true }])
-test(`wrapped grid paragraph, table=${entry.table}, arbitrary offset=${!!entry.shifted}`, async ({ page }) => {
+// Word 2024 puts 36 lines of this paragraph on an 18pt grid in a 646pt body and 35 in a 644pt one:
+// the last line needs only its centred text, 15.9pt of its 18pt slot (#1551).
+for (const entry of [{ table: false, height: 646, rows: 36 }, { table: false, height: 644, rows: 35 },
+  { table: true, height: 646, rows: 36 }, { table: true, height: 646, rows: 36, shifted: true }])
+test(`wrapped grid paragraph, table=${entry.table}, body=${entry.height}pt, arbitrary offset=${!!entry.shifted}`, async ({ page }) => {
   await page.goto('/test-harness.html');
   await page.setContent(`<style>p {font:12pt/normal 'Liberation Serif';margin:0;--docx-auto-line-spacing:1;--docx-line-grid:18pt}</style>
-    <div id="staging"><div data-section-index="0" data-page-width="612" data-page-height="790"
-      data-content-width="468" data-content-height="646" data-margin-top="72" data-margin-right="72"
+    <div id="staging"><div data-section-index="0" data-page-width="612" data-page-height="${entry.height + 144}"
+      data-content-width="468" data-content-height="${entry.height}" data-margin-top="72" data-margin-right="72"
       data-margin-bottom="72" data-margin-left="72"><p><span style="white-space:pre-wrap">${Array.from({ length: 900 }, (_, i) => `Cedar${i}`).join(' ')}</span></p>
       ${entry.table ? '<table><tr><td>Separate table</td></tr></table>' : ''}</div></div><div id="pages"></div>`);
   await page.addScriptTag({ path: fileURLToPath(new URL('../dist/pagination.bundle.js', import.meta.url)) });
@@ -96,8 +99,8 @@ test(`wrapped grid paragraph, table=${entry.table}, arbitrary offset=${!!entry.s
     return { fitted, rows: rows.size, text: Array.from(pages.querySelectorAll('.page-content p')).map(p => p.textContent).join(' ') };
   }, !!entry.shifted);
   expect(result.fitted).toBe('0');
-  if (entry.shifted) expect(result.rows).toBeGreaterThan(35);
-  else expect(result.rows).toBe(35);
+  if (entry.shifted) expect(result.rows).toBeGreaterThan(entry.rows);
+  else expect(result.rows).toBe(entry.rows);
   expect(result.text.match(/Cedar\d+/g)).toEqual(Array.from({ length: 900 }, (_, i) => `Cedar${i}`));
 });
 
