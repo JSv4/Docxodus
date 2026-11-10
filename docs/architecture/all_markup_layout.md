@@ -159,13 +159,38 @@ Otherwise:
 
 - The page box keeps the paper size and stays the print unit.
 - Its content moves into one layer. That layer is the page as far as its text column's right edge
-  plus a 266.4pt (3.7in) markup area, shrunk by `paperWidth / (textRight + 266.4pt)` to the paper's
-  width.
-- The shrunken page stands at the paper's foot, 10.8 paper-points above it.
+  plus a markup area of Word's default balloon width, 266.4pt (3.7in).
+- The layer is shrunk to the paper's width at Word's zoom. Word's zoom moves in steps of 1/600, and
+  it takes the step nearest `paperWidth / (textRight + 266.4pt)`. The sheet can therefore overrun the
+  paper's right edge by under a point, and the paper cuts it off. Here the page box clips it.
+- The shrunken page's left edge is the paper's, and its height is centred on the paper.
 - The grey area (`#F2F2F2`) starts 9pt right of the text column and spans the page's height.
 - The layer is anchored at the page box's foot and reaches above it while unscaled. This is
   because print fragmentation would carry anything laid out past the foot onto a new page.
 - `data-docx-markup-scale` on the page box records the factor.
+
+**Measured sheets (issues #1559, #1577).** Word 2024's Save as PDF of one-change and one-comment
+documents, in paper points. The zoom is 1/600 steps, and the top band is the distance from the
+paper's top to the shrunken page. The foot band was within 0.6pt of the top band on every paper.
+
+| Paper, margins | Zoom (steps) | `w / (textRight + 266.4)` | Top band | Markup area, left to right |
+|---|---|---|---|---|
+| Letter, 1in | 455 | 455.36 | 95.43 | 416.40 to 611.64 |
+| A4, 1in | 452 | 452.30 | 103.70 | 401.09 to 595.03 |
+| Letter landscape, 1in | 482 | 481.75 | 60.36 | 585.72 to 792.53 |
+| Letter, 0.5in | 436 | 435.90 | 108.27 | 425.18 to 612.26 |
+| Letter, 0.75in right | 445 | 445.41 | 102.03 | 420.60 to 611.54 |
+| Letter, 1.5in right | 477 | 476.64 | 81.39 | 407.90 to 612.57 |
+| Letter, 2in right | 500 | 500.00 | 66.00 | 397.58 to 612.12 |
+| Tabloid, 1in | 482 | 481.75 | 120.60 | 585.72 to 792.53 |
+| A5, 1in | 410 | 410.02 | 94.23 | 243.70 to 419.62 |
+| A4 landscape, 1in | 487 | 487.45 | 55.92 | 632.30 to 841.27 |
+
+The left margin does not matter: a 0.5in left margin printed exactly like the 1in one. Print to PDF
+(`PrintOut` to "Microsoft Print to PDF") lays the sheet out a little smaller, as if the paper were
+about 9pt narrower, still in 1/600 steps (449 on Letter). It puts the page about 1pt in from the
+paper's left edge and still centres it. Docxodus reproduces Save as PDF. Word's Balloon print
+orientation option (Auto, Preserve, Force landscape) changed neither print.
 
 **Balloons.**
 
@@ -193,10 +218,10 @@ Otherwise:
   |---|---|
   | Left edge | 31.6pt past the text column |
   | Right inset | 4pt |
-  | Border | 0.5pt, in the author's colour |
+  | Outline | 0.5pt, in the author's colour, drawn as an inset shadow inside the padding: a CSS border that thin is drawn a whole CSS pixel (0.75pt) wide |
   | Corner radius | 3pt |
   | Padding | 1.8pt × 4pt |
-  | Line height | 1.15 |
+  | Line height | Each line's own fonts' natural height, unrounded: Word's lines measured 12.1pt in Segoe UI 9pt and 10.3pt in Times New Roman 9pt, against 10.35pt for both at the old fixed 1.15 |
   | Vertical gap between balloons | 1pt |
   | Inset from the page's top and bottom edges | 2pt |
 
@@ -204,6 +229,13 @@ Otherwise:
   colours are mixed mostly with white); formatting balloons are white.
 - Labels are bold. The label and the wording use the Balloon Text font; a comment's text keeps its
   own font.
+- Word's prints of issue #1577's comment balloon on Letter, A4, landscape and 0.5in margins agree
+  with this table, in page points. The outline's path runs 31.6pt past the text column and 4.5pt
+  inside the area's right edge, which puts its outer edge at about 4.3pt. The text starts 36.1pt past
+  the column, the corners are 3pt, the outline is 0.47pt, and the text is 9pt Segoe UI Bold, then the
+  comment's own font. The leader turns 4.6pt past the column and meets the balloon 6pt below its top.
+  Word draws the leader as two dotted strokes. Chromium paints Docxodus's dotted hairline as one
+  filled shape, which looks the same.
 
 **Placement.**
 

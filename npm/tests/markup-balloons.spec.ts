@@ -42,9 +42,11 @@ async function paginate(page: Page, bytes: Uint8Array, placement: 'balloons' | '
     const balloons = Array.from(host.querySelectorAll<HTMLElement>('.page-balloon')).map(balloon => {
       const r = balloon.getBoundingClientRect();
       const box = balloon.closest<HTMLElement>('.page-box')!.getBoundingClientRect();
-      return { text: balloon.textContent!.replace(/\s+/g, ' ').trim(), border: getComputedStyle(balloon).borderTopColor,
+      return { text: balloon.textContent!.replace(/\s+/g, ' ').trim(),
+        border: getComputedStyle(balloon).boxShadow.match(/rgba?\([^)]*\)/)?.[0],
         page: pageOf(balloon), truncated: balloon.dataset.balloonTruncated === 'true',
-        top: pt(r.top - box.top), bottom: pt(r.bottom - box.top), left: pt(r.left - box.left), right: pt(r.right - box.left) };
+        top: pt(r.top - box.top), bottom: pt(r.bottom - box.top), left: pt(r.left - box.left), right: pt(r.right - box.left),
+        textLeft: pt(balloon.querySelector('b')!.getBoundingClientRect().left - box.left) };
     });
     const spanTop = (text: string) => {
       const span = Array.from(host.querySelectorAll<HTMLElement>('.page-box span')).filter(s => s.textContent === text).pop()!;
@@ -54,6 +56,13 @@ async function paginate(page: Page, bytes: Uint8Array, placement: 'balloons' | '
       pages: pages.map(p => ({ width: pt(p.getBoundingClientRect().width), height: pt(p.getBoundingClientRect().height),
         scale: Number(p.dataset.docxMarkupScale ?? '1') })),
       balloons,
+      // The first page's markup area, which spans the shrunken page's height.
+      area: (() => {
+        const area = host.querySelector('.page-markup-area')?.getBoundingClientRect();
+        const box = host.querySelector('.page-box')!.getBoundingClientRect();
+        return area && { top: pt(area.top - box.top), bottom: pt(area.bottom - box.top),
+          left: pt(area.left - box.left), right: pt(area.right - box.left) };
+      })(),
       leaders: host.querySelectorAll('.page-box svg path[stroke-dasharray]').length,
       markerWidths: Array.from(host.querySelectorAll<HTMLElement>('.page-box a.comment-marker'))
         .map(a => a.getBoundingClientRect().width),
@@ -85,14 +94,49 @@ for (const [paper, width, height] of [['letter', 612, 792], ['a4', 595.3, 841.9]
     expect(result.pages).toHaveLength(1);
     expect(result.pages[0].width).toBeCloseTo(width, 0);
     expect(result.pages[0].height).toBeCloseTo(height, 0);
-    // The page as far as its text column's right edge (1in margins) plus the 3.7in area fits the paper.
-    expect(result.pages[0].scale).toBeCloseTo(width / (width - 72 + 266.4), 4);
+    expect(result.pages[0].scale).toBeLessThan(1);
     for (const balloon of result.balloons) {
       expect(balloon.left).toBeGreaterThan((width - 72) * result.pages[0].scale);
       expect(balloon.right).toBeLessThanOrEqual(width);
     }
   });
 }
+
+// Word 2024's Save as PDF of issue #1577's one-comment page (issues #1559, #1577), in paper points:
+// the zoom (in 1/600 steps), the markup area's top, left and right edges, and the balloon text's left
+// edge. The zoom is the step nearest the paper's width over the page's width as far as its text
+// column plus the 3.7in area; the shrunken page is centred on the paper's height.
+for (const [name, paper, margin, steps, top, left, right, textLeft] of [
+  ['letter', 'letter', 1440, 455, 95.43, 416.40, 611.64, 436.87],
+  ['a4', 'a4', 1440, 452, 103.70, 401.09, 595.03, 421.44],
+  ['landscape letter', 'landscape', 1440, 482, 60.36, 585.72, 792.53, 607.42],
+  ['letter with half-inch margins', 'letter', 720, 436, 108.27, 425.18, 612.26, 444.79],
+] as const) {
+  test(`the shrunken page, markup area and balloon text sit where Word prints them on ${name} paper`, async ({ page }) => {
+    await open(page);
+    const body = `<w:p>${commented(0, 'The ferry leaves the east dock at seven.')}</w:p>${plain('Line 2 of the harbor log.')}`;
+    const comments = [{ id: 0, author: 'Harbor Editor', initials: 'HE', text: 'Check the tide times against the new table.' }];
+    const { pages, area, balloons } = await paginate(page, balloonDocx({ body, comments, paper, margin }), 'balloons');
+    expect(pages[0].scale).toBeCloseTo(steps / 600, 6);
+    expect(area!.top).toBeCloseTo(top, 0);
+    expect(pages[0].height - area!.bottom).toBeCloseTo(top, 0);
+    expect(area!.left).toBeCloseTo(left, 0);
+    expect(area!.right).toBeCloseTo(right, 0);
+    expect(Math.abs(balloons[0].textLeft - textLeft)).toBeLessThan(0.15);
+  });
+}
+
+test('a balloon line takes its own font\'s height, as Word\'s do', async ({ page }) => {
+  await open(page);
+  // A face whose own line height is 1.5em (Word's balloon lines measured 1.35em in Segoe UI, 1.15em in
+  // Times New Roman): its one line, the 1.8pt padding and the 0.5pt outline above and below.
+  await page.addStyleTag({ content: "@font-face { font-family: 'Tall Balloon'; src: local('Liberation Sans'), local('Arial'); " +
+    'ascent-override: 120%; descent-override: 30%; line-gap-override: 0%; }' });
+  await page.evaluate(() => document.fonts.load("bold 12px 'Tall Balloon'"));
+  const fixture = balloonDocx({ body: `<w:p>${formatted(1, 'buyer')}</w:p>`, balloonFont: 'Tall Balloon' });
+  const { balloons, pages } = await paginate(page, fixture, 'balloons');
+  expect((balloons[0].bottom - balloons[0].top) / pages[0].scale).toBeCloseTo(9 * 1.5 + 2 * (1.8 + 0.5), 0);
+});
 
 test('balloons hold comments, replies and formatting changes in Word\'s wording, one leader each', async ({ page }) => {
   await open(page);
@@ -221,7 +265,7 @@ test('the margin placement ignores the balloon data the Word presentation record
 test('balloons too many for their page stay whole from the top, and the rest are cut to one line', async ({ page }) => {
   await open(page);
   const remark = 'Please confirm the delivery window with the carrier before this clause is finalised. '.repeat(5);
-  const { balloons, pages } = await paginate(page, crowdedCommentsFixture(25, 1, remark), 'balloons');
+  const { balloons, pages, area } = await paginate(page, crowdedCommentsFixture(25, 1, remark), 'balloons');
   expect(balloons).toHaveLength(25);
   const firstCut = balloons.findIndex(b => b.truncated);
   expect(firstCut).toBeGreaterThanOrEqual(1);
@@ -241,7 +285,7 @@ test('balloons too many for their page stay whole from the top, and the rest are
   expect(balloons[0].top).toBeCloseTo(firstLineTop, 0);
   expectNoOverlap(balloons);
   // As many whole as the page allows: the stack ends above the page's foot, and one more whole balloon would not have.
-  const foot = pages[0].height - 10.8 - 2 * scale;
+  const foot = area!.bottom - 2 * scale;
   const wholeHeight = balloons[0].bottom - balloons[0].top;
   const cutHeight = balloons[firstCut].bottom - balloons[firstCut].top;
   expect(balloons[24].bottom).toBeLessThanOrEqual(foot + 0.1);
@@ -274,7 +318,7 @@ test('long comments near the page\'s foot are pulled up whole while the page can
   const body = Array.from({ length: 40 }, (_, i) => plain(`Filler line ${i + 1}.`)).join('') +
     [0, 1, 2].map(id => `<w:p>${commented(id, `late${id} `)}</w:p>`).join('');
   const comments = [0, 1, 2].map(id => ({ id, author: 'Tomas Lindqvist', initials: 'TL', text: `${id}: ${long}` }));
-  const { balloons, pages } = await paginate(page, balloonDocx({ body, comments }), 'balloons');
+  const { balloons, pages, area } = await paginate(page, balloonDocx({ body, comments }), 'balloons');
   expect(balloons).toHaveLength(3);
   expect(pages).toHaveLength(1);
   for (const balloon of balloons) {
@@ -286,7 +330,7 @@ test('long comments near the page\'s foot are pulled up whole while the page can
     return (span.getBoundingClientRect().top - span.closest('.page-box')!.getBoundingClientRect().top) * 0.75;
   });
   expect(balloons[0].top).toBeLessThan(lineTop);
-  expect(balloons[2].bottom).toBeLessThanOrEqual(pages[0].height - 10.8 - 2 * pages[0].scale + 0.1);
+  expect(balloons[2].bottom).toBeLessThanOrEqual(area!.bottom - 2 * pages[0].scale + 0.1);
   expectNoOverlap(balloons);
 });
 

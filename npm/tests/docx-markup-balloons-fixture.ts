@@ -30,18 +30,22 @@ export const markedParagraph = (id: number, mark: 'ins' | 'del', content: string
 
 /** An original one-section document with the given body, comments and optional default header. */
 export function balloonDocx(options: {
-  body: string; comments?: FixtureComment[]; header?: string; paper?: 'letter' | 'a4';
+  body: string; comments?: FixtureComment[]; header?: string; paper?: 'letter' | 'a4' | 'landscape';
+  /** Every page margin, in twips; default 1440 (one inch). */
+  margin?: number;
   bodyFont?: string; balloonFont?: string; fontTable?: string;
 }): Uint8Array {
-  const [width, height] = options.paper === 'a4' ? [11906, 16838] : [12240, 15840];
+  const [width, height] = options.paper === 'a4' ? [11906, 16838] : options.paper === 'landscape' ? [15840, 12240] : [12240, 15840];
+  const margin = options.margin ?? 1440;
   const comments = options.comments ?? [];
   const bodyFont = options.bodyFont ?? 'Liberation Serif';
   const balloonFont = options.balloonFont ?? 'Liberation Sans';
   const paraId = (id: number) => (0x10000000 + id).toString(16).toUpperCase();
   const parts: Record<string, string> = {
     'word/document.xml': `<w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"><w:body>${options.body}<w:sectPr>` +
-      `${options.header ? '<w:headerReference w:type="default" r:id="rheader"/>' : ''}<w:pgSz w:w="${width}" w:h="${height}"/>` +
-      '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>' +
+      `${options.header ? '<w:headerReference w:type="default" r:id="rheader"/>' : ''}<w:pgSz w:w="${width}" w:h="${height}"` +
+      `${options.paper === 'landscape' ? ' w:orient="landscape"' : ''}/><w:pgMar w:top="${margin}" w:right="${margin}" ` +
+      `w:bottom="${margin}" w:left="${margin}" w:header="720" w:footer="720" w:gutter="0"/>` +
       '</w:sectPr></w:body></w:document>',
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${bodyFont}" w:hAnsi="${bodyFont}"/><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:styleId="BalloonText"><w:name w:val="Balloon Text"/><w:rPr><w:rFonts w:ascii="${balloonFont}" w:hAnsi="${balloonFont}"/><w:sz w:val="18"/></w:rPr></w:style></w:styles>`,
     'word/settings.xml': `<w:settings xmlns:w="${W_NS}"/>`,

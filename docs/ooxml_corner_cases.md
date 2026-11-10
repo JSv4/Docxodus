@@ -4582,8 +4582,9 @@ Then print or save as PDF with All Markup and "Show only comments and formatting
 **Measured from Word-printed All Markup PDFs.**
 
 - **Shrinking.** Word shrinks the page as far as its text column's right edge plus the 266.4pt
-  (3.7in) area, to the paper's width. The shrunken page stands at the paper's foot, 10.8pt above it.
-  The grey area starts 9pt right of the text column.
+  (3.7in) area, to the paper's width, at the nearest 1/600 zoom step. The shrunken page is centred
+  on the paper's height. That position was corrected by issue #1559; the earlier text said it stood
+  at the foot. The grey area starts 9pt right of the text column.
 - **Balloons.**
   - The left edge is 31.6pt past the text column.
   - Borders are 0.5pt in the author's colour, with 3pt corners.
@@ -4631,6 +4632,34 @@ document's own `w:revisionView w:formatting="0"` also turns formatting markup of
 | Bold change only, Show All Revisions Inline | Full size, change bar | Not selectable | `markupMode: "inline"`: full size, change bar |
 
 **Docxodus.** `markupMode` on the paginator and the export (`npm/src/markup-balloons.ts`).
+
+### Where the shrunken page sits, and how far it shrinks (issues #1559, #1577)
+
+**Reproducer.** Issue #1577's `comment-balloon.docx` (one comment on 39 lines) and issue #1559's
+`all-markup.docx` (one bold change), on Letter, A4, Letter landscape and 0.5in margins. Printed from
+Word 2024 with All Markup, through Save as PDF and Print to PDF. A sweep over right margins and
+over Tabloid, A5 and A4 landscape paper confirmed the rule (`all_markup_layout.md`, "Measured
+sheets").
+
+| Letter, 1in margins | Word | Docxodus before | Docxodus now |
+|---|---|---|---|
+| Zoom | 455/600 (0.7583) | 0.7589 (`612 / 806.4`) | 455/600 |
+| Band above the shrunken page | 95.43pt | 180.2pt | 95.2pt |
+| Band below it | 95.90pt | 10.8pt | 96.2pt |
+| Markup area, left to right | 416.40 to 611.64 | 416.65 to 611.89 | 416.32 to 611.41 |
+| Balloon text left edge | 436.87 | 437.40 | 436.87 |
+| Balloon outline | 0.36pt (0.47pt before shrinking), radius 3pt | 0.57pt | 0.38pt |
+| One-line Segoe UI balloon, before shrinking | 16.7pt | 15.0pt | 16.5pt |
+| Body and balloon text | 9.10pt and 6.82pt | 9.11pt and 6.83pt | 9.10pt and 6.83pt |
+
+**Analysis.** The zoom is the 1/600 step nearest the paper's width over the sheet's, as `round` and
+not `floor`: a 1.5in right margin gives 476.64, printed as 477. The page is centred, not stood at the
+foot, and the left margin plays no part. Print to PDF uses a slightly smaller step (449 on Letter)
+with the page about 1pt in from the left. Word sets each balloon line at its fonts' own height. A CSS
+border under one CSS pixel is drawn a whole pixel wide, which is why the old 0.5pt border printed
+0.75pt.
+
+**Docxodus.** `MarkupSheet` and `balloon()` in `npm/src/markup-balloons.ts`.
 
 ### When a page's balloons cannot all fit beside it
 
