@@ -1326,33 +1326,51 @@ internal static class RevisionOps
     }
 
     /// <summary>
-    /// The row revision of the table that <paramref name="mark"/>'s empty paragraph closes, when
-    /// that one revision inserts (or deletes) every row of the table and the mark is revised the
-    /// same way by the same edit. A table needs a paragraph after it to end a cell or the body, or
-    /// to stay apart from the next table, so Word and a tracked InsertTable insert that paragraph
-    /// with the table (issue #1626). It exists only for the table, so it is part of the table's
-    /// revision: resolving the rows on their own could leave a table ending a cell, or two tables
-    /// fused into one.
+    /// The row revision of the table that <paramref name="mark"/>'s empty paragraph closes (see
+    /// <see cref="ClosesTable"/>), when that one revision inserts (or deletes) every row of the
+    /// table and the mark is revised the same way by the same edit. Word and a tracked
+    /// InsertTable insert that paragraph with the table (issue #1626); it exists only for the
+    /// table, so it is part of the table's revision. A paragraph that ends a section is never
+    /// absorbed: its section break is a change of its own.
     /// </summary>
     private static RevisionGroup? ClosingTableGroup(
         RevisionUnit mark, Dictionary<XElement, RevisionGroup> rowGroupByTr)
     {
         var paragraph = mark.Paragraph;
-        if (paragraph is null || paragraph.Elements().Any(e => !IsIgnorableBetween(e)))
+        if (paragraph is null || paragraph.Elements().Any(e => !IsIgnorableBetween(e))
+            || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null || !ClosesTable(paragraph))
             return null;
-        // Walk back over range markers only, so a body of empty revised paragraphs stays linear.
-        var previous = paragraph.PreviousNode;
-        while (previous is not null && (previous is not XElement element || IsIgnorableBetween(element)))
-            previous = previous.PreviousNode;
-        if (previous is not XElement table || table.Name != W.tbl)
-            return null;
-        var rows = WordprocessingMLUtil.TableRows(table).ToList();
+        var rows = WordprocessingMLUtil.TableRows(SiblingBlock(paragraph, forward: false)!).ToList();
         return rows.Count > 0 && rowGroupByTr.TryGetValue(rows[0], out var group)
             && rows.All(row => rowGroupByTr.TryGetValue(row, out var rowGroup) && ReferenceEquals(rowGroup, group))
             && group.Type == mark.Type && group.Author == mark.Author && group.Date == mark.Date
             && group.DateUtc == DateUtcOf(mark.Element)
                 ? group
                 : null;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="paragraph"/> is the paragraph a table needs after it: it directly
+    /// follows a table, and only the end of its container, the section properties or another
+    /// table follows it. Without it the table would end a cell or the body, or touch the next
+    /// table and be read as one table with it, so resolving a revision never removes it while
+    /// the table stands.
+    /// </summary>
+    internal static bool ClosesTable(XElement paragraph)
+    {
+        if (SiblingBlock(paragraph, forward: false)?.Name != W.tbl) return false;
+        var next = SiblingBlock(paragraph, forward: true);
+        return next is null || next.Name == W.sectPr || next.Name == W.tbl;
+    }
+
+    /// <summary>The nearest sibling element before or after <paramref name="element"/> that is not
+    /// a range marker (<see cref="IsIgnorableBetween"/>), walking only as far as it has to.</summary>
+    internal static XElement? SiblingBlock(XElement element, bool forward)
+    {
+        var node = forward ? element.NextNode : element.PreviousNode;
+        while (node is not null && (node is not XElement sibling || IsIgnorableBetween(sibling)))
+            node = forward ? node.NextNode : node.PreviousNode;
+        return node as XElement;
     }
 
     private static bool CellsStructurallyAdjacent(RevisionUnit left, RevisionUnit right)
@@ -2494,10 +2512,11 @@ internal static class RevisionOps
                     // a paragraph with unrelated surviving content keeps its unavoidable mark.
                     // Never the LAST block-level child of its container, though: a w:tc, note,
                     // comment, header/footer or body left with no w:p/w:tbl violates the content
-                    // model and sends Word into repair. There the mark is stripped instead.
+                    // model and sends Word into repair. Nor the paragraph a surviving table needs
+                    // after it (ClosesTable). There the mark is stripped instead.
                     if (!u.Paragraph.Elements().Any(element => element.Name != W.pPr
                         && !IsIgnorableBetween(element))
-                        && HasSurvivingBlockSibling(u.Paragraph))
+                        && HasSurvivingBlockSibling(u.Paragraph) && !ClosesTable(u.Paragraph))
                     {
                         var paragraph = u.Paragraph;
                         paragraph.Remove();

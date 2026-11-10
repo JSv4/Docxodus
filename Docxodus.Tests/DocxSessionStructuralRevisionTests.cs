@@ -692,6 +692,8 @@ public class DocxSessionStructuralRevisionTests
     [Theory]
     [InlineData("between_paragraphs", true)]
     [InlineData("between_paragraphs", false)]
+    [InlineData("before_paragraph", true)]
+    [InlineData("before_paragraph", false)]
     [InlineData("before_table", true)]
     [InlineData("before_table", false)]
     [InlineData("end_of_body", true)]
@@ -722,6 +724,11 @@ public class DocxSessionStructuralRevisionTests
         Assert.Equal("Table Reviewer", revision.Author);
         Assert.Equal(RevisionResolutionStatus.Supported, revision.ResolutionStatus);
         Assert.Empty(Office2019Errors(tracked.Save()));
+        // Word's encoding: every run of the new table inside w:ins and every mark inserted.
+        var table = Assert.Single(MainRoot(tracked.Save()).Descendants(W.tbl),
+            t => t.Elements(W.tr).All(r => r.Element(W.trPr)?.Element(W.ins) is not null));
+        Assert.All(table.Descendants(W.r), r => Assert.Contains(r.Ancestors(), a => a.Name == W.ins));
+        Assert.All(table.Descendants(W.p), p => Assert.NotNull(p.Element(W.pPr)?.Element(W.rPr)?.Element(W.ins)));
 
         var resolved = accept ? tracked.AcceptRevision(revision.Id) : tracked.RejectRevision(revision.Id);
         Assert.True(resolved.Success, resolved.Error?.Message);
@@ -769,6 +776,105 @@ public class DocxSessionStructuralRevisionTests
         Assert.True(session.RejectRevision(bob.Id).Success);
         Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())),
             FirstDifference(MainRoot(baseline), MainRoot(session.Save())));
+    }
+
+    private const string AliceStamp = "w:author=\"Alice\" w:date=\"2025-01-01T00:00:00Z\"";
+
+    private static string AliceTable(int firstId) =>
+        "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid>"
+        + $"<w:tr><w:trPr><w:ins w:id=\"{firstId}\" {AliceStamp}/></w:trPr><w:tc><w:p>"
+        + $"<w:pPr><w:rPr><w:ins w:id=\"{firstId + 1}\" {AliceStamp}/></w:rPr></w:pPr>"
+        + $"<w:ins w:id=\"{firstId + 2}\" {AliceStamp}><w:r><w:t>cell</w:t></w:r></w:ins></w:p></w:tc></w:tr></w:tbl>";
+
+    /// <summary>The registry folds an empty paragraph into an inserted table's revision only when
+    /// it is the paragraph the table needs after it, revised by the same edit, and not a section
+    /// break: a blank line before more text, another author's paragraph, or an inserted section
+    /// break stays its own revision.</summary>
+    [Theory]
+    [InlineData("closes_the_body", 1)]
+    [InlineData("before_a_paragraph", 2)]
+    [InlineData("another_author", 2)]
+    [InlineData("section_break", 2)]
+    public void DS1626_ClosingParagraph_JoinsOnlyTheTableItCloses(string shape, int revisions)
+    {
+        string Mark(string stamp) => $"<w:pPr><w:rPr><w:ins w:id=\"50\" {stamp}/></w:rPr></w:pPr>";
+        var after = shape switch
+        {
+            "closes_the_body" => $"<w:p>{Mark(AliceStamp)}</w:p>",
+            "before_a_paragraph" => $"<w:p>{Mark(AliceStamp)}</w:p><w:p><w:r><w:t>Charlie</w:t></w:r></w:p>",
+            "another_author" => $"<w:p>{Mark("w:author=\"Bob\" w:date=\"2025-01-01T00:00:00Z\"")}</w:p>",
+            _ => $"<w:p><w:pPr><w:rPr><w:ins w:id=\"50\" {AliceStamp}/></w:rPr><w:sectPr/></w:pPr></w:p>"
+                + "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p/>",
+        };
+        var input = IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Alpha</w:t></w:r></w:p>" + AliceTable(1) + after
+            + "<w:sectPr/>").DocumentByteArray;
+        using var session = new DocxSession(input);
+
+        Assert.Equal(revisions, session.ListRevisions().Count);
+    }
+
+    /// <summary>Resolving a revision never removes the paragraph a surviving table needs after
+    /// it: rejecting an empty inserted paragraph that ends the body or a cell right after a table
+    /// strips its mark and keeps it, so the body and the cell still end in a paragraph.</summary>
+    [Theory]
+    [InlineData("body")]
+    [InlineData("cell")]
+    public void DS1626_Resolution_KeepsTheParagraphATableNeeds(string container)
+    {
+        var table = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc></w:tr></w:tbl>";
+        var closing = $"<w:p><w:pPr><w:rPr><w:ins w:id=\"50\" {AliceStamp}/></w:rPr></w:pPr></w:p>";
+        var body = container == "body"
+            ? "<w:p><w:r><w:t>Alpha</w:t></w:r></w:p>" + table + closing
+            : "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid><w:tr><w:tc>"
+                + "<w:p><w:r><w:t>Outer</w:t></w:r></w:p>" + table + closing + "</w:tc></w:tr></w:tbl><w:p/>";
+        using var session = new DocxSession(IrTestDocuments.FromBodyXml(body + "<w:sectPr/>").DocumentByteArray);
+
+        Assert.True(session.RejectAllRevisions().Success);
+
+        var root = MainRoot(session.Save());
+        var holder = container == "body" ? root.Descendants(W.body).Single() : root.Descendants(W.tc).First();
+        Assert.Equal(W.p, holder.Elements().Last(e => e.Name != W.sectPr).Name);
+        Assert.Empty(session.ListRevisions());
+    }
+
+    /// <summary>After another author's wholly inserted paragraph a tracked table is fine — unless
+    /// that paragraph holds a bookmark: rejecting the paragraph has to carry the bookmark into the
+    /// next paragraph, which a table between them blocks, so the insert refuses.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DS1626_TrackedInsertTable_AfterAnotherAuthorsInsertedParagraph(bool bookmarked)
+    {
+        var inserted = $"<w:p><w:pPr><w:rPr><w:ins w:id=\"1\" {AliceStamp}/></w:rPr></w:pPr>"
+            + (bookmarked ? "<w:bookmarkStart w:id=\"7\" w:name=\"Note\"/>" : "")
+            + $"<w:ins w:id=\"2\" {AliceStamp}><w:r><w:t>New</w:t></w:r></w:ins>"
+            + (bookmarked ? "<w:bookmarkEnd w:id=\"7\"/>" : "") + "</w:p>";
+        var input = IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Alpha</w:t></w:r></w:p>" + inserted
+            + "<w:p><w:r><w:t>Charlie</w:t></w:r></w:p><w:sectPr/>").DocumentByteArray;
+        byte[] rejected;
+        using (var original = new DocxSession(input))
+        {
+            Assert.True(original.RejectAllRevisions().Success);
+            rejected = original.Save();
+        }
+        using var session = new DocxSession(input, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Bob",
+        });
+
+        var result = session.InsertTable(BodyParagraph(session, "New"), Position.After, 1, 1);
+
+        Assert.Equal(!bookmarked, result.Success);
+        if (bookmarked)
+        {
+            Assert.Equal(EditErrorCode.TrackedOperationUnsupported, result.Error!.Code);
+            Assert.False(session.Undo());
+            return;
+        }
+        Assert.True(session.RejectAllRevisions().Success);
+        Assert.True(XNode.DeepEquals(MainRoot(rejected), MainRoot(session.Save())),
+            FirstDifference(MainRoot(rejected), MainRoot(session.Save())));
     }
 
     /// <summary>
@@ -849,6 +955,7 @@ public class DocxSessionStructuralRevisionTests
         var (anchor, pos) = placement switch
         {
             "between_paragraphs" => ("Alpha", Position.After),
+            "before_paragraph" => ("Bravo", Position.Before),
             "before_table" => ("Bravo", Position.After),
             "end_of_body" => ("Charlie", Position.After),
             "end_of_cell" => ("B2", Position.After),

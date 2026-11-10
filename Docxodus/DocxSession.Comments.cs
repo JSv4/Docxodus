@@ -689,8 +689,9 @@ public sealed partial class DocxSession
                 $"ColumnWidths must have one positive width per column ({cols}); got {colWidths.Count}", anchorId);
         if (_trackedChanges == TrackedChangeMode.RenderInline && SplitsPendingParagraphJoin(element, pos))
             return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
-                "InsertTable would sit between the halves of a pending tracked paragraph split, which rejecting "
-                + "the split could not rejoin; resolve the split first. No changes were made", anchorId);
+                "InsertTable would separate a paragraph from the one a pending inserted paragraph mark joins it to "
+                + "on rejection (as after a tracked split), and no rejection can rejoin them across a table; "
+                + "resolve that revision first. No changes were made", anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -791,20 +792,20 @@ public sealed partial class DocxSession
     /// <summary>
     /// Whether a block placed <paramref name="pos"/> <paramref name="anchor"/> would stand inside a
     /// pending paragraph join: the paragraph just before it ends in an inserted mark (a tracked
-    /// split, or Enter pressed with Track Changes on) and keeps content once that insertion is
-    /// rejected, so the rejection must merge it into the paragraph just after — a merge a table
-    /// between them blocks, leaving the halves split. No tracked encoding of a table there
-    /// rejects back to the original. A wholly inserted paragraph is emptied and removed instead,
-    /// so a table after one is safe.
+    /// split, or Enter pressed with Track Changes on) and keeps something once that insertion is
+    /// rejected — text, or a bookmark or comment marker the merge would carry along — so the
+    /// rejection must merge it into the paragraph just after, a merge a table between them
+    /// blocks. No tracked encoding of a table there rejects back to the original. A paragraph
+    /// holding only inserted content is emptied and removed instead, so a table after one is safe.
     /// </summary>
     private static bool SplitsPendingParagraphJoin(XElement anchor, Position pos)
     {
-        static bool Ignorable(XElement e) => Internal.RevisionOps.IsIgnorableBetween(e);
-        var before = pos == Position.After ? anchor : anchor.ElementsBeforeSelf().LastOrDefault(e => !Ignorable(e));
-        var after = pos == Position.Before ? anchor : anchor.ElementsAfterSelf().FirstOrDefault(e => !Ignorable(e));
+        var before = pos == Position.After ? anchor : Internal.RevisionOps.SiblingBlock(anchor, forward: false);
+        var after = pos == Position.Before ? anchor : Internal.RevisionOps.SiblingBlock(anchor, forward: true);
         return before?.Name == W.p && after?.Name == W.p
             && before.Element(W.pPr)?.Element(W.rPr)?.Elements().Any(m => m.Name == W.ins || m.Name == W.moveTo) == true
-            && before.Elements().Any(child => !Ignorable(child) && child.Name != W.ins && child.Name != W.moveTo);
+            && before.Elements().Any(child => child.Name != W.pPr && child.Name != W.proofErr
+                && child.Name != W.ins && child.Name != W.moveTo);
     }
 
     /// <summary>Build the cell's paragraph(s) from optional markdown + alignment. Always >= 1 paragraph.</summary>
