@@ -1708,24 +1708,37 @@ a tracked table move marks its destination (`MarkTableRowsAsTrackedRevision`, sh
 `MoveBlock`): every row gets `w:trPr/w:ins`, every run in its cells is wrapped in `w:ins`, and
 every cell paragraph mark gets `w:pPr/w:rPr/w:ins`. When the untracked call would add an empty
 paragraph after the table — the table would otherwise end the body or a cell, or sit directly
-against another table, which Word fuses into one — that paragraph's mark is inserted too, so a
-reject leaves nothing behind.
+against another table — that paragraph's mark is inserted too, so a reject leaves nothing
+behind.
 
-The revision registry already groups consecutive inserted rows with one stamp into a single
-`RowInsert` revision, with their cell content attached. It now also attaches the closing
-paragraph: an empty paragraph whose mark is revised by the same edit, directly after a table
-whose every row that one revision inserts (or deletes). Without that, the closing paragraph was
-a second revision, and resolving it on its own could leave a cell ending in a table or two
-tables fused together. So a tracked table insert lists as one revision wherever it lands, and so
-does a Word-authored table of the same shape. Accepting it yields exactly the untracked insert;
-rejecting it removes the rows (and with the last row the table), then the closing paragraph.
+That closing paragraph is what `RevisionOps.ClosesTable` recognises: a paragraph directly after
+a table with only the end of its container, the section properties or another table after it.
+Two rules hang off it:
 
-One shape still refuses with `TrackedOperationUnsupported`: a table between the halves of a
-pending tracked split, i.e. right after a paragraph whose mark is a pending insertion and which
-keeps content once that insertion is rejected, with a paragraph right after the insertion point.
-Rejecting the split must merge the two halves, and a table between them blocks the merge, so
-reject-all would leave the paragraph split. After a wholly inserted paragraph (a tracked
-`InsertParagraph`) the table is fine: rejecting empties that paragraph and removes it outright.
+- **Grouping.** The registry already groups consecutive inserted rows with one stamp into a
+  single `RowInsert` revision, with their cell content attached. It also attaches an empty
+  closing paragraph whose mark the same edit revised (`ClosingTableGroup`), when that revision
+  covers every row of the table and the paragraph does not end a section. So a tracked table
+  insert lists as one revision wherever it lands. A blank paragraph the table does not need (one
+  followed by more text), another author's, or an inserted section break stays its own revision.
+- **Resolution.** Rejecting (or accepting the deletion of) an empty paragraph's mark removes the
+  paragraph, except one that closes a surviving table: there only the mark goes. Rejecting the
+  table's own revision removes the rows first, so its closing paragraph no longer closes a table
+  and goes with it. Without this rule, accepting the table and later rejecting a paragraph that
+  had been edited into its closing paragraph left a cell or the body ending in a table.
+
+Accepting the insert yields exactly the untracked insert; rejecting it gives back the original.
+
+One shape still refuses with `TrackedOperationUnsupported`: right after a paragraph whose mark is
+a pending insertion (a tracked split, or Enter typed with tracking on) and which keeps something
+once that insertion is rejected — text, or a bookmark or comment marker — with a paragraph
+right after the insertion point. Rejecting that mark has to merge the paragraph into the next
+one, carrying what it keeps, and a table between them blocks the merge, so reject-all would
+leave the paragraph split (or drop its markers). After a paragraph holding only inserted runs,
+directly or inside a hyperlink, simple field or smart tag (a tracked `InsertParagraph`), the
+table is fine: rejecting empties that paragraph and removes it. The ribbon's Enter-then-table
+flow under tracking meets this refusal, since Enter is a tracked split; inserting the table after
+an existing paragraph, or resolving the split first, avoids it.
 
 Markdown inserts still refuse GFM tables (`TableInsertNotSupported`); that limit is in the
 payload parser, not the tracking path.

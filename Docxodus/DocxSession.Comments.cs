@@ -796,16 +796,20 @@ public sealed partial class DocxSession
     /// rejected — text, or a bookmark or comment marker the merge would carry along — so the
     /// rejection must merge it into the paragraph just after, a merge a table between them
     /// blocks. No tracked encoding of a table there rejects back to the original. A paragraph
-    /// holding only inserted content is emptied and removed instead, so a table after one is safe.
+    /// holding only inserted content (directly, or inside a hyperlink, simple field or smart tag)
+    /// is emptied and removed instead, so a table after one is safe.
     /// </summary>
     private static bool SplitsPendingParagraphJoin(XElement anchor, Position pos)
     {
+        static bool Survives(XElement child) => child.Name != W.pPr && child.Name != W.proofErr
+            && child.Name != W.ins && child.Name != W.moveTo
+            && !((child.Name == W.hyperlink || child.Name == W.fldSimple || child.Name == W.smartTag)
+                && child.HasElements && !child.Elements().Any(Survives));
         var before = pos == Position.After ? anchor : Internal.RevisionOps.SiblingBlock(anchor, forward: false);
         var after = pos == Position.Before ? anchor : Internal.RevisionOps.SiblingBlock(anchor, forward: true);
         return before?.Name == W.p && after?.Name == W.p
             && before.Element(W.pPr)?.Element(W.rPr)?.Elements().Any(m => m.Name == W.ins || m.Name == W.moveTo) == true
-            && before.Elements().Any(child => child.Name != W.pPr && child.Name != W.proofErr
-                && child.Name != W.ins && child.Name != W.moveTo);
+            && before.Elements().Any(Survives);
     }
 
     /// <summary>Build the cell's paragraph(s) from optional markdown + alignment. Always >= 1 paragraph.</summary>

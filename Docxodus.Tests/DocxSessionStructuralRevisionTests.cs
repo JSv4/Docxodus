@@ -882,29 +882,34 @@ public class DocxSessionStructuralRevisionTests
     /// Rejecting the split's inserted paragraph mark has to merge the halves back together, and a
     /// table between them blocks that merge, so no encoding of the table rejects back to the
     /// original; the refusal writes nothing and leaves the split as the last undo step. A table
-    /// after a wholly inserted paragraph is fine — rejecting removes that paragraph outright.
+    /// after a wholly inserted paragraph is fine, its runs in a hyperlink or not — rejecting
+    /// removes that paragraph outright.
     /// </summary>
     [Theory]
     [InlineData("after_first_half", Position.After, false)]
     [InlineData("before_second_half", Position.Before, false)]
     [InlineData("after_inserted_paragraph", Position.After, true)]
+    [InlineData("after_inserted_link", Position.After, true)]
     public void DS1626_TrackedInsertTable_RefusesInsideAPendingSplit(string shape, Position pos, bool succeeds)
     {
         var baseline = BuildTableInsertDocument();
         using var session = new DocxSession(baseline,
             new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
         var bravo = BodyParagraph(session, "Bravo");
-        var prior = shape == "after_inserted_paragraph"
-            ? session.InsertParagraph(bravo, Position.After, "Bravo note")
-            : session.SplitParagraph(bravo, 2);
+        var prior = shape switch
+        {
+            "after_inserted_paragraph" => session.InsertParagraph(bravo, Position.After, "Bravo note"),
+            "after_inserted_link" => session.InsertParagraph(bravo, Position.After, "see [site](https://example.com)"),
+            _ => session.SplitParagraph(bravo, 2),
+        };
         Assert.True(prior.Success, prior.Error?.Message);
         var before = session.Save();
-        var anchor = BodyParagraph(session, shape switch
+        var anchor = shape switch
         {
-            "after_first_half" => "Br",
-            "before_second_half" => "avo",
-            _ => "Bravo note",
-        });
+            "after_first_half" => BodyParagraph(session, "Br"),
+            "before_second_half" => BodyParagraph(session, "avo"),
+            _ => prior.Created[0].Id,
+        };
 
         var result = session.InsertTable(anchor, pos, 2, 2);
 
