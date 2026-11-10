@@ -81,6 +81,8 @@ public sealed class FileHistoryBlobStore : IHistoryBlobStore
 
     private string BlobPath(HistoryBlobReference reference) => Path.Combine(_directory, reference.Digest.Value + ".blob");
 
+    // Blobs are immutable. Sharing delete as FileHistoryHeadStore does lets Windows open one while a
+    // concurrent writer's File.Move still holds it with delete access (issue #1659); POSIX ignores it.
     private static FileStream OpenFile(string path) => new(path, FileMode.Open, FileAccess.Read,
-        FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        FileShare.Read | FileShare.Delete, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
 }
