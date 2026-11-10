@@ -103,6 +103,9 @@ const cases: Array<{ name: string; source: Uint8Array; steps: number[] }> = [
   { name: 'an 18pt list number at 1.15', source: docx(list(multiple), numbering(size(18))),
     steps: [...item4(19.44, 15.84, 15.84), ...item4(21.48, 15.84, 15.96), ...item4(21.48, 15.84, 15.84),
       ...item4(21.51, 15.84, 15.84), 15.96] },
+  { name: 'a line break inside items under an 18pt number', source: docx(['01', '02', '03', '04']
+    .map(item => paragraph(run(`Aster${item}a`) + lineBreak() + run(`Aster${item}b`), numbered + single)).join(''),
+  numbering(size(18))), steps: [13.80, 19.32, 13.80, 19.44, 13.80, 19.44, 13.80] },
   { name: 'a 16pt bullet in the text face', source: bullets('Liberation Sans', '\u2022', size(16)),
     steps: [17.52, 17.52, 17.64, 17.52, 17.52, 17.52, 17.64, 17.52, 17.52, 13.83, 13.80, 13.80] },
   // Alignment does not change how tall a line is.
