@@ -10,6 +10,7 @@
  * PageMap fragments land where the shrunken text prints.
  */
 import type { PageDimensions } from "./page-geometry.js";
+import { applyUnroundedNormalLineHeights } from "./line-metrics.js";
 
 /**
  * Word's balloon geometry and colours, measured from Word-printed All Markup PDFs. Lengths are page
@@ -28,12 +29,21 @@ const WORD = {
   elbow: 4.6,
   /** A leader reaches its balloon this far below the balloon's top. */
   leaderDrop: 6,
-  /** The shrunken page's foot stands this far above the paper's, in paper points. */
-  paperFootGap: 10.8,
+  /**
+   * Word's print zoom moves in steps of 1/600: it is the step nearest to the paper's width over the
+   * sheet's, so the sheet may overrun the paper's right edge by a fraction of a point, which the paper
+   * cuts off. Measured from Save as PDF on ten paper sizes and margins (issues #1559, #1577).
+   */
+  zoomSteps: 600,
   border: 0.5,
   corner: 3,
   padBlock: 1.8,
   padInline: 4,
+  /**
+   * A balloon line's height in the balloon font, roughly, which tells a one-line balloon from a longer
+   * one. Each line itself takes its own fonts' unrounded height, as Word's do: measured from Word's
+   * prints, a Segoe UI 9pt line is 12.1pt and a Times New Roman 9pt line 10.3pt (issue #1577).
+   */
   leading: 1.15,
   /** Vertical space between neighbouring balloons. */
   between: 1,
@@ -156,8 +166,8 @@ export function scopeMarkupBalloons(
   rules.textContent = [
     `[${SCOPE}="comments"] a.${commentPrefix}marker { font-size: 0 !important; margin: 0 !important; padding: 0 !important; visibility: hidden !important; }`,
     `[${SCOPE}="comments"] span.${commentPrefix}highlight { background: none !important; border: 0 !important; }`,
-    `[${SCOPE}] .${cssPrefix}balloon { position: absolute; box-sizing: border-box; border: ${WORD.border}pt solid;` +
-      ` border-radius: ${WORD.corner}pt; padding: ${WORD.padBlock}pt ${WORD.padInline}pt; line-height: ${WORD.leading};` +
+    `[${SCOPE}] .${cssPrefix}balloon { position: absolute; box-sizing: border-box; border-radius: ${WORD.corner}pt;` +
+      ` padding: ${WORD.padBlock + WORD.border}pt ${WORD.padInline + WORD.border}pt; line-height: normal;` +
       " color: #000; text-align: left; overflow: hidden; overflow-wrap: anywhere; }",
     `[${SCOPE}] .${cssPrefix}balloon b { font-weight: bold; }`,
   ].join("\n");
@@ -362,6 +372,8 @@ export function layoutMarkupBalloons(options: {
       for (const entry of entries) {
         entry.element = balloon(document, entry, font, cssPrefix, left, sheet.width - WORD.balloonEnd - left);
         sheet.layer.append(entry.element);
+        // Word sets each balloon line at its fonts' own height; Chromium would round that to a pixel.
+        applyUnroundedNormalLineHeights(entry.element);
         entry.height = sheet.height(entry.element);
       }
       const top = sheet.pageTop + WORD.pageInset;
@@ -402,8 +414,9 @@ export function layoutMarkupBalloons(options: {
 /**
  * The page box's content, moved into one layer that also holds the markup area. The layer spans the
  * page up to its text column's right edge plus the markup area, and is shrunk to the paper's width
- * with the page standing at the paper's foot. Unscaled, it reaches up from the page box's foot rather
- * than down past it: print fragmentation would push anything laid out below the foot onto a new page.
+ * at Word's zoom step, with the page centred on the paper's height. Unscaled, it reaches up from the
+ * page box's foot rather than down past it: print fragmentation would push anything laid out below
+ * the foot onto a new page.
  */
 class MarkupSheet {
   readonly layer: HTMLElement;
@@ -417,9 +430,10 @@ class MarkupSheet {
     const { pageWidth: paperWidth, pageHeight: paperHeight, marginRight } = page.dimensions;
     this.columnRight = paperWidth - marginRight;
     this.width = Math.max(paperWidth, this.columnRight + WORD.areaWidth);
-    this.factor = paperWidth / this.width;
+    this.factor = Math.round(WORD.zoomSteps * paperWidth / this.width) / WORD.zoomSteps;
     this.layerHeight = paperHeight / this.factor;
-    this.pageTop = this.layerHeight - paperHeight - WORD.paperFootGap / this.factor;
+    // Shrunk, the layer spans the paper's height, so this centres the page on the paper, as Word does.
+    this.pageTop = (this.layerHeight - paperHeight) / 2;
 
     const placed = (className: string, left: number, top: number, width: number, height: number) => {
       const element = document.createElement("div");
@@ -474,8 +488,9 @@ function balloon(document: Document, entry: Entry, font: MarkupBalloonFont, cssP
   element.className = `${cssPrefix}balloon`;
   element.dataset.pageMapExclude = "true";
   // The label and any formatting wording are set in the balloon font; a comment keeps its own.
-  element.style.cssText = `left:${left}pt;width:${width}pt;font-size:${font.sizePt}pt;border-color:${entry.color};` +
-    `background-color:${entry.fill}`;
+  // The outline is an inset shadow: a CSS border this thin is drawn a whole CSS pixel (0.75pt) wide.
+  element.style.cssText = `left:${left}pt;width:${width}pt;font-size:${font.sizePt}pt;` +
+    `box-shadow:inset 0 0 0 ${WORD.border}pt ${entry.color};background-color:${entry.fill}`;
   element.style.fontFamily = fontStack(entry.textFont ?? font.family, entry.textFont ? entry.textFontStack : font.stack);
   const content = document.createElement("div");
   const label = document.createElement("b");
@@ -516,7 +531,7 @@ function fit(entries: Entry[], top: number, bottom: number, lineHeight: number,
  * Cuts a balloon to its first line, as Word does: the line's text stops short of a small white box
  * at the balloon's lower right corner that holds an ellipsis, and the balloon takes Word's height for
  * a cut balloon. The balloon becomes a two-column grid, the line and the box, and the box's negative
- * margins carry its edges onto the balloon's padding edge. It stays in the flow: positioned
+ * margins carry its edges onto the outline's inner edge. It stays in the flow: positioned
  * absolutely, it made Chromium shrink every printed page.
  */
 function cutShort(document: Document, entry: Entry, font: MarkupBalloonFont, cssPrefix: string,

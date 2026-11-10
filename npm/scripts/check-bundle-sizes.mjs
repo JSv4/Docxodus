@@ -96,12 +96,14 @@ const budgetsKiB = {
   // Embed and editor are over; round only these two to the next 0.1 KiB.
   // The balloon setting (markupMode, #1552) measures 162800/162878/141508/56878 on top of that,
   // within 16 and 9 bytes of the embed and editor gates. Raise those two by 0.1 KiB.
+  // Word's markup-sheet zoom steps and unrounded balloon lines (#1559, #1577) then measure
+  // 162815/162905/141525/56895, 13 bytes inside the IIFE gate. Raise only that gate by 0.1 KiB.
   'embed.bundle.js': 159.1,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
   // The appended bullet-normalization option adds 29 gzip bytes (161996 -> 162025).
   // Only IIFE exhausts its gate; increase it by 0.1 KiB.
-  'embed.iife.js': 159.1,
+  'embed.iife.js': 159.2,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
   'editor.bundle.js': 138.3,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.

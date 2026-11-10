@@ -27,6 +27,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- All Markup balloon prints (`commentColumnPlacement: "balloons"`) now place and size the shrunken page as Word 2024's Save as PDF does (#1559, #1577). The page is centred on the paper's height instead of standing 10.8pt above its foot, which moves every line, balloon and leader up by about 85pt on Letter. The zoom is Word's nearest 1/600 step rather than the exact fit. Balloons draw a true 0.5pt outline, where the old CSS border was drawn 0.75pt wide, and set each line at its fonts' own height instead of a fixed 1.15. That makes a Segoe UI balloon 1.5pt taller, as in Word. The rules and the measurements on ten paper sizes are in `all_markup_layout.md`.
 - A line break inside a hanging-indent list item no longer keeps the item's lines at the paragraph's largest size; each line takes its own text's height there too (#1565).
 
 - A list item whose bullet is mapped from Symbol or Wingdings to a Unicode glyph keeps the replaced font's height on its first line, as Word does: a zero-width box as tall as that font's ascent sits beside the glyph, which renders as before. A 12pt Symbol bullet over 12pt Arial now steps 14.61pt per item instead of 13.80pt; wrapped lines and exact spacing are unchanged (#1567).

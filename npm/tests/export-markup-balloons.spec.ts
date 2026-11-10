@@ -260,7 +260,8 @@ test('the appendix overflow prints each cut comment in full after the last page,
 
 test('a long cut comment runs on across the appended pages with every word printed once, in order', async ({ browser }) => {
   test.setTimeout(120_000);
-  const words = Array.from({ length: 900 }, (_, i) => `w${i + 1}`);
+  // Long enough to cross a page break however many shorter cut comments are listed before it.
+  const words = Array.from({ length: 1500 }, (_, i) => `w${i + 1}`);
   const ids = Array.from({ length: 25 }, (_, id) => id);
   const body = ids.map(id => `<w:p>${commented(id, `Line ${id} `)}</w:p>`).join('');
   const filler = 'The schedule of deliverables needs a second look before the closing date. '.repeat(6);
