@@ -25,6 +25,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `FileHistoryBlobStore` on Windows no longer fails a concurrent write of a blob that already exists with "being used by another process". The write verifies the existing blob, but it opened that file without sharing delete access, which Windows refuses while another writer's `File.Move` still holds the file. Blobs are now opened sharing delete, as `FileHistoryHeadStore` already does (#1659).
 - A line break inside a hanging-indent list item no longer keeps the item's lines at the paragraph's largest size; each line takes its own text's height there too (#1565).
 
 - A list item whose bullet is mapped from Symbol or Wingdings to a Unicode glyph keeps the replaced font's height on its first line, as Word does: a zero-width box as tall as that font's ascent sits beside the glyph, which renders as before. A 12pt Symbol bullet over 12pt Arial now steps 14.61pt per item instead of 13.80pt; wrapped lines and exact spacing are unchanged (#1567).
