@@ -687,7 +687,7 @@ public sealed partial class DocxSession
         if (colWidths is not null && (colWidths.Count != cols || colWidths.Any(w => w <= 0)))
             return EditResult.Fail(EditErrorCode.MalformedMarkdown,
                 $"ColumnWidths must have one positive width per column ({cols}); got {colWidths.Count}", anchorId);
-        if (_trackedChanges == TrackedChangeMode.RenderInline)
+        if (_trackedChanges == TrackedChangeMode.RenderInline && SplitsPendingParagraphJoin(element, pos))
             return TrackedStructureUnsupported("InsertTable", anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
@@ -746,11 +746,24 @@ public sealed partial class DocxSession
             // block below it (S-1 smoke-test finding 2). If nothing — or only a sectPr / another
             // table — follows, append an empty trailing paragraph.
             var afterTbl = tbl.ElementsAfterSelf().FirstOrDefault();
+            XElement? trailing = null;
             if (afterTbl is null || afterTbl.Name == W.sectPr || afterTbl.Name == W.tbl)
             {
-                var trailing = new XElement(W.p);
+                trailing = new XElement(W.p);
                 UnidHelper.AssignToSelfAndDescendants(trailing);
                 tbl.AddAfterSelf(trailing);
+            }
+
+            // Tracked, the table is the rows Word writes for a table inserted with Track Changes
+            // on: every row and its content inserted (the row encoding InsertTableRow and a
+            // tracked table move use), so rejecting its rows removes the table. A trailing
+            // paragraph this insert had to add is inserted with it.
+            if (_trackedChanges == TrackedChangeMode.RenderInline)
+            {
+                var author = _revisionAuthor ?? "docxodus";
+                var date = NextTrackedFormatRevisionDate();
+                MarkTableRowsAsTrackedRevision(tbl, inserted: true, author, date);
+                if (trailing is not null) MarkParagraphMark(trailing, W.ins, author, date);
             }
 
             foreach (var p in cellParagraphs) PromoteHyperlinkRelationships(p);
@@ -771,6 +784,25 @@ public sealed partial class DocxSession
         {
             return FailInternal(ex, anchorId);
         }
+    }
+
+    /// <summary>
+    /// Whether a block placed <paramref name="pos"/> <paramref name="anchor"/> would stand inside a
+    /// pending paragraph join: the paragraph just before it ends in an inserted mark (a tracked
+    /// split, or Enter pressed with Track Changes on) and keeps content once that insertion is
+    /// rejected, so the rejection must merge it into the paragraph just after — a merge a table
+    /// between them blocks, leaving the halves split. No tracked encoding of a table there
+    /// rejects back to the original. A wholly inserted paragraph is emptied and removed instead,
+    /// so a table after one is safe.
+    /// </summary>
+    private static bool SplitsPendingParagraphJoin(XElement anchor, Position pos)
+    {
+        static bool Ignorable(XElement e) => Internal.RevisionOps.IsIgnorableBetween(e);
+        var before = pos == Position.After ? anchor : anchor.ElementsBeforeSelf().LastOrDefault(e => !Ignorable(e));
+        var after = pos == Position.Before ? anchor : anchor.ElementsAfterSelf().FirstOrDefault(e => !Ignorable(e));
+        return before?.Name == W.p && after?.Name == W.p
+            && before.Element(W.pPr)?.Element(W.rPr)?.Elements().Any(m => m.Name == W.ins || m.Name == W.moveTo) == true
+            && before.Elements().Any(child => !Ignorable(child) && child.Name != W.ins && child.Name != W.moveTo);
     }
 
     /// <summary>Build the cell's paragraph(s) from optional markdown + alignment. Always >= 1 paragraph.</summary>

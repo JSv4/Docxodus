@@ -682,29 +682,179 @@ public class DocxSessionStructuralRevisionTests
             FirstDifference(MainRoot(expected), MainRoot(actual)));
     }
 
+    /// <summary>
+    /// Issue #1626: a tracked InsertTable writes Word's encoding of a table inserted with Track
+    /// Changes on — every row and its content inserted — and lists as one revision, the paragraph
+    /// the insert had to add after the table included. Accepting it gives exactly the untracked
+    /// insert; rejecting it gives back the original document, wherever the table lands: between
+    /// paragraphs, before another table, at the end of the body, or at the end of a table cell.
+    /// </summary>
     [Theory]
-    [InlineData("insert_table")]
-    public void DS45513_UnsafeTrackedStructuralOperations_FailTypedAndUndoFree(string operation)
+    [InlineData("between_paragraphs", true)]
+    [InlineData("between_paragraphs", false)]
+    [InlineData("before_table", true)]
+    [InlineData("before_table", false)]
+    [InlineData("end_of_body", true)]
+    [InlineData("end_of_body", false)]
+    [InlineData("end_of_cell", true)]
+    [InlineData("end_of_cell", false)]
+    public void DS1626_TrackedInsertTable_ResolvesToDirectOrOriginal(string placement, bool accept)
     {
-        var baseline = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        var baseline = BuildTableInsertDocument();
+        byte[] direct;
+        using (var untracked = new DocxSession(baseline))
+        {
+            Assert.True(InsertTableAt(untracked, placement).Success);
+            Assert.Empty(untracked.ListRevisions());
+            direct = untracked.Save();
+        }
+
+        using var tracked = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Table Reviewer",
+        });
+        var edit = InsertTableAt(tracked, placement);
+        Assert.True(edit.Success, edit.Error?.Message);
+        Assert.Equal(4, edit.Created.Count);
+        var revision = Assert.Single(tracked.ListRevisions());
+        Assert.Equal(RevisionFamily.RowInsert, revision.Family);
+        Assert.Equal("Table Reviewer", revision.Author);
+        Assert.Equal(RevisionResolutionStatus.Supported, revision.ResolutionStatus);
+        Assert.Empty(Office2019Errors(tracked.Save()));
+
+        var resolved = accept ? tracked.AcceptRevision(revision.Id) : tracked.RejectRevision(revision.Id);
+        Assert.True(resolved.Success, resolved.Error?.Message);
+        Assert.Empty(tracked.ListRevisions());
+        var expected = accept ? direct : baseline;
+        Assert.True(XNode.DeepEquals(MainRoot(expected), MainRoot(tracked.Save())),
+            FirstDifference(MainRoot(expected), MainRoot(tracked.Save())));
+    }
+
+    [Fact]
+    public void DS1626_TrackedInsertTable_UndoRestoresTheOriginal()
+    {
+        var baseline = BuildTableInsertDocument();
+        using var session = new DocxSession(baseline,
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+
+        Assert.True(InsertTableAt(session, "before_table").Success);
+        Assert.True(session.Undo());
+
+        Assert.Empty(session.ListRevisions());
+        Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())));
+        Assert.True(session.Redo());
+        Assert.Single(session.ListRevisions());
+    }
+
+    /// <summary>A table nested at the end of a cell in another author's pending inserted row is
+    /// Bob's own revision, its closing paragraph included even though that paragraph sits in
+    /// Alice's row: rejecting it gives back the document with Alice's row still pending.</summary>
+    [Fact]
+    public void DS1626_TrackedInsertTable_InAPendingInsertedRow_IsItsOwnRevision()
+    {
+        var baseline = BuildTableInsertDocument(secondRowInsertedByAlice: true);
         using var session = new DocxSession(baseline, new DocxSessionSettings
         {
             TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Bob",
         });
-        var paragraphs = session.Project().AnchorIndex.Values
-            .Where(anchor => anchor.Anchor.Scope == "body" && anchor.Anchor.Kind == "p")
-            .Select(anchor => anchor.Anchor.Id).Take(2).ToArray();
+        Assert.Equal("Alice", Assert.Single(session.ListRevisions()).Author);
 
-        var result = operation switch
+        Assert.True(InsertTableAt(session, "end_of_cell").Success);
+
+        var bob = Assert.Single(session.ListRevisions(), r => r.Author == "Bob");
+        Assert.Equal(RevisionFamily.RowInsert, bob.Family);
+        Assert.Equal(2, session.ListRevisions().Count);
+        Assert.True(session.RejectRevision(bob.Id).Success);
+        Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())),
+            FirstDifference(MainRoot(baseline), MainRoot(session.Save())));
+    }
+
+    /// <summary>
+    /// The one shape a tracked table still refuses: between the halves of a pending tracked split.
+    /// Rejecting the split's inserted paragraph mark has to merge the halves back together, and a
+    /// table between them blocks that merge, so no encoding of the table rejects back to the
+    /// original; the refusal writes nothing and leaves the split as the last undo step. A table
+    /// after a wholly inserted paragraph is fine — rejecting removes that paragraph outright.
+    /// </summary>
+    [Theory]
+    [InlineData("after_first_half", Position.After, false)]
+    [InlineData("before_second_half", Position.Before, false)]
+    [InlineData("after_inserted_paragraph", Position.After, true)]
+    public void DS1626_TrackedInsertTable_RefusesInsideAPendingSplit(string shape, Position pos, bool succeeds)
+    {
+        var baseline = BuildTableInsertDocument();
+        using var session = new DocxSession(baseline,
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+        var bravo = BodyParagraph(session, "Bravo");
+        var prior = shape == "after_inserted_paragraph"
+            ? session.InsertParagraph(bravo, Position.After, "Bravo note")
+            : session.SplitParagraph(bravo, 2);
+        Assert.True(prior.Success, prior.Error?.Message);
+        var before = session.Save();
+        var anchor = BodyParagraph(session, shape switch
         {
-            "insert_table" => session.InsertTable(paragraphs[0], Position.After, 1, 1),
-            _ => throw new ArgumentOutOfRangeException(nameof(operation)),
-        };
+            "after_first_half" => "Br",
+            "before_second_half" => "avo",
+            _ => "Bravo note",
+        });
 
+        var result = session.InsertTable(anchor, pos, 2, 2);
+
+        if (succeeds)
+        {
+            Assert.True(result.Success, result.Error?.Message);
+            Assert.True(session.RejectAllRevisions().Success);
+            Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())),
+                FirstDifference(MainRoot(baseline), MainRoot(session.Save())));
+            return;
+        }
         Assert.False(result.Success);
         Assert.Equal(EditErrorCode.TrackedOperationUnsupported, result.Error!.Code);
-        Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())));
-        Assert.False(session.Undo());
+        Assert.True(XNode.DeepEquals(MainRoot(before), MainRoot(session.Save())));
+        Assert.True(session.Undo());
+        Assert.Empty(session.ListRevisions());
+    }
+
+    /// <summary>Alpha, Bravo, a 2×2 table, Charlie, then the section: the shape issue #1626
+    /// reported, where a new table can land before a paragraph, before a table, at the end of
+    /// the body or at the end of a cell. Optionally the second row is Alice's pending insertion,
+    /// written the way Word writes an inserted row.</summary>
+    private static byte[] BuildTableInsertDocument(bool secondRowInsertedByAlice = false)
+    {
+        const string Alice = "w:author=\"Alice\" w:date=\"2025-01-01T00:00:00Z\"";
+        int id = 100;
+        string Cell(string text, bool inserted) => inserted
+            ? $"<w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p><w:pPr><w:rPr><w:ins w:id=\"{id++}\" {Alice}/></w:rPr></w:pPr>"
+                + $"<w:ins w:id=\"{id++}\" {Alice}><w:r><w:t>{text}</w:t></w:r></w:ins></w:p></w:tc>"
+            : $"<w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        var secondRowPr = secondRowInsertedByAlice ? $"<w:trPr><w:ins w:id=\"{id++}\" {Alice}/></w:trPr>" : "";
+        return IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Alpha</w:t></w:r></w:p><w:p><w:r><w:t>Bravo</w:t></w:r></w:p>"
+            + "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/></w:tblGrid>"
+            + "<w:tr>" + Cell("A1", false) + Cell("B1", false) + "</w:tr>"
+            + "<w:tr>" + secondRowPr + Cell("A2", secondRowInsertedByAlice) + Cell("B2", secondRowInsertedByAlice) + "</w:tr></w:tbl>"
+            + "<w:p><w:r><w:t>Charlie</w:t></w:r></w:p>"
+            + "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr>").DocumentByteArray;
+    }
+
+    private static string BodyParagraph(DocxSession session, string text) =>
+        session.Project().AnchorIndex.Values
+            .First(a => a.Anchor.Kind == "p" && a.TextPreview == text).Anchor.Id;
+
+    private static EditResult InsertTableAt(DocxSession session, string placement)
+    {
+        var (anchor, pos) = placement switch
+        {
+            "between_paragraphs" => ("Alpha", Position.After),
+            "before_table" => ("Bravo", Position.After),
+            "end_of_body" => ("Charlie", Position.After),
+            "end_of_cell" => ("B2", Position.After),
+            _ => throw new ArgumentOutOfRangeException(nameof(placement)),
+        };
+        return session.InsertTable(BodyParagraph(session, anchor), pos, 2, 2,
+            new TableInsertOptions { CellContents = new[] { "a", "b", "1", "2" } });
     }
 
     [Theory]

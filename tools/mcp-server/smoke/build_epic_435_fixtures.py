@@ -415,16 +415,18 @@ def workflow() -> list[dict]:
             "expect": {"error.code": "tracked_operation_unsupported"},
         },
         {
-            "id": "table_insert_is_refused_while_tracking",
-            "name": "docxodus_create",
+            # A tracked insert_table records native revisions (#1626), so the link half of the
+            # batch below stands in for it: a hyperlink has no tracked encoding.
+            "id": "hyperlink_is_refused_while_tracking",
+            "name": "docxodus_links",
             "arguments": {
                 "sessionId": "$session_id",
-                "action": "insert_table",
-                "anchorId": "$certify_anchor",
-                "position": "after",
-                "rows": 2,
-                "columns": 2,
-                "cellContents": ["Class", "Authorized Shares"],
+                "action": "add_hyperlink",
+                "anchorId": "$list_anchor",
+                "startOffset": 0,
+                "length": 8,
+                "kind": "external",
+                "target": "https://delcode.delaware.gov/title8/c001/",
             },
             "expectFailure": True,
             "expect": {"error.code": "tracked_operation_unsupported"},

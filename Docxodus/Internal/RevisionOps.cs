@@ -1283,6 +1283,13 @@ internal static class RevisionOps
                 continue;
             }
 
+            if (u.Kind == UnitKind.ParaMark && ClosingTableGroup(u, rowGroupByTr) is { } closedTable)
+            {
+                closedTable.Units.Add(u);
+                cur = null;
+                continue;
+            }
+
             if (u.Kind == UnitKind.PropsChange)
             {
                 if (cur is not null && cur.Type == TypeFormat && cur.Author == u.Author
@@ -1316,6 +1323,36 @@ internal static class RevisionOps
                 groups.Add(cur);
             }
         }
+    }
+
+    /// <summary>
+    /// The row revision of the table that <paramref name="mark"/>'s empty paragraph closes, when
+    /// that one revision inserts (or deletes) every row of the table and the mark is revised the
+    /// same way by the same edit. A table needs a paragraph after it to end a cell or the body, or
+    /// to stay apart from the next table, so Word and a tracked InsertTable insert that paragraph
+    /// with the table (issue #1626). It exists only for the table, so it is part of the table's
+    /// revision: resolving the rows on their own could leave a table ending a cell, or two tables
+    /// fused into one.
+    /// </summary>
+    private static RevisionGroup? ClosingTableGroup(
+        RevisionUnit mark, Dictionary<XElement, RevisionGroup> rowGroupByTr)
+    {
+        var paragraph = mark.Paragraph;
+        if (paragraph is null || paragraph.Elements().Any(e => !IsIgnorableBetween(e)))
+            return null;
+        // Walk back over range markers only, so a body of empty revised paragraphs stays linear.
+        var previous = paragraph.PreviousNode;
+        while (previous is not null && (previous is not XElement element || IsIgnorableBetween(element)))
+            previous = previous.PreviousNode;
+        if (previous is not XElement table || table.Name != W.tbl)
+            return null;
+        var rows = WordprocessingMLUtil.TableRows(table).ToList();
+        return rows.Count > 0 && rowGroupByTr.TryGetValue(rows[0], out var group)
+            && rows.All(row => rowGroupByTr.TryGetValue(row, out var rowGroup) && ReferenceEquals(rowGroup, group))
+            && group.Type == mark.Type && group.Author == mark.Author && group.Date == mark.Date
+            && group.DateUtc == DateUtcOf(mark.Element)
+                ? group
+                : null;
     }
 
     private static bool CellsStructurallyAdjacent(RevisionUnit left, RevisionUnit right)
@@ -2112,7 +2149,7 @@ internal static class RevisionOps
         return false;
     }
 
-    private static bool IsIgnorableBetween(XElement element) =>
+    internal static bool IsIgnorableBetween(XElement element) =>
         IgnorableBetween.Contains(element.Name)
         || (element.Name == W.r && element.Descendants(W.commentReference).Any()
             && !element.Descendants(W.t).Any() && !element.Descendants(W.delText).Any());
