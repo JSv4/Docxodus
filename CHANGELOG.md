@@ -25,8 +25,6 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- PDF export no longer fails with "body content is clipped" on a table row whose minimum height (`w:trHeight` without `w:hRule="exact"`) is taller than the page. As in Word, the row starts on a fresh page and ends at the foot of its body, where Word draws its bottom border, and the rest of its minimum height is not carried to the next page. An exact row still runs to the paper edge. A minimum-height row whose content is taller than a page now splits inside a paragraph like a row without a declared height, and, as in Word, each page's part keeps the row's minimum, capped at the page (#1558).
-
 - `FileHistoryBlobStore` on Windows no longer fails a concurrent write of a blob that already exists with "being used by another process". The write verifies the existing blob, but it opened that file without sharing delete access, which Windows refuses while another writer's `File.Move` still holds the file. Blobs are now opened sharing delete, as `FileHistoryHeadStore` already does (#1659).
 - A line break inside a hanging-indent list item no longer keeps the item's lines at the paragraph's largest size; each line takes its own text's height there too (#1565).
 
@@ -60,6 +58,7 @@ All notable changes to this project will be documented in this file.
 
 - Flow HTML headers and footers now use the final section's inherited default references, including an empty final section. First/even-only and unreferenced package parts no longer appear as document-wide stories (#1619).
 
+- PDF export no longer fails with "body content is clipped" on a table row whose minimum height (`w:trHeight` without `w:hRule="exact"`) is taller than the page. As in Word, the row starts on a fresh page and ends at the foot of its body, where Word draws its bottom border, and the rest of its minimum height is not carried to the next page. An exact row still runs to the paper edge. A minimum-height row whose content is taller than a page now splits inside a paragraph like a row without a declared height, and, as in Word, each page's part keeps the row's minimum, capped at the page (#1558).
 - Static EMF rectangle/ellipse pictures render as inline SVG in HTML and PDF, preserving their authored frames and overflowing artwork. Cosmetic outlines use one browser pixel; geometric outlines scale with the picture. Unsupported records retain the whole-image placeholder and strict-export diagnostics (#1554).
 
 - The rendering-fidelity check no longer rebuilds and re-measures the pinned baseline and main on every pull request. Its build cache was written only by pull-request runs, which no other pull request can read, so it never hit and its copies filled the repository's Actions cache. Baseline and main are now measured once per push to main and reused only in an identical measurement environment; a parallel canary re-measures the cached baseline live, and any cache miss falls back to measuring everything live. Pull requests that change only tests no longer run the check, and changes under `wasm/` now do.
