@@ -25,6 +25,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Text in a font installed on the host is measured at its full width. `MetricsGetter.GetTextWidth` set the font size to the run's point size and so returned points, but all three of its callers (HTML conversion, list-number widths, HTML-to-DOCX) read the result as 96-DPI pixels. Every installed font measured three quarters as wide as Word sets it: 10 pt Times New Roman text that Word sets 233.5 pt wide measured 175 pt. Tabs after long text and wrapping decisions therefore differed between a host with the font, such as Windows, and one without, such as Linux CI (#1659).
 - A line break inside a hanging-indent list item no longer keeps the item's lines at the paragraph's largest size; each line takes its own text's height there too (#1565).
 
 - A list item whose bullet is mapped from Symbol or Wingdings to a Unicode glyph keeps the replaced font's height on its first line, as Word does: a zero-width box as tall as that font's ascent sits beside the glyph, which renders as before. A 12pt Symbol bullet over 12pt Arial now steps 14.61pt per item instead of 13.80pt; wrapped lines and exact spacing are unchanged (#1567).

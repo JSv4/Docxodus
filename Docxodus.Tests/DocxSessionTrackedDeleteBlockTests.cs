@@ -559,13 +559,22 @@ public class DocxSessionTrackedDeleteBlockTests
     [Fact]
     public void TrackedRangeDeletion_ScalesWithTheRange()
     {
-        var blocks = Enumerable.Range(0, 4000).Select(i => P($"paragraph {i}")).Append(P("survivor")).ToArray();
-        using var session = Open(Build(blocks));
-        var paragraphs = session.Project().AnchorIndex.Values.Where(a => a.Anchor.Kind == "p").Select(a => a.Anchor.Id).ToList();
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        Assert.True(session.DeleteRange(paragraphs[0], paragraphs[^1]).Success);
-        stopwatch.Stop();
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"tracked DeleteRange over 4000 paragraphs took {stopwatch.Elapsed}");
+        // Allocations on this thread, which are deterministic for this synchronous path, rather than
+        // wall-clock time: a loaded test host stretched 4000 paragraphs past a 10 s bound (issue #1659).
+        // Four times the range allocates four times as much (13.7 MB and 53.4 MB); a walk that is
+        // quadratic in the paragraphs, like the cubic bookmark-guard pass #789 removed, makes it 16.
+        long Allocated(int count)
+        {
+            var blocks = Enumerable.Range(0, count).Select(i => P($"paragraph {i}")).Append(P("survivor")).ToArray();
+            using var session = Open(Build(blocks));
+            var paragraphs = session.Project().AnchorIndex.Values.Where(a => a.Anchor.Kind == "p").Select(a => a.Anchor.Id).ToList();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            Assert.True(session.DeleteRange(paragraphs[0], paragraphs[^1]).Success);
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+
+        long small = Allocated(1000), large = Allocated(4000);
+        Assert.True(large <= 6 * small, $"tracked DeleteRange allocated {small:N0} bytes for 1000 paragraphs, {large:N0} for 4000");
     }
 
     [Theory]

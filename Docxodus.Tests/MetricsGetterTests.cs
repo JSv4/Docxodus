@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft. All rights reserved.
+// Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System;
@@ -103,6 +103,23 @@ namespace Docxodus.Tests
             XElement? referenceToNullImage = metrics.Descendants(H.ReferenceToNullImage).FirstOrDefault();
             Assert.NotNull(referenceToNullImage);
             Assert.Equal(1, (int)referenceToNullImage!.Attribute(H.Val)!);
+        }
+
+        [Fact]
+        public void MG004_TextWidth_IsInPixelsOfTheRunsPointSize()
+        {
+            // Every caller converts GetTextWidth from 96-DPI pixels. Measuring at the point size made
+            // each installed font three quarters as wide as Word sets it (issue #1659): Word 2024 sets
+            // this text in 10 pt Times New Roman 233.5 pt wide, which a host with the font measured as
+            // 175 pt. Where the font is missing, Skia substitutes the same fallback on both sides.
+            const string text = "the parties agree that the supplier shall deliver the services";
+            using var typeface = SkiaSharp.SKTypeface.FromFamilyName("Times New Roman");
+            using var tenPoints = new SkiaSharp.SKFont(typeface, 10f);
+            var points = tenPoints.MeasureText(text);
+            Assert.True(points > 0, "no font to measure with");
+
+            var pixels = MetricsGetter.GetTextWidth("Times New Roman", false, false, 20m, text);
+            Assert.InRange(pixels, (int)(points * 96 / 72) - 1, (int)(points * 96 / 72) + 1);
         }
     }
 }
