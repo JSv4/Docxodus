@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Docxodus.Internal;
 
 namespace Docxodus
 {
@@ -512,7 +513,7 @@ namespace Docxodus
                                     return DontConsolidate;
 
                                 XElement? rPr = ce.Element(A.rPr);
-                                return rPr == null ? "" : rPr.ToString(SaveOptions.None);
+                                return rPr == null ? "" : rPr.ToXmlString(SaveOptions.None);
                             });
                     var paragraphWithConsolidatedRuns = new XElement(A.p,
                         groupedAdjacentRunsWithIdenticalFormatting.Select(g =>

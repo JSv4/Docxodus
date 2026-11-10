@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
+using Docxodus.Internal;
 
 namespace Docxodus.Verification;
 
@@ -820,7 +821,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             .ThenBy(record => (string?)record.Attribute("path"), StringComparer.Ordinal)
             .ThenBy(record => (string?)record.Attribute("name"), StringComparer.Ordinal)
             .ThenBy(record => (int?)record.Attribute("ordinal"))
-            .ThenBy(record => record.ToString(SaveOptions.DisableFormatting), StringComparer.Ordinal)
+            .ThenBy(record => record.ToXmlString(SaveOptions.DisableFormatting), StringComparer.Ordinal)
             .ToArray();
         var normalized = XmlSemanticNormalizer.Digest(
             new XDocument(new XElement(residualNamespace + "story", orderedRecords)),

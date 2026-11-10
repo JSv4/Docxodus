@@ -202,7 +202,7 @@ class Program
 
             XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
 
-            var htmlString = html.ToString(SaveOptions.DisableFormatting);
+            var htmlString = WmlToHtmlConverter.ToHtmlString(html, indent: false);
             File.WriteAllText(outputPath, htmlString, Encoding.UTF8);
 
             Console.WriteLine();

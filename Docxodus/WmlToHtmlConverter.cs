@@ -11,6 +11,7 @@ using SkiaSharp;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using Docxodus.Internal;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
@@ -1075,7 +1076,7 @@ namespace Docxodus
         public static string ToHtmlString(XElement html, bool indent = true)
         {
             // First serialize with formatting
-            var serialized = html.ToString(indent ? SaveOptions.None : SaveOptions.DisableFormatting);
+            var serialized = html.ToXmlString(indent ? SaveOptions.None : SaveOptions.DisableFormatting);
 
             if (!indent)
                 return serialized;
@@ -2193,7 +2194,7 @@ namespace Docxodus
                     .ToList();
                 int classCounter = 1000000;
                 var sb = new StringBuilder();
-                sb.Append(Environment.NewLine);
+                sb.Append(LineEndings.Lf);
                 foreach (var grp in augmented)
                 {
                     string classNameToUse;
@@ -2217,13 +2218,13 @@ namespace Docxodus
                         classCounter++;
                     }
                     usedCssClassNames.Add(classNameToUse);
-                    sb.Append(firstOne.Element.Name.LocalName + "." + classNameToUse + " {" + Environment.NewLine);
+                    sb.Append(firstOne.Element.Name.LocalName + "." + classNameToUse + " {" + LineEndings.Lf);
                     foreach (var st in firstOne.Styles.Where(s => s.Key != "PtStyleName"))
                     {
-                        var s = "    " + st.Key + ": " + st.Value + ";" + Environment.NewLine;
+                        var s = "    " + st.Key + ": " + st.Value + ";" + LineEndings.Lf;
                         sb.Append(s);
                     }
-                    sb.Append("}" + Environment.NewLine);
+                    sb.Append("}" + LineEndings.Lf);
                     foreach (var gc in grp)
                     {
                         var existingClass = gc.Element.Attribute("class");
@@ -2403,44 +2404,44 @@ namespace Docxodus
         {
             var prefix = settings.RevisionCssClassPrefix ?? "rev-";
             var sb = new StringBuilder();
-            sb.AppendLine();
-            sb.AppendLine("/* Tracked Changes CSS (Word presentation) */");
-            sb.AppendLine($"ins.{prefix}ins {{ text-decoration: underline; }}");
-            sb.AppendLine($"del.{prefix}del {{ text-decoration: line-through; }}");
-            sb.AppendLine($"ins.{prefix}move-to {{ text-decoration: underline double; color: #00B050; }}");
-            sb.AppendLine($"del.{prefix}move-from {{ text-decoration: line-through double; color: #00B050; }}");
-            sb.AppendLine($"span.{prefix}del-marker, span.{prefix}move-from-marker {{");
-            sb.AppendLine("    display: inline-block;");
-            sb.AppendLine("    width: 2px;");
-            sb.AppendLine("    height: 1em;");
-            sb.AppendLine("    background-color: currentColor;");
-            sb.AppendLine("    vertical-align: middle;");
-            sb.AppendLine("}");
+            sb.AppendLf();
+            sb.AppendLf("/* Tracked Changes CSS (Word presentation) */");
+            sb.AppendLf($"ins.{prefix}ins {{ text-decoration: underline; }}");
+            sb.AppendLf($"del.{prefix}del {{ text-decoration: line-through; }}");
+            sb.AppendLf($"ins.{prefix}move-to {{ text-decoration: underline double; color: #00B050; }}");
+            sb.AppendLf($"del.{prefix}move-from {{ text-decoration: line-through double; color: #00B050; }}");
+            sb.AppendLf($"span.{prefix}del-marker, span.{prefix}move-from-marker {{");
+            sb.AppendLf("    display: inline-block;");
+            sb.AppendLf("    width: 2px;");
+            sb.AppendLf("    height: 1em;");
+            sb.AppendLf("    background-color: currentColor;");
+            sb.AppendLf("    vertical-align: middle;");
+            sb.AppendLf("}");
             // Word shows no inline mark for a paragraph-mark, formatting or section change: the
             // change bar is the only trace (it shows the detail in balloons, which HTML has not).
-            sb.AppendLine($"span.{prefix}cxml-marker {{ font-weight: bold; }}");
-            sb.AppendLine($"span.{prefix}cxml-ins-start::before, span.{prefix}cxml-del-start::before,");
-            sb.AppendLine($"span.{prefix}cxml-move-from-start::before, span.{prefix}cxml-move-to-start::before {{ content: \"\\27E6\"; }}");
-            sb.AppendLine($"span.{prefix}cxml-ins-end::before, span.{prefix}cxml-del-end::before,");
-            sb.AppendLine($"span.{prefix}cxml-move-from-end::before, span.{prefix}cxml-move-to-end::before {{ content: \"\\27E7\"; }}");
-            sb.AppendLine($"tr.{prefix}row-del {{ text-decoration: line-through; }}");
+            sb.AppendLf($"span.{prefix}cxml-marker {{ font-weight: bold; }}");
+            sb.AppendLf($"span.{prefix}cxml-ins-start::before, span.{prefix}cxml-del-start::before,");
+            sb.AppendLf($"span.{prefix}cxml-move-from-start::before, span.{prefix}cxml-move-to-start::before {{ content: \"\\27E6\"; }}");
+            sb.AppendLf($"span.{prefix}cxml-ins-end::before, span.{prefix}cxml-del-end::before,");
+            sb.AppendLf($"span.{prefix}cxml-move-from-end::before, span.{prefix}cxml-move-to-end::before {{ content: \"\\27E7\"; }}");
+            sb.AppendLf($"tr.{prefix}row-del {{ text-decoration: line-through; }}");
             // Word's default cell shading for cell insertions, deletions and merges.
-            sb.AppendLine($"td.{prefix}cell-ins {{ background-color: #CCECFF; }}");
-            sb.AppendLine($"td.{prefix}cell-del {{ background-color: #FFCCFF; text-decoration: line-through; }}");
-            sb.AppendLine($"td.{prefix}cell-merge {{ background-color: #FFFFCC; }}");
-            sb.AppendLine($".{prefix}changed-line {{ position: relative; }}");
-            sb.AppendLine($".{prefix}changed-line::before {{");
-            sb.AppendLine("    content: \"\";");
-            sb.AppendLine("    position: absolute;");
-            sb.AppendLine("    top: 0;");
-            sb.AppendLine("    bottom: 0;");
-            sb.AppendLine($"    left: calc(-1 * (var(--{prefix}change-bar-indent, 0px) + {WordChangeBarOffset}));");
-            sb.AppendLine("    border-left: 1px solid #000;");
-            sb.AppendLine("}");
+            sb.AppendLf($"td.{prefix}cell-ins {{ background-color: #CCECFF; }}");
+            sb.AppendLf($"td.{prefix}cell-del {{ background-color: #FFCCFF; text-decoration: line-through; }}");
+            sb.AppendLf($"td.{prefix}cell-merge {{ background-color: #FFFFCC; }}");
+            sb.AppendLf($".{prefix}changed-line {{ position: relative; }}");
+            sb.AppendLf($".{prefix}changed-line::before {{");
+            sb.AppendLf("    content: \"\";");
+            sb.AppendLf("    position: absolute;");
+            sb.AppendLf("    top: 0;");
+            sb.AppendLf("    bottom: 0;");
+            sb.AppendLf($"    left: calc(-1 * (var(--{prefix}change-bar-indent, 0px) + {WordChangeBarOffset}));");
+            sb.AppendLf("    border-left: 1px solid #000;");
+            sb.AppendLf("}");
 
             var authors = wordDoc.MainDocumentPart?.Annotation<RevisionAuthorIndex>()?.Authors ?? new List<string>();
             for (var i = 0; i < authors.Count; i++)
-                sb.AppendLine($".{prefix}author-{i} {{ color: {WordAuthorColor(settings, authors[i], i)}; }}");
+                sb.AppendLf($".{prefix}author-{i} {{ color: {WordAuthorColor(settings, authors[i], i)}; }}");
             return sb.ToString();
         }
 
@@ -2453,160 +2454,160 @@ namespace Docxodus
 
             var prefix = settings.RevisionCssClassPrefix ?? "rev-";
             var sb = new StringBuilder();
-            sb.AppendLine();
-            sb.AppendLine("/* Tracked Changes CSS */");
+            sb.AppendLf();
+            sb.AppendLf("/* Tracked Changes CSS */");
 
             // Insertions - underlined green text
-            sb.AppendLine($"ins.{prefix}ins {{");
-            sb.AppendLine("    text-decoration: underline;");
-            sb.AppendLine("    color: #006400;");
-            sb.AppendLine("    background-color: #e6ffe6;");
-            sb.AppendLine("}");
+            sb.AppendLf($"ins.{prefix}ins {{");
+            sb.AppendLf("    text-decoration: underline;");
+            sb.AppendLf("    color: #006400;");
+            sb.AppendLf("    background-color: #e6ffe6;");
+            sb.AppendLf("}");
 
             // Deletions - strikethrough red text
-            sb.AppendLine($"del.{prefix}del {{");
-            sb.AppendLine("    text-decoration: line-through;");
-            sb.AppendLine("    color: #8b0000;");
-            sb.AppendLine("    background-color: #ffe6e6;");
-            sb.AppendLine("}");
+            sb.AppendLf($"del.{prefix}del {{");
+            sb.AppendLf("    text-decoration: line-through;");
+            sb.AppendLf("    color: #8b0000;");
+            sb.AppendLf("    background-color: #ffe6e6;");
+            sb.AppendLf("}");
 
             // Deletion marker (when content is hidden)
-            sb.AppendLine($"span.{prefix}del-marker {{");
-            sb.AppendLine("    display: inline-block;");
-            sb.AppendLine("    width: 4px;");
-            sb.AppendLine("    height: 1em;");
-            sb.AppendLine("    background-color: #8b0000;");
-            sb.AppendLine("    vertical-align: middle;");
-            sb.AppendLine("}");
+            sb.AppendLf($"span.{prefix}del-marker {{");
+            sb.AppendLf("    display: inline-block;");
+            sb.AppendLf("    width: 4px;");
+            sb.AppendLf("    height: 1em;");
+            sb.AppendLf("    background-color: #8b0000;");
+            sb.AppendLf("    vertical-align: middle;");
+            sb.AppendLf("}");
 
             // Move source - strikethrough purple text (content moved elsewhere)
-            sb.AppendLine($"del.{prefix}move-from {{");
-            sb.AppendLine("    text-decoration: line-through;");
-            sb.AppendLine("    color: #4b0082;");
-            sb.AppendLine("    background-color: #f0e6ff;");
-            sb.AppendLine("}");
+            sb.AppendLf($"del.{prefix}move-from {{");
+            sb.AppendLf("    text-decoration: line-through;");
+            sb.AppendLf("    color: #4b0082;");
+            sb.AppendLf("    background-color: #f0e6ff;");
+            sb.AppendLf("}");
 
             // Move destination - underlined purple text (content moved here)
-            sb.AppendLine($"ins.{prefix}move-to {{");
-            sb.AppendLine("    text-decoration: underline;");
-            sb.AppendLine("    color: #4b0082;");
-            sb.AppendLine("    background-color: #e6f0ff;");
-            sb.AppendLine("}");
+            sb.AppendLf($"ins.{prefix}move-to {{");
+            sb.AppendLf("    text-decoration: underline;");
+            sb.AppendLf("    color: #4b0082;");
+            sb.AppendLf("    background-color: #e6f0ff;");
+            sb.AppendLf("}");
 
             // Move from marker (when content is hidden)
-            sb.AppendLine($"span.{prefix}move-from-marker {{");
-            sb.AppendLine("    display: inline-block;");
-            sb.AppendLine("    width: 4px;");
-            sb.AppendLine("    height: 1em;");
-            sb.AppendLine("    background-color: #4b0082;");
-            sb.AppendLine("    vertical-align: middle;");
-            sb.AppendLine("}");
+            sb.AppendLf($"span.{prefix}move-from-marker {{");
+            sb.AppendLf("    display: inline-block;");
+            sb.AppendLf("    width: 4px;");
+            sb.AppendLf("    height: 1em;");
+            sb.AppendLf("    background-color: #4b0082;");
+            sb.AppendLf("    vertical-align: middle;");
+            sb.AppendLf("}");
 
             // Custom XML revision range boundaries (issue #538) — bracket glyphs in the owning
             // family's revision color. The glyph is CSS content so copied text stays clean.
-            sb.AppendLine($"span.{prefix}cxml-marker {{");
-            sb.AppendLine("    font-weight: bold;");
-            sb.AppendLine("    cursor: help;");
-            sb.AppendLine("}");
-            sb.AppendLine($"span.{prefix}cxml-ins-start::before,");
-            sb.AppendLine($"span.{prefix}cxml-del-start::before,");
-            sb.AppendLine($"span.{prefix}cxml-move-from-start::before,");
-            sb.AppendLine($"span.{prefix}cxml-move-to-start::before {{");
-            sb.AppendLine("    content: \"\\27E6\";"); // ⟦
-            sb.AppendLine("}");
-            sb.AppendLine($"span.{prefix}cxml-ins-end::before,");
-            sb.AppendLine($"span.{prefix}cxml-del-end::before,");
-            sb.AppendLine($"span.{prefix}cxml-move-from-end::before,");
-            sb.AppendLine($"span.{prefix}cxml-move-to-end::before {{");
-            sb.AppendLine("    content: \"\\27E7\";"); // ⟧
-            sb.AppendLine("}");
-            sb.AppendLine($"span.{prefix}cxml-ins-start, span.{prefix}cxml-ins-end {{");
-            sb.AppendLine("    color: #006400;");
-            sb.AppendLine("}");
-            sb.AppendLine($"span.{prefix}cxml-del-start, span.{prefix}cxml-del-end {{");
-            sb.AppendLine("    color: #8b0000;");
-            sb.AppendLine("}");
-            sb.AppendLine($"span.{prefix}cxml-move-from-start, span.{prefix}cxml-move-from-end,");
-            sb.AppendLine($"span.{prefix}cxml-move-to-start, span.{prefix}cxml-move-to-end {{");
-            sb.AppendLine("    color: #4b0082;");
-            sb.AppendLine("}");
+            sb.AppendLf($"span.{prefix}cxml-marker {{");
+            sb.AppendLf("    font-weight: bold;");
+            sb.AppendLf("    cursor: help;");
+            sb.AppendLf("}");
+            sb.AppendLf($"span.{prefix}cxml-ins-start::before,");
+            sb.AppendLf($"span.{prefix}cxml-del-start::before,");
+            sb.AppendLf($"span.{prefix}cxml-move-from-start::before,");
+            sb.AppendLf($"span.{prefix}cxml-move-to-start::before {{");
+            sb.AppendLf("    content: \"\\27E6\";"); // ⟦
+            sb.AppendLf("}");
+            sb.AppendLf($"span.{prefix}cxml-ins-end::before,");
+            sb.AppendLf($"span.{prefix}cxml-del-end::before,");
+            sb.AppendLf($"span.{prefix}cxml-move-from-end::before,");
+            sb.AppendLf($"span.{prefix}cxml-move-to-end::before {{");
+            sb.AppendLf("    content: \"\\27E7\";"); // ⟧
+            sb.AppendLf("}");
+            sb.AppendLf($"span.{prefix}cxml-ins-start, span.{prefix}cxml-ins-end {{");
+            sb.AppendLf("    color: #006400;");
+            sb.AppendLf("}");
+            sb.AppendLf($"span.{prefix}cxml-del-start, span.{prefix}cxml-del-end {{");
+            sb.AppendLf("    color: #8b0000;");
+            sb.AppendLf("}");
+            sb.AppendLf($"span.{prefix}cxml-move-from-start, span.{prefix}cxml-move-from-end,");
+            sb.AppendLf($"span.{prefix}cxml-move-to-start, span.{prefix}cxml-move-to-end {{");
+            sb.AppendLf("    color: #4b0082;");
+            sb.AppendLf("}");
 
             // Block-level property revisions (issue #539) — a goldenrod change bar / outline
             // in place of markup the block cannot strike or underline. Titles carry the detail.
-            sb.AppendLine($".{prefix}para-format-change {{");
-            sb.AppendLine("    border-left: 3px dotted #b8860b;");
-            sb.AppendLine("    padding-left: 4px;");
-            sb.AppendLine("}");
-            sb.AppendLine($"table.{prefix}table-format-change {{");
-            sb.AppendLine("    outline: 2px dotted #b8860b;");
-            sb.AppendLine("    outline-offset: 1px;");
-            sb.AppendLine("}");
-            sb.AppendLine($"tr.{prefix}row-format-change {{");
-            sb.AppendLine("    outline: 1px dotted #b8860b;");
-            sb.AppendLine("}");
-            sb.AppendLine($"td.{prefix}cell-format-change {{");
-            sb.AppendLine("    outline: 1px dotted #b8860b;");
-            sb.AppendLine("    outline-offset: -1px;");
-            sb.AppendLine("}");
-            sb.AppendLine($".{prefix}section-format-change {{");
-            sb.AppendLine("    border-left: 3px dotted #b8860b;");
-            sb.AppendLine("    padding-left: 4px;");
-            sb.AppendLine("    color: #b8860b;");
-            sb.AppendLine("    font-size: 0.85em;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}para-format-change {{");
+            sb.AppendLf("    border-left: 3px dotted #b8860b;");
+            sb.AppendLf("    padding-left: 4px;");
+            sb.AppendLf("}");
+            sb.AppendLf($"table.{prefix}table-format-change {{");
+            sb.AppendLf("    outline: 2px dotted #b8860b;");
+            sb.AppendLf("    outline-offset: 1px;");
+            sb.AppendLf("}");
+            sb.AppendLf($"tr.{prefix}row-format-change {{");
+            sb.AppendLf("    outline: 1px dotted #b8860b;");
+            sb.AppendLf("}");
+            sb.AppendLf($"td.{prefix}cell-format-change {{");
+            sb.AppendLf("    outline: 1px dotted #b8860b;");
+            sb.AppendLf("    outline-offset: -1px;");
+            sb.AppendLf("}");
+            sb.AppendLf($".{prefix}section-format-change {{");
+            sb.AppendLf("    border-left: 3px dotted #b8860b;");
+            sb.AppendLf("    padding-left: 4px;");
+            sb.AppendLf("    color: #b8860b;");
+            sb.AppendLf("    font-size: 0.85em;");
+            sb.AppendLf("}");
 
             // Table row inserted
-            sb.AppendLine($"tr.{prefix}row-ins {{");
-            sb.AppendLine("    background-color: #e6ffe6;");
-            sb.AppendLine("}");
+            sb.AppendLf($"tr.{prefix}row-ins {{");
+            sb.AppendLf("    background-color: #e6ffe6;");
+            sb.AppendLf("}");
 
             // Table row deleted
-            sb.AppendLine($"tr.{prefix}row-del {{");
-            sb.AppendLine("    background-color: #ffe6e6;");
-            sb.AppendLine("    text-decoration: line-through;");
-            sb.AppendLine("}");
+            sb.AppendLf($"tr.{prefix}row-del {{");
+            sb.AppendLf("    background-color: #ffe6e6;");
+            sb.AppendLf("    text-decoration: line-through;");
+            sb.AppendLf("}");
 
             // Paragraph with inserted paragraph mark (paragraph was split)
-            sb.AppendLine($".{prefix}para-ins {{");
-            sb.AppendLine("    border-left: 3px solid #006400;");
-            sb.AppendLine("    padding-left: 4px;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}para-ins {{");
+            sb.AppendLf("    border-left: 3px solid #006400;");
+            sb.AppendLf("    padding-left: 4px;");
+            sb.AppendLf("}");
 
             // Paragraph with deleted paragraph mark (paragraphs were merged)
-            sb.AppendLine($".{prefix}para-del {{");
-            sb.AppendLine("    border-left: 3px solid #8b0000;");
-            sb.AppendLine("    padding-left: 4px;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}para-del {{");
+            sb.AppendLf("    border-left: 3px solid #8b0000;");
+            sb.AppendLf("    padding-left: 4px;");
+            sb.AppendLf("}");
 
             // Deleted paragraph mark indicator (pilcrow)
-            sb.AppendLine($"span.{prefix}para-mark-del {{");
-            sb.AppendLine("    color: #8b0000;");
-            sb.AppendLine("    font-size: 0.8em;");
-            sb.AppendLine("    vertical-align: super;");
-            sb.AppendLine("}");
+            sb.AppendLf($"span.{prefix}para-mark-del {{");
+            sb.AppendLf("    color: #8b0000;");
+            sb.AppendLf("    font-size: 0.8em;");
+            sb.AppendLf("    vertical-align: super;");
+            sb.AppendLf("}");
 
             // Format changes (run property revisions)
-            sb.AppendLine($"span.{prefix}format-change {{");
-            sb.AppendLine("    border-bottom: 2px dotted #ffa500;");
-            sb.AppendLine("    cursor: help;");
-            sb.AppendLine("}");
+            sb.AppendLf($"span.{prefix}format-change {{");
+            sb.AppendLf("    border-bottom: 2px dotted #ffa500;");
+            sb.AppendLf("    cursor: help;");
+            sb.AppendLf("}");
 
             // Table cell inserted
-            sb.AppendLine($"td.{prefix}cell-ins {{");
-            sb.AppendLine("    background-color: #e6ffe6;");
-            sb.AppendLine("}");
+            sb.AppendLf($"td.{prefix}cell-ins {{");
+            sb.AppendLf("    background-color: #e6ffe6;");
+            sb.AppendLf("}");
 
             // Table cell deleted
-            sb.AppendLine($"td.{prefix}cell-del {{");
-            sb.AppendLine("    background-color: #ffe6e6;");
-            sb.AppendLine("    text-decoration: line-through;");
-            sb.AppendLine("}");
+            sb.AppendLf($"td.{prefix}cell-del {{");
+            sb.AppendLf("    background-color: #ffe6e6;");
+            sb.AppendLf("    text-decoration: line-through;");
+            sb.AppendLf("}");
 
             // Table cell merged
-            sb.AppendLine($"td.{prefix}cell-merge {{");
-            sb.AppendLine("    background-color: #fff0e6;");
-            sb.AppendLine("    border: 2px dashed #ff8c00;");
-            sb.AppendLine("}");
+            sb.AppendLf($"td.{prefix}cell-merge {{");
+            sb.AppendLf("    background-color: #fff0e6;");
+            sb.AppendLf("    border: 2px dashed #ff8c00;");
+            sb.AppendLf("}");
 
             // Author-specific colors if provided
             if (settings.AuthorColors != null)
@@ -2615,10 +2616,10 @@ namespace Docxodus
                 {
                     // Escape author name for use in CSS attribute selector
                     var safeAuthor = kvp.Key.Replace("\"", "\\\"");
-                    sb.AppendLine($"[data-author=\"{safeAuthor}\"] {{");
-                    sb.AppendLine($"    border-left: 3px solid {kvp.Value};");
-                    sb.AppendLine($"    padding-left: 2px;");
-                    sb.AppendLine("}");
+                    sb.AppendLf($"[data-author=\"{safeAuthor}\"] {{");
+                    sb.AppendLf($"    border-left: 3px solid {kvp.Value};");
+                    sb.AppendLf($"    padding-left: 2px;");
+                    sb.AppendLf("}");
                 }
             }
 
@@ -2631,95 +2632,95 @@ namespace Docxodus
                 return string.Empty;
 
             var sb = new StringBuilder();
-            sb.AppendLine();
-            sb.AppendLine("/* Footnotes and Endnotes CSS */");
+            sb.AppendLf();
+            sb.AppendLf("/* Footnotes and Endnotes CSS */");
 
             // Footnote/Endnote reference links
-            sb.AppendLine("a.footnote-ref, a.endnote-ref {");
-            sb.AppendLine("    text-decoration: none;");
-            sb.AppendLine("    color: inherit;");
-            sb.AppendLine("}");
+            sb.AppendLf("a.footnote-ref, a.endnote-ref {");
+            sb.AppendLf("    text-decoration: none;");
+            sb.AppendLf("    color: inherit;");
+            sb.AppendLf("}");
 
             // Footnotes section
-            sb.AppendLine("section.footnotes, section.endnotes {");
-            sb.AppendLine("    margin-top: 2em;");
-            sb.AppendLine("    font-size: 0.9em;");
-            sb.AppendLine("}");
+            sb.AppendLf("section.footnotes, section.endnotes {");
+            sb.AppendLf("    margin-top: 2em;");
+            sb.AppendLf("    font-size: 0.9em;");
+            sb.AppendLf("}");
 
             if (settings.RenderPagination == PaginationMode.Paginated)
             {
-                sb.AppendLine("section.endnotes {");
-                sb.AppendLine("    margin-top: 0;");
-                sb.AppendLine("    font-size: inherit;");
-                sb.AppendLine("}");
-                sb.AppendLine("section.endnotes ol {");
-                sb.AppendLine("    list-style-type: none;");
-                sb.AppendLine("    margin: 0;");
-                sb.AppendLine("}");
-                sb.AppendLine("section.endnotes hr {");
-                sb.AppendLine("    border: none;");
-                sb.AppendLine("    height: 1px;");
-                sb.AppendLine("    background-color: currentColor;");
-                sb.AppendLine("    width: 2in;");
-                sb.AppendLine("    max-width: 100%;");
-                sb.AppendLine("    margin: 0 0 4pt 0;");
-                sb.AppendLine("}");
+                sb.AppendLf("section.endnotes {");
+                sb.AppendLf("    margin-top: 0;");
+                sb.AppendLf("    font-size: inherit;");
+                sb.AppendLf("}");
+                sb.AppendLf("section.endnotes ol {");
+                sb.AppendLf("    list-style-type: none;");
+                sb.AppendLf("    margin: 0;");
+                sb.AppendLf("}");
+                sb.AppendLf("section.endnotes hr {");
+                sb.AppendLf("    border: none;");
+                sb.AppendLf("    height: 1px;");
+                sb.AppendLf("    background-color: currentColor;");
+                sb.AppendLf("    width: 2in;");
+                sb.AppendLf("    max-width: 100%;");
+                sb.AppendLf("    margin: 0 0 4pt 0;");
+                sb.AppendLf("}");
             }
 
             // Footnote/Endnote list. Semantic lists nest the note bodies' own lists inside it, so
             // the rule then reaches only the notes list itself.
-            sb.AppendLine(EmitsSemanticLists(settings)
+            sb.AppendLf(EmitsSemanticLists(settings)
                 ? "section.footnotes > ol, section.endnotes > ol {"
                 : "section.footnotes ol, section.endnotes ol {");
-            sb.AppendLine("    padding-left: 1.5em;");
-            sb.AppendLine("}");
+            sb.AppendLf("    padding-left: 1.5em;");
+            sb.AppendLf("}");
 
             if (settings.RenderPagination == PaginationMode.Paginated)
-                sb.AppendLine("section.endnotes ol { padding-left: 0; }");
+                sb.AppendLf("section.endnotes ol { padding-left: 0; }");
 
             // Back reference links
-            sb.AppendLine("a.footnote-backref, a.endnote-backref {");
-            sb.AppendLine("    text-decoration: none;");
-            sb.AppendLine("    color: #0066cc;");
-            sb.AppendLine("    margin-left: 0.5em;");
-            sb.AppendLine("}");
+            sb.AppendLf("a.footnote-backref, a.endnote-backref {");
+            sb.AppendLf("    text-decoration: none;");
+            sb.AppendLf("    color: #0066cc;");
+            sb.AppendLf("    margin-left: 0.5em;");
+            sb.AppendLf("}");
 
             // Per-page footnotes (for paginated mode)
             var prefix = settings.PaginationCssClassPrefix ?? "page-";
-            sb.AppendLine();
-            sb.AppendLine("/* Per-page Footnotes (Paginated Mode) */");
+            sb.AppendLf();
+            sb.AppendLf("/* Per-page Footnotes (Paginated Mode) */");
 
             // Page footnotes container. The note area is bottom-anchored at the body band's foot,
             // so every point of extra leading or trailing space inside it lifts the visible ink
             // off the bottom margin. Word's FootnoteText style is single-spaced (w:line 240 auto);
             // `normal` matches that, where a web-style 1.4 floated the notes ~5px high per line.
-            sb.AppendLine($".{prefix}footnotes {{");
-            sb.AppendLine("    font-size: 0.85em;");
-            sb.AppendLine("    line-height: normal;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}footnotes {{");
+            sb.AppendLf("    font-size: 0.85em;");
+            sb.AppendLf("    line-height: normal;");
+            sb.AppendLf("}");
 
             // Separator line above footnotes - using background instead of border
             // to avoid subpixel rendering issues that can cause the line to disappear during scrolling
-            sb.AppendLine($".{prefix}footnotes hr {{");
-            sb.AppendLine("    border: none;");
-            sb.AppendLine("    height: 1px;");
-            sb.AppendLine("    background-color: #999;");
+            sb.AppendLf($".{prefix}footnotes hr {{");
+            sb.AppendLf("    border: none;");
+            sb.AppendLf("    height: 1px;");
+            sb.AppendLf("    background-color: #999;");
             // Word's built-in footnote separator is two inches long. A percentage makes the
             // rule drift with paper size/margins (6.5in Letter text yielded 2.145in) and does
             // not match either Word or LibreOffice's fixed default separator.
-            sb.AppendLine("    width: 2in;");
-            sb.AppendLine("    max-width: 100%;");
+            sb.AppendLf("    width: 2in;");
+            sb.AppendLf("    max-width: 100%;");
             // Word draws the separator on the baseline of one empty FootnoteText line, putting the
             // rule roughly a descent-plus-ascent (~6-8px) above the first note's ink; 6pt doubled it.
-            sb.AppendLine("    margin: 0 0 3pt 0;");
-            sb.AppendLine("    opacity: 0.6;");
-            sb.AppendLine("}");
+            sb.AppendLf("    margin: 0 0 3pt 0;");
+            sb.AppendLf("    opacity: 0.6;");
+            sb.AppendLf("}");
             // A stock separator is a mark on an otherwise empty line. Its shell reserves
             // that font's natural line; the rule retains the existing gap above note text.
-            sb.AppendLine($".{prefix}footnotes .footnote-separator-line hr {{");
-            sb.AppendLine("    position: absolute;");
-            sb.AppendLine("    bottom: 0;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}footnotes .footnote-separator-line hr {{");
+            sb.AppendLf("    position: absolute;");
+            sb.AppendLf("    bottom: 0;");
+            sb.AppendLf("}");
             // A continuation separator spans the text column; Word's ordinary
             // separator remains the calibrated two-inch rule above. Both the
             // converter-produced story wrapper and the paginator fallback carry
@@ -2727,10 +2728,10 @@ namespace Docxodus
             // Descendant selectors only: this CSS is serialized as XML, so a `>`
             // child combinator ships as `&gt;` and the browser drops the rule
             // (GeneratedCssEscapingTests).
-            sb.AppendLine($".{prefix}footnotes [data-footnote-separator=\"continuation\"] hr,");
-            sb.AppendLine($".{prefix}footnotes hr[data-footnote-separator=\"continuation\"] {{");
-            sb.AppendLine("    width: 100%;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}footnotes [data-footnote-separator=\"continuation\"] hr,");
+            sb.AppendLf($".{prefix}footnotes hr[data-footnote-separator=\"continuation\"] {{");
+            sb.AppendLf("    width: 100%;");
+            sb.AppendLf("}");
 
             // Individual footnote item (in registry and on page). Word stacks notes with no
             // spacing of its own — any inter-note gap belongs to the FootnoteText paragraph's
@@ -2743,36 +2744,36 @@ namespace Docxodus
             // contributes no strut (line-height 0), and the wrapper generates no box and hands `normal`
             // back to the paragraph, whose own font then sizes its lines. The number, inside the
             // paragraph, declares its own zero line height below.
-            sb.AppendLine(".footnote-item {");
-            sb.AppendLine("    margin-bottom: 0;");
-            sb.AppendLine("    line-height: 0;");
-            sb.AppendLine("}");
+            sb.AppendLf(".footnote-item {");
+            sb.AppendLf("    margin-bottom: 0;");
+            sb.AppendLf("    line-height: 0;");
+            sb.AppendLf("}");
 
             // Footnote number - inline with superscript styling. It is the first content of the
             // note's first paragraph, so it does not inherit the item's zero line height; it
             // declares its own, so a raised number cannot grow the paragraph's line (issue #955).
-            sb.AppendLine(".footnote-number {");
-            sb.AppendLine("    font-weight: normal;");
-            sb.AppendLine("    display: inline;");
-            sb.AppendLine("    line-height: 0;");
-            sb.AppendLine($"    vertical-align: {ScriptRaiseCss(superscript: true)};");
-            sb.AppendLine($"    font-size: {ScriptSizeCss};");
-            sb.AppendLine("    margin-right: 2pt;");
-            sb.AppendLine("}");
+            sb.AppendLf(".footnote-number {");
+            sb.AppendLf("    font-weight: normal;");
+            sb.AppendLf("    display: inline;");
+            sb.AppendLf("    line-height: 0;");
+            sb.AppendLf($"    vertical-align: {ScriptRaiseCss(superscript: true)};");
+            sb.AppendLf($"    font-size: {ScriptSizeCss};");
+            sb.AppendLf("    margin-right: 2pt;");
+            sb.AppendLf("}");
 
             // A number rendered from the note's own reference run carries that run's size and
             // raise (issue #1003); the generic styling above would shrink and raise it again.
-            sb.AppendLine(".footnote-number[data-note-run] {");
-            sb.AppendLine("    vertical-align: baseline;");
-            sb.AppendLine("    font-size: inherit;");
-            sb.AppendLine("    margin-right: 0;");
-            sb.AppendLine("}");
+            sb.AppendLf(".footnote-number[data-note-run] {");
+            sb.AppendLf("    vertical-align: baseline;");
+            sb.AppendLf("    font-size: inherit;");
+            sb.AppendLf("    margin-right: 0;");
+            sb.AppendLf("}");
 
             // Footnote content (inline with number)
-            sb.AppendLine(".footnote-content {");
-            sb.AppendLine("    display: contents;");
-            sb.AppendLine("    line-height: normal;");
-            sb.AppendLine("}");
+            sb.AppendLf(".footnote-content {");
+            sb.AppendLf("    display: contents;");
+            sb.AppendLf("    line-height: normal;");
+            sb.AppendLf("}");
 
             // No rule targets the note paragraphs themselves. The number is a run of the first
             // paragraph, as in Word (issue #1130), so every paragraph is an ordinary block whose
@@ -2790,9 +2791,9 @@ namespace Docxodus
             // bottom margin; counting its spacing after lifted every page's notes by it (6pt for
             // the common FootnoteText style) and reserved that much body space (issue #1130).
             // The engine measures and paints the same tree, so both see this.
-            sb.AppendLine($".{prefix}footnotes .footnote-item:last-child .footnote-content p:last-of-type {{");
-            sb.AppendLine("    margin-bottom: 0 !important;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}footnotes .footnote-item:last-child .footnote-content p:last-of-type {{");
+            sb.AppendLf("    margin-bottom: 0 !important;");
+            sb.AppendLf("}");
 
             return sb.ToString();
         }
@@ -2803,23 +2804,23 @@ namespace Docxodus
                 return string.Empty;
 
             var sb = new StringBuilder();
-            sb.AppendLine();
-            sb.AppendLine("/* Document Headers and Footers CSS */");
+            sb.AppendLf();
+            sb.AppendLf("/* Document Headers and Footers CSS */");
 
             // Document header
-            sb.AppendLine("header.document-header {");
-            sb.AppendLine("    margin-bottom: 1.5em;");
-            sb.AppendLine("    padding-bottom: 0.5em;");
-            sb.AppendLine("    border-bottom: 1px solid #ccc;");
-            sb.AppendLine("}");
+            sb.AppendLf("header.document-header {");
+            sb.AppendLf("    margin-bottom: 1.5em;");
+            sb.AppendLf("    padding-bottom: 0.5em;");
+            sb.AppendLf("    border-bottom: 1px solid #ccc;");
+            sb.AppendLf("}");
 
             // Document footer
-            sb.AppendLine("footer.document-footer {");
-            sb.AppendLine("    margin-top: 1.5em;");
-            sb.AppendLine("    padding-top: 0.5em;");
-            sb.AppendLine("    border-top: 1px solid #ccc;");
-            sb.AppendLine("    font-size: 0.9em;");
-            sb.AppendLine("}");
+            sb.AppendLf("footer.document-footer {");
+            sb.AppendLf("    margin-top: 1.5em;");
+            sb.AppendLf("    padding-top: 0.5em;");
+            sb.AppendLf("    border-top: 1px solid #ccc;");
+            sb.AppendLf("    font-size: 0.9em;");
+            sb.AppendLf("}");
 
             return sb.ToString();
         }
@@ -2831,227 +2832,227 @@ namespace Docxodus
 
             var prefix = settings.CommentCssClassPrefix ?? "comment-";
             var sb = new StringBuilder();
-            sb.AppendLine();
-            sb.AppendLine("/* Comments CSS */");
+            sb.AppendLf();
+            sb.AppendLf("/* Comments CSS */");
 
             // Comment highlights (the highlighted text in the document)
-            sb.AppendLine($"span.{prefix}highlight {{");
-            sb.AppendLine("    background-color: #fff9c4;");
-            sb.AppendLine("    border-bottom: 2px solid #fbc02d;");
-            sb.AppendLine("}");
+            sb.AppendLf($"span.{prefix}highlight {{");
+            sb.AppendLf("    background-color: #fff9c4;");
+            sb.AppendLf("    border-bottom: 2px solid #fbc02d;");
+            sb.AppendLf("}");
 
             // Comment marker (the [1] reference link)
-            sb.AppendLine($"a.{prefix}marker {{");
-            sb.AppendLine("    color: #1976d2;");
-            sb.AppendLine("    text-decoration: none;");
-            sb.AppendLine("    margin-left: 2px;");
-            sb.AppendLine("}");
+            sb.AppendLf($"a.{prefix}marker {{");
+            sb.AppendLf("    color: #1976d2;");
+            sb.AppendLf("    text-decoration: none;");
+            sb.AppendLf("    margin-left: 2px;");
+            sb.AppendLf("}");
 
-            sb.AppendLine($"a.{prefix}marker:hover {{");
-            sb.AppendLine("    text-decoration: underline;");
-            sb.AppendLine("}");
+            sb.AppendLf($"a.{prefix}marker:hover {{");
+            sb.AppendLf("    text-decoration: underline;");
+            sb.AppendLf("}");
 
             // Comments section (EndnoteStyle mode)
-            sb.AppendLine($"aside.{prefix.TrimEnd('-')}s-section {{");
-            sb.AppendLine("    margin-top: 2em;");
-            sb.AppendLine("    padding-top: 1em;");
-            sb.AppendLine("    border-top: 2px solid #ccc;");
-            sb.AppendLine("}");
+            sb.AppendLf($"aside.{prefix.TrimEnd('-')}s-section {{");
+            sb.AppendLf("    margin-top: 2em;");
+            sb.AppendLf("    padding-top: 1em;");
+            sb.AppendLf("    border-top: 2px solid #ccc;");
+            sb.AppendLf("}");
 
-            sb.AppendLine($"aside.{prefix.TrimEnd('-')}s-section h2 {{");
-            sb.AppendLine("    font-size: 1.2em;");
-            sb.AppendLine("    margin-bottom: 0.5em;");
-            sb.AppendLine("}");
+            sb.AppendLf($"aside.{prefix.TrimEnd('-')}s-section h2 {{");
+            sb.AppendLf("    font-size: 1.2em;");
+            sb.AppendLf("    margin-bottom: 0.5em;");
+            sb.AppendLf("}");
 
-            sb.AppendLine($"ol.{prefix.TrimEnd('-')}s-list {{");
-            sb.AppendLine("    list-style: none;");
-            sb.AppendLine("    padding: 0;");
-            sb.AppendLine("}");
+            sb.AppendLf($"ol.{prefix.TrimEnd('-')}s-list {{");
+            sb.AppendLf("    list-style: none;");
+            sb.AppendLf("    padding: 0;");
+            sb.AppendLf("}");
 
             // Individual comment item
-            sb.AppendLine($"li.{prefix.TrimEnd('-')} {{");
-            sb.AppendLine("    margin-bottom: 1em;");
-            sb.AppendLine("    padding: 0.75em;");
-            sb.AppendLine("    background-color: #f5f5f5;");
-            sb.AppendLine("    border-left: 3px solid #1976d2;");
-            sb.AppendLine("    border-radius: 0 4px 4px 0;");
-            sb.AppendLine("}");
+            sb.AppendLf($"li.{prefix.TrimEnd('-')} {{");
+            sb.AppendLf("    margin-bottom: 1em;");
+            sb.AppendLf("    padding: 0.75em;");
+            sb.AppendLf("    background-color: #f5f5f5;");
+            sb.AppendLf("    border-left: 3px solid #1976d2;");
+            sb.AppendLf("    border-radius: 0 4px 4px 0;");
+            sb.AppendLf("}");
 
             // Comment topology (issue #540): replies nest beneath their parent, resolved
             // comments read as settled rather than live.
-            sb.AppendLine($"ol.{prefix}replies {{");
-            sb.AppendLine("    list-style: none;");
-            sb.AppendLine("    margin: 0.75em 0 0 0;");
-            sb.AppendLine("    padding-left: 1.5em;");
-            sb.AppendLine("    border-left: 2px solid #bbdefb;");
-            sb.AppendLine("}");
+            sb.AppendLf($"ol.{prefix}replies {{");
+            sb.AppendLf("    list-style: none;");
+            sb.AppendLf("    margin: 0.75em 0 0 0;");
+            sb.AppendLf("    padding-left: 1.5em;");
+            sb.AppendLf("    border-left: 2px solid #bbdefb;");
+            sb.AppendLf("}");
 
-            sb.AppendLine($".{prefix}resolved {{");
-            sb.AppendLine("    opacity: 0.65;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}resolved {{");
+            sb.AppendLf("    opacity: 0.65;");
+            sb.AppendLf("}");
 
-            sb.AppendLine($"span.{prefix}resolved-badge {{");
-            sb.AppendLine("    background-color: #2e7d32;");
-            sb.AppendLine("    color: #fff;");
-            sb.AppendLine("    border-radius: 8px;");
-            sb.AppendLine("    padding: 0 0.5em;");
-            sb.AppendLine("    font-size: 0.85em;");
-            sb.AppendLine("}");
+            sb.AppendLf($"span.{prefix}resolved-badge {{");
+            sb.AppendLf("    background-color: #2e7d32;");
+            sb.AppendLf("    color: #fff;");
+            sb.AppendLf("    border-radius: 8px;");
+            sb.AppendLf("    padding: 0 0.5em;");
+            sb.AppendLf("    font-size: 0.85em;");
+            sb.AppendLf("}");
 
-            sb.AppendLine($"div.{prefix}margin-replies {{");
-            sb.AppendLine("    margin-top: 0.5em;");
-            sb.AppendLine("}");
+            sb.AppendLf($"div.{prefix}margin-replies {{");
+            sb.AppendLf("    margin-top: 0.5em;");
+            sb.AppendLf("}");
 
             // Comment header
-            sb.AppendLine($"div.{prefix}header {{");
-            sb.AppendLine("    display: flex;");
-            sb.AppendLine("    align-items: center;");
-            sb.AppendLine("    gap: 0.5em;");
-            sb.AppendLine("    margin-bottom: 0.5em;");
-            sb.AppendLine("    font-size: 0.85em;");
-            sb.AppendLine("}");
+            sb.AppendLf($"div.{prefix}header {{");
+            sb.AppendLf("    display: flex;");
+            sb.AppendLf("    align-items: center;");
+            sb.AppendLf("    gap: 0.5em;");
+            sb.AppendLf("    margin-bottom: 0.5em;");
+            sb.AppendLf("    font-size: 0.85em;");
+            sb.AppendLf("}");
 
-            sb.AppendLine($"span.{prefix}author {{");
-            sb.AppendLine("    font-weight: bold;");
-            sb.AppendLine("    color: #1976d2;");
-            sb.AppendLine("}");
+            sb.AppendLf($"span.{prefix}author {{");
+            sb.AppendLf("    font-weight: bold;");
+            sb.AppendLf("    color: #1976d2;");
+            sb.AppendLf("}");
 
-            sb.AppendLine($"span.{prefix}date {{");
-            sb.AppendLine("    color: #666;");
-            sb.AppendLine("}");
+            sb.AppendLf($"span.{prefix}date {{");
+            sb.AppendLf("    color: #666;");
+            sb.AppendLf("}");
 
-            sb.AppendLine($"a.{prefix}backref {{");
-            sb.AppendLine("    margin-left: auto;");
-            sb.AppendLine("    text-decoration: none;");
-            sb.AppendLine("    color: #1976d2;");
-            sb.AppendLine("}");
+            sb.AppendLf($"a.{prefix}backref {{");
+            sb.AppendLf("    margin-left: auto;");
+            sb.AppendLf("    text-decoration: none;");
+            sb.AppendLf("    color: #1976d2;");
+            sb.AppendLf("}");
 
             // Comment body
-            sb.AppendLine($"div.{prefix}body p {{");
-            sb.AppendLine("    margin: 0;");
-            sb.AppendLine("}");
+            sb.AppendLf($"div.{prefix}body p {{");
+            sb.AppendLf("    margin: 0;");
+            sb.AppendLf("}");
 
             // Inline mode - tooltip on hover
-            sb.AppendLine($"span.{prefix}highlight[title] {{");
-            sb.AppendLine("    cursor: help;");
-            sb.AppendLine("}");
+            sb.AppendLf($"span.{prefix}highlight[title] {{");
+            sb.AppendLf("    cursor: help;");
+            sb.AppendLf("}");
 
             // Margin mode styles
             if (settings.CommentRenderMode == CommentRenderMode.Margin)
             {
-                sb.AppendLine();
-                sb.AppendLine("/* Margin Mode Comments */");
+                sb.AppendLf();
+                sb.AppendLf("/* Margin Mode Comments */");
 
                 // Container that holds both content and margin
-                sb.AppendLine($"div.{prefix}margin-container {{");
-                sb.AppendLine("    display: flex;");
-                sb.AppendLine("    flex-direction: row;");
-                sb.AppendLine("    gap: 1em;");
-                sb.AppendLine("}");
+                sb.AppendLf($"div.{prefix}margin-container {{");
+                sb.AppendLf("    display: flex;");
+                sb.AppendLf("    flex-direction: row;");
+                sb.AppendLf("    gap: 1em;");
+                sb.AppendLf("}");
 
                 // Main content area
-                sb.AppendLine($"div.{prefix}margin-content {{");
-                sb.AppendLine("    flex: 1;");
-                sb.AppendLine("    min-width: 0;");
-                sb.AppendLine("}");
+                sb.AppendLf($"div.{prefix}margin-content {{");
+                sb.AppendLf("    flex: 1;");
+                sb.AppendLf("    min-width: 0;");
+                sb.AppendLf("}");
 
                 // Margin column for comments
-                sb.AppendLine($"aside.{prefix}margin-column {{");
-                sb.AppendLine("    width: 250px;");
-                sb.AppendLine("    flex-shrink: 0;");
-                sb.AppendLine("    position: relative;");
-                sb.AppendLine("}");
+                sb.AppendLf($"aside.{prefix}margin-column {{");
+                sb.AppendLf("    width: 250px;");
+                sb.AppendLf("    flex-shrink: 0;");
+                sb.AppendLf("    position: relative;");
+                sb.AppendLf("}");
 
                 // Individual margin comment
-                sb.AppendLine($"div.{prefix}margin-note {{");
-                sb.AppendLine("    position: relative;");
-                sb.AppendLine("    margin-bottom: 0.5em;");
-                sb.AppendLine("    padding: 0.5em;");
-                sb.AppendLine("    background-color: #fff9c4;");
-                sb.AppendLine("    border-left: 3px solid #fbc02d;");
-                sb.AppendLine("    border-radius: 0 4px 4px 0;");
-                sb.AppendLine("    font-size: 0.85rem;");
-                sb.AppendLine("    box-shadow: 0 1px 3px rgba(0,0,0,0.1);");
-                sb.AppendLine("}");
+                sb.AppendLf($"div.{prefix}margin-note {{");
+                sb.AppendLf("    position: relative;");
+                sb.AppendLf("    margin-bottom: 0.5em;");
+                sb.AppendLf("    padding: 0.5em;");
+                sb.AppendLf("    background-color: #fff9c4;");
+                sb.AppendLf("    border-left: 3px solid #fbc02d;");
+                sb.AppendLf("    border-radius: 0 4px 4px 0;");
+                sb.AppendLf("    font-size: 0.85rem;");
+                sb.AppendLf("    box-shadow: 0 1px 3px rgba(0,0,0,0.1);");
+                sb.AppendLf("}");
 
                 // A nested reply is part of its parent's note: a separator, not another box, so
                 // its text keeps the root note's width at every nesting level. A reply that a
                 // malformed parent graph renders at top level keeps the full note box.
-                sb.AppendLine($"div.{prefix}margin-replies > div.{prefix}margin-reply {{");
-                sb.AppendLine("    margin: 0;");
-                sb.AppendLine("    padding: 0.5em 0 0;");
-                sb.AppendLine("    background: none;");
-                sb.AppendLine("    border: 0;");
-                sb.AppendLine("    border-top: 1px solid rgba(0,0,0,0.1);");
-                sb.AppendLine("    border-radius: 0;");
-                sb.AppendLine("    box-shadow: none;");
-                sb.AppendLine("}");
+                sb.AppendLf($"div.{prefix}margin-replies > div.{prefix}margin-reply {{");
+                sb.AppendLf("    margin: 0;");
+                sb.AppendLf("    padding: 0.5em 0 0;");
+                sb.AppendLf("    background: none;");
+                sb.AppendLf("    border: 0;");
+                sb.AppendLf("    border-top: 1px solid rgba(0,0,0,0.1);");
+                sb.AppendLf("    border-radius: 0;");
+                sb.AppendLf("    box-shadow: none;");
+                sb.AppendLf("}");
 
                 // Margin comment header
-                sb.AppendLine($"div.{prefix}margin-note-header {{");
-                sb.AppendLine("    display: flex;");
-                sb.AppendLine("    justify-content: space-between;");
-                sb.AppendLine("    flex-wrap: wrap;");
-                sb.AppendLine("    gap: 0.25em 0.5em;");
-                sb.AppendLine("    min-width: 0;");
-                sb.AppendLine("    align-items: center;");
-                sb.AppendLine("    margin-bottom: 0.25em;");
-                sb.AppendLine("    font-size: 0.9em;");
-                sb.AppendLine("}");
+                sb.AppendLf($"div.{prefix}margin-note-header {{");
+                sb.AppendLf("    display: flex;");
+                sb.AppendLf("    justify-content: space-between;");
+                sb.AppendLf("    flex-wrap: wrap;");
+                sb.AppendLf("    gap: 0.25em 0.5em;");
+                sb.AppendLf("    min-width: 0;");
+                sb.AppendLf("    align-items: center;");
+                sb.AppendLf("    margin-bottom: 0.25em;");
+                sb.AppendLf("    font-size: 0.9em;");
+                sb.AppendLf("}");
 
                 // Every header item must fit even when the review column is narrow.
-                sb.AppendLine($"div.{prefix}margin-note-header * {{");
-                sb.AppendLine("    min-width: 0;");
-                sb.AppendLine("    max-width: 100%;");
-                sb.AppendLine("    box-sizing: border-box;");
-                sb.AppendLine("    overflow-wrap: anywhere;");
-                sb.AppendLine("}");
+                sb.AppendLf($"div.{prefix}margin-note-header * {{");
+                sb.AppendLf("    min-width: 0;");
+                sb.AppendLf("    max-width: 100%;");
+                sb.AppendLf("    box-sizing: border-box;");
+                sb.AppendLf("    overflow-wrap: anywhere;");
+                sb.AppendLf("}");
 
-                sb.AppendLine($"span.{prefix}margin-author {{");
-                sb.AppendLine("    font-weight: bold;");
-                sb.AppendLine("    color: #f57f17;");
-                sb.AppendLine("}");
+                sb.AppendLf($"span.{prefix}margin-author {{");
+                sb.AppendLf("    font-weight: bold;");
+                sb.AppendLf("    color: #f57f17;");
+                sb.AppendLf("}");
 
-                sb.AppendLine($"span.{prefix}margin-date {{");
-                sb.AppendLine("    color: #666;");
-                sb.AppendLine("    font-size: 0.85em;");
-                sb.AppendLine("}");
+                sb.AppendLf($"span.{prefix}margin-date {{");
+                sb.AppendLf("    color: #666;");
+                sb.AppendLf("    font-size: 0.85em;");
+                sb.AppendLf("}");
 
                 // Margin comment body
-                sb.AppendLine($"div.{prefix}margin-note-body {{");
-                sb.AppendLine("    color: #333;");
-                sb.AppendLine("}");
+                sb.AppendLf($"div.{prefix}margin-note-body {{");
+                sb.AppendLf("    color: #333;");
+                sb.AppendLf("}");
 
-                sb.AppendLine($"div.{prefix}margin-note-body p {{");
-                sb.AppendLine("    margin: 0;");
-                sb.AppendLine("}");
+                sb.AppendLf($"div.{prefix}margin-note-body p {{");
+                sb.AppendLf("    margin: 0;");
+                sb.AppendLf("}");
 
                 // Back reference link
-                sb.AppendLine($"a.{prefix}margin-backref {{");
-                sb.AppendLine("    color: #1976d2;");
-                sb.AppendLine("    text-decoration: none;");
-                sb.AppendLine("    font-size: 0.85em;");
-                sb.AppendLine("}");
+                sb.AppendLf($"a.{prefix}margin-backref {{");
+                sb.AppendLf("    color: #1976d2;");
+                sb.AppendLf("    text-decoration: none;");
+                sb.AppendLf("    font-size: 0.85em;");
+                sb.AppendLf("}");
 
-                sb.AppendLine($"a.{prefix}margin-backref:hover {{");
-                sb.AppendLine("    text-decoration: underline;");
-                sb.AppendLine("}");
+                sb.AppendLf($"a.{prefix}margin-backref:hover {{");
+                sb.AppendLf("    text-decoration: underline;");
+                sb.AppendLf("}");
 
                 // Highlighted text in margin mode - add anchor styling
-                sb.AppendLine($"span.{prefix}highlight[data-comment-id] {{");
-                sb.AppendLine("    cursor: pointer;");
-                sb.AppendLine("}");
+                sb.AppendLf($"span.{prefix}highlight[data-comment-id] {{");
+                sb.AppendLf("    cursor: pointer;");
+                sb.AppendLf("}");
 
                 // Print styles for margin mode
-                sb.AppendLine("@media print {");
-                sb.AppendLine($"    div.{prefix}margin-container {{");
-                sb.AppendLine("        display: block;");
-                sb.AppendLine("    }");
-                sb.AppendLine($"    aside.{prefix}margin-column {{");
-                sb.AppendLine("        width: auto;");
-                sb.AppendLine("        page-break-inside: avoid;");
-                sb.AppendLine("    }");
-                sb.AppendLine("}");
+                sb.AppendLf("@media print {");
+                sb.AppendLf($"    div.{prefix}margin-container {{");
+                sb.AppendLf("        display: block;");
+                sb.AppendLf("    }");
+                sb.AppendLf($"    aside.{prefix}margin-column {{");
+                sb.AppendLf("        width: auto;");
+                sb.AppendLf("        page-break-inside: avoid;");
+                sb.AppendLf("    }");
+                sb.AppendLf("}");
             }
 
             return sb.ToString();
@@ -3066,123 +3067,123 @@ namespace Docxodus
             var scale = settings.PaginationScale > 0 ? settings.PaginationScale : 1.0;
             var sb = new StringBuilder();
 
-            sb.AppendLine();
-            sb.AppendLine("/* Pagination CSS */");
+            sb.AppendLf();
+            sb.AppendLf("/* Pagination CSS */");
 
             // CSS variable for scale
-            sb.AppendLine(":root {");
-            sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo, "    --{0}scale: {1:F2};", prefix, scale));
-            sb.AppendLine("}");
+            sb.AppendLf(":root {");
+            sb.AppendLf(string.Format(NumberFormatInfo.InvariantInfo, "    --{0}scale: {1:F2};", prefix, scale));
+            sb.AppendLf("}");
 
             // Staging area - hidden for measurement by client-side JavaScript
-            sb.AppendLine($".{prefix}staging {{");
-            sb.AppendLine("    position: absolute;");
-            sb.AppendLine("    left: -9999px;");
-            sb.AppendLine("    visibility: hidden;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}staging {{");
+            sb.AppendLf("    position: absolute;");
+            sb.AppendLf("    left: -9999px;");
+            sb.AppendLf("    visibility: hidden;");
+            sb.AppendLf("}");
 
             // Main container with dark background (PDF.js style)
-            sb.AppendLine($".{prefix}container {{");
-            sb.AppendLine("    display: flex;");
-            sb.AppendLine("    flex-direction: column;");
-            sb.AppendLine("    align-items: center;");
-            sb.AppendLine("    gap: 20px;");
-            sb.AppendLine("    padding: 20px;");
-            sb.AppendLine("    background: #525659;");
-            sb.AppendLine("    min-height: 100vh;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}container {{");
+            sb.AppendLf("    display: flex;");
+            sb.AppendLf("    flex-direction: column;");
+            sb.AppendLf("    align-items: center;");
+            sb.AppendLf("    gap: 20px;");
+            sb.AppendLf("    padding: 20px;");
+            sb.AppendLf("    background: #525659;");
+            sb.AppendLf("    min-height: 100vh;");
+            sb.AppendLf("}");
 
             // Page box with shadow
-            sb.AppendLine($".{prefix}box {{");
-            sb.AppendLine("    background: white;");
-            sb.AppendLine("    box-shadow: 0 2px 8px rgba(0,0,0,0.3);");
-            sb.AppendLine("    position: relative;");
-            sb.AppendLine("    overflow: hidden;");
-            sb.AppendLine("    box-sizing: border-box;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}box {{");
+            sb.AppendLf("    background: white;");
+            sb.AppendLf("    box-shadow: 0 2px 8px rgba(0,0,0,0.3);");
+            sb.AppendLf("    position: relative;");
+            sb.AppendLf("    overflow: hidden;");
+            sb.AppendLf("    box-sizing: border-box;");
+            sb.AppendLf("}");
 
             // Content area within page
-            sb.AppendLine($".{prefix}content {{");
-            sb.AppendLine("    position: absolute;");
-            sb.AppendLine("    overflow-x: visible;");
-            sb.AppendLine("    overflow-y: clip;");
-            sb.AppendLine("    transform-origin: top left;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}content {{");
+            sb.AppendLf("    position: absolute;");
+            sb.AppendLf("    overflow-x: visible;");
+            sb.AppendLf("    overflow-y: clip;");
+            sb.AppendLf("    transform-origin: top left;");
+            sb.AppendLf("}");
 
             // Header band. Word measures w:header from the paper's top edge to the TOP of the
             // header story, which then grows downward — so the band is top-anchored and
             // top-aligned. The paginator supplies the page-specific top/height; anchoring it to
             // the top margin instead would pull the header down onto the body text.
-            sb.AppendLine($".{prefix}header {{");
-            sb.AppendLine("    position: absolute;");
-            sb.AppendLine("    overflow: hidden;");
-            sb.AppendLine("    box-sizing: border-box;");
-            sb.AppendLine("    display: flex;");
-            sb.AppendLine("    flex-direction: column;");
-            sb.AppendLine("    justify-content: flex-start;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}header {{");
+            sb.AppendLf("    position: absolute;");
+            sb.AppendLf("    overflow: hidden;");
+            sb.AppendLf("    box-sizing: border-box;");
+            sb.AppendLf("    display: flex;");
+            sb.AppendLf("    flex-direction: column;");
+            sb.AppendLf("    justify-content: flex-start;");
+            sb.AppendLf("}");
 
             // Footer band — the mirror: w:footer is the distance to the BOTTOM of the footer
             // story, which grows upward, so the band is bottom-anchored and bottom-aligned.
-            sb.AppendLine($".{prefix}footer {{");
-            sb.AppendLine("    position: absolute;");
-            sb.AppendLine("    overflow: hidden;");
-            sb.AppendLine("    box-sizing: border-box;");
-            sb.AppendLine("    display: flex;");
-            sb.AppendLine("    flex-direction: column;");
-            sb.AppendLine("    justify-content: flex-end;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}footer {{");
+            sb.AppendLf("    position: absolute;");
+            sb.AppendLf("    overflow: hidden;");
+            sb.AppendLf("    box-sizing: border-box;");
+            sb.AppendLf("    display: flex;");
+            sb.AppendLf("    flex-direction: column;");
+            sb.AppendLf("    justify-content: flex-end;");
+            sb.AppendLf("}");
 
             // Page number indicator
-            sb.AppendLine($".{prefix}number {{");
-            sb.AppendLine("    position: absolute;");
-            sb.AppendLine("    bottom: 8px;");
-            sb.AppendLine("    width: 100%;");
-            sb.AppendLine("    text-align: center;");
-            sb.AppendLine("    font-size: 11px;");
-            sb.AppendLine("    color: #666;");
-            sb.AppendLine("    pointer-events: none;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}number {{");
+            sb.AppendLf("    position: absolute;");
+            sb.AppendLf("    bottom: 8px;");
+            sb.AppendLf("    width: 100%;");
+            sb.AppendLf("    text-align: center;");
+            sb.AppendLf("    font-size: 11px;");
+            sb.AppendLf("    color: #666;");
+            sb.AppendLf("    pointer-events: none;");
+            sb.AppendLf("}");
 
             // Hide system page number when page has a document footer
-            sb.AppendLine($".{prefix}box:has(.{prefix}footer) .{prefix}number {{");
-            sb.AppendLine("    display: none;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}box:has(.{prefix}footer) .{prefix}number {{");
+            sb.AppendLf("    display: none;");
+            sb.AppendLf("}");
 
             // Page break marker (rendered by client-side as separator)
-            sb.AppendLine($".{prefix}break {{");
-            sb.AppendLine("    display: none;"); // Hidden in staging; processed by pagination engine
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}break {{");
+            sb.AppendLf("    display: none;"); // Hidden in staging; processed by pagination engine
+            sb.AppendLf("}");
 
             // Column break marker
-            sb.AppendLine($".{prefix}column-break {{");
-            sb.AppendLine("    display: none;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}column-break {{");
+            sb.AppendLf("    display: none;");
+            sb.AppendLf("}");
 
             // The viewer uses a flex column and scaled boxes on screen. Those layout
             // affordances can introduce blank physical pages when the paginated view is
             // captured with a browser's print/PDF path, so restore document-page layout
             // only for print. The conversion bridge enables GeneratePageCss for paginated
             // documents so Chromium also receives each document section's physical page size.
-            sb.AppendLine("@media print {");
-            sb.AppendLine($"    .{prefix}container {{");
-            sb.AppendLine("        display: block;");
-            sb.AppendLine("        gap: 0;");
-            sb.AppendLine("        padding: 0;");
-            sb.AppendLine("        background: transparent;");
-            sb.AppendLine("        min-height: 0;");
-            sb.AppendLine("    }");
-            sb.AppendLine($"    .{prefix}box {{");
-            sb.AppendLine("        zoom: 1 !important;");
-            sb.AppendLine("        transform: none !important;");
-            sb.AppendLine("        margin: 0 !important;");
-            sb.AppendLine("        box-shadow: none;");
-            sb.AppendLine("    }");
-            sb.AppendLine($"    .{prefix}box + .{prefix}box {{");
-            sb.AppendLine("        break-before: page;");
-            sb.AppendLine("        page-break-before: always;");
-            sb.AppendLine("    }");
-            sb.AppendLine("}");
+            sb.AppendLf("@media print {");
+            sb.AppendLf($"    .{prefix}container {{");
+            sb.AppendLf("        display: block;");
+            sb.AppendLf("        gap: 0;");
+            sb.AppendLf("        padding: 0;");
+            sb.AppendLf("        background: transparent;");
+            sb.AppendLf("        min-height: 0;");
+            sb.AppendLf("    }");
+            sb.AppendLf($"    .{prefix}box {{");
+            sb.AppendLf("        zoom: 1 !important;");
+            sb.AppendLf("        transform: none !important;");
+            sb.AppendLf("        margin: 0 !important;");
+            sb.AppendLf("        box-shadow: none;");
+            sb.AppendLf("    }");
+            sb.AppendLf($"    .{prefix}box + .{prefix}box {{");
+            sb.AppendLf("        break-before: page;");
+            sb.AppendLf("        page-break-before: always;");
+            sb.AppendLf("    }");
+            sb.AppendLf("}");
 
             return sb.ToString();
         }
@@ -3219,28 +3220,28 @@ namespace Docxodus
             var dims = ExtractPageDimensions(sectPr);
 
             var sb = new StringBuilder();
-            sb.AppendLine();
-            sb.AppendLine("/* Page CSS for print */");
-            sb.AppendLine("@page {");
+            sb.AppendLf();
+            sb.AppendLf("/* Page CSS for print */");
+            sb.AppendLf("@page {");
 
-            sb.AppendLine($"    size: {PageLengthCss(dims.PageWidthPt)} {PageLengthCss(dims.PageHeightPt)};");
+            sb.AppendLf($"    size: {PageLengthCss(dims.PageWidthPt)} {PageLengthCss(dims.PageHeightPt)};");
 
             if (settings.RenderPagination == PaginationMode.Paginated)
             {
                 // The paginator has already positioned content within each page box using the
                 // Word section margins. Reapplying them to the physical print page shrinks the
                 // box and can spill an A4 page onto an extra Letter-sized PDF page.
-                sb.AppendLine("    margin: 0;");
+                sb.AppendLf("    margin: 0;");
             }
             else
             {
                 // Generate margin (top right bottom left) for continuous HTML, where the
                 // browser's physical page margin is the only representation of section margins.
-                sb.AppendLine($"    margin: {PageLengthCss(dims.MarginTopPt)} {PageLengthCss(dims.MarginRightPt)} " +
+                sb.AppendLf($"    margin: {PageLengthCss(dims.MarginTopPt)} {PageLengthCss(dims.MarginRightPt)} " +
                     $"{PageLengthCss(dims.MarginBottomPt)} {PageLengthCss(dims.MarginLeftPt)};");
             }
 
-            sb.AppendLine("}");
+            sb.AppendLf("}");
 
             return sb.ToString();
         }
@@ -3260,26 +3261,26 @@ namespace Docxodus
             var prefix = settings.PaginationCssClassPrefix ?? "page-";
             var sb = new StringBuilder();
 
-            sb.AppendLine();
-            sb.AppendLine("/* Named page CSS for mixed-size paginated sections */");
+            sb.AppendLf();
+            sb.AppendLf("/* Named page CSS for mixed-size paginated sections */");
             for (int sectionIndex = 0; sectionIndex < sectionDimensions.Count; sectionIndex++)
             {
                 var dims = sectionDimensions[sectionIndex];
-                sb.AppendLine($"@page docxodus-section-{sectionIndex} {{");
-                sb.AppendLine($"    size: {PageLengthCss(dims.PageWidthPt)} {PageLengthCss(dims.PageHeightPt)};");
+                sb.AppendLf($"@page docxodus-section-{sectionIndex} {{");
+                sb.AppendLf($"    size: {PageLengthCss(dims.PageWidthPt)} {PageLengthCss(dims.PageHeightPt)};");
                 // Section margins are already represented inside each fixed page box.
-                sb.AppendLine("    margin: 0;");
-                sb.AppendLine("}");
+                sb.AppendLf("    margin: 0;");
+                sb.AppendLf("}");
             }
 
-            sb.AppendLine("@media print {");
+            sb.AppendLf("@media print {");
             for (int sectionIndex = 0; sectionIndex < sectionDimensions.Count; sectionIndex++)
             {
-                sb.AppendLine($"    .{prefix}box[data-section-index=\"{sectionIndex}\"] {{");
-                sb.AppendLine($"        page: docxodus-section-{sectionIndex};");
-                sb.AppendLine("    }");
+                sb.AppendLf($"    .{prefix}box[data-section-index=\"{sectionIndex}\"] {{");
+                sb.AppendLf($"        page: docxodus-section-{sectionIndex};");
+                sb.AppendLf("    }");
             }
-            sb.AppendLine("}");
+            sb.AppendLf("}");
 
             return sb.ToString();
         }
@@ -3309,86 +3310,86 @@ namespace Docxodus
             var prefix = settings.AnnotationCssClassPrefix ?? "annot-";
             var sb = new StringBuilder();
 
-            sb.AppendLine();
-            sb.AppendLine("/* Custom Annotations CSS */");
+            sb.AppendLf();
+            sb.AppendLf("/* Custom Annotations CSS */");
 
             // Annotation highlight base
-            sb.AppendLine($".{prefix}highlight {{");
-            sb.AppendLine("    position: relative;");
-            sb.AppendLine("    display: inline;");
-            sb.AppendLine("    background-color: color-mix(in srgb, var(--annot-color, #FFFF00) 35%, transparent);");
-            sb.AppendLine("    border-bottom: 2px solid var(--annot-color, #FFFF00);");
-            sb.AppendLine("    padding: 1px 2px;");
-            sb.AppendLine("    border-radius: 2px;");
-            sb.AppendLine("    transition: background-color 0.15s ease;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}highlight {{");
+            sb.AppendLf("    position: relative;");
+            sb.AppendLf("    display: inline;");
+            sb.AppendLf("    background-color: color-mix(in srgb, var(--annot-color, #FFFF00) 35%, transparent);");
+            sb.AppendLf("    border-bottom: 2px solid var(--annot-color, #FFFF00);");
+            sb.AppendLf("    padding: 1px 2px;");
+            sb.AppendLf("    border-radius: 2px;");
+            sb.AppendLf("    transition: background-color 0.15s ease;");
+            sb.AppendLf("}");
 
             // Hover state
-            sb.AppendLine($".{prefix}highlight:hover {{");
-            sb.AppendLine("    background-color: color-mix(in srgb, var(--annot-color, #FFFF00) 50%, transparent);");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}highlight:hover {{");
+            sb.AppendLf("    background-color: color-mix(in srgb, var(--annot-color, #FFFF00) 50%, transparent);");
+            sb.AppendLf("}");
 
             // Floating label above highlight
-            sb.AppendLine($".{prefix}label {{");
-            sb.AppendLine("    position: absolute;");
-            sb.AppendLine("    top: -1.7em;");
-            sb.AppendLine("    left: 0;");
-            sb.AppendLine("    font-size: 0.7em;");
-            sb.AppendLine("    font-weight: 600;");
-            sb.AppendLine("    background: var(--annot-color, #FFFF00);");
-            sb.AppendLine("    color: #000;");
-            sb.AppendLine("    padding: 2px 6px;");
-            sb.AppendLine("    border-radius: 3px;");
-            sb.AppendLine("    white-space: nowrap;");
-            sb.AppendLine("    box-shadow: 0 1px 3px rgba(0,0,0,0.2);");
-            sb.AppendLine("    z-index: 100;");
-            sb.AppendLine("    pointer-events: none;");
-            sb.AppendLine("    line-height: 1.2;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}label {{");
+            sb.AppendLf("    position: absolute;");
+            sb.AppendLf("    top: -1.7em;");
+            sb.AppendLf("    left: 0;");
+            sb.AppendLf("    font-size: 0.7em;");
+            sb.AppendLf("    font-weight: 600;");
+            sb.AppendLf("    background: var(--annot-color, #FFFF00);");
+            sb.AppendLf("    color: #000;");
+            sb.AppendLf("    padding: 2px 6px;");
+            sb.AppendLf("    border-radius: 3px;");
+            sb.AppendLf("    white-space: nowrap;");
+            sb.AppendLf("    box-shadow: 0 1px 3px rgba(0,0,0,0.2);");
+            sb.AppendLf("    z-index: 100;");
+            sb.AppendLf("    pointer-events: none;");
+            sb.AppendLf("    line-height: 1.2;");
+            sb.AppendLf("}");
 
             // Only show label on first segment of multi-paragraph annotations
-            sb.AppendLine($".{prefix}continuation .{prefix}label,");
-            sb.AppendLine($".{prefix}end .{prefix}label {{");
-            sb.AppendLine("    display: none;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}continuation .{prefix}label,");
+            sb.AppendLf($".{prefix}end .{prefix}label {{");
+            sb.AppendLf("    display: none;");
+            sb.AppendLf("}");
 
             // Inline label mode
-            sb.AppendLine($".{prefix}highlight[data-label-mode=\"inline\"] .{prefix}label {{");
-            sb.AppendLine("    position: static;");
-            sb.AppendLine("    display: inline;");
-            sb.AppendLine("    margin-right: 4px;");
-            sb.AppendLine("    font-size: 0.8em;");
-            sb.AppendLine("    vertical-align: middle;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}highlight[data-label-mode=\"inline\"] .{prefix}label {{");
+            sb.AppendLf("    position: static;");
+            sb.AppendLf("    display: inline;");
+            sb.AppendLf("    margin-right: 4px;");
+            sb.AppendLf("    font-size: 0.8em;");
+            sb.AppendLf("    vertical-align: middle;");
+            sb.AppendLf("}");
 
             // Tooltip mode - show on hover
-            sb.AppendLine($".{prefix}highlight[data-label-mode=\"tooltip\"] .{prefix}label {{");
-            sb.AppendLine("    display: none;");
-            sb.AppendLine("    top: auto;");
-            sb.AppendLine("    bottom: 100%;");
-            sb.AppendLine("    margin-bottom: 4px;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}highlight[data-label-mode=\"tooltip\"] .{prefix}label {{");
+            sb.AppendLf("    display: none;");
+            sb.AppendLf("    top: auto;");
+            sb.AppendLf("    bottom: 100%;");
+            sb.AppendLf("    margin-bottom: 4px;");
+            sb.AppendLf("}");
 
-            sb.AppendLine($".{prefix}highlight[data-label-mode=\"tooltip\"]:hover .{prefix}label {{");
-            sb.AppendLine("    display: block;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}highlight[data-label-mode=\"tooltip\"]:hover .{prefix}label {{");
+            sb.AppendLf("    display: block;");
+            sb.AppendLf("}");
 
             // No label mode
-            sb.AppendLine($".{prefix}highlight[data-label-mode=\"none\"] .{prefix}label {{");
-            sb.AppendLine("    display: none;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}highlight[data-label-mode=\"none\"] .{prefix}label {{");
+            sb.AppendLf("    display: none;");
+            sb.AppendLf("}");
 
             // Handle nested/overlapping annotations
-            sb.AppendLine($".{prefix}highlight .{prefix}highlight {{");
-            sb.AppendLine("    background: none;");
-            sb.AppendLine("    border-bottom-style: dashed;");
-            sb.AppendLine("    padding: 0;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}highlight .{prefix}highlight {{");
+            sb.AppendLf("    background: none;");
+            sb.AppendLf("    border-bottom-style: dashed;");
+            sb.AppendLf("    padding: 0;");
+            sb.AppendLf("}");
 
             // Ensure labels don't overlap badly for nested annotations
-            sb.AppendLine($".{prefix}highlight .{prefix}highlight .{prefix}label {{");
-            sb.AppendLine("    top: -3.2em;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}highlight .{prefix}highlight .{prefix}label {{");
+            sb.AppendLf("    top: -3.2em;");
+            sb.AppendLf("}");
 
             return sb.ToString();
         }
@@ -3441,28 +3442,28 @@ namespace Docxodus
         private static string GenerateDocumentLayoutCss()
         {
             var sb = new StringBuilder();
-            sb.AppendLine("/* Document layout CSS — Word's layout invariants, which CSS defaults do not match. */");
-            sb.AppendLine("body {");
-            sb.AppendLine("    overflow-wrap: break-word;");
-            sb.AppendLine("    font-kerning: none;");
-            sb.AppendLine("    font-variant-ligatures: none;");
-            sb.AppendLine("}");
-            sb.AppendLine("span {");
-            sb.AppendLine("    white-space: pre-wrap;");
-            sb.AppendLine("}");
-            sb.AppendLine("body, body * {");
-            sb.AppendLine("    -webkit-text-size-adjust: 100%;");
-            sb.AppendLine("    text-size-adjust: 100%;");
-            sb.AppendLine("}");
-            sb.AppendLine("table {");
-            sb.AppendLine("    max-width: 100%;");
-            sb.AppendLine("}");
-            sb.AppendLine("td, th {");
-            sb.AppendLine("    overflow-wrap: anywhere;");
-            sb.AppendLine("}");
-            sb.AppendLine("sup, sub {");
-            sb.AppendLine("    line-height: 0;");
-            sb.AppendLine("}");
+            sb.AppendLf("/* Document layout CSS — Word's layout invariants, which CSS defaults do not match. */");
+            sb.AppendLf("body {");
+            sb.AppendLf("    overflow-wrap: break-word;");
+            sb.AppendLf("    font-kerning: none;");
+            sb.AppendLf("    font-variant-ligatures: none;");
+            sb.AppendLf("}");
+            sb.AppendLf("span {");
+            sb.AppendLf("    white-space: pre-wrap;");
+            sb.AppendLf("}");
+            sb.AppendLf("body, body * {");
+            sb.AppendLf("    -webkit-text-size-adjust: 100%;");
+            sb.AppendLf("    text-size-adjust: 100%;");
+            sb.AppendLf("}");
+            sb.AppendLf("table {");
+            sb.AppendLf("    max-width: 100%;");
+            sb.AppendLf("}");
+            sb.AppendLf("td, th {");
+            sb.AppendLf("    overflow-wrap: anywhere;");
+            sb.AppendLf("}");
+            sb.AppendLf("sup, sub {");
+            sb.AppendLf("    line-height: 0;");
+            sb.AppendLf("}");
             return sb.ToString();
         }
 
@@ -3474,57 +3475,57 @@ namespace Docxodus
             var prefix = settings.UnsupportedContentCssClassPrefix ?? "unsupported-";
             var sb = new StringBuilder();
 
-            sb.AppendLine();
-            sb.AppendLine("/* Unsupported Content Placeholders CSS */");
+            sb.AppendLf();
+            sb.AppendLf("/* Unsupported Content Placeholders CSS */");
 
             // Base placeholder style
-            sb.AppendLine($".{prefix}placeholder {{");
-            sb.AppendLine("    display: inline-block;");
-            sb.AppendLine("    background-color: #fff3cd;");
-            sb.AppendLine("    border: 1px dashed #856404;");
-            sb.AppendLine("    border-radius: 3px;");
-            sb.AppendLine("    padding: 2px 6px;");
-            sb.AppendLine("    font-family: monospace;");
-            sb.AppendLine("    font-size: 0.85em;");
-            sb.AppendLine("    color: #856404;");
-            sb.AppendLine("    cursor: help;");
-            sb.AppendLine("    vertical-align: middle;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}placeholder {{");
+            sb.AppendLf("    display: inline-block;");
+            sb.AppendLf("    background-color: #fff3cd;");
+            sb.AppendLf("    border: 1px dashed #856404;");
+            sb.AppendLf("    border-radius: 3px;");
+            sb.AppendLf("    padding: 2px 6px;");
+            sb.AppendLf("    font-family: monospace;");
+            sb.AppendLf("    font-size: 0.85em;");
+            sb.AppendLf("    color: #856404;");
+            sb.AppendLf("    cursor: help;");
+            sb.AppendLf("    vertical-align: middle;");
+            sb.AppendLf("}");
 
             // Image placeholders (green)
-            sb.AppendLine($".{prefix}image {{");
-            sb.AppendLine("    background-color: #d4edda;");
-            sb.AppendLine("    border-color: #28a745;");
-            sb.AppendLine("    color: #155724;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}image {{");
+            sb.AppendLf("    background-color: #d4edda;");
+            sb.AppendLf("    border-color: #28a745;");
+            sb.AppendLf("    color: #155724;");
+            sb.AppendLf("}");
 
             // Math placeholders (blue)
-            sb.AppendLine($".{prefix}math {{");
-            sb.AppendLine("    background-color: #d1ecf1;");
-            sb.AppendLine("    border-color: #17a2b8;");
-            sb.AppendLine("    color: #0c5460;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}math {{");
+            sb.AppendLf("    background-color: #d1ecf1;");
+            sb.AppendLf("    border-color: #17a2b8;");
+            sb.AppendLf("    color: #0c5460;");
+            sb.AppendLf("}");
 
             // Form field placeholders (gray)
-            sb.AppendLine($".{prefix}form {{");
-            sb.AppendLine("    background-color: #e2e3e5;");
-            sb.AppendLine("    border-color: #6c757d;");
-            sb.AppendLine("    color: #383d41;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}form {{");
+            sb.AppendLf("    background-color: #e2e3e5;");
+            sb.AppendLf("    border-color: #6c757d;");
+            sb.AppendLf("    color: #383d41;");
+            sb.AppendLf("}");
 
             // Ruby annotation placeholders (light blue)
-            sb.AppendLine($".{prefix}ruby {{");
-            sb.AppendLine("    background-color: #cce5ff;");
-            sb.AppendLine("    border-color: #0d6efd;");
-            sb.AppendLine("    color: #084298;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}ruby {{");
+            sb.AppendLf("    background-color: #cce5ff;");
+            sb.AppendLf("    border-color: #0d6efd;");
+            sb.AppendLf("    color: #084298;");
+            sb.AppendLf("}");
 
             // OLE/embedded object placeholders (purple)
-            sb.AppendLine($".{prefix}object {{");
-            sb.AppendLine("    background-color: #e2d9f3;");
-            sb.AppendLine("    border-color: #6f42c1;");
-            sb.AppendLine("    color: #432874;");
-            sb.AppendLine("}");
+            sb.AppendLf($".{prefix}object {{");
+            sb.AppendLf("    background-color: #e2d9f3;");
+            sb.AppendLf("    border-color: #6f42c1;");
+            sb.AppendLf("    color: #432874;");
+            sb.AppendLf("}");
 
             return sb.ToString();
         }
@@ -7354,7 +7355,7 @@ namespace Docxodus
                     return settings.RenderHeadersAndFooters && settings.RenderHeaderFooterRegistry
                         && settings.RenderPagination != PaginationMode.Paginated
                         ? (object?)section ?? ""
-                        : section?.ToString() ?? "";
+                        : section?.ToXmlString() ?? "";
                 });
 
             int sectionIndex = 0;
@@ -11264,7 +11265,7 @@ namespace Docxodus
         {
             var copy = new XElement(element);
             copy.DescendantsAndSelf().Attributes(PtOpenXml.Unid).Remove();
-            return copy.ToString(SaveOptions.DisableFormatting);
+            return copy.ToXmlString(SaveOptions.DisableFormatting);
         }
 
         private static List<XElement> CreateBorderDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,

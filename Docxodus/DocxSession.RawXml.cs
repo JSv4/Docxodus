@@ -30,7 +30,7 @@ public sealed partial class DocxSession
         if (target is null)
             throw new ArgumentException($"anchor not found: {anchorId}");
         var element = target.Resolve(_doc!);
-        return element?.ToString() ?? "";
+        return element?.ToXmlString() ?? "";
     }
 
     /// <summary>

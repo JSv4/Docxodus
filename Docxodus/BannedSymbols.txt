@@ -1,0 +1,32 @@
+// .NET defaults these to Environment.NewLine ("\r\n" on Windows). The library writes "\n" on every
+// platform (issue #1659); Internal/LineEndings.cs holds the replacements and is the only allowed caller.
+M:System.Text.StringBuilder.AppendLine;Use AppendLf (Internal/LineEndings.cs)
+M:System.Text.StringBuilder.AppendLine(System.String);Use AppendLf (Internal/LineEndings.cs)
+M:System.Text.StringBuilder.AppendLine(System.Text.StringBuilder.AppendInterpolatedStringHandler@);Use AppendLf (Internal/LineEndings.cs)
+M:System.Text.StringBuilder.AppendLine(System.IFormatProvider,System.Text.StringBuilder.AppendInterpolatedStringHandler@);Use AppendLf (Internal/LineEndings.cs)
+P:System.Environment.NewLine;Write "\n" (LineEndings.Lf)
+M:System.String.ReplaceLineEndings;Pass the replacement explicitly, e.g. ReplaceLineEndings(LineEndings.Lf)
+M:System.IO.TextWriter.WriteLine;Write LineEndings.Lf explicitly
+M:System.IO.TextWriter.WriteLine(System.String);Write LineEndings.Lf explicitly
+M:System.Xml.Linq.XNode.ToString;Use ToXmlString (Internal/LineEndings.cs)
+M:System.Xml.Linq.XNode.ToString(System.Xml.Linq.SaveOptions);Use ToXmlString (Internal/LineEndings.cs)
+M:System.Xml.Linq.XDocument.Save(System.IO.Stream);Use SaveLf (Internal/LineEndings.cs)
+M:System.Xml.Linq.XDocument.Save(System.IO.Stream,System.Xml.Linq.SaveOptions);Use SaveLf (Internal/LineEndings.cs)
+M:System.Xml.Linq.XDocument.Save(System.IO.TextWriter);Use SaveLf (Internal/LineEndings.cs)
+M:System.Xml.Linq.XDocument.Save(System.IO.TextWriter,System.Xml.Linq.SaveOptions);Use SaveLf (Internal/LineEndings.cs)
+M:System.Xml.Linq.XDocument.Save(System.String);Use SaveLf (Internal/LineEndings.cs)
+M:System.Xml.Linq.XDocument.Save(System.String,System.Xml.Linq.SaveOptions);Use SaveLf (Internal/LineEndings.cs)
+M:System.Xml.Linq.XElement.Save(System.IO.Stream);Save through an XmlWriter from LineEndings.CreateXmlWriterSettings
+M:System.Xml.Linq.XElement.Save(System.IO.Stream,System.Xml.Linq.SaveOptions);Save through an XmlWriter from LineEndings.CreateXmlWriterSettings
+M:System.Xml.Linq.XElement.Save(System.IO.TextWriter);Save through an XmlWriter from LineEndings.CreateXmlWriterSettings
+M:System.Xml.Linq.XElement.Save(System.IO.TextWriter,System.Xml.Linq.SaveOptions);Save through an XmlWriter from LineEndings.CreateXmlWriterSettings
+M:System.Xml.Linq.XElement.Save(System.String);Save through an XmlWriter from LineEndings.CreateXmlWriterSettings
+M:System.Xml.Linq.XElement.Save(System.String,System.Xml.Linq.SaveOptions);Save through an XmlWriter from LineEndings.CreateXmlWriterSettings
+M:System.Xml.XmlWriter.Create(System.IO.Stream);Pass LineEndings.CreateXmlWriterSettings()
+M:System.Xml.XmlWriter.Create(System.IO.TextWriter);Pass LineEndings.CreateXmlWriterSettings()
+M:System.Xml.XmlWriter.Create(System.String);Pass LineEndings.CreateXmlWriterSettings()
+M:System.Xml.XmlWriter.Create(System.Text.StringBuilder);Pass LineEndings.CreateXmlWriterSettings()
+M:System.Xml.XmlWriter.Create(System.Xml.XmlWriter);Pass LineEndings.CreateXmlWriterSettings()
+M:System.Xml.XmlWriterSettings.#ctor;Use LineEndings.CreateXmlWriterSettings()
+P:System.Text.Json.JsonSerializerOptions.WriteIndented;Use LineEndings.Indent(options, indented)
+P:System.Text.Json.JsonWriterOptions.Indented;Use LineEndings.Indent(options, indented)

@@ -6,6 +6,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text;
+using Docxodus.Internal;
 
 namespace Docxodus.Verification;
 
@@ -262,8 +263,7 @@ public sealed record RedlineReversibilityProof
             var options = new JsonSerializerOptions
             {
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                WriteIndented = indented,
-            };
+            }.Indent(indented);
             options.Converters.Add(new JsonStringEnumConverter<RedlineRevisionDisposition>(
                 JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<RedlineProofDirection>(

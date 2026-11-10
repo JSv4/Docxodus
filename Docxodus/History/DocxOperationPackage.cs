@@ -5,6 +5,7 @@ using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 using Docxodus.Verification;
+using Docxodus.Internal;
 
 namespace Docxodus.History;
 
@@ -34,8 +35,10 @@ internal static class DocxOperationPackage
         node.Value = replacement;
         node.SetAttributeValue(XNamespace.Xml + "space", "preserve");
         using var output = new MemoryStream();
-        using (var writer = XmlWriter.Create(output, new XmlWriterSettings
-        { Encoding = new UTF8Encoding(false, true), Indent = false, CloseOutput = false, NewLineHandling = NewLineHandling.Entitize }))
+        var settings = LineEndings.CreateXmlWriterSettings();
+        settings.Encoding = new UTF8Encoding(false, true);
+        settings.NewLineHandling = NewLineHandling.Entitize;
+        using (var writer = XmlWriter.Create(output, settings))
             document.Save(writer);
         entries[splice.PartUri] = entry with { Bytes = output.ToArray() };
         return Write(entries);

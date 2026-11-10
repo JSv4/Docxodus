@@ -13,6 +13,7 @@ using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 using System.Xml.Schema;
+using Docxodus.Internal;
 
 namespace Docxodus
 {
@@ -94,7 +95,7 @@ namespace Docxodus
             string? contentType = null;
             string? boundary = null;
 
-            string[] lines = src.Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+            string[] lines = src.ReplaceLineEndings(LineEndings.Lf).Split(LineEndings.Lf);
 
 
             var priambleKeyWords = new[]
@@ -185,7 +186,7 @@ namespace Docxodus
                     var partText = rp
                         .Skip(partPriamble.Length)
                         .Skip(blankLinesAtBeginning)
-                        .Select(l => l + Environment.NewLine)
+                        .Select(l => l + LineEndings.Lf)
                         .StringConcatenate();
 
                     if (partContentType != null && partContentType.Contains(";"))
@@ -706,12 +707,9 @@ namespace Docxodus
 
         public static string ToStringNewLineOnAttributes(this XElement element)
         {
-            var settings = new XmlWriterSettings
-            {
-                Indent = true,
-                OmitXmlDeclaration = true,
-                NewLineOnAttributes = true
-            };
+            var settings = LineEndings.CreateXmlWriterSettings(SaveOptions.None);
+            settings.OmitXmlDeclaration = true;
+            settings.NewLineOnAttributes = true;
             var stringBuilder = new StringBuilder();
             using (var stringWriter = new StringWriter(stringBuilder))
             using (XmlWriter xmlWriter = XmlWriter.Create(stringWriter, settings))
@@ -1095,9 +1093,9 @@ namespace Docxodus
                         proc.StartInfo.RedirectStandardOutput = true;
                         proc.StartInfo.RedirectStandardError = true;
                         proc.OutputDataReceived +=
-                            (o, e) => runResults.Output.Append(e.Data).Append(Environment.NewLine);
+                            (o, e) => runResults.Output.Append(e.Data).Append(LineEndings.Lf);
                         proc.ErrorDataReceived +=
-                            (o, e) => runResults.Error.Append(e.Data).Append(Environment.NewLine);
+                            (o, e) => runResults.Error.Append(e.Data).Append(LineEndings.Lf);
                         proc.Start();
                         proc.BeginOutputReadLine();
                         proc.BeginErrorReadLine();
@@ -1232,7 +1230,7 @@ namespace Docxodus
                 if (ts.Contains('.'))
                     ts = ts.Substring(0, ts.Length - 5);
                 string s = bucket.Key.PadRight(60, '-') + "  " + string.Format("{0:00000000}", bucket.Value.Count) + "  " + ts;
-                sb.Append(s + Environment.NewLine);
+                sb.Append(s + LineEndings.Lf);
             }
             TimeSpan total = Buckets
                 .Aggregate(TimeSpan.Zero, (t, b) => t + b.Value.Time);
@@ -1250,7 +1248,7 @@ namespace Docxodus
                 if (ts.Contains('.'))
                     ts = ts.Substring(0, ts.Length - 5);
                 string s = bucket.Key + "," + bucket.Value.Count.ToString() + "," + ts;
-                sb.Append(s + Environment.NewLine);
+                sb.Append(s + LineEndings.Lf);
             }
             return sb.ToString();
         }
@@ -1264,7 +1262,7 @@ namespace Docxodus
                 if (ts.Contains('.'))
                     ts = ts.Substring(0, ts.Length - 5);
                 string s = bucket.Key.PadRight(60, '-') + "  " + string.Format("{0:00000000}", bucket.Value.Count) + "  " + ts;
-                sb.Append(s + Environment.NewLine);
+                sb.Append(s + LineEndings.Lf);
             }
             TimeSpan total = Buckets
                 .Aggregate(TimeSpan.Zero, (t, b) => t + b.Value.Time);
@@ -1340,7 +1338,7 @@ namespace Docxodus
                 if (ts.Contains('.'))
                     ts = ts.Substring(0, ts.Length - 5);
                 string s = bucket.Key.PadRight(80, '-') + "  " + string.Format("{0:00000000}", bucket.Value.Count) + "  " + ts;
-                sb.Append(s + Environment.NewLine);
+                sb.Append(s + LineEndings.Lf);
             }
             TimeSpan total = Buckets
                 .Aggregate(TimeSpan.Zero, (t, b) => t + b.Value.Time);
@@ -1358,7 +1356,7 @@ namespace Docxodus
                 if (ts.Contains('.'))
                     ts = ts.Substring(0, ts.Length - 5);
                 string s = bucket.Key + "," + bucket.Value.Count.ToString() + "," + ts;
-                sb.Append(s + Environment.NewLine);
+                sb.Append(s + LineEndings.Lf);
             }
             return sb.ToString();
         }
@@ -1372,7 +1370,7 @@ namespace Docxodus
                 if (ts.Contains('.'))
                     ts = ts.Substring(0, ts.Length - 5);
                 string s = bucket.Key.PadRight(80, '-') + "  " + string.Format("{0:00000000}", bucket.Value.Count) + "  " + ts;
-                sb.Append(s + Environment.NewLine);
+                sb.Append(s + LineEndings.Lf);
             }
             TimeSpan total = Buckets
                 .Aggregate(TimeSpan.Zero, (t, b) => t + b.Value.Time);

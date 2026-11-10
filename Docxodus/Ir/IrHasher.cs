@@ -9,6 +9,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Internal;
 
 namespace Docxodus.Ir;
 
@@ -91,7 +92,7 @@ internal static class IrHasher
     {
         var clone = new XElement(element);
         Clean(clone, resolver);
-        var xml = clone.ToString(SaveOptions.DisableFormatting);
+        var xml = clone.ToXmlString(SaveOptions.DisableFormatting);
         return Encoding.UTF8.GetBytes(xml);
     }
 
@@ -108,7 +109,7 @@ internal static class IrHasher
     {
         var clone = new XElement(element);
         Clean(clone, resolver);
-        return IrHash.ComputeUtf8(clone.ToString(SaveOptions.DisableFormatting));
+        return IrHash.ComputeUtf8(clone.ToXmlString(SaveOptions.DisableFormatting));
     }
 
     /// <summary>
@@ -124,7 +125,7 @@ internal static class IrHasher
         ArgumentNullException.ThrowIfNull(attributeRewrite);
         var clone = new XElement(element);
         Clean(clone, resolver: null, attributeRewrite: attributeRewrite);
-        return IrHash.Compute(Encoding.UTF8.GetBytes(clone.ToString(SaveOptions.DisableFormatting)));
+        return IrHash.Compute(Encoding.UTF8.GetBytes(clone.ToXmlString(SaveOptions.DisableFormatting)));
     }
 
     private static void Clean(

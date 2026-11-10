@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Docxodus.Internal;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 
@@ -765,8 +766,8 @@ public static class WmlToMarkdownConverter
         var bodyScope = scopes.FirstOrDefault(s => s.Name == "body");
         if (bodyScope != null)
         {
-            ctx.Sb.AppendLine("# Document");
-            ctx.Sb.AppendLine();
+            ctx.Sb.AppendLf("# Document");
+            ctx.Sb.AppendLf();
             ctx.Scope = "body";
             var body = bodyScope.Root.Element(W.body);
             if (body != null) EmitBlocks(body.Elements(), ctx);
@@ -782,12 +783,12 @@ public static class WmlToMarkdownConverter
         if (headerScopes.Count > 0)
         {
             if (anyScopeEmitted) AppendScopeDivider(ctx.Sb);
-            ctx.Sb.AppendLine("# Headers");
-            ctx.Sb.AppendLine();
+            ctx.Sb.AppendLf("# Headers");
+            ctx.Sb.AppendLf();
             foreach (var s in headerScopes)
             {
-                ctx.Sb.Append("## ").AppendLine(s.Name);
-                ctx.Sb.AppendLine();
+                ctx.Sb.Append("## ").AppendLf(s.Name);
+                ctx.Sb.AppendLf();
                 ctx.Scope = s.Name;
                 EmitBlocks(s.Root.Elements(), ctx);
             }
@@ -800,12 +801,12 @@ public static class WmlToMarkdownConverter
         if (footerScopes.Count > 0)
         {
             if (anyScopeEmitted) AppendScopeDivider(ctx.Sb);
-            ctx.Sb.AppendLine("# Footers");
-            ctx.Sb.AppendLine();
+            ctx.Sb.AppendLf("# Footers");
+            ctx.Sb.AppendLf();
             foreach (var s in footerScopes)
             {
-                ctx.Sb.Append("## ").AppendLine(s.Name);
-                ctx.Sb.AppendLine();
+                ctx.Sb.Append("## ").AppendLf(s.Name);
+                ctx.Sb.AppendLf();
                 ctx.Scope = s.Name;
                 EmitBlocks(s.Root.Elements(), ctx);
             }
@@ -841,8 +842,8 @@ public static class WmlToMarkdownConverter
 
     private static void AppendScopeDivider(StringBuilder sb)
     {
-        sb.AppendLine("---");
-        sb.AppendLine();
+        sb.AppendLf("---");
+        sb.AppendLf();
     }
 
     /// <summary>
@@ -871,8 +872,8 @@ public static class WmlToMarkdownConverter
         if (notes.Count == 0) return;
 
         if (precedingContent) AppendScopeDivider(ctx.Sb);
-        ctx.Sb.Append("# ").AppendLine(header);
-        ctx.Sb.AppendLine();
+        ctx.Sb.Append("# ").AppendLf(header);
+        ctx.Sb.AppendLf();
         ctx.Scope = scope.Name;
         foreach (var note in notes)
             EmitNoteDefinition(note, ctx, kindPrefix);
@@ -891,8 +892,8 @@ public static class WmlToMarkdownConverter
             first = false;
             EmitInlineRuns(p, ctx);
         }
-        ctx.Sb.AppendLine();
-        ctx.Sb.AppendLine();
+        ctx.Sb.AppendLf();
+        ctx.Sb.AppendLf();
         EmitTextboxes(note, ctx);
     }
 
@@ -921,12 +922,12 @@ public static class WmlToMarkdownConverter
         if (comments.Count == 0) return;
 
         if (precedingContent) AppendScopeDivider(ctx.Sb);
-        ctx.Sb.AppendLine("# Comments");
-        ctx.Sb.AppendLine();
+        ctx.Sb.AppendLf("# Comments");
+        ctx.Sb.AppendLf();
         ctx.Scope = "cmt";
         foreach (var c in comments)
             EmitComment(c, ctx);
-        ctx.Sb.AppendLine();
+        ctx.Sb.AppendLf();
     }
 
     private static void EmitComment(XElement c, EmitContext ctx)
@@ -943,7 +944,7 @@ public static class WmlToMarkdownConverter
             EmitInlineRuns(p, ctx);
             ctx.Sb.Append(' ');
         }
-        ctx.Sb.AppendLine();
+        ctx.Sb.AppendLf();
         EmitTextboxes(c, ctx);
     }
 
@@ -1048,7 +1049,7 @@ public static class WmlToMarkdownConverter
                 {
                     // End of a list block — emit the trailing blank line that the list item
                     // emitter intentionally omits.
-                    ctx.Sb.AppendLine();
+                    ctx.Sb.AppendLf();
                 }
                 EmitTextboxes(b, ctx);
             }
@@ -1086,8 +1087,7 @@ public static class WmlToMarkdownConverter
 
     internal static void EnsureBlankLine(StringBuilder sb)
     {
-        if (sb.Length > 0 && (sb.Length < 2 * Environment.NewLine.Length
-            || sb[sb.Length - 1 - Environment.NewLine.Length] != '\n')) sb.AppendLine();
+        if (sb.Length > 0 && (sb.Length < 2 || sb[^2] != '\n')) sb.AppendLf();
     }
 
     private static IEnumerable<XElement> TextboxBodies(XElement host, WmlToMarkdownConverterSettings settings)
@@ -1167,8 +1167,8 @@ public static class WmlToMarkdownConverter
                 if (numberPrefix != null) ctx.Sb.Append(numberPrefix).Append(' ');
             }
             EmitInlineRuns(p, ctx);
-            ctx.Sb.AppendLine();
-            ctx.Sb.AppendLine();
+            ctx.Sb.AppendLf();
+            ctx.Sb.AppendLf();
             EmitInlineSectionBreak(p, ctx);
             return;
         }
@@ -1208,8 +1208,8 @@ public static class WmlToMarkdownConverter
                 ctx.Sb.Length--;
             }
         }
-        ctx.Sb.AppendLine();
-        ctx.Sb.AppendLine();
+        ctx.Sb.AppendLf();
+        ctx.Sb.AppendLf();
         EmitInlineSectionBreak(p, ctx);
     }
 
@@ -1243,10 +1243,10 @@ public static class WmlToMarkdownConverter
         if (ctx.Settings.AnchorMode != AnchorRenderMode.None)
         {
             var rendered = ctx.AnchorIdMap.Render(unid);
-            ctx.Sb.Append("{#sec:").Append(ctx.Scope).Append(':').Append(rendered).AppendLine("}");
+            ctx.Sb.Append("{#sec:").Append(ctx.Scope).Append(':').Append(rendered).AppendLf("}");
         }
-        ctx.Sb.AppendLine("---");
-        ctx.Sb.AppendLine();
+        ctx.Sb.AppendLf("---");
+        ctx.Sb.AppendLf();
     }
 
     /// <summary>Build the anchor prefix (with trailing space) for a block element, or empty string when AnchorMode==None.</summary>
@@ -1560,7 +1560,7 @@ public static class WmlToMarkdownConverter
 
         ctx.Sb.Append(indent).Append(anchor).Append(marker).Append(' ');
         EmitInlineRuns(p, ctx);
-        ctx.Sb.AppendLine();
+        ctx.Sb.AppendLf();
         // The trailing blank line that separates list blocks from following content is
         // emitted by EmitBlocks once the run of list items ends.
     }
@@ -1627,19 +1627,19 @@ public static class WmlToMarkdownConverter
 
     private static void EmitGfmTable(XElement tbl, string anchor, EmitContext ctx)
     {
-        if (anchor.Length > 0) { ctx.Sb.Append(anchor); ctx.Sb.AppendLine(); }
+        if (anchor.Length > 0) { ctx.Sb.Append(anchor); ctx.Sb.AppendLf(); }
         var rows = ProjectedRows(tbl, ctx.Settings).ToList();
         if (rows.Count == 0) return;
 
         var headerCells = TableChildren(rows[0], W.tc).Select(CellTextForGfm).ToList();
-        ctx.Sb.Append("| ").Append(string.Join(" | ", headerCells)).AppendLine(" |");
-        ctx.Sb.Append('|').Append(string.Concat(Enumerable.Repeat(" --- |", headerCells.Count))).AppendLine();
+        ctx.Sb.Append("| ").Append(string.Join(" | ", headerCells)).AppendLf(" |");
+        ctx.Sb.Append('|').Append(string.Concat(Enumerable.Repeat(" --- |", headerCells.Count))).AppendLf();
         foreach (var r in rows.Skip(1))
         {
             var cells = TableChildren(r, W.tc).Select(CellTextForGfm);
-            ctx.Sb.Append("| ").Append(string.Join(" | ", cells)).AppendLine(" |");
+            ctx.Sb.Append("| ").Append(string.Join(" | ", cells)).AppendLf(" |");
         }
-        ctx.Sb.AppendLine();
+        ctx.Sb.AppendLf();
     }
 
     private static void EmitOpaqueTable(XElement tbl, string anchor, EmitContext ctx)
@@ -1651,12 +1651,12 @@ public static class WmlToMarkdownConverter
             .Select(tr => TableChildren(tr, W.tc)
                 .Sum(tc => Math.Max(1, (int?)tc.Element(W.tcPr)?.Element(W.gridSpan)?.Attribute(W.val) ?? 1)))
             .DefaultIfEmpty(0).Max();
-        if (anchor.Length > 0) { ctx.Sb.Append(anchor); ctx.Sb.AppendLine(); }
-        ctx.Sb.AppendLine("```table");
-        ctx.Sb.Append("rows: ").Append(rows.Count).AppendLine();
-        ctx.Sb.Append("cols: ").Append(cols).AppendLine();
-        ctx.Sb.AppendLine("```");
-        ctx.Sb.AppendLine();
+        if (anchor.Length > 0) { ctx.Sb.Append(anchor); ctx.Sb.AppendLf(); }
+        ctx.Sb.AppendLf("```table");
+        ctx.Sb.Append("rows: ").Append(rows.Count).AppendLf();
+        ctx.Sb.Append("cols: ").Append(cols).AppendLf();
+        ctx.Sb.AppendLf("```");
+        ctx.Sb.AppendLf();
     }
 
     private static string CellTextRaw(XElement tc)

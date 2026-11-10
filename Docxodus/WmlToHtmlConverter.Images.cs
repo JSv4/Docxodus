@@ -53,7 +53,7 @@ public static partial class WmlToHtmlConverter
             else if (imageType == UnsupportedContentType.EmfImage)
             {
                 emf = EmfImage.Read(imageBytes);
-                imageBytes = System.Text.Encoding.UTF8.GetBytes(emf.Drawing.ToString(SaveOptions.DisableFormatting));
+                imageBytes = System.Text.Encoding.UTF8.GetBytes(emf.Drawing.ToXmlString(SaveOptions.DisableFormatting));
                 contentType = "image/svg+xml";
             }
         }

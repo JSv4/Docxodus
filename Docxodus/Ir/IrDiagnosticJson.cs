@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using Docxodus.Internal;
 
 namespace Docxodus.Ir;
 
@@ -25,7 +26,7 @@ namespace Docxodus.Ir;
 /// </remarks>
 internal static class IrDiagnosticJson
 {
-    private static readonly JsonWriterOptions Options = new() { Indented = true };
+    private static readonly JsonWriterOptions Options = new JsonWriterOptions().Indent(true);
 
     /// <summary>
     /// Render <paramref name="document"/>'s scopes as diagnostic JSON. The top level is

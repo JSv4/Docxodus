@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DocumentFormat.OpenXml;
+using Docxodus.Internal;
 
 namespace Docxodus.Verification;
 
@@ -507,8 +508,7 @@ public sealed record DeliverableVerificationResult
             var options = new JsonSerializerOptions
             {
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                WriteIndented = indented,
-            };
+            }.Indent(indented);
             // Generic enum converters are trim/AOT-safe. Register them explicitly because the
             // source-generation switch emits enum member names verbatim, while schema v1's
             // durable wire vocabulary is camelCase.

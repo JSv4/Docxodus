@@ -6,6 +6,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Xml.Linq;
+using Docxodus.Internal;
 
 namespace Docxodus;
 
@@ -225,7 +226,7 @@ internal static class StrictOoxmlNormalizer
         // the entry is written as UTF-8, making the SDK's reader refuse the part ("There is no
         // Unicode byte order mark"). Declare UTF-8 explicitly.
         using var sw = new Utf8StringWriter();
-        doc.Save(sw, SaveOptions.DisableFormatting);
+        doc.SaveLf(sw, SaveOptions.DisableFormatting);
         return sw.ToString();
     }
 

@@ -134,10 +134,12 @@ class Program
 // Source-generated serializer for the export (issue #903). Reflection-based System.Text.Json is
 // disabled in trimmed and NativeAOT builds, so the export's shape is declared here at compile time.
 // The options match the reflection-based ones this replaced: indented, camelCase, nulls omitted.
+// NewLine is explicit because it otherwise defaults to Environment.NewLine ("\r\n" on Windows).
 // OpenContractsAnnotation.AnnotationJson is typed `object`; the runtime types the exporter can put
 // there are registered so the generated resolver can serialize them polymorphically.
 [JsonSourceGenerationOptions(
     WriteIndented = true,
+    NewLine = "\n",
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(OpenContractDocExport))]

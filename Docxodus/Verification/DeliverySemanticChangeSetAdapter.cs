@@ -452,7 +452,6 @@ internal static class DeliverySemanticChangeSetAdapter
         using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
         {
             Encoder = JavaScriptEncoder.Default,
-            Indented = false,
             MaxDepth = limits.MaxJsonDepth,
         }))
         {

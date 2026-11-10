@@ -62,7 +62,7 @@ public sealed partial class DocxSession
             {
                 var part = package.CreatePart(uri, relationship.ContentType, CompressionOption.Normal);
                 using var output = part.GetStream(FileMode.Create, FileAccess.Write);
-                byUri[relationship.PartUri].Materialize().Save(output, SaveOptions.DisableFormatting);
+                byUri[relationship.PartUri].Materialize().SaveLf(output, SaveOptions.DisableFormatting);
             }
             mainPart.CreateRelationship(PackUriHelper.GetRelativeUri(main.Uri, uri), TargetMode.Internal,
                 relationship.RelationshipType, relationship.RelId);

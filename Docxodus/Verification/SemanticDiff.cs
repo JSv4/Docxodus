@@ -9,6 +9,7 @@ using System.Linq;
 using System.Xml.Linq;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
+using Docxodus.Internal;
 
 namespace Docxodus.Verification;
 
@@ -2155,7 +2156,7 @@ internal static class SemanticDiffEngine
             element.Nodes().Select(node => node is XElement child
                 ? (XNode?)XElement.Parse(CanonicalXml(child), LoadOptions.PreserveWhitespace)
                 : node is XText text ? new XText(text.Value) : null))
-            .ToString(SaveOptions.DisableFormatting);
+            .ToXmlString(SaveOptions.DisableFormatting);
     }
 
     private static bool SemanticValuesEqual(SemanticValue left, SemanticValue right)

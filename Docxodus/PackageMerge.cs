@@ -661,7 +661,7 @@ internal static class PackageMerge
             // parsing. Remapping only ever GREW a part while relationship ids were "R" + a 32-character Guid;
             // with the deterministic ids (see NewRelationshipId) a fixed-up part is routinely shorter.
             using (var stream = copiedPart.GetStream(FileMode.Create, FileAccess.Write))
-                copiedXDoc.Save(stream);
+                copiedXDoc.SaveLf(stream);
 
             // SmartArt's PREBUILT drawing rides an extension inside the DATA part (dsp:dataModelExt/@relId)
             // whose relationship lives on the owner that linked the data part, not the data part itself.
@@ -801,7 +801,7 @@ internal static class PackageMerge
 
             if (changed)
                 using (var s = copiedDataPart.GetStream(FileMode.Create, FileAccess.Write))
-                    dataXDoc.Save(s);
+                    dataXDoc.SaveLf(s);
         }
 
 }

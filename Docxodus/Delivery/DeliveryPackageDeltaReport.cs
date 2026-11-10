@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Docxodus.Verification;
+using Docxodus.Internal;
 
 namespace Docxodus.Delivery;
 
@@ -167,11 +168,10 @@ public sealed record DeliveryPackageDeltaReport
             var options = new JsonSerializerOptions
             {
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                WriteIndented = indented,
                 // Source-generated metadata keeps the report usable where reflection-based
                 // serialization is trimmed away (the browser build, issue #748).
                 TypeInfoResolver = DeliveryPackageDeltaJsonContext.Default,
-            };
+            }.Indent(indented);
             options.Converters.Add(new JsonStringEnumConverter<DeliveryPackageDeltaChangeKind>(
                 JsonNamingPolicy.CamelCase));
             return options;

@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using Docxodus.Internal;
 
 namespace Docxodus.Verification;
 
@@ -255,7 +256,7 @@ public sealed class SemanticChangeSet
     public string ToJson(bool indented = true)
     {
         using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = indented }))
+        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions().Indent(indented)))
             WriteCanonical(writer);
 
         return Encoding.UTF8.GetString(buffer.ToArray());

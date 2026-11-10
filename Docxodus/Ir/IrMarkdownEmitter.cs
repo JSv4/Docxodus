@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using Docxodus.Internal;
 
 namespace Docxodus.Ir;
 
@@ -634,8 +635,8 @@ internal static class IrMarkdownEmitter
 
         // --- body: opens with the fixed, non-addressable "# Document" marker, then a blank line. ---
         ctx.Scope = "body";
-        sb.AppendLine("# Document");
-        sb.AppendLine();
+        sb.AppendLf("# Document");
+        sb.AppendLf();
         EmitBlocks(ir.Body.Blocks, sb, ctx);
         anyScopeEmitted = true;
 
@@ -644,12 +645,12 @@ internal static class IrMarkdownEmitter
         if (headerScopes.Count > 0)
         {
             if (anyScopeEmitted) AppendScopeDivider(sb);
-            sb.AppendLine("# Headers");
-            sb.AppendLine();
+            sb.AppendLf("# Headers");
+            sb.AppendLf();
             foreach (var hf in headerScopes)
             {
-                sb.Append("## ").AppendLine(hf.ScopeName);
-                sb.AppendLine();
+                sb.Append("## ").AppendLf(hf.ScopeName);
+                sb.AppendLf();
                 ctx.Scope = hf.ScopeName;
                 EmitBlocks(hf.Scope.Blocks, sb, ctx);
             }
@@ -660,12 +661,12 @@ internal static class IrMarkdownEmitter
         if (footerScopes.Count > 0)
         {
             if (anyScopeEmitted) AppendScopeDivider(sb);
-            sb.AppendLine("# Footers");
-            sb.AppendLine();
+            sb.AppendLf("# Footers");
+            sb.AppendLf();
             foreach (var hf in footerScopes)
             {
-                sb.Append("## ").AppendLine(hf.ScopeName);
-                sb.AppendLine();
+                sb.Append("## ").AppendLf(hf.ScopeName);
+                sb.AppendLf();
                 ctx.Scope = hf.ScopeName;
                 EmitBlocks(hf.Scope.Blocks, sb, ctx);
             }
@@ -687,8 +688,8 @@ internal static class IrMarkdownEmitter
 
     private static void AppendScopeDivider(StringBuilder sb)
     {
-        sb.AppendLine("---");
-        sb.AppendLine();
+        sb.AppendLf("---");
+        sb.AppendLf();
     }
 
     /// <summary>True when a header/footer scope has any non-whitespace text (the oracle's
@@ -716,8 +717,8 @@ internal static class IrMarkdownEmitter
         if (store.Notes.Count == 0) return false;
 
         if (precedingContent) AppendScopeDivider(sb);
-        sb.Append("# ").AppendLine(header);
-        sb.AppendLine();
+        sb.Append("# ").AppendLf(header);
+        sb.AppendLf();
         ctx.Scope = kindPrefix;
         foreach (var (noteId, noteScope) in store.Notes)
         {
@@ -731,8 +732,8 @@ internal static class IrMarkdownEmitter
                 first = false;
                 EmitInlineRuns(p, sb, ctx);
             }
-            sb.AppendLine();
-            sb.AppendLine();
+            sb.AppendLf();
+            sb.AppendLf();
             EmitTextboxes(noteScope.Blocks, sb, ctx);
         }
         return true;
@@ -750,8 +751,8 @@ internal static class IrMarkdownEmitter
         if (store.Comments.Count == 0) return false;
 
         if (precedingContent) AppendScopeDivider(sb);
-        sb.AppendLine("# Comments");
-        sb.AppendLine();
+        sb.AppendLf("# Comments");
+        sb.AppendLf();
         ctx.Scope = "cmt";
         foreach (var c in store.Comments)
         {
@@ -765,10 +766,10 @@ internal static class IrMarkdownEmitter
                 EmitInlineRuns(p, sb, ctx);
                 sb.Append(' ');
             }
-            sb.AppendLine();
+            sb.AppendLf();
             EmitTextboxes(c.Blocks, sb, ctx);
         }
-        sb.AppendLine();
+        sb.AppendLf();
         return true;
     }
 
@@ -811,7 +812,7 @@ internal static class IrMarkdownEmitter
                     && list[i + 1] is IrParagraph np && IsListItemForBlankRule(np);
                 EmitParagraph(p, sb, ctx);
                 if (IsListItemForBlankRule(p) && !nextIsListItem)
-                    sb.AppendLine();
+                    sb.AppendLf();
                 EmitTextboxes(new[] { p }, sb, ctx);
             }
             else if (b is IrTable t)
@@ -887,8 +888,8 @@ internal static class IrMarkdownEmitter
                 if (numberPrefix != null) sb.Append(numberPrefix).Append(' ');
             }
             EmitInlineRuns(p, sb, ctx);
-            sb.AppendLine();
-            sb.AppendLine();
+            sb.AppendLf();
+            sb.AppendLf();
             EmitInlineSectionBreak(p, sb, ctx);
             return;
         }
@@ -921,8 +922,8 @@ internal static class IrMarkdownEmitter
             else if (sb[sb.Length - 1] == ' ')
                 sb.Length--;
         }
-        sb.AppendLine();
-        sb.AppendLine();
+        sb.AppendLf();
+        sb.AppendLf();
         EmitInlineSectionBreak(p, sb, ctx);
     }
 
@@ -937,10 +938,10 @@ internal static class IrMarkdownEmitter
         if (ctx.Settings.AnchorMode != AnchorRenderMode.None)
         {
             var rendered = ctx.AnchorIdMap.Render(sec.Unid);
-            sb.Append("{#sec:").Append(ctx.Scope).Append(':').Append(rendered).AppendLine("}");
+            sb.Append("{#sec:").Append(ctx.Scope).Append(':').Append(rendered).AppendLf("}");
         }
-        sb.AppendLine("---");
-        sb.AppendLine();
+        sb.AppendLf("---");
+        sb.AppendLf();
     }
 
     private static void EmitListItem(IrParagraph p, StringBuilder sb, EmitCtx ctx)
@@ -952,7 +953,7 @@ internal static class IrMarkdownEmitter
 
         sb.Append(indent).Append(anchor).Append(marker).Append(' ');
         EmitInlineRuns(p, sb, ctx);
-        sb.AppendLine();
+        sb.AppendLf();
         // Trailing blank line between a list block and following content is emitted by EmitBlocks.
     }
 
@@ -1266,19 +1267,19 @@ internal static class IrMarkdownEmitter
 
     private static void EmitGfmTable(IrTable tbl, string anchor, StringBuilder sb, EmitCtx ctx)
     {
-        if (anchor.Length > 0) { sb.Append(anchor); sb.AppendLine(); }
+        if (anchor.Length > 0) { sb.Append(anchor); sb.AppendLf(); }
         var rows = tbl.Rows.ToList();
         if (rows.Count == 0) return;
 
         var headerCells = rows[0].Cells.Select(CellTextForGfm).ToList();
-        sb.Append("| ").Append(string.Join(" | ", headerCells)).AppendLine(" |");
-        sb.Append('|').Append(string.Concat(Enumerable.Repeat(" --- |", headerCells.Count))).AppendLine();
+        sb.Append("| ").Append(string.Join(" | ", headerCells)).AppendLf(" |");
+        sb.Append('|').Append(string.Concat(Enumerable.Repeat(" --- |", headerCells.Count))).AppendLf();
         foreach (var r in rows.Skip(1))
         {
             var cells = r.Cells.Select(CellTextForGfm);
-            sb.Append("| ").Append(string.Join(" | ", cells)).AppendLine(" |");
+            sb.Append("| ").Append(string.Join(" | ", cells)).AppendLf(" |");
         }
-        sb.AppendLine();
+        sb.AppendLf();
     }
 
     private static void EmitOpaqueTable(IrTable tbl, string anchor, StringBuilder sb)
@@ -1289,12 +1290,12 @@ internal static class IrMarkdownEmitter
         var cols = visibleRows
             .Select(r => r.Cells.Sum(c => Math.Max(1, c.GridSpan)))
             .DefaultIfEmpty(0).Max();
-        if (anchor.Length > 0) { sb.Append(anchor); sb.AppendLine(); }
-        sb.AppendLine("```table");
-        sb.Append("rows: ").Append(rows).AppendLine();
-        sb.Append("cols: ").Append(cols).AppendLine();
-        sb.AppendLine("```");
-        sb.AppendLine();
+        if (anchor.Length > 0) { sb.Append(anchor); sb.AppendLf(); }
+        sb.AppendLf("```table");
+        sb.Append("rows: ").Append(rows).AppendLf();
+        sb.Append("cols: ").Append(cols).AppendLf();
+        sb.AppendLf("```");
+        sb.AppendLf();
     }
 
     /// <summary>The cell's flat text, excluding textboxes emitted as separate anchored blocks.</summary>

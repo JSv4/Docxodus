@@ -6,6 +6,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Docxodus.Internal;
 
 namespace Docxodus.Verification;
 
@@ -325,7 +326,7 @@ public sealed record PackageManifest
     public byte[] ToJsonBytes(bool indented = false)
     {
         using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = indented }))
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions().Indent(indented)))
         {
             WriteJson(writer);
         }

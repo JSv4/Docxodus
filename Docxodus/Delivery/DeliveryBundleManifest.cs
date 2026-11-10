@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Docxodus.Verification;
+using Docxodus.Internal;
 
 namespace Docxodus.Delivery;
 
@@ -378,14 +379,13 @@ internal static class DeliveryBundleCanonicalJson
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             PropertyNameCaseInsensitive = false,
-            WriteIndented = indented,
             MaxDepth = 64,
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
             // Source-generated metadata keeps the bundle usable where reflection-based
             // serialization is trimmed away (the browser build, issue #748); the runtime
             // options above and the converters below still apply through the metadata path.
             TypeInfoResolver = DeliveryBundleJsonContext.Default,
-        };
+        }.Indent(indented);
         // Generic enum converters are trim/AOT-safe. Registered explicitly because the
         // source-generation switch emits enum member names verbatim, while the durable wire
         // vocabulary is camelCase.

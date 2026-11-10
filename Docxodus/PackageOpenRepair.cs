@@ -11,6 +11,7 @@ using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Internal;
 
 namespace Docxodus;
 
@@ -130,7 +131,9 @@ internal static partial class PackageOpenRepair
                 using var stream = zip.GetEntry(name)!.Open();
                 stream.SetLength(0);
                 // As UTF-8 whatever the part declared, which is what the output side reads back.
-                using var writer = XmlWriter.Create(stream, new XmlWriterSettings { Encoding = new UTF8Encoding(false) });
+                var settings = LineEndings.CreateXmlWriterSettings();
+                settings.Encoding = new UTF8Encoding(false);
+                using var writer = XmlWriter.Create(stream, settings);
                 rels.Save(writer);
             }
         }

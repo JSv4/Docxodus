@@ -50,7 +50,7 @@ internal static class WordFormatWording
                 {
                     // The wording depends only on the paragraph's properties and the run's two sides.
                     string Text(IEnumerable<XElement>? elements) =>
-                        string.Concat((elements ?? Enumerable.Empty<XElement>()).Select(e => e.ToString(SaveOptions.DisableFormatting)));
+                        string.Concat((elements ?? Enumerable.Empty<XElement>()).Select(e => e.ToXmlString(SaveOptions.DisableFormatting)));
                     var signature = string.Join("\u0001", Text(paragraph.Element(W.pPr)?.Elements().Where(e => e.Name != W.pPrChange)),
                         Text(properties.Elements().Where(e => e.Name != W.rPrChange)), Text(change.Element(W.rPr)?.Elements()));
                     if (!runWordings.TryGetValue(signature, out var known))
@@ -315,7 +315,7 @@ internal static class WordFormatWording
                 .Where(a => a.Name.Namespace == W.w)
                 .Where(a => !a.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal))
                 .Select(a => new XAttribute(a.Name.LocalName, a.Value))
-                .OrderBy(a => a.Name.LocalName, StringComparer.Ordinal)).ToString(SaveOptions.DisableFormatting))
+                .OrderBy(a => a.Name.LocalName, StringComparer.Ordinal)).ToXmlString(SaveOptions.DisableFormatting))
             .ToList();
         canonical.Sort(StringComparer.Ordinal);
         return string.Concat(canonical);
