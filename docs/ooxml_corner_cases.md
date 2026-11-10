@@ -6706,3 +6706,52 @@ its concrete Liberation-family checks. Swiss/Roman preserve the class while diff
 in face; the monospace captures differ in class too. The named controls remain
 references only for their own inputs. Eligible declared-input scoring and Word parity
 are pending. The standalone export's existing strict-font resolution policy is unchanged.
+
+## A tracked inserted table and the paragraph that closes it (#1626)
+
+Word records a table inserted with Track Changes on as inserted rows with inserted content,
+and inserts the empty paragraph that has to follow the table along with it. From the
+Word-authored `TestFiles/RP/RP001-Tracked-Revisions-01.docx` (`Application: Microsoft Office
+Word`; rsids and run properties trimmed):
+
+```xml
+<w:tbl>
+  <w:tblPr>…</w:tblPr>                     <!-- no w:tblPrChange, no w:tblGridChange -->
+  <w:tblGrid>…</w:tblGrid>
+  <w:tr>
+    <w:trPr><w:trHeight w:val="377"/><w:ins w:id="4" w:author="Author"/></w:trPr>
+    <w:tc>…<w:p>
+      <w:pPr><w:rPr><w:ins w:id="5" w:author="Author"/></w:rPr></w:pPr>
+      <w:ins w:id="6" w:author="Author"><w:r><w:t>Name of the preparations</w:t></w:r></w:ins>
+    </w:p></w:tc>…
+  </w:tr>…                                  <!-- every row: trPr/ins, content ins, mark ins -->
+</w:tbl>
+<w:p><w:pPr>…<w:rPr><w:ins w:id="38" w:author="Author"/></w:rPr></w:pPr></w:p>  <!-- empty, inserted -->
+```
+
+The same file deletes a table the mirror-image way: every row `w:trPr/w:del` and the empty
+paragraph after it `w:pPr/w:rPr/w:del`.
+
+| | Tracked `InsertTable` | Closing paragraph's revision |
+|---|---|---|
+| Word | rows, runs and marks inserted, as above | inserted with the table |
+| Docxodus before #1626 | refused with `tracked_operation_unsupported` on every document | — |
+| Docxodus with #1626 | the same encoding | inserted, and listed inside the table's one `RowInsert` revision |
+
+Why the closing paragraph matters: a table cannot end a table cell or the body, and two tables
+with nothing between them are one table to Word. So the paragraph after an inserted table often
+exists only because of the table, and resolving the table's rows without it can leave a
+cell ending in a table, a body ending in a table, or two tables fused. The session's revision
+registry (`RevisionOps.ClosingTableGroup`) therefore attaches an empty paragraph whose mark is
+revised by the same edit to the row revision of the wholly revised table directly before it.
+Across the 102 revision-bearing documents in `TestFiles/`, accept-all and reject-all produce
+byte-identical bodies before and after that grouping change, and the revision counts are
+unchanged; only which revision the closing paragraph belongs to moves.
+
+One placement has no reversible encoding: between the halves of a pending tracked split.
+Rejecting the split's inserted paragraph mark has to merge the first half into the second, and
+Docxodus's resolver cannot merge a paragraph across a
+table, so after a tracked split of `Bravo` and a tracked table between `Br` and `avo`,
+reject-all left `Br | avo` instead of `Bravo`. `DocxSession.InsertTable` refuses that shape
+(`SplitsPendingParagraphJoin`); a table after a wholly inserted paragraph is fine, because
+rejecting empties that paragraph and removes it.
