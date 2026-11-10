@@ -437,13 +437,6 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
     }
     if (offset === text.length && rows.length === measured.length &&
         rows.every((row, index) => row.text === measured[index])) {
-      // The painter owns vertical baselines. Removing a baseline-only relative
-      // offset leaves inline flow and word X positions intact, while allowing
-      // the existing safe-fragment guard to handle this otherwise plain run.
-      if (runStyle.position === 'relative' && runStyle.left === '0px' && runStyle.right === '0px') {
-        run.style.position = 'static';
-        run.style.top = '0';
-      }
       run.setAttribute(FITTED_RUN, '0');
       if (modernJustification || wordPerfect) run.style.setProperty('--docx-word-space-compression', `${-space / 4}px`);
       return 'unchanged';
@@ -469,8 +462,8 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
     fragment.append(line);
     return line;
   });
-  run.style.position = 'static';
-  run.style.top = '0';
+  // The run keeps the converter's vertical offset: automatic spacing puts its text at the top of
+  // each line, as Word does, so pagination can fit a page's last line by its text height (#1571).
   run.style.wordSpacing = '0px';
   run.replaceChildren(fragment);
   for (let index = 0; index < lines.length; index++) {
