@@ -1413,6 +1413,13 @@ export class PaginationEngine {
         }
       }
 
+      // Word sets an empty section mark on the preceding paragraph's last line (#1572). After an
+      // explicit page break that line ends the break's page, so the mark flows before the break.
+      for (let b = 1; b < blocks.length; b++) {
+        if (blocks[b].element.dataset.sectionMark === "true" && blocks[b - 1].isPageBreak)
+          [blocks[b - 1], blocks[b]] = [blocks[b], blocks[b - 1]];
+      }
+
       // Flow blocks into pages
       for (const block of blocks) block.element.dataset.paginationSection = String(block.sectionIndex);
       const sectionPages = this.flowToPages(

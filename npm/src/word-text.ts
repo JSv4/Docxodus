@@ -738,7 +738,7 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     return result;
   }
 
-  const pending: Array<{ paragraph: HTMLElement; run: HTMLElement; svg: SVGSVGElement; height: number }> = [];
+  const pending: Array<{ paragraph: HTMLElement; run: HTMLElement; svg: SVGSVGElement; height: number; column: boolean }> = [];
   // Chromium lays fractional line heights out in 1/64-pixel units, so
   // each prepared line ends slightly early and later paragraphs drift up. Paint each paragraph at
   // its ideal place: its layout top plus what the prepared lines above it on the page lost.
@@ -841,11 +841,11 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
       }
       svg.append(line);
     });
-    pending.push({ paragraph, run, svg, height: box.height });
+    pending.push({ paragraph, run, svg, height: box.height, column: column !== null });
   }
   // Read every line before replacing any paragraph, so one vector box cannot
   // change the column coordinates used to measure the following paragraph.
-  for (const { paragraph, run, svg, height } of pending) {
+  for (const { paragraph, run, svg, height, column } of pending) {
     checkpoint?.();
     if (Array.from(paragraph.children).some(child => pictureSibling(child, view))) run.replaceWith(svg);
     else paragraph.replaceChildren(svg);
@@ -855,6 +855,9 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     // retain the measured value verbatim through the standalone HTML round trip.
     paragraph.style.setProperty('--docx-word-text-height', `${height}px`);
     paragraph.style.height = 'var(--docx-word-text-height)';
+    // The box no longer holds lines, so a balanced column container could slice it while
+    // rebalancing; it was measured whole in one column and stays there (#1572).
+    if (column) paragraph.style.breakInside = 'avoid';
     paragraph.removeAttribute(PREPARED);
     paragraph.removeAttribute(NOTE_FIT);
   }

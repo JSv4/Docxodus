@@ -6479,6 +6479,10 @@ namespace Docxodus
             if (IsOnOffPropertyEnabled(closingPPr?.Element(W.keepLines)))
                 htmlParagraph.Add(new XAttribute("data-keep-lines", "true"));
 
+            // Its line is the preceding paragraph's, so it stays on that page after a page break.
+            if ((string?)firstParagraph.Attribute(StructuralParagraphAttribute) == SectionMarkParagraph)
+                htmlParagraph.Add(new XAttribute("data-section-mark", "true"));
+
             var pPr = firstParagraph.Element(W.pPr);
             if (pPr == null) return;
 
@@ -7626,12 +7630,12 @@ namespace Docxodus
         {
             var style = DefineParagraphStyle(paragraph, elementName, suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
             var implied = (string?)paragraph.Attribute(ImpliedTableEndParagraphAttribute) == "true";
-            if ((string?)paragraph.Attribute(StructuralTableEndParagraphAttribute) == "true")
+            if (paragraph.Attribute(StructuralParagraphAttribute) != null)
             {
-                // A nested table's required, unformatted cell-end paragraph is a structural
-                // boundary, not an additional blank text line. Keep a one-twip box so the
-                // source paragraph retains positive PageMap geometry without adding the
-                // inherited line height and space-after to the containing row.
+                // A nested table's required, unformatted cell-end paragraph, or an empty paragraph
+                // that only carries a section break, is a structural boundary, not an additional
+                // blank text line. Keep a one-twip box so the source paragraph retains positive
+                // PageMap geometry without adding its inherited line height and spacing.
                 style.Remove(AutomaticLineSpacingMultiplierCssProperty);
                 style["line-height"] = "0.05pt";
                 style["min-height"] = "0.05pt";
@@ -7716,8 +7720,11 @@ namespace Docxodus
 
         private const string AutomaticLineSpacingMultiplierCssProperty = "--docx-auto-line-spacing";
         private const string ExactLineSpacingCssProperty = "--docx-exact-line-height";
-        private static readonly XName StructuralTableEndParagraphAttribute =
-            XName.Get("table-end-paragraph", "urn:docxodus:rendering");
+        /// <summary>Marks a paragraph that lays out as a one-twip box: <c>table-end</c> or
+        /// <see cref="SectionMarkParagraph"/>.</summary>
+        private static readonly XName StructuralParagraphAttribute =
+            XName.Get("structural-paragraph", "urn:docxodus:rendering");
+        private const string SectionMarkParagraph = "section-mark";
         private static readonly XName ImpliedTableEndParagraphAttribute =
             XName.Get("implied-table-end-paragraph", "urn:docxodus:rendering");
 
@@ -7861,7 +7868,7 @@ namespace Docxodus
                             (child.Name == W.t && child.Value.Length == 0) ||
                             (child.Name == W.rPr && !child.HasElements)));
                     if (empty)
-                        paragraph.SetAttributeValue(StructuralTableEndParagraphAttribute, "true");
+                        paragraph.SetAttributeValue(StructuralParagraphAttribute, "table-end");
                 }
             }
         }
@@ -10887,14 +10894,16 @@ namespace Docxodus
                         element.Elements().Where(e => e.Name != W.pPr).SelectMany(e => InFlowDescendantsAndSelf(e))
                             .Any(e => e.Name == W.br && (string?)e.Attribute(W.type) == "page"
                                 && e.Ancestors(W.p).FirstOrDefault() == element));
-                    // Structural table-end paragraphs get a one-twip minimum box in ConvertParagraph.
+                    // Structural paragraphs get a one-twip minimum box in ConvertParagraph.
                     // A full-size placeholder would extend beyond it and trip export clipping checks.
-                    if (hasContent == false && (string?)element.Attribute(StructuralTableEndParagraphAttribute) != "true")
+                    var sectionMark = hasContent == false && IsSectionMarkOnly(element);
+                    if (hasContent == false && element.Attribute(StructuralParagraphAttribute) == null)
                         return new XElement(element.Name,
                             element.Attributes(),
                             new XAttribute(PtOpenXml.EmptyParagraph, true),
+                            sectionMark ? new XAttribute(StructuralParagraphAttribute, SectionMarkParagraph) : null,
                             element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n, paginated, math)),
-                            new XElement(W.r,
+                            sectionMark ? null : new XElement(W.r,
                                 element.Elements(W.pPr).Elements(W.rPr),
                                 new XElement(W.t, "\u00A0")));
                 }
@@ -10905,6 +10914,18 @@ namespace Docxodus
             }
             return node;
         }
+
+        /// <summary>
+        /// Whether an empty paragraph only carries a section break. Word sets its mark at the end of
+        /// the preceding paragraph's last line, so it takes no line and no spacing of its own (#1572).
+        /// With no paragraph before it (first in its container, after a table, or after another
+        /// section's mark), Word gives it a line. Called before the body's final sectPr moves onto
+        /// the last paragraph, so only a section break inside the body qualifies.
+        /// </summary>
+        private static bool IsSectionMarkOnly(XElement paragraph) =>
+            Internal.BlockMetadataOps.SectionBreakIn(paragraph) != null
+            && paragraph.ElementsBeforeSelf().LastOrDefault(e => !IsBlockBoundaryMarker(e)) is { } previous
+            && previous.Name == W.p && Internal.BlockMetadataOps.SectionBreakIn(previous) == null;
 
         private static bool ParagraphHasInFlowContent(XElement element, MathRenderingContext math) => element.Elements()
             .Where(e => e.Name != W.pPr).SelectMany(child => InFlowDescendantsAndSelf(child))
