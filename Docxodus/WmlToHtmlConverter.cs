@@ -3578,10 +3578,10 @@ namespace Docxodus
             WmlToHtmlConverterSettings settings, XNode node,
             bool suppressTrailingWhiteSpace,
             decimal currentMarginLeft,
-            bool suppressLeadingWhiteSpace = false)
+            int absorbedSpaceBefore = 0)
         {
             var content = ConvertToHtmlContent(wordDoc, settings, node, suppressTrailingWhiteSpace,
-                currentMarginLeft, suppressLeadingWhiteSpace);
+                currentMarginLeft, absorbedSpaceBefore);
             return node is XElement element
                 ? WithJoinedParagraphSource(wordDoc, settings, element, content)
                 : content;
@@ -3591,7 +3591,7 @@ namespace Docxodus
             WmlToHtmlConverterSettings settings, XNode node,
             bool suppressTrailingWhiteSpace,
             decimal currentMarginLeft,
-            bool suppressLeadingWhiteSpace)
+            int absorbedSpaceBefore)
         {
             var element = node as XElement;
             if (element == null) return null;
@@ -3751,7 +3751,7 @@ namespace Docxodus
             // have a style separator).
             if (element.Name == W.p)
             {
-                return ProcessParagraph(wordDoc, settings, element, suppressTrailingWhiteSpace, currentMarginLeft, suppressLeadingWhiteSpace);
+                return ProcessParagraph(wordDoc, settings, element, suppressTrailingWhiteSpace, currentMarginLeft, absorbedSpaceBefore);
             }
 
             // Transform hyperlinks to the XHTML h:a element.
@@ -6119,7 +6119,7 @@ namespace Docxodus
         // the element (e.g., h:h2) created from the w:p element having the (first)
         // hidden paragraph mark (w:specVanish or w:vanish).
         private static object? ProcessParagraph(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
-            XElement element, bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool suppressLeadingWhiteSpace = false)
+            XElement element, bool suppressTrailingWhiteSpace, decimal currentMarginLeft, int absorbedSpaceBefore = 0)
         {
             // Ignore this paragraph if the preceding paragraph ends in a hidden mark.
             // We have already transformed this one together with the previous one.
@@ -6128,7 +6128,7 @@ namespace Docxodus
             var elementName = GetParagraphElementName(element, wordDoc);
             var isBidi = IsBidi(element);
             var paragraph = (XElement) ConvertParagraph(wordDoc, settings, element, elementName,
-                suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
+                suppressTrailingWhiteSpace, currentMarginLeft, isBidi, absorbedSpaceBefore);
             if (element.Attribute(EmptyRevisionDisplayAttribute) != null)
                 paragraph.SetAttributeValue("data-docx-empty-review-display", "true");
 
@@ -7626,9 +7626,9 @@ namespace Docxodus
 
         private static object ConvertParagraph(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             XElement paragraph, XName elementName, bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool isBidi,
-            bool suppressLeadingWhiteSpace = false)
+            int absorbedSpaceBefore = 0)
         {
-            var style = DefineParagraphStyle(paragraph, elementName, suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
+            var style = DefineParagraphStyle(paragraph, elementName, suppressTrailingWhiteSpace, currentMarginLeft, isBidi, absorbedSpaceBefore);
             var implied = (string?)paragraph.Attribute(ImpliedTableEndParagraphAttribute) == "true";
             if (paragraph.Attribute(StructuralParagraphAttribute) != null)
             {
@@ -8291,7 +8291,7 @@ namespace Docxodus
         }
 
         private static Dictionary<string, string> DefineParagraphStyle(XElement paragraph, XName elementName,
-            bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool isBidi, bool suppressLeadingWhiteSpace = false)
+            bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool isBidi, int absorbedSpaceBefore = 0)
         {
             var style = new Dictionary<string, string>();
 
@@ -8303,7 +8303,7 @@ namespace Docxodus
             if (pPr == null) return style;
 
             CreateStyleFromSpacing(style, pPr.Element(W.spacing), elementName, suppressTrailingWhiteSpace,
-                suppressLeadingWhiteSpace);
+                absorbedSpaceBefore);
             CreateStyleFromInd(style, pPr.Element(W.ind), elementName, currentMarginLeft, isBidi);
 
             // todo need to handle
@@ -8384,13 +8384,12 @@ namespace Docxodus
         }
 
         private static void CreateStyleFromSpacing(Dictionary<string, string> style, XElement? spacing, XName elementName,
-            bool suppressTrailingWhiteSpace, bool suppressLeadingWhiteSpace = false)
+            bool suppressTrailingWhiteSpace, int absorbedSpaceBefore = 0)
         {
             if (spacing == null) return;
 
-            var spacingBefore = suppressLeadingWhiteSpace
-                ? 0
-                : WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.before));
+            var spacingBefore = WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.before));
+            if (absorbedSpaceBefore > 0) spacingBefore = Math.Max(0, (spacingBefore ?? 0) - absorbedSpaceBefore);
             if (spacingBefore != null && elementName != Xhtml.span)
                 style.AddIfMissing("margin-top",
                     spacingBefore > 0m
@@ -11412,8 +11411,7 @@ namespace Docxodus
 
                     // Materialize the (lazy) paragraph projections once, so the adjusted elements
                     // are the ones the wrapper holds.
-                    var content = ApplyContextualSpacing(wordDoc, settings, g, currentMarginLeft)
-                        .SelectMany(item => item is IEnumerable<object> nested ? nested : new[] { item }).ToList();
+                    var content = ApplyContextualSpacing(wordDoc, settings, g, currentMarginLeft).ToList();
                     if (trailingIndentInPoints > 0m)
                     {
                         // Each paragraph wrote its trailing indent on its own direction's side.
@@ -11435,27 +11433,40 @@ namespace Docxodus
             .ToList();
         }
 
-        private static IEnumerable<object> ApplyContextualSpacing(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+        /// <summary>Whether a block-level element takes part in paragraph spacing; a bookmark does not.</summary>
+        internal static bool HoldsBlock(XElement element) =>
+            element.DescendantsAndSelf().Any(d => d.Name == W.p || d.Name == W.tbl);
+
+        private static IEnumerable<object?> ApplyContextualSpacing(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             IEnumerable<XElement> elements, decimal currentMarginLeft)
         {
-            // Each enabled paragraph removes only its own spacing beside the same style (#1553).
-            // The neighbor's flag is independent; list membership alone removes nothing (#1151).
-            // FormattingAssembler records the resolved default style when w:pStyle is omitted.
-            return elements
-                .GroupAdjacent(e => e.Name == W.p
-                    ? "sty:" + ((string?)e.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val)
-                        ?? (string?)e.Attribute(PtOpenXml.StyleName))
-                    : "")
-                .Select(g =>
-                {
-                    var last = g.Count() - 1;
-                    return g.Select((e, i) =>
-                    {
-                        var contextual = g.Key != "" && IsOnOffPropertyEnabled(e.Element(W.pPr)?.Element(W.contextualSpacing));
-                        return ConvertToHtmlTransform(wordDoc, settings, e, contextual && i != last,
-                            currentMarginLeft, suppressLeadingWhiteSpace: contextual && i != 0);
-                    });
-                });
+            // Each enabled paragraph removes its own spacing beside a paragraph of the same style
+            // (#1553), and the after-space it gives up still absorbs that much of the next
+            // paragraph's before-space: Word prints max(0, before - after) there. Markup holding no
+            // block, such as a bookmark, does not separate the two. List membership alone removes
+            // nothing (#1151). FormattingAssembler records the resolved default style when
+            // w:pStyle is omitted.
+            var items = elements.ToList();
+            string? Style(XElement e) => (string?)e.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val)
+                ?? (string?)e.Attribute(PtOpenXml.StyleName);
+            bool Contextual(XElement e) => IsOnOffPropertyEnabled(e.Element(W.pPr)?.Element(W.contextualSpacing));
+            XElement? Beside(int i, int step)
+            {
+                for (var j = i + step; j >= 0 && j < items.Count; j += step)
+                    if (HoldsBlock(items[j]))
+                        return items[j].Name == W.p && Style(items[j]) == Style(items[i]) ? items[j] : null;
+                return null;
+            }
+            return items.Select((e, i) =>
+            {
+                if (e.Name != W.p) return ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft);
+                var previous = Beside(i, -1);
+                var absorbed = previous == null ? 0 : Contextual(e) ? int.MaxValue : Contextual(previous)
+                    ? WordprocessingMLUtil.AttributeToTwips(previous.Element(W.pPr)?.Element(W.spacing)?.Attribute(W.after)) ?? 0
+                    : 0;
+                return ConvertToHtmlTransform(wordDoc, settings, e, Contextual(e) && Beside(i, 1) != null,
+                    currentMarginLeft, absorbedSpaceBefore: absorbed);
+            });
         }
 
         private class BorderMappingInfo

@@ -3972,10 +3972,30 @@ the gap replaces only enabled sides; contextual suppression and the neighbor's e
 apply. The stateless block API reuses the session renderer, including its real neighboring context.
 It no longer builds a single-paragraph shell that loses contextual spacing.
 
-This is deliberately partial: unmatched document/section boundaries, cells and other stories,
-frames/borders, revision-bearing documents, and enabled `doNotUseHTMLParagraphAutoSpacing` retain
-their previous behavior. The cited print did not measure first-document/first-cell suppression or
-that compatibility setting. They remain open rather than being assigned an unverified value.
+**Edges, measured in Word 2024 (November 2026).** Fixtures: Times New Roman 12pt, exact 16pt lines,
+`w:before="100" w:after="100"` under both flags; controls set the flags off with 280 or 100 twips.
+Gaps are PDF baseline steps less 16pt.
+
+| Boundary | Word gap | Docxodus before → after |
+|---|---:|---:|
+| First paragraph of the document, space before | 0 | 5pt → 0 |
+| First / last paragraph of a table cell, before / after | 0 / 0 | 5pt → 0 |
+| Between paragraphs of one cell | 14pt | 5pt → 14pt |
+| Paragraph next to a table, either side | 14pt | 5pt → 14pt |
+| Across a bookmark, a block content control or a continuous section break | 14pt | 5pt → 14pt |
+| Bordered paragraph (equals the explicit-280 control) | 14pt | 5pt → 14pt |
+| Paragraph holding a tracked run insertion | 14pt | 5pt → 14pt |
+| First paragraph of a header, then between header paragraphs | 0, then 14pt | 5pt (unchanged) |
+| `doNotUseHTMLParagraphAutoSpacing`: flags ignored, explicit 5pt kept | 5pt edges, **10pt** between | 5pt edges, 5pt between (unchanged) |
+
+`AutomaticParagraphSpacing` now finds each paragraph's neighbors in its body or table-cell block
+sequence (content controls and custom XML are transparent; bookmarks and other markup are skipped):
+no neighbor gives 0, a table gives 14pt. Frames, floating tables and tracked paragraph marks or
+rows keep their explicit values, as do headers, footers, notes and text boxes.
+
+Still open: the compatibility setting is not about the automatic value. With it on, Word *adds* space
+after and space before between any two paragraphs (explicit 14pt + 14pt gave 28pt), where the default
+takes the larger. Docxodus always takes the larger. Header and footer automatic spacing is unhandled.
 
 Tests: `HtmlAutomaticSpacingTests`, `DenseTextParagraphTests`, and
 `npm/tests/export-automatic-spacing.spec.ts`.
@@ -3983,8 +4003,10 @@ Tests: `HtmlAutomaticSpacingTests`, `DenseTextParagraphTests`, and
 ### Contextual spacing belongs to each paragraph (#1553)
 
 The neighbor need not enable the setting. ECMA-376 17.3.1.9 removes the enabled
-paragraph's own spacing on a side touching the same style; the neighbor's spacing
-still participates in the maximum gap. With both paragraphs in the same style:
+paragraph's own spacing on a side touching the same style. Word 2024 (November 2026) shows
+the space after a flagged paragraph gives up still absorbs that much of the next paragraph's
+space before: the gap is `max(0, before - after)`, so the neighbor's spacing participates only
+beyond it. With both paragraphs in the same style:
 
 ```xml
 <w:p><w:pPr><w:spacing w:after="240"/><w:contextualSpacing/></w:pPr>
@@ -3998,7 +4020,11 @@ still participates in the maximum gap. With both paragraphs in the same style:
 | Issue `context-after-first.docx` | 13.75pt step, confirmed by the author | Not recaptured here | Previously retained the unwanted 12pt; now suppresses it |
 | Authored Oak body, 16pt exact line, first-only after-space | Not printed | 16pt step | 12pt unwanted gap / zero authored gap |
 | Oak body, second-only before-space | Not printed | 16pt step | 12pt unwanted gap / zero authored gap |
-| Oak body, first-only flag and neighbor's 6pt before-space | Not printed | 22pt step | 12pt gap / neighbor's 6pt gap |
+| Oak body, first-only flag and neighbor's 6pt before-space | Not printed | 22pt step | 12pt gap / 6pt (#1600) / 0 now, as Word's rule gives |
+| Flagged 5pt after, then 14pt before (Word 2024) | 9pt gap | Not captured | 14pt / 9pt |
+| Flagged 14pt after, then 5pt before (Word 2024) | 0 | Not captured | 5pt / 0 |
+| 5pt after, then flagged 14pt before (Word 2024) | 5pt gap | Not captured | 5pt / 5pt |
+| Flagged 14pt after, a bookmark, then the same style (Word 2024) | 0 | Not captured | 14pt / 0 |
 | Oak text boxes, first-only flag | Not printed | Retains 12pt; VML also adds inset | 12pt unwanted gap / zero authored gap |
 
 The Word measurement is from [the author's print results](https://github.com/JSv4/Docxodus/issues/1553#issuecomment-6701328156),
@@ -4007,8 +4033,8 @@ line-height defaults. Their two native textbox references remain ineligible beca
 LibreOffice disagrees with the declared spacing/position; no Word textbox parity is claimed.
 
 `ApplyContextualSpacing` now groups by resolved style, including implicit default styles,
-then gates each side with that paragraph's resolved on/off value. Border, frame, table,
-bookmark and other existing content boundaries remain intact. Native regressions and
+then gates each side with that paragraph's resolved on/off value. A bookmark or other markup
+holding no block does not separate the two paragraphs; a table does. Native regressions and
 the public PDF tests cover body text and both textbox formats, including direct-off
 overrides and neighbor-owned space. Automatic spacing is a separate remaining part of #1553.
 

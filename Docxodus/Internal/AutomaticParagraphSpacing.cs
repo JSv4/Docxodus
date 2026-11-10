@@ -5,7 +5,7 @@ using DocumentFormat.OpenXml.Packaging;
 
 namespace Docxodus.Internal;
 
-/// <summary>Original body boundaries for the Word-confirmed automatic paragraph gaps.</summary>
+/// <summary>Word's automatic paragraph spacing, resolved from each paragraph's original neighbors.</summary>
 internal sealed class AutomaticParagraphSpacing
 {
     private static readonly XNamespace Rendering = "urn:docxodus:rendering";
@@ -15,6 +15,8 @@ internal sealed class AutomaticParagraphSpacing
     private readonly XElement? _body;
     private readonly bool _enabled;
     private readonly Dictionary<XElement, (bool Eligible, int? List)> _facts = new();
+    private readonly Dictionary<XElement, (XElement? Previous, XElement? Next)> _neighbors = new();
+    private readonly HashSet<XElement> _stories = new();
 
     internal AutomaticParagraphSpacing(WordprocessingDocument document)
     {
@@ -23,10 +25,8 @@ internal sealed class AutomaticParagraphSpacing
         _body = main.GetXDocument().Root?.Element(W.body);
         var compatibility = main.DocumentSettingsPart?.GetXDocument().Root?
             .Element(W.compat)?.Element(W.doNotUseHTMLParagraphAutoSpacing);
-        // First/last boundaries, other stories, revisions and compatibility-mode spacing
-        // still need separate Word measurements. Do not infer those from a shell's body.
+        // Under doNotUseHTMLParagraphAutoSpacing Word ignores the flags and keeps the explicit values.
         _enabled = !(compatibility != null && compatibility.Attribute(W.val).ToBoolean() != false)
-            && !RevisionAccepter.HasTrackedRevisions(document)
             && new[] { main.GetXDocument(), main.StyleDefinitionsPart?.GetXDocument(),
                 main.NumberingDefinitionsPart?.GetXDocument() }.Any(x => x?.Descendants(W.spacing)
                     .Any(s => s.Attribute(W.beforeAutospacing).ToBoolean() == true
@@ -50,17 +50,45 @@ internal sealed class AutomaticParagraphSpacing
     private string Gap(XElement paragraph, bool before)
     {
         var own = Facts(paragraph);
-        if (!own.Eligible) return "-";
-        XNode? node = before ? paragraph.PreviousNode : paragraph.NextNode;
-        while (node != null && node is not XElement) node = before ? node.PreviousNode : node.NextNode;
-        if (node is not XElement neighbor || !Facts(neighbor).Eligible) return "-";
+        if (!own.Eligible || Story(paragraph) is not { } story) return "-";
+        if (_stories.Add(story))
+        {
+            var blocks = Blocks(story).ToList();
+            for (int i = 0; i < blocks.Count; i++)
+                if (blocks[i].Name == W.p)
+                    _neighbors[blocks[i]] = (i > 0 ? blocks[i - 1] : null, i + 1 < blocks.Count ? blocks[i + 1] : null);
+        }
+        if (!_neighbors.TryGetValue(paragraph, out var neighbors)) return "-";
+        var (previous, next) = neighbors;
+        // Word prints no automatic space at the start or end of the body or a table cell.
+        if ((before ? previous : next) is not { } neighbor) return "0";
+        if (neighbor.Name == W.tbl)
+            return neighbor.Element(W.tblPr)?.Element(W.tblpPr) == null
+                && !neighbor.Descendants(W.trPr).Elements().Any(e => e.Name == W.ins || e.Name == W.del) ? "280" : "-";
+        if (!Facts(neighbor).Eligible) return "-";
         return own.List is { } id && id == Facts(neighbor).List ? "0" : "280";
     }
+
+    // The body or table cell whose block sequence holds the paragraph. Content controls and
+    // custom XML are transparent; text boxes, notes and other stories are not measured.
+    private XElement? Story(XElement paragraph)
+    {
+        var parent = paragraph.Parent;
+        while (parent != null && (parent.Name == W.sdtContent || parent.Name == W.sdt || parent.Name == W.customXml))
+            parent = parent.Parent;
+        return parent != null && (parent == _body || parent.Name == W.tc && parent.Document == _body?.Document
+            && !parent.Ancestors(W.txbxContent).Any()) ? parent : null;
+    }
+
+    private static IEnumerable<XElement> Blocks(XElement container) => container.Elements().SelectMany(e =>
+        e.Name == W.p || e.Name == W.tbl ? new[] { e }
+        : e.Name == W.sdt ? e.Elements(W.sdtContent).SelectMany(Blocks)
+        : e.Name == W.customXml ? Blocks(e) : Enumerable.Empty<XElement>());
 
     private (bool Eligible, int? List) Facts(XElement paragraph)
     {
         if (_facts.TryGetValue(paragraph, out var facts)) return facts;
-        if (!_enabled || paragraph.Name != W.p || paragraph.Parent != _body) return (false, null);
+        if (!_enabled || paragraph.Name != W.p) return (false, null);
         var properties = FormattingAssembler.ResolveEffectiveParagraphProperties(_document, paragraph);
         var listParagraph = paragraph;
         if (_document.MainDocumentPart?.NumberingDefinitionsPart is { } numbering)
@@ -78,9 +106,13 @@ internal sealed class AutomaticParagraphSpacing
         var item = listParagraph.Annotation<ListItemRetriever.ListItemInfo>();
         var list = item is { IsListItem: true, IsZeroNumId: false } && item.NumId > 0 ? item : null;
         var levelProperties = list?.Lvl(ListItemRetriever.GetEffectiveLevel(listParagraph))?.Element(W.pPr);
-        static bool Boundary(XElement? pPr) => pPr?.Elements().Any(e =>
-            e.Name == W.framePr || e.Name == W.pBdr || e.Name == W.sectPr) == true;
-        facts = (!Boundary(properties) && !Boundary(levelProperties), list?.NumId);
+        // Borders and section breaks keep the automatic gap. Frames sit outside the text flow,
+        // and a tracked paragraph mark joins or splits paragraphs, so neither has one neighbor.
+        var mark = paragraph.Element(W.pPr)?.Element(W.rPr);
+        var revised = mark?.Elements().Any(e => e.Name == W.ins || e.Name == W.del
+            || e.Name == W.moveFrom || e.Name == W.moveTo) == true;
+        facts = (!revised && properties?.Element(W.framePr) == null && levelProperties?.Element(W.framePr) == null,
+            list?.NumId);
         _facts.Add(paragraph, facts);
         return facts;
     }

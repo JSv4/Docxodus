@@ -194,7 +194,7 @@ public class DenseTextParagraphTests
         frame.SetAttributeValue(PtOpenXml.Unid, anchor.Split(':').Last());
         Assert.True(session.Raw.ReplaceXml(anchor, frame.ToString()).Success);
         var options = new HtmlConversionOptions { FabricateCssClasses = false };
-        Assert.Contains("margin-bottom: 5pt;", HtmlConversionOps.RenderBlockHtml(session, anchor, options));
+        Assert.Contains("margin-bottom: 0;", HtmlConversionOps.RenderBlockHtml(session, anchor, options));
         var source = session.LiveDocument.MainDocumentPart!.GetXDocument().Descendants(W.p).First();
         source.AddAfterSelf(new XElement(W.p, new XElement(W.r, new XElement(W.t, "Neighbor"))));
         Assert.Contains("margin-bottom: 14pt;", HtmlConversionOps.RenderBlockHtml(session, anchor, options));
