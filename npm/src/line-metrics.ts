@@ -303,8 +303,10 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
         sides: [css.left, css.right], bottom: css.bottom, float: css.cssFloat };
     });
     const paragraphFont = owned ? undefined : measure(style, Number.parseFloat(style.fontSize));
-    // Converter line breaks stay inside their run, followed by the run's direction mark.
+    // Converter line breaks stay inside their run, followed by the run's direction mark and, in an
+    // indented paragraph, an empty span that carries the following line's horizontal offset.
     const contained = (child: Element) => child.matches('br[data-docx-break]')
+      || child.localName === 'span' && !child.childNodes.length && !!child.previousElementSibling?.matches('br[data-docx-break]')
       || owned && child.hasAttribute('data-docx-line-metric');
     if (!runs.length || paragraph.querySelector('*:not(span):not(br[data-docx-break])')
       || Array.from(paragraph.children).some(child => child.localName === 'br') || fonts.some(f =>
