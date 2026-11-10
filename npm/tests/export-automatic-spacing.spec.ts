@@ -16,6 +16,8 @@ const cases = [
   { name: 'different lists sharing a definition', lists: [1, 2], gap: 14 },
   { name: 'disabled automatic spacing control', lists: [1, 1], gap: 5, disabled: true },
   { name: 'neighbor-owned explicit spacing', lists: [1, 1], gap: 30, neighbor: true },
+  // doNotUseHTMLParagraphAutoSpacing: Word ignores the flags and adds 5pt after to 5pt before.
+  { name: 'compatibility setting adds the explicit values', lists: [1, 1], gap: 10, compat: true },
 ];
 
 function document(entry: typeof cases[number]): Uint8Array {
@@ -37,7 +39,8 @@ function document(entry: typeof cases[number]): Uint8Array {
     ['styles', 'styles', `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>` +
       '<w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>' +
       '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>'],
-    ['settings', 'settings', `<w:settings xmlns:w="${W_NS}"/>`],
+    ['settings', 'settings', `<w:settings xmlns:w="${W_NS}">` +
+      (entry.compat ? '<w:compat><w:doNotUseHTMLParagraphAutoSpacing/></w:compat>' : '') + '</w:settings>'],
     ['numbering', 'numbering', `<w:numbering xmlns:w="${W_NS}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0">` +
       '<w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/>' +
       '<w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>' +

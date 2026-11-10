@@ -26,7 +26,7 @@ public class HtmlAutomaticSpacingTests
     [InlineData("explicit-neighbor", "14pt", "30pt")]
     [InlineData("contextual", "0", "0")]
     [InlineData("zero-number", "14pt", "14pt")]
-    [InlineData("compatibility", "5pt", "5pt")]
+    [InlineData("compatibility", "5pt", "10pt")]
     [InlineData("compatibility-off", "14pt", "14pt")]
     [InlineData("revision", "14pt", "14pt")]
     [InlineData("table", "14pt", "14pt")]
@@ -101,6 +101,104 @@ public class HtmlAutomaticSpacingTests
             main.NumberingDefinitionsPart!.PutXDocument();
         });
         VerifyGaps(bytes, after, before, windowed: !kind.EndsWith("border") && kind != "inherited-frame");
+    }
+
+    // Under w:doNotUseHTMLParagraphAutoSpacing Word adds a paragraph's space after to the next
+    // one's space before (#1553). Every renderer collapses margins to the larger one, so the
+    // second paragraph's margin carries the sum, except below a section break onto a new page.
+    [Theory]
+    [InlineData("style", "10pt", "15pt")]
+    [InlineData("unspaced", "5pt", "5pt")]
+    [InlineData("after-lines", "12pt", "17pt")]
+    [InlineData("before-lines", "5pt", "11pt")]
+    [InlineData("bookmark", "5pt", "10pt")]
+    [InlineData("content-control", "5pt", "10pt")]
+    [InlineData("continuous-section", "5pt", "10pt")]
+    [InlineData("next-page-section", "5pt", "5pt")]
+    [InlineData("table", "5pt", "5pt")]
+    [InlineData("contextual-first", "0", "5pt")]
+    [InlineData("contextual-second", "5pt", "0")]
+    public void CompatibilitySpacingAddsTheSpaceAfterAbove(string kind, string after, string before)
+    {
+        var bytes = Create(0, 0, doc =>
+        {
+            var main = doc.MainDocumentPart!;
+            var body = main.GetXDocument().Root!.Element(W.body)!;
+            var first = body.Elements(W.p).ElementAt(1);
+            main.DocumentSettingsPart!.GetXDocument().Root!.Add(new XElement(W.compat,
+                new XElement(W.doNotUseHTMLParagraphAutoSpacing)));
+            switch (kind)
+            {
+                case "style":
+                    first.Element(W.pPr)!.Element(W.spacing)!.Attribute(W.after)!.Remove();
+                    main.StyleDefinitionsPart!.GetXDocument().Descendants(W.style).Single().Add(
+                        new XElement(W.pPr, new XElement(W.spacing, new XAttribute(W.after, "200"))));
+                    main.StyleDefinitionsPart.PutXDocument();
+                    break;
+                case "unspaced": body.Elements(W.p).ElementAt(2).Element(W.pPr)!.Element(W.spacing)!.Remove(); break;
+                // Line counts replace the twips; a line is 12pt without a line grid.
+                case "after-lines": first.Element(W.pPr)!.Element(W.spacing)!.SetAttributeValue(W.afterLines, "100"); break;
+                case "before-lines":
+                    body.Elements(W.p).ElementAt(2).Element(W.pPr)!.Element(W.spacing)!.SetAttributeValue(W.beforeLines, "50"); break;
+                case "bookmark":
+                    first.AddAfterSelf(new XElement(W.bookmarkStart, new XAttribute(W.id, "1"),
+                        new XAttribute(W.name, "AshMark")), new XElement(W.bookmarkEnd, new XAttribute(W.id, "1"))); break;
+                case "content-control":
+                    first.ReplaceWith(new XElement(W.sdt, new XElement(W.sdtPr), new XElement(W.sdtContent, first))); break;
+                case "continuous-section":
+                case "next-page-section":
+                    first.Element(W.pPr)!.Add(new XElement(W.sectPr));
+                    if (kind == "continuous-section")
+                        body.Element(W.sectPr)!.Add(new XElement(W.type, new XAttribute(W.val, "continuous")));
+                    break;
+                case "table": first.AddAfterSelf(new XElement(W.tbl, new XElement(W.tblPr),
+                    new XElement(W.tblGrid, new XElement(W.gridCol, new XAttribute(W._w, "1200"))),
+                    new XElement(W.tr, new XElement(W.tc, new XElement(W.p))))); break;
+                case "contextual-first": first.Element(W.pPr)!.Add(new XElement(W.contextualSpacing)); break;
+                case "contextual-second":
+                    body.Elements(W.p).ElementAt(2).Element(W.pPr)!.Add(new XElement(W.contextualSpacing)); break;
+            }
+            main.PutXDocument();
+            main.DocumentSettingsPart.PutXDocument();
+        });
+        VerifyGaps(bytes, after, before);
+    }
+
+    // In a cell the table style's space after outranks the document defaults, so the sum uses the
+    // space after the cell paragraph above was rendered with. A cell paragraph rendered on its own
+    // has no table style, so only the document render is compared.
+    [Theory]
+    [InlineData(false, "10pt", "15pt")]
+    [InlineData(true, "0", "5pt")]
+    public void CompatibilitySpacingInACellAddsTheRenderedSpaceAfter(bool tableStyle, string after, string before)
+    {
+        var bytes = Create(0, 0, doc =>
+        {
+            var main = doc.MainDocumentPart!;
+            var body = main.GetXDocument().Root!.Element(W.body)!;
+            var paragraphs = body.Elements(W.p).Skip(1).Take(2).ToArray();
+            paragraphs.Remove();
+            paragraphs[0].Element(W.pPr)!.Element(W.spacing)!.Attribute(W.after)!.Remove();
+            body.AddFirst(new XElement(W.tbl,
+                new XElement(W.tblPr, tableStyle ? new XElement(W.tblStyle, new XAttribute(W.val, "Grid")) : null),
+                new XElement(W.tblGrid, new XElement(W.gridCol, new XAttribute(W._w, "6000"))),
+                new XElement(W.tr, new XElement(W.tc, paragraphs))));
+            var styles = main.StyleDefinitionsPart!.GetXDocument().Root!;
+            styles.Element(W.docDefaults)!.Add(new XElement(W.pPrDefault, new XElement(W.pPr,
+                new XElement(W.spacing, new XAttribute(W.after, "200")))));
+            styles.Add(new XElement(W.style, new XAttribute(W.type, "table"), new XAttribute(W.styleId, "Grid"),
+                new XElement(W.name, new XAttribute(W.val, "Grid")),
+                new XElement(W.pPr, new XElement(W.spacing, new XAttribute(W.after, "0")))));
+            main.DocumentSettingsPart!.GetXDocument().Root!.Add(new XElement(W.compat,
+                new XElement(W.doNotUseHTMLParagraphAutoSpacing)));
+            main.PutXDocument();
+            main.StyleDefinitionsPart.PutXDocument();
+            main.DocumentSettingsPart.PutXDocument();
+        });
+        var styles = XElement.Parse(HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions { FabricateCssClasses = false }))
+            .Descendants().Where(e => e.Name.LocalName == "p").ToDictionary(e => e.Value, e => (string?)e.Attribute("style"));
+        Assert.Contains($"margin-bottom: {after};", styles["AshFirst"]);
+        Assert.Contains($"margin-top: {before};", styles["AshSecond"]);
     }
 
     [Theory]
