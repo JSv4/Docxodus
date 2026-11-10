@@ -4,7 +4,7 @@ import { wordTextScript as wordText } from './word-text-script.js';
 const sentence = 'Soft amber lamps guide seven quiet boats toward shore.';
 const tail = ' The dock stays open until dawn.';
 const styles = `<style>p{font:12pt 'Liberation Sans';line-height:15pt;--docx-exact-line-height:15pt;
-  margin:0;text-align:justify} .run{white-space:pre-wrap;vertical-align:top;line-height:15pt;--docx-font-kerning:none}</style>`;
+  margin:0;text-align:justify} .run{white-space:pre-wrap;vertical-align:top;line-height:15pt;font-kerning:none}</style>`;
 
 for (const indent of [0, 12]) {
   test(`repeated spaces fit after ${indent}pt indent beside unchanged automatic text`, async ({ page }) => {

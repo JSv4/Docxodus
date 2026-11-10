@@ -1928,7 +1928,7 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Throws<McpToolException>(() => _store.Documents.Resolve(_root + "-sibling/doc.docx"));
     }
 
-    [Fact]
+    [SymlinkFact]
     public void MCP125_Store_RejectsSymlinkEscapingRoot()
     {
         var outsideDir = Path.Combine(Path.GetTempPath(), $"mcp-outside-{Guid.NewGuid():N}");
@@ -1937,14 +1937,7 @@ public class McpServerDispatcherTests : IDisposable
         File.WriteAllBytes(secret, DocxSession.CreateBlankDocxBytes());
 
         var link = Path.Combine(_root, "link");
-        try
-        {
-            Directory.CreateSymbolicLink(link, outsideDir);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
-        {
-            return; // environment doesn't permit symlink creation; nothing to assert
-        }
+        Directory.CreateSymbolicLink(link, outsideDir);
 
         try
         {
