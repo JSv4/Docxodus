@@ -6706,3 +6706,29 @@ its concrete Liberation-family checks. Swiss/Roman preserve the class while diff
 in face; the monospace captures differ in class too. The named controls remain
 references only for their own inputs. Eligible declared-input scoring and Word parity
 are pending. The standalone export's existing strict-font resolution policy is unchanged.
+
+## Fractional whole-number measures truncate in Word (#1622)
+
+The schema types are whole numbers (`w:sz` is ST_EighthPointMeasure; `w:gridCol/@w:w`,
+`w:trHeight/@w:val` and `w:cols/@w:space` are ST_TwipsMeasure), but non-Word producers write bare
+decimals such as `<w:top w:val="single" w:sz="4.5"/>` or `<w:gridCol w:w="4000.5"/>`. Original
+minimal fixtures (Times New Roman, one fixed-layout two-column table or one bordered paragraph)
+were opened read-only in Word 2024; the table records what Word holds (`Document.WordOpenXML`)
+and reports through the object model.
+
+| Markup | Word 2024 | Docxodus 15.1.0 | Fixed converter |
+| --- | --- | --- | --- |
+| `w:sz` 4.5 / 4.6 / 5.5 / 8.9 / 12.75 in `w:pBdr`, `w:tblBorders`, `w:tcBorders` | opens; holds 4 / 4 / 5 / 8 / 12 | conversion fails | 4 / 4 / 5 / 8 / 12 |
+| `w:gridCol w:w` 4000.5 / 4000.6 / 4001.5 | opens; 4000 / 4000 / 4001 (column 200pt / 200pt / 200.05pt) | conversion fails (15.0.0: 200pt) | 200pt / 200pt / 200.05pt |
+| `w:cols w:space` 720.5 / 720.9 | opens; 720 (36pt) | conversion fails | 36pt |
+| `w:trHeight w:val` 600.5 / 600.9375 (exact) | opens; 600 (30pt) | 30.025pt / 30.0469pt | unchanged |
+| `w:gridCol w:w="1e3"` | "The file appears to be corrupted" | conversion fails | conversion fails |
+
+Word truncates toward zero, as `WordprocessingMLUtil.AttributeToTwips` already did. The failing
+sites read these attributes with `XAttribute` integer casts (`XmlConvert.ToInt32`). The `w:gridCol`
+case was a 15.1.0 regression: the exact table-border pass added that release cast every grid width,
+while the column group had always used `AttributeToTwips`. Border sizes now read through
+`WordprocessingMLUtil.BorderSize`, which shares the twip parser's invariant number syntax without
+units; grid widths and column spacing use `AttributeToTwips`. Exponents, NaN, infinities, comma
+decimals and values outside the Int32 range still fail. Row heights keep the fractional twips adopted
+for #1436, a sub-twip (under 0.05pt) difference from Word's truncation.
