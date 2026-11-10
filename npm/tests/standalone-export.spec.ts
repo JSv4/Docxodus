@@ -1127,23 +1127,54 @@ test.describe('standalone paginated HTML', () => {
     expect(hidden.html).not.toContain('No, it was superseded.');
   });
 
-  test('exports an oversized exact row at the paper edge', async ({ page }) => {
-    const source = bodyFillDocx({
-      paragraphs: 3, fontHalfPoints: 20, lineTwips: 240, exactRowTableTwips: 15000,
+  // Word starts either row taller than a page on a fresh page. It clips an exact row at the paper
+  // edge and ends a minimum-height row at the foot of the body (issue #1558).
+  for (const [tallRowRule, overhangPx] of [['exact', 136], ['atLeast', 0]] as const) {
+    test(`exports an oversized ${tallRowRule} row alone on its page`, async ({ page, context }) => {
+      const source = bodyFillDocx({
+        paragraphs: 3, fontHalfPoints: 20, lineTwips: 240, exactRowTableTwips: 15000, tallRowRule,
+      });
+      const result = await convert(page, source, false, { commentProfile: 'hidden' });
+      expect(result.renderReport.status).toBe('complete');
+      expect(result.pageCount).toBe(3);
+      const paragraphs = await page.evaluate((html) => {
+        const parsed = new DOMParser().parseFromString(html, 'text/html');
+        return Array.from(parsed.querySelectorAll('.page-box'), box =>
+          Array.from(box.querySelectorAll('.page-content p')).map(p => p.textContent?.trim()));
+      }, result.html);
+      expect(paragraphs).toEqual([
+        ['Line 1 of the body, typography and spacing.'],
+        ['Tall row'],
+        ['Line 2 of the body, typography and spacing.', 'Line 3 of the body, typography and spacing.'],
+      ]);
+      const offline = await context.newPage();
+      await offline.setContent(result.html);
+      const overhang = await offline.locator('.page-content table').evaluate(table =>
+        table.getBoundingClientRect().bottom - table.closest('.page-content')!.getBoundingClientRect().bottom);
+      await offline.close();
+      expect(Math.abs(overhang - overhangPx)).toBeLessThanOrEqual(2);
     });
+  }
+
+  test('continues a minimum-height row its content makes taller than a page', async ({ page }) => {
+    // Word 2024 moves the row to a fresh page, breaks it across pages 2 and 3, and gives the part on
+    // page 3 the same capped minimum, so the next paragraph starts page 4 (issue #1558). Word breaks
+    // after line 54, which exactly fills the band; Docxodus breaks after 53 even without a minimum.
+    const source = bodyFillDocx({ paragraphs: 3, fontHalfPoints: 20, lineTwips: 240,
+      exactRowTableTwips: 15000, tallRowRule: 'atLeast', tallRowLines: 70 });
     const result = await convert(page, source, false, { commentProfile: 'hidden' });
     expect(result.renderReport.status).toBe('complete');
-    expect(result.pageCount).toBe(3);
-    const paragraphs = await page.evaluate((html) => {
+    const pages = await page.evaluate((html) => {
       const parsed = new DOMParser().parseFromString(html, 'text/html');
       return Array.from(parsed.querySelectorAll('.page-box'), box =>
-        Array.from(box.querySelectorAll('.page-content p')).map(p => p.textContent?.trim()));
+        box.querySelector('.page-content')?.textContent?.match(/(Row line|Line) \d+/g) ?? []);
     }, result.html);
-    expect(paragraphs).toEqual([
-      ['Line 1 of the body, typography and spacing.'],
-      ['Tall row'],
-      ['Line 2 of the body, typography and spacing.', 'Line 3 of the body, typography and spacing.'],
-    ]);
+    expect(pages).toHaveLength(4);
+    expect(pages[0]).toEqual(['Line 1']);
+    expect(pages[1][0]).toBe('Row line 1');
+    expect(pages[1].length).toBeGreaterThanOrEqual(53);
+    expect([...pages[1], ...pages[2]]).toEqual(Array.from({ length: 70 }, (_, i) => `Row line ${i + 1}`));
+    expect(pages[3]).toEqual(['Line 2', 'Line 3']);
   });
 
   test('continues an oversized minimum-height merged group within the page limit', async ({ page, context }) => {

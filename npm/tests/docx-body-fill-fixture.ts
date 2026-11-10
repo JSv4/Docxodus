@@ -33,6 +33,10 @@ export interface BodyFillOptions {
    * an indivisible block, taller than the 648pt band when above 12960.
    */
   exactRowTableTwips?: number;
+  /** That row's `w:hRule`; `atLeast` makes its height a minimum instead. */
+  tallRowRule?: 'exact' | 'atLeast';
+  /** Fill that row with one paragraph of this many lines ("Row line N", split by `w:br`). */
+  tallRowLines?: number;
 }
 
 export function bodyFillDocx(options: BodyFillOptions): Uint8Array {
@@ -52,8 +56,11 @@ export function bodyFillDocx(options: BodyFillOptions): Uint8Array {
     : '';
   const tallTable = options.exactRowTableTwips
     ? '<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/></w:tblPr><w:tblGrid><w:gridCol w:w="9360"/></w:tblGrid>' +
-      `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:hRule="exact" w:val="${options.exactRowTableTwips}"/></w:trPr>` +
-      `<w:tc><w:tcPr><w:tcW w:w="9360" w:type="dxa"/></w:tcPr>${paragraph('Tall row')}</w:tc></w:tr></w:tbl>`
+      `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:hRule="${options.tallRowRule ?? 'exact'}" w:val="${options.exactRowTableTwips}"/></w:trPr>` +
+      `<w:tc><w:tcPr><w:tcW w:w="9360" w:type="dxa"/></w:tcPr>${options.tallRowLines
+        ? `<w:p>${pPr()}${Array.from({ length: options.tallRowLines }, (_, index) =>
+          `<w:r>${rPr}<w:t>Row line ${index + 1}</w:t></w:r>`).join(`<w:r>${rPr}<w:br/></w:r>`)}</w:p>`
+        : paragraph('Tall row')}</w:tc></w:tr></w:tbl>`
     : '';
   const lines = Array.from({ length: options.paragraphs },
     (_, index) => paragraph(`Line ${index + 1} of the body, typography and spacing.`,
