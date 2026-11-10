@@ -3985,18 +3985,33 @@ Gaps are PDF baseline steps less 16pt.
 | Across a bookmark, a block content control or a continuous section break | 14pt | 5pt → 14pt |
 | Bordered paragraph (equals the explicit-280 control) | 14pt | 5pt → 14pt |
 | Paragraph holding a tracked run insertion | 14pt | 5pt → 14pt |
-| First paragraph of a header, then between header paragraphs | 0, then 14pt | 5pt (unchanged) |
+| First paragraph of a header, then between header paragraphs | 0, then 14pt | 5pt → 0, then 10pt → 14pt |
+| Last paragraph of a header: space after, which pushes the body down | 14pt | 5pt → 14pt |
+| Between footer paragraphs; last paragraph of a footer, space after | 14pt; 14pt | 10pt → 14pt; 5pt → 14pt |
+| First / last paragraph of a table cell in a header, then between them | 0 / 0, then 14pt | 5pt → 0 / 0, then 5pt → 14pt |
+| Control: explicit 14pt + 14pt (5pt + 5pt) between header or footer paragraphs, flags off | 14pt (5pt) | 28pt (10pt) → 14pt (5pt) |
 | `doNotUseHTMLParagraphAutoSpacing`: flags ignored, explicit 5pt kept | 5pt edges, **10pt** between | 5pt edges, 5pt → 10pt between (next section) |
 
-`AutomaticParagraphSpacing` now finds each paragraph's neighbors in its body or table-cell block
-sequence (content controls and custom XML are transparent; bookmarks and other markup are skipped):
-no neighbor gives 0, a table gives 14pt. Frames, floating tables and tracked paragraph marks or
-rows keep their explicit values, as do headers, footers, notes and text boxes.
+`AutomaticParagraphSpacing` now finds each paragraph's neighbors in its story's block sequence: the
+body, a header, a footer, or a table cell in one of them (content controls and custom XML are
+transparent; bookmarks and other markup are skipped). No neighbor gives 0, except after the last
+paragraph of a header or footer, where Word keeps the 14pt: the body below an automatic header, and
+an automatic footer's lines, sit exactly where the explicit-280 controls put them. A table gives 14pt. Frames, floating tables and tracked paragraph
+marks or rows keep their explicit values, as do notes and text boxes. The converter stamps and
+applies the header and footer parts with the main document.
 
-Still open: header and footer automatic spacing is unhandled.
+The control row was a renderer bug of its own: the paginated header and footer bands are flex
+columns (the footer's is bottom-anchored), and flex items never collapse their margins, so every
+pair of running-story paragraphs printed both spaces; #1432 had matched the band's measurement to
+that. `measureHeaderFooterHeight` in `npm/src/pagination.ts` now puts the story's paragraphs in one
+block, which every page copy clones, so they collapse as in the body while the band's single flex
+item still holds the first paragraph's space before and the last one's space after, as Word does.
+Docxodus now prints the header fixtures within 1pt of Word, and the body below an automatic header
+lands at 124.5pt against Word's 124.8pt (117pt on `main`, which kept the explicit 5pt values and added them).
 
-Tests: `HtmlAutomaticSpacingTests`, `DenseTextParagraphTests`, and
-`npm/tests/export-automatic-spacing.spec.ts`.
+Tests: `HtmlAutomaticSpacingTests` (`StoryParagraphsUseTheirStoryNeighborsAndEdges` for the stories),
+`DenseTextParagraphTests`, `npm/tests/export-automatic-spacing.spec.ts`, and for the bands
+`npm/tests/page-map-story-spacing.spec.ts` and `npm/tests/export-story-spacing.spec.ts`.
 
 ### `w:doNotUseHTMLParagraphAutoSpacing` adds the two spaces (#1553)
 
@@ -4034,7 +4049,7 @@ up no longer absorbs the next paragraph's space before. The last row is Word's o
 spacing for a styles part without `w:pPrDefault` (#1652), not a property of this setting.
 
 `Internal/AutomaticParagraphSpacing.cs` resolves the setting once. For each paragraph whose original
-neighbor above, in the same body or cell, is an eligible paragraph, it records that paragraph's
+neighbor above, in the same body, header, footer or cell, is an eligible paragraph, it records that paragraph's
 resolved space after before the markup is rewritten; after formatting assembly the value is added to
 the paragraph's own space before. A table, a frame, a tracked paragraph mark, or a section break whose
 next section is not continuous ends the sum. Every renderer, CSS and the paginator alike, collapses

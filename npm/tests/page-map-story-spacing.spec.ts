@@ -33,7 +33,7 @@ for (const story of ['header', 'footer'] as const) {
       return {
         fragments: pagination.pageMap.fragments,
         height: bounds.height,
-        contained: Array.from(band.children).every(child => {
+        contained: Array.from(band.querySelectorAll('p')).every(child => {
           const rect = child.getBoundingClientRect();
           return rect.top >= bounds.top && rect.bottom <= bounds.bottom;
         }),
@@ -41,7 +41,9 @@ for (const story of ['header', 'footer'] as const) {
     }, story);
 
     expect(result.contained).toBe(true);
-    expect(result.height).toBeCloseTo(4 * (12 + 18 + 18) * 4 / 3, 1);
+    // Word 2024 collapses adjoining paragraph spacing in a running story, as in the body (#1553);
+    // the first space before and the last space after stay inside the band.
+    expect(result.height).toBeCloseTo((18 + 4 * 12 + 3 * 18 + 18) * 4 / 3, 1);
     expect(result.fragments.filter((fragment: any) => fragment.story === story)).toHaveLength(4);
     expect(result.fragments.some((fragment: any) => fragment.anchorId === 'p:body:caption')).toBe(true);
   });

@@ -1275,7 +1275,7 @@ namespace Docxodus
             NormalizeLiteralTextControls(wordDoc);
 
             var spacingRoot = wordDoc.MainDocumentPart!.GetXDocument().Root!;
-            new Internal.AutomaticParagraphSpacing(wordDoc).Stamp(spacingRoot, spacingRoot);
+            new Internal.AutomaticParagraphSpacing(wordDoc).Stamp();
             new Internal.ParagraphLineGrid(wordDoc).Stamp(spacingRoot, spacingRoot);
 
             // Only accept revisions if NOT rendering tracked changes AND document has tracked changes
@@ -1361,7 +1361,7 @@ namespace Docxodus
 
             StampFitTextGroups(wordDoc);
 
-            Internal.AutomaticParagraphSpacing.Apply(wordDoc.MainDocumentPart!.GetXDocument().Root!);
+            Internal.AutomaticParagraphSpacing.Apply(wordDoc);
 
             MergeRevisionParagraphGroups(wordDoc, htmlConverterSettings);
             NormalizeFieldResults(wordDoc, htmlConverterSettings);
