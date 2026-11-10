@@ -15,7 +15,7 @@ for (const source of observations.cases) {
     // separate public-export checks use the exact declared Times New Roman font.
     await page.setContent(`<style>p{font:${source.fontSizePt}pt 'Liberation Serif',serif;line-height:normal;
       margin:0 0 6pt;--docx-auto-line-spacing:1.15} .run{white-space:pre-wrap;position:static;
-      line-height:calc(1lh * 1.15);--docx-font-kerning:none}</style><main data-docx-compatibility-mode="15">
+      line-height:calc(1lh * 1.15);font-kerning:none}</style><main data-docx-compatibility-mode="15">
       ${source.paragraphs.map((p: any, i: number) => `<p data-source-anchor-id="p:body:${i}"
         style="width:${p.widthPt}pt;text-indent:${p.firstLineIndentPt}pt;text-align:justify"><span class="run">${escape(p.text)}</span></p>`).join('')}</main>`);
     await page.addScriptTag({ content: lineMetrics });
@@ -48,7 +48,7 @@ for (const source of observations.cases) {
     await page.setContent(`<style>p{font:${source.fontSizePt}pt 'Liberation Serif',serif;line-height:normal;
       margin:0 0 6pt;--docx-auto-line-spacing:1.15} .run{white-space:pre-wrap;position:${position};
       top:min(0px,calc(1lh * (1/1.15 - 1)/2));
-      line-height:calc(1lh * 1.15);--docx-font-kerning:none}</style><div id="staging" data-docx-compatibility-mode="15"><div data-section-index="0"
+      line-height:calc(1lh * 1.15);font-kerning:none}</style><div id="staging" data-docx-compatibility-mode="15"><div data-section-index="0"
       data-page-width="612" data-page-height="792" data-content-width="468" data-content-height="648"
       data-margin-top="72" data-margin-bottom="72" data-margin-left="72" data-margin-right="72">
       ${source.paragraphs.map((p: any, i: number) => `<p data-source-anchor-id="p:body:${i.toString(16).padStart(32, '0')}"

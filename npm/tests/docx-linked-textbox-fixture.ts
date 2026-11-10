@@ -7,7 +7,9 @@ export function linkedTextBoxDocx(mode: 'flow' | 'fitting' | 'unlinked' | 'image
     : `<w:r><w:t>${words}</w:t></w:r>${mode === 'tab' ? '<w:r><w:tab/><w:t>CedarClosing</w:t></w:r>' : ''}`;
   const paragraphs = `<w:p><w:pPr><w:keepLines w:val="0"/><w:widowControl w:val="0"/><w:spacing w:after="0" w:line="240" w:lineRule="exact"/></w:pPr>${runs}</w:p>`;
   const box = (continuation: boolean) => {
-    const width = continuation ? 216 : 144, height = continuation ? 216 : mode === 'fitting' || mode === 'unlinked' ? 360 : 60;
+    // Unkerned, as in Word (#1562), three 11pt labels need 138.21pt of the box's 138pt band, so 35 two-label
+    // lines of 12pt need 426pt with the insets: the fitting box is 432pt tall.
+    const width = continuation ? 216 : 144, height = continuation ? 216 : mode === 'fitting' || mode === 'unlinked' ? 432 : 60;
     return `<w:drawing><wp:anchor simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
       <wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="page"><wp:posOffset>${(continuation ? 240 : 72) * 12700}</wp:posOffset></wp:positionH>
       <wp:positionV relativeFrom="page"><wp:posOffset>1524000</wp:posOffset></wp:positionV><wp:extent cx="${width * 12700}" cy="${height * 12700}"/>

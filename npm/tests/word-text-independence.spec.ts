@@ -19,7 +19,7 @@ for (const [name, neighbor] of Object.entries(neighbors)) for (const kind of ['j
     await page.setContent(`<style>p{font:12pt/normal 'Liberation Serif';margin:0;--docx-auto-line-spacing:1}
       span{white-space:pre-wrap}</style><main data-docx-compatibility-mode="15" style="width:468pt">
       <p id="target" style="text-align:${kind === 'justify' ? 'justify' : 'left'}"><span
-        style="--docx-font-kerning:${kind === 'kerned' ? 'normal' : 'none'}">${text}</span></p>
+        style="font-kerning:${kind === 'kerned' ? 'normal' : 'none'}">${text}</span></p>
       <div id="neighbor">${neighbor}</div></main>`);
     await page.addScriptTag({ content: metrics });
     await page.addScriptTag({ content: wordTextScript });

@@ -14,7 +14,7 @@ for (const [name, text, indent, last] of [
     await page.setContent(`<main data-docx-compatibility-mode="14" data-docx-wordperfect-justification="true">
       <p style="width:468pt;font:12pt 'Liberation Mono';line-height:normal;--docx-auto-line-spacing:1;
         margin:0;text-align:justify;text-indent:${indent}pt"><span style="white-space:pre-wrap;line-height:normal;
-        --docx-font-kerning:none">${text}</span></p></main>`);
+        font-kerning:none">${text}</span></p></main>`);
     await page.addScriptTag({ content:metrics }); await page.addScriptTag({ content:wordTextScript });
     const result = await page.evaluate(() => {
       const root = document.querySelector('main')!, run = root.querySelector('span')!, api = window as any;
