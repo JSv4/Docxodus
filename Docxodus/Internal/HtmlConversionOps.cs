@@ -661,15 +661,23 @@ internal static class HtmlConversionOps
 
             var positions = parentGroup.Select(t => posOf.TryGetValue(t, out var p) ? p : -1)
                 .Where(p => p >= 0).Distinct().OrderBy(p => p).ToList();
+            // The real neighbor is the nearest sibling holding a block: markup such as a
+            // bookmark between two paragraphs does not separate them (#1553).
+            int Reach(int position, int step)
+            {
+                var j = position + step;
+                while (j > 0 && j < siblings.Count - 1 && !WmlToHtmlConverter.HoldsBlock(siblings[j])) j += step;
+                return Math.Clamp(j, 0, siblings.Count - 1);
+            }
             int idx = 0;
             while (idx < positions.Count)
             {
-                int start = Math.Max(0, positions[idx] - 1);
-                int end = Math.Min(siblings.Count - 1, positions[idx] + 1);
-                while (idx + 1 < positions.Count && positions[idx + 1] - 1 <= end + 1)
+                int start = Reach(positions[idx], -1);
+                int end = Reach(positions[idx], 1);
+                while (idx + 1 < positions.Count && Reach(positions[idx + 1], -1) <= end + 1)
                 {
                     idx++;
-                    end = Math.Min(siblings.Count - 1, positions[idx] + 1);
+                    end = Reach(positions[idx], 1);
                 }
                 idx++;
                 runs.Add((siblings, start, end));

@@ -24,18 +24,19 @@ public class HtmlAutomaticSpacingTests
     [InlineData("inherited", "14pt", "14pt")]
     [InlineData("direct-off", "5pt", "14pt")]
     [InlineData("explicit-neighbor", "14pt", "30pt")]
-    [InlineData("contextual", "0", "14pt")]
+    [InlineData("contextual", "0", "0")]
     [InlineData("zero-number", "14pt", "14pt")]
     [InlineData("compatibility", "5pt", "5pt")]
     [InlineData("compatibility-off", "14pt", "14pt")]
-    [InlineData("revision", "5pt", "5pt")]
-    [InlineData("table", "5pt", "5pt")]
-    [InlineData("bookmark", "5pt", "5pt")]
-    [InlineData("contextual-bookmark", "5pt", "5pt")]
-    [InlineData("section", "5pt", "5pt")]
-    [InlineData("inherited-border", "5pt", "5pt")]
+    [InlineData("revision", "14pt", "14pt")]
+    [InlineData("table", "14pt", "14pt")]
+    [InlineData("bookmark", "14pt", "14pt")]
+    [InlineData("contextual-bookmark", "0", "0")]
+    [InlineData("content-control", "14pt", "14pt")]
+    [InlineData("section", "14pt", "14pt")]
+    [InlineData("inherited-border", "14pt", "14pt")]
     [InlineData("inherited-frame", "5pt", "5pt")]
-    [InlineData("level-border", "5pt", "5pt")]
+    [InlineData("level-border", "0", "0")]
     public void FlagsAndOriginalBoundariesStayConsistent(string kind, string after, string before)
     {
         var bytes = Create(kind == "level-border" ? 1 : 0, kind == "level-border" ? 1 : 0, doc =>
@@ -86,6 +87,8 @@ public class HtmlAutomaticSpacingTests
                     first.AddAfterSelf(new XElement(W.bookmarkStart, new XAttribute(W.id, "1"),
                         new XAttribute(W.name, "AshMark")), new XElement(W.bookmarkEnd, new XAttribute(W.id, "1"))); break;
                 case "section": firstProps.Add(new XElement(W.sectPr)); break;
+                case "content-control":
+                    first.ReplaceWith(new XElement(W.sdt, new XElement(W.sdtPr), new XElement(W.sdtContent, first))); break;
                 case "inherited-border": styleProps.Add(border); break;
                 case "inherited-frame": styleProps.Add(new XElement(W.framePr,
                     new XAttribute(W._w, "3600"), new XAttribute(W.hAnchor, "text"), new XAttribute(W.vAnchor, "text"))); break;
@@ -103,7 +106,7 @@ public class HtmlAutomaticSpacingTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void CellAndHeaderClonesDoNotBecomeOrdinaryBodyParagraphs(bool header)
+    public void CellParagraphsUseTheirCellNeighborsButHeadersKeepExplicitSpacing(bool header)
     {
         var bytes = Create(0, 0, doc =>
         {
@@ -122,7 +125,7 @@ public class HtmlAutomaticSpacingTests
                 new XElement(W.gridCol, new XAttribute(W._w, "6000"))), new XElement(W.tr, new XElement(W.tc, paragraphs))));
             main.PutXDocument();
         });
-        VerifyGaps(bytes, "5pt", "5pt");
+        VerifyGaps(bytes, header ? "5pt" : "14pt", header ? "5pt" : "14pt");
     }
 
     private static void VerifyGaps(byte[] bytes, string after, string before, bool windowed = true)
@@ -158,24 +161,35 @@ public class HtmlAutomaticSpacingTests
         }
     }
 
-    [Fact]
-    public void UnmeasuredDocumentEdgesKeepTheirExplicitSpacing()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DocumentAndCellEdgesHaveNoAutomaticSpacing(bool cell)
     {
+        // Word prints no automatic space before the first or after the last paragraph of the
+        // document or of a table cell (#1553).
         var bytes = Create(0, 0, doc =>
         {
             var main = doc.MainDocumentPart!;
             var paragraphs = main.GetXDocument().Descendants(W.p).ToArray();
-            paragraphs[0].Remove();
-            paragraphs[^1].Remove();
+            if (cell)
+                paragraphs[0].AddAfterSelf(new XElement(W.tbl, new XElement(W.tblPr), new XElement(W.tblGrid,
+                    new XElement(W.gridCol, new XAttribute(W._w, "6000"))),
+                    new XElement(W.tr, new XElement(W.tc, paragraphs[1..3].Select(p => { p.Remove(); return p; }).ToArray()))));
+            else
+            {
+                paragraphs[0].Remove();
+                paragraphs[^1].Remove();
+            }
             main.PutXDocument();
         });
         VerifyGaps(bytes, "14pt", "14pt");
         var options = new HtmlConversionOptions { FabricateCssClasses = false, StampAnchors = true };
-        var paragraphs = XElement.Parse(HtmlConversionOps.ConvertToHtml(bytes, options))
-            .Descendants().Where(e => e.Name.LocalName == "p").ToArray();
+        var paragraphs = XElement.Parse(HtmlConversionOps.ConvertToHtml(bytes, options)).Descendants()
+            .Where(e => e.Name.LocalName == "p" && e.Value is "AshFirst" or "AshSecond").ToArray();
         foreach (var (paragraph, side) in new[] { (paragraphs[0], "top"), (paragraphs[1], "bottom") })
         {
-            var expected = $"margin-{side}: 5pt;";
+            var expected = $"margin-{side}: 0;";
             Assert.Contains(expected, (string?)paragraph.Attribute("style"));
             Assert.Contains(expected, HtmlConversionOps.RenderBlockHtml(bytes,
                 (string)paragraph.Attribute("data-anchor")!, options));

@@ -3972,10 +3972,30 @@ the gap replaces only enabled sides; contextual suppression and the neighbor's e
 apply. The stateless block API reuses the session renderer, including its real neighboring context.
 It no longer builds a single-paragraph shell that loses contextual spacing.
 
-This is deliberately partial: unmatched document/section boundaries, cells and other stories,
-frames/borders, revision-bearing documents, and enabled `doNotUseHTMLParagraphAutoSpacing` retain
-their previous behavior. The cited print did not measure first-document/first-cell suppression or
-that compatibility setting. They remain open rather than being assigned an unverified value.
+**Edges, measured in Word 2024 (November 2026).** Fixtures: Times New Roman 12pt, exact 16pt lines,
+`w:before="100" w:after="100"` under both flags; controls set the flags off with 280 or 100 twips.
+Gaps are PDF baseline steps less 16pt.
+
+| Boundary | Word gap | Docxodus before → after |
+|---|---:|---:|
+| First paragraph of the document, space before | 0 | 5pt → 0 |
+| First / last paragraph of a table cell, before / after | 0 / 0 | 5pt → 0 |
+| Between paragraphs of one cell | 14pt | 5pt → 14pt |
+| Paragraph next to a table, either side | 14pt | 5pt → 14pt |
+| Across a bookmark, a block content control or a continuous section break | 14pt | 5pt → 14pt |
+| Bordered paragraph (equals the explicit-280 control) | 14pt | 5pt → 14pt |
+| Paragraph holding a tracked run insertion | 14pt | 5pt → 14pt |
+| First paragraph of a header, then between header paragraphs | 0, then 14pt | 5pt (unchanged) |
+| `doNotUseHTMLParagraphAutoSpacing`: flags ignored, explicit 5pt kept | 5pt edges, **10pt** between | 5pt edges, 5pt between (unchanged) |
+
+`AutomaticParagraphSpacing` now finds each paragraph's neighbors in its body or table-cell block
+sequence (content controls and custom XML are transparent; bookmarks and other markup are skipped):
+no neighbor gives 0, a table gives 14pt. Frames, floating tables and tracked paragraph marks or
+rows keep their explicit values, as do headers, footers, notes and text boxes.
+
+Still open: the compatibility setting is not about the automatic value. With it on, Word *adds* space
+after and space before between any two paragraphs (explicit 14pt + 14pt gave 28pt), where the default
+takes the larger. Docxodus always takes the larger. Header and footer automatic spacing is unhandled.
 
 Tests: `HtmlAutomaticSpacingTests`, `DenseTextParagraphTests`, and
 `npm/tests/export-automatic-spacing.spec.ts`.
@@ -3983,8 +4003,10 @@ Tests: `HtmlAutomaticSpacingTests`, `DenseTextParagraphTests`, and
 ### Contextual spacing belongs to each paragraph (#1553)
 
 The neighbor need not enable the setting. ECMA-376 17.3.1.9 removes the enabled
-paragraph's own spacing on a side touching the same style; the neighbor's spacing
-still participates in the maximum gap. With both paragraphs in the same style:
+paragraph's own spacing on a side touching the same style. Word 2024 (November 2026) shows
+the space after a flagged paragraph gives up still absorbs that much of the next paragraph's
+space before: the gap is `max(0, before - after)`, so the neighbor's spacing participates only
+beyond it. With both paragraphs in the same style:
 
 ```xml
 <w:p><w:pPr><w:spacing w:after="240"/><w:contextualSpacing/></w:pPr>
@@ -3998,7 +4020,11 @@ still participates in the maximum gap. With both paragraphs in the same style:
 | Issue `context-after-first.docx` | 13.75pt step, confirmed by the author | Not recaptured here | Previously retained the unwanted 12pt; now suppresses it |
 | Authored Oak body, 16pt exact line, first-only after-space | Not printed | 16pt step | 12pt unwanted gap / zero authored gap |
 | Oak body, second-only before-space | Not printed | 16pt step | 12pt unwanted gap / zero authored gap |
-| Oak body, first-only flag and neighbor's 6pt before-space | Not printed | 22pt step | 12pt gap / neighbor's 6pt gap |
+| Oak body, first-only flag and neighbor's 6pt before-space | Not printed | 22pt step | 12pt gap / 6pt (#1600) / 0 now, as Word's rule gives |
+| Flagged 5pt after, then 14pt before (Word 2024) | 9pt gap | Not captured | 14pt / 9pt |
+| Flagged 14pt after, then 5pt before (Word 2024) | 0 | Not captured | 5pt / 0 |
+| 5pt after, then flagged 14pt before (Word 2024) | 5pt gap | Not captured | 5pt / 5pt |
+| Flagged 14pt after, a bookmark, then the same style (Word 2024) | 0 | Not captured | 14pt / 0 |
 | Oak text boxes, first-only flag | Not printed | Retains 12pt; VML also adds inset | 12pt unwanted gap / zero authored gap |
 
 The Word measurement is from [the author's print results](https://github.com/JSv4/Docxodus/issues/1553#issuecomment-6701328156),
@@ -4007,8 +4033,8 @@ line-height defaults. Their two native textbox references remain ineligible beca
 LibreOffice disagrees with the declared spacing/position; no Word textbox parity is claimed.
 
 `ApplyContextualSpacing` now groups by resolved style, including implicit default styles,
-then gates each side with that paragraph's resolved on/off value. Border, frame, table,
-bookmark and other existing content boundaries remain intact. Native regressions and
+then gates each side with that paragraph's resolved on/off value. A bookmark or other markup
+holding no block does not separate the two paragraphs; a table does. Native regressions and
 the public PDF tests cover body text and both textbox formats, including direct-off
 overrides and neighbor-owned space. Automatic spacing is a separate remaining part of #1553.
 
@@ -7027,3 +7053,61 @@ embedding-rights checks instead.
 **Code.** `npm-export/src/fonts/document.ts` reads and de-obfuscates the parts;
 `npm-export/src/fonts/resolver.ts` (`withDocumentFaces`, `withLocalFaces`) places them after an
 explicit directory and an enabled local family, and before substitution.
+
+---
+## An empty paragraph that only carries a section break (#1572)
+
+```xml
+<w:p><w:r><w:t>Line above.</w:t></w:r></w:p>
+<w:p><w:pPr><w:sectPr>…</w:sectPr></w:pPr></w:p>   <!-- no runs: it only ends the section -->
+<w:p><w:r><w:t>Line below.</w:t></w:r></w:p>
+```
+
+The specification says nothing about the height of this paragraph. Word 2024 sets its mark at the
+end of the preceding paragraph's last line (`Range.Information` puts it at that line's y, right of
+its text), so it has no line of its own. Its spacing before and after, its run size and the type of
+the next section make no difference. With no paragraph line before it, it keeps a line: first in the
+body, directly after a table, or first on the new page its own next-page section opens. A page break
+paragraph's last line is the break's line, so an empty next-page mark after a page break stays on
+that page and the next section starts on the following one. Measured from Word's PDFs (Times New
+Roman 12 pt, Letter, compatibility mode 15 unless stated; a single line steps 13.80 pt):
+
+| Fixture (next section) | Word 2024 | Docxodus before | Docxodus after |
+| --- | ---: | ---: | ---: |
+| No paragraph between (control) | 13.80 | 13.80 | 13.80 |
+| Plain empty paragraph between (control) | 27.60 | 27.59 | 27.59 |
+| Text paragraph carrying the break (control) | 13.80 twice | 13.80 twice | 13.80 twice |
+| Empty mark (continuous) | 13.80 | 27.59 | 13.84 |
+| Empty mark, 8 pt after and 1.08 lines, all three paragraphs (continuous) | 22.92 | 45.78 | 22.94 |
+| Empty mark with 12 pt before (continuous) | 13.80 | 39.59 | 13.84 |
+| Empty mark with a 28 pt mark run (continuous) | 13.80 | 45.99 | 13.84 |
+| Empty mark holding only a bookmark (continuous) | 13.80 | 27.59 | 13.84 |
+| Empty mark (continuous, two columns) | 13.80 | 27.59 | 13.84 |
+| Empty mark ending a one-line two-column section (continuous) | 13.80 | 13.80 | 13.80 |
+| The same section with the break on its one line (control) | 13.80 | 7.04 | 13.80 |
+| Empty mark directly after a table: cell line to next line | 27.60 | 27.83 | 27.83 |
+| Empty mark first in the body: next line's top | one line | one line | one line |
+| Two empty marks, the second opening a next-page section | 2 pages, second mark a line | same | same |
+| Page break, empty mark (next page), twice; modes 12 and 15 | 3 pages | 5 pages | 3 pages |
+| Empty marks only (next page, control) | 3 pages | 3 pages | 3 pages |
+| Page break, mark with text (next page, control) | 5 pages | 5 pages | 5 pages |
+| Page break, empty mark (continuous) | 2 pages, next line tops page 2 | 2 pages, a blank line first | 2 pages, next line first |
+
+Docxodus recognises the paragraph in `InsertAppropriateNonbreakingSpacesTransform`, where empty
+paragraphs are already found, before the body's final `w:sectPr` is moved onto the last paragraph,
+so only a break inside the body qualifies (`IsSectionMarkOnly`). It marks it as a structural
+paragraph, which `ConvertParagraph` already lays out as a one-twip box with no margins (the same
+treatment as a nested table's cell-end paragraph), so every renderer gets the same zero-height
+paragraph. The paginated output also flags it `data-section-mark`, and the paginator flows a flagged
+mark ahead of an explicit page break that directly precedes it, which keeps it on the break's page.
+A paragraph with a list number has content and keeps its line. Two cases are unmeasured and keep
+their line: a mark directly after a block-level content control, and a mark after another
+section's mark when its own section is continuous. The one-twip box is 0.04 pt more than Word.
+
+The two-column rows exposed a separate PDF export fault. The export replaces each line with vector
+text and fixes the paragraph's height, so the box no longer holds lines and a balanced column
+container can split it between the columns when it rebalances. A section whose columns hold one
+line therefore sent the next section's first line 7.04 pt down instead of one line. Before the
+change, the empty mark's own line filled the second column and hid this. Vector paragraphs in
+columns now set `break-inside: avoid` (`npm/src/word-text.ts`); the vectoriser already skips
+paragraphs that were split across columns.

@@ -3578,10 +3578,10 @@ namespace Docxodus
             WmlToHtmlConverterSettings settings, XNode node,
             bool suppressTrailingWhiteSpace,
             decimal currentMarginLeft,
-            bool suppressLeadingWhiteSpace = false)
+            int absorbedSpaceBefore = 0)
         {
             var content = ConvertToHtmlContent(wordDoc, settings, node, suppressTrailingWhiteSpace,
-                currentMarginLeft, suppressLeadingWhiteSpace);
+                currentMarginLeft, absorbedSpaceBefore);
             return node is XElement element
                 ? WithJoinedParagraphSource(wordDoc, settings, element, content)
                 : content;
@@ -3591,7 +3591,7 @@ namespace Docxodus
             WmlToHtmlConverterSettings settings, XNode node,
             bool suppressTrailingWhiteSpace,
             decimal currentMarginLeft,
-            bool suppressLeadingWhiteSpace)
+            int absorbedSpaceBefore)
         {
             var element = node as XElement;
             if (element == null) return null;
@@ -3751,7 +3751,7 @@ namespace Docxodus
             // have a style separator).
             if (element.Name == W.p)
             {
-                return ProcessParagraph(wordDoc, settings, element, suppressTrailingWhiteSpace, currentMarginLeft, suppressLeadingWhiteSpace);
+                return ProcessParagraph(wordDoc, settings, element, suppressTrailingWhiteSpace, currentMarginLeft, absorbedSpaceBefore);
             }
 
             // Transform hyperlinks to the XHTML h:a element.
@@ -6119,7 +6119,7 @@ namespace Docxodus
         // the element (e.g., h:h2) created from the w:p element having the (first)
         // hidden paragraph mark (w:specVanish or w:vanish).
         private static object? ProcessParagraph(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
-            XElement element, bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool suppressLeadingWhiteSpace = false)
+            XElement element, bool suppressTrailingWhiteSpace, decimal currentMarginLeft, int absorbedSpaceBefore = 0)
         {
             // Ignore this paragraph if the preceding paragraph ends in a hidden mark.
             // We have already transformed this one together with the previous one.
@@ -6128,7 +6128,7 @@ namespace Docxodus
             var elementName = GetParagraphElementName(element, wordDoc);
             var isBidi = IsBidi(element);
             var paragraph = (XElement) ConvertParagraph(wordDoc, settings, element, elementName,
-                suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
+                suppressTrailingWhiteSpace, currentMarginLeft, isBidi, absorbedSpaceBefore);
             if (element.Attribute(EmptyRevisionDisplayAttribute) != null)
                 paragraph.SetAttributeValue("data-docx-empty-review-display", "true");
 
@@ -6478,6 +6478,10 @@ namespace Docxodus
             // w:keepLines - keep all lines of this paragraph together on one page
             if (IsOnOffPropertyEnabled(closingPPr?.Element(W.keepLines)))
                 htmlParagraph.Add(new XAttribute("data-keep-lines", "true"));
+
+            // Its line is the preceding paragraph's, so it stays on that page after a page break.
+            if ((string?)firstParagraph.Attribute(StructuralParagraphAttribute) == SectionMarkParagraph)
+                htmlParagraph.Add(new XAttribute("data-section-mark", "true"));
 
             var pPr = firstParagraph.Element(W.pPr);
             if (pPr == null) return;
@@ -7622,16 +7626,16 @@ namespace Docxodus
 
         private static object ConvertParagraph(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             XElement paragraph, XName elementName, bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool isBidi,
-            bool suppressLeadingWhiteSpace = false)
+            int absorbedSpaceBefore = 0)
         {
-            var style = DefineParagraphStyle(paragraph, elementName, suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
+            var style = DefineParagraphStyle(paragraph, elementName, suppressTrailingWhiteSpace, currentMarginLeft, isBidi, absorbedSpaceBefore);
             var implied = (string?)paragraph.Attribute(ImpliedTableEndParagraphAttribute) == "true";
-            if ((string?)paragraph.Attribute(StructuralTableEndParagraphAttribute) == "true")
+            if (paragraph.Attribute(StructuralParagraphAttribute) != null)
             {
-                // A nested table's required, unformatted cell-end paragraph is a structural
-                // boundary, not an additional blank text line. Keep a one-twip box so the
-                // source paragraph retains positive PageMap geometry without adding the
-                // inherited line height and space-after to the containing row.
+                // A nested table's required, unformatted cell-end paragraph, or an empty paragraph
+                // that only carries a section break, is a structural boundary, not an additional
+                // blank text line. Keep a one-twip box so the source paragraph retains positive
+                // PageMap geometry without adding its inherited line height and spacing.
                 style.Remove(AutomaticLineSpacingMultiplierCssProperty);
                 style["line-height"] = "0.05pt";
                 style["min-height"] = "0.05pt";
@@ -7716,8 +7720,11 @@ namespace Docxodus
 
         private const string AutomaticLineSpacingMultiplierCssProperty = "--docx-auto-line-spacing";
         private const string ExactLineSpacingCssProperty = "--docx-exact-line-height";
-        private static readonly XName StructuralTableEndParagraphAttribute =
-            XName.Get("table-end-paragraph", "urn:docxodus:rendering");
+        /// <summary>Marks a paragraph that lays out as a one-twip box: <c>table-end</c> or
+        /// <see cref="SectionMarkParagraph"/>.</summary>
+        private static readonly XName StructuralParagraphAttribute =
+            XName.Get("structural-paragraph", "urn:docxodus:rendering");
+        private const string SectionMarkParagraph = "section-mark";
         private static readonly XName ImpliedTableEndParagraphAttribute =
             XName.Get("implied-table-end-paragraph", "urn:docxodus:rendering");
 
@@ -7861,7 +7868,7 @@ namespace Docxodus
                             (child.Name == W.t && child.Value.Length == 0) ||
                             (child.Name == W.rPr && !child.HasElements)));
                     if (empty)
-                        paragraph.SetAttributeValue(StructuralTableEndParagraphAttribute, "true");
+                        paragraph.SetAttributeValue(StructuralParagraphAttribute, "table-end");
                 }
             }
         }
@@ -8284,7 +8291,7 @@ namespace Docxodus
         }
 
         private static Dictionary<string, string> DefineParagraphStyle(XElement paragraph, XName elementName,
-            bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool isBidi, bool suppressLeadingWhiteSpace = false)
+            bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool isBidi, int absorbedSpaceBefore = 0)
         {
             var style = new Dictionary<string, string>();
 
@@ -8296,7 +8303,7 @@ namespace Docxodus
             if (pPr == null) return style;
 
             CreateStyleFromSpacing(style, pPr.Element(W.spacing), elementName, suppressTrailingWhiteSpace,
-                suppressLeadingWhiteSpace);
+                absorbedSpaceBefore);
             CreateStyleFromInd(style, pPr.Element(W.ind), elementName, currentMarginLeft, isBidi);
 
             // todo need to handle
@@ -8377,13 +8384,12 @@ namespace Docxodus
         }
 
         private static void CreateStyleFromSpacing(Dictionary<string, string> style, XElement? spacing, XName elementName,
-            bool suppressTrailingWhiteSpace, bool suppressLeadingWhiteSpace = false)
+            bool suppressTrailingWhiteSpace, int absorbedSpaceBefore = 0)
         {
             if (spacing == null) return;
 
-            var spacingBefore = suppressLeadingWhiteSpace
-                ? 0
-                : WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.before));
+            var spacingBefore = WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.before));
+            if (absorbedSpaceBefore > 0) spacingBefore = Math.Max(0, (spacingBefore ?? 0) - absorbedSpaceBefore);
             if (spacingBefore != null && elementName != Xhtml.span)
                 style.AddIfMissing("margin-top",
                     spacingBefore > 0m
@@ -10887,14 +10893,16 @@ namespace Docxodus
                         element.Elements().Where(e => e.Name != W.pPr).SelectMany(e => InFlowDescendantsAndSelf(e))
                             .Any(e => e.Name == W.br && (string?)e.Attribute(W.type) == "page"
                                 && e.Ancestors(W.p).FirstOrDefault() == element));
-                    // Structural table-end paragraphs get a one-twip minimum box in ConvertParagraph.
+                    // Structural paragraphs get a one-twip minimum box in ConvertParagraph.
                     // A full-size placeholder would extend beyond it and trip export clipping checks.
-                    if (hasContent == false && (string?)element.Attribute(StructuralTableEndParagraphAttribute) != "true")
+                    var sectionMark = hasContent == false && IsSectionMarkOnly(element);
+                    if (hasContent == false && element.Attribute(StructuralParagraphAttribute) == null)
                         return new XElement(element.Name,
                             element.Attributes(),
                             new XAttribute(PtOpenXml.EmptyParagraph, true),
+                            sectionMark ? new XAttribute(StructuralParagraphAttribute, SectionMarkParagraph) : null,
                             element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n, paginated, math)),
-                            new XElement(W.r,
+                            sectionMark ? null : new XElement(W.r,
                                 element.Elements(W.pPr).Elements(W.rPr),
                                 new XElement(W.t, "\u00A0")));
                 }
@@ -10905,6 +10913,18 @@ namespace Docxodus
             }
             return node;
         }
+
+        /// <summary>
+        /// Whether an empty paragraph only carries a section break. Word sets its mark at the end of
+        /// the preceding paragraph's last line, so it takes no line and no spacing of its own (#1572).
+        /// With no paragraph before it (first in its container, after a table, or after another
+        /// section's mark), Word gives it a line. Called before the body's final sectPr moves onto
+        /// the last paragraph, so only a section break inside the body qualifies.
+        /// </summary>
+        private static bool IsSectionMarkOnly(XElement paragraph) =>
+            Internal.BlockMetadataOps.SectionBreakIn(paragraph) != null
+            && paragraph.ElementsBeforeSelf().LastOrDefault(e => !IsBlockBoundaryMarker(e)) is { } previous
+            && previous.Name == W.p && Internal.BlockMetadataOps.SectionBreakIn(previous) == null;
 
         private static bool ParagraphHasInFlowContent(XElement element, MathRenderingContext math) => element.Elements()
             .Where(e => e.Name != W.pPr).SelectMany(child => InFlowDescendantsAndSelf(child))
@@ -11391,8 +11411,7 @@ namespace Docxodus
 
                     // Materialize the (lazy) paragraph projections once, so the adjusted elements
                     // are the ones the wrapper holds.
-                    var content = ApplyContextualSpacing(wordDoc, settings, g, currentMarginLeft)
-                        .SelectMany(item => item is IEnumerable<object> nested ? nested : new[] { item }).ToList();
+                    var content = ApplyContextualSpacing(wordDoc, settings, g, currentMarginLeft).ToList();
                     if (trailingIndentInPoints > 0m)
                     {
                         // Each paragraph wrote its trailing indent on its own direction's side.
@@ -11414,27 +11433,40 @@ namespace Docxodus
             .ToList();
         }
 
-        private static IEnumerable<object> ApplyContextualSpacing(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+        /// <summary>Whether a block-level element takes part in paragraph spacing; a bookmark does not.</summary>
+        internal static bool HoldsBlock(XElement element) =>
+            element.DescendantsAndSelf().Any(d => d.Name == W.p || d.Name == W.tbl);
+
+        private static IEnumerable<object?> ApplyContextualSpacing(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             IEnumerable<XElement> elements, decimal currentMarginLeft)
         {
-            // Each enabled paragraph removes only its own spacing beside the same style (#1553).
-            // The neighbor's flag is independent; list membership alone removes nothing (#1151).
-            // FormattingAssembler records the resolved default style when w:pStyle is omitted.
-            return elements
-                .GroupAdjacent(e => e.Name == W.p
-                    ? "sty:" + ((string?)e.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val)
-                        ?? (string?)e.Attribute(PtOpenXml.StyleName))
-                    : "")
-                .Select(g =>
-                {
-                    var last = g.Count() - 1;
-                    return g.Select((e, i) =>
-                    {
-                        var contextual = g.Key != "" && IsOnOffPropertyEnabled(e.Element(W.pPr)?.Element(W.contextualSpacing));
-                        return ConvertToHtmlTransform(wordDoc, settings, e, contextual && i != last,
-                            currentMarginLeft, suppressLeadingWhiteSpace: contextual && i != 0);
-                    });
-                });
+            // Each enabled paragraph removes its own spacing beside a paragraph of the same style
+            // (#1553), and the after-space it gives up still absorbs that much of the next
+            // paragraph's before-space: Word prints max(0, before - after) there. Markup holding no
+            // block, such as a bookmark, does not separate the two. List membership alone removes
+            // nothing (#1151). FormattingAssembler records the resolved default style when
+            // w:pStyle is omitted.
+            var items = elements.ToList();
+            string? Style(XElement e) => (string?)e.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val)
+                ?? (string?)e.Attribute(PtOpenXml.StyleName);
+            bool Contextual(XElement e) => IsOnOffPropertyEnabled(e.Element(W.pPr)?.Element(W.contextualSpacing));
+            XElement? Beside(int i, int step)
+            {
+                for (var j = i + step; j >= 0 && j < items.Count; j += step)
+                    if (HoldsBlock(items[j]))
+                        return items[j].Name == W.p && Style(items[j]) == Style(items[i]) ? items[j] : null;
+                return null;
+            }
+            return items.Select((e, i) =>
+            {
+                if (e.Name != W.p) return ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft);
+                var previous = Beside(i, -1);
+                var absorbed = previous == null ? 0 : Contextual(e) ? int.MaxValue : Contextual(previous)
+                    ? WordprocessingMLUtil.AttributeToTwips(previous.Element(W.pPr)?.Element(W.spacing)?.Attribute(W.after)) ?? 0
+                    : 0;
+                return ConvertToHtmlTransform(wordDoc, settings, e, Contextual(e) && Beside(i, 1) != null,
+                    currentMarginLeft, absorbedSpaceBefore: absorbed);
+            });
         }
 
         private class BorderMappingInfo
