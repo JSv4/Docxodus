@@ -46,7 +46,7 @@ internal static class WmfImage
                 case 0: // EOF
                     Size(6);
                     if (offset + length != bytes.Length) throw new InvalidDataException("WMF data follows EOF.");
-                    return Encoding.UTF8.GetBytes(svg.ToString(SaveOptions.DisableFormatting));
+                    return Encoding.UTF8.GetBytes(svg.ToXmlString(SaveOptions.DisableFormatting));
                 case 0x0103: // SETMAPMODE
                     Size(8);
                     if (I16(bytes, start) != 8) throw new NotSupportedException("WMF requires anisotropic mapping.");

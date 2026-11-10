@@ -11,6 +11,7 @@ using Docxodus;
 using Docxodus.HtmlToWml;
 using Docxodus.HtmlToWml.CSS;
 using System.Globalization;
+using Docxodus.Internal;
 
 #if false
 Sort:
@@ -2723,33 +2724,33 @@ namespace Docxodus.HtmlToWml
         {
             int depth = element.Ancestors().Count() * 2;
             XElement dummyElement = new XElement(element.Name, element.Attributes());
-            sb.Append(String.Format("{0}{1}", "".PadRight(depth), dummyElement) + Environment.NewLine);
+            sb.Append(String.Format("{0}{1}", "".PadRight(depth), dummyElement) + LineEndings.Lf);
             Dictionary<string, Property>? propList = element.Annotation<Dictionary<string, Property>>();
             if (propList != null)
             {
-                sb.Append("".PadRight(depth + 2) + "Properties from Stylesheets" + Environment.NewLine);
-                sb.Append("".PadRight(depth + 2) + "===========================" + Environment.NewLine);
+                sb.Append("".PadRight(depth + 2) + "Properties from Stylesheets" + LineEndings.Lf);
+                sb.Append("".PadRight(depth + 2) + "===========================" + LineEndings.Lf);
                 foreach (var kvp in propList.OrderBy(p => p.Key).ThenBy(p => p.Value))
                 {
                     Property prop = kvp.Value;
                     string propString = String.Format("{0} High:{1} Id:{2} Att:{3} Ell:{4} Seq:{5}",
                         (prop.Name + ":" + prop.Expression + " ").PadRight(50 - depth + 2, '.'), (int)prop.HighOrderSort, prop.IdAttributesInSelector, prop.AttributesInSelector,
                         prop.ElementNamesInSelector, prop.SequenceNumber);
-                    sb.Append(String.Format("{0}{1}", "".PadRight(depth + 2), propString) + Environment.NewLine);
+                    sb.Append(String.Format("{0}{1}", "".PadRight(depth + 2), propString) + LineEndings.Lf);
                 }
-                sb.Append(Environment.NewLine);
+                sb.Append(LineEndings.Lf);
             }
             Dictionary<string, CssExpression>? computedProperties = element.Annotation<Dictionary<string, CssExpression>>();
             if (computedProperties != null)
             {
-                sb.Append("".PadRight(depth + 2) + "Computed Properties" + Environment.NewLine);
-                sb.Append("".PadRight(depth + 2) + "===================" + Environment.NewLine);
+                sb.Append("".PadRight(depth + 2) + "Computed Properties" + LineEndings.Lf);
+                sb.Append("".PadRight(depth + 2) + "===================" + LineEndings.Lf);
                 foreach (var prop in computedProperties.OrderBy(cp => cp.Key))
                 {
                     string propString = prop.Key + ":" + prop.Value;
-                    sb.Append(String.Format("{0}{1}", "".PadRight(depth + 2), propString) + Environment.NewLine);
+                    sb.Append(String.Format("{0}{1}", "".PadRight(depth + 2), propString) + LineEndings.Lf);
                 }
-                sb.Append(Environment.NewLine);
+                sb.Append(LineEndings.Lf);
             }
             foreach (var child in element.Elements())
                 WriteXHtmlWithAnnotations(child, sb);
@@ -2894,7 +2895,7 @@ namespace Docxodus.HtmlToWml
             //sb2.Replace("<", "&lt;");
             //sb2.Replace(">", "&gt;");
             sb.Append(sb2);
-            sb.Append(Environment.NewLine);
+            sb.Append(LineEndings.Lf);
             //Console.WriteLine(sb2);
         }
 
@@ -2905,7 +2906,7 @@ namespace Docxodus.HtmlToWml
             //sb2.Replace("<", "&lt;");
             //sb2.Replace(">", "&gt;");
             sb.Append(sb2);
-            sb.Append(Environment.NewLine);
+            sb.Append(LineEndings.Lf);
             //Console.WriteLine(sb2);
         }
 

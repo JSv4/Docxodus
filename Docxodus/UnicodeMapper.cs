@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft. All rights reserved.
+// Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 /***************************************************************************
@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Linq;
+using Docxodus.Internal;
 
 namespace Docxodus
 {
@@ -229,7 +230,7 @@ namespace Docxodus
                 new XAttribute(W.font, fontAttributeValue),
                 new XAttribute(W._char, charAttributeValue),
                 new XAttribute(XNamespace.Xmlns + "w", W.w));
-            string standardizedSymString = standardizedSym.ToString(SaveOptions.None);
+            string standardizedSymString = standardizedSym.ToXmlString(SaveOptions.None);
             lock (SymMapGate)
             {
                 if (SymStringToUnicodeCharDictionary.TryGetValue(standardizedSymString, out var mapped))

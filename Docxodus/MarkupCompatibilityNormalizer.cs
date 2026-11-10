@@ -8,6 +8,7 @@ using System.Linq;
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
+using Docxodus.Internal;
 
 namespace Docxodus;
 
@@ -206,7 +207,7 @@ internal static class MarkupCompatibilityNormalizer
             return null;
 
         using var sw = new Utf8StringWriter();
-        doc.Save(sw, SaveOptions.DisableFormatting);
+        doc.SaveLf(sw, SaveOptions.DisableFormatting);
         return sw.ToString();
     }
 

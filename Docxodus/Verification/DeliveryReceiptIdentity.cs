@@ -138,7 +138,6 @@ internal static class DeliveryReceiptIdentity
         new JsonWriterOptions
         {
             Encoder = JavaScriptEncoder.Default,
-            Indented = false,
             MaxDepth = maxDepth,
         });
 

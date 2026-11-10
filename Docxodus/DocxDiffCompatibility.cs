@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Docxodus.Internal;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
@@ -46,9 +47,9 @@ public sealed record DocxDiffCompatibilityReport(
         if (Warnings.Count == 0)
             return "DocxDiff compatibility: no under-tested features detected.";
         var sb = new StringBuilder();
-        sb.AppendLine($"DocxDiff compatibility: {Warnings.Count} under-tested feature(s) detected:");
+        sb.AppendLf($"DocxDiff compatibility: {Warnings.Count} under-tested feature(s) detected:");
         foreach (var w in Warnings)
-            sb.AppendLine($"  [{w.Feature.Coverage}] {w.Feature.DisplayName} (x{w.Occurrences}) - {w.Feature.Note}");
+            sb.AppendLf($"  [{w.Feature.Coverage}] {w.Feature.DisplayName} (x{w.Occurrences}) - {w.Feature.Note}");
         return sb.ToString().TrimEnd();
     }
 }

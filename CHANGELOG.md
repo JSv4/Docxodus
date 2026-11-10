@@ -90,6 +90,7 @@ All notable changes to this project will be documented in this file.
 
 - Empty text runs no longer enlarge the line metrics of nonempty paragraphs. Blank paragraphs and structural runs retain their existing metrics (part of #1565).
 
+- Output is now byte-identical on Windows, macOS and Linux: the markdown projection (and so anchor offsets and `ProjectAnchor` slices), HTML, raw XML, IR snapshots and hashes, indented JSON reports and manifests, and re-serialized package parts break lines with `\n` everywhere. On Windows they used `\r\n`, because `StringBuilder.AppendLine`, `XNode.ToString`, `XDocument.Save` and indented JSON take the platform newline, and XML serialization also rewrote every line break inside text to it. The library now writes through one helper, and an analyzer ban on those APIs fails the build if one comes back (#1659).
 - Long body paragraphs containing non-wrapping drawings or square/tight picture floats now split across pages while keeping each drawing with its source fragment. A single late edge picture reflows the beginning of its destination fragment and retains its full height budget. Multiple late pictures and line-dependent placements retain their existing safeguards (part of #1558).
 
 - Fixed text boxes inside DrawingML groups and canvases can report authored off-paper clipping without failing export. Placement proof binds the group origin, member geometry and paragraph host; visible siblings and blank lines remain protected (part of #1558).

@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Docxodus.Internal;
 
 namespace Docxodus.Verification;
 
@@ -43,7 +44,6 @@ internal static class DeliveryReceiptCanonicalJson
         using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
         {
             Encoder = JavaScriptEncoder.Default,
-            Indented = false,
             MaxDepth = limits.MaxJsonDepth,
         }))
         {
@@ -92,7 +92,6 @@ internal static class DeliveryReceiptCanonicalJson
         using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
         {
             Encoder = JavaScriptEncoder.Default,
-            Indented = false,
             MaxDepth = limits?.MaxJsonDepth ?? 128,
         }))
         {
@@ -412,7 +411,6 @@ internal static class DeliveryReceiptCanonicalJson
             Encoder = JavaScriptEncoder.Default,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             MaxDepth = 128,
-            WriteIndented = false,
         };
         options.Converters.Add(new JsonStringEnumConverter<DeliveryReceiptPrivacyProfile>(
             JsonNamingPolicy.CamelCase, allowIntegerValues: false));
@@ -689,7 +687,6 @@ public static class DeliveryChangeReceiptSerializer
         using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
         {
             Encoder = JavaScriptEncoder.Default,
-            Indented = false,
             MaxDepth = 128,
         }))
         {
@@ -717,9 +714,8 @@ public static class DeliveryChangeReceiptSerializer
         using (var writer = new Utf8JsonWriter(indentedStream, new JsonWriterOptions
         {
             Encoder = JavaScriptEncoder.Default,
-            Indented = true,
             MaxDepth = 128,
-        }))
+        }.Indent(true)))
         {
             canonicalDocument.RootElement.WriteTo(writer);
         }

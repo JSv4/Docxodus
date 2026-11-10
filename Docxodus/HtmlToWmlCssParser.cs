@@ -21,6 +21,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Docxodus.Internal;
 
 namespace Docxodus.HtmlToWml.CSS
 {
@@ -158,15 +159,15 @@ namespace Docxodus.HtmlToWml.CSS
             StringBuilder sb = new StringBuilder();
             foreach (CssDirective cssDir in m_dirs)
             {
-                sb.AppendFormat("{0}" + Environment.NewLine, cssDir.ToString());
+                sb.AppendFormat("{0}" + LineEndings.Lf, cssDir.ToString());
             }
             if (sb.Length > 0)
             {
-                sb.Append(Environment.NewLine);
+                sb.Append(LineEndings.Lf);
             }
             foreach (CssRuleSet rules in m_rulesets)
             {
-                sb.AppendFormat("{0}" + Environment.NewLine,
+                sb.AppendFormat("{0}" + LineEndings.Lf,
                     rules.ToString());
             }
             return sb.ToString();
@@ -362,16 +363,16 @@ namespace Docxodus.HtmlToWml.CSS
                 return sb.ToString();
             }
 
-            sb.Append(" {" + Environment.NewLine + start);
+            sb.Append(" {" + LineEndings.Lf + start);
 
             foreach (CssDirective dir in m_directives)
             {
-                sb.AppendFormat("{0}" + Environment.NewLine, dir.ToCharSetString(start + "\t"));
+                sb.AppendFormat("{0}" + LineEndings.Lf, dir.ToCharSetString(start + "\t"));
             }
 
             foreach (CssRuleSet rules in m_rulesets)
             {
-                sb.AppendFormat("{0}" + Environment.NewLine, rules.ToString(indentLevel + 1));
+                sb.AppendFormat("{0}" + LineEndings.Lf, rules.ToString(indentLevel + 1));
             }
 
             first = true;
@@ -385,11 +386,11 @@ namespace Docxodus.HtmlToWml.CSS
                 {
                     sb.Append(";");
                 }
-                sb.Append(Environment.NewLine + "\t" + start);
+                sb.Append(LineEndings.Lf + "\t" + start);
                 sb.Append(decl.ToString());
             }
 
-            sb.Append(Environment.NewLine + "}");
+            sb.Append(LineEndings.Lf + "}");
             return sb.ToString();
         }
 
@@ -409,11 +410,11 @@ namespace Docxodus.HtmlToWml.CSS
                 {
                     sb.Append(";");
                 }
-                sb.Append(Environment.NewLine + "\t" + start);
+                sb.Append(LineEndings.Lf + "\t" + start);
                 sb.Append(decl.ToString());
             }
 
-            sb.Append(Environment.NewLine + "}");
+            sb.Append(LineEndings.Lf + "}");
             return sb.ToString();
         }
 
@@ -462,11 +463,11 @@ namespace Docxodus.HtmlToWml.CSS
                 }
                 sb.Append(medium.ToString());
             }
-            sb.Append(" {" + Environment.NewLine);
+            sb.Append(" {" + LineEndings.Lf);
 
             foreach (CssRuleSet ruleset in m_rulesets)
             {
-                sb.AppendFormat("{0}" + Environment.NewLine, ruleset.ToString(indentLevel + 1));
+                sb.AppendFormat("{0}" + LineEndings.Lf, ruleset.ToString(indentLevel + 1));
             }
 
             sb.Append("}");
@@ -481,7 +482,7 @@ namespace Docxodus.HtmlToWml.CSS
             {
                 sb.AppendFormat("{0} ", m_expression);
             }
-            sb.Append("{" + Environment.NewLine);
+            sb.Append("{" + LineEndings.Lf);
 
             bool first = true;
             foreach (CssDeclaration decl in m_declarations)
@@ -494,7 +495,7 @@ namespace Docxodus.HtmlToWml.CSS
                 {
                     sb.Append(";");
                 }
-                sb.Append(Environment.NewLine + "\t" + start);
+                sb.Append(LineEndings.Lf + "\t" + start);
                 sb.Append(decl.ToString());
             }
 
@@ -958,12 +959,12 @@ namespace Docxodus.HtmlToWml.CSS
                 }
                 sb.Append(sel.ToString());
             }
-            sb.Append(" {" + Environment.NewLine);
+            sb.Append(" {" + LineEndings.Lf);
             sb.Append(start);
 
             foreach (CssDeclaration dec in m_declarations)
             {
-                sb.AppendFormat("\t{0};" + Environment.NewLine + "{1}", dec.ToString(), start);
+                sb.AppendFormat("\t{0};" + LineEndings.Lf + "{1}", dec.ToString(), start);
             }
 
             sb.Append("}");

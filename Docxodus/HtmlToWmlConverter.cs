@@ -12,6 +12,7 @@ using Docxodus;
 using Docxodus.HtmlToWml;
 using Docxodus.HtmlToWml.CSS;
 using System.Text.RegularExpressions;
+using Docxodus.Internal;
 
 namespace Docxodus
 {
@@ -410,7 +411,7 @@ AAAAAAAAAAAAAAAANi8AAGRvY1Byb3BzL2FwcC54bWxQSwUGAAAAAAwADAAJAwAA3DEAAAAA";
                         return false;
                     return true;
                 })
-                .Select(l => l + Environment.NewLine )
+                .Select(l => l + LineEndings.Lf )
                 .StringConcatenate();
             return cleanCss;
         }

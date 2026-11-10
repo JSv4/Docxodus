@@ -1478,13 +1478,13 @@ public sealed partial class DocxSession
         var sizeRelV = anchor.Element(WP14.sizeRelV);
         if (sizeRelH is not null)
         {
-            rawRelativeSizeHorizontal = sizeRelH.ToString(SaveOptions.DisableFormatting);
+            rawRelativeSizeHorizontal = sizeRelH.ToXmlString(SaveOptions.DisableFormatting);
             mutable = false;
             unsupportedReason ??= "relative percentage sizing is read-only";
         }
         if (sizeRelV is not null)
         {
-            rawRelativeSizeVertical = sizeRelV.ToString(SaveOptions.DisableFormatting);
+            rawRelativeSizeVertical = sizeRelV.ToXmlString(SaveOptions.DisableFormatting);
             mutable = false;
             unsupportedReason ??= "relative percentage sizing is read-only";
         }
@@ -1520,7 +1520,7 @@ public sealed partial class DocxSession
         {
             horizontalOffset = null;
             horizontalAlignment = null;
-            rawHorizontalPosition = positionH.ToString(SaveOptions.DisableFormatting);
+            rawHorizontalPosition = positionH.ToXmlString(SaveOptions.DisableFormatting);
             mutable = false;
             unsupportedReason ??= "floating horizontal position is not one supported offset or alignment";
         }
@@ -1528,7 +1528,7 @@ public sealed partial class DocxSession
         {
             verticalOffset = null;
             verticalAlignment = null;
-            rawVerticalPosition = positionV.ToString(SaveOptions.DisableFormatting);
+            rawVerticalPosition = positionV.ToXmlString(SaveOptions.DisableFormatting);
             mutable = false;
             unsupportedReason ??= "floating vertical position is not one supported offset or alignment";
         }
@@ -1543,7 +1543,7 @@ public sealed partial class DocxSession
             wrapMode = ImageWrapMode.None;
             if (!HasOnlyAttributes(wrap) || wrap.Nodes().Any())
             {
-                rawWrapMode = wrap.ToString(SaveOptions.DisableFormatting);
+                rawWrapMode = wrap.ToXmlString(SaveOptions.DisableFormatting);
                 mutable = false;
                 unsupportedReason ??= "floating wrap contains unmodeled attributes or children";
             }
@@ -1576,7 +1576,7 @@ public sealed partial class DocxSession
             };
             if (shapeReason is not null)
             {
-                rawWrapMode = wrap.ToString(SaveOptions.DisableFormatting);
+                rawWrapMode = wrap.ToXmlString(SaveOptions.DisableFormatting);
                 mutable = false;
                 unsupportedReason ??= shapeReason;
             }

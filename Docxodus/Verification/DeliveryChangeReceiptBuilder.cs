@@ -559,7 +559,6 @@ public sealed class DeliveryChangeReceiptBuilder
         using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
         {
             Encoder = JavaScriptEncoder.Default,
-            Indented = false,
             MaxDepth = _limits.MaxJsonDepth,
         }))
         {

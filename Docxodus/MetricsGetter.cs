@@ -14,6 +14,7 @@ using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using System.Globalization;
+using Docxodus.Internal;
 
 namespace Docxodus
 {
@@ -431,11 +432,11 @@ namespace Docxodus
                     {
                         StringBuilder sb = new StringBuilder();
                         if (err.Description.Length > 300)
-                            sb.Append(PtUtils.MakeValidXml(err.Description.Substring(0, 300) + " ... elided ...") + Environment.NewLine);
+                            sb.Append(PtUtils.MakeValidXml(err.Description.Substring(0, 300) + " ... elided ...") + LineEndings.Lf);
                         else
-                            sb.Append(PtUtils.MakeValidXml(err.Description) + Environment.NewLine);
-                        sb.Append("  in part " + PtUtils.MakeValidXml(err.Part!.Uri.ToString()) + Environment.NewLine);
-                        sb.Append("  at " + PtUtils.MakeValidXml(err.Path!.XPath) + Environment.NewLine);
+                            sb.Append(PtUtils.MakeValidXml(err.Description) + LineEndings.Lf);
+                        sb.Append("  in part " + PtUtils.MakeValidXml(err.Part!.Uri.ToString()) + LineEndings.Lf);
+                        sb.Append("  at " + PtUtils.MakeValidXml(err.Path!.XPath) + LineEndings.Lf);
                         return sb.ToString();
                     })));
             }

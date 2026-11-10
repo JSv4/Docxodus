@@ -69,6 +69,13 @@ locally or re-add the opt-out. Debug builds don't fail on warnings, so check wit
 its reason inline: `SA1206` (the code writes `public required`) and `SA1633` (new files may have no
 header — see the copyright-attribution rule above; `SourceFileCopyrightTests` enforces attribution).
 
+### Line endings
+
+Library output breaks lines with `\n` on every OS. `Docxodus/BannedSymbols.txt` bans the APIs that
+default to `Environment.NewLine` (`AppendLine`, `XNode.ToString`, `XDocument.Save`, `new
+XmlWriterSettings`, JSON indentation, …) as error `RS0030` in every configuration; use the
+replacements in `Docxodus/Internal/LineEndings.cs`.
+
 `Docxodus.Tests.csproj` still opts out with `TreatWarningsAsErrors=false`: the test project builds
 with **434 warnings**, nearly all nullable-reference warnings in test code. Don't add to that
 number. Measure with `--no-incremental`, because a warm incremental build reports zero.

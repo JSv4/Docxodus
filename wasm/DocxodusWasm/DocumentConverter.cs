@@ -2007,7 +2007,7 @@ public partial class DocumentConverter
             sw.Restart();
 
             // Serialize to string
-            var html = htmlElement.ToString(SaveOptions.DisableFormatting);
+            var html = htmlElement.ToXmlString(SaveOptions.DisableFormatting);
             timings["8_XElement_ToString"] = sw.Elapsed.TotalMilliseconds;
 
             response.Html = html;
@@ -2173,7 +2173,7 @@ public partial class DocumentConverter
             // PHASE 6: SERIALIZATION
             // ═══════════════════════════════════════════════════════════════════
 
-            var html = htmlElement.ToString(SaveOptions.DisableFormatting);
+            var html = htmlElement.ToXmlString(SaveOptions.DisableFormatting);
             timings["Serialize_1_ToString"] = sw.Elapsed.TotalMilliseconds;
 
             // Calculate HTML size

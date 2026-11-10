@@ -10,6 +10,7 @@ using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Internal;
 
 namespace Docxodus
 {
@@ -102,7 +103,7 @@ namespace Docxodus
                         if (part == null)
                             throw new DocxodusException($"Replacement part Uri '{uri}' does not match any part in the package");
                         using (Stream partStream = part.GetStream(FileMode.Create, FileAccess.Write))
-                        using (XmlWriter partXmlWriter = XmlWriter.Create(partStream))
+                        using (XmlWriter partXmlWriter = XmlWriter.Create(partStream, LineEndings.CreateXmlWriterSettings()))
                             replacementPart.Save(partXmlWriter);
                     }
                 }

@@ -4,6 +4,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System.Text;
+using Docxodus.Internal;
 using System.Xml.Linq;
 
 namespace Docxodus;
@@ -111,7 +112,7 @@ public static class ExternalAnnotationProjector
         // Project annotations
         var annotatedHtml = ProjectAnnotations(html, annotationSet, projectionSettings);
 
-        return annotatedHtml.ToString();
+        return annotatedHtml.ToXmlString();
     }
 
     #region Text Mapping
@@ -521,20 +522,20 @@ public static class ExternalAnnotationProjector
         if (hiddenLabelIds == null) throw new ArgumentNullException(nameof(hiddenLabelIds));
 
         var css = new StringBuilder();
-        css.AppendLine("/* Annotation Visibility Overrides */");
+        css.AppendLf("/* Annotation Visibility Overrides */");
 
         foreach (var labelId in hiddenLabelIds)
         {
             var safeId = labelId.Replace(" ", "-").Replace(".", "-");
             // Hide the highlight styling but keep the text visible
-            css.AppendLine($".{cssClassPrefix}highlight[data-label-id=\"{safeId}\"] {{");
-            css.AppendLine("  background-color: transparent !important;");
-            css.AppendLine("  border-bottom: none !important;");
-            css.AppendLine("}");
+            css.AppendLf($".{cssClassPrefix}highlight[data-label-id=\"{safeId}\"] {{");
+            css.AppendLf("  background-color: transparent !important;");
+            css.AppendLf("  border-bottom: none !important;");
+            css.AppendLf("}");
             // Hide the label text
-            css.AppendLine($".{cssClassPrefix}highlight[data-label-id=\"{safeId}\"] .{cssClassPrefix}label {{");
-            css.AppendLine("  display: none !important;");
-            css.AppendLine("}");
+            css.AppendLf($".{cssClassPrefix}highlight[data-label-id=\"{safeId}\"] .{cssClassPrefix}label {{");
+            css.AppendLf("  display: none !important;");
+            css.AppendLf("}");
         }
 
         return css.ToString();
@@ -570,11 +571,11 @@ public static class ExternalAnnotationProjector
         var safeId = (annotation.AnnotationLabel ?? "").Replace(" ", "-").Replace(".", "-");
 
         var css = new StringBuilder();
-        css.AppendLine();
-        css.AppendLine($"/* Annotation label: {safeId} */");
-        css.AppendLine($".{prefix}label-{safeId} {{");
-        css.AppendLine($"  --annot-color: {label.Color};");
-        css.AppendLine("}");
+        css.AppendLf();
+        css.AppendLf($"/* Annotation label: {safeId} */");
+        css.AppendLf($".{prefix}label-{safeId} {{");
+        css.AppendLf($"  --annot-color: {label.Color};");
+        css.AppendLf("}");
 
         var head = html.Descendants()
             .FirstOrDefault(e => e.Name.LocalName.Equals("head", StringComparison.OrdinalIgnoreCase));
@@ -671,13 +672,13 @@ public static class ExternalAnnotationProjector
     private static string SerializeHtmlString(XElement element, bool wasWrapped)
     {
         if (!wasWrapped)
-            return element.ToString();
+            return element.ToXmlString();
 
         // Remove the synthetic wrapper - return just the inner content
         var sb = new StringBuilder();
         foreach (var node in element.Nodes())
         {
-            sb.Append(node.ToString());
+            sb.Append(node.ToXmlString());
         }
         return sb.ToString();
     }
@@ -693,47 +694,47 @@ public static class ExternalAnnotationProjector
         var prefix = settings.CssClassPrefix;
 
         var css = new StringBuilder();
-        css.AppendLine();
-        css.AppendLine("/* External Annotation Styles */");
-        css.AppendLine($".{prefix}highlight {{");
-        css.AppendLine("  background-color: color-mix(in srgb, var(--annot-color, #FFEB3B) 30%, transparent);");
-        css.AppendLine("  border-bottom: 2px solid var(--annot-color, #FFEB3B);");
-        css.AppendLine("  display: inline;");
-        css.AppendLine("  padding: 0.1em 0;");
-        css.AppendLine("}");
+        css.AppendLf();
+        css.AppendLf("/* External Annotation Styles */");
+        css.AppendLf($".{prefix}highlight {{");
+        css.AppendLf("  background-color: color-mix(in srgb, var(--annot-color, #FFEB3B) 30%, transparent);");
+        css.AppendLf("  border-bottom: 2px solid var(--annot-color, #FFEB3B);");
+        css.AppendLf("  display: inline;");
+        css.AppendLf("  padding: 0.1em 0;");
+        css.AppendLf("}");
 
         // Both Above and Inline use inline display - Above just has a superscript style
         if (settings.LabelMode == AnnotationLabelMode.Above)
         {
-            css.AppendLine($".{prefix}label {{");
-            css.AppendLine("  font-size: 0.65em;");
-            css.AppendLine("  background-color: var(--annot-color, #FFEB3B);");
-            css.AppendLine("  color: white;");
-            css.AppendLine("  padding: 0.1em 0.3em;");
-            css.AppendLine("  border-radius: 3px;");
-            css.AppendLine("  vertical-align: super;");
-            css.AppendLine("  margin-right: 0.2em;");
-            css.AppendLine("}");
+            css.AppendLf($".{prefix}label {{");
+            css.AppendLf("  font-size: 0.65em;");
+            css.AppendLf("  background-color: var(--annot-color, #FFEB3B);");
+            css.AppendLf("  color: white;");
+            css.AppendLf("  padding: 0.1em 0.3em;");
+            css.AppendLf("  border-radius: 3px;");
+            css.AppendLf("  vertical-align: super;");
+            css.AppendLf("  margin-right: 0.2em;");
+            css.AppendLf("}");
         }
         else if (settings.LabelMode == AnnotationLabelMode.Inline)
         {
-            css.AppendLine($".{prefix}label {{");
-            css.AppendLine("  font-size: 0.65em;");
-            css.AppendLine("  background-color: var(--annot-color, #FFEB3B);");
-            css.AppendLine("  color: white;");
-            css.AppendLine("  padding: 0.1em 0.3em;");
-            css.AppendLine("  border-radius: 3px;");
-            css.AppendLine("  margin-right: 0.2em;");
-            css.AppendLine("}");
+            css.AppendLf($".{prefix}label {{");
+            css.AppendLf("  font-size: 0.65em;");
+            css.AppendLf("  background-color: var(--annot-color, #FFEB3B);");
+            css.AppendLf("  color: white;");
+            css.AppendLf("  padding: 0.1em 0.3em;");
+            css.AppendLf("  border-radius: 3px;");
+            css.AppendLf("  margin-right: 0.2em;");
+            css.AppendLf("}");
         }
 
         // Add per-label color classes
         foreach (var (id, label) in labels)
         {
             var safeId = id.Replace(" ", "-").Replace(".", "-");
-            css.AppendLine($".{prefix}label-{safeId} {{");
-            css.AppendLine($"  --annot-color: {label.Color};");
-            css.AppendLine("}");
+            css.AppendLf($".{prefix}label-{safeId} {{");
+            css.AppendLf($"  --annot-color: {label.Color};");
+            css.AppendLf("}");
         }
 
         return css.ToString();

@@ -197,7 +197,7 @@ internal static class HtmlConversionOps
         };
 
         var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, settings);
-        return htmlElement.ToString(SaveOptions.DisableFormatting);
+        return htmlElement.ToXmlString(SaveOptions.DisableFormatting);
     }
 
     /// <summary>Render a live session's current (possibly edited) state to HTML.</summary>
@@ -783,7 +783,7 @@ internal static class HtmlConversionOps
                 || e.Name == W.rPr || e.Name == W.rFonts || e.Name == W.sz || e.Name == W.szCs
                 || e.Name == W.color || e.Name == W.b || e.Name == W.bCs || e.Name == W.t || e.Name == W.br));
         var templateKey = cacheable
-            ? renderMain.GetXDocument().ToString(SaveOptions.DisableFormatting) : null;
+            ? renderMain.GetXDocument().ToXmlString(SaveOptions.DisableFormatting) : null;
         XElement htmlElement;
         if (templateKey is not null && session.DenseTextRenderTemplates.TryGetValue((options, templateKey), out var cached))
             htmlElement = new XElement(cached);
@@ -818,7 +818,7 @@ internal static class HtmlConversionOps
                     .Select(d => UnitAnchor(d)!.Value)
                     .ToList();
                 if (units.Count > 0 && units.All(wantedUnids.Contains))
-                    topLevel.Add((units[0], node.ToString(SaveOptions.DisableFormatting)));
+                    topLevel.Add((units[0], node.ToXmlString(SaveOptions.DisableFormatting)));
             }
         }
         foreach (var e in htmlElement.Descendants())
@@ -839,7 +839,7 @@ internal static class HtmlConversionOps
             // tables and explicitly owned split paragraphs: border divs can GROUP several
             // blocks, so they are the client's remount-fallback territory, not extraction chrome.
             var outer = BlockRenderRoot(e);
-            htmlByUnid[u] = outer.ToString(SaveOptions.DisableFormatting);
+            htmlByUnid[u] = outer.ToXmlString(SaveOptions.DisableFormatting);
         }
         return htmlByUnid;
     }

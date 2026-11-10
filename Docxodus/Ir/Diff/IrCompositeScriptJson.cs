@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using Docxodus.Internal;
 
 namespace Docxodus.Ir.Diff;
 
@@ -30,7 +31,7 @@ namespace Docxodus.Ir.Diff;
 /// </remarks>
 internal static class IrCompositeScriptJson
 {
-    private static readonly JsonWriterOptions WriteOptions = new() { Indented = true };
+    private static readonly JsonWriterOptions WriteOptions = new JsonWriterOptions().Indent(true);
 
     public static string Write(IrCompositeScript script)
     {

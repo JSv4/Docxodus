@@ -243,12 +243,11 @@ namespace Docxodus
                     && head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF;
             }
 
-            return new XmlWriterSettings
-            {
-                Encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: hasByteOrderMark),
-                // A literal CR would reload as LF. Preserve its character identity across saves.
-                NewLineHandling = NewLineHandling.Entitize,
-            };
+            var settings = LineEndings.CreateXmlWriterSettings();
+            settings.Encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: hasByteOrderMark);
+            // A literal CR would reload as LF. Preserve its character identity across saves.
+            settings.NewLineHandling = NewLineHandling.Entitize;
+            return settings;
         }
 
         public static void PutXDocument(this OpenXmlPart? part)
@@ -274,7 +273,7 @@ namespace Docxodus
             {
                 using (Stream partStream = part.GetStream(FileMode.Create, FileAccess.Write))
                 {
-                    XmlWriterSettings settings = new XmlWriterSettings();
+                    XmlWriterSettings settings = LineEndings.CreateXmlWriterSettings();
                     settings.NewLineHandling = NewLineHandling.Entitize;
                     settings.Indent = true;
                     settings.OmitXmlDeclaration = true;
@@ -509,7 +508,7 @@ namespace Docxodus
                                         sb => sb.ToString()
                                     )
                                 )
-                                .Append(Environment.NewLine),
+                                .Append(LineEndings.Lf),
                             s => s.ToString()
                         );
                     return new XElement(pkg + "part",
@@ -584,7 +583,7 @@ namespace Docxodus
                         package.GetParts().Select(part => GetContentsAsXml(part))
                     )
                 );
-                return doc.ToString().Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+                return doc.ToXmlString().Split(LineEndings.Lf);
             }
         }
 
@@ -656,7 +655,7 @@ namespace Docxodus
                         PackagePart part = package.CreatePart(u, contentType,
                             CompressionOption.SuperFast);
                         using (Stream str = part.GetStream(FileMode.Create))
-                        using (XmlWriter xmlWriter = XmlWriter.Create(str))
+                        using (XmlWriter xmlWriter = XmlWriter.Create(str, LineEndings.CreateXmlWriterSettings()))
                             xmlPart.Element(pkg + "xmlData")!
                                 .Elements()
                                 .First()
@@ -768,10 +767,10 @@ namespace Docxodus
                                 sb => sb.ToString()
                             )
                         )
-                        .Append(Environment.NewLine),
+                        .Append(LineEndings.Lf),
                     s =>
                     {
-                        s.Length -= Environment.NewLine.Length;
+                        s.Length -= LineEndings.Lf.Length;
                         return s.ToString();
                     }
                 );
@@ -2334,7 +2333,7 @@ listSeparator
                         entry.Delete();
                         var newEntry = za.CreateEntry(fullName);
                         using (StreamWriter writer = new StreamWriter(newEntry.Open()))
-                        using (XmlWriter xmlWriter = XmlWriter.Create(writer))
+                        using (XmlWriter xmlWriter = XmlWriter.Create(writer, LineEndings.CreateXmlWriterSettings()))
                         {
                             entryXDoc.WriteTo(xmlWriter);
                         }

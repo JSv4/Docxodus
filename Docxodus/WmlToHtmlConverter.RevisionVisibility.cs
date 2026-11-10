@@ -54,7 +54,7 @@ public static partial class WmlToHtmlConverter
                     if (document.MainDocumentPart.Annotation<RevisionAuthorIndex>()?.IndexOf(author) is { } index)
                         marker.SetAttributeValue(WordFormatWording.BalloonData + "author-color", WordAuthorColor(settings, author, index));
                 }
-                paragraph.SetAttributeValue(NumberingRevisionAttribute, marker.ToString(SaveOptions.DisableFormatting));
+                paragraph.SetAttributeValue(NumberingRevisionAttribute, marker.ToXmlString(SaveOptions.DisableFormatting));
             }
         var body = document.MainDocumentPart.GetXDocument().Root?.Element(W.body);
         bool hadBodyContent = body?.Descendants().Any(e => e.Name == W.p || e.Name == W.tbl) == true;
