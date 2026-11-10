@@ -3433,6 +3433,10 @@ namespace Docxodus
         /// 5. <b>Ordinary spaces retain their width and their breakability.</b> Nonbreaking-space
         ///    substitution changes justification and soft wrapping. Preserve source characters and
         ///    use <c>white-space: pre-wrap</c> on runs, including for direct converter callers.
+        /// 6. <b>Text is neither kerned nor ligated unless its run asks.</b> Word kerns a run only
+        ///    through <c>w:kern</c> and forms ligatures only through <c>w14:ligatures</c>, while
+        ///    browsers apply both by default. Narrower kerned or ligated words change where lines
+        ///    wrap. <c>DefineRunStyle</c> turns each feature back on for the runs that ask.
         /// </remarks>
         private static string GenerateDocumentLayoutCss()
         {
@@ -3440,6 +3444,8 @@ namespace Docxodus
             sb.AppendLine("/* Document layout CSS — Word's layout invariants, which CSS defaults do not match. */");
             sb.AppendLine("body {");
             sb.AppendLine("    overflow-wrap: break-word;");
+            sb.AppendLine("    font-kerning: none;");
+            sb.AppendLine("    font-variant-ligatures: none;");
             sb.AppendLine("}");
             sb.AppendLine("span {");
             sb.AppendLine("    white-space: pre-wrap;");
@@ -8533,6 +8539,25 @@ namespace Docxodus
                 e.Name == W.shadow || e.Name == W.rPrChange);
         }
 
+        /// <summary>
+        /// An empty, zero-width box <paramref name="ascent"/> ems tall standing on the baseline: it gives
+        /// a mapped symbol marker's line the ascent of the font the glyph no longer renders in, which
+        /// Word sizes that line by, and no descent (#1567). The layout pass reads it as marker ascent.
+        /// </summary>
+        private static XElement GlyphAscentBox(decimal ascent)
+        {
+            var box = new XElement(Xhtml.span,
+                new XAttribute("data-docx-glyph-ascent", ascent.ToString("0.####", NumberFormatInfo.InvariantInfo)),
+                new XAttribute("aria-hidden", "true"), new XText(string.Empty));
+            box.AddAnnotation(new Dictionary<string, string>
+            {
+                { "display", "inline-block" }, { "width", "0" },
+                { "height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}em", ascent) },
+                { "vertical-align", "baseline" },
+            });
+            return box;
+        }
+
         private static void DefineLineHeight(Dictionary<string, string> style, XElement paragraph)
         {
             // Don't set a default line-height. LibreOffice doesn't set explicit line-height,
@@ -8687,6 +8712,12 @@ namespace Docxodus
                     var fallback = Internal.SymbolFontMapper.FallbackFamilies(markerFont);
                     if (fallback == null) style.Remove("font-family");
                     else style["font-family"] = fallback;
+                    // Word still lifts the marker's line to the replaced font's ascent (#1567). An empty
+                    // box that tall, standing on the baseline, keeps it wherever the glyph renders. An
+                    // exact line never grows, so it gets none.
+                    if (!paragraphHasExactLineHeight)
+                        content = new object?[] { GlyphAscentBox(Internal.SymbolFontMapper.Ascent(markerFont)) }
+                            .Concat((List<object?>)content).ToList();
                 }
             }
             else
@@ -9095,12 +9126,21 @@ namespace Docxodus
             if (sz != null)
                 style.AddIfMissing("font-size", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", sz/2.0m));
 
-            // Word kerning is opt-in, with a minimum size in half-points. Preserve
-            // that resolved intent for the precision text renderer; legacy complex
-            // layouts retain their existing shaping until that renderer owns them.
+            // Kerning and ligatures are off in the layout stylesheet. Word kerns a run only when
+            // its w:kern minimum (half-points) is positive and no larger than the run's size:
+            // 12pt text kerns at 24, but not at 25 or at 0.
             var kern = (decimal?)rPr.Element(W.kern)?.Attribute(W.val);
-            if (kern != null)
-                style["--docx-font-kerning"] = sz != null && sz >= kern ? "normal" : "none";
+            if (kern > 0 && sz >= kern)
+                style["font-kerning"] = "normal";
+
+            // Each w14:ligatures set is one OpenType feature, named in the value ("all" is every set).
+            var ligatures = (string?)rPr.Element(W14.ligatures)?.Attribute(W14.val);
+            var ligatureFeatures = new[] { ("standard", "liga"), ("contextual", "clig"), ("historical", "hlig"), ("discretional", "dlig") }
+                .Where(set => ligatures == "all" || ligatures?.Contains(set.Item1, StringComparison.OrdinalIgnoreCase) == true)
+                .Select(set => $"\"{set.Item2}\" 1")
+                .ToList();
+            if (ligatureFeatures.Count > 0)
+                style["font-feature-settings"] = string.Join(", ", ligatureFeatures);
 
             // Character width scales glyphs and advances together; font-stretch
             // selects a different face instead. The export text owner consumes this.

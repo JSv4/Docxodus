@@ -3,6 +3,7 @@ export {
   type ConfiguredFontFace,
   type FontCatalog,
 } from "./discovery.js";
+export { documentFontFaces } from "./document.js";
 export {
   createNodeFontRuntime,
   createNodeFontResolver,

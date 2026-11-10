@@ -15,6 +15,9 @@ const PREPARED = 'data-docx-word-text-prepared';
 const FITTED_RUN = 'data-docx-word-fit';
 const FITTED_LINE = 'data-docx-word-line';
 const NOTE_FIT = 'data-docx-note-fit';
+// HTML-painted justified text: the paragraph, and each line whose ordinary spaces Word condenses.
+const CONDENSED = 'data-docx-condensed-lines';
+const CONDENSED_LINE = 'data-docx-condensed-line';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PARAGRAPHS = 'p, h1, h2, h3, h4, h5, h6';
 
@@ -240,12 +243,9 @@ function contourRows(image: HTMLImageElement, paragraph: HTMLElement, run: HTMLE
   const pitch = Number.parseFloat(style.lineHeight);
   const nativeHeight = Number.parseFloat(style.getPropertyValue('--docx-word-native-height'));
   if (!(nativeHeight > 0) || !(pitch > 0) || !(picture.width > 0) || !(picture.height > 0)) return null;
-  const context = paragraph.ownerDocument.createElement('canvas').getContext('2d');
+  const context = fontContext(paragraph.ownerDocument, style);
   if (!context) return null;
   const measureScale = Number.parseFloat(style.fontSize) / 10000;
-  context.font = `${style.fontStyle} ${style.fontWeight} 10000px ${style.fontFamily}`;
-  context.fontKerning = style.fontKerning as CanvasFontKerning;
-  if (!context.font.includes('10000px')) return null;
   const words = Array.from(run.textContent!.matchAll(/\S+\s*/gu), (match, index) => {
     if ((index & 63) === 0) checkpoint?.();
     return { text: match[0], width: context.measureText(match[0].trimEnd()).width * measureScale,
@@ -289,14 +289,25 @@ function characterScale(style: CSSStyleDeclaration): number {
   return Number.isFinite(scale) && scale > 0 ? scale : 1;
 }
 
+/**
+ * A canvas at a large em with the run's own kerning and ligatures. Canvas can only turn ligatures
+ * off (`optimizeSpeed`) or keep the browser's defaults, so a finer feature request is unmeasurable.
+ */
+function fontContext(document: Document, style: CSSStyleDeclaration): CanvasRenderingContext2D | null {
+  const context = document.createElement('canvas').getContext('2d');
+  if (!context || !['none', 'normal'].includes(style.fontVariantLigatures) || style.fontFeatureSettings !== 'normal')
+    return null;
+  context.font = `${style.fontStyle} ${style.fontWeight} 10000px ${style.fontFamily}`;
+  context.fontKerning = style.fontKerning as CanvasFontKerning;
+  context.textRendering = style.fontVariantLigatures === 'none' ? 'optimizeSpeed' : 'auto';
+  return context.font.includes('10000px') ? context : null;
+}
+
 /** Measure advances at a large em to avoid CSS-pixel font hinting in line positions. */
 function wordMeasure(run: HTMLElement, exactHeight = 0): { (text: string): number; raw: (text: string) => number } | null {
   const style = run.ownerDocument.defaultView!.getComputedStyle(run);
-  const context = run.ownerDocument.createElement('canvas').getContext('2d');
+  const context = fontContext(run.ownerDocument, style);
   if (!context) return null;
-  context.font = `${style.fontStyle} ${style.fontWeight} 10000px ${style.fontFamily}`;
-  context.fontKerning = style.fontKerning as CanvasFontKerning;
-  if (!context.font.includes('10000px')) return null;
   const scale = Number.parseFloat(style.fontSize) / 10000;
   // Owned block lines cannot use the inline-only exact-ink overflow path. Keep
   // overlapping/tight exact text there until its ink has a fitted-line model.
@@ -330,15 +341,64 @@ function paragraphWidth(paragraph: HTMLElement, style: CSSStyleDeclaration): num
   return Math.abs(resolved - measured) < 1 / 64 ? resolved : measured;
 }
 
+type MeasuredWord = { text: string; width: number; spaces: number; gap: number };
+type LineChoice = { start: number; end: number; available: number; natural: number; spaces: number };
+
+/** The paragraph's own `w:wpJustification` compatibility option, for a justified paragraph. */
+function wordPerfectJustified(paragraph: HTMLElement, style: CSSStyleDeclaration): boolean {
+  return style.textAlign === 'justify' && (paragraph.closest('[data-docx-wordperfect-justification]')
+    ?.getAttribute('data-docx-wordperfect-justification') ?? paragraph.ownerDocument.body
+      .getAttribute('data-docx-wordperfect-justification')) === 'true';
+}
+
+/**
+ * Word's line choices over measured words. Each word carries the advance of the ordinary spaces
+ * after it (`gap`). Legacy lines keep natural spaces; modern justified lines may condense them.
+ */
+function chooseLines(words: MeasuredWord[], width: number, indent: number, modernJustification: boolean,
+  wordPerfect: boolean, checkpoint?: () => void): LineChoice[] | null {
+  const rows: LineChoice[] = [];
+  let start = 0;
+  while (start < words.length) {
+    checkpoint?.();
+    const available = width - (rows.length ? 0 : indent);
+    // wpJustification selects against an expanded band, then fits its gaps back
+    // into the actual line width (MS-OE376, 2.1.481).
+    const selectionWidth = wordPerfect ? available * (1 + 281 / 7200) : available;
+    let natural = 0, gaps = 0, best = start, bestCost = Infinity, bestNatural = 0;
+    for (let end = start; end < words.length; end++) {
+      if ((end & 63) === 0) checkpoint?.();
+      if (end > start) { gaps += words[end - 1].gap; natural += words[end - 1].gap; }
+      natural += words[end].width;
+      const minimum = natural - (modernJustification ? gaps / 4 : 0);
+      // Two additions per word can put an exact sum a few floating-point
+      // units above its band. Bound arithmetic error, not physical overflow.
+      const roundoff = Number.EPSILON * 2 * (end - start + 1) * Math.max(natural, selectionWidth);
+      if (minimum - selectionWidth > roundoff) break;
+      // Native Word prefers less gap strain, with condensation twice as costly
+      // as expansion. A final line that fits naturally needs no justification.
+      // The 75% floor bounds which condensed alternatives are legal.
+      const cost = !modernJustification ? -end : end === words.length - 1 && natural - available <= roundoff ? -1 :
+        gaps ? Math.abs(available - natural) / gaps * (natural > available ? 2 : 1) : Infinity;
+      if (cost <= bestCost) { best = end; bestCost = cost; bestNatural = natural; }
+    }
+    // Interword compression cannot fit a line whose letters alone exceed its
+    // width. Keep the paragraph's existing flow instead of overlapping glyphs.
+    if (wordPerfect && words.slice(start, best + 1).reduce((sum, word) => sum + word.width, 0) > available) return null;
+    rows.push({ start, end: best, available, natural: bestNatural,
+      spaces: words.slice(start, best).reduce((n, w) => n + w.spaces, 0) });
+    start = best + 1;
+  }
+  return rows;
+}
+
 /** Resolve plain line contents before pagination, using the shared advance model. */
 function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustification: boolean,
   checkpoint?: () => void, exact = false): 'fitted' | 'unchanged' | null {
   const view = run.ownerDocument.defaultView!;
   const style = view.getComputedStyle(paragraph);
   const runStyle = view.getComputedStyle(run);
-  const wordPerfect = style.textAlign === 'justify' && (paragraph.closest('[data-docx-wordperfect-justification]')
-    ?.getAttribute('data-docx-wordperfect-justification') ?? paragraph.ownerDocument.body
-      .getAttribute('data-docx-wordperfect-justification')) === 'true';
+  const wordPerfect = wordPerfectJustified(paragraph, style);
   modernJustification &&= !wordPerfect;
   const scale = characterScale(runStyle);
   const text = run.textContent!;
@@ -355,42 +415,14 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
   const space = measure(' ');
   const words = Array.from(text.matchAll(/\S+ */gu), (match, index) => {
     if ((index & 63) === 0) checkpoint?.();
-    const word = match[0].trimEnd();
-    return { text: match[0], width: measure(word), spaces: match[0].length - word.length };
+    const word = match[0].trimEnd(), spaces = match[0].length - word.length;
+    return { text: match[0], width: measure(word), spaces, gap: spaces * space };
   });
   if (!words.length || words.some(w => w.width > width) || words[0].width > width - indent) return null;
-  const rows: Array<{ text: string; spaces: number; available: number }> = [];
-  let start = 0;
-  while (start < words.length) {
-    checkpoint?.();
-    const available = width - (rows.length ? 0 : indent);
-    // wpJustification selects against an expanded band, then fits its gaps back
-    // into the actual line width (MS-OE376, 2.1.481).
-    const selectionWidth = wordPerfect ? available * (1 + 281 / 7200) : available;
-    let natural = 0, spaces = 0, best = start, bestCost = Infinity;
-    for (let end = start; end < words.length; end++) {
-      if ((end & 63) === 0) checkpoint?.();
-      if (end > start) { spaces += words[end - 1].spaces; natural += words[end - 1].spaces * space; }
-      natural += words[end].width;
-      const minimum = natural - (modernJustification ? spaces * space / 4 : 0);
-      // Two additions per word can put an exact sum a few floating-point
-      // units above its band. Bound arithmetic error, not physical overflow.
-      const roundoff = Number.EPSILON * 2 * (end - start + 1) * Math.max(natural, selectionWidth);
-      if (minimum - selectionWidth > roundoff) break;
-      // Native Word prefers less gap strain, with condensation twice as costly
-      // as expansion. A final line that fits naturally needs no justification.
-      // The 75% floor bounds which condensed alternatives are legal.
-      const cost = !modernJustification ? -end : end === words.length - 1 && natural - available <= roundoff ? -1 :
-        spaces ? Math.abs(available - natural) / (spaces * space) * (natural > available ? 2 : 1) : Infinity;
-      if (cost <= bestCost) { best = end; bestCost = cost; }
-    }
-    // Interword compression cannot fit a line whose letters alone exceed its
-    // width. Keep the paragraph's existing flow instead of overlapping glyphs.
-    if (wordPerfect && words.slice(start, best + 1).reduce((sum, word) => sum + word.width, 0) > available) return null;
-    rows.push({ text: words.slice(start, best + 1).map(w => w.text).join(''),
-      spaces: words.slice(start, best).reduce((n, w) => n + w.spaces, 0), available });
-    start = best + 1;
-  }
+  const choices = chooseLines(words, width, indent, modernJustification, wordPerfect, checkpoint);
+  if (!choices) return null;
+  const rows = choices.map(row => ({ text: words.slice(row.start, row.end + 1).map(w => w.text).join(''),
+    spaces: row.spaces, available: row.available }));
   // A measured flow needs no replacement when its complete line choices agree.
   // Preserve inline block geometry in either mode. The painter still derives
   // word positions from font advances; matching breaks do not certify DOM X.
@@ -413,13 +445,6 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
     }
     if (offset === text.length && rows.length === measured.length &&
         rows.every((row, index) => row.text === measured[index])) {
-      // The painter owns vertical baselines. Removing a baseline-only relative
-      // offset leaves inline flow and word X positions intact, while allowing
-      // the existing safe-fragment guard to handle this otherwise plain run.
-      if (runStyle.position === 'relative' && runStyle.left === '0px' && runStyle.right === '0px') {
-        run.style.position = 'static';
-        run.style.top = '0';
-      }
       run.setAttribute(FITTED_RUN, '0');
       if (modernJustification || wordPerfect) run.style.setProperty('--docx-word-space-compression', `${-space / 4}px`);
       return 'unchanged';
@@ -445,8 +470,8 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
     fragment.append(line);
     return line;
   });
-  run.style.position = 'static';
-  run.style.top = '0';
+  // The run keeps the converter's vertical offset: automatic spacing puts its text at the top of
+  // each line, as Word does, so pagination can fit a page's last line by its text height (#1571).
   run.style.wordSpacing = '0px';
   run.replaceChildren(fragment);
   for (let index = 0; index < lines.length; index++) {
@@ -473,6 +498,187 @@ function fitWordLines(paragraph: HTMLElement, run: HTMLElement, modernJustificat
     Number.parseFloat(run.style.getPropertyValue('--docx-word-native-height'))));
   if (modernJustification || wordPerfect) run.style.setProperty('--docx-word-space-compression', `${-space / 4}px`);
   return 'fitted';
+}
+
+/** The paragraph's text nodes in order, without its leading list marker. */
+function inlineTexts(paragraph: HTMLElement): Text[] {
+  const view = paragraph.ownerDocument.defaultView!, filter = view.NodeFilter;
+  const walker = paragraph.ownerDocument.createTreeWalker(paragraph, filter.SHOW_ELEMENT | filter.SHOW_TEXT, {
+    acceptNode: node => node.nodeType === 3 ? filter.FILTER_ACCEPT
+      : (node as HTMLElement).dataset.listMarker === 'true' ? filter.FILTER_REJECT : filter.FILTER_SKIP });
+  const texts: Text[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) if ((node as Text).data) texts.push(node as Text);
+  return texts;
+}
+
+/**
+ * A character range among the paragraph's current text nodes, by offset into their joined text.
+ * Callers share one range: the browser updates every live range on each later DOM mutation.
+ */
+function textRects(paragraph: HTMLElement, range: Range): (begin: number, end: number) => DOMRect {
+  const nodes = inlineTexts(paragraph);
+  return (begin, end) => {
+    let start = 0;
+    for (const text of nodes) {
+      const length = text.data.length;
+      if (begin >= start && begin < start + length) range.setStart(text, begin - start);
+      if (end > start && end <= start + length) { range.setEnd(text, end - start); break; }
+      start += length;
+    }
+    return range.getBoundingClientRect();
+  };
+}
+
+type CondensedWord = MeasuredWord & { begin: number; end: number };
+
+/** Word's lines for an HTML-painted justified paragraph when at least one of them is condensed. */
+function planCondensedLines(paragraph: HTMLElement, modernJustification: boolean,
+  measureFor: (run: HTMLElement) => ((text: string) => number) | null, range: Range, checkpoint?: () => void):
+  { paragraph: HTMLElement; words: CondensedWord[]; rows: LineChoice[] } | null {
+  const document = paragraph.ownerDocument, view = document.defaultView!;
+  const style = view.getComputedStyle(paragraph);
+  const wordPerfect = wordPerfectJustified(paragraph, style);
+  modernJustification &&= !wordPerfect;
+  if (paragraph.hasAttribute(CONDENSED) || style.textAlign !== 'justify' || !(modernJustification || wordPerfect)
+    || style.direction !== 'ltr' || style.writingMode !== 'horizontal-tb' || style.wordBreak !== 'normal'
+    || ['top', 'right', 'bottom', 'left'].some(side => style.getPropertyValue(`padding-${side}`) !== '0px'
+      || style.getPropertyValue(`border-${side}-width`) !== '0px')) return null;
+  const texts = inlineTexts(paragraph);
+  if (!texts.length) return null;
+  // Only ordinary inline runs flow here; a list marker may lead the first line.
+  for (const element of Array.from(paragraph.querySelectorAll<HTMLElement>('*'))) {
+    checkpoint?.();
+    const marker = element.closest<HTMLElement>('[data-list-marker]');
+    if (marker) {
+      if (marker.compareDocumentPosition(texts[0]) & view.Node.DOCUMENT_POSITION_PRECEDING) return null;
+      continue;
+    }
+    const s = view.getComputedStyle(element);
+    if (!['span', 'a'].includes(element.localName) || element.matches('[data-field], [data-comment-id]')
+      || s.display !== 'inline' || s.cssFloat !== 'none' || !['static', 'relative'].includes(s.position)
+      || [s.left, s.right].some(side => !['auto', '0px'].includes(side)) || s.verticalAlign !== 'baseline'
+      || ['transform', 'translate', 'rotate', 'scale'].some(property => s.getPropertyValue(property) !== 'none')
+      || s.textTransform !== 'none' || s.fontVariantCaps !== 'normal' || !['normal', '100%'].includes(s.fontStretch)
+      || !['normal', '0px'].includes(s.letterSpacing) || !['normal', '0px'].includes(s.wordSpacing)
+      || characterScale(s) !== 1) return null;
+  }
+  // Each word's text spans one or more runs; its gap is the advance of the spaces after it.
+  const words: CondensedWord[] = [];
+  let offset = 0;
+  for (const text of texts) {
+    const parent = text.parentElement!;
+    // Hyphens/slashes and nonordinary spaces have additional break opportunities.
+    if (view.getComputedStyle(parent).whiteSpace !== 'pre-wrap' || /[^\u0020-\u007e\u00c0-\u024f]|[-/]/u.test(text.data))
+      return null;
+    const measure = measureFor(parent);
+    if (!measure) return null;
+    for (const match of text.data.matchAll(/ +|[^ ]+/gu)) {
+      if ((words.length & 63) === 0) checkpoint?.();
+      const piece = match[0], last = words.at(-1), begin = offset + match.index!;
+      if (piece[0] === ' ') {
+        if (!last) return null;
+        last.text += piece; last.spaces += piece.length; last.gap += measure(piece);
+      } else if (last && !last.spaces) {
+        last.text += piece; last.width += measure(piece); last.end = begin + piece.length;
+      } else words.push({ text: piece, width: measure(piece), spaces: 0, gap: 0, begin, end: begin + piece.length });
+    }
+    offset += text.data.length;
+  }
+  const box = paragraph.getBoundingClientRect(), width = paragraphWidth(paragraph, style);
+  // Indents, a list marker and its tab narrow only the first line.
+  const indent = textRects(paragraph, range)(words[0].begin, words[0].end).left - box.left;
+  if (!(width > 0) || words.some(word => word.width > width) || words[0].width > width - indent) return null;
+  const rows = chooseLines(words, width, indent, modernJustification, wordPerfect, checkpoint);
+  return rows?.some(row => row.spaces && row.natural > row.available) ? { paragraph, words, rows } : null;
+}
+
+/**
+ * Word's justified line choices for paragraphs that keep HTML layout and paint: mixed runs, links,
+ * list items and unscaled cell text. A line that fits at natural spacing is already the browser's
+ * choice. A line Word condenses narrows only its own ordinary spaces, and the browser still
+ * justifies it, so glyphs, inline elements and source text stay as they are. Each phase reads or
+ * writes every paragraph at once, so a long document is laid out a fixed number of times.
+ */
+function condenseLines(paragraphs: HTMLElement[], modernJustification: boolean, checkpoint?: () => void): void {
+  // Runs in the same font share one measurer and its word advances.
+  if (!paragraphs.length) return;
+  const range = paragraphs[0].ownerDocument.createRange();
+  const measurers = new Map<string, ((text: string) => number) | null>();
+  const measureFor = (run: HTMLElement) => {
+    const s = run.ownerDocument.defaultView!.getComputedStyle(run);
+    const key = [s.fontStyle, s.fontWeight, s.fontSize, s.fontFamily, s.fontKerning, s.fontVariantLigatures, s.fontFeatureSettings].join('|');
+    if (!measurers.has(key)) {
+      const measure = wordMeasure(run), widths = new Map<string, number>();
+      measurers.set(key, measure && (text => widths.get(text) ?? widths.set(text, measure(text)).get(text)!));
+    }
+    return measurers.get(key)!;
+  };
+  const plans = paragraphs.flatMap(paragraph => {
+    checkpoint?.();
+    const plan = planCondensedLines(paragraph, modernJustification, measureFor, range, checkpoint);
+    return plan ? [{ ...plan, authored: paragraph.getAttribute('style') }] : [];
+  });
+  // The browser breaks on its own advances: measure every chosen line unwrapped, so each one
+  // that overflows the band in this layout is condensed by exactly its own overflow.
+  for (const { paragraph } of plans) {
+    paragraph.style.width = 'max-content';
+    paragraph.style.textAlign = 'left';
+  }
+  const excess = plans.map(({ paragraph, words, rows }) => {
+    checkpoint?.();
+    const rect = textRects(paragraph, range);
+    return rows.map(row => row.spaces ? rect(words[row.start].begin, words[row.end].end).width - row.available : 0);
+  });
+  for (const { paragraph, authored } of plans)
+    if (authored === null) paragraph.removeAttribute('style'); else paragraph.setAttribute('style', authored);
+  plans.forEach(({ paragraph, words, rows }, plan) => {
+    checkpoint?.();
+    const nodes = inlineTexts(paragraph);
+    const segments = rows.flatMap((row, index) => {
+      if (!(excess[plan][index] > 0)) return [];
+      const begin = words[row.start].begin, end = words[row.end].end;
+      // A sixteenth of a pixel beyond the overflow; justification restores it.
+      const spacing = `${-(excess[plan][index] + 1 / 16) / row.spaces}px`;
+      let start = 0;
+      return nodes.flatMap(text => {
+        const from = Math.max(begin - start, 0), to = Math.min(end - start, text.data.length);
+        start += text.data.length;
+        return from < to && text.data.slice(from, to).includes(' ') ? [{ text, from, to, spacing }] : [];
+      });
+    });
+    // Last segment first: splitting a text node keeps every earlier segment's node and offsets.
+    for (const { text, from, to, spacing } of segments.reverse()) {
+      if (to < text.data.length) text.splitText(to);
+      const target = from > 0 ? text.splitText(from) : text;
+      const line = paragraph.ownerDocument.createElement('span');
+      line.setAttribute(CONDENSED_LINE, 'true');
+      line.style.wordSpacing = spacing;
+      target.replaceWith(line);
+      line.append(target);
+    }
+  });
+  // Commit only Word's complete line inventory; otherwise restore the original flow. A word
+  // that starts left of the previous word's end has wrapped to a new line.
+  const matched = plans.map(({ paragraph, words, rows }) => {
+    checkpoint?.();
+    const rect = textRects(paragraph, range);
+    let line = 0, right = -Infinity;
+    const actual = words.map(word => {
+      const bounds = rect(word.begin, word.end);
+      if (bounds.left < right - 1 / 8) line++;
+      right = bounds.right;
+      return line;
+    });
+    return rows.every((row, index) => actual[row.start] === index && actual[row.end] === index);
+  });
+  plans.forEach(({ paragraph }, plan) => {
+    if (matched[plan]) { paragraph.setAttribute(CONDENSED, 'true'); return; }
+    for (const condensedLine of Array.from(paragraph.querySelectorAll<HTMLElement>(`[${CONDENSED_LINE}]`))) {
+      const parent = condensedLine.parentElement!;
+      condensedLine.replaceWith(...Array.from(condensedLine.childNodes));
+      parent.normalize();
+    }
+  });
 }
 
 /** Space-aware positioning for an ordinary, unfragmented left-to-right line box. */
@@ -611,6 +817,9 @@ function prepareText(root: HTMLElement, checkpoint: (() => void) | undefined, ow
   };
   prepareSectionTextWidths(root);
   let prepared = 0;
+  const condensable: HTMLElement[] = [];
+  let picture: boolean | undefined;
+  const pictures = () => picture ??= root.querySelector('img') !== null;
   for (const paragraph of paragraphsIn(root)) {
     checkpoint?.();
     if (paragraph.hasAttribute(PREPARED)) continue;
@@ -628,34 +837,43 @@ function prepareText(root: HTMLElement, checkpoint: (() => void) | undefined, ow
     if (owners === 'notes' && style.display !== 'block') continue;
     const multiple = Number(style.getPropertyValue('--docx-auto-line-spacing'));
     const exact = mode >= 15 && Number.parseFloat(style.getPropertyValue('--docx-exact-line-height')) > 0;
+    const inColumns = () => {
+      for (let ancestor = paragraph.parentElement; ancestor && ancestor !== root; ancestor = ancestor.parentElement)
+        if (Number(view.getComputedStyle(ancestor).columnCount) > 1) return true;
+      return false;
+    };
+    // Other inline content keeps its HTML layout and paint, with Word's justified line choices.
+    const condense = () => style.textAlign === 'justify' && owners !== 'running' && owners !== 'notes'
+      && !pictures() && !inColumns() && condensable.push(paragraph);
     const run = plainRun(paragraph, false, exact);
-    if (!run) continue;
+    if (!run) { condense(); continue; }
     const runStyle = view.getComputedStyle(run);
     const scale = characterScale(runStyle);
     // The measured running-story pass extends only character scaling. Preserve
     // unscaled stories even when the initial document-wide pass could not run.
     if ((owners === 'running' || owners === 'notes') && scale === 1) continue;
-    // Unscaled cell text retains its existing layout until the general table
-    // line-breaking policy is resolved. Scaled text needs both fitted lines and paint.
-    if (table && scale === 1) continue;
-    const kerning = runStyle.getPropertyValue('--docx-font-kerning').trim() || 'none';
+    // Unscaled cell text keeps HTML paint until the general table line-breaking
+    // policy is resolved. Scaled text needs both fitted lines and paint.
+    if (table && scale === 1) { condense(); continue; }
+    // Word kerns only on request; the converter states it as `font-kerning: normal`.
+    const kerning = runStyle.fontKerning === 'normal' ? 'normal' : 'none';
     // A unit multiple leaves the run at `line-height: normal`; the export's unrounded
     // normal-line pass (line-metrics.ts) has already resolved it to a length.
     const height = Number.parseFloat(runStyle.lineHeight);
-    if ((!(multiple > 0) && !exact) || !(height > 0) || !['none', 'normal'].includes(kerning)) continue;
+    // Implicit or minimum line spacing has no precision line model; it keeps HTML paint too.
+    if (!(multiple > 0) && !exact) { condense(); continue; }
+    if (!(height > 0)) continue;
     // Keep the resolved font height's precision through the spacing multiple.
     // Rounding the natural height to twips and flooring the product shortens
     // every line; native Word controls show the loss accumulating down a page.
     const nativeHeight = Number.parseFloat(runStyle.getPropertyValue('--docx-word-native-height')) || height / multiple;
-    let column = false;
-    for (let ancestor = paragraph.parentElement; ancestor && ancestor !== root; ancestor = ancestor.parentElement)
-      if (Number(view.getComputedStyle(ancestor).columnCount) > 1) column = true;
+    const column = inColumns();
     // Width changes need a complete fitted line model. Other owners retain their
     // existing flow until both their layout and paint can apply the same scale.
-    if (scale !== 1 && (exact || column || root.querySelector('img') ||
+    if (scale !== 1 && (exact || column || pictures() ||
       paragraph.closest('[data-hf-type], #pagination-hf-registry'))) continue;
     if (exact && (style.textAlign !== 'justify' || !['auto', 'start', 'left'].includes(style.textAlignLast) ||
-      column || root.querySelector('img'))) continue;
+      column || pictures())) continue;
     // Exact lines keep their HTML baseline/ink handling and full declared pitch.
     if (exact) {
       if (fitWordLines(paragraph, run, true, checkpoint, true) === 'fitted') prepared++;
@@ -665,7 +883,7 @@ function prepareText(root: HTMLElement, checkpoint: (() => void) | undefined, ow
     run.style.fontKerning = kerning;
     run.style.lineHeight = `${height}px`;
     run.style.setProperty('--docx-word-native-height', `${nativeHeight}px`);
-    const fitted = !column && !root.querySelector('img')
+    const fitted = !column && !pictures()
       ? fitWordLines(paragraph, run, mode >= 15 && style.textAlign === 'justify', checkpoint) : null;
     if (scale !== 1 && fitted === null) {
       if (previousStyle === null) run.removeAttribute('style'); else run.setAttribute('style', previousStyle);
@@ -682,6 +900,7 @@ function prepareText(root: HTMLElement, checkpoint: (() => void) | undefined, ow
     paragraph.setAttribute(PREPARED, 'true');
     prepared++;
   }
+  condenseLines(condensable, mode >= 15, checkpoint);
   return prepared;
 }
 
@@ -829,7 +1048,8 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
       }
       line.setAttribute('y', String((box.top - band.top + dy + lost + baseline + index * pitch) * 4));
       line.setAttribute('xml:space', 'preserve');
-      for (const property of ['font-family', 'font-weight', 'font-style', 'font-stretch', 'font-kerning'])
+      for (const property of ['font-family', 'font-weight', 'font-style', 'font-stretch', 'font-kerning',
+        'font-variant-ligatures', 'font-feature-settings'])
         line.style.setProperty(property, style.getPropertyValue(property));
       line.style.fontSize = `${fontSize * 4}px`;
       line.style.fill = style.color;

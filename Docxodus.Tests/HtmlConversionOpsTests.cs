@@ -2449,10 +2449,49 @@ public class HtmlConversionOpsTests
     // line of the item. The mapped bullet keeps the generic family it rendered in when it was the strut.
     [Theory]
     [InlineData("decimal", "%1.", null, "36", "18pt", "Calibri")]
-    [InlineData("bullet", "", "Symbol", "24", "12pt", "serif")]
+    [InlineData("bullet", "\uF0B7", "Symbol", "24", "12pt", "serif")]
     [InlineData("decimal", "%1.", null, null, "11pt", "Calibri")]
     public void HCO102_ListMarker_DoesNotSizeTheParagraphStrut(string format, string text,
         string? markerFont, string? markerSize, string glyphSize, string glyphFamily)
+    {
+        var paragraph = ListItem(format, text, markerFont, markerSize);
+        var style = (string?)paragraph.Attribute("style") ?? string.Empty;
+        var glyph = MarkerGlyph(paragraph);
+
+        Assert.Contains("font-family: 'Arial'", style);
+        Assert.Contains("font-size: 12pt", style);
+        Assert.Contains($"font-size: {glyphSize}", (string?)glyph.Attribute("style"));
+        Assert.Equal(glyphFamily, FontFamily(glyph));
+    }
+
+    // Issue #1567: Word lifts a list marker's line to its font's ascent. A mapped symbol glyph renders in
+    // another font, so it carries an empty box as tall as the replaced font's ascent; an exact line,
+    // an unmapped glyph and a text-face bullet get none.
+    [Theory]
+    [InlineData("\uF0B7", "Symbol", null, "1.0054")]
+    [InlineData("\uF0A7", "Wingdings", null, "0.8989")]
+    [InlineData("\uF0B7", "Symbol", "exact", null)]
+    [InlineData("\uF020", "Symbol", null, null)]
+    [InlineData("\u2022", "Arial", null, null)]
+    public void HCO103_MappedSymbolMarker_KeepsTheReplacedFontsAscent(string text, string markerFont,
+        string? rule, string? ascent)
+    {
+        var glyph = MarkerGlyph(ListItem("bullet", text, markerFont, "24", rule));
+        var box = glyph.Elements().SingleOrDefault(e => e.Attribute("data-docx-glyph-ascent") != null);
+
+        Assert.Equal(ascent, (string?)box?.Attribute("data-docx-glyph-ascent"));
+        if (box != null)
+        {
+            Assert.Equal("true", (string?)box.Attribute("aria-hidden"));
+            Assert.Equal(string.Empty, box.Value);
+            Assert.Contains($"height: {ascent}em", (string?)box.Attribute("style"));
+            Assert.Contains("width: 0", (string?)box.Attribute("style"));
+        }
+    }
+
+    /// <summary>Converts one list item of 12pt Arial text whose level marker uses the given font and size.</summary>
+    private static XElement ListItem(string format, string text, string? markerFont, string? markerSize,
+        string? rule = null)
     {
         var level = new Wp.Level(new Wp.StartNumberingValue { Val = 1 },
             new Wp.NumberingFormat { Val = format == "bullet" ? Wp.NumberFormatValues.Bullet : Wp.NumberFormatValues.Decimal },
@@ -2463,22 +2502,20 @@ public class HtmlConversionOpsTests
                 markerFont == null ? null : new Wp.RunFonts { Ascii = markerFont, HighAnsi = markerFont },
                 markerSize == null ? null : new Wp.FontSize { Val = markerSize },
             }.OfType<DocumentFormat.OpenXml.OpenXmlElement>())) { LevelIndex = 0 };
-        var paragraph = ConvertParagraph(new Wp.Paragraph(
-            new Wp.ParagraphProperties(new Wp.NumberingProperties(
-                new Wp.NumberingLevelReference { Val = 0 }, new Wp.NumberingId { Val = 1 })),
+        var properties = new Wp.ParagraphProperties(new Wp.NumberingProperties(
+            new Wp.NumberingLevelReference { Val = 0 }, new Wp.NumberingId { Val = 1 }));
+        if (rule == "exact")
+            properties.Append(new Wp.SpacingBetweenLines { Line = "240", LineRule = Wp.LineSpacingRuleValues.Exact });
+        return ConvertParagraph(new Wp.Paragraph(properties,
             new Wp.Run(new Wp.RunProperties(new Wp.RunFonts { Ascii = "Arial", HighAnsi = "Arial" },
                 new Wp.FontSize { Val = "24" }), new Wp.Text("Item text"))),
             new Wp.Numbering(new Wp.AbstractNum(level) { AbstractNumberId = 0 },
                 new Wp.NumberingInstance(new Wp.AbstractNumId { Val = 0 }) { NumberID = 1 }));
-        var style = (string?)paragraph.Attribute("style") ?? string.Empty;
-        var glyph = paragraph.Descendants().First(e => (string?)e.Attribute("data-list-marker") == "true"
-            && e.Elements().Any() == false && e.Value.Length > 0);
-
-        Assert.Contains("font-family: 'Arial'", style);
-        Assert.Contains("font-size: 12pt", style);
-        Assert.Contains($"font-size: {glyphSize}", (string?)glyph.Attribute("style"));
-        Assert.Equal(glyphFamily, FontFamily(glyph));
     }
+
+    /// <summary>The marker span that holds the number or bullet glyph itself.</summary>
+    private static XElement MarkerGlyph(XElement paragraph) => paragraph.Descendants().First(e =>
+        (string?)e.Attribute("data-list-marker") == "true" && e.Nodes().OfType<XText>().Any(t => t.Value.Length > 0));
 
     /// <summary>The primary family an element renders in: its own declaration or its nearest ancestor's.</summary>
     private static string? FontFamily(XElement element) => element.AncestorsAndSelf()

@@ -17,7 +17,7 @@ import {
   type BrowserRenderOutcome,
   type BrowserRuntimeIdentity,
 } from "./browser-session.js";
-import { createNodeFontRuntime } from "./fonts/index.js";
+import { createNodeFontRuntime, documentFontFaces } from "./fonts/index.js";
 import type {
   NodeExportOptions,
   NodeExportRuntime,
@@ -251,11 +251,12 @@ function validateEnvironmentAttestation(
 }
 
 /**
- * Attaches a font resolver when the caller configured font directories.
+ * Attaches a font resolver when the caller configured font directories or local fonts, or the
+ * document embeds usable fonts of its own.
  *
  * Discovery needs the resolved limits and the requested outputs — a license record is
  * scoped to the outputs it permits — so it cannot be built during runtime validation,
- * which sees neither. Without directories the runtime stays resolver-free and the
+ * which sees neither. Without any font source the runtime stays resolver-free and the
  * materializer falls back to measured browser observation.
  */
 function withFontResolver(
@@ -263,16 +264,20 @@ function withFontResolver(
   options: NodeExportOptions,
   outputs: readonly RenderOutput[],
   warn: (warning: RenderWarning) => void,
+  sourceBytes: Uint8Array,
 ): NodeExportRuntime {
-  if (!runtime.fontDirectories?.length && !runtime.fontSources?.includes("local")) return runtime;
+  const limits = { ...DEFAULT_EXPORT_RESOURCE_LIMITS, ...options.limits };
+  const documentFaces = documentFontFaces(sourceBytes, limits, outputs, warn);
+  if (!runtime.fontDirectories?.length && !runtime.fontSources?.includes("local") && !documentFaces.length) return runtime;
   return {
     ...runtime,
     fontResolver: createNodeFontRuntime(
       runtime.fontDirectories ?? [],
       runtime.fontLicenseAttestations ?? [],
-      { ...DEFAULT_EXPORT_RESOURCE_LIMITS, ...options.limits },
+      limits,
       outputs,
       runtime.fontSources?.includes("local") ? { strict: options.strictFonts, warn } : undefined,
+      documentFaces,
     ).resolver,
   };
 }
@@ -838,11 +843,10 @@ function runtimeEnvironment(
       ? "contextRestricted"
       : "ownedProcessRestricted",
   };
-  // "embedded" left the vocabulary with the v2 font contract: OOXML embedded fonts are not
-  // exported until de-obfuscation and embedding-license policy exist. A node-verified font
-  // environment is one the host itself configured, or one the caller attested to.
+  // A node-verified font environment is one whose every face the host read and hashed itself:
+  // configured, attested, local, or embedded in the source document.
   const nodeFontsVerified = report.fonts.every((font) =>
-    font.status === "resolved" && (font.source === "configured" || font.source === "attested" || font.source === "local"));
+    font.status === "resolved" && font.source !== "browser");
   const baselineVerification = runtime.launchMode !== "injected" && nodeFontsVerified
     ? "nodeVerified"
     : "browserObserved";
@@ -989,7 +993,7 @@ async function renderOwned(
     if (localWarnings.length >= diagnosticLimit) exportError("resource_limit", "font_loading",
       "Local font warnings exceed renderDiagnostics limit.", "Resolve skipped local fonts or configure an explicit font directory.");
     localWarnings.push(warning);
-  });
+  }, sourceBytes);
   const timeoutMs = normalizedTimeout(options);
   const deadline = Date.now() + timeoutMs;
   const pdfLimit = options.limits?.pdfOutputBytes

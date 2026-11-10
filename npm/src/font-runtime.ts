@@ -812,12 +812,12 @@ async function validateResolverResponse(
       identity: digestString(evidence.identity, `faces[${index}].licenseEvidence.identity`),
       noSubsetting: evidence.noSubsetting,
     }) as FontResolverFace["licenseEvidence"];
-    if (face.source !== undefined && face.source !== "local") {
+    if (face.source !== undefined && face.source !== "local" && face.source !== "document") {
       throw new BrowserFontError("invalid_response", `faces[${index}].source is invalid.`);
     }
     const resolved: FontResolverFace = Object.freeze({
       id,
-      ...(face.source === "local" ? { source: "local" as const } : {}),
+      ...(face.source === undefined ? {} : { source: face.source as "local" | "document" }),
       resolvedFamily: normalizeFontFamilyName(shortString(
         face.resolvedFamily,
         `faces[${index}].resolvedFamily`,

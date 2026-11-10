@@ -175,7 +175,9 @@ function uniformParagraphRuns(paragraph: HTMLElement, allowStructuralWrappers = 
     || runs.some(child => {
       const inMarker = marker?.contains(child);
       if (!(child instanceof view.HTMLElement) || child.localName !== "span"
-        || (!inMarker && ((child !== note && child.children.length) || !child.textContent?.trim()))) return true;
+        // A condensed justified line (word-text.ts) narrows spaces inside its run, nothing else.
+        || (!inMarker && ((child !== note && child.querySelector(':scope > :not([data-docx-condensed-line])'))
+          || !child.textContent?.trim()))) return true;
       const run = view.getComputedStyle(child);
       // Converter list prefixes are an inline flex box with two flex items: the
       // number and its tab suffix. Their uniform metrics must move together.
@@ -225,6 +227,9 @@ function applyUniformLineMinimums(paragraphs: HTMLElement[], ratioFor: (style: P
 
 /** The converter's direction mark after a `<br>`: it holds an otherwise empty line's font. */
 const BREAK_CARRIER = /^\u200e+$/u;
+
+/** The converter's empty box holding a mapped symbol marker's original ascent (#1567). */
+const GLYPH_ASCENT = 'span[data-docx-glyph-ascent]';
 
 /**
  * Give mixed ordinary text one shared ascent, descent and spacing floor per visual line (#1565).
@@ -290,12 +295,15 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
     // The converter's number and suffix tab occupy two baseline-aligned flex items.
     if (marker && (marker.children.length !== 2 || marker.children[0].children.length !== 1
       || !marker.children[0].firstElementChild?.matches('span[data-list-marker="true"]')
-      || marker.children[0].firstElementChild.children.length
+      // A mapped symbol glyph may carry the converter's ascent box for the font it replaced.
+      || Array.from(marker.children[0].firstElementChild.children).some(child => !child.matches(GLYPH_ASCENT))
       || marker.children[1].children.length !== 1
       || !marker.children[1].firstElementChild?.matches('span[data-docx-tab]')
       || marker.children[1].firstElementChild.childNodes.length)) continue;
+    // A replaced symbol font's ascent differs from the glyph's fallback face even when every run matches.
+    const glyphAscent = !!marker?.querySelector(GLYPH_ASCENT);
     const runs = Array.from(paragraph.querySelectorAll<HTMLElement>('span'))
-      .filter(run => !run.hasAttribute('data-docx-line-metric'));
+      .filter(run => !run.hasAttribute('data-docx-line-metric') && !run.matches(GLYPH_ASCENT));
     const fonts = runs.map(run => {
       const css = view.getComputedStyle(run);
       return { run, size: Number.parseFloat(css.fontSize), family: css.fontFamily,
@@ -305,8 +313,10 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
         sides: [css.left, css.right], bottom: css.bottom, float: css.cssFloat };
     });
     const paragraphFont = owned ? undefined : measure(style, Number.parseFloat(style.fontSize));
-    // Converter line breaks stay inside their run, followed by the run's direction mark.
+    // Converter line breaks stay inside their run, followed by the run's direction mark and, in an
+    // indented paragraph, an empty span that carries the following line's horizontal offset.
     const contained = (child: Element) => child.matches('br[data-docx-break]')
+      || child.localName === 'span' && !child.childNodes.length && !!child.previousElementSibling?.matches('br[data-docx-break]')
       || owned && child.hasAttribute('data-docx-line-metric');
     if (!runs.length || paragraph.querySelector('*:not(span):not(br[data-docx-break])')
       || Array.from(paragraph.children).some(child => child.localName === 'br') || fonts.some(f =>
@@ -326,12 +336,12 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
       || !marker?.contains(f.run) && Array.from(f.run.children).some(child => !contained(child)))
       || !owned && style.lineHeight !== 'normal'
         && !(minimum >= 14 * 4 / 3 && Math.abs(Number.parseFloat(style.lineHeight) - minimum) < .02)
-      || !owned && new Set(fonts.map(f => `${f.size}|${f.family}|${f.weight}|${f.style}`)).size < 2) continue;
+      || !owned && !glyphAscent && new Set(fonts.map(f => `${f.size}|${f.family}|${f.weight}|${f.style}`)).size < 2) continue;
     const metrics = new Map(fonts.map(f => [f.run, measure({ fontFamily: f.family,
       fontWeight: f.weight, fontStyle: f.style, fontStretch: f.stretch }, f.size)]));
     // Styling alone does not require vertical line ownership. Equal metrics keep
     // the ordinary flow available to the precise horizontal text fitter.
-    if (!owned && new Set([...metrics.values()].map(m => `${m.ascent}|${m.descent}`)).size < 2) continue;
+    if (!owned && !glyphAscent && new Set([...metrics.values()].map(m => `${m.ascent}|${m.descent}`)).size < 2) continue;
     const before = paragraph.cloneNode(true) as HTMLElement;
     const sourceText = paragraph.textContent;
     const words = () => {
@@ -393,8 +403,12 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
     for (const run of runs) run.style.lineHeight = '0';
     // The marker opens the first line, which it raises by its font's ascent alone.
     const markerText = document.createTreeWalker(marker ?? paragraph, view.NodeFilter.SHOW_TEXT);
-    for (let node = marker && markerText.nextNode(); node && lines.length; node = markerText.nextNode())
-      if (node.textContent?.trim()) lines[0].marker = Math.max(lines[0].marker, metrics.get(node.parentElement!)?.ascent ?? 0);
+    for (let node = marker && markerText.nextNode(); node && lines.length; node = markerText.nextNode()) {
+      if (!node.textContent?.trim()) continue;
+      // A mapped symbol glyph counts with the replaced font's ascent, not its fallback face's (#1567).
+      const span = node.parentElement!, box = span.querySelector<HTMLElement>(GLYPH_ASCENT);
+      lines[0].marker = Math.max(lines[0].marker, box ? box.getBoundingClientRect().height : metrics.get(span)?.ascent ?? 0);
+    }
     // A line holding only a break's direction mark takes that break's font.
     for (const line of lines) if (!line.descent) Object.assign(line, line.carrier);
     // Lengths keep only the six significant digits CSS serializes, so a saved page lays out
