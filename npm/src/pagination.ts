@@ -5499,8 +5499,9 @@ export class PaginationEngine {
     const ends = this.tableRowGroupEnds(rows);
     const headers = rows.slice(0, this.leadingHeaderRowCount(rows, ends));
     const row = rows[headers.length];
-    // Keep vertical merges, declared row heights and non-top cell alignment intact. These need
-    // their own layout rules; ordinary rows can partition each cell in the same measured band.
+    // Keep vertical merges and declared row heights intact. These need their own layout rules;
+    // ordinary rows can partition each cell in the same measured band. A centered or bottom cell
+    // keeps its alignment in each part, as Word aligns content within the page it lands on.
     if (!row || !ends.includes(headers.length + 1) || (row.dataset.docxCantSplit === "true" && !freshBody)
       || (!relaxKeeps && rows.length > headers.length + 1 && this.rowKeepsWithNext(row))
       || row.dataset.docxHeaderRow === "true"
@@ -5508,8 +5509,7 @@ export class PaginationEngine {
       // capMinimumRowHeights); both parts below are copies of the row, so both keep it.
       || (row.dataset.docxRowHeightRule ? row.dataset.docxRowHeightRule !== "atLeast"
         : row.style.height || row.style.minHeight)
-      || Array.from(row.cells).some(cell => cell.rowSpan !== 1
-        || this.view.getComputedStyle(cell).verticalAlign !== "top")) return fallback();
+      || Array.from(row.cells).some(cell => cell.rowSpan !== 1)) return fallback();
 
     // DOCX cells contain blocks. Direct HTML callers can also supply bare text; the block
     // partition below cannot represent it, so retain the whole row rather than dropping it.

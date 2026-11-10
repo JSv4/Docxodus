@@ -68,6 +68,7 @@ All notable changes to this project will be documented in this file.
 
 - The rendering-fidelity check no longer rebuilds and re-measures the pinned baseline and main on every pull request. Its build cache was written only by pull-request runs, which no other pull request can read, so it never hit and its copies filled the repository's Actions cache. Baseline and main are now measured once per push to main and reused only in an identical measurement environment; a parallel canary re-measures the cached baseline live, and any cache miss falls back to measuring everything live. Pull requests that change only tests no longer run the check, and changes under `wasm/` now do.
 
+- PDF export no longer fails with "body content is clipped" on a table row taller than a page whose cells are centered or bottom-aligned (`w:vAlign`). The row now splits across pages as a top-aligned row already did, and a short cell is aligned within the part of the row on the row's first page, where Word puts it (#1558).
 - Uniform fixed-pitch text fits the confirmed 65-character line into a 468pt column. Line selection and word positions share the inferred twip-rounded cell advance before character scaling, while preserving raw glyph dimensions and proportional-font measurements (#1564).
 
 - Left-aligned mixed Latin text and numbered body paragraphs use the fonts on each visual line for single spacing, multiples of at least one, and minimum line spacing. Viewer and export pagination preserve complete line boundaries and source identities (#1566; part of #1565).
