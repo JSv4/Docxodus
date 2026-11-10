@@ -336,7 +336,8 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
       const pieces: Array<{ node: Text; start: number; end: number; left: number; width: number; top: number }> = [];
       const walker = document.createTreeWalker(paragraph, view.NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null)
-        for (const match of node.data.matchAll(/\S+/gu)) {
+        // The marker is measured by its font alone: its glyph may render in a fallback face.
+        for (const match of marker?.contains(node) ? [] : node.data.matchAll(/\S+/gu)) {
           const range = document.createRange();
           range.setStart(node, match.index); range.setEnd(node, match.index + match[0].length);
           if (range.getClientRects().length !== 1) return undefined;
@@ -371,7 +372,7 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
     const walker = document.createTreeWalker(paragraph, view.NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
       const run = node.parentElement!, metric = metrics.get(run);
-      if (!metric) continue;
+      if (!metric || marker?.contains(run)) continue;
       for (const match of node.data.matchAll(/\S+/gu)) {
         checkpoint?.();
         const range = document.createRange();
@@ -383,12 +384,15 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
           lines.push({ pieces: [], ascent: 0, descent: 0, baseline, marker: 0, carrier: { ascent: 0, descent: 0 } });
         const line = lines.at(-1)!;
         line.pieces.push({ node, start: match.index, end: match.index + match[0].length, left: box.left, width: box.width, run });
-        if (marker?.contains(run)) { line.marker = Math.max(line.marker, metric.ascent); continue; }
         const extent = BREAK_CARRIER.test(match[0]) ? line.carrier : line;
         extent.ascent = Math.max(extent.ascent, metric.ascent); extent.descent = Math.max(extent.descent, metric.descent);
       }
     }
     for (const run of runs) run.style.lineHeight = '0';
+    // The marker opens the first line, which it raises by its font's ascent alone.
+    const markerText = document.createTreeWalker(marker ?? paragraph, view.NodeFilter.SHOW_TEXT);
+    for (let node = marker && markerText.nextNode(); node && lines.length; node = markerText.nextNode())
+      if (node.textContent?.trim()) lines[0].marker = Math.max(lines[0].marker, metrics.get(node.parentElement!)?.ascent ?? 0);
     // A line holding only a break's direction mark takes that break's font.
     for (const line of lines) if (!line.descent) Object.assign(line, line.carrier);
     // Lengths keep only the six significant digits CSS serializes, so a saved page lays out
@@ -430,7 +434,10 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
       const baseline = box.bottom + Number.parseFloat(strut.style.verticalAlign);
       return line.pieces.every(() => Math.abs(observed[pieceIndex++]?.baseline - baseline) < .05);
     });
-    const valid = pristine && simple && lines.length > 0 && lines.every(line => line.descent > 0) && ownsLines && membership && sourceText === paragraph.textContent && observed.length === pristine.length
+    const markerBox = marker?.getBoundingClientRect(), firstLine = inserted[0]?.getBoundingClientRect();
+    const markerOnFirstLine = !markerBox || !!firstLine
+      && markerBox.top >= firstLine.top - .05 && markerBox.bottom <= firstLine.bottom + .05;
+    const valid = pristine && simple && lines.length > 0 && lines.every(line => line.descent > 0) && markerOnFirstLine && ownsLines && membership && sourceText === paragraph.textContent && observed.length === pristine.length
       && pristine.every((piece, index) => Math.abs(piece.left - observed[index].left) < 1 / 32
         && Math.abs(piece.width - observed[index].width) < 1 / 32)
       && inserted.every((strut, index) => index === 0 || strut.getBoundingClientRect().top > inserted[index - 1].getBoundingClientRect().top);
