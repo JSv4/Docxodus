@@ -6564,6 +6564,58 @@ stories, textboxes, revision-bearing documents and other grid types retain their
 behavior. Word's multiple-spacing formula, cell compatibility option and `beforeLines`/`afterLines`
 still require separate measurements; this is a partial resolution of #1551.
 
+### Word 2024 measurements: spacing rules, grid types and cells on a line grid
+
+Measured from Word 2024's own layout (`Range.Information` page and vertical position of each
+paragraph) on 120 one-line paragraphs of 12pt Times New Roman, Letter, one-inch margins, with
+`w:before="0" w:after="0"` declared in `w:pPrDefault`. The natural line is 13.8pt. Columns are
+line step / lines on page 1 / pages.
+
+| Case | Word | Docxodus before |
+| --- | --- | --- |
+| `auto` 1.15 (`w:line="276"`), 18pt grid | 20.7pt / 31 / 4 | 15.87pt / 40 / 3 |
+| `auto` 1.15, 14pt grid; 1.08, 20pt grid | 16.1pt / 40 / 3; 21.6pt / 30 / 4 | not measured |
+| `auto` 1.5, 18pt / 15pt / 12pt grid | 27pt / 24 / 5; 22.5pt / 28 / 5; 24pt / 27 / 5 | 20.7pt / 31 / 4 (18pt, 12pt) |
+| `auto` double, 18pt / 12pt grid; triple and 2.5, 12pt grid | 36pt; 24pt / 27 / 5; 36pt; 30pt | 27.6pt / 23 / 6 (12pt) |
+| `auto` 0.8, 18pt grid | 18pt / 36 / 4 | 11.04pt / 58 / 3 |
+| 24pt text: single or 1.5 on 18pt grid, double on 12pt grid | 36pt / 18 / 7 | 36pt (single) |
+| `linesAndChars` or `snapToChars`, 18pt, single | 18pt / 36 / 4 | 13.8pt / 46 / 3 |
+| `w:docGrid` without `w:type`, or `w:type="default"` | 13.8pt / 46 / 3 | same |
+| `exact` 15pt or 24pt, 18pt grid | 15pt; 24pt (grid ignored) | same |
+| `atLeast` 15pt / 20pt / 30pt, 18pt grid | 18pt / 36 / 4; 20pt; 30pt | 15pt / 43 / 3; 20pt; 30pt |
+| 24pt text, `atLeast` 30pt, 18pt grid | 36pt | 30pt |
+| 6pt after or before, 18pt grid; 12pt after; 6pt after on 12pt grid; 1.5 + 6pt after | 24pt; 30pt; 30pt; 33pt | same |
+| Table cells, 18pt grid, single or 1.5, with or without `w:doNotSnapToGridInCell` | 13.8pt; 20.7pt (no snap) | same |
+| 1.5 + 6pt after, 18pt grid: lines on page 1 | 20 (19 × 33pt + 27pt slot overruns; its text fits) | 19 |
+| `w:beforeLines="100"`, 18pt / 12pt grid; with `w:before="60"` | 18pt / 12pt before; 18pt (lines win) | ignored |
+| `w:beforeLines="100"` in a table cell, or with `w:snapToGrid w:val="0"`, 18pt grid | 18pt before | ignored |
+| `w:beforeLines="0"` with `w:before="120"`; style `beforeLines="100"` under direct `w:before="0"` | 6pt; 18pt | 6pt; 0pt |
+| `w:afterLines="50"`, 18pt grid; 15pt `linesAndChars` grid | 9pt; 7.5pt after | ignored |
+| `w:beforeLines="100"`, no grid, a grid with no type, or 24pt text without a grid | 12pt before | ignored |
+
+So, in compatibility mode 15:
+
+- Every grid type except `default` (and an absent `w:type`) puts lines on the pitch.
+- An `auto` line is `pitch × max(ceil(natural / pitch), multiple)`: the multiple scales the
+  pitch, not the natural height, and never shrinks a line below the slots its text needs.
+- An `atLeast` line is `max(ceil(natural / pitch) × pitch, value)`; an `exact` line ignores the grid.
+- Paragraph spacing is added unsnapped, so the following lines leave the page's grid positions.
+- Table cell text never snaps, whatever `w:doNotSnapToGridInCell` says.
+- Word centres the text in a grid line: the reported line top moves down by about
+  `(height − natural) / 2` (2pt at 18pt, 6.5pt for 1.5 lines at 18pt). A page's last line needs
+  only that text, so the lower half of its extra height may pass the bottom margin.
+- A line in `w:beforeLines`/`w:afterLines` is the grid pitch, also in cells and unsnapped
+  paragraphs, or 12pt without a snapping grid whatever the font. A positive count replaces
+  `w:before`/`w:after`, even one set directly over a style's count; a zero count does not.
+
+Docxodus applies the `auto` rule, the three grid types and the line-count spacing in
+`Docxodus/Internal/ParagraphLineGrid.cs` (which paragraphs snap, to which pitch, and how long a
+spacing line is) and `applyParagraphLineGrids` in `npm/src/line-metrics.ts` (the height), so the
+HTML line box, the paginator and the PDF share one value; `lastLineTrailingLeadingPt` in
+`npm/src/pagination.ts` admits the half-slot overrun. Tested by `HtmlLineGridTests` and
+`npm/tests/pagination-line-grid.spec.ts`. The `atLeast` rule below the pitch is not applied yet:
+its line height is resolved outside the natural-height pass.
+
 ## Unrelated content changed paragraph fitting and kerning (#1550, #1562)
 
 With 12pt Liberation Serif, a 468pt column, explicit single spacing and compatibility mode 15,

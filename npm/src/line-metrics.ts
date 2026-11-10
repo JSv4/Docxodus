@@ -155,7 +155,8 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
 }
 
 /** Ordinary inline runs whose metrics can be represented by their paragraph's font. */
-function uniformParagraphRuns(paragraph: HTMLElement, allowStructuralWrappers = false): HTMLElement[] | undefined {
+function uniformParagraphRuns(paragraph: HTMLElement, allowStructuralWrappers = false,
+  positioned?: (run: CSSStyleDeclaration) => boolean): HTMLElement[] | undefined {
   const view = paragraph.ownerDocument.defaultView!;
   const style = view.getComputedStyle(paragraph);
   const fontProperties = ["font-family", "font-size", "font-style", "font-weight", "font-stretch"];
@@ -183,7 +184,8 @@ function uniformParagraphRuns(paragraph: HTMLElement, allowStructuralWrappers = 
       const display = child === marker ? 'inline-flex' : child.parentElement === marker ? 'block'
         : inMarker && child.hasAttribute('data-docx-tab') ? 'inline-block' : 'inline';
       return fontProperties.some(property => run.getPropertyValue(property) !== style.getPropertyValue(property))
-        || run.display !== display || run.position !== "static" || run.verticalAlign !== "baseline" || run.transform !== "none";
+        || run.display !== display || (run.position !== "static" && !positioned?.(run))
+        || run.verticalAlign !== "baseline" || run.transform !== "none";
     })) return;
   return runs as HTMLElement[];
 }
@@ -485,13 +487,25 @@ export function isMixedLineMetric(element: HTMLElement): boolean {
       .every(property => Number.parseFloat(style.getPropertyValue(property)) === 0);
 }
 
-/** Reserve whole grid slots for uniform single-spaced text, retaining its natural baseline. */
+/**
+ * Size uniform automatic-spacing lines on their section's grid, retaining their natural baseline.
+ * Word 2024 gives such a line the whole grid slots its natural height needs or its multiple of one
+ * pitch, whichever is taller (#1551): 1.5 lines on an 18pt pitch is 27pt, on a 12pt pitch 24pt.
+ */
 function applyParagraphLineGrids(grids: Array<{ paragraph: HTMLElement; pitch: number }>, naturalHeights: Map<HTMLElement, number>): void {
+  const view = grids[0].paragraph.ownerDocument.defaultView!;
   for (const { paragraph, pitch } of grids) {
     const natural = naturalHeights.get(paragraph);
-    const children = uniformParagraphRuns(paragraph);
-    if (!natural || !children || children.some(child => naturalHeights.get(child) !== natural)) continue;
-    const height = Math.ceil(natural / pitch) * pitch;
+    if (!natural) continue;
+    const multiple = Number(view.getComputedStyle(paragraph).getPropertyValue('--docx-auto-line-spacing')) || 1;
+    // The converter's own multiple: m natural lines, its text lifted to their top. The grid replaces both.
+    const multiplied = (run: CSSStyleDeclaration) => multiple !== 1 && run.position === 'relative'
+      && Math.abs(Number.parseFloat(run.lineHeight) - natural * multiple) < .01
+      && Math.abs(Number.parseFloat(run.top) - Math.min(0, natural * (1 - multiple) / 2)) < .01;
+    const children = uniformParagraphRuns(paragraph, false, multiplied);
+    if (!children || children.some(child => naturalHeights.get(child) !== natural
+      && !multiplied(view.getComputedStyle(child)))) continue;
+    const height = Math.max(Math.ceil(natural / pitch), multiple) * pitch;
     for (const child of children) {
       // As with automatic multiples, the paragraph strut remains natural and extra
       // layout height goes below its ink. Read-only baseline correction still applies.

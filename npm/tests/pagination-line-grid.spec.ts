@@ -6,10 +6,20 @@ for (const presentation of ['editor', 'viewer', 'export']) for (const entry of [
   { name: '12pt grid spans two slots', grid: 12, pitch: 24, count: 27, pages: 5 },
   { name: 'unrelated table', grid: 18, pitch: 18, count: 36, pages: 4, table: true },
   { name: 'no grid control', grid: 0, pitch: 2355 / 2048 * 12, count: 46, pages: 3 },
-]) test(`single line grid ${presentation}: ${entry.name}`, async ({ page }) => {
+  // Word 2024 (#1551): the greater of the slots the text needs and the multiple of one pitch.
+  { name: '1.15 lines on an 18pt grid', grid: 18, multiple: 1.15, pitch: 20.7, count: 31, pages: 4 },
+  { name: 'double lines on a 12pt grid', grid: 12, multiple: 2, pitch: 24, count: 27, pages: 5 },
+  { name: '0.8 lines on an 18pt grid', grid: 18, multiple: .8, pitch: 18, count: 36, pages: 4 },
+  // A page's last grid line needs only its text, which Word centres: 19 x 33pt + 20.4pt fits 648pt.
+  { name: '1.5 lines and 6pt after on an 18pt grid', grid: 18, multiple: 1.5, after: 6, pitch: 33, count: 20, pages: 6 },
+  { name: '1.15 lines without a grid', grid: 0, multiple: 1.15, pitch: 2355 / 2048 * 12 * 1.15, count: 40, pages: 3 },
+]) test(`${entry.multiple ? 'multiple' : 'single'} line grid ${presentation}: ${entry.name}`, async ({ page }) => {
   await page.goto('/test-harness.html');
-  await page.setContent(`<style>p {font:12pt/normal 'Liberation Serif'; margin:0; padding:0;
-    --docx-auto-line-spacing:1; --docx-line-grid:${entry.grid}pt}</style>
+  // An automatic multiple carries the converter's run line height and lift.
+  await page.setContent(`<style>p {font:12pt/normal 'Liberation Serif'; margin:0 0 ${entry.after ?? 0}pt; padding:0;
+    --docx-auto-line-spacing:${entry.multiple ?? 1}; --docx-line-grid:${entry.grid}pt}
+    ${entry.multiple ? `p > span {line-height:calc(1lh * var(--docx-auto-line-spacing)); position:relative;
+      top:min(0px, calc(1lh * (1 / var(--docx-auto-line-spacing) - 1) / 2))}` : ''}</style>
     <div id="staging"><div data-section-index="0" data-page-width="612" data-page-height="792"
       data-content-width="468" data-content-height="648" data-margin-top="72" data-margin-right="72"
       data-margin-bottom="72" data-margin-left="72">
@@ -50,17 +60,21 @@ for (const presentation of ['editor', 'viewer', 'export']) for (const entry of [
   expect(result.first.count).toBe(entry.count);
   expect(result.first.pages).toBe(entry.pages);
   expect(Math.abs(result.first.pitch - entry.pitch)).toBeLessThan(1 / 64);
-  // The preexisting natural-height pass removes whole-pixel line rounding.
-  if (presentation === 'editor') expect(Math.abs(result.first.ink - result.before)).toBeLessThan(.5);
+  // The preexisting natural-height pass removes whole-pixel line rounding. A multiple's ink
+  // starts in a CSS-rounded line box, which that pass also moves.
+  if (presentation === 'editor' && !entry.multiple) expect(Math.abs(result.first.ink - result.before)).toBeLessThan(.5);
   expect(result.repeated).toBe(true);
 });
 
-for (const entry of [{ table: false }, { table: true }, { table: true, shifted: true }])
-test(`wrapped grid paragraph, table=${entry.table}, arbitrary offset=${!!entry.shifted}`, async ({ page }) => {
+// Word 2024 puts 36 lines of this paragraph on an 18pt grid in a 646pt body and 35 in a 644pt one:
+// the last line needs only its centred text, 15.9pt of its 18pt slot (#1551).
+for (const entry of [{ table: false, height: 646, rows: 36 }, { table: false, height: 644, rows: 35 },
+  { table: true, height: 646, rows: 36 }, { table: true, height: 646, rows: 36, shifted: true }])
+test(`wrapped grid paragraph, table=${entry.table}, body=${entry.height}pt, arbitrary offset=${!!entry.shifted}`, async ({ page }) => {
   await page.goto('/test-harness.html');
   await page.setContent(`<style>p {font:12pt/normal 'Liberation Serif';margin:0;--docx-auto-line-spacing:1;--docx-line-grid:18pt}</style>
-    <div id="staging"><div data-section-index="0" data-page-width="612" data-page-height="790"
-      data-content-width="468" data-content-height="646" data-margin-top="72" data-margin-right="72"
+    <div id="staging"><div data-section-index="0" data-page-width="612" data-page-height="${entry.height + 144}"
+      data-content-width="468" data-content-height="${entry.height}" data-margin-top="72" data-margin-right="72"
       data-margin-bottom="72" data-margin-left="72"><p><span style="white-space:pre-wrap">${Array.from({ length: 900 }, (_, i) => `Cedar${i}`).join(' ')}</span></p>
       ${entry.table ? '<table><tr><td>Separate table</td></tr></table>' : ''}</div></div><div id="pages"></div>`);
   await page.addScriptTag({ path: fileURLToPath(new URL('../dist/pagination.bundle.js', import.meta.url)) });
@@ -85,8 +99,8 @@ test(`wrapped grid paragraph, table=${entry.table}, arbitrary offset=${!!entry.s
     return { fitted, rows: rows.size, text: Array.from(pages.querySelectorAll('.page-content p')).map(p => p.textContent).join(' ') };
   }, !!entry.shifted);
   expect(result.fitted).toBe('0');
-  if (entry.shifted) expect(result.rows).toBeGreaterThan(35);
-  else expect(result.rows).toBe(35);
+  if (entry.shifted) expect(result.rows).toBeGreaterThan(entry.rows);
+  else expect(result.rows).toBe(entry.rows);
   expect(result.text.match(/Cedar\d+/g)).toEqual(Array.from({ length: 900 }, (_, i) => `Cedar${i}`));
 });
 

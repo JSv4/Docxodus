@@ -3146,12 +3146,14 @@ export class PaginationEngine {
    * only its text height: the leading may run past the bottom margin (issue #1571). Only text the
    * converter's lift holds at the top of its line box qualifies; a run laid out with CSS's split
    * leading would paint below its text height, and pictures, bottom borders and padding keep the
-   * full line. The smallest run bounds the leading below every run's text.
+   * full line. The smallest run bounds the leading below every run's text. Word centres a grid
+   * line's text instead, so half of that line's extra height lies below its text (#1551).
    */
   private lastLineTrailingLeadingPt(paragraph: HTMLElement): number {
     const style = this.view.getComputedStyle(paragraph);
     const multiple = parseFloat(style.getPropertyValue("--docx-auto-line-spacing"));
-    if (!(multiple > 1) || !this.isWordParagraphElement(paragraph) || paragraph.querySelector("img, svg")
+    const grid = parseFloat(style.getPropertyValue("--docx-line-grid")) > 0;
+    if (!(multiple > 1 || grid) || !this.isWordParagraphElement(paragraph) || paragraph.querySelector("img, svg")
       || parseFloat(style.paddingBottom) > 0 || parseFloat(style.borderBottomWidth) > 0) return 0;
     let leading = Infinity;
     let checked: Element | null = null;
@@ -3164,11 +3166,12 @@ export class PaginationEngine {
       checked = run;
       const runStyle = this.view.getComputedStyle(run);
       const height = parseFloat(runStyle.lineHeight);
-      const natural = height / multiple;
+      const native = grid ? parseFloat((run as HTMLElement).style.getPropertyValue("--docx-word-native-height")) : NaN;
+      const natural = native > 0 ? native : height / multiple;
       // The lift is `top: (natural - height) / 2`; anything else leaves the text elsewhere in its line.
-      if (runStyle.position !== "relative" || !(Math.abs(parseFloat(runStyle.top) - (natural - height) / 2) < 0.01))
-        return 0;
-      leading = Math.min(leading, height - natural);
+      if (!(native > 0 || multiple > 1) || runStyle.position !== "relative"
+        || !(Math.abs(parseFloat(runStyle.top) - (natural - height) / 2) < 0.01)) return 0;
+      leading = Math.min(leading, native > 0 ? (height - natural) / 2 : height - natural);
     }
     return Number.isFinite(leading) ? pxToPt(leading) : 0;
   }
