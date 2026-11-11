@@ -1323,6 +1323,15 @@ internal static class RevisionOps
                 groups.Add(cur);
             }
         }
+
+        // The paragraph a tracked InsertTable puts between its table and the table before it
+        // (issue #1649) comes ahead of the rows it belongs with, so it joins them only now.
+        foreach (var lone in groups.Where(g => g.Units.Count == 1 && g.Units[0].Kind == UnitKind.ParaMark).ToList())
+        {
+            if (ClosingTableGroup(lone.Units[0], rowGroupByTr, tableAfter: true) is not { } table) continue;
+            table.Units.Add(lone.Units[0]);
+            groups.Remove(lone);
+        }
     }
 
     /// <summary>
@@ -1331,16 +1340,18 @@ internal static class RevisionOps
     /// table and the mark is revised the same way by the same edit. Word and a tracked
     /// InsertTable insert that paragraph with the table (issue #1626); it exists only for the
     /// table, so it is part of the table's revision. A paragraph that ends a section is never
-    /// absorbed: its section break is a change of its own.
+    /// absorbed: its section break is a change of its own. The paragraph belongs to the table
+    /// before it, or with <paramref name="tableAfter"/> to the table it keeps apart from that one.
     /// </summary>
     private static RevisionGroup? ClosingTableGroup(
-        RevisionUnit mark, Dictionary<XElement, RevisionGroup> rowGroupByTr)
+        RevisionUnit mark, Dictionary<XElement, RevisionGroup> rowGroupByTr, bool tableAfter = false)
     {
         var paragraph = mark.Paragraph;
         if (paragraph is null || paragraph.Elements().Any(e => !IsIgnorableBetween(e))
-            || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null || !ClosesTable(paragraph))
+            || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null || !ClosesTable(paragraph)
+            || SiblingBlock(paragraph, forward: tableAfter) is not { } table || table.Name != W.tbl)
             return null;
-        var rows = WordprocessingMLUtil.TableRows(SiblingBlock(paragraph, forward: false)!).ToList();
+        var rows = WordprocessingMLUtil.TableRows(table).ToList();
         return rows.Count > 0 && rowGroupByTr.TryGetValue(rows[0], out var group)
             && rows.All(row => rowGroupByTr.TryGetValue(row, out var rowGroup) && ReferenceEquals(rowGroup, group))
             && group.Type == mark.Type && group.Author == mark.Author && group.Date == mark.Date

@@ -6048,18 +6048,6 @@ namespace Docxodus
                     new XText(string.Empty));
             }
 
-            XElement? span = null;
-            var tabWidth = (decimal?) element.Attribute(PtOpenXml.TabWidth);
-            if (tabWidth != null)
-            {
-                span = new XElement(Xhtml.span);
-                span.AddAnnotation(new Dictionary<string, string>
-                {
-                    { "margin", "0 0 0 " + InchesCss(tabWidth.Value) },
-                    { "padding", "0 0 0 0" }
-                });
-            }
-
             var paragraph = element.Ancestors(W.p).FirstOrDefault();
             var isBidi = paragraph != null &&
                          paragraph.Elements(W.pPr).Elements(W.bidi).Any(b => b.Attribute(W.val) == null ||
@@ -6100,7 +6088,6 @@ namespace Docxodus
             {
                 breakElement,
                 directionMark,
-                span,
             };
         }
 
@@ -10221,9 +10208,6 @@ namespace Docxodus
                     twipCounter = leftInTwips;
                     stretchStart = null;
                     rightStopReached = 0;
-
-                    currentElement.Add(new XAttribute(PtOpenXml.TabWidth,
-                        TabWidthValue(firstInTwips)));
 
                     currentElementIdx++;
                     if (currentElementIdx >= contentToMeasure.Length)

@@ -60,6 +60,21 @@ public sealed class DocxHistoryArchiveTests
         finally { Directory.Delete(directory, recursive: true); }
     }
 
+    /// <summary>Issue #1659: the archive streams to the caller, yet every entry records Unix as the
+    /// host that made it, so the same history exports to the same bytes on Windows as elsewhere.</summary>
+    [Fact]
+    public async Task ExportedArchiveRecordsUnixAsEveryEntrysHost()
+    {
+        var (bytes, _) = await SmallArchive();
+
+        var hosts = Enumerable.Range(0, bytes.Length - 5)
+            .Where(i => bytes[i] == 0x50 && bytes[i + 1] == 0x4B && bytes[i + 2] == 1 && bytes[i + 3] == 2)
+            .Select(i => (int)bytes[i + 5]).ToList();
+        using var zip = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
+        Assert.Equal(zip.Entries.Count, hosts.Count);
+        Assert.All(hosts, host => Assert.Equal(3, host));
+    }
+
     [Fact]
     public async Task OwnedInputCopiesBeforeAwaitAndConcurrentReadsDoNotShareZipPosition()
     {
