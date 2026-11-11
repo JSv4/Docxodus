@@ -4058,9 +4058,8 @@ changes. In a table cell the sum reads the space after of the paragraph rendered
 table style can set it and the style cascade read before assembly does not include table styles.
 The contextual rule then applies to the summed value, which gives the rows above.
 
-Known gap: a bordered paragraph keeps its own spacing inside its border box, where it does not
-collapse with the neighbor's, so under this setting the space after next to a bordered paragraph
-counts twice.
+A bordered paragraph's spacing lies outside its border box (#1677, below), so the sum collapses
+with it like any other paragraph's.
 
 Tests: `HtmlAutomaticSpacingTests` (`CompatibilitySpacingAddsTheSpaceAfterAbove`,
 `CompatibilitySpacingInACellAddsTheRenderedSpaceAfter`) and `npm/tests/export-automatic-spacing.spec.ts`.
@@ -4102,6 +4101,69 @@ then gates each side with that paragraph's resolved on/off value. A bookmark or 
 holding no block does not separate the two paragraphs; a table does. Native regressions and
 the public PDF tests cover body text and both textbox formats, including direct-off
 overrides and neighbor-owned space. Automatic spacing is a separate remaining part of #1553.
+
+### A paragraph border encloses the text, not the paragraph's spacing (#1677)
+
+```xml
+<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="exact"/></w:pPr><w:r><w:t>Open</w:t></w:r></w:p>
+<w:p><w:pPr>
+  <w:pBdr>
+    <w:top w:val="single" w:sz="4" w:space="1" w:color="000000"/>
+    <w:left w:val="single" w:sz="4" w:space="1" w:color="000000"/>
+    <w:bottom w:val="single" w:sz="4" w:space="1" w:color="000000"/>
+    <w:right w:val="single" w:sz="4" w:space="1" w:color="000000"/>
+  </w:pBdr>
+  <w:spacing w:before="280" w:after="280" w:line="320" w:lineRule="exact"/>
+</w:pPr><w:r><w:t>First</w:t></w:r></w:p>
+<w:p><w:pPr><w:spacing w:before="280" w:after="280" w:line="320" w:lineRule="exact"/></w:pPr><w:r><w:t>Second</w:t></w:r></w:p>
+```
+
+Word draws the border around the text and `w:space` only. The space before lies above the top
+border and the space after below the bottom border, and there each behaves as an unbordered
+paragraph's does: it collapses with the neighbour's spacing, is kept at the top of the first page
+and at the edges of a table cell, and is dropped at the top of a later page. Paragraphs that share
+one border keep the spacing between them inside the box. Shading without a border already covered
+the text lines only.
+
+Measured in Word 2024 (build 16.0.20326, November 2026): Times New Roman 12pt, exact 16pt lines,
+14pt before and after, a 0.5pt border with `w:space="1"`. Positions are points from the page top,
+read from Word's PDF; Docxodus is its own PDF export.
+
+| Case | Word | Docxodus before | Docxodus after |
+|---|---|---|---|
+| Top border after "Open" (line ends at 88) | 102.0 (14pt below) | 88.0 | 102.0 |
+| Bottom border | 120.5 | 134.5 | 120.5 |
+| Baseline step, bordered "First" to "Second" | 31.56 (16 + 1.5 + 14) | 45.75 | 31.5 |
+| The same under `w:doNotUseHTMLParagraphAutoSpacing` (#1553) | 45.56 (16 + 1.5 + 28) | 59.25 | 45.75 |
+| Three paragraphs in one box: step between members | 30 (16 + 14) | 30 | 30 (unchanged) |
+| Last member's bottom border to the next paragraph's line | 14 | 28 | 14 |
+| Two different boxes one after the other: gap between the borders | 14 | 28 (borders touch, 14 inside each) | 14 |
+| 20pt after above a box with 10pt before: gap to the top border | 20 | 20, then 10 inside the box | 20 |
+| Box first in the document: top border below the page margin | 14 | 0 (14 inside the box) | 14 |
+| Box first or last in a table cell: border to the cell edge | 14 | 0 (14 inside the box) | 14 |
+| Box before or after a table: border to the table | 14 | 0 (14 inside the box) | 14 |
+| Box moved to the top of page 2: top border below the margin | 0 | 0, text 14pt low | 0 |
+| A box split by a page: border open at the break, no space before the continuation | yes | yes | yes (unchanged) |
+| Top-only, bottom-only border (`w:top`, `w:bottom` alone) | as above, on that side | spacing inside | as Word |
+
+`CreateBorderDivsCore` (`Docxodus/WmlToHtmlConverter.cs`) wraps a run of paragraphs with the same
+border in one `div` that draws the border. It left the first paragraph's `margin-top` and the last
+paragraph's `margin-bottom` on the paragraphs, inside the box, where CSS cannot collapse them with
+the neighbours' margins. `MoveOuterSpacing` now moves those two margins onto the wrapper; the frame
+slot's existing rule for a frame's trailing space is the same function. The paginator treats the
+wrapper's top margin as paragraph space-before (`hasParagraphSpacing` in `npm/src/pagination.ts`),
+so it drops it at the top of a later page.
+
+Measured with the same fixtures and not changed here:
+
+- `w:between` draws no line between the members of a box in Docxodus. Word draws it midway and
+  adds its width and twice its `w:space` to the step (32.5pt, where the table above has 30pt).
+- `w:contextualSpacing` does not reach across the edge of a box in Docxodus. In Word a bordered
+  paragraph with the flag drops its spacing next to an unbordered paragraph of the same style.
+- `w:pageBreakBefore` on a bordered paragraph does not start a page in the paginated view.
+- Shading on a bordered paragraph fills the lines of text only; Word fills the box to its border.
+
+Tests: `ParagraphBorderOuterSpacingTests` and `npm/tests/export-bordered-paragraph-spacing.spec.ts`.
 
 ## Footnotes: the note number is a run of the first paragraph, and spacing after stops at the margin (issue #1130)
 

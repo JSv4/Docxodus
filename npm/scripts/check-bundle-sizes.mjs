@@ -102,7 +102,11 @@ const budgetsKiB = {
   // 163441), 11 over this gate. Round only this exhausted gate to the next 0.1 KiB.
   // Grid lines for mixed runs and centred grid text (#1551) add 358–387 gzip bytes over cbe989a3:
   // embed/IIFE/editor/pagination 163892/163950/142574/57936. Round these four gates to the next 0.1 KiB.
-  'embed.bundle.js': 160.1,
+  // Outer spacing on a bordered paragraph's box (#1677: the paginator's page-top rule and the
+  // editor's re-render of a box whose paragraph format changes) adds 83–92 gzip bytes over
+  // 1aab1f44: embed/IIFE/editor/pagination 164010/164062/142683/57988. Round the three exhausted
+  // gates (embed, IIFE, editor) to the next 0.1 KiB; pagination still fits.
+  'embed.bundle.js': 160.2,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
   // The appended bullet-normalization option adds 29 gzip bytes (161996 -> 162025).
@@ -110,9 +114,9 @@ const budgetsKiB = {
   // At-least grid lines above the pitch and tracked-change wrappers in the line passes (#1551) add
   // 82/98/97 gzip bytes to IIFE/editor/pagination (163592/142187/57566). Embed (163524) still fits;
   // round only these three exhausted gates to the next 0.1 KiB.
-  'embed.iife.js': 160.2,
+  'embed.iife.js': 160.3,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
-  'editor.bundle.js': 139.3,
+  'editor.bundle.js': 139.4,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
   // Whole inline-layout continuation adds 0.24 KiB (35.801 -> 36.038 on main).
