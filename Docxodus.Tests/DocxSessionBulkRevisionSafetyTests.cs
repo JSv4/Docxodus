@@ -96,11 +96,12 @@ public class DocxSessionBulkRevisionSafetyTests
     [Fact]
     public void MetadataDefect_DoesNotMaskAResolutionSafetyCheck()
     {
-        // The deleted cell is the first of its row: no surviving predecessor can absorb its grid
-        // column. That refusal must win over the missing author, which alone would not block.
+        // Every cell of the row is deleted: no surviving cell can absorb the grid columns. That
+        // refusal must win over the missing author, which alone would not block.
         var body = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/></w:tblGrid>"
             + "<w:tr><w:tc><w:tcPr><w:cellDel w:id=\"1\" w:date=\"2026-03-02T10:00:00Z\"/></w:tcPr>"
-            + Paragraph(Run("Left")) + "</w:tc><w:tc>" + Paragraph(Run("Right")) + "</w:tc></w:tr></w:tbl>"
+            + Paragraph(Run("Left")) + "</w:tc><w:tc><w:tcPr><w:cellDel w:id=\"2\" w:date=\"2026-03-02T10:00:00Z\"/></w:tcPr>"
+            + Paragraph(Run("Right")) + "</w:tc></w:tr></w:tbl>"
             + Paragraph(Run("After"));
 
         using var session = new DocxSession(Build(body));
