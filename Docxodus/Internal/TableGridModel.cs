@@ -63,7 +63,10 @@ internal static class TableGridModel
     /// table with its inserted cells, so it says nothing about a row without them; there the
     /// rows that keep every cell are the witness, and with none, nothing is widened. A row that
     /// is already whole is left alone, whoever wrote the mark: the property changes resolved
-    /// with it (a restored grid, a restored span) already describe the row. A content-control or
+    /// with it (a restored grid, a restored span) already describe the row. A deleted cell whose
+    /// own last paragraph mark is tracked as deleted gives its columns to no one, so its row is
+    /// left short; callers must therefore remove cells before they resolve the marks inside them.
+    /// A content-control or
     /// custom-XML wrapper left without a cell goes with its cell. <paramref name="leaving"/>
     /// names every cell leaving the table, in any row, and <paramref name="inserted"/> says they
     /// are rejected insertions. Returns <c>false</c>, changing nothing,
@@ -76,6 +79,10 @@ internal static class TableGridModel
         if (staying.Count == 0) return false;
 
         int Span(XElement cell) => Math.Max(1, (int?)cell.Element(W.tcPr)?.Element(W.gridSpan)?.Attribute(W.val) ?? 1);
+        // What a leaving cell hands on. A deleted cell whose own last paragraph mark is deleted
+        // too takes its columns with it, and Word leaves the row that much shorter.
+        int Given(XElement cell) => !inserted && cell.DescendantsTrimmed(e => e.Name == W.p || e.Name == W.tbl).LastOrDefault()
+            ?.Elements(W.pPr).Elements(W.rPr).Elements(W.del).Any() == true ? 0 : Span(cell);
         int Columns(XElement r) => GridBefore(r) + GridAfter(r)
             + WordprocessingMLUtil.RowCells(r).Where(cell => !leaving.Contains(cell)).Sum(Span);
         var table = row.Ancestors(W.tbl).FirstOrDefault();
@@ -89,7 +96,7 @@ internal static class TableGridModel
         var widened = new HashSet<XElement>();
         foreach (var cell in cells.Where(leaving.Contains))
         {
-            int taken = Math.Min(Span(cell), missing);
+            int taken = Math.Min(Given(cell), missing);
             if (taken > 0)
             {
                 int position = cells.IndexOf(cell);

@@ -40,6 +40,9 @@ public class DocxSessionCellRevisionShapeTests
 
     private static byte[] Table(int columns, params string[] rows) => Body(Tbl(columns, rows) + "<w:p/>");
 
+    private static WmlDocument Document(params string[][] rows) => new("d.docx", Table(rows.Max(cells => cells.Length),
+        rows.Select(cells => Row(cells.Select(text => Cell(text)).ToArray())).ToArray()));
+
     private static byte[] Body(string blocks)
     {
         var xml = $"<w:document xmlns:w=\"{W.w.NamespaceName}\"><w:body>{blocks}"
@@ -256,12 +259,52 @@ public class DocxSessionCellRevisionShapeTests
     {
         // The redline narrows the grid and marks the surplus cell of each row deleted. The cells that
         // stay already fill the narrowed grid, so accepting must not widen one of them over it.
-        static WmlDocument Document(params string[][] rows) => new("d.docx", Table(rows[0].Length,
-            rows.Select(cells => Row(cells.Select(text => Cell(text)).ToArray())).ToArray()));
         var redline = DocxCompare.Compare(
             Document(new[] { "A", "B", "C" }, new[] { "D", "E", "F" }), Document(new[] { "B", "C" }, new[] { "E", "F" }));
 
         Assert.Equal("B C / E F", Resolve(redline.DocumentByteArray, accept: true));
+    }
+
+    public static TheoryData<string, string, string> StruckCells => new()
+    {
+        // the leaving cell's paragraph, as its text and what of it is tracked; the row once accepted
+        { "<w:p><w:pPr><w:rPr><w:del w:id=\"8\" {0}/></w:rPr></w:pPr><w:del w:id=\"9\" {0}><w:r><w:delText>?</w:delText></w:r></w:del></w:p>", "run and mark deleted", "short" },
+        { "<w:p><w:pPr><w:rPr><w:del w:id=\"8\" {0}/></w:rPr></w:pPr></w:p>", "empty, mark deleted", "short" },
+        { "<w:p><w:del w:id=\"9\" {0}><w:r><w:delText>?</w:delText></w:r></w:del></w:p>", "run deleted only", "widened" },
+        { "<w:p/>", "empty", "widened" },
+    };
+
+    [Theory]
+    [MemberData(nameof(StruckCells))]
+    public void DeletedCellWhoseLastParagraphMarkIsDeleted_LeavesTheRowShort(string paragraph, string state, string outcome)
+    {
+        // Issue #1694, measured in Word 2024: a deleted cell gives its columns to a neighbour unless
+        // its own last paragraph mark is tracked as deleted. Then the row is left a cell short, in
+        // every position. An inserted cell in the same state is widened over as any other.
+        byte[] Marked(string text, string mark)
+        {
+            string With(string cell) => cell != text ? Cell(cell) : Cell(cell, mark).Replace(
+                $"<w:p><w:r><w:t>{cell}</w:t></w:r></w:p>", string.Format(paragraph, OtherStamp).Replace("?", cell));
+            return Table(3, Row(With("A"), With("B"), With("C")), Plain(3));
+        }
+        bool isShort = outcome == "short";
+
+        Assert.True((isShort ? "B C" : "B×2 C") + " / x x x" == Resolve(Marked("A", "cellDel"), accept: true), state + ": first");
+        Assert.True((isShort ? "A C" : "A×2 C") + " / x x x" == Resolve(Marked("B", "cellDel"), accept: true), state + ": middle");
+        Assert.True((isShort ? "A B" : "A B×2") + " / x x x" == Resolve(Marked("C", "cellDel"), accept: true), state + ": last");
+        Assert.True("A×2 C / x x x" == Resolve(Marked("B", "cellIns"), accept: false), state + ": rejected insertion");
+    }
+
+    [Fact]
+    public void ComparisonThatRemovedACellFromOneRow_AcceptsToTheRevisedTable()
+    {
+        // The other row keeps the grid at three columns, so only the removed cell's struck paragraph
+        // mark says the first row is to stay short.
+        var redline = DocxCompare.Compare(
+            Document(new[] { "A", "B", "C" }, new[] { "D", "E", "F" }), Document(new[] { "B", "C" }, new[] { "D", "E", "F" }));
+
+        Assert.Equal("B C / D E F", Resolve(redline.DocumentByteArray, accept: true));
+        Assert.Equal("A B C / D E F", Resolve(redline.DocumentByteArray, accept: false));
     }
 
     [Fact]

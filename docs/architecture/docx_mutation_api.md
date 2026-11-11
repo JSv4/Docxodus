@@ -2126,7 +2126,9 @@ deletion is measured against it; it describes the table with its inserted cells,
 insertion is measured against the rows that keep every cell, and is not widened when there is none.
 A row that is already whole is left alone, whoever wrote the mark, so a tracked `InsertTableColumn`
 whose rejection restores the old grid and a comparison that wrote the row in its final shape keep
-their geometry. A row that keeps no cell is removed, and a table that keeps no
+their geometry. A deleted cell whose own last paragraph mark is tracked as deleted gives its columns
+to no cell and leaves the row short, again as Word does (issue #1694); this is the markup
+`DocxDiff` writes for a removed cell, so accepting its redline gives the revised row. A row that keeps no cell is removed, and a table that keeps no
 row with it. A row's cells are read through content-control and custom-XML wrappers
 (`w:tr/w:sdt/w:sdtContent/w:tc`, as one online editor exports every cell), and a wrapper left
 without a cell is removed with it. No cell insertion or deletion is refused for its shape any more.
