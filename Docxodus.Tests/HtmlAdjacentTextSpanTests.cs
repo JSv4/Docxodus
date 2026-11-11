@@ -20,7 +20,9 @@ public class HtmlAdjacentTextSpanTests
         using (var document = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
         {
             var main = document.AddMainDocumentPart();
-            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            // An empty paragraph default: single spacing. Without one Word supplies 1.16 lines (#1652),
+            // and a line multiple gives every run its own positioned box, which is not what these join.
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(new Wp.DocDefaults(new Wp.ParagraphPropertiesDefault()));
             main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
             main.Document = new Wp.Document(new Wp.Body(new Wp.Paragraph(content), new Wp.SectionProperties()));
         }

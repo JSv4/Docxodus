@@ -37,7 +37,8 @@ internal sealed record IrStyle(string Id, string? Name, string? BasedOn, string 
 /// <summary>
 /// Resolved style registry: every <c>w:style</c> keyed by its style id, the default paragraph
 /// style id (the first <c>w:style type="paragraph" w:default="1"</c>), and deep clones of the
-/// document defaults (<c>w:docDefaults/w:pPrDefault/w:pPr</c> and <c>w:rPrDefault/w:rPr</c>).
+/// document defaults (<c>w:docDefaults/w:pPrDefault/w:pPr</c>, as
+/// <see cref="WordStockDocDefaults.ParagraphProperties"/> reads it, and <c>w:rPrDefault/w:rPr</c>).
 /// </summary>
 internal sealed record IrStyleRegistry(
     IReadOnlyDictionary<string, IrStyle> Styles,
@@ -48,7 +49,7 @@ internal sealed record IrStyleRegistry(
     public Uri? PartUri { get; init; }
 
     public static readonly IrStyleRegistry Empty =
-        new(new Dictionary<string, IrStyle>(), null, null, null);
+        new(new Dictionary<string, IrStyle>(), null, WordStockDocDefaults.ParagraphProperties(null), null);
 }
 
 /// <summary>

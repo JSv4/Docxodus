@@ -1,4 +1,4 @@
-# OOXML Corner Cases
+| Flags on, no values and no `w:pPrDefault` | 0 before, 8pt after | 0 → 8pt after (#1652) |# OOXML Corner Cases
 
 ## Independent stories in DrawingML groups (#1527)
 
@@ -7298,16 +7298,44 @@ archive every slice a revised style owns, as Word's own output does.
 ### A styles part without `w:pPrDefault` is not single-spaced in Word
 
 Word lays out `no-spacing` at 8 pt after and 1.16 lines (y 72, 96, 120), and writes
-`w:after="160" w:line="278"` into the compare result. The same happens with no
-`w:docDefaults` at all, with no compatibility setting, and in compatibility mode 14. An
-empty `<w:pPrDefault/>` or `<w:pPrDefault><w:pPr/></w:pPrDefault>` gives 0 / single. Docxodus
-reads a missing `w:pPrDefault` as 0 / single, as the schema's defaults say, so the wide →
-no-spacing redline accepts to single spacing in Word while Word shows the revised document
-at 8 pt / 1.16. Likewise no-spacing → wide rejects to single spacing in Word (before this
-change Word's Reject All left the revised spacing in place). Those values match Word's
-blank-document defaults (`WordStockDocDefaults.ModernXml`), and may come from the
-installation's Normal template. This is a rendering question independent of comparison and is
-not changed here; it is tracked as #1652.
+`w:after="160" w:line="278"` into the compare result. An element that is present, even empty, is
+taken as written. Measured in Word 2024 (16.0.20326), three one-line 12 pt Times New Roman
+paragraphs, `Range.Information(wdVerticalPositionRelativeToPage)`:
+
+| `word/styles.xml` | Word: after / line | Paragraph tops (pt) |
+| --- | --- | --- |
+| `w:docDefaults` with only `w:rPrDefault` | 8 pt / 1.16 | 72, 96, 120 |
+| `<w:docDefaults/>`, no `w:docDefaults`, an empty `w:styles`, or no styles part | 8 pt / 1.16 | 72, 96, 120 |
+| the same in compatibility mode 14, with no `w:compat`, or with a Calibri-era theme part | 8 pt / 1.16 | 72, 96, 120 |
+| missing default, `Normal` sets only `w:after="0"` | 0 / 1.16 | 72, 88, 104 |
+| missing default, `Normal` sets only `w:line="240"` | 8 pt / single | 72, 94, 115.5 |
+| `<w:pPrDefault/>`, `<w:pPrDefault><w:pPr/></w:pPrDefault>`, or a `w:pPr` holding only `w:jc` | 0 / single | 72, 86, 99.5 |
+| explicit `w:after="0" w:line="240"` (control) | 0 / single | 72, 86, 99.5 |
+
+So Word supplies `<w:spacing w:after="160" w:line="278" w:lineRule="auto"/>` as the paragraph
+default exactly when `w:pPrDefault` is missing, and styles and direct formatting override it one
+attribute at a time like any declared default. The line value is 278 with or without a theme part
+(Word's *compare* backfill writes 259 for a themed original; its layout does not).
+
+The values are built into Word, not read from the installation's Normal template. The same
+documents measured the same in a Word instance started with `/a` (no Normal template or add-ins),
+and in an instance whose user-templates folder held a copy of `Normal.dotm` changed to
+`w:after="400" w:line="480"` and 20 pt text: a new blank document there took the changed
+defaults (20 pt after, double spacing), and the probes still laid out at 8 pt / 1.16.
+
+Docxodus read a missing `w:pPrDefault` as 0 / single, as the schema's defaults say, so every
+paragraph of such a document sat closer together than in Word, and a redline whose revised side
+lacked the default recorded single spacing that Word then showed on Accept All. Every reader of
+the paragraph defaults now goes through `WordStockDocDefaults.ParagraphProperties`, which returns
+the declared `w:pPr` when `w:pPrDefault` is present and Word's spacing when it is not:
+`FormattingAssembler` (rendering, pagination, style introspection), `IrReader` (the comparison's
+effective formats) and `IrMarkupRenderer` (the styles a redline records). Tests:
+`MissingParagraphDefaultTests`.
+
+Not changed: a missing `w:rPrDefault` is analogous in Word. The same probes with `w:pPrDefault`
+but no `w:rPrDefault` set their text in the theme's minor font at 12 pt with 1 pt kerning (Aptos
+with no theme part, Calibri with a Calibri-era theme), where an empty `<w:rPrDefault/>` gives
+Times New Roman 10 pt. Docxodus reads both as Times New Roman 10 pt.
 
 ### Code and tests
 

@@ -1,5 +1,7 @@
 #nullable enable
 
+using System.Xml.Linq;
+
 namespace Docxodus;
 
 /// <summary>
@@ -37,4 +39,22 @@ internal static class WordStockDocDefaults
         "</w:rPr></w:rPrDefault>" +
         "<w:pPrDefault><w:pPr><w:spacing w:after=\"160\" w:line=\"259\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault>" +
         "</w:docDefaults>";
+
+    private static readonly XElement MissingParagraphProperties = XElement.Parse(ModernXml)
+        .Element(W.pPrDefault)!.Element(W.pPr)!;
+
+    /// <summary>
+    /// A styles part's document-default paragraph properties as Word applies them. Word reads a
+    /// <c>w:pPrDefault</c> that is present, even empty, as written. When the element is missing (with
+    /// or without <c>w:docDefaults</c>, or with no styles part at all) Word 2024 supplies its own
+    /// 8 pt after and 1.16 lines, whatever the theme, compatibility mode or Normal template
+    /// (issue #1652). Every reader of the paragraph defaults goes through here. The result is a
+    /// detached copy, or null for a present <c>w:pPrDefault</c> without a <c>w:pPr</c>.
+    /// </summary>
+    internal static XElement? ParagraphProperties(XElement? stylesRoot)
+    {
+        var declared = stylesRoot?.Element(W.docDefaults)?.Element(W.pPrDefault);
+        var properties = declared is null ? MissingParagraphProperties : declared.Element(W.pPr);
+        return properties is null ? null : new XElement(properties);
+    }
 }
