@@ -440,19 +440,15 @@ internal static class RevisionOps
 
                 if (group.Family == RevisionFamily.CellDelete)
                 {
-                    var deleted = cells.Select(u => u.MarkedCell!).ToHashSet();
-                    bool invalidRow = deleted.GroupBy(c => c.Parent).Any(byRow =>
-                    {
-                        var rowCells = byRow.Key?.Elements(W.tc).ToList() ?? new List<XElement>();
-                        int firstDeleted = rowCells.FindIndex(deleted.Contains);
-                        return firstDeleted == 0 || rowCells.All(deleted.Contains);
-                    });
-                    if (invalidRow)
+                    // Another revision may delete the row's other cells, so only a cell that no
+                    // revision deletes is certain to be there to take the columns.
+                    if (cells.Select(u => RowOf(u.MarkedCell)).Any(row => RowCells(row)
+                            .All(cell => cell.Elements(W.tcPr).Elements(W.cellDel).Any())))
                     {
                         group.ResolutionStatus = RevisionResolutionStatus.Malformed;
                         group.Diagnostic = new RevisionDiagnostic(
                             "unabsorbable_cell_deletion",
-                            "A deleted-cell run has no surviving predecessor that can absorb its grid columns.");
+                            "Every cell of a row is deleted, so no surviving cell can absorb its grid columns.");
                         continue;
                     }
                 }
@@ -460,13 +456,7 @@ internal static class RevisionOps
                 if (group.Family == RevisionFamily.CellInsert)
                 {
                     var inserted = cells.Select(unit => unit.MarkedCell!).ToHashSet();
-                    bool emptiesRow = inserted.GroupBy(cell => cell.Parent).Any(byRow =>
-                    {
-                        var rowCells = byRow.Key?.Elements(W.tc).ToList()
-                            ?? new List<XElement>();
-                        return rowCells.Count == 0 || rowCells.All(inserted.Contains);
-                    });
-                    if (emptiesRow)
+                    if (inserted.Select(RowOf).Any(row => RowCells(row).All(inserted.Contains)))
                     {
                         group.ResolutionStatus = RevisionResolutionStatus.Malformed;
                         group.Diagnostic = new RevisionDiagnostic(
@@ -853,7 +843,7 @@ internal static class RevisionOps
                     Author = AuthorOf(child),
                     Date = (string?)child.Attribute(W.date),
                     MarkedCell = cell,
-                    MarkedRow = cell?.Parent,
+                    MarkedRow = RowOf(cell),
                     Table = table,
                     Wid = WidOf(child),
                     NativeId = (string?)child.Attribute(W.id),
@@ -1373,18 +1363,26 @@ internal static class RevisionOps
         return node as XElement;
     }
 
+    /// <summary>The row a cell belongs to. A cell may sit in content-control or custom-XML
+    /// wrappers inside its row (<c>w:tr/w:sdt/w:sdtContent/w:tc</c>), so its parent is not always
+    /// the row; every row-geometry question goes through this and <see cref="RowCells"/>.</summary>
+    private static XElement? RowOf(XElement? cell) => cell?.Ancestors(W.tr).FirstOrDefault();
+
+    private static IEnumerable<XElement> RowCells(XElement? row) =>
+        row is null ? Enumerable.Empty<XElement>() : WordprocessingMLUtil.RowCells(row);
+
     private static bool CellsStructurallyAdjacent(RevisionUnit left, RevisionUnit right)
     {
         var leftCell = left.MarkedCell;
         var rightCell = right.MarkedCell;
-        var leftRow = leftCell?.Parent;
-        var rightRow = rightCell?.Parent;
-        if (leftCell is null || rightCell is null || leftRow?.Name != W.tr
-            || rightRow?.Name != W.tr || left.Table != right.Table)
+        var leftRow = RowOf(leftCell);
+        var rightRow = RowOf(rightCell);
+        if (leftCell is null || rightCell is null || leftRow is null
+            || rightRow is null || left.Table != right.Table)
             return false;
 
-        int leftColumn = leftRow.Elements(W.tc).TakeWhile(cell => cell != leftCell).Count();
-        int rightColumn = rightRow.Elements(W.tc).TakeWhile(cell => cell != rightCell).Count();
+        int leftColumn = RowCells(leftRow).TakeWhile(cell => cell != leftCell).Count();
+        int rightColumn = RowCells(rightRow).TakeWhile(cell => cell != rightCell).Count();
         if (leftRow == rightRow) return Math.Abs(leftColumn - rightColumn) == 1;
         return leftColumn == rightColumn
             && (OnlyIgnorableBetween(leftRow, rightRow)
@@ -2568,9 +2566,7 @@ internal static class RevisionOps
                 foreach (var cell in cellUnits.Select(u => u.MarkedCell)
                     .Where(c => c is not null).Select(c => c!).Distinct().ToList())
                 {
-                    if (Detached(cell)) continue;
-                    cell.Remove();
-                    removedElements.Add(cell);
+                    if (!Detached(cell)) DetachCell(cell, removedElements);
                 }
             }
         }
@@ -2643,49 +2639,57 @@ internal static class RevisionOps
     }
 
     /// <summary>
-    /// Accept cell deletion using grid units, not physical-cell count. Consecutive
-    /// deleted cells contribute the sum of their pre-existing gridSpan values to the
-    /// nearest surviving predecessor.
+    /// Accept cell deletion using grid units, not physical-cell count. As in Word, a deleted
+    /// cell's grid columns go to the nearest surviving cell before it, and the deleted cells
+    /// that start a row go to the first surviving cell after them.
     /// </summary>
     private static void AcceptDeletedCells(
         IReadOnlyList<RevisionUnit> units, List<XElement> removedElements)
     {
         var deleted = units.Select(u => u.MarkedCell).Where(c => c is not null)
             .Select(c => c!).ToHashSet();
-        foreach (var row in deleted.Select(c => c.Parent).Where(r => r is not null)
-            .Select(r => r!).Distinct().ToList())
+        foreach (var row in deleted.Select(RowOf).OfType<XElement>().Distinct().ToList())
         {
-            var cells = row.Elements(W.tc).ToList();
-            XElement? predecessor = null;
-            int pendingSpan = 0;
-            foreach (var cell in cells)
+            XElement? survivor = null;
+            var leading = new List<XElement>();
+            foreach (var cell in RowCells(row).ToList())
             {
-                if (deleted.Contains(cell))
+                if (!deleted.Contains(cell))
                 {
-                    pendingSpan += CellGridSpan(cell);
-                    cell.Remove();
-                    removedElements.Add(cell);
+                    foreach (var gone in leading) AbsorbCell(cell, gone);
+                    leading.Clear();
+                    survivor = cell;
                     continue;
                 }
 
-                if (pendingSpan > 0)
-                {
-                    if (predecessor is null)
-                        throw new InvalidOperationException(
-                            "A deleted-cell run has no surviving predecessor to absorb its grid columns.");
-                    SetCellGridSpan(predecessor, CellGridSpan(predecessor) + pendingSpan);
-                    pendingSpan = 0;
-                }
-                predecessor = cell;
+                if (survivor is null) leading.Add(cell);
+                else AbsorbCell(survivor, cell);
+                DetachCell(cell, removedElements);
             }
-            if (pendingSpan > 0)
-            {
-                if (predecessor is null)
-                    throw new InvalidOperationException(
-                        "Resolving the cell deletion would remove every cell in a row.");
-                SetCellGridSpan(predecessor, CellGridSpan(predecessor) + pendingSpan);
-            }
+            if (survivor is null)
+                throw new InvalidOperationException(
+                    "Resolving the cell deletion would remove every cell in a row.");
         }
+    }
+
+    /// <summary>Gives a surviving cell a deleted cell's grid columns and, as Word does, its width.</summary>
+    private static void AbsorbCell(XElement survivor, XElement gone)
+    {
+        var width = TableGridModel.CombinedTwipWidth(new[] { survivor, gone });
+        SetCellGridSpan(survivor, CellGridSpan(survivor) + CellGridSpan(gone));
+        if (width is not null) survivor.Element(W.tcPr)!.Element(W.tcW)!.SetAttributeValue(W._w, width);
+    }
+
+    /// <summary>Removes a cell from its row, with any content control or custom-XML wrapper that
+    /// held no other cell: a wrapper left without a cell is not valid row content. The cell is
+    /// what is reported removed, since callers find its part through the revision's own cell.</summary>
+    private static void DetachCell(XElement cell, List<XElement> removedElements)
+    {
+        var outermost = cell;
+        while (outermost.Parent is { } parent && parent.Name != W.tr && RowCells(parent).All(other => other == cell))
+            outermost = parent;
+        outermost.Remove();
+        removedElements.Add(cell);
     }
 
     private static int CellGridSpan(XElement cell) =>
