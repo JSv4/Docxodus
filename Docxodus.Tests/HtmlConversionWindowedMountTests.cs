@@ -310,6 +310,36 @@ public class HtmlConversionWindowedMountTests
         }
     }
 
+    /// <summary>Paragraphs that differ only in <c>w:between</c> share a box, and a bordered paragraph
+    /// that starts a page starts a new one (issue #1692). The plan must cut its groups where the
+    /// renderer cuts its boxes.</summary>
+    [Fact]
+    public void WM005_PlanGroupsFollowBetweenAndPageStartsLikeTheRenderer()
+    {
+        static Wp.Paragraph Boxed(string text, bool between = false, bool startsPage = false) => new(
+            new Wp.ParagraphProperties(
+                startsPage ? new Wp.PageBreakBefore() : null,
+                new Wp.ParagraphBorders(new[] { new Wp.TopBorder { Val = Wp.BorderValues.Single, Size = 8 } as DocumentFormat.OpenXml.OpenXmlElement,
+                    new Wp.BottomBorder { Val = Wp.BorderValues.Single, Size = 8 } }
+                    .Concat(between ? new[] { new Wp.BetweenBorder { Val = Wp.BorderValues.Single, Size = 8 } as DocumentFormat.OpenXml.OpenXmlElement } : []))),
+            new Wp.Run(new Wp.Text(text)));
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+            doc.AddMainDocumentPart().Document = new Wp.Document(new Wp.Body(
+                Boxed("ruled"), Boxed("plain box", between: true), Boxed("starts a page", startsPage: true), Boxed("follows")));
+        using var session = new DocxSession(ms.ToArray());
+
+        var plan = session.ListBlocks().Body;
+        Assert.Equal(new[] { 0, 0, 1, 1 }, plan.Select(unit => unit.Group - plan[0].Group));
+
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("boxes.docx", ms.ToArray()), new WmlToHtmlConverterSettings());
+        var boxes = new[] { "ruled", "plain box", "starts a page", "follows" }
+            .Select(text => html.Descendants().Single(e => e.Name.LocalName == "p" && e.Value == text).Parent).ToList();
+        Assert.Same(boxes[0], boxes[1]);
+        Assert.NotSame(boxes[1], boxes[2]);
+        Assert.Same(boxes[2], boxes[3]);
+    }
+
     private static XElement Parse(string html)
     {
         if (html.TrimStart().StartsWith('{')) throw new Xunit.Sdk.XunitException(html);

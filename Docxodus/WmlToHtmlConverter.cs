@@ -11184,14 +11184,15 @@ namespace Docxodus
         /// when its <c>w:val</c> is absent, <c>"nil"</c>, or <c>"none"</c>. Word renders no border for
         /// an all-nil pBdr, so for grouping purposes it must be treated as "no border".
         /// </summary>
-        private static bool HasVisibleBorder(XElement pBdr)
-        {
-            return pBdr.Elements().Any(side =>
-            {
-                var val = (string?)side.Attribute(W.val);
-                return val != null && val != "nil" && val != "none";
-            });
-        }
+        private static bool HasVisibleBorder(XElement pBdr) => pBdr.Elements().Any(IsVisibleBorder);
+
+        private static bool IsVisibleBorder(XElement? side) =>
+            (string?)side?.Attribute(W.val) is { } val && val != "nil" && val != "none";
+
+        /// <summary>The rule a paragraph draws below itself when the next paragraph shares its border
+        /// box (<c>w:between</c>), or null.</summary>
+        private static XElement? BetweenBorder(XElement paragraph) =>
+            paragraph.Element(W.pPr)?.Element(W.pBdr)?.Element(W.between) is { } between && IsVisibleBorder(between) ? between : null;
 
         /// <summary>
         /// The key adjacent body blocks are grouped by before they render: blocks with the same
@@ -11205,6 +11206,8 @@ namespace Docxodus
         /// windowed mount never cuts a window through a border box; it keys on the paragraph's
         /// style-resolved properties, because by the time this runs the formatting assembler has
         /// folded the style chain into <c>w:pPr</c> and a border a style contributes groups too.
+        /// <c>w:between</c> is no part of the key: Word keeps paragraphs that differ only in it in one
+        /// box, and each draws its own rule below itself (issue #1692).
         /// </summary>
         internal static string BorderGroupKey(XElement e) => BorderGroupKey(e, e.Element(W.pPr));
 
@@ -11224,10 +11227,15 @@ namespace Docxodus
                 // direction joins the key only then: paragraphs whose boxes coincide still join, with
                 // between borders, as LibreOffice joins them (issue #1155).
                 var direction = HasBidi(pPr) && !BorderBoxIsMirrorSymmetric(ind) ? "|rtl" : string.Empty;
-                return WithoutUnids(pBdr) + indStr + direction;
+                return WithoutUnids(pBdr, W.between) + indStr + direction;
             }
             return e.Name == W.tbl ? "table" : string.Empty;
         }
+
+        /// <summary>Whether a bordered paragraph with these properties starts a box of its own whatever
+        /// precedes it: one that starts a page does, because Word closes the box before the page break
+        /// (issue #1692). The render plan splits its groups by the same rule.</summary>
+        internal static bool StartsBorderBox(XElement? pPr) => IsOnOffPropertyEnabled(pPr?.Element(W.pageBreakBefore));
 
         private static bool HasBidi(XElement pPr) =>
             pPr.Elements(W.bidi).Any(b => b.Attribute(W.val) == null || b.Attribute(W.val).ToBoolean() == true);
@@ -11248,10 +11256,11 @@ namespace Docxodus
         /// removed. Two paragraphs with the same borders must key alike whether or not a session
         /// has stamped their property elements — otherwise a document rendered from a session
         /// never groups its boxed paragraphs while the same bytes rendered cold do.</summary>
-        private static string WithoutUnids(XElement element)
+        private static string WithoutUnids(XElement element, XName? ignored = null)
         {
             var copy = new XElement(element);
             copy.DescendantsAndSelf().Attributes(PtOpenXml.Unid).Remove();
+            copy.Elements(ignored).Remove();
             return copy.ToXmlString(SaveOptions.DisableFormatting);
         }
 
@@ -11384,12 +11393,25 @@ namespace Docxodus
 
         private static object CreateBorderDivsCore(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements)
         {
-            return elements.GroupAdjacent(BorderGroupKey)
+            // A paragraph's neighbours for contextual spacing are its siblings, whichever box they are in.
+            var siblings = elements.ToList();
+            var next = 0;
+            var box = 0;
+            string Box(XElement e)
+            {
+                var key = BorderGroupKey(e);
+                if (key.Length == 0 || key == "table") return key;
+                if (StartsBorderBox(e.Element(W.pPr))) box++;
+                return key + "|" + box;
+            }
+            return siblings.GroupAdjacent(Box)
                 .Select(g =>
                 {
+                    var first = next;
+                    next += g.Count();
                     if (g.Key == string.Empty)
                     {
-                        return (object) ApplyContextualSpacing(wordDoc, settings, g, 0m);
+                        return (object) ApplyContextualSpacing(wordDoc, settings, siblings, first, next, 0m);
                     }
                     if (g.Key == "table")
                     {
@@ -11434,7 +11456,7 @@ namespace Docxodus
 
                     // Materialize the (lazy) paragraph projections once, so the adjusted elements
                     // are the ones the wrapper holds.
-                    var content = ApplyContextualSpacing(wordDoc, settings, g, currentMarginLeft).ToList();
+                    var content = ApplyContextualSpacing(wordDoc, settings, siblings, first, next, currentMarginLeft).ToList();
                     if (trailingIndentInPoints > 0m)
                     {
                         // Each paragraph wrote its trailing indent on its own direction's side.
@@ -11449,13 +11471,55 @@ namespace Docxodus
 
                     // Word draws the box around the text and w:space only: the group's space before
                     // and after lie outside it, where they meet the neighbours' spacing (issue #1677).
-                    var div = new XElement(Xhtml.div, content);
+                    // Each paragraph's first and last element in the box: a paragraph a page or column
+                    // break splits renders as several.
+                    var div = new XElement(Xhtml.div);
+                    var members = g.Zip(content, (source, html) =>
+                    {
+                        var preceding = div.LastNode;
+                        div.Add(html);
+                        return (Source: source, First: (preceding == null ? div.FirstNode : preceding.NextNode) as XElement, Last: div.LastNode as XElement);
+                    }).Where(member => StyleOf(member.First) != null && StyleOf(member.Last) != null).ToList();
                     MoveOuterSpacing(div, style, "margin-top");
                     MoveOuterSpacing(div, style, "margin-bottom");
                     if (RecordExactParagraphBorderWidths(pBdr, style))
                         div.Add(new XAttribute(ExactParagraphBorderAttribute, "true"));
+
+                    // The box stands for its paragraphs wherever a reader takes the block as a whole
+                    // (issue #1692): the paginator reads a page start from the first one and a keep
+                    // from the last, and shading they all share fills the box to its border. Word
+                    // leaves the w:space band of a left border unshaded unless the box has a right
+                    // border too.
+                    if (members.Count > 0)
+                    {
+                        div.Add(members[0].First!.Attribute("data-page-break-before"), members[^1].Last!.Attribute("data-keep-with-next"));
+                        var fills = div.Elements().Select(element => StyleOf(element)?.GetValueOrDefault("background")).Distinct().ToList();
+                        if (fills.Count == 1 && fills[0] is { } fill && (!IsVisibleBorder(pBdr!.Element(W.left)) || IsVisibleBorder(pBdr.Element(W.right))))
+                            (style["background"], style["background-clip"]) = (fill, "padding-box");
+                    }
+                    // Each paragraph's w:between is the rule below it. It is drawn as the top border
+                    // of the next paragraph, which takes it to the next page when the box splits
+                    // there, as Word does. The rule's w:space lies on both of its sides, and the
+                    // rule runs through the box's own w:space to its side borders.
+                    foreach (var (upper, lower) in members.Zip(members.Skip(1)))
+                    {
+                        var lowerStyle = StyleOf(lower.First)!;
+                        if (BetweenBorder(upper.Source) is { } rule)
+                        {
+                            GenerateBorderStyle(rule.Parent, W.between, lowerStyle, BorderType.Paragraph);
+                            if (RecordExactParagraphBorderWidth(rule, "top", lowerStyle))
+                                lower.First!.SetAttributeValue(ExactParagraphBorderAttribute, "true");
+                            foreach (var side in new[] { "left", "right" })
+                                if (style.GetValueOrDefault("padding-" + side, "0") is var space && space != "0")
+                                    (lowerStyle["margin-" + side], lowerStyle["padding-" + side]) = ("-" + space, space);
+                        }
+                        if (BetweenBorder(lower.Source) is { } below)
+                            StyleOf(upper.Last)!["padding-bottom"] = PointsCss((decimal?)below.Attribute(W.space) ?? 0m);
+                    }
                     div.AddAnnotation(style);
                     return div;
+
+                    static Dictionary<string, string>? StyleOf(XElement? html) => html?.Annotation<Dictionary<string, string>>();
                 })
             .ToList();
         }
@@ -11486,8 +11550,10 @@ namespace Docxodus
         internal static bool HoldsBlock(XElement element) =>
             element.DescendantsAndSelf().Any(d => d.Name == W.p || d.Name == W.tbl);
 
+        /// <summary>Renders <paramref name="items"/> from <paramref name="first"/> up to
+        /// <paramref name="end"/>, each with the spacing its neighbours in the whole list leave it.</summary>
         private static IEnumerable<object?> ApplyContextualSpacing(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
-            IEnumerable<XElement> elements, decimal currentMarginLeft)
+            IReadOnlyList<XElement> items, int first, int end, decimal currentMarginLeft)
         {
             // Each enabled paragraph removes its own spacing beside a paragraph of the same style
             // (#1553), and the after-space it gives up still absorbs that much of the next
@@ -11495,7 +11561,6 @@ namespace Docxodus
             // block, such as a bookmark, does not separate the two. List membership alone removes
             // nothing (#1151). FormattingAssembler records the resolved default style when
             // w:pStyle is omitted.
-            var items = elements.ToList();
             string? Style(XElement e) => (string?)e.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val)
                 ?? (string?)e.Attribute(PtOpenXml.StyleName);
             bool Contextual(XElement e) => IsOnOffPropertyEnabled(e.Element(W.pPr)?.Element(W.contextualSpacing));
@@ -11506,8 +11571,9 @@ namespace Docxodus
                         return items[j].Name == W.p && Style(items[j]) == Style(items[i]) ? items[j] : null;
                 return null;
             }
-            return items.Select((e, i) =>
+            return Enumerable.Range(first, end - first).Select(i =>
             {
+                var e = items[i];
                 if (e.Name != W.p) return ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft);
                 var previous = Beside(i, -1);
                 var absorbed = previous == null ? 0 : Contextual(e) ? int.MaxValue : Contextual(previous)
@@ -11582,16 +11648,18 @@ namespace Docxodus
         {
             var recorded = false;
             foreach (var side in new[] { W.top, W.right, W.bottom, W.left })
-            {
-                var border = pBdr?.Element(side);
-                var type = (string?)border?.Attribute(W.val);
-                var sz = WordprocessingMLUtil.BorderSize(border);
-                if (type is not ("single" or "dashed") || sz <= 0)
-                    continue;
-                style["--docx-border-" + side.LocalName + "-width"] = PointsCss(Math.Min(96, Math.Max(2, sz)) / 8m);
-                recorded = true;
-            }
+                recorded |= RecordExactParagraphBorderWidth(pBdr?.Element(side), side.LocalName, style);
             return recorded;
+        }
+
+        private static bool RecordExactParagraphBorderWidth(XElement? border, string side, Dictionary<string, string> style)
+        {
+            var type = (string?)border?.Attribute(W.val);
+            var sz = WordprocessingMLUtil.BorderSize(border);
+            if (type is not ("single" or "dashed") || sz <= 0)
+                return false;
+            style["--docx-border-" + side + "-width"] = PointsCss(Math.Min(96, Math.Max(2, sz)) / 8m);
+            return true;
         }
 
         /// <summary>Points as CSS at the four decimals the format keeps; a value that rounds to
@@ -11653,25 +11721,18 @@ namespace Docxodus
 
         private static void GenerateBorderStyle(XElement? pBdr, XName sideXName, Dictionary<string, string> style, BorderType borderType)
         {
-            string whichSide;
-            if (sideXName == W.top)
-                whichSide = "top";
-            else if (sideXName == W.right)
-                whichSide = "right";
-            else if (sideXName == W.bottom)
-                whichSide = "bottom";
-            else
-                whichSide = "left";
+            // A paragraph's w:between is the top border of the paragraph below it.
+            var whichSide = sideXName == W.between ? "top" : sideXName.LocalName;
             if (pBdr == null)
             {
-                style.Add("border-" + whichSide, "none");
+                style["border-" + whichSide] = "none";
                 return;
             }
 
             var side = pBdr.Element(sideXName);
             if (side == null)
             {
-                style.Add("border-" + whichSide, "none");
+                style["border-" + whichSide] = "none";
                 return;
             }
             // A cell's padding is its margin, which ProcessTableCell sets; w:space spaces only a
@@ -11679,12 +11740,12 @@ namespace Docxodus
             var type = (string?)side.Attribute(W.val);
             if (type == "nil" || type == "none")
             {
-                style.Add("border-" + whichSide + "-style", "none");
+                style["border-" + whichSide + "-style"] = "none";
 
                 var space = (decimal?)side.Attribute(W.space) ?? 0;
                 if (borderType != BorderType.Cell)
-                    style.Add("padding-" + whichSide,
-                        space == 0 ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", space));
+                    style["padding-" + whichSide] =
+                        space == 0 ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", space);
             }
             else
             {
@@ -11717,10 +11778,10 @@ namespace Docxodus
                 var borderWidth = string.Format(NumberFormatInfo.InvariantInfo,
                     borderType == BorderType.Paragraph ? "{0:0.##}pt" : "{0:0.0}pt", borderWidthInPoints);
 
-                style.Add("border-" + whichSide, borderStyle + " " + color + " " + borderWidth);
+                style["border-" + whichSide] = borderStyle + " " + color + " " + borderWidth;
                 if (borderType != BorderType.Cell)
-                    style.Add("padding-" + whichSide,
-                        space == 0 ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", space));
+                    style["padding-" + whichSide] =
+                        space == 0 ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", space);
             }
         }
 
@@ -12773,7 +12834,7 @@ namespace Docxodus
                     // paragraphs. Converting them one at a time retained inter-paragraph space
                     // that Word suppresses, pushing visible text below a fixed box's clip.
                     var projected = new XElement(Xhtml.span,
-                        ApplyContextualSpacing(wordDoc, settings!, group, 0m));
+                        ApplyContextualSpacing(wordDoc, settings!, group.ToList(), 0, group.Count(), 0m));
                     var paragraphs = projected.Elements().ToList();
                     projected.RemoveNodes(); // Detach without losing the style annotations.
                     foreach (var paragraph in paragraphs)

@@ -704,10 +704,10 @@ public sealed partial class DocxSession : IDisposable
                     }
                     // The renderer keys on assembled properties, so a border the style chain
                     // contributes must count here too.
-                    var key = WmlToHtmlConverter.BorderGroupKey(el, el.Name == W.p
-                        ? FormattingAssembler.ResolveEffectiveParagraphProperties(LiveDocument, el)
-                        : null);
-                    if (key.Length == 0 || key == "table" || !string.Equals(key, previousKey, StringComparison.Ordinal))
+                    var pPr = el.Name == W.p ? FormattingAssembler.ResolveEffectiveParagraphProperties(LiveDocument, el) : null;
+                    var key = WmlToHtmlConverter.BorderGroupKey(el, pPr);
+                    if (key.Length == 0 || key == "table" || !string.Equals(key, previousKey, StringComparison.Ordinal)
+                        || WmlToHtmlConverter.StartsBorderBox(pPr))
                         group++;
                     previousKey = key;
                     var unid = (string?)el.Attribute(PtOpenXml.Unid);

@@ -4547,11 +4547,16 @@ export class PaginationEngine {
       // line/hanging indent. Keep the side margin so paragraph alignment remains.
       fragment.style.setProperty("margin-top", "0", "important");
       fragment.style.setProperty("text-indent", "0", "important");
+      // Nor does it repeat the rule a bordered box draws above the paragraph (`w:between`).
+      fragment.style.setProperty("border-top", "none", "important");
+      fragment.style.setProperty("padding-top", "0", "important");
+      omitPaintedBorderSide(fragment, "top");
     }
     if (!isFinalFragment) {
       // The original bottom spacing belongs after the complete paragraph, not
       // between synthetic page fragments.
       fragment.style.setProperty("margin-bottom", "0", "important");
+      fragment.style.setProperty("padding-bottom", "0", "important");
       const mixedLine = Array.from(fragment.querySelectorAll<HTMLElement>('[data-docx-line-metric]')).at(-1);
       if (mixedLine?.dataset.docxLineMetric === 'auto' && isMixedLineMetric(mixedLine)) {
         mixedLine.style.height = `${mixedLine.dataset.docxLineNatural}px`;
@@ -4801,7 +4806,8 @@ export class PaginationEngine {
     availableHeightPt: number,
     effectiveMarginTopPt: number,
   ): MeasuredBlock[] | null {
-    if (!this.fragmentParagraphs || block.keepWithNext || block.keepLines || block.pageBreakBefore
+    // A box's page start is spent once it is placed, and its keep belongs to its last paragraph.
+    if (!this.fragmentParagraphs || block.keepLines
       || block.isPageBreak || block.element.querySelector("[data-footnote-id]")) return null;
 
     // Continuations are detached clones: lay the group out in the staging context first.
@@ -4816,10 +4822,10 @@ export class PaginationEngine {
       const split = this.splitParagraphGroup(group, head => effectiveMarginTopPt
         + this.measureElement(head, dims, block.sectionIndex).heightPt <= availableHeightPt, { bodyParagraph: true });
       if (!split) return null;
-      return [split.head, split.tail].map(element => ({
+      return [split.head, split.tail].map((element, index) => ({
         ...this.measureElement(element, dims, block.sectionIndex),
         element,
-        keepWithNext: false,
+        keepWithNext: index === 1 && block.keepWithNext,
         keepLines: false,
         pageBreakBefore: false,
         isPageBreak: false,

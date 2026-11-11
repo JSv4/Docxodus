@@ -1,0 +1,210 @@
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
+using Xunit;
+
+namespace Docxodus.Tests;
+
+// Issue #1692: four things Word 2024 does with the box around bordered paragraphs. It draws each
+// paragraph's w:between below it, applies contextual spacing across the edge of the box, honours a
+// page start or a keep on a bordered paragraph, and fills the box with its paragraphs' shading.
+public class BorderedParagraphBoxTests
+{
+    private const string W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    private static string Border(string sides) => "<w:pBdr>" + string.Concat(
+        new[] { "top", "left", "bottom", "right", "between" }.Where(side => sides.Split(' ').Contains(side)).Select(side =>
+            $"<w:{side} w:val=\"single\" w:sz=\"4\" w:space=\"{(side is "left" or "right" ? 4 : 1)}\" w:color=\"000000\"/>")) + "</w:pBdr>";
+
+    private const string Box = "top left bottom right";
+    private const string Ruled = "top left bottom between right";
+    private const string Fill = "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"CCCCCC\"/>";
+    private const string Contextual = "<w:contextualSpacing/>";
+
+    // Properties in schema order: keep, border, shading, spacing, contextual spacing.
+    private static string Paragraph(string text, string sides = "", string keep = "", string shading = "", string after = "",
+        int space = 280, string style = "") =>
+        $"<w:p><w:pPr>{(style == "" ? "" : $"<w:pStyle w:val=\"{style}\"/>")}{keep}{(sides == "" ? "" : Border(sides))}{shading}"
+        + $"<w:spacing w:before=\"{space}\" w:after=\"{space}\"/>{after}</w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>";
+
+    // Literal original paragraphs; no external document or template is read.
+    private static XElement Convert(params string[] paragraphs)
+    {
+        using var stream = new MemoryStream();
+        using (var document = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = document.AddMainDocumentPart();
+            Feed(main, $"<w:document xmlns:w=\"{W}\"><w:body>{string.Concat(paragraphs)}<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/>"
+                + "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\"/></w:sectPr></w:body></w:document>");
+            Feed(main.AddNewPart<StyleDefinitionsPart>(), $"<w:styles xmlns:w=\"{W}\"><w:docDefaults><w:pPrDefault><w:pPr>"
+                + "<w:spacing w:before=\"0\" w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault></w:docDefaults>"
+                + "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>"
+                + "<w:style w:type=\"paragraph\" w:styleId=\"Other\"><w:name w:val=\"Other\"/><w:basedOn w:val=\"Normal\"/></w:style></w:styles>");
+        }
+        return WmlToHtmlConverter.ConvertToHtml(new WmlDocument("Sedge.docx", stream.ToArray()),
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, RenderPagination = PaginationMode.Paginated });
+
+        static void Feed(OpenXmlPart part, string xml)
+        {
+            using var content = new MemoryStream(Encoding.UTF8.GetBytes(xml));
+            part.FeedData(content);
+        }
+    }
+
+    private static Dictionary<string, string> Style(XElement element) =>
+        ((string?)element.Attribute("style") ?? "").Split(';', System.StringSplitOptions.RemoveEmptyEntries)
+            .Select(d => d.Split(':', 2)).ToDictionary(d => d[0].Trim(), d => d[1].Trim());
+
+    private static string Value(XElement element, string property) => Style(element).GetValueOrDefault(property, "unset");
+
+    private static XElement Block(XElement html, string text) =>
+        html.Descendants().Single(e => e.Name.LocalName == "p" && e.Value == text);
+
+    /// <summary>The paragraph's box, or the paragraph itself when nothing wraps it.</summary>
+    private static XElement BoxOf(XElement html, string text) =>
+        Block(html, text).Parent is { } parent && Style(parent).Keys.Any(key => key.StartsWith("border-")) ? parent : Block(html, text);
+
+    // ---- w:between -----------------------------------------------------------------------------
+
+    [Fact]
+    public void EachBetweenRuleIsTheTopBorderOfTheNextParagraphInTheBox()
+    {
+        var html = Convert(Paragraph("SedgeOne", Ruled), Paragraph("SedgeTwo", Ruled), Paragraph("SedgeThree", Ruled));
+        var (one, two, three) = (Block(html, "SedgeOne"), Block(html, "SedgeTwo"), Block(html, "SedgeThree"));
+
+        Assert.Same(one.Parent, three.Parent);
+        Assert.Equal("unset", Value(one, "border-top"));
+        foreach (var lower in new[] { two, three })
+        {
+            Assert.Equal("solid #000000 0.75pt", Value(lower, "border-top"));
+            Assert.Equal("0.5pt", Value(lower, "--docx-border-top-width"));
+            Assert.Equal("true", (string?)lower.Attribute("data-docx-exact-border"));
+            // w:space below the rule, and the rule runs through the box's 4pt w:space to its side borders.
+            Assert.Equal(("1.0pt", "-4.0pt", "4.0pt", "-4.0pt", "4.0pt"), (Value(lower, "padding-top"),
+                Value(lower, "margin-left"), Value(lower, "padding-left"), Value(lower, "margin-right"), Value(lower, "padding-right")));
+        }
+        // w:space above each rule; none below the last paragraph, where the box's own border follows.
+        Assert.Equal(("1pt", "1pt", "unset"), (Value(one, "padding-bottom"), Value(two, "padding-bottom"), Value(three, "padding-bottom")));
+    }
+
+    [Fact]
+    public void ParagraphsThatDifferOnlyInBetweenShareOneBoxAndEachDrawsItsOwnRule()
+    {
+        // Word: the rule and the w:space below it come from the paragraph above, the w:space above it from the one below.
+        var html = Convert(Paragraph("SedgeOne", Ruled), Paragraph("SedgeTwo", Box), Paragraph("SedgeThree", Ruled));
+        var (one, two, three) = (Block(html, "SedgeOne"), Block(html, "SedgeTwo"), Block(html, "SedgeThree"));
+
+        Assert.Same(one.Parent, three.Parent);
+        Assert.Equal(("unset", "solid #000000 0.75pt", "1.0pt", "1pt"),
+            (Value(one, "padding-bottom"), Value(two, "border-top"), Value(two, "padding-top"), Value(two, "padding-bottom")));
+        Assert.Equal(("unset", "unset"), (Value(three, "border-top"), Value(three, "padding-top")));
+    }
+
+    [Fact]
+    public void ABoxWithoutBetweenKeepsItsParagraphsUnruled()
+    {
+        var html = Convert(Paragraph("SedgeOne", Box), Paragraph("SedgeTwo", Box));
+
+        Assert.Same(Block(html, "SedgeOne").Parent, Block(html, "SedgeTwo").Parent);
+        foreach (var text in new[] { "SedgeOne", "SedgeTwo" })
+            Assert.DoesNotContain(Style(Block(html, text)).Keys, key => key.StartsWith("border") || key.StartsWith("padding"));
+    }
+
+    // ---- w:contextualSpacing at the edge of a box ----------------------------------------------
+
+    [Theory]
+    [InlineData("", "0", "0", "0")]           // one style: the box and its neighbours give up their spacing
+    [InlineData("Other", "14pt", "14pt", "14pt")] // another style beside the box: nothing is removed
+    public void ContextualSpacingReachesAcrossTheEdgeOfABox(string neighbourStyle, string above, string below, string next)
+    {
+        var html = Convert(Paragraph("SedgeOpen", after: Contextual, space: 0, style: neighbourStyle),
+            Paragraph("SedgeBoxed", Box, after: Contextual), Paragraph("SedgeNext", after: Contextual, style: neighbourStyle),
+            Paragraph("SedgeClose", space: 0, style: "Other"));
+        var box = BoxOf(html, "SedgeBoxed");
+
+        Assert.NotSame(box, Block(html, "SedgeBoxed"));
+        Assert.Equal((above, below, next), (Value(box, "margin-top"), Value(box, "margin-bottom"), Value(Block(html, "SedgeNext"), "margin-top")));
+    }
+
+    [Fact]
+    public void TheSpaceAfterABoxGivesUpStillAbsorbsTheNextSpaceBefore()
+    {
+        // Only the boxed paragraph has the flag: Word keeps 14pt above it (the neighbour's space
+        // after) and leaves max(0, 14 - 14) of the next paragraph's space before below it.
+        var html = Convert(Paragraph("SedgeOpen"), Paragraph("SedgeBoxed", Box, after: Contextual), Paragraph("SedgeNext"));
+        var box = BoxOf(html, "SedgeBoxed");
+
+        Assert.Equal(("14pt", "0", "0", "0"), (Value(Block(html, "SedgeOpen"), "margin-bottom"), Value(box, "margin-top"),
+            Value(box, "margin-bottom"), Value(Block(html, "SedgeNext"), "margin-top")));
+    }
+
+    // ---- page start and keep -------------------------------------------------------------------
+
+    [Fact]
+    public void TheBoxStartsThePageItsFirstParagraphStarts()
+    {
+        var html = Convert(Paragraph("SedgeOpen"), Paragraph("SedgeBoxed", Box, keep: "<w:pageBreakBefore/>"));
+
+        Assert.Equal("true", (string?)BoxOf(html, "SedgeBoxed").Attribute("data-page-break-before"));
+        Assert.Null(Block(html, "SedgeOpen").Attribute("data-page-break-before"));
+    }
+
+    [Fact]
+    public void APageStartInsideARunOfBorderedParagraphsClosesTheBoxBeforeIt()
+    {
+        var html = Convert(Paragraph("SedgeOne", Box), Paragraph("SedgeTwo", Box, keep: "<w:pageBreakBefore/>"), Paragraph("SedgeThree", Box));
+        var (first, second) = (BoxOf(html, "SedgeOne"), BoxOf(html, "SedgeTwo"));
+
+        Assert.NotSame(first, second);
+        Assert.Same(second, BoxOf(html, "SedgeThree"));
+        Assert.Null(first.Attribute("data-page-break-before"));
+        Assert.Equal("true", (string?)second.Attribute("data-page-break-before"));
+    }
+
+    [Theory]
+    [InlineData(false, true, "true")]  // the last paragraph keeps with the next block: so does the box
+    [InlineData(true, false, null)]    // a keep on an earlier paragraph is between members of the box
+    [InlineData(false, false, null)]
+    public void TheBoxKeepsWithTheNextBlockWhenItsLastParagraphDoes(bool first, bool last, string? expected)
+    {
+        var html = Convert(Paragraph("SedgeOne", Box, keep: first ? "<w:keepNext/>" : ""),
+            Paragraph("SedgeTwo", Box, keep: last ? "<w:keepNext/>" : ""), Paragraph("SedgeNext"));
+
+        Assert.Equal(expected, (string?)BoxOf(html, "SedgeOne").Attribute("data-keep-with-next"));
+    }
+
+    // ---- shading -------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(Box, true, true, "#CCCCCC")]          // every paragraph shaded: the box is filled to its border
+    [InlineData("top", true, true, "#CCCCCC")]
+    [InlineData("left right", true, true, "#CCCCCC")]
+    [InlineData(Box, true, false, "unset")]           // mixed shading stays on the paragraphs
+    [InlineData("left", true, true, "unset")]         // Word leaves a lone left border's w:space unshaded
+    [InlineData(Box, false, false, "unset")]
+    public void ShadingSharedByEveryParagraphFillsTheBox(string sides, bool first, bool second, string expected)
+    {
+        var html = Convert(Paragraph("SedgeOne", sides, shading: first ? Fill : ""), Paragraph("SedgeTwo", sides, shading: second ? Fill : ""));
+        var box = BoxOf(html, "SedgeOne");
+
+        Assert.Same(box, BoxOf(html, "SedgeTwo"));
+        Assert.Equal(expected, Value(box, "background"));
+        // The fill stops at the inner edge of the border, as in Word; a double or dashed border shows no fill through it.
+        Assert.Equal(expected == "unset" ? "unset" : "padding-box", Value(box, "background-clip"));
+        // Each paragraph keeps its own shading either way.
+        Assert.Equal(first ? "#CCCCCC" : "unset", Value(Block(html, "SedgeOne"), "background"));
+    }
+
+    [Fact]
+    public void AnUnborderedShadedParagraphIsUnchanged()
+    {
+        var html = Convert(Paragraph("SedgePlain", shading: Fill));
+
+        Assert.Equal("#CCCCCC", Value(Block(html, "SedgePlain"), "background"));
+        Assert.Same(Block(html, "SedgePlain"), BoxOf(html, "SedgePlain"));
+        Assert.DoesNotContain(Block(html, "SedgePlain").Ancestors(), ancestor => Style(ancestor).ContainsKey("background"));
+    }
+}
