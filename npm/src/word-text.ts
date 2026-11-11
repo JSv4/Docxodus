@@ -9,6 +9,7 @@
  */
 
 import { FONT_REQUEST_ATTRIBUTE } from './font-contract.js';
+import { gridTextOffset } from './line-metrics.js';
 
 const PREPARED = 'data-docx-word-text-prepared';
 // A positive value carries fitted-line natural height; zero certifies unchanged line choices.
@@ -255,7 +256,7 @@ function contourRows(image: HTMLImageElement, paragraph: HTMLElement, run: HTMLE
   let next = 0;
   for (let line = 0; line < lineCount && next < words.length; line++) {
     checkpoint?.();
-    const top = (box.top + line * pitch - picture.top) / picture.height;
+    const top = (box.top + line * pitch + gridTextOffset(style) - picture.top) / picture.height;
     const bottom = top + nativeHeight / picture.height;
     const crossings: number[] = [];
     for (let i = 0; i < vertices.length; i++) {
@@ -1037,7 +1038,7 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     svg.style.cssText = columnBand
       ? 'position:absolute;left:0;top:0;display:block;overflow:visible'
       : 'position:relative;display:block;overflow:visible';
-    const baseline = (metric.height - metric.descent) * fontSize;
+    const baseline = (metric.height - metric.descent) * fontSize + gridTextOffset(style);
     Array.from(rows.values()).forEach((words, index) => {
       const line = document.createElementNS(SVG_NS, 'text');
       if (scale !== 1) {

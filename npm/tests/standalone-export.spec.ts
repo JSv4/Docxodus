@@ -851,14 +851,15 @@ test.describe('standalone paginated HTML', () => {
     expect(result.html).toContain('After the box.');
   });
 
-  for (const mixed of [false, true]) test(mixed
+  for (const [first, mixed] of [['', false], ['<w:b/>', false], ['<w:position w:val="2"/>', true]] as const) test(mixed
     ? 'lays a page out again when mixed minimum-spaced text would be clipped'
-    : 'retains natural height when a smaller minimum would compress page-filling text', async ({ page }) => {
-    // Uniform 24pt Liberation Serif has a 27.598pt natural pitch, so 23 paragraphs fit.
-    // Mixed bold/regular runs retain the existing 14pt boxes and must still exercise #848's
-    // corrective pass: only authored EXACT spacing permits glyph overhang.
+    : `retains natural height when a smaller minimum would compress page-filling text${first ? ' with a bold word' : ''}`, async ({ page }) => {
+    // Uniform 24pt Liberation Serif has a 27.598pt natural pitch, so 23 paragraphs fit; a bold first
+    // word's face has the same metrics, as in Word 2024 (#1551). A raised first word's runs retain the
+    // existing 14pt boxes, which no line pass measures, and must still exercise #848's corrective pass
+    // (43 of its line boxes fit page 1, 42 lines stay): only authored EXACT spacing permits glyph overhang.
     const source = bodyFillDocx({ paragraphs: 46, fontHalfPoints: 48, lineTwips: 280,
-      lineRule: 'atLeast', boldFirstWord: mixed });
+      lineRule: 'atLeast', firstWordProperties: first });
 
     const result = await convert(page, source);
 
@@ -870,7 +871,7 @@ test.describe('standalone paginated HTML', () => {
         Array.from(box.querySelectorAll('.page-content p')).map((p) => p.textContent?.trim()));
     }, result.html);
     const text = Array.from({ length: 46 }, (_, i) => `Line ${i + 1} of the body, typography and spacing.`);
-    const firstPageCount = mixed ? 45 : Math.floor(648 / (2355 / 2048 * 24));
+    const firstPageCount = mixed ? 42 : Math.floor(648 / (2355 / 2048 * 24));
     expect(pages).toEqual([text.slice(0, firstPageCount), text.slice(firstPageCount)]);
     // A correction rebuilds the attempt and truncates its own entries, so the report records one
     // pass through the render phases, in the same order as any successful render.

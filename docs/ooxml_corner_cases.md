@@ -7555,14 +7555,80 @@ moves only the paragraph's own children, so a wrapper carries its runs once; the
 baseline passes see through it alike. Tested by `HtmlLineGridTests`,
 `npm/tests/export-line-grid.spec.ts` and `npm/tests/pagination-line-grid.spec.ts`.
 
+### Runs that differ in font, size or weight, and where the text sits
+
+Same setup, 120 one-line paragraphs of `Item n on the seed order form.` with `seed` styled in every
+paragraph as the row says, on an 18pt grid unless it says otherwise. Columns are line step / lines on
+page 1 / pages, then page 1's first baseline. Docxodus is its PDF export, before and after this change.
+
+| Case | Word 2024 | Docxodus before | After |
+| --- | --- | --- | --- |
+| Bold word, single; no grid | 18 / 36 / 4, 85.34; 13.8 / 46 / 3, 83.18 | 13.8 / 46 / 3, 83.25; same | 18 / 36 / 4, 85.5; same |
+| Arial word; 10pt word | 18 / 36 / 4, 85.34 | 13.8 / 46 / 3 | 18 / 36 / 4, 85.34; 85.31 |
+| 14pt word; no grid | 18 / 36 / 4, 86.06; 16.1 / 40 / 3, 85.1 | 16.1 / 40 / 3, 84.75; same | 18 / 36 / 4, 86.03; same |
+| 18pt word | 36 / 18 / 7, 96.5 | 20.7 / 31 / 4 | 36 / 18 / 7, 96.46 |
+| 24pt word, on an 18pt or a 12pt grid; no grid | 36 / 18 / 7, 98.66; 27.6 / 23 / 6, 94.46 | 27.6 / 23 / 6; same | 36 / 18 / 7, 98.61; same |
+| Bold word, 1.15 / 1.5 lines | 20.7 / 31 / 4, 86.66; 27 / 24 / 5, 89.78 | 15.87 / 40 / 3; 20.7 / 31 / 4 | as Word, 87.0; 90.0 |
+| 24pt word, 1.5 lines; no grid | 36 / 18 / 7, 98.66; 41.4 / 15 / 8 | 45 / 14 / 9; same | 36 / 18 / 7, 98.61; same |
+| Bold word, `atLeast` 15pt / 20pt | 18 / 36 / 4, 85.34; 20 / 32 / 4, 87.26 | 15 / 43 / 3; 20 / 32 / 4, 85.5 | as Word, 85.5; 87.0 |
+| 24pt word, `atLeast` 30pt / 40pt | 36 / 18 / 7, 98.66; 40 / 16 / 8, 102.62 | 30 / 21 / 6; 40 / 16 / 8, 106.82 | as Word, 98.61; 102.61 |
+| 14pt word, `atLeast` 20pt; no grid | 20 / 32 / 4, 88.1; 20, 89.06 | 20, 88.97 | 20, 88.02; same |
+| Four wrapped lines, a 24pt word on the first | 36, 18, 18, 18; 28 / 5 | 27.6 each; 22 / 6 | as Word |
+| Three lines split by `w:br`, a 24pt word on the second | 18, 36, 18; 27 / 5 | 27.6 each; 21 / 6 | as Word |
+| 24pt word, 645pt / 643pt body (bottom margin 75pt / 77pt): lines on page 1 / pages | 18 / 7; 17 / 8 | 23 / 6 | as Word |
+| Bold word, 0.8 lines; 10pt text, `atLeast` 13pt, 12pt grid | 18 / 36 / 4; 13 / 49 / 3 | 13.8 / 46 / 3; 11.5 / 56 / 3 | as Word |
+| Bold word, no grid: `atLeast` 20pt; 10pt text, `atLeast` 13pt; 24pt text, `atLeast` 15pt | 20, 89.42; 13 / 49 / 3; 27.6 / 23 / 6 | 20, 85.5; 11.5 / 56 / 3; 15 / 42 / 3, lines overlapping | 20, 89.25; as Word |
+
+And the text of uniform lines (12pt unless the row says otherwise; first baseline, Word / before / after):
+single without a grid 83.18 / 83.2 / 83.2; 18pt grid 85.34 / 83.2 / 85.3; 15pt grid 83.78 / 83.2 /
+83.8; 30pt grid 91.34 / 83.2 / 91.3; 12pt grid (24pt lines), single or double 88.34 / 83.2 / 88.3;
+1.5 lines on an 18pt grid 89.78 / 83.2 / 89.8; 10pt text on an 18pt grid 84.62 / 81.33 / 84.59 (81.38
+without a grid); 24pt text 98.66 / 94.41 / 98.6 (94.46 without a grid); `atLeast` 20pt on an 18pt
+grid 87.26 / 89.25 / 87.0 (89.42 without a grid); 10pt text, `atLeast` 13pt on a 12pt grid 82.58 /
+82.5 / 82.5 (82.82 without a grid). The steps and page counts of these lines were already Word's.
+
+So, for every line on a grid, with N its text's largest ascent plus largest descent:
+
+- The line is `max(G, minimum)` with `G = max(ceil(N / pitch), multiple) × pitch`, worked out for
+  each visual line: a wrapped paragraph's lines differ, and a bold or larger word is no exception.
+- Its baseline is `(height − G) + (G − N) / 2` below where an unspaced line of the same text puts
+  it: the text is centred in its grid lines and a winning minimum's excess goes above them. Every
+  row above agrees to within the 0.12pt step of Word's PDF coordinates.
+- A page's last line needs only its text, so the lower `(G − N) / 2` of it may pass the bottom
+  margin, for mixed text as for uniform.
+
+`applyParagraphLineGrids` in `npm/src/line-metrics.ts` sizes a paragraph as one uniform line
+when every run lays out as its paragraph's font does. `uniformParagraphRuns` compared the runs'
+family, size, style, weight and stretch; it now takes a face whose canvas ascent and descent match
+the paragraph's at the same size and stretch (`sameLineFace`), so a bold or italic word keeps its
+paragraph uniform. That also lets the at-least minimum pass and the baseline pass take such a
+paragraph off the grid, which they had skipped. Runs whose metrics differ go to
+`prepareMixedLineHeights`, the per-visual-line pass of #1565, which had skipped every grid paragraph
+without a minimum and sized the rest without the grid. Both passes now apply one rule,
+`gridLineHeight`. The mixed pass gives each line's strut that height and places the text centred
+in its grid lines; a `grid` strut records its grid lines' height (`data-docx-line-grid`), from
+which the paginator reads the half below the text that may pass the bottom margin, and the export's
+clipping check no longer counts a strut, which paints nothing.
+
+For uniform lines, the grid pass no longer lifts the runs to the top of their line box (the
+treatment of an automatic multiple, whose surplus Word puts below the text); a run's taller line
+box centres its text as Word does. Three places that place text from font metrics rather than from
+the laid-out box add the same offset, `gridTextOffset`: the export's vector text, its contour
+wrapping and the baseline pass. The baseline pass also moves a uniform line whose minimum beats its
+grid lines up by half their surplus. Tested by `npm/tests/pagination-line-grid.spec.ts`,
+`npm/tests/mixed-line-metrics.spec.ts` and `npm/tests/export-line-grid.spec.ts`.
+
 Still different from Word:
 
-- Text position inside a grid line. Word centres the text in its line; Docxodus puts it at the top
-  (see "Single-spaced body text on a line grid" above), 2.1pt higher for 12pt text on an 18pt grid
-  and 4.2pt for 24pt text on two lines. Where an `atLeast` value wins on a grid, Docxodus places the
-  text as it does without a grid, 2pt lower than Word.
-- A paragraph whose runs differ in font, size or weight (a bold word) gets no grid lines, because
-  the grid pass sizes only uniform runs: it keeps its natural height or its `atLeast` value.
+- A paragraph broken by `w:br` whose runs share their metrics (uniform text, or a bold word) gets no
+  grid lines: three such lines per paragraph print 13.8pt / 45 / 3 where Word prints 18pt / 36 / 4.
+  The uniform pass does not size a run holding a break, and the mixed pass, which handles breaks,
+  leaves runs with equal metrics to it. Mixed sizes with a break are on the grid (the table above).
+- A paragraph of mixed sizes with an automatic multiple below one: a 24pt word with 0.8 lines on an
+  18pt grid prints 36pt / 18 / 7 in Word and about 28.5pt / 22 / 6 in Docxodus, because the mixed
+  pass leaves multiples below one to the converter.
+- The editor's paginated view does not run the baseline pass, so there a uniform line whose at-least
+  minimum beats its grid lines keeps its text where it would be without a grid, about 2pt low.
 
 ## Word kerns and ligates only on request (#1562)
 

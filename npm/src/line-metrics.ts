@@ -157,12 +157,35 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
   return resolved.length + restored;
 }
 
+const faceCanvases = new WeakMap<Document, CanvasRenderingContext2D | null>();
+
+/**
+ * Whether a run's face lays a line out as its paragraph's does: the same size and stretch, and the same
+ * family, style and weight or the same ascent and descent. Word lines up a bold word with its text (#1551).
+ */
+function sameLineFace(document: Document, run: CSSStyleDeclaration, paragraph: CSSStyleDeclaration): boolean {
+  if (run.fontSize !== paragraph.fontSize || run.fontStretch !== paragraph.fontStretch) return false;
+  if (run.fontFamily === paragraph.fontFamily && run.fontStyle === paragraph.fontStyle
+    && run.fontWeight === paragraph.fontWeight) return true;
+  if (!faceCanvases.has(document)) faceCanvases.set(document, document.createElement("canvas").getContext("2d"));
+  const canvas = faceCanvases.get(document), size = fontProbeSize(document);
+  if (!canvas) return false;
+  const extent = (face: CSSStyleDeclaration) => {
+    // A face the canvas cannot parse leaves the font before it in place.
+    canvas.font = "1px serif";
+    canvas.font = `${face.fontStyle} ${face.fontWeight} ${size}px ${face.fontFamily}`;
+    const { fontBoundingBoxAscent, fontBoundingBoxDescent } = canvas.measureText(LATIN_PROBE);
+    return canvas.font.includes(`${size}px`) ? `${fontBoundingBoxAscent}|${fontBoundingBoxDescent}` : undefined;
+  };
+  const own = extent(paragraph);
+  return own !== undefined && own === extent(run);
+}
+
 /** Ordinary inline runs whose metrics can be represented by their paragraph's font. */
 function uniformParagraphRuns(paragraph: HTMLElement, allowStructuralWrappers = false,
   positioned?: (run: CSSStyleDeclaration) => boolean): HTMLElement[] | undefined {
   const view = paragraph.ownerDocument.defaultView!;
   const style = view.getComputedStyle(paragraph);
-  const fontProperties = ["font-family", "font-size", "font-style", "font-weight", "font-stretch"];
   if (style.direction !== "ltr" || style.writingMode !== "horizontal-tb") return;
   const children = Array.from(paragraph.children);
   const marker = allowStructuralWrappers && children[0]?.getAttribute('data-list-marker') === 'true'
@@ -188,9 +211,8 @@ function uniformParagraphRuns(paragraph: HTMLElement, allowStructuralWrappers = 
       // number and its tab suffix. Their uniform metrics must move together.
       const display = child === marker ? 'inline-flex' : child.parentElement === marker ? 'block'
         : inMarker && child.hasAttribute('data-docx-tab') ? 'inline-block' : 'inline';
-      return fontProperties.some(property => run.getPropertyValue(property) !== style.getPropertyValue(property))
-        || run.display !== display || (run.position !== "static" && !positioned?.(run))
-        || run.verticalAlign !== "baseline" || run.transform !== "none";
+      return !sameLineFace(paragraph.ownerDocument, run, style) || run.display !== display
+        || (run.position !== "static" && !positioned?.(run)) || run.verticalAlign !== "baseline" || run.transform !== "none";
     })) return;
   return runs as HTMLElement[];
 }
@@ -283,13 +305,12 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
     const style = view.getComputedStyle(paragraph);
     const minimum = Number.parseFloat(style.getPropertyValue('--docx-min-line-height')) * 4 / 3 || 0;
     const multiple = Number(style.getPropertyValue('--docx-auto-line-spacing')) || 1;
+    const pitch = Number.parseFloat(style.getPropertyValue('--docx-line-grid')) * 4 / 3 || 0;
     const section = paragraph.closest<HTMLElement>('[data-section-index]');
     if (Number(section?.dataset.cols ?? 1) > 1 || section?.querySelector(
       '[data-docx-text-frame], [data-docx-wrap-text], [data-docx-edge-picture]')) continue;
-    // A mixed at-least line is one the grid pass cannot measure: it keeps its minimum here, as off the grid.
     if (style.direction !== 'ltr' || style.writingMode !== 'horizontal-tb'
       || multiple < 1
-      || !minimum && Number.parseFloat(style.getPropertyValue('--docx-line-grid')) > 0
       || Number.parseFloat(style.getPropertyValue('--docx-exact-line-height')) > 0
       || Array.from(paragraph.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim())) continue;
     const marker = paragraph.firstElementChild?.getAttribute('data-list-marker') === 'true'
@@ -426,14 +447,17 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
       const text = line.ascent + line.descent;
       // The marker raises its line's ascent outside any multiple of the text's own height.
       const natural = css(Math.max(line.ascent, line.marker) + line.descent);
-      const height = css(minimum ? Math.max(minimum, natural) : natural + text * (multiple - 1));
+      const spaced = pitch ? gridLineHeight(natural, pitch, multiple) : natural + text * (multiple - 1);
+      const height = css(Math.max(minimum, spaced));
       // Word puts minimum-height surplus above the baseline; automatic multiples
-      // put their surplus below it. Both retain the font's natural descent.
+      // put their surplus below it, and a grid line centres its text in its grid lines
+      // (#1551), surplus over them above. All retain the font's natural descent.
       line.descent = css(line.descent);
-      const descent = css(line.descent + (minimum ? 0 : height - natural));
+      const descent = css(line.descent + (pitch ? (spaced - natural) / 2 : minimum ? 0 : height - natural));
       const range = document.createRange(); range.setStart(last.node, last.end); range.collapse(true);
       const strut = document.createElement('span');
-      strut.dataset.docxLineMetric = minimum ? 'minimum' : 'auto';
+      strut.dataset.docxLineMetric = pitch ? 'grid' : minimum ? 'minimum' : 'auto';
+      if (pitch) strut.dataset.docxLineGrid = String(css(spaced));
       strut.dataset.docxLineNatural = String(natural); strut.dataset.docxLineDescent = String(line.descent);
       strut.setAttribute('aria-hidden', 'true');
       strut.style.cssText = `display:inline-block;position:static;float:none;transform:none;width:0;height:${height}px;font-size:0;line-height:0;vertical-align:${-descent}px;margin:0;padding:0;border:0`;
@@ -479,12 +503,15 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
 export function isMixedLineMetric(element: HTMLElement): boolean {
   if (!element.closest('[data-docx-mixed-lines]') || element.localName !== 'span'
     || element.childNodes.length || element.id || element.hasAttribute('data-anchor')
-    || element.hasAttribute('data-source-anchor-id') || !['auto', 'minimum'].includes(element.dataset.docxLineMetric ?? '')) return false;
+    || element.hasAttribute('data-source-anchor-id') || !['auto', 'minimum', 'grid'].includes(element.dataset.docxLineMetric ?? '')) return false;
   const style = element.isConnected ? element.ownerDocument.defaultView!.getComputedStyle(element) : element.style;
   const natural = Number(element.dataset.docxLineNatural), descent = Number(element.dataset.docxLineDescent);
-  const height = Number.parseFloat(style.height);
-  const extra = element.dataset.docxLineMetric === 'minimum' ? 0 : height - natural;
+  const height = Number.parseFloat(style.height), kind = element.dataset.docxLineMetric;
+  // The surplus below the text: an automatic multiple's, or half of a grid line's below its grid lines.
+  const grid = kind === 'grid' ? Number(element.dataset.docxLineGrid) : natural;
+  const extra = kind === 'auto' ? height - natural : (grid - natural) / 2;
   return natural > 0 && descent > 0 && descent < natural && Number.isFinite(natural)
+    && grid >= natural && grid < height + .01
     && style.display === 'inline-block' && style.position === 'static' && style.transform === 'none'
     && style.float === 'none' && style.width === '0px' && height > 0 && Number.isFinite(height)
     && Math.abs(Number.parseFloat(style.verticalAlign) + descent + extra) < .01
@@ -494,10 +521,17 @@ export function isMixedLineMetric(element: HTMLElement): boolean {
 }
 
 /**
+ * A line's height on its section's grid. Word 2024 gives a visual line the whole grid slots its natural
+ * height needs or its multiple of one pitch, whichever is taller (#1551): 1.5 lines on an 18pt pitch is
+ * 27pt, on a 12pt pitch 24pt. An at-least minimum taller than those slots is the line instead.
+ */
+function gridLineHeight(natural: number, pitch: number, multiple: number): number {
+  return Math.max(Math.ceil(natural / pitch), multiple) * pitch;
+}
+
+/**
  * Size uniform automatic and at-least lines on their section's grid, retaining their natural baseline.
- * Word 2024 gives such a line the whole grid slots its natural height needs or its multiple of one
- * pitch, whichever is taller (#1551): 1.5 lines on an 18pt pitch is 27pt, on a 12pt pitch 24pt.
- * An at-least minimum taller than those slots is the line instead, which the converter already set.
+ * A minimum taller than the grid lines is the line instead, which the converter already set.
  */
 function applyParagraphLineGrids(grids: Array<{ paragraph: HTMLElement; pitch: number }>, naturalHeights: Map<HTMLElement, number>): void {
   const view = grids[0].paragraph.ownerDocument.defaultView!;
@@ -506,7 +540,7 @@ function applyParagraphLineGrids(grids: Array<{ paragraph: HTMLElement; pitch: n
     if (!natural) continue;
     const style = view.getComputedStyle(paragraph);
     const multiple = Number(style.getPropertyValue('--docx-auto-line-spacing')) || 1;
-    const height = Math.max(Math.ceil(natural / pitch), multiple) * pitch;
+    const height = gridLineHeight(natural, pitch, multiple);
     if (Number.parseFloat(style.getPropertyValue('--docx-min-line-height')) * 4 / 3 > height) continue;
     // The converter's own multiple: m natural lines, its text lifted to their top. The grid replaces both.
     const multiplied = (run: CSSStyleDeclaration) => multiple !== 1 && run.position === 'relative'
@@ -521,15 +555,25 @@ function applyParagraphLineGrids(grids: Array<{ paragraph: HTMLElement; pitch: n
     paragraph.style.lineHeight = `${natural.toFixed(4)}px`;
     for (const child of runs) {
       if (child.parentElement !== paragraph) continue;
-      // As with automatic multiples, the paragraph strut remains natural and extra
-      // layout height goes below its ink. Read-only baseline correction still applies.
+      // The paragraph strut remains natural, and the run's taller line box centres its ink
+      // in the grid lines, as Word does (#1551). That replaces a multiple's lift to their top.
       child.style.lineHeight = `${height}px`;
       child.style.position = "relative";
-      child.style.top = `${(natural - height) / 2}px`;
+      child.style.top = "0px";
       child.style.setProperty("--docx-word-native-height", `${natural}px`);
       child.style.setProperty("--docx-word-grid-height", `${height}px`);
     }
   }
+}
+
+/**
+ * How far below the top of its line Word puts a grid run's natural line: it centres the text in its grid
+ * lines (#1551), as the run's line box does. Zero for a run the grid pass has not sized.
+ */
+export function gridTextOffset(run: CSSStyleDeclaration): number {
+  const grid = Number.parseFloat(run.getPropertyValue("--docx-word-grid-height"));
+  const native = Number.parseFloat(run.getPropertyValue("--docx-word-native-height"));
+  return grid > native ? (grid - native) / 2 : 0;
 }
 
 /** Word's ruby raise is a baseline distance. Keep native horizontal ruby layout, moving only
@@ -727,7 +771,8 @@ const REPLACED_ELEMENTS = new Set(["img", "svg", "canvas", "video", "object", "e
  * Measure each descendant's content bottom once for this layout snapshot (#1271, #1493).
  * Inline padding/borders can paint beyond a fitting line, including through zero-height
  * wrappers. Measure nested text/children without those decorations; atomic boxes keep
- * their full bounds. Unboxed generated content conservatively uses its boxed ancestor.
+ * their full bounds, but a mixed line's metric box only sizes its line and paints nothing.
+ * Unboxed generated content conservatively uses its boxed ancestor.
  */
 export function measureLaidOutBottoms(band: HTMLElement): Map<Element, number> {
   const bottoms = new Map<Element, number>();
@@ -735,6 +780,7 @@ export function measureLaidOutBottoms(band: HTMLElement): Map<Element, number> {
   const scale = band.getBoundingClientRect().width / band.offsetWidth || 1;
   const range = band.ownerDocument.createRange();
   const visit = (element: Element, ancestorBottom: number): number => {
+    if (element.hasAttribute("data-docx-line-metric") && isMixedLineMetric(element as HTMLElement)) return -Infinity;
     const style = view?.getComputedStyle(element);
     const transparent = style?.display === "contents";
     const inline = style?.display === "inline" && !REPLACED_ELEMENTS.has(element.localName);
@@ -835,8 +881,11 @@ export function alignBaselinesToWord(root: Element): number {
     if (!(descent > 0)) continue;
     const childStyle = view.getComputedStyle(first);
     // Word: the extra height of a multiple goes below the text (issue #908), so the baseline is one natural
-    // line height less the descent below the line's top, however tall the line is.
-    const shift = (lineHeight - descent * fontSize) - chromiumOffset(style, childStyle);
+    // line height less the descent below the line's top, however tall the line is. A grid line centres its
+    // text (#1551), and where an at-least minimum wins on the grid, half the grid lines' surplus stays below.
+    const pitch = Number.parseFloat(style.getPropertyValue("--docx-line-grid")) * 4 / 3;
+    const centred = uniformMinimum && pitch > 0 ? (natural - gridLineHeight(natural, pitch, 1)) / 2 : gridTextOffset(childStyle);
+    const shift = (lineHeight + centred - descent * fontSize) - chromiumOffset(style, childStyle);
     // The correction is Chromium's rounding plus the half of any line gap it puts below the text, which Word
     // puts above: a fraction of the line. Half a line or more means the font does not follow this model.
     if (!Number.isFinite(shift) || Math.abs(shift) < 1 / 64 || Math.abs(shift) >= lineHeight / 2) continue;

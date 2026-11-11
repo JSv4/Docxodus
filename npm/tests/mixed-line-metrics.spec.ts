@@ -219,8 +219,22 @@ test('changed-width preparation matches fresh source at both narrower and wider 
   expect(result.resized[2].actual.tokens).toEqual(result.after.tokens);
 });
 
-for (const viewer of [false, true]) test(`the ${viewer ? 'viewer' : 'editable engine'} paginates mixed lines with complete source identities`, async ({ page }) => {
-  const source = paragraph({ width: 42, text: Array(12).fill('word').join(' ') });
+// Word 2024 (#1551) gives each visual line of mixed text the whole grid lines its text needs, with its text
+// centred in them. On a 36pt grid, that puts a 10pt line's text lower than its own height below the baseline.
+for (const pitch of [18, 36]) test(`mixed visual lines take whole ${pitch}pt grid lines`, async ({ page }) => {
+  const result = await exercise(page, paragraph({ width: 42, text: Array(12).fill('word').join(' '),
+    paragraphStyle: `--docx-line-grid:${pitch}pt` }));
+  expect(result.count).toBe(1);
+  expect(result.after.struts.map(strut => strut.height / (pitch * 4 / 3))).toEqual([pitch === 18 ? 2 : 1, ...Array(12).fill(1)]);
+  expect(result.after.struts.every(strut => strut.valid)).toBe(true);
+  expect(Math.abs(result.after.height - result.after.struts.reduce((sum, strut) => sum + strut.height, 0))).toBeLessThan(.25);
+  expect(horizontal(result.after.tokens)).toEqual(horizontal(result.before.tokens));
+});
+
+// On an 18pt grid the 20pt line takes two grid lines and each 10pt line one, so 4, 5 and 4 lines fill 100pt pages.
+for (const [viewer, pitch, lines] of [[false, 0, [7, 6]], [true, 0, [7, 6]], [false, 18, [4, 5, 4]], [true, 18, [4, 5, 4]]] as const)
+test(`the ${viewer ? 'viewer' : 'editable engine'} paginates mixed lines${pitch ? ` on a ${pitch}pt grid` : ''} with complete source identities`, async ({ page }) => {
+  const source = paragraph({ width: 42, text: Array(12).fill('word').join(' '), paragraphStyle: pitch ? `--docx-line-grid:${pitch}pt` : '' });
   await page.setContent('<div id="staging" style="display:none">' + source.replace('<section data-section-index="0">',
     '<section data-section-index="0" data-page-width="175.5" data-page-height="244" '
       + 'data-content-width="31.5" data-content-height="100" data-margin-top="72" '
@@ -246,13 +260,14 @@ for (const viewer of [false, true]) test(`the ${viewer ? 'viewer' : 'editable en
       editorAnchors: pages.querySelectorAll('[data-anchor="mixed"]').length,
       htmlIds: pages.querySelectorAll('#target').length };
   }, viewer);
-  expect(result.pageNumbers).toEqual([1, 2]);
-  expect(result.lines).toEqual([7, 6]);
+  const pageNumbers = lines.map((_, index) => index + 1);
+  expect(result.pageNumbers).toEqual(pageNumbers);
+  expect(result.lines).toEqual(lines);
   expect(result.text).toBe('Big ' + Array(12).fill('word').join(' '));
-  expect(result.sourceAnchors).toEqual(['p:body:mixed', 'p:body:mixed']);
+  expect(result.sourceAnchors).toEqual(lines.map(() => 'p:body:mixed'));
   expect(result.editorAnchors).toBe(1); expect(result.htmlIds).toBe(1);
   expect(result.map.map(fragment => fragment.anchorId)).toEqual(result.sourceAnchors);
-  expect(result.map.map(fragment => fragment.pageNumber)).toEqual([1, 2]);
-  expect(result.map.map(fragment => fragment.fragmentIndex)).toEqual([0, 1]);
-  expect(new Set(result.map.map(fragment => fragment.fragmentId)).size).toBe(2);
+  expect(result.map.map(fragment => fragment.pageNumber)).toEqual(pageNumbers);
+  expect(result.map.map(fragment => fragment.fragmentIndex)).toEqual(pageNumbers.map(number => number - 1));
+  expect(new Set(result.map.map(fragment => fragment.fragmentId)).size).toBe(lines.length);
 });

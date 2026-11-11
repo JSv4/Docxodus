@@ -100,7 +100,9 @@ const budgetsKiB = {
   // Round only these four exhausted gates to the next 0.1 KiB.
   // The at-least minimum kept for unmeasured grid lines (#1551) adds 23 gzip bytes (163418 ->
   // 163441), 11 over this gate. Round only this exhausted gate to the next 0.1 KiB.
-  'embed.bundle.js': 159.7,
+  // Grid lines for mixed runs and centred grid text (#1551) add 358–387 gzip bytes over cbe989a3:
+  // embed/IIFE/editor/pagination 163892/163950/142574/57936. Round these four gates to the next 0.1 KiB.
+  'embed.bundle.js': 160.1,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
   // The appended bullet-normalization option adds 29 gzip bytes (161996 -> 162025).
@@ -108,9 +110,9 @@ const budgetsKiB = {
   // At-least grid lines above the pitch and tracked-change wrappers in the line passes (#1551) add
   // 82/98/97 gzip bytes to IIFE/editor/pagination (163592/142187/57566). Embed (163524) still fits;
   // round only these three exhausted gates to the next 0.1 KiB.
-  'embed.iife.js': 159.8,
+  'embed.iife.js': 160.2,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
-  'editor.bundle.js': 138.9,
+  'editor.bundle.js': 139.3,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
   // Whole inline-layout continuation adds 0.24 KiB (35.801 -> 36.038 on main).
@@ -121,7 +123,7 @@ const budgetsKiB = {
   // Round only this exhausted gate up by 0.5 KiB (CI measures 47.1 KiB).
   // Collapsing running-story paragraph spacing in one block adds 59 bytes (57,388 -> 57,447 on
   // current main), one byte over the old gate; round it up by 0.1 KiB.
-  'pagination.bundle.js': 56.3,
+  'pagination.bundle.js': 56.6,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,

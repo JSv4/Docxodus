@@ -3147,7 +3147,8 @@ export class PaginationEngine {
    * converter's lift holds at the top of its line box qualifies; a run laid out with CSS's split
    * leading would paint below its text height, and pictures, bottom borders and padding keep the
    * full line. The smallest run bounds the leading below every run's text. Word centres a grid
-   * line's text instead, so half of that line's extra height lies below its text (#1551).
+   * line's text instead, so half of that line's extra height lies below its text (#1551). Mixed text's
+   * line metrics carry their own lines, of which only a grid line's leading qualifies.
    */
   private lastLineTrailingLeadingPt(paragraph: HTMLElement): number {
     const style = this.view.getComputedStyle(paragraph);
@@ -3155,6 +3156,9 @@ export class PaginationEngine {
     const grid = parseFloat(style.getPropertyValue("--docx-line-grid")) > 0;
     if (!(multiple > 1 || grid) || !this.isWordParagraphElement(paragraph) || paragraph.querySelector("img, svg")
       || parseFloat(style.paddingBottom) > 0 || parseFloat(style.borderBottomWidth) > 0) return 0;
+    const metric = Array.from(paragraph.querySelectorAll<HTMLElement>("[data-docx-line-metric]")).at(-1);
+    if (metric) return metric.dataset.docxLineMetric === "grid" && isMixedLineMetric(metric)
+      ? pxToPt((Number(metric.dataset.docxLineGrid) - Number(metric.dataset.docxLineNatural)) / 2) : 0;
     let leading = Infinity;
     let checked: Element | null = null;
     const walker = this.document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
@@ -3168,9 +3172,9 @@ export class PaginationEngine {
       const height = parseFloat(runStyle.lineHeight);
       const native = grid ? parseFloat((run as HTMLElement).style.getPropertyValue("--docx-word-native-height")) : NaN;
       const natural = native > 0 ? native : height / multiple;
-      // The lift is `top: (natural - height) / 2`; anything else leaves the text elsewhere in its line.
+      // The lift is `top: (natural - height) / 2`, or none in a grid line; anything else leaves the text elsewhere.
       if (!(native > 0 || multiple > 1) || runStyle.position !== "relative"
-        || !(Math.abs(parseFloat(runStyle.top) - (natural - height) / 2) < 0.01)) return 0;
+        || !(Math.abs(parseFloat(runStyle.top) - (native > 0 ? 0 : (natural - height) / 2)) < 0.01)) return 0;
       leading = Math.min(leading, native > 0 ? (height - natural) / 2 : height - natural);
     }
     return Number.isFinite(leading) ? pxToPt(leading) : 0;
@@ -4205,7 +4209,7 @@ export class PaginationEngine {
     const grid = parseFloat(element.style.getPropertyValue("--docx-word-grid-height"));
     const natural = parseFloat(element.style.getPropertyValue("--docx-word-native-height"));
     const gridBaseline = natural > 0 && grid >= natural && Math.abs(parseFloat(style.lineHeight) - grid) < 0.001
-      && Math.abs(parseFloat(style.top) - (natural - grid) / 2) < 0.001;
+      && Math.abs(parseFloat(style.top)) < 0.001;
     const imageCarrier = element.localName !== "img" && !!element.querySelector("img")
       && !this.hasVisibleText(element.textContent ?? "");
     return style.position === "static" || (style.position === "relative"
