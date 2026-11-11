@@ -30,7 +30,7 @@ export function textboxLineHeightDocx(legacy: boolean, hostMultiple: number, exa
       '<Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>') },
     { name: 'word/styles.xml', data: xml(`<w:styles xmlns:w="${w}">` +
       '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/>' +
-      '<w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>' +
+      '<w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>' +
       '<w:style w:type="paragraph" w:styleId="Heron"><w:name w:val="Heron"/><w:pPr>' +
       '<w:spacing w:before="0" w:after="0"' + (exactInner ? ' w:line="280" w:lineRule="exact"' : '') + '/>' + '</w:pPr></w:style></w:styles>') },
     { name: 'word/document.xml', data: xml(`<w:document xmlns:w="${w}" xmlns:wps="${wps}" ` +

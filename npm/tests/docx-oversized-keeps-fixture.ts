@@ -17,7 +17,7 @@ export function oversizedKeepDocx(
       <Relationship Id="main" Type="${R_NS}/officeDocument" Target="word/document.xml"/></Relationships>`,
     'word/_rels/document.xml.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
       <Relationship Id="styles" Type="${R_NS}/styles" Target="styles.xml"/></Relationships>`,
-    'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:style w:type="paragraph" w:styleId="Kept">
+    'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:pPrDefault/></w:docDefaults><w:style w:type="paragraph" w:styleId="Kept">
       <w:name w:val="Kept"/><w:pPr><w:keepNext/></w:pPr></w:style></w:styles>`,
     'word/document.xml': `<w:document xmlns:w="${W_NS}"><w:body>
       ${openingLines ? `<w:p><w:pPr><w:spacing w:after="0" w:line="320" w:lineRule="exact"/></w:pPr>

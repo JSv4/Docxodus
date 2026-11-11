@@ -37,7 +37,7 @@ export function generateLegacyPageNumberDocx(options: LegacyPageNumberOptions = 
       <Relationship Id="header" Type="${R_NS}/header" Target="header1.xml"/></Relationships>`,
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>
       <w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="22"/>
-      </w:rPr></w:rPrDefault></w:docDefaults></w:styles>`,
+      </w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults></w:styles>`,
     'word/header1.xml': `<w:hdr xmlns:w="${W_NS}"><w:p><w:pPr><w:spacing w:after="0"/></w:pPr>${header}</w:p></w:hdr>`,
     'word/document.xml': `<w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"><w:body>${body}
       <w:sectPr><w:headerReference w:type="default" r:id="header"/><w:pgSz w:w="12240" w:h="15840"/>

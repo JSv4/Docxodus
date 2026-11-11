@@ -18,7 +18,7 @@ export function autoSpacingParagraphDocx(note: boolean, tabs = false): Uint8Arra
       <Relationship Id="notes" Type="${R_NS}/footnotes" Target="footnotes.xml"/>`),
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>
       <w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/><w:sz w:val="22"/>
-      </w:rPr></w:rPrDefault></w:docDefaults></w:styles>`,
+      </w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults></w:styles>`,
     'word/footnotes.xml': `<w:footnotes xmlns:w="${W_NS}">
       <w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>
       <w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>
