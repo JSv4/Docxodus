@@ -134,7 +134,7 @@ export interface MeasuredBlock {
   pageBreakBefore: boolean;
   /** Whether this is a page break marker */
   isPageBreak: boolean;
-  /** Whether the block is a Word paragraph whose top margin represents paragraph space-before */
+  /** Whether the block's top margin is Word paragraph space-before; see `hasParagraphSpacing` */
   isWordParagraph?: boolean;
 }
 
@@ -2423,7 +2423,7 @@ export class PaginationEngine {
         keepLines: child.dataset.keepLines === "true",
         pageBreakBefore: child.dataset.pageBreakBefore === "true",
         isPageBreak,
-        isWordParagraph: this.isWordParagraphElement(child),
+        isWordParagraph: this.hasParagraphSpacing(child),
       });
     }
 
@@ -3067,7 +3067,7 @@ export class PaginationEngine {
       isPageBreak:
         element.dataset.pageBreak === "true" ||
         element.classList.contains(`${this.cssPrefix}break`),
-      isWordParagraph: this.isWordParagraphElement(element),
+      isWordParagraph: this.hasParagraphSpacing(measuredElement),
     };
 
     this.stagingElement.removeChild(measurementHost);
@@ -3138,6 +3138,14 @@ export class PaginationEngine {
   /** Word paragraphs render as `p`, or as `h1`–`h6` when their style has an outline level. */
   private isWordParagraphElement(element: HTMLElement): boolean {
     return element.tagName === "P" || /^H[1-6]$/.test(element.tagName);
+  }
+
+  /**
+   * Whether a laid-out block's top margin is Word paragraph space-before: a paragraph's own, or
+   * that of the box around a bordered run of paragraphs, which carries the run's (issue #1677).
+   */
+  private hasParagraphSpacing(element: HTMLElement): boolean {
+    return this.isWordParagraphElement(element) || this.isBorderGroup(element);
   }
 
   /**

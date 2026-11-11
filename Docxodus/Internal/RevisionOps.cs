@@ -310,32 +310,15 @@ internal static class RevisionOps
                     continue;
                 }
 
-                if (mathMarks.Any(unit => unit.Element.Elements().Any(child => child.Name != W.rPr)))
+                // The mark holds the control character's own w:rPr and, at most, its later
+                // deletion (MathControlMarks), which is a revision of its own.
+                if (mathMarks.Any(unit => unit.Element.Elements()
+                        .Any(child => child.Name != W.rPr && child.Name != W.del)))
                 {
                     group.ResolutionStatus = RevisionResolutionStatus.Unsupported;
                     group.Diagnostic = new RevisionDiagnostic(
                         "unsupported_math_control_payload",
-                        "A math control-character mark carries nested revision markup (a property change on the inserted control character) that cannot be selectively resolved.");
-                    continue;
-                }
-
-                // The object's existence follows its control character, so resolving the mark
-                // removes the whole object in one direction. Every piece of equation text inside
-                // must therefore be revised the same way; otherwise that direction would drop
-                // text the document still shows (or resurrect text it does not).
-                var wrapperName = group.Type == TypeInsert ? W.ins : W.del;
-                bool unrevisedText = mathMarks.Select(unit => unit.StructuredWrapper!)
-                    .Any(owner => owner.Descendants()
-                        .Where(text => text.Name == M.t || text.Name == W.t)
-                        .Any(text => !text.Ancestors()
-                            .TakeWhile(ancestor => !ReferenceEquals(ancestor, owner))
-                            .Any(ancestor => ancestor.Name == wrapperName)));
-                if (unrevisedText)
-                {
-                    group.ResolutionStatus = RevisionResolutionStatus.Unsupported;
-                    group.Diagnostic = new RevisionDiagnostic(
-                        "unrevised_math_control_payload",
-                        "A revised math control character owns equation text that is not revised the same way; resolving it would drop or resurrect that text.");
+                        "A math control-character mark holds markup other than the control character's properties or its later deletion, and cannot be selectively resolved.");
                     continue;
                 }
             }
@@ -440,19 +423,15 @@ internal static class RevisionOps
 
                 if (group.Family == RevisionFamily.CellDelete)
                 {
-                    var deleted = cells.Select(u => u.MarkedCell!).ToHashSet();
-                    bool invalidRow = deleted.GroupBy(c => c.Parent).Any(byRow =>
-                    {
-                        var rowCells = byRow.Key?.Elements(W.tc).ToList() ?? new List<XElement>();
-                        int firstDeleted = rowCells.FindIndex(deleted.Contains);
-                        return firstDeleted == 0 || rowCells.All(deleted.Contains);
-                    });
-                    if (invalidRow)
+                    // Another revision may delete the row's other cells, so only a cell that no
+                    // revision deletes is certain to be there to take the columns.
+                    if (cells.Select(u => RowOf(u.MarkedCell)).Any(row => RowCells(row)
+                            .All(cell => cell.Elements(W.tcPr).Elements(W.cellDel).Any())))
                     {
                         group.ResolutionStatus = RevisionResolutionStatus.Malformed;
                         group.Diagnostic = new RevisionDiagnostic(
                             "unabsorbable_cell_deletion",
-                            "A deleted-cell run has no surviving predecessor that can absorb its grid columns.");
+                            "Every cell of a row is deleted, so no surviving cell can absorb its grid columns.");
                         continue;
                     }
                 }
@@ -460,13 +439,7 @@ internal static class RevisionOps
                 if (group.Family == RevisionFamily.CellInsert)
                 {
                     var inserted = cells.Select(unit => unit.MarkedCell!).ToHashSet();
-                    bool emptiesRow = inserted.GroupBy(cell => cell.Parent).Any(byRow =>
-                    {
-                        var rowCells = byRow.Key?.Elements(W.tc).ToList()
-                            ?? new List<XElement>();
-                        return rowCells.Count == 0 || rowCells.All(inserted.Contains);
-                    });
-                    if (emptiesRow)
+                    if (inserted.Select(RowOf).Any(row => RowCells(row).All(inserted.Contains)))
                     {
                         group.ResolutionStatus = RevisionResolutionStatus.Malformed;
                         group.Diagnostic = new RevisionDiagnostic(
@@ -853,7 +826,7 @@ internal static class RevisionOps
                     Author = AuthorOf(child),
                     Date = (string?)child.Attribute(W.date),
                     MarkedCell = cell,
-                    MarkedRow = cell?.Parent,
+                    MarkedRow = RowOf(cell),
                     Table = table,
                     Wid = WidOf(child),
                     NativeId = (string?)child.Attribute(W.id),
@@ -894,10 +867,10 @@ internal static class RevisionOps
             }
             if ((n == W.ins || n == W.del) && child.Parent?.Name == M.ctrlPr)
             {
-                // The mark's payload is the control character's own w:rPr (or, in the
-                // nested CT_MathCtrlIns form, a property change on it) — never document
-                // content — so it is not walked. ValidateGroups fails the nested form closed.
-                sink.Add(MakeMathControlUnit(child, paragraph, markedRow, markedRowType));
+                // The mark's payload is the control character's own w:rPr — never document
+                // content — so it is not walked.
+                foreach (var mark in MathControlMarks(child))
+                    sink.Add(MakeMathControlUnit(mark, paragraph, markedRow, markedRowType));
                 continue;
             }
             if ((n == W.ins || n == W.del || n == W.moveFrom || n == W.moveTo) && IsContentWrapper(child))
@@ -1031,7 +1004,9 @@ internal static class RevisionOps
     /// property set holds it — the fraction bar, radical sign, delimiters — which is how Word
     /// tracks the insertion or deletion of the object itself (the runs inside carry their own
     /// marks). The unit carries that object as its wrapper; a <c>m:ctrlPr</c> that is not the
-    /// property set of a math object yields none and is reported as orphaned.
+    /// property set of a math object yields none and is reported as orphaned. Word resolves
+    /// the object by this mark alone, whatever marks the text inside carries: carrying out a
+    /// deletion removes unmarked text with the object, and keeping the object keeps it.
     /// </summary>
     private static RevisionUnit MakeMathControlUnit(
         XElement mark, XElement? paragraph, XElement? markedRow, string? markedRowType)
@@ -1056,11 +1031,21 @@ internal static class RevisionOps
         };
     }
 
+    /// <summary>
+    /// The control-character revisions a mark directly under <c>m:ctrlPr</c> stands for: itself
+    /// and, nested in it, the later deletion of the control character it inserted
+    /// (<c>m:ctrlPr > w:ins > w:del</c>, CT_MathCtrlIns). Each is a revision of the same
+    /// object, as in Word (issue #1189). The deletion comes first so that the insertion stays
+    /// next to the object's inserted content, which is one revision with it.
+    /// </summary>
+    internal static IEnumerable<XElement> MathControlMarks(XElement mark) =>
+        mark.Elements(W.del).Append(mark);
+
     /// <summary>The math object owning a <c>m:ctrlPr</c> mark: <c>m:ctrlPr</c> sits in the
     /// object's <c>m:*Pr</c> property set, never anywhere else in a conformant document.</summary>
     private static XElement? MathObjectOf(XElement mark)
     {
-        var properties = mark.Parent?.Parent;
+        var properties = mark.Ancestors(M.ctrlPr).FirstOrDefault()?.Parent;
         var owner = properties?.Parent;
         return properties is not null && owner is not null
             && properties.Name.Namespace == M.m
@@ -1384,18 +1369,26 @@ internal static class RevisionOps
         return node as XElement;
     }
 
+    /// <summary>The row a cell belongs to. A cell may sit in content-control or custom-XML
+    /// wrappers inside its row (<c>w:tr/w:sdt/w:sdtContent/w:tc</c>), so its parent is not always
+    /// the row; every row-geometry question goes through this and <see cref="RowCells"/>.</summary>
+    private static XElement? RowOf(XElement? cell) => cell?.Ancestors(W.tr).FirstOrDefault();
+
+    private static IEnumerable<XElement> RowCells(XElement? row) =>
+        row is null ? Enumerable.Empty<XElement>() : WordprocessingMLUtil.RowCells(row);
+
     private static bool CellsStructurallyAdjacent(RevisionUnit left, RevisionUnit right)
     {
         var leftCell = left.MarkedCell;
         var rightCell = right.MarkedCell;
-        var leftRow = leftCell?.Parent;
-        var rightRow = rightCell?.Parent;
-        if (leftCell is null || rightCell is null || leftRow?.Name != W.tr
-            || rightRow?.Name != W.tr || left.Table != right.Table)
+        var leftRow = RowOf(leftCell);
+        var rightRow = RowOf(rightCell);
+        if (leftCell is null || rightCell is null || leftRow is null
+            || rightRow is null || left.Table != right.Table)
             return false;
 
-        int leftColumn = leftRow.Elements(W.tc).TakeWhile(cell => cell != leftCell).Count();
-        int rightColumn = rightRow.Elements(W.tc).TakeWhile(cell => cell != rightCell).Count();
+        int leftColumn = RowCells(leftRow).TakeWhile(cell => cell != leftCell).Count();
+        int rightColumn = RowCells(rightRow).TakeWhile(cell => cell != rightCell).Count();
         if (leftRow == rightRow) return Math.Abs(leftColumn - rightColumn) == 1;
         return leftColumn == rightColumn
             && (OnlyIgnorableBetween(leftRow, rightRow)
@@ -2437,9 +2430,8 @@ internal static class RevisionOps
             if (u.Paragraph is not null) touchedParagraphs.Add(u.Paragraph);
             if (u.Kind == UnitKind.MathControlMark)
             {
-                // The object's existence follows its control character. Its inner runs are
-                // units of this same group and detach with it; ValidateGroups proved none of
-                // their text would have survived on its own.
+                // The object's existence follows its control character, and its content goes
+                // or stays with it.
                 if (ContentSurvives(u.Element.Name, accept))
                     UnwrapWrapper(u.Element, restoreDeleted: false);
                 else
@@ -2579,9 +2571,7 @@ internal static class RevisionOps
                 foreach (var cell in cellUnits.Select(u => u.MarkedCell)
                     .Where(c => c is not null).Select(c => c!).Distinct().ToList())
                 {
-                    if (Detached(cell)) continue;
-                    cell.Remove();
-                    removedElements.Add(cell);
+                    if (!Detached(cell)) DetachCell(cell, removedElements);
                 }
             }
         }
@@ -2654,49 +2644,57 @@ internal static class RevisionOps
     }
 
     /// <summary>
-    /// Accept cell deletion using grid units, not physical-cell count. Consecutive
-    /// deleted cells contribute the sum of their pre-existing gridSpan values to the
-    /// nearest surviving predecessor.
+    /// Accept cell deletion using grid units, not physical-cell count. As in Word, a deleted
+    /// cell's grid columns go to the nearest surviving cell before it, and the deleted cells
+    /// that start a row go to the first surviving cell after them.
     /// </summary>
     private static void AcceptDeletedCells(
         IReadOnlyList<RevisionUnit> units, List<XElement> removedElements)
     {
         var deleted = units.Select(u => u.MarkedCell).Where(c => c is not null)
             .Select(c => c!).ToHashSet();
-        foreach (var row in deleted.Select(c => c.Parent).Where(r => r is not null)
-            .Select(r => r!).Distinct().ToList())
+        foreach (var row in deleted.Select(RowOf).OfType<XElement>().Distinct().ToList())
         {
-            var cells = row.Elements(W.tc).ToList();
-            XElement? predecessor = null;
-            int pendingSpan = 0;
-            foreach (var cell in cells)
+            XElement? survivor = null;
+            var leading = new List<XElement>();
+            foreach (var cell in RowCells(row).ToList())
             {
-                if (deleted.Contains(cell))
+                if (!deleted.Contains(cell))
                 {
-                    pendingSpan += CellGridSpan(cell);
-                    cell.Remove();
-                    removedElements.Add(cell);
+                    foreach (var gone in leading) AbsorbCell(cell, gone);
+                    leading.Clear();
+                    survivor = cell;
                     continue;
                 }
 
-                if (pendingSpan > 0)
-                {
-                    if (predecessor is null)
-                        throw new InvalidOperationException(
-                            "A deleted-cell run has no surviving predecessor to absorb its grid columns.");
-                    SetCellGridSpan(predecessor, CellGridSpan(predecessor) + pendingSpan);
-                    pendingSpan = 0;
-                }
-                predecessor = cell;
+                if (survivor is null) leading.Add(cell);
+                else AbsorbCell(survivor, cell);
+                DetachCell(cell, removedElements);
             }
-            if (pendingSpan > 0)
-            {
-                if (predecessor is null)
-                    throw new InvalidOperationException(
-                        "Resolving the cell deletion would remove every cell in a row.");
-                SetCellGridSpan(predecessor, CellGridSpan(predecessor) + pendingSpan);
-            }
+            if (survivor is null)
+                throw new InvalidOperationException(
+                    "Resolving the cell deletion would remove every cell in a row.");
         }
+    }
+
+    /// <summary>Gives a surviving cell a deleted cell's grid columns and, as Word does, its width.</summary>
+    private static void AbsorbCell(XElement survivor, XElement gone)
+    {
+        var width = TableGridModel.CombinedTwipWidth(new[] { survivor, gone });
+        SetCellGridSpan(survivor, CellGridSpan(survivor) + CellGridSpan(gone));
+        if (width is not null) survivor.Element(W.tcPr)!.Element(W.tcW)!.SetAttributeValue(W._w, width);
+    }
+
+    /// <summary>Removes a cell from its row, with any content control or custom-XML wrapper that
+    /// held no other cell: a wrapper left without a cell is not valid row content. The cell is
+    /// what is reported removed, since callers find its part through the revision's own cell.</summary>
+    private static void DetachCell(XElement cell, List<XElement> removedElements)
+    {
+        var outermost = cell;
+        while (outermost.Parent is { } parent && parent.Name != W.tr && RowCells(parent).All(other => other == cell))
+            outermost = parent;
+        outermost.Remove();
+        removedElements.Add(cell);
     }
 
     private static int CellGridSpan(XElement cell) =>

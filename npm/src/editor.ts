@@ -4476,13 +4476,17 @@ export class DocxEditor {
     const block = this.activeBlock;
     if (this.closed || !block) return;
     const blocks = this.selectedBlocks();
+    // A border change regroups the wrapping border <div>s, and a bordered paragraph's wrapper
+    // carries its indentation and outer spacing — both are whole-document context. (A bordered
+    // table cell is no such wrapper.)
+    const rewraps = !!op.clearBorders
+      || [block, ...blocks].some((b) => b.parentElement?.tagName === "DIV" && inBorderWrapper(b));
     if (
       blocks.length > 1 &&
       this.applyParagraphOpAcrossBlocks(
         blocks,
         (id) => this.exports.DocxSessionBridge.SetParagraphFormat(this.handle, id, JSON.stringify(op)),
-        // A border change regroups the wrapping border <div>s — whole-document context.
-        !!op.clearBorders,
+        rewraps,
       )
     )
       return;
@@ -4497,9 +4501,9 @@ export class DocxEditor {
       this.exports.DocxSessionBridge.SetParagraphFormat(this.handle, fullId, JSON.stringify(op)),
     );
     if (!res.success) return;
-    // A border change adds/removes the wrapping border <div>, so a single-block swap can't restructure
-    // it correctly — re-render fully (like list edits) so the wrapper appears/disappears cleanly.
-    if (this.affectsList(res) || op.clearBorders) { this.refreshAfter(block, idx, false, true); return; }
+    // A single-block swap can't restructure or restyle the wrapping border <div> — re-render fully
+    // (like list edits) so the wrapper appears, disappears or takes its new spacing cleanly.
+    if (this.affectsList(res) || rewraps) { this.refreshAfter(block, idx, false, true); return; }
     this.swapBlock(block, unid, res.modified?.[0])?.focus();
   }
 

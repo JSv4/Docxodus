@@ -1958,11 +1958,16 @@ namespace Docxodus
                 // Accept revisions for a deleted math control character: the mark sits in the
                 // owning object's property set (m:f/m:fPr/m:ctrlPr/w:del, m:rad/m:radPr/…) and
                 // the object's existence follows its control character, so remove the object.
+                // A control character inserted and then deleted nests the deletion in the
+                // insertion (m:ctrlPr/w:ins/w:del); Word removes that object too (issue #1189).
 
                 if (element.Name.Namespace == M.m &&
                     element.Elements().Any(properties =>
                         properties.Name.LocalName.EndsWith("Pr", StringComparison.Ordinal) &&
-                        properties.Elements(M.ctrlPr).Elements(W.del).Any()))
+                        properties.Elements(M.ctrlPr).Elements()
+                            .Where(mark => mark.Name == W.ins || mark.Name == W.del)
+                            .SelectMany(Internal.RevisionOps.MathControlMarks)
+                            .Any(mark => mark.Name == W.del)))
                     return null;
 
                 // Accept revisions for deleted rows in tables.
@@ -3272,6 +3277,8 @@ namespace Docxodus
                                         return Order_tcPr[e.Name];
                                     return 999;
                                 }));
+                            if (Internal.TableGridModel.CombinedTwipWidth(g.Where(e => e.Name == W.tc)) is { } width)
+                                orderedTcPr.Element(W.tcW)!.SetAttributeValue(W._w, width);
                             XElement newTc = new XElement(W.tc,
                                 orderedTcPr,
                                 g.First().Elements().Where(e => e.Name != W.tcPr));

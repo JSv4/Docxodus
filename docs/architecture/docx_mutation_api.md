@@ -2019,7 +2019,7 @@ individual and bulk resolution:
 
 | Method | Description |
 |--------|-------------|
-| `ListRevisions()` | Read-only entries in document order across body, headers, footers, footnotes, and endnotes. Each carries an opaque stable `Id` (`rev2-…`), coarse `Type`, exact `Family`, native `ConstituentIds`, owning `PartUri`/canonical `Scope`, primary `AnchorId`, every `AffectedAnchor`, and a `ResolutionStatus` plus optional diagnostic (on a `Supported` entry the diagnostic is advisory — see "What blocks bulk resolution" below). Authors/dates come from the live markup. Atomic entries include content and paragraph/row/property changes, named moves, cell insert/delete/merge operations, structured-wrapper envelopes (`w:sdt` and `w:customXml` insertion and deletion; a moved wrapper's envelope resolves with its named move, so RP018 round-trips), numbering-property revisions, and math control-character marks (an `m:ctrlPr` mark and the revised runs of its object — the fraction, radical, delimiter… whose existence the mark tracks — resolve as one entry; a paragraph mark carrying both an insertion and a later deletion lists each as its own revision). Unsupported, malformed, and ambiguous markup stays visible and fails closed. Legacy `revNNN` ids are accepted only as unambiguous inputs and are never emitted. |
+| `ListRevisions()` | Read-only entries in document order across body, headers, footers, footnotes, and endnotes. Each carries an opaque stable `Id` (`rev2-…`), coarse `Type`, exact `Family`, native `ConstituentIds`, owning `PartUri`/canonical `Scope`, primary `AnchorId`, every `AffectedAnchor`, and a `ResolutionStatus` plus optional diagnostic (on a `Supported` entry the diagnostic is advisory — see "What blocks bulk resolution" below). Authors/dates come from the live markup. Atomic entries include content and paragraph/row/property changes, named moves, cell insert/delete/merge operations, structured-wrapper envelopes (`w:sdt` and `w:customXml` insertion and deletion; a moved wrapper's envelope resolves with its named move, so RP018 round-trips), numbering-property revisions, and math control-character marks (an `m:ctrlPr` mark and the revised runs of its object — the fraction, radical, delimiter… whose existence the mark tracks — resolve as one entry; a paragraph mark carrying both an insertion and a later deletion lists each as its own revision, and so does a math object whose control character was inserted and later deleted). Unsupported, malformed, and ambiguous markup stays visible and fails closed. Legacy `revNNN` ids are accepted only as unambiguous inputs and are never emitted. |
 | `AcceptRevision(id)` | Resolve ONE revision, keeping the change: unwrap `w:ins`/`w:moveTo`, carry out `w:del`/`w:moveFrom` (paragraph-mark deletions coalesce into the following paragraph, row deletions drop the row — the last row drops the table), drop the `*PrChange` element keeping current properties. An ordinary undoable mutation returning the `EditResult` envelope (`Modified` = touched blocks, `Removed` = blocks the resolution deleted). |
 | `RejectRevision(id)` | The inverse: remove insertions, restore deletions (`w:delText` → `w:t`, marks stripped), keep a move at its source, restore a format change's stored old properties (preserving the children the `CT_*Base` inner schema excludes — mark revisions on a paragraph-mark `rPr`, header/footer references on `sectPr`, `rPr`/`sectPr` on `pPr`). |
 | `AcceptAllRevisions()` / `RejectAllRevisions()` | Resolve the complete live registry through the same selective resolver as one atomic undo step. The registry is rebuilt after every entry so resolving a property shell can expose older archived revisions safely. Any unsupported, malformed, or ambiguous entry rolls back the whole operation, except one that is ambiguous only to address (`duplicate_revision_id`, `incoherent_move_metadata`), which refuses selective resolution alone. |
@@ -2050,7 +2050,7 @@ Concretely, these shapes were resolvable before and are refused now:
 | A structured-wrapper range marker (`w:customXml{Ins,Del,MoveFrom,MoveTo}Range*`) whose id has no counterpart, or more than one | `Malformed` / `Ambiguous` | `unpaired_range_marker`, `duplicate_range_id` |
 | A paired range that does not cross a `w:sdt`/`w:customXml` tag as one half of Word's two-range envelope | `Malformed` | `malformed_range_topology` |
 | A move envelope around a wrapper whose content carries no `w:moveFrom`/`w:moveTo` mark | `Malformed` | `orphan_custom_xml_move_range` |
-| An `m:ctrlPr` mark whose object still shows text not revised the same way (resolving it would drop or resurrect that text), or one carrying the nested `CT_MathCtrlIns` property change | `Unsupported` | `unrevised_math_control_payload`, `unsupported_math_control_payload` |
+| An `m:ctrlPr` mark holding anything but the control character's `w:rPr` or its later deletion (`w:ins > w:del`, which lists as a second revision of the same object) | `Unsupported` | `unsupported_math_control_payload` |
 | An `m:ctrlPr` mark outside any math object's property set | `Malformed` | `orphan_math_control_revision` |
 | A revision mark under a run's `w:rPr`, or a `w:del`/move mark under `w:numPr` — positions the schema never allows (`CT_RPr` carries no marks; `CT_NumPr` admits only `w:ins` and `w:numberingChange`, removed numbering being archived in `w:pPrChange`) | `Malformed` | `invalid_revision_carrier` |
 | `w:numberingChange` not attached to `w:numPr` or a LISTNUM field | `Malformed` | `orphan_numbering_revision` |
@@ -2116,15 +2116,14 @@ Three further shapes have a single safe resolution and resolve:
   range closes just after the other's opens, with no moved content in both) is an ordinary move.
   Moved content that lies inside a range of the other side still reports `overlapping_move_topology`.
 
-Two table shapes stay refused, each for want of a unique resolution, not out of caution about
-metadata: a deleted first cell of a row (`unabsorbable_cell_deletion` — no predecessor exists to absorb
-its grid column and Word's rule for that case is unverified; `RevisionProcessor` leaves a row one
-column short, and LibreOffice deletes the whole first column, including cells that were not deleted),
-and cell operations on cells wrapped in cell-level content controls (`w:tr/w:sdt/w:sdtContent/w:tc`,
-as one online editor exports them), whose row geometry the resolver does not model
-(`ambiguous_table_structure_cluster`, or `unabsorbable_cell_deletion` once the grid change is set
-aside; `RevisionProcessor`'s accept leaves the `w:cellDel` markers in place there). See
-`docs/ooxml_corner_cases.md`.
+Cell revisions follow the geometry desktop Word 2024 writes (issue #1404). An accepted deleted cell
+gives its grid columns, and its `w:tcW` when both widths are in twips, to the nearest surviving cell
+before it; deleted cells that start a row give them to the first surviving cell after them. The row
+model reads a row's cells through content-control and custom-XML wrappers
+(`w:tr/w:sdt/w:sdtContent/w:tc`, as one online editor exports every cell), so wrapped cells group and
+resolve like bare ones, and a wrapper left without a cell is removed with it. One shape stays refused:
+a row whose every cell is deleted (`unabsorbable_cell_deletion`) or inserted
+(`unresolvable_cell_insertion`), where Word removes the row. See `docs/ooxml_corner_cases.md`.
 
 `RevisionProcessor.AcceptRevisions`/`RejectRevisions` still handle all of them and remain
 public, so a caller that needs the old always-succeeding behaviour can run the transform over
