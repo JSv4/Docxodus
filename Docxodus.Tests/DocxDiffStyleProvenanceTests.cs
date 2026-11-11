@@ -715,7 +715,10 @@ public class DocxDiffStyleProvenanceTests
         Assert.Equal("240", (string?)imported.Element(W + "pPr")?.Element(W + "spacing")?.Attribute(W + "line"));
         Assert.NotNull(imported.Element(W + "rPr")?.Element(W + "rPrChange"));
         Assert.Null(unused.Element(W + "pPr")?.Element(W + "pPrChange"));
-        Assert.Null(unused.Element(W + "pPr")?.Element(W + "spacing")?.Attribute(W + "line"));
+        // The left has no w:pPrDefault, so Word's 1.16 lines are its default (#1652). The right's default
+        // is an empty w:pPrDefault, single spacing, which the copied style must state to keep it.
+        Assert.Equal("240", (string?)unused.Element(W + "pPr")?.Element(W + "spacing")?.Attribute(W + "line"));
+        Assert.Equal("720", (string?)unused.Element(W + "pPr")?.Element(W + "spacing")?.Attribute(W + "after"));
 
         // Capture the archived style payloads before processors mutate the package.  This is the
         // critical semantic test: RevisionProcessor accepts a style-property revision by keeping

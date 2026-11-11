@@ -1358,7 +1358,8 @@ public class HtmlConversionOpsTests
                     "<w:body><w:p><w:pPr><w:spacing w:lineRule=\"auto\"/></w:pPr><w:pPr/>" +
                     "<w:r><w:t>HCO066 retained text</w:t></w:r></w:p><w:sectPr/></w:body></w:document>");
             }
-            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            // An empty paragraph default, so that no line value is inherited either (a missing one is Word's 1.16 lines, #1652).
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(new Wp.DocDefaults(new Wp.ParagraphPropertiesDefault()));
             main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
             doc.Save();
         }
@@ -2576,7 +2577,9 @@ public class HtmlConversionOpsTests
         {
             var main = doc.AddMainDocumentPart();
             main.Document = new Wp.Document(new Wp.Body(new Wp.Paragraph(run)));
-            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(new Wp.DocDefaults());
+            // Single spacing, stated: Word gives a missing paragraph default 1.16 lines (#1652), and a line
+            // multiple positions every run with `top`, which is what this must tell apart from a shift.
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(new Wp.DocDefaults(new Wp.ParagraphPropertiesDefault()));
             main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
             main.Document.Save();
         }

@@ -50,7 +50,7 @@ export function pageFittingDocx(body: string, compatibility = ''): Uint8Array {
     ...(compatibility ? { 'word/settings.xml': `<w:settings xmlns:w="${W_NS}"><w:compat>${compatibility}</w:compat></w:settings>` } : {}),
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>
       <w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/><w:sz w:val="22"/>
-      </w:rPr></w:rPrDefault></w:docDefaults></w:styles>`,
+      </w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults></w:styles>`,
     'word/document.xml': `<w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"
       xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
