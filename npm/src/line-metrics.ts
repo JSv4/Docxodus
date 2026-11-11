@@ -115,33 +115,36 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
 
   // Read every style before probing: each probe changes the document, so a style read after one
   // recomputes the styles of the whole tree.
-  const candidates: Array<{ element: HTMLElement; font: ProbeFont; fontSize: number; characters: string[] }> = [];
+  const candidates: Array<{ element: HTMLElement; font: ProbeFont; fontSize: number; characters: string[]; floor: boolean }> = [];
   const grids: Array<{ paragraph: HTMLElement; pitch: number }> = [];
   const minimums: HTMLElement[] = [];
   for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
     if (!(element instanceof view.HTMLElement)) continue;
     const style = view.getComputedStyle(element);
-    if (element.matches(PARAGRAPH_SELECTOR) && Number.parseFloat(style.getPropertyValue('--docx-min-line-height')) > 0)
-      minimums.push(element);
-    if (style.lineHeight !== "normal") continue;
+    const paragraph = element.matches(PARAGRAPH_SELECTOR);
+    const minimum = Number.parseFloat(style.getPropertyValue('--docx-min-line-height')) * 4 / 3;
+    if (paragraph && minimum > 0) minimums.push(element);
+    const pitch = Number.parseFloat(style.getPropertyValue("--docx-line-grid")) * 4 / 3;
+    // On a grid, an at-least line height is only the floor of the text's grid lines (#1551):
+    // its natural height is measured too, and the minimum stays until the grid pass replaces it.
+    const floor = pitch > 0 && Math.abs(Number.parseFloat(style.lineHeight) - minimum) < .01;
+    if (style.lineHeight !== "normal" && !floor) continue;
     const fontSize = Number.parseFloat(style.fontSize);
     if (!(fontSize > 0)) continue;
     const { fontStyle, fontWeight, fontStretch, fontFamily } = style;
     candidates.push({ element, font: { fontStyle, fontWeight, fontStretch, fontFamily }, fontSize,
-      characters: probeCharacters(element) });
-    if (element.matches(PARAGRAPH_SELECTOR)) {
-      const pitch = Number.parseFloat(style.getPropertyValue("--docx-line-grid")) * 4 / 3;
-      if (pitch > 0) grids.push({ paragraph: element, pitch });
-    }
+      characters: probeCharacters(element), floor });
+    if (paragraph && pitch > 0) grids.push({ paragraph: element, pitch });
   }
-  const targets: Array<{ element: HTMLElement; lineHeight: number }> = [];
-  for (const { element, font, fontSize, characters } of candidates) {
+  const targets: Array<{ element: HTMLElement; lineHeight: number; floor: boolean }> = [];
+  for (const { element, font, fontSize, characters, floor } of candidates) {
     // Fallback fonts are chosen per run of text, so the characters are probed together, as they
     // are laid out; a character probed alone can fall back to a different font.
     const ratio = ratioFor(font, LATIN_PROBE + [...characters].sort().join(""));
-    if (ratio > 0) targets.push({ element, lineHeight: ratio * fontSize });
+    if (ratio > 0) targets.push({ element, lineHeight: ratio * fontSize, floor });
   }
-  for (const { element, lineHeight } of targets) {
+  const resolved = targets.filter(target => !target.floor);
+  for (const { element, lineHeight } of resolved) {
     element.style.setProperty("line-height", `${lineHeight.toFixed(4)}px`);
   }
   let restored = 0;
@@ -151,7 +154,7 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
     if (minimums.length) restored = applyUniformLineMinimums(minimums, ratioFor, naturalHeights);
   }
   positionRubyAnnotations(root);
-  return targets.length + restored;
+  return resolved.length + restored;
 }
 
 /** Ordinary inline runs whose metrics can be represented by their paragraph's font. */
@@ -168,15 +171,17 @@ function uniformParagraphRuns(paragraph: HTMLElement, allowStructuralWrappers = 
   // each paragraph's runs. Its own font and line height must move with them.
   const note = allowStructuralWrappers && paragraph.matches('section.endnotes > ol > li > p')
     && children.length === 1 && children[0].getAttribute('data-source-anchor-id')?.startsWith('en:en:') ? children[0] : null;
-  if (note && Array.from(note.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim())) return;
+  // Tracked changes shown as markup wrap their runs in <ins> or <del>, which Word lays out as plain text (#1551).
+  const wrappers = children.filter(child => child === note || allowStructuralWrappers && /^(ins|del)$/.test(child.localName));
   const runs = children.flatMap(child => child === marker ? [child, ...Array.from(child.querySelectorAll('*'))]
-    : child === note ? [child, ...Array.from(child.children)] : [child]);
-  if (!children.length || Array.from(paragraph.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim())
+    : wrappers.includes(child) ? [child, ...Array.from(child.children)] : [child]);
+  if (!children.length || [paragraph, ...wrappers].some(parent =>
+    Array.from(parent.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim()))
     || runs.some(child => {
-      const inMarker = marker?.contains(child);
-      if (!(child instanceof view.HTMLElement) || child.localName !== "span"
+      const inMarker = marker?.contains(child), wrapper = wrappers.includes(child);
+      if (!(child instanceof view.HTMLElement) || (!wrapper && child.localName !== "span")
         // A condensed justified line (word-text.ts) narrows spaces inside its run, nothing else.
-        || (!inMarker && ((child !== note && child.querySelector(':scope > :not([data-docx-condensed-line])'))
+        || (!inMarker && ((!wrapper && child.querySelector(':scope > :not([data-docx-condensed-line])'))
           || !child.textContent?.trim()))) return true;
       const run = view.getComputedStyle(child);
       // Converter list prefixes are an inline flex box with two flex items: the
@@ -281,9 +286,10 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
     const section = paragraph.closest<HTMLElement>('[data-section-index]');
     if (Number(section?.dataset.cols ?? 1) > 1 || section?.querySelector(
       '[data-docx-text-frame], [data-docx-wrap-text], [data-docx-edge-picture]')) continue;
+    // A mixed at-least line is one the grid pass cannot measure: it keeps its minimum here, as off the grid.
     if (style.direction !== 'ltr' || style.writingMode !== 'horizontal-tb'
       || multiple < 1
-      || Number.parseFloat(style.getPropertyValue('--docx-line-grid')) > 0
+      || !minimum && Number.parseFloat(style.getPropertyValue('--docx-line-grid')) > 0
       || Number.parseFloat(style.getPropertyValue('--docx-exact-line-height')) > 0
       || Array.from(paragraph.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim())) continue;
     const marker = paragraph.firstElementChild?.getAttribute('data-list-marker') === 'true'
@@ -488,10 +494,10 @@ export function isMixedLineMetric(element: HTMLElement): boolean {
 }
 
 /**
- * Size uniform automatic-spacing lines on their section's grid, retaining their natural baseline.
+ * Size uniform automatic and at-least lines on their section's grid, retaining their natural baseline.
  * Word 2024 gives such a line the whole grid slots its natural height needs or its multiple of one
  * pitch, whichever is taller (#1551): 1.5 lines on an 18pt pitch is 27pt, on a 12pt pitch 24pt.
- * An at-least minimum no taller than the pitch never exceeds those slots, so its line is sized alike.
+ * An at-least minimum taller than those slots is the line instead, which the converter already set.
  */
 function applyParagraphLineGrids(grids: Array<{ paragraph: HTMLElement; pitch: number }>, naturalHeights: Map<HTMLElement, number>): void {
   const view = grids[0].paragraph.ownerDocument.defaultView!;
@@ -500,20 +506,21 @@ function applyParagraphLineGrids(grids: Array<{ paragraph: HTMLElement; pitch: n
     if (!natural) continue;
     const style = view.getComputedStyle(paragraph);
     const multiple = Number(style.getPropertyValue('--docx-auto-line-spacing')) || 1;
+    const height = Math.max(Math.ceil(natural / pitch), multiple) * pitch;
+    if (Number.parseFloat(style.getPropertyValue('--docx-min-line-height')) * 4 / 3 > height) continue;
     // The converter's own multiple: m natural lines, its text lifted to their top. The grid replaces both.
     const multiplied = (run: CSSStyleDeclaration) => multiple !== 1 && run.position === 'relative'
       && Math.abs(Number.parseFloat(run.lineHeight) - natural * multiple) < .01
       && Math.abs(Number.parseFloat(run.top) - Math.min(0, natural * (1 - multiple) / 2)) < .01;
-    const children = uniformParagraphRuns(paragraph, false, multiplied);
-    if (!children || children.some(child => naturalHeights.get(child) !== natural
-      && !multiplied(view.getComputedStyle(child)))) {
-      // Text the pass cannot measure keeps an at-least line's minimum, which the converter leaves off a grid line.
-      const minimum = Number.parseFloat(style.getPropertyValue('--docx-min-line-height')) * 4 / 3;
-      if (minimum > natural) paragraph.style.lineHeight = `${minimum}px`;
-      continue;
-    }
-    const height = Math.max(Math.ceil(natural / pitch), multiple) * pitch;
-    for (const child of children) {
+    const runs = uniformParagraphRuns(paragraph, true, multiplied);
+    // A tracked change's wrapper carries the line of the runs inside it and moves them with it.
+    if (!runs || runs.some(run => run.parentElement === paragraph
+      ? naturalHeights.get(run) !== natural && !multiplied(view.getComputedStyle(run))
+      : view.getComputedStyle(run).lineHeight !== view.getComputedStyle(run.parentElement!).lineHeight)) continue;
+    // The strut stays natural, also where the converter set an at-least minimum.
+    paragraph.style.lineHeight = `${natural.toFixed(4)}px`;
+    for (const child of runs) {
+      if (child.parentElement !== paragraph) continue;
       // As with automatic multiples, the paragraph strut remains natural and extra
       // layout height goes below its ink. Read-only baseline correction still applies.
       child.style.lineHeight = `${height}px`;
@@ -819,7 +826,6 @@ export function alignBaselinesToWord(root: Element): number {
     // authored minima, retaining explicit overrides and exact/mixed-run handling.
     const minimumRuns = minimum >= natural && Math.abs(lineHeight - minimum) < .01
       && !Number.parseFloat(style.getPropertyValue('--docx-exact-line-height'))
-      && !Number.parseFloat(style.getPropertyValue('--docx-line-grid'))
       && !BEYOND_LATIN.test(paragraph.textContent ?? '')
       ? uniformParagraphRuns(paragraph, true) : undefined;
     const uniformMinimum = minimumRuns?.every(run => view.getComputedStyle(run).lineHeight === style.lineHeight);
