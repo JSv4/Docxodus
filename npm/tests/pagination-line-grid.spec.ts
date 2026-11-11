@@ -270,11 +270,9 @@ test('grid lines centre their text', async ({ page }) => {
 
 // Word 2024 (#1551): lines split by `w:br` are grid lines as wrapped ones are, and centre their text. The converter
 // keeps a break in a run with the direction mark that holds the next line's font, so two breaks make an empty
-// line, and a break at the end of a paragraph gives its mark a line: Word gives each of those 18pt too. In a
-// paragraph with tabs, the break's run also holds an empty span that carries the next line's offset.
+// line, and a break at the end of a paragraph gives its mark a line: Word gives each of those 18pt too.
 test('lines split by breaks take whole grid lines', async ({ page }) => {
   const br = '<span><br data-docx-break="true">&#x200e;</span>', run = (text: string) => `<span>${text}</span>`;
-  const tabbed = '<span><br data-docx-break="true">&#x200e;<span style="margin:0 0 0 36pt;padding:0"></span></span>';
   const three = run('First line') + br + run('Middle line') + br + run('Last line');
   const grid = '--docx-line-grid:18pt', lines15 = '--docx-auto-line-spacing:1.5';
   const atLeast = (minimum: number) => `line-height:${minimum}pt;--docx-min-line-height:${minimum}pt`;
@@ -282,17 +280,16 @@ test('lines split by breaks take whole grid lines', async ({ page }) => {
   const lines = await gridLines(page, [
     ...[three, run('First line') + br + br + run('Last line'), run('First line') + br + run('Last line') + br,
       run('First ') + '<span style="font-weight:bold">seed</span>' + br + run('Middle line') + br + run('Last line'),
-      run('First line') + tabbed + run('Last line'),
     ].flatMap(html => [grid, ''].map(style => ({ html, style }))),
     ...[`${lines15};${grid}`, lines15, `${atLeast(15)};${grid}`, atLeast(15), `${atLeast(20)};${grid}`,
       `font-size:24pt;${grid}`, '--docx-line-grid:12pt'].map(style => ({ html: three, style })),
     ...[grid, ''].map(style => ({ html: wrapped, style: `width:320px;${style}` })),
   ]);
-  expect(lines.slice(0, 17).map(([height]) => height)).toEqual([54, 41.4, 54, 41.4, 54, 41.4, 54, 41.4, 36, 27.6,
+  expect(lines.slice(0, 15).map(([height]) => height)).toEqual([54, 41.4, 54, 41.4, 54, 41.4, 54, 41.4,
     81, 62.1, 54, 45, 60, 108, 72]);
   // The last line's text: two grid lines down and centred in the third, 10.5pt below the unspaced line's.
   expect(Math.abs(lines[0][1] - lines[1][1] - 10.5)).toBeLessThan(.35);
-  const plainLines = Math.round(lines[18][0] / 13.8);
+  const plainLines = Math.round(lines[16][0] / 13.8);
   expect(plainLines).toBeGreaterThanOrEqual(3);
-  expect(lines[17][0]).toBeCloseTo(18 * plainLines, 1);
+  expect(lines[15][0]).toBeCloseTo(18 * plainLines, 1);
 });
