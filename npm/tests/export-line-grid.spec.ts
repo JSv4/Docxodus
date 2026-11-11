@@ -37,14 +37,24 @@ for (const entry of [
   { pitch: 0, word: '<w:b/>', step: 2355 / 2048 * 12, lines: 46, pages: 3, baseline: 83.18, digits: 1 },
   { pitch: 18, word: '<w:sz w:val="48"/>', step: 36, lines: 18, pages: 7, baseline: 98.66 },
   { pitch: 0, word: '<w:sz w:val="48"/>', step: 2355 / 2048 * 24, lines: 23, pages: 6, baseline: 94.46, digits: 1 },
+  // A multiple below one is single spacing on the grid, for mixed sizes too.
+  { pitch: 18, word: '<w:sz w:val="48"/>', spacing: '<w:spacing w:line="192" w:lineRule="auto"/>', step: 36, lines: 18, pages: 7, baseline: 98.66 },
   // Off the grid, a bold word's line puts its at-least surplus above the text, as a uniform line does.
   { pitch: 0, word: '<w:b/>', spacing: atLeast(20), step: 20, lines: 32, pages: 4, baseline: 89.42, digits: 1 },
   // A page's last line needs only its centred text: 18 such lines fit a 645pt body (17 x 36pt + 31.8pt), 17 a 643pt one.
   { pitch: 18, word: '<w:sz w:val="48"/>', bottom: 1500, step: 36, lines: 18, pages: 7 },
   { pitch: 18, word: '<w:sz w:val="48"/>', bottom: 1540, step: 36, lines: 17, pages: 8 },
-]) test(`single spacing PDF grid=${entry.pitch}, snap=${entry.snap !== false} ${entry.size ?? 12}pt ${entry.spacing ?? ''}${entry.tracked ? ` markup ${entry.tracked}` : ''}${entry.word ? ` word ${entry.word}` : ''}${entry.bottom ? ` bottom ${entry.bottom}` : ''}`, async ({ browser }) => {
+  // Three lines a paragraph split by `w:br` are grid lines too, as wrapped ones are; Word moves a three-line
+  // paragraph whole rather than leave one of its lines alone on a page.
+  { pitch: 18, split: 3, step: 18, lines: 36, pages: 4, baseline: 85.34 },
+  { pitch: 0, split: 3, step: 2355 / 2048 * 12, lines: 45, pages: 3, baseline: 83.18, digits: 1 },
+  { pitch: 18, split: 3, spacing: '<w:spacing w:line="360" w:lineRule="auto"/>', step: 27, lines: 24, pages: 5, baseline: 89.78 },
+  { pitch: 18, split: 3, word: '<w:b/>', step: 18, lines: 36, pages: 4, baseline: 85.34 },
+  { pitch: 18, split: 3, spacing: atLeast(20), step: 20, lines: 30, pages: 4, baseline: 87.26, digits: 1 },
+  { pitch: 0, split: 3, spacing: atLeast(20), step: 20, lines: 30, pages: 4, baseline: 89.42, digits: 1 },
+]) test(`single spacing PDF grid=${entry.pitch}, snap=${entry.snap !== false} ${entry.size ?? 12}pt ${entry.spacing ?? ''}${entry.tracked ? ` markup ${entry.tracked}` : ''}${entry.word ? ` word ${entry.word}` : ''}${entry.bottom ? ` bottom ${entry.bottom}` : ''}${entry.split ? ` split ${entry.split}` : ''}`, async ({ browser }) => {
   test.setTimeout(120_000);
-  const result = await renderDocxArtifacts(lineGridDocx(entry.pitch, entry.snap, entry.spacing, entry.tracked, entry.size, entry.word, entry.bottom),
+  const result = await renderDocxArtifacts(lineGridDocx(entry.pitch, entry.snap, entry.spacing, entry.tracked, entry.size, entry.word, entry.bottom, entry.split),
     { browser, outputs: ['pdf'], reviewProfile: entry.tracked ? 'markup' : 'final', commentProfile: 'hidden', timeoutMs: 120_000 });
   expect(result.pageCount).toBe(entry.pages);
   const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
