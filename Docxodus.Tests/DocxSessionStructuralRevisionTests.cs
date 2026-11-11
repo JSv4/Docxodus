@@ -1475,6 +1475,23 @@ public class DocxSessionStructuralRevisionTests
         Assert.True(XNode.DeepEquals(expected, processed), FirstDifference(expected, processed));
     }
 
+    // Only a mark directly on the control character deletes the object. A w:del inside the
+    // character's own w:rPr is not one, so accepting leaves the object in place.
+    [Fact]
+    public void DS45549_DeletionMarkInsideControlRunProperties_DoesNotRemoveTheObject()
+    {
+        var input = MutateMain(BuildMathControlDocument("fraction_present"), root =>
+            root.Descendants(M.ctrlPr).Single().Element(W.rPr)!.Add(new XElement(W.del,
+                new XAttribute(W.id, "10"), new XAttribute(W.author, "Math Reviewer"),
+                new XAttribute(W.date, "2026-01-01T00:00:00Z"))));
+
+        var accepted = MainRoot(RevisionProcessor.AcceptRevisions(
+            new WmlDocument("oracle.docx", input)).DocumentByteArray);
+
+        Assert.Single(accepted.Descendants(M.f));
+        Assert.Equal("A=12+B", string.Concat(accepted.Descendants(M.t).Select(text => text.Value)));
+    }
+
     // Shapes with no safe semantics stay listed and fail closed: a control mark holding
     // anything but the character's properties or its later deletion, and a m:ctrlPr outside
     // any object's property set.

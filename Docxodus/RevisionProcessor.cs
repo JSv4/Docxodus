@@ -1965,6 +1965,7 @@ namespace Docxodus
                     element.Elements().Any(properties =>
                         properties.Name.LocalName.EndsWith("Pr", StringComparison.Ordinal) &&
                         properties.Elements(M.ctrlPr).Elements()
+                            .Where(mark => mark.Name == W.ins || mark.Name == W.del)
                             .SelectMany(Internal.RevisionOps.MathControlMarks)
                             .Any(mark => mark.Name == W.del)))
                     return null;
