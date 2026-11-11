@@ -147,8 +147,10 @@ public sealed class PackageCompressionTests
         Assert.All(zip.Entries, entry => Assert.NotEqual(0, (entry.ExternalAttributes >> 16) & 0x1FF));
     }
 
-    [Fact]
-    public void PKG1659_StampUnixHost_RewritesEveryCentralDirectoryHost()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PKG1659_StampUnixHost_RewritesEveryCentralDirectoryHost(bool centralDirectoryOnly)
     {
         // Linux and macOS already write host 3, so forge a Windows-written archive to test the stamp anywhere.
         using var buffer = new MemoryStream();
@@ -161,7 +163,11 @@ public sealed class PackageCompressionTests
         var bytes = buffer.ToArray();
         foreach (var header in CentralDirectoryHeaders(bytes)) bytes[header + 5] = 0;
 
-        ZipPackageOutputNormalizer.StampUnixHost(bytes);
+        // A streamed archive is stamped from its central directory on, the part still in hand.
+        int start = centralDirectoryOnly ? CentralDirectoryHeaders(bytes).First() : 0;
+        var tail = bytes[start..];
+        ZipPackageOutputNormalizer.StampUnixHost(tail, start);
+        tail.CopyTo(bytes, start);
 
         Assert.Equal(new[] { 3, 3 }, CentralDirectoryHosts(bytes));
         using var reread = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);

@@ -99,9 +99,10 @@ internal static class ZipPackageOutputNormalizer
     /// host it runs on into each central-directory header (0, MS-DOS, on Windows; 3, Unix, elsewhere)
     /// and offers no way to choose it, so the same package differed by a byte per entry between hosts
     /// (issue #1659). Unix, with the permissions <see cref="NormalizedExternalAttributes"/> sets, is
-    /// what Linux and macOS already wrote.
+    /// what Linux and macOS already wrote. <paramref name="zip"/> may be only the end of the archive,
+    /// from the central directory on, when <paramref name="start"/> gives the offset it begins at.
     /// </summary>
-    internal static void StampUnixHost(byte[] zip)
+    internal static void StampUnixHost(byte[] zip, long start = 0)
     {
         const byte Unix = 3;
         var bytes = zip.AsSpan();
@@ -110,16 +111,16 @@ internal static class ZipPackageOutputNormalizer
         while (end >= floor && BinaryPrimitives.ReadUInt32LittleEndian(bytes[end..]) != 0x06054b50) end--;
         if (end < floor) return;
         long count = BinaryPrimitives.ReadUInt16LittleEndian(bytes[(end + 10)..]);
-        long offset = BinaryPrimitives.ReadUInt32LittleEndian(bytes[(end + 16)..]);
+        long offset = BinaryPrimitives.ReadUInt32LittleEndian(bytes[(end + 16)..]) - start;
         if ((count == 0xFFFF || offset == 0xFFFFFFFF) && end >= 20
             && BinaryPrimitives.ReadUInt32LittleEndian(bytes[(end - 20)..]) == 0x07064b50)
         {
             // Zip64: the locator names the zip64 record, which holds the real count and offset.
-            var record = BinaryPrimitives.ReadInt64LittleEndian(bytes[(end - 12)..]);
+            var record = BinaryPrimitives.ReadInt64LittleEndian(bytes[(end - 12)..]) - start;
             if (record < 0 || record + 56 > end) return;
             bytes[(int)record + 13] = Unix;
             count = BinaryPrimitives.ReadInt64LittleEndian(bytes[((int)record + 32)..]);
-            offset = BinaryPrimitives.ReadInt64LittleEndian(bytes[((int)record + 48)..]);
+            offset = BinaryPrimitives.ReadInt64LittleEndian(bytes[((int)record + 48)..]) - start;
         }
         for (long i = 0; i < count && offset >= 0 && offset + 46 <= bytes.Length; i++)
         {

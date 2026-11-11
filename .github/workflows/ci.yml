@@ -251,8 +251,15 @@ jobs:
           dotnet build tools/docx2html/docx2html.csproj -c Release --no-restore
           dotnet build tools/docx2oc/docx2oc.csproj -c Release --no-restore
 
-      - name: Test delivery directory publication on Windows and macOS
-        if: matrix.os != 'ubuntu-latest'
+      # Windows runs the whole suite. It differs from Linux in its newline, default thread stack,
+      # symlink privilege, installed fonts, file sharing and zip host byte, and the suite went red
+      # there unnoticed while only Linux ran it (issue #1659).
+      - name: Run the whole suite on Windows
+        if: matrix.os == 'windows-latest'
+        run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release
+
+      - name: Test delivery directory publication on macOS
+        if: matrix.os == 'macos-latest'
         run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --filter "FullyQualifiedName~DeliveryBundleDirectoryPublisherTests|FullyQualifiedName~DeliveryBundleMacTempTests"
 
       - name: Test delivery publication with the macOS /tmp alias
