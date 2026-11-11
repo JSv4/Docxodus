@@ -106,7 +106,12 @@ const budgetsKiB = {
   // editor's re-render of a box whose paragraph format changes) adds 83–92 gzip bytes over
   // 1aab1f44: embed/IIFE/editor/pagination 164010/164062/142683/57988. Round the three exhausted
   // gates (embed, IIFE, editor) to the next 0.1 KiB; pagination still fits.
-  'embed.bundle.js': 160.2,
+  // Splitting a border box before its kept last paragraphs, and dropping padding that stands for
+  // paragraph spacing at a break inside a box (#1692), add 92-111 gzip bytes to the four
+  // paginator-carrying bundles over 80ded70a, which exhausts all four gates. CI reports 160.3 KiB
+  // for both embed bundles, the ESM one about 40 bytes under the IIFE one and so within a few
+  // bytes of 160.3: give both 160.4, and raise the other two by 0.1 KiB.
+  'embed.bundle.js': 160.4,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
   // The appended bullet-normalization option adds 29 gzip bytes (161996 -> 162025).
@@ -114,9 +119,9 @@ const budgetsKiB = {
   // At-least grid lines above the pitch and tracked-change wrappers in the line passes (#1551) add
   // 82/98/97 gzip bytes to IIFE/editor/pagination (163592/142187/57566). Embed (163524) still fits;
   // round only these three exhausted gates to the next 0.1 KiB.
-  'embed.iife.js': 160.3,
+  'embed.iife.js': 160.4,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
-  'editor.bundle.js': 139.4,
+  'editor.bundle.js': 139.5,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
   // Whole inline-layout continuation adds 0.24 KiB (35.801 -> 36.038 on main).
@@ -130,7 +135,7 @@ const budgetsKiB = {
   // Grid lines split by w:br and mixed multiples below one on a grid (#1551) add 20–29 gzip bytes
   // over 0dfb5eae: embed/IIFE/editor/pagination 163921/163970/142600/57960. Only this gate is
   // exhausted (by 2 bytes); round it to the next 0.1 KiB.
-  'pagination.bundle.js': 56.7,
+  'pagination.bundle.js': 56.8,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,
