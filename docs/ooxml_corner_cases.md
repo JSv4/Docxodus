@@ -7745,3 +7745,33 @@ the same rule, so it no longer depends on which renderer owns a paragraph. The e
 measures with the same kerning and ligatures (canvas `textRendering: optimizeSpeed` disables
 ligatures without touching kerning, matching the DOM); runs that request specific ligature features
 keep the browser's own line layout.
+
+## Text after a line break starts at the left indent (#1654)
+
+A line break (`w:br`) starts a new line of the same paragraph, and Word 2024 places that line at
+the paragraph's left indent like any wrapped line. The first-line or hanging indent applies only
+to the paragraph's first line.
+
+```xml
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>
+  <w:r><w:t>Aster01a</w:t></w:r><w:r><w:br/></w:r><w:r><w:t>Aster01b</w:t></w:r></w:p>
+```
+
+Measured from Word 2024's PDF (Times New Roman 12pt, 72pt page margin, the level indented
+`w:left="720" w:hanging="360"`), x of the first line's text and of the text after the break:
+
+| Paragraph | Word: first line | Word: after the break | Docxodus before | Docxodus now |
+| --- | ---: | ---: | ---: | ---: |
+| numbered item (`left` 720, `hanging` 360) | 108 | 108 | 126 | 108 |
+| the same item, a tab after the break's text | 108 | 108, tab to 180 | 126 | 108, tab to 180 |
+| `left` 720, `hanging` 360, a tab on the first line | 90 | 108 | 126 | 108 |
+| `firstLine` 1417, a tab on the first line | 144 | 72 | 142.85 | 72 |
+| `left` 720 / `hanging` / `firstLine`, no tab | per indent | left indent | left indent | left indent |
+
+The paragraph's CSS already gives this: `margin-left` is the left indent and `text-indent` the
+first-line offset, which CSS applies to the first line only. The extra offset came from the tab
+layout pass (`CalculateSpanWidthTransform`), which runs only for paragraphs containing a tab. It
+stamped each `w:br` with the first line's start position, and `ProcessBreak` wrote that as the
+left margin of an empty span after the `<br>`. Paragraphs without a tab never had the span, which
+is why only list items and tabbed paragraphs were affected. Both halves are removed; nothing else
+read the value.
