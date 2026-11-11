@@ -700,6 +700,10 @@ public class DocxSessionStructuralRevisionTests
     [InlineData("end_of_body", false)]
     [InlineData("end_of_cell", true)]
     [InlineData("end_of_cell", false)]
+    [InlineData("after_table", true)]
+    [InlineData("after_table", false)]
+    [InlineData("before_paragraph_after_table", true)]
+    [InlineData("before_paragraph_after_table", false)]
     public void DS1626_TrackedInsertTable_ResolvesToDirectOrOriginal(string placement, bool accept)
     {
         var baseline = BuildTableInsertDocument();
@@ -777,6 +781,54 @@ public class DocxSessionStructuralRevisionTests
         Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())),
             FirstDifference(MainRoot(baseline), MainRoot(session.Save())));
     }
+
+    /// <summary>
+    /// Issue #1649: wherever InsertTable puts a table, a paragraph stands between it and the
+    /// nearest table on either side and after it at the end of its cell or the body, and range
+    /// markers between the blocks do not count as that paragraph. Two tables that touch are read
+    /// as one table. A table placed between two paragraphs gets no extra paragraph.
+    /// </summary>
+    [Theory]
+    [InlineData("after_table", 1)]
+    [InlineData("before_paragraph_after_table", 1)]
+    [InlineData("before_table", 1)]
+    [InlineData("between_paragraphs", 0)]
+    public void DS1649_InsertTable_NeverLeavesTwoTablesTouching(string placement, int addedParagraphs)
+    {
+        var baseline = BuildTableInsertDocument();
+        using var session = new DocxSession(baseline);
+
+        Assert.True(InsertTableAt(session, placement).Success);
+
+        var saved = session.Save();
+        AssertEveryTableIsFollowedByAParagraph(MainRoot(saved));
+        Assert.Equal(MainRoot(baseline).Descendants(W.p).Count() + 4 + addedParagraphs,
+            MainRoot(saved).Descendants(W.p).Count());
+        Assert.Empty(Office2019Errors(saved));
+    }
+
+    [Theory]
+    [InlineData("body")]
+    [InlineData("cell")]
+    public void DS1649_InsertTable_LooksPastRangeMarkers(string container)
+    {
+        const string Table = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc></w:tr></w:tbl>";
+        const string Bravo = "<w:p><w:bookmarkStart w:id=\"7\" w:name=\"Note\"/><w:r><w:t>Bravo</w:t></w:r></w:p><w:bookmarkEnd w:id=\"7\"/>";
+        var body = container == "body"
+            ? Bravo + Table + "<w:p/>"
+            : "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid><w:tr><w:tc>" + Bravo + "</w:tc></w:tr></w:tbl><w:p/>";
+        using var session = new DocxSession(IrTestDocuments.FromBodyXml(body + "<w:sectPr/>").DocumentByteArray);
+
+        Assert.True(session.InsertTable(BodyParagraph(session, "Bravo"), Position.After, 1, 1).Success);
+
+        var saved = session.Save();
+        AssertEveryTableIsFollowedByAParagraph(MainRoot(saved));
+        Assert.Empty(Office2019Errors(saved));
+    }
+
+    private static void AssertEveryTableIsFollowedByAParagraph(XElement root) =>
+        Assert.All(root.Descendants(W.tbl), table => Assert.Equal(W.p, table.ElementsAfterSelf()
+            .FirstOrDefault(e => e.Name != W.bookmarkStart && e.Name != W.bookmarkEnd)?.Name));
 
     private const string AliceStamp = "w:author=\"Alice\" w:date=\"2025-01-01T00:00:00Z\"";
 
@@ -964,9 +1016,14 @@ public class DocxSessionStructuralRevisionTests
             "before_table" => ("Bravo", Position.After),
             "end_of_body" => ("Charlie", Position.After),
             "end_of_cell" => ("B2", Position.After),
+            "after_table" => ("", Position.After),
+            "before_paragraph_after_table" => ("Charlie", Position.Before),
             _ => throw new ArgumentOutOfRangeException(nameof(placement)),
         };
-        return session.InsertTable(BodyParagraph(session, anchor), pos, 2, 2,
+        var id = anchor.Length > 0
+            ? BodyParagraph(session, anchor)
+            : session.Project().AnchorIndex.Values.Single(a => a.Anchor.Kind == "tbl").Anchor.Id;
+        return session.InsertTable(id, pos, 2, 2,
             new TableInsertOptions { CellContents = new[] { "a", "b", "1", "2" } });
     }
 

@@ -7150,6 +7150,16 @@ byte-identical bodies and the same revision counts before and after the change. 
 the paragraph after the inserted table is followed by more text, so it is not a closing
 paragraph in this sense and stays its own revision.
 
+Range markers do not keep two tables apart (#1649). Word 2024 opens `w:tbl`, `w:tbl` as one
+two-row table, and also `w:tbl`, `w:bookmarkStart`, `w:bookmarkEnd`, `w:tbl`; only a paragraph
+between them leaves two tables. `InsertTable` used to check only the element directly after
+the new table, so a table placed after a table anchor, before a paragraph that follows a
+table, or next to a block-level bookmark marker fused with its neighbour or ended its cell.
+It now looks for the nearest block on both sides past range markers
+(`RevisionOps.SiblingBlock`) and adds the empty paragraph on whichever side needs one. When
+changes are tracked, a paragraph added before the new table is inserted with it, and the
+registry attaches it to that table's revision the same way as the one after it.
+
 One placement has no reversible encoding: right after a paragraph whose mark is a pending
 insertion and which keeps something once it is rejected, such as the first half of a pending
 tracked split. Rejecting that mark has to merge the paragraph into the next one, and
