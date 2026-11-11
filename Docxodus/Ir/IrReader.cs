@@ -3423,8 +3423,7 @@ internal static class IrReader
             }
 
             var docDefaults = root.Element(W + "docDefaults");
-            var docDefaultsPPr = CloneOrNull(
-                docDefaults?.Element(W + "pPrDefault")?.Element(W + "pPr"));
+            var docDefaultsPPr = WordStockDocDefaults.ParagraphProperties(root);
             var docDefaultsRPr = CloneOrNull(
                 docDefaults?.Element(W + "rPrDefault")?.Element(W + "rPr"));
 

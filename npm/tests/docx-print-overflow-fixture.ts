@@ -41,7 +41,7 @@ export function printOverflowFixture(): Uint8Array {
       'w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>'],
     ['word/styles.xml', `${WML}.styles+xml`, `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>` +
       '<w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="24"/></w:rPr></w:rPrDefault>' +
-      '</w:docDefaults><w:style w:type="paragraph" w:styleId="BalloonText"><w:name w:val="Balloon Text"/>' +
+      '<w:pPrDefault/></w:docDefaults><w:style w:type="paragraph" w:styleId="BalloonText"><w:name w:val="Balloon Text"/>' +
       '<w:rPr><w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/><w:sz w:val="18"/></w:rPr></w:style></w:styles>'],
     ['word/settings.xml', `${WML}.settings+xml`, `<w:settings xmlns:w="${W_NS}"/>`],
     ['word/comments.xml', `${WML}.comments+xml`, `<w:comments xmlns:w="${W_NS}" xmlns:w14="${W14}">${comments}</w:comments>`],

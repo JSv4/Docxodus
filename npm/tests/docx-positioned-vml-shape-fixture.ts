@@ -7,8 +7,11 @@ export function positionedVmlShapeDocx(kind: 'oval' | 'rect', positioned = true)
   const relations = (value: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${value}</Relationships>`;
   return storedZip([
     { name: '[Content_Types].xml', data: xml(`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>
-      <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`) },
+      <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+      <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`) },
     { name: '_rels/.rels', data: xml(relations(`<Relationship Id="main" Type="${R_NS}/officeDocument" Target="word/document.xml"/>`)) },
+    { name: 'word/_rels/document.xml.rels', data: xml(relations(`<Relationship Id="styles" Type="${R_NS}/styles" Target="styles.xml"/>`)) },
+    { name: 'word/styles.xml', data: xml(`<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:pPrDefault/></w:docDefaults></w:styles>`) },
     { name: 'word/document.xml', data: xml(`<w:document xmlns:w="${W_NS}"><w:body>
       <w:p><w:r>${shape}</w:r><w:r><w:t>Maple inventory begins.</w:t></w:r></w:p>
       <w:p><w:r><w:t>Maple inventory complete.</w:t></w:r></w:p>

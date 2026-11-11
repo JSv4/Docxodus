@@ -1100,8 +1100,7 @@ namespace Docxodus
             XElement? docDefaults = sXDoc.Root.Element(W.docDefaults);
             if (docDefaults != null)
             {
-                globalDefaultParaPropsAsDefined = docDefaults.Elements(W.pPrDefault).Elements(W.pPr)
-                    .FirstOrDefault();
+                globalDefaultParaPropsAsDefined = WordStockDocDefaults.ParagraphProperties(sXDoc.Root);
                 if (globalDefaultParaPropsAsDefined == null)
                     globalDefaultParaPropsAsDefined = new XElement(W.pPr,
                         new XElement(W.rPr));
@@ -1142,7 +1141,8 @@ namespace Docxodus
                                 new XAttribute(W.val, "20")));
 
             if (globalDefaultParaProps == null)
-                globalDefaultParaProps = new XElement(W.pPr, rPr);
+                globalDefaultParaProps = new XElement(W.pPr,
+                    WordStockDocDefaults.ParagraphProperties(sXDoc.Root)?.Elements(), rPr);
 
             if (globalDefaultRunProps == null)
                 globalDefaultRunProps = rPr;
@@ -2614,7 +2614,7 @@ namespace Docxodus
             var stylesPart = wDoc.MainDocumentPart?.StyleDefinitionsPart;
             var direct = paragraph.Element(W.pPr) ?? new XElement(W.pPr);
             if (stylesPart == null)
-                return new XElement(direct);
+                return new XElement(MergeStyleElement(direct, WordStockDocDefaults.ParagraphProperties(null)));
 
             var stylesXDoc = stylesPart.GetXDocument();
             var defaultParagraphStyleName = (string?)stylesXDoc.Root?
@@ -2622,10 +2622,7 @@ namespace Docxodus
                 .FirstOrDefault(s => (string?)s.Attribute(W.type) == "paragraph"
                     && s.Attribute(W._default).ToBoolean() == true)?
                 .Attribute(W.styleId);
-            var defaults = stylesXDoc.Root?
-                .Element(W.docDefaults)?
-                .Element(W.pPrDefault)?
-                .Element(W.pPr) ?? new XElement(W.pPr);
+            var defaults = WordStockDocDefaults.ParagraphProperties(stylesXDoc.Root) ?? new XElement(W.pPr);
 
             // ParagraphStyleRollup folds an extra numbering-level pPr layer in whenever the
             // paragraph carries ListItemRetriever's ListItemInfo annotation. Those annotations

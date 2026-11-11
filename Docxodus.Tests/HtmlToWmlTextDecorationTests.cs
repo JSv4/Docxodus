@@ -120,7 +120,10 @@ public class HtmlToWmlTextDecorationTests
             using (var writer = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
                 writer.Write($"<w:document xmlns:w=\"{W}\"><w:body><w:p><w:r><w:t>plain</w:t></w:r>" +
                     $"<w:r><w:rPr>{rPr}</w:rPr><w:t>x</w:t></w:r></w:p><w:sectPr/></w:body></w:document>");
-            main.AddNewPart<StyleDefinitionsPart>().Styles = new DocumentFormat.OpenXml.Wordprocessing.Styles();
+            // Single spacing, stated: Word gives a missing paragraph default 1.16 lines (#1652), and the HTML
+            // importer's CSS parser rejects the custom property that carries a line multiple.
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new DocumentFormat.OpenXml.Wordprocessing.Styles(
+                new DocumentFormat.OpenXml.Wordprocessing.DocDefaults(new DocumentFormat.OpenXml.Wordprocessing.ParagraphPropertiesDefault()));
             main.AddNewPart<DocumentSettingsPart>().Settings = new DocumentFormat.OpenXml.Wordprocessing.Settings();
             doc.Save();
         }

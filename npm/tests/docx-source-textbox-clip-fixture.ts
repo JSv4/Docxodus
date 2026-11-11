@@ -49,7 +49,7 @@ export function sourceTextboxClipDocx(kind: SourceClipKind, fit: SourceClipFit =
       (story === 'body' ? '' : `<Relationship Id="story" Type="${R_NS}/${story}" Target="${story}.xml"/>`) + '</Relationships>',
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>` +
       '<w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="20"/>' +
-      '</w:rPr></w:rPrDefault></w:docDefaults></w:styles>',
+      '</w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults></w:styles>',
     'word/document.xml': `<w:document ${namespaces}><w:body>` + (story === 'body' ? boxParagraph : '') +
       '<w:p>' + (placement.markup ? '<w:pPr><w:jc w:val="center"/>' +
         '<w:pPrChange w:id="9" w:author="Quail Editor" w:date="2026-03-04T09:00:00Z"><w:pPr/></w:pPrChange></w:pPr>' : '') +

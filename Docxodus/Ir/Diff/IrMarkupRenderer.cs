@@ -8328,7 +8328,7 @@ internal static partial class IrMarkupRenderer
     {
         XElement Payload(XElement styles) => new XElement(W.docDefaults,
             new XElement(W.pPrDefault,
-                new XElement(W.pPr, styles.Element(W.docDefaults)?.Element(W.pPrDefault)?.Element(W.pPr)?.Elements())),
+                new XElement(W.pPr, WordStockDocDefaults.ParagraphProperties(styles)?.Elements())),
             new XElement(W.rPrDefault,
                 new XElement(W.rPr, styles.Element(W.docDefaults)?.Element(W.rPrDefault)?.Element(W.rPr)?.Elements())));
         var left = Payload(leftStyles);
@@ -9235,7 +9235,7 @@ internal static partial class IrMarkupRenderer
     }
 
     private static XElement? LeftDocDefaultsProps(XElement stylesRoot, bool paragraphAxis) => paragraphAxis
-        ? stylesRoot.Element(W.docDefaults)?.Element(W.pPrDefault)?.Element(W.pPr)
+        ? WordStockDocDefaults.ParagraphProperties(stylesRoot)
         : stylesRoot.Element(W.docDefaults)?.Element(W.rPrDefault)?.Element(W.rPr);
 
     /// <summary>
@@ -10213,7 +10213,7 @@ internal static partial class IrMarkupRenderer
         XElement stylesRoot, string? type, string styleId, XElement? toggleBaseline = null)
     {
         var accPPr = new XElement(W.pPr,
-            stylesRoot.Element(W.docDefaults)?.Element(W.pPrDefault)?.Element(W.pPr)?.Elements());
+            WordStockDocDefaults.ParagraphProperties(stylesRoot)?.Elements());
         var accRPr = new XElement(W.rPr,
             stylesRoot.Element(W.docDefaults)?.Element(W.rPrDefault)?.Element(W.rPr)?.Elements());
 

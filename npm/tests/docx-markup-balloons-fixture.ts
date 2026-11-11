@@ -47,7 +47,7 @@ export function balloonDocx(options: {
       `${options.paper === 'landscape' ? ' w:orient="landscape"' : ''}/><w:pgMar w:top="${margin}" w:right="${margin}" ` +
       `w:bottom="${margin}" w:left="${margin}" w:header="720" w:footer="720" w:gutter="0"/>` +
       '</w:sectPr></w:body></w:document>',
-    'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${bodyFont}" w:hAnsi="${bodyFont}"/><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:styleId="BalloonText"><w:name w:val="Balloon Text"/><w:rPr><w:rFonts w:ascii="${balloonFont}" w:hAnsi="${balloonFont}"/><w:sz w:val="18"/></w:rPr></w:style></w:styles>`,
+    'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${bodyFont}" w:hAnsi="${bodyFont}"/><w:sz w:val="24"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults><w:style w:type="paragraph" w:styleId="BalloonText"><w:name w:val="Balloon Text"/><w:rPr><w:rFonts w:ascii="${balloonFont}" w:hAnsi="${balloonFont}"/><w:sz w:val="18"/></w:rPr></w:style></w:styles>`,
     'word/settings.xml': `<w:settings xmlns:w="${W_NS}"/>`,
     'word/comments.xml': `<w:comments xmlns:w="${W_NS}" xmlns:w14="${W14}">${comments.map(({ id, author, initials, text }) =>
       `<w:comment w:id="${id}" w:author="${author}" w:initials="${initials}" ${DATE}><w:p w14:paraId="${paraId(id)}">` +

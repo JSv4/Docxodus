@@ -42,15 +42,20 @@ public class RevisedPageFieldRenderingTests
                 + "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
                 + "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
                 + $"<Override PartName=\"/word/document.xml\" ContentType=\"{type}document.main+xml\"/>"
+                + $"<Override PartName=\"/word/styles.xml\" ContentType=\"{type}styles+xml\"/>"
                 + $"<Override PartName=\"/word/comments.xml\" ContentType=\"{type}comments+xml\"/>"
                 + $"<Override PartName=\"/word/footnotes.xml\" ContentType=\"{type}footnotes+xml\"/>"
                 + $"<Override PartName=\"/word/footer1.xml\" ContentType=\"{type}footer+xml\"/></Types>"),
             ("_rels/.rels", "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
                 + $"<Relationship Id=\"rId1\" Type=\"{rel}officeDocument\" Target=\"word/document.xml\"/></Relationships>"),
             ("word/_rels/document.xml.rels", "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+                + $"<Relationship Id=\"rIdStyles\" Type=\"{rel}styles\" Target=\"styles.xml\"/>"
                 + $"<Relationship Id=\"rIdComments\" Type=\"{rel}comments\" Target=\"comments.xml\"/>"
                 + $"<Relationship Id=\"rIdFootnotes\" Type=\"{rel}footnotes\" Target=\"footnotes.xml\"/>"
                 + $"<Relationship Id=\"rIdFooter\" Type=\"{rel}footer\" Target=\"footer1.xml\"/></Relationships>"),
+            // Single spacing, stated: Word gives a missing paragraph default 1.16 lines (#1652), and under a
+            // line multiple every inline box (ins, del, a) carries a fabricated class of its own.
+            ("word/styles.xml", $"<w:styles {ns}><w:docDefaults><w:pPrDefault/></w:docDefaults></w:styles>"),
             ("word/comments.xml", $"<w:comments {ns}><w:comment w:id=\"7\" w:author=\"Review Example\" "
                 + "w:date=\"2026-09-12T10:00:00Z\"><w:p><w:r><w:t>Check the desk</w:t></w:r></w:p></w:comment></w:comments>"),
             ("word/footnotes.xml", $"<w:footnotes {ns}>"
