@@ -5410,29 +5410,58 @@ the two resolvers would disagree. Ranges of the two sides of a move matter only 
 them belongs to; the session resolves moved content by its own `w:moveFrom`/`w:moveTo` element, so
 markers interleaving with no content between them have one reading.
 
-### Still refused: a deleted first cell, and cells inside content controls
+### Cell insertions and deletions: who takes the grid columns (issue #1404)
 
 ```xml
-<w:tr><w:trPr><w:gridAfter w:val="1"/></w:trPr>
-  <w:tc><w:tcPr><w:cellDel w:id="1" …/></w:tcPr>…</w:tc><w:tc>…</w:tc><w:tc>…</w:tc></w:tr>
+<w:tr><w:tc><w:tcPr><w:tcW w:w="2400" w:type="dxa"/><w:cellDel w:id="1" …/></w:tcPr>…</w:tc>
+      <w:tc>…</w:tc><w:tc>…</w:tc></w:tr>
+<w:tr><w:sdt><w:sdtPr>…</w:sdtPr><w:sdtContent>
+        <w:tc><w:tcPr><w:cellDel w:id="2" …/></w:tcPr>…</w:tc></w:sdtContent></w:sdt>…</w:tr>
 ```
 
-Accepting a deleted cell absorbs its grid column into the preceding cell; a row's first cell has
-none. `RevisionProcessor` removes the cell and leaves the row one grid column short (`w:gridAfter`
-unchanged); LibreOffice deletes the entire first column of the table, including cells that were not
-deleted, and the text of one surviving cell. Without Word's own result for this case there is no
-verified resolution, so the session keeps `unabsorbable_cell_deletion`. Rejecting it would be safe,
-but resolution status is per revision, not per direction.
+Measured in desktop Word 2024 (16.0.20326) with Accept All and Reject All on authored documents: a
+three- or four-column table, 2400-twip columns, one revised row above an unrevised one. No file drew a
+repair prompt. Cells are written `text×span`.
 
-```xml
-<w:tr><w:sdt><w:sdtContent><w:tc><w:tcPr><w:cellIns …/></w:tcPr>…</w:tc></w:sdtContent></w:sdt>…</w:tr>
-```
+| Row (`-` deleted, `+` inserted) | Word accept | Word reject | Docxodus session |
+| --- | --- | --- | --- |
+| `A -B C` | `A×2 C` | `A B C` | same |
+| `A B -C` | `A B×2` | `A B C` | same |
+| `-A B C` | `B×2 C` | `A B C` | same (was refused) |
+| `-A -B C` | `C×3` | `A B C` | same (was refused) |
+| `-A B -C` | `B×3` | `A B C` | same (was refused) |
+| `-A B×2 D` | `B×3 D` | `A B×2 D` | same (was refused) |
+| `gridBefore=1`, `-B C D` | `C×2 D`, `gridBefore` kept | `B C D` | same (was refused) |
+| `-A B C` in every row | grid rewritten to `4800 2400`, no spans | `A B C` | `B×2 C` on the three-column grid; Word lays it out at the same widths (was refused) |
+| `-A -B -C` | the row is removed | `A B C` | refused, `unabsorbable_cell_deletion` |
+| `A +B C` | `A B C` | `A×2 C` | reject removes `B` without widening `A` |
+| `+A B C` | `A B C` | `B×2 C` | reject removes `A` without widening `B` |
+| `+A +B +C`, each in its own `w:sdt` | `A B C` | the row is removed | refused, `unresolvable_cell_insertion` |
+| each cell in its own `w:sdt`, `A -B C` | `A×2 C`; `B`'s `w:sdt` is gone | `A B C` | same (was refused) |
+| each cell in its own `w:sdt`, `-A B C` | `B×2 C`; `A`'s `w:sdt` is gone | `A B C` | same (was refused) |
+| each cell in its own `w:sdt`, `A +B C` | `A B C` | `A×2 C`; `B`'s `w:sdt` is gone | accept same; reject removes `B` and its `w:sdt` without widening `A` |
+| `A`, then one `w:sdt` around `-B C` | `A×2 C`; Word drops that `w:sdt` in both directions | `A B C` | `A×2 C`; the `w:sdt` stays around `C` |
 
-Cells wrapped one by one in content controls (one online editor exports every cell this way) have
-`w:sdtContent`, not `w:tr`, as their parent. The resolver's row geometry reads `w:tr/w:tc` and cannot
-place them; `RevisionProcessor`'s accept leaves the `w:cellDel` markers in the output, and LibreOffice
-produces a two-column table on accept and a three-column one on reject. The document stays refused
-(`ambiguous_table_structure_cluster`).
+Word's rule: a cell that leaves the row gives its grid columns to the nearest surviving cell before
+it, and the cells that start a row give theirs to the first surviving cell after them. The absorbing
+cell's `w:tcW` grows by the removed cell's width (`2400` to `4800` above). The width is not
+cosmetic: with a column deleted from every row, spans alone leave every row `tcW 2400 + 2400` over
+three grid columns, and Word lays the two cells out equally wide (180 pt each) instead of 240 pt and
+120 pt. A content control around the removed cell alone goes with it. Word Online resolves none of
+these cell marks.
+
+The session applies the rule on accepting a deletion (`AcceptDeletedCells` in
+`Docxodus/Internal/RevisionOps.cs`) and reads a row's cells through wrappers (`RowOf`, `RowCells`).
+Both it and `RevisionProcessor` add the removed cell's twip width to the absorbing cell
+(`TableGridModel.CombinedTwipWidth`). Opened in Word, the session's output for every deletion row
+above has the same cell widths as Word's own. Three differences remain:
+
+- Rejecting a bare `w:cellIns` removes the cell and leaves the row a column short, as
+  `RevisionProcessor` does, where Word widens the neighbour. Insertions written by Docxodus carry
+  the `w:tcPrChange` and `w:tblGridChange` that restore the row.
+- A row whose every cell is deleted, or inserted, is refused where Word removes the row.
+- `RevisionProcessor` is unchanged: it drops a deleted first cell without widening the next one,
+  and leaves `w:cellDel` on a cell inside a content control.
 
 ---
 

@@ -2116,15 +2116,14 @@ Three further shapes have a single safe resolution and resolve:
   range closes just after the other's opens, with no moved content in both) is an ordinary move.
   Moved content that lies inside a range of the other side still reports `overlapping_move_topology`.
 
-Two table shapes stay refused, each for want of a unique resolution, not out of caution about
-metadata: a deleted first cell of a row (`unabsorbable_cell_deletion` — no predecessor exists to absorb
-its grid column and Word's rule for that case is unverified; `RevisionProcessor` leaves a row one
-column short, and LibreOffice deletes the whole first column, including cells that were not deleted),
-and cell operations on cells wrapped in cell-level content controls (`w:tr/w:sdt/w:sdtContent/w:tc`,
-as one online editor exports them), whose row geometry the resolver does not model
-(`ambiguous_table_structure_cluster`, or `unabsorbable_cell_deletion` once the grid change is set
-aside; `RevisionProcessor`'s accept leaves the `w:cellDel` markers in place there). See
-`docs/ooxml_corner_cases.md`.
+Cell revisions follow the geometry desktop Word 2024 writes (issue #1404). An accepted deleted cell
+gives its grid columns, and its `w:tcW` when both widths are in twips, to the nearest surviving cell
+before it; deleted cells that start a row give them to the first surviving cell after them. The row
+model reads a row's cells through content-control and custom-XML wrappers
+(`w:tr/w:sdt/w:sdtContent/w:tc`, as one online editor exports every cell), so wrapped cells group and
+resolve like bare ones, and a wrapper left without a cell is removed with it. One shape stays refused:
+a row whose every cell is deleted (`unabsorbable_cell_deletion`) or inserted
+(`unresolvable_cell_insertion`), where Word removes the row. See `docs/ooxml_corner_cases.md`.
 
 `RevisionProcessor.AcceptRevisions`/`RejectRevisions` still handle all of them and remain
 public, so a caller that needs the old always-succeeding behaviour can run the transform over

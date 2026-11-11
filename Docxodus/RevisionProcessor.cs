@@ -3272,6 +3272,8 @@ namespace Docxodus
                                         return Order_tcPr[e.Name];
                                     return 999;
                                 }));
+                            if (Internal.TableGridModel.CombinedTwipWidth(g.Where(e => e.Name == W.tc)) is { } width)
+                                orderedTcPr.Element(W.tcW)!.SetAttributeValue(W._w, width);
                             XElement newTc = new XElement(W.tc,
                                 orderedTcPr,
                                 g.First().Elements().Where(e => e.Name != W.tcPr));
