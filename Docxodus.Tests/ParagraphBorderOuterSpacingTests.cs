@@ -54,6 +54,9 @@ public class ParagraphBorderOuterSpacingTests
     private static (string Top, string Bottom) Spacing(XElement block) =>
         (Style(block).GetValueOrDefault("margin-top", "none"), Style(block).GetValueOrDefault("margin-bottom", "none"));
 
+    private static (string Top, string Bottom) Padding(XElement block) =>
+        (Style(block).GetValueOrDefault("padding-top", "none"), Style(block).GetValueOrDefault("padding-bottom", "none"));
+
     [Fact]
     public void ABorderedParagraphsSpacingLiesOutsideItsBorder()
     {
@@ -74,10 +77,14 @@ public class ParagraphBorderOuterSpacingTests
 
         Assert.Equal(3, box.Elements().Count());
         Assert.Equal(("14pt", "10pt"), Spacing(box));
-        // Between the members the spacing stays inside the box, where the paragraphs' own margins collapse.
-        Assert.Equal(("0", "5pt"), Spacing(Block(html, "LarchOne")));
-        Assert.Equal(("6pt", "8pt"), Spacing(Block(html, "LarchTwo")));
-        Assert.Equal(("9pt", "0"), Spacing(Block(html, "LarchThree")));
+        // Between the members the spacing stays inside the box as the paragraphs' padding (issue
+        // #1692): each keeps its space after, and its space before only where that exceeds the
+        // space after above it. The first and last also hold the box's 1pt w:space.
+        foreach (var text in new[] { "LarchOne", "LarchTwo", "LarchThree" })
+            Assert.Equal(("0", "0"), Spacing(Block(html, text)));
+        Assert.Equal(("1pt", "5pt"), Padding(Block(html, "LarchOne")));
+        Assert.Equal(("1pt", "8pt"), Padding(Block(html, "LarchTwo")));
+        Assert.Equal(("1pt", "1pt"), Padding(Block(html, "LarchThree")));
     }
 
     [Fact]

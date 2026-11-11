@@ -4803,8 +4803,7 @@ export class PaginationEngine {
   private tryFragmentParagraphGroup(
     block: MeasuredBlock,
     dims: PageDimensions,
-    availableHeightPt: number,
-    effectiveMarginTopPt: number,
+    fitsHead: (head: HTMLElement) => boolean,
   ): MeasuredBlock[] | null {
     // A box's page start is spent once it is placed, and its keep belongs to its last paragraph.
     if (!this.fragmentParagraphs || block.keepLines
@@ -4819,8 +4818,7 @@ export class PaginationEngine {
       this.stagingElement.appendChild(host);
     }
     try {
-      const split = this.splitParagraphGroup(group, head => effectiveMarginTopPt
-        + this.measureElement(head, dims, block.sectionIndex).heightPt <= availableHeightPt, { bodyParagraph: true });
+      const split = this.splitParagraphGroup(group, fitsHead, { bodyParagraph: true });
       if (!split) return null;
       return [split.head, split.tail].map((element, index) => ({
         ...this.measureElement(element, dims, block.sectionIndex),
@@ -4841,7 +4839,8 @@ export class PaginationEngine {
     fitsCandidate: (head: HTMLElement) => boolean,
     options: { bodyParagraph?: boolean; relaxKeepLines?: boolean; forceProgress?: boolean } = {},
   ): { head: HTMLElement; tail: HTMLElement } | null {
-    if (group.dataset.paginationCommentGroup !== "true" && !this.isBorderGroup(group)) return null;
+    const boxed = group.dataset.paginationCommentGroup !== "true";
+    if (boxed && !this.isBorderGroup(group)) return null;
     this.checkpoint();
     const paragraphs = Array.from(group.children) as HTMLElement[];
     const part = (content: HTMLElement[], open: "bottom" | "top") => {
@@ -4851,6 +4850,9 @@ export class PaginationEngine {
       wrapper.style.setProperty(`margin-${open}`, "0", "important");
       omitPaintedBorderSide(wrapper, open);
       for (const paragraph of content) wrapper.appendChild(paragraph);
+      // A bordered box holds its last paragraph's space after as that paragraph's padding. Like any
+      // space after, it need not fit above the break.
+      if (open === "bottom" && boxed) content.at(-1)?.style.setProperty("padding-bottom", "0", "important");
       return wrapper;
     };
     const fits = (content: HTMLElement[]) => fitsCandidate(part(content, "bottom"));
@@ -4890,8 +4892,12 @@ export class PaginationEngine {
       tail = clones(whole, paragraphs.length);
     }
     if (head.length === 0) return null;
-    // Do not repeat a paragraph's space before at the top of its continuation.
+    // Do not repeat a paragraph's space before at the top of its continuation. Inside a bordered
+    // box that space is part of the paragraph's padding, below the rule it may draw above itself.
     tail[0].style.setProperty("margin-top", "0", "important");
+    const spaceBefore = ptToPx(Number.parseFloat(tail[0].dataset.docxSpaceBefore ?? "0"));
+    if (!divided && spaceBefore > 0) tail[0].style.setProperty("padding-top",
+      `${Number.parseFloat(this.view.getComputedStyle(paragraphs[whole]).paddingTop) - spaceBefore}px`, "important");
     const result = { head: part(head, "bottom"), tail: part(tail, "top") };
     this.reconcileFragmentIdentities(result.head, result.tail);
     return result;
@@ -4914,7 +4920,8 @@ export class PaginationEngine {
   ): MeasuredBlock[] | null {
     if (availableHeightPt <= effectiveMarginTopPt) return null;
     if (block.element.localName === "div" || block.element.dataset.paginationCommentGroup === "true") {
-      return this.tryFragmentParagraphGroup(block, dims, availableHeightPt, effectiveMarginTopPt);
+      return this.tryFragmentParagraphGroup(block, dims, head => effectiveMarginTopPt
+        + this.measureElement(head, dims, block.sectionIndex).heightPt <= availableHeightPt);
     }
     // Keep-next is relaxed only for an oversized body paragraph on an empty page. Note,
     // cell and textbox callers of the shared Range gate retain their own keep policies.
@@ -7141,6 +7148,18 @@ export class PaginationEngine {
             }, laterNotesClosed()));
 
           if (!chainFitsHere) {
+            // A box's keep is its last paragraphs'. Word leaves the paragraphs before them here,
+            // the box open below them, and takes only the kept ones to the next page (issue #1692).
+            const marginTop = this.effectiveBlockMarginTop(block, prevMarginBottomPt, currentContent.length === 0,
+              pageInSection(block.sectionIndex));
+            const unkept = this.tryFragmentParagraphGroup(block, blockDimensions, head =>
+              (head.lastElementChild as HTMLElement).dataset.keepWithNext !== "true"
+              && marginTop + this.measureElement(head, blockDimensions, block.sectionIndex).heightPt <= currentAvailableHeight);
+            if (unkept) {
+              blocks.splice(i, 1, ...unkept);
+              i--;
+              continue;
+            }
             const last = keepChain[keepChain.length - 1];
             const canRelaxChain = this.fragmentParagraphs && last.keepLines
               && this.isWordParagraphElement(last.element) && newChainFootnoteIds.length > 0;

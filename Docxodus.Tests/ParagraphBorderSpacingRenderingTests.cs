@@ -63,8 +63,11 @@ public class ParagraphBorderSpacingRenderingTests
         Assert.Equal("-4.75pt", style["margin-left"]);
         Assert.Equal("-4.75pt", style["margin-right"]);
         Assert.Equal("solid #246B7D 0.75pt", style["border-left"]);
-        Assert.Equal("4.0pt", style["padding-left"]);
-        Assert.Equal("4.0pt", style["padding-right"]);
+        // The space is the paragraph's padding, so its shading reaches the border (issue #1692).
+        Assert.DoesNotContain(style.Keys, key => key.StartsWith("padding"));
+        var paragraph = Style(Paragraph(wrapper, "Plain"));
+        Assert.Equal(("4pt", "4pt", "4pt", "4pt"),
+            (paragraph["padding-top"], paragraph["padding-right"], paragraph["padding-bottom"], paragraph["padding-left"]));
     }
 
     [Fact]

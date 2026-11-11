@@ -4192,11 +4192,10 @@ draws the rules and no box.
 `BorderGroupKey` no longer includes `w:between`, so such paragraphs share a box.
 `CreateBorderDivsCore` gives each member after the first the upper paragraph's rule as its own
 `border-top` with the rule's `w:space` as `padding-top`, and gives the upper paragraph the lower
-one's `w:space` as `padding-bottom`; negative side margins and equal padding run the rule through
-the box's own `w:space`. Being the lower paragraph's top border is what takes the rule to the next
-page with it. Docxodus matches every row above except the last-but-one: with a larger space before
-below than space after above, the step is right and the rule sits lower by the difference (it is
-drawn after the collapsed spacing). A box that has only `w:between` draws its rules across the text
+one's `w:space` as `padding-bottom`. Being the lower paragraph's top border is what takes the rule
+to the next page with it. The spacing around the rule is padding as well (see "Inside the box"
+below), which puts the rule below the space after and above the rest of the space before, so
+Docxodus matches every row above. A box that has only `w:between` draws its rules across the text
 width; Word extends them 1.4pt past it on each side, as it does unbordered shading.
 
 **`w:contextualSpacing`.** The rule of #1553 holds across the edge of a box exactly as between
@@ -4217,16 +4216,20 @@ on the paragraphs.
 | `w:pageBreakBefore` on a bordered paragraph | box at the top of page 2 (border at 72.0) | one page | as Word |
 | `w:pageBreakBefore` on the second of three bordered paragraphs | box closed on page 1 (bottom border), a new box on page 2 | one page, one box | as Word |
 | `w:keepNext` on a bordered paragraph whose next paragraph does not fit | both on page 2 | box left on page 1 | as Word |
-| `w:keepNext` on the last of two paragraphs in a box | the first stays on page 1, the box open; the last moves | both left on page 1 | both move to page 2 |
+| `w:keepNext` on the last of two paragraphs in a box | the first stays on page 1, the box open; the last moves | both left on page 1 | as Word (after #1696 alone: both moved to page 2) |
+| the same on the last of three, or the last two of three | the unkept ones stay on page 1; the kept ones move | all left on page 1 | as Word |
 | `w:keepLines` on a four-line bordered paragraph | moves whole | as Word | unchanged |
 | three lines, widow control on / off | moves whole / splits 2 + 1 with the box open | as Word | unchanged |
 
 A bordered paragraph with `w:pageBreakBefore` now starts a box of its own, and the box carries its
 first paragraph's page start and its last paragraph's keep. The paginator can split a box that
 carries either (a box taller than a page must), and the part after the split keeps the keep. The
-fourth row is the remaining difference: the paginator moves a kept block whole, where Word splits
-the box before its last paragraph. `w:keepLines` and `w:widowControl` are read per paragraph inside
-the box and already matched.
+keep is the last paragraphs', not the box's: when the box and the block after it do not fit, the
+paginator first splits the box before its trailing kept paragraphs, leaves the others on the page
+with the box open, and moves only the kept ones (`tryFragmentParagraphGroup` with a head that must
+not end in a kept paragraph). `w:keepLines` and `w:widowControl` are read per paragraph inside the
+box and already matched. One shape still moves whole: a box whose first paragraph also keeps with
+the next (`One` kept, `Two`, `Three` kept), where the split would have to look past the first keep.
 
 **Shading.** Word fills a box to the inner edge of its border, through the `w:space` band, and
 each paragraph's fill runs down to the next paragraph's first line, so the spacing between shaded
@@ -4240,17 +4243,55 @@ members is filled too.
 | top border only | from the border through its `w:space` | lines only | as Word |
 | left and right borders only | to both borders | text width | as Word |
 | left border only (`w:space="4"`) | stops 4pt short of the border | 4pt short | unchanged |
-| left border with top or bottom, no right | vertical to the borders, 4pt short of the left one | lines only | unchanged |
-| one shaded member of three, or two fills in one box | that member's lines, the gap below it and the `w:space` beside it | its lines only | unchanged |
+| left border with top or bottom, no right | vertical to the borders, 4pt short of the left one | lines only | as Word |
+| one shaded member of three, or two fills in one box | that member's lines, the gap below it and the `w:space` beside it | its lines only | as Word |
 | no border | lines only | lines only | unchanged |
 
-When every paragraph of a box has the same shading, the box carries it (`background` on the border
-wrapper, clipped at the inner edge of the border). Word does not fill the `w:space` band of a left border unless the box has a right border
-too, so such a box keeps its paragraphs' own fills. Members with different shading also keep their
-own fills, which cover their lines and not the gap below or the `w:space` beside them: that needs
-the spacing inside a box to be the paragraphs' padding rather than their margins, which is not done
-here. Word also fills the gap between consecutive shaded paragraphs that have no border (102.0 to
-132.0 for a 16pt line with 14pt after); Docxodus fills their lines only.
+**Inside the box.** One model accounts for the shading rows above, the position of a `w:between`
+rule and what a page break leaves. Word treats each paragraph of a box as a slab. The slabs touch:
+one runs from the border, or the slab above, down to the next paragraph's first line, and from side
+border to side border, and it is filled with that paragraph's shading. Measured with a 16pt line
+whose top is at 103.5 (text 14pt below "Open", a 0.5pt border, `w:space="1"`), fills in points:
+
+| Two paragraphs in a box | Upper fill | Lower fill |
+|---|---|---|
+| 14pt after / 14pt before, red then blue | 102.5 to 133.6 (its line and all 14) | 133.6 to 150.5 |
+| 5pt after / 20pt before | 102.5 to 124.6 (its line and its 5) | 124.6 to 156.5 (the other 15, then its line) |
+| 20pt after / 5pt before | 102.5 to 139.6 (its line and all 20) | 139.6 to 156.5 |
+| 5 / 20 with `w:between` | 102.5 to 125.5 (5, then the rule's `w:space`) | rule at 125.5 to 126.0; fill 126.0 to 159.1 (`w:space`, the other 15, its line) |
+| 20 / 5 with `w:between` | 102.5 to 140.5 | rule at 140.5 to 141.0; fill from 141.0 |
+| only the upper one shaded | 102.5 to 133.6 | none |
+| only the middle one of three shaded | | 133.6 to 163.6: its line and the 14 below it |
+
+So a paragraph owns its space after, and of its space before only what exceeds the space after
+above it. That is CSS padding. `CreateBorderDivsCore` therefore leaves the box nothing but its
+border and makes everything inside it padding of the paragraphs: the box's `w:space` (top on the
+first paragraph, bottom on the last, the sides on all), each paragraph's space after as
+`padding-bottom`, and `max(0, before - after)` as the next one's `padding-top`, below the rule it
+may draw. Each paragraph's own `background` then fills exactly Word's slab, shared or not, and the
+earlier rule that moved a shared fill onto the box is gone. The `w:space` band of a left border
+stays the box's padding when the box has no right border, because Word does not fill it there
+(fill from 70.6 with the border at 66.1, with or without top and bottom borders); a `w:between`
+rule still crosses that band to the border (66.6 to 541.5), which the ruled paragraph does with a
+negative margin and equal padding.
+
+At a page break the slab above keeps its space after on the first page (side borders run through
+it) and the next page starts with the paragraph's text at the top margin: its share of the space
+before is dropped, as an unbordered paragraph's is. Word does this by sliding the slab up, so it
+paints the dropped 15pt of fill, and a `w:between` rule above it, in the top margin (fill from 57.0
+and the rule at 57.0 on a page whose text starts at 72.0). Docxodus puts the text where Word does
+and draws the rule at the top of the text area instead. The converter marks that share of the
+padding with `data-docx-space-before` and `splitParagraphGroup` takes it off the paragraph that
+starts a page. It also takes the space after off the last paragraph before the break, so that
+space need not fit on the page, as it need not when it is a margin.
+
+Remaining differences: Word's fill and rule in the top margin just described; before a break
+Docxodus ends the side borders at the last line where Word runs them through the space after; a
+box whose first paragraph also keeps with the next still moves whole; a ruled, shaded
+paragraph in a box with a left border and no right one fills the 4pt band beside the left border
+(Word leaves it white); and Word also fills the gap between consecutive shaded paragraphs that
+have no border (102.0 to 132.0 for a 16pt line with 14pt after), where Docxodus fills their lines
+only.
 
 Tests: `BorderedParagraphBoxTests` and `npm/tests/export-bordered-paragraph-spacing.spec.ts`.
 
