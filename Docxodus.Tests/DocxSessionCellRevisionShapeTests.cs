@@ -135,14 +135,19 @@ public class DocxSessionCellRevisionShapeTests
     [Theory]
     [InlineData("cellDel")]
     [InlineData("cellIns")]
-    public void ColumnThatLeavesEveryRow_LeavesNoRowShort_SoNoCellIsWidened(string mark)
+    public void RowNoOtherRowShowsToBeShort_IsNotWidened(string mark)
     {
-        // The rows decide whether a row is short. With the first column gone from every row the
-        // table is one column narrower and whole. (Word 2024 merges each leaving cell into its
-        // neighbour here too, which gives a first column twice as wide.)
-        var bytes = Table(3, Row(Cell("A", mark), Cell("B"), Cell("C")), Row(Cell("D", mark), Cell("E"), Cell("F")));
+        // A row is widened only up to the widest of the table's rows once the cells have left. The
+        // stated grid is not asked: a comparison may mark a cell in a row that was already short of
+        // it, and rejecting must then give the original row back (RedlineReversibilityProofTests).
+        // Word 2024 merges the leaving cell into its neighbour in all three of these.
+        bool leaves = mark == "cellDel";
 
-        Assert.Equal("B C / E F", Resolve(bytes, accept: mark == "cellDel"));
+        // A whole column: the table is one column narrower.
+        Assert.Equal("B C / E F", Resolve(Table(3,
+            Row(Cell("A", mark), Cell("B"), Cell("C")), Row(Cell("D", mark), Cell("E"), Cell("F"))), accept: leaves));
+        // A table of one row.
+        Assert.Equal("A C", Resolve(Table(3, Row(Cell("A"), Cell("B", mark), Cell("C"))), accept: leaves));
     }
 
     [Theory]
