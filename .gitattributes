@@ -1,8 +1,11 @@
-# Set the default behavior, in case people don't have core.autocrlf set.
-* text=auto
+# Text is checked out with LF on every OS, whatever core.autocrlf says. The library writes LF
+# everywhere (issue #1659), so a CRLF checkout breaks two things: golden text fixtures no longer
+# match its output, and multi-line string literals in .cs files compile with CRLF inside them,
+# which changes the bytes the library built from that checkout produces.
+* text=auto eol=lf
 
 # Explicitly declare text files you want to always be normalized and converted
-# to native line endings on checkout.
+# to LF on checkout.
 *.cs text
 *.ps1 text
 *.psm1 text
