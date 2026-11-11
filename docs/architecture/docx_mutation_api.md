@@ -2050,7 +2050,7 @@ Concretely, these shapes were resolvable before and are refused now:
 | A structured-wrapper range marker (`w:customXml{Ins,Del,MoveFrom,MoveTo}Range*`) whose id has no counterpart, or more than one | `Malformed` / `Ambiguous` | `unpaired_range_marker`, `duplicate_range_id` |
 | A paired range that does not cross a `w:sdt`/`w:customXml` tag as one half of Word's two-range envelope | `Malformed` | `malformed_range_topology` |
 | A move envelope around a wrapper whose content carries no `w:moveFrom`/`w:moveTo` mark | `Malformed` | `orphan_custom_xml_move_range` |
-| An `m:ctrlPr` mark whose object still shows text not revised the same way (resolving it would drop or resurrect that text), or one carrying the nested `CT_MathCtrlIns` property change | `Unsupported` | `unrevised_math_control_payload`, `unsupported_math_control_payload` |
+| An `m:ctrlPr` mark holding anything but the control character's `w:rPr` or its later deletion (`w:ins > w:del`, which lists as a second revision of the same object) | `Unsupported` | `unsupported_math_control_payload` |
 | An `m:ctrlPr` mark outside any math object's property set | `Malformed` | `orphan_math_control_revision` |
 | A revision mark under a run's `w:rPr`, or a `w:del`/move mark under `w:numPr` — positions the schema never allows (`CT_RPr` carries no marks; `CT_NumPr` admits only `w:ins` and `w:numberingChange`, removed numbering being archived in `w:pPrChange`) | `Malformed` | `invalid_revision_carrier` |
 | `w:numberingChange` not attached to `w:numPr` or a LISTNUM field | `Malformed` | `orphan_numbering_revision` |

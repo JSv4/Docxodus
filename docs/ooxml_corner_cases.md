@@ -7735,3 +7735,71 @@ the same rule, so it no longer depends on which renderer owns a paragraph. The e
 measures with the same kerning and ligatures (canvas `textRendering: optimizeSpeed` disables
 ligatures without touching kerning, matching the DOM); runs that request specific ligature features
 keep the browser's own line layout.
+
+## A tracked math object is one revision, decided by its control character (#1189)
+
+Word tracks the insertion or deletion of a math object (fraction, radical, delimiter, …) with a
+mark on the object's control character, `m:ctrlPr`, inside the object's property set. A control
+character that was inserted and later deleted nests the deletion in the insertion, which is the
+only nesting `CT_MathCtrlIns` allows:
+
+```xml
+<m:f>
+  <m:fPr><m:ctrlPr>
+    <w:ins w:id="10" w:author="A" w:date="…"><w:del w:id="16" w:author="B" w:date="…"><w:rPr/></w:del></w:ins>
+  </m:ctrlPr></m:fPr>
+  <m:num><m:r><w:ins w:id="11" w:author="A" w:date="…"><w:rPr/><m:t>1</m:t></w:ins></m:r></m:num>
+  <m:den><m:r><w:ins w:id="12" w:author="A" w:date="…"><w:rPr/><m:t>2</m:t></w:ins></m:r></m:den>
+</m:f>
+```
+
+Measured in desktop Word 2024 (16.0 build 20326, Windows 11) through the object model: the
+document `A=` + fraction + `+B` was opened, `Document.Revisions` listed, the operation applied
+(`Revisions.AcceptAll`, `RejectAll`, or `Accept`/`Reject` on one revision) and the result read
+from `Document.Content.WordOpenXML`.
+
+| Control mark | Text inside the object | Word lists | Accept All | Reject All |
+| --- | --- | --- | --- | --- |
+| `w:del` | deleted (`w:del`) | 1 deletion, text `1 2` | object removed | object kept, unmarked |
+| `w:del` | unmarked | 1 deletion, text `1 2` | object removed with its text | object kept |
+| `w:ins` | inserted (`w:ins`) | 1 insertion | object kept, unmarked | object removed |
+| `w:ins` | unmarked | 1 insertion | object kept | object removed with its text |
+| `w:ins > w:del` | inserted, unmarked, or inserted and deleted | 1 deletion + 1 insertion | object removed | object removed |
+| none | deleted | 1 deletion per run | empty `m:num`/`m:den`, object kept | object kept |
+
+Resolving one revision of the inserted-then-deleted object:
+
+| Operation | Result in Word |
+| --- | --- |
+| accept the deletion | object removed; the insertion is gone with it |
+| reject the deletion | object kept, still an insertion (`m:ctrlPr > w:ins`) |
+| accept the insertion | object kept, still a deletion; the text's own insertion marks are resolved with it |
+| reject the insertion | object removed |
+
+So the control mark alone decides whether the object exists, and the object takes its text with
+it whatever marks that text carries. Word also rewrites a run-level wrapper around `m:r`
+(`<w:ins><m:r>…`) to its own spelling, the mark inside the run (`<m:r><w:ins><w:rPr/><m:t>…`).
+
+**Docxodus before #1189.** `RevisionProcessor.AcceptRevisions` looked for `w:del` only directly
+under `m:ctrlPr`, so it kept an inserted-then-deleted object (with an empty `m:ctrlPr`).
+`DocxSession` listed that shape as `unsupported_math_control_payload`, which made
+`AcceptAllRevisions` and `RejectAllRevisions` refuse the whole document, and it refused a control
+mark whose text was not marked the same way (`unrevised_math_control_payload`), a shape Word
+resolves.
+
+**Now.** `RevisionOps.MathControlMarks` names the marks a control character carries, the mark
+itself and the deletion nested in it. The session lists each as a revision of the object and
+resolves it as the table above; `RevisionProcessor` uses the same definition to find the
+deletion. The text-marking guard is removed. A mark holding anything else (for example
+`w:ins > w:ins`) still fails closed as `unsupported_math_control_payload`. Tests:
+`DS45533`, `DS45534`, `DS45547`, `DS45548` in `DocxSessionStructuralRevisionTests`.
+
+One difference remains in the listing only: when the text inside an inserted-then-deleted object
+carries its own nested insert-and-delete marks, the session lists those text deletions as
+further revisions, where Word shows two for the whole object. Accept All and Reject All agree
+with Word.
+
+The same captures confirm the inline custom XML envelopes from the issue: Word 2024 strips
+`w:customXml` and its `w:customXmlInsRange*`/`w:customXmlDelRange*` markers on open and keeps
+the content's own `w:ins`/`w:del`, so its accept and reject results have the same text as
+Docxodus, which keeps the `w:customXml` wrapper around surviving content.
