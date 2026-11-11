@@ -34,9 +34,12 @@ function fontProbeSize(document: Document): number {
 /** Probe text for an element whose own text the primary font covers (Latin, through U+024F). */
 const LATIN_PROBE = "Hg";
 
-/** A character the Latin probe's font may not cover (beyond U+024F), other than white space. */
-const BEYOND_LATIN = /[^\u0000-\u024f\s]/u;
-const BEYOND_LATIN_CHARACTERS = /[^\u0000-\u024f\s]/gu;
+/**
+ * A character the Latin probe's font may not cover (beyond U+024F), other than white space and the
+ * left-to-right mark, which is never drawn: the converter puts one after each line break.
+ */
+const BEYOND_LATIN = /[^\u0000-\u024f\s\u200e]/u;
+const BEYOND_LATIN_CHARACTERS = /[^\u0000-\u024f\s\u200e]/gu;
 
 /** At most this many distinct characters of an element's own text go into its probe. */
 const MAX_PROBE_CHARACTERS = 256;
@@ -181,6 +184,15 @@ function sameLineFace(document: Document, run: CSSStyleDeclaration, paragraph: C
   return own !== undefined && own === extent(run);
 }
 
+/**
+ * The converter keeps a line break inside its run: the `<br>`, its direction mark (text) and, in a paragraph
+ * with tabs, an empty span carrying the following line's offset. A run's line height applies to every line it spans.
+ */
+function isBreakPiece(child: Element): boolean {
+  return child.matches('br[data-docx-break]')
+    || child.localName === 'span' && !child.childNodes.length && !!child.previousElementSibling?.matches('br[data-docx-break]');
+}
+
 /** Ordinary inline runs whose metrics can be represented by their paragraph's font. */
 function uniformParagraphRuns(paragraph: HTMLElement, allowStructuralWrappers = false,
   positioned?: (run: CSSStyleDeclaration) => boolean): HTMLElement[] | undefined {
@@ -203,8 +215,9 @@ function uniformParagraphRuns(paragraph: HTMLElement, allowStructuralWrappers = 
     || runs.some(child => {
       const inMarker = marker?.contains(child), wrapper = wrappers.includes(child);
       if (!(child instanceof view.HTMLElement) || (!wrapper && child.localName !== "span")
-        // A condensed justified line (word-text.ts) narrows spaces inside its run, nothing else.
-        || (!inMarker && ((!wrapper && child.querySelector(':scope > :not([data-docx-condensed-line])'))
+        // A condensed justified line (word-text.ts) narrows spaces inside its run, and a break stays in its run.
+        || (!inMarker && ((!wrapper && Array.from(child.children).some(piece =>
+          !piece.matches('[data-docx-condensed-line]') && !isBreakPiece(piece)))
           || !child.textContent?.trim()))) return true;
       const run = view.getComputedStyle(child);
       // Converter list prefixes are an inline flex box with two flex items: the
@@ -309,8 +322,9 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
     const section = paragraph.closest<HTMLElement>('[data-section-index]');
     if (Number(section?.dataset.cols ?? 1) > 1 || section?.querySelector(
       '[data-docx-text-frame], [data-docx-wrap-text], [data-docx-edge-picture]')) continue;
+    // Off a grid, a multiple below one stays with the converter; on one, it is whole grid lines (#1551).
     if (style.direction !== 'ltr' || style.writingMode !== 'horizontal-tb'
-      || multiple < 1
+      || multiple < 1 && !pitch
       || Number.parseFloat(style.getPropertyValue('--docx-exact-line-height')) > 0
       || Array.from(paragraph.childNodes).some(n => n.nodeType === 3 && n.textContent?.trim())) continue;
     const marker = paragraph.firstElementChild?.getAttribute('data-list-marker') === 'true'
@@ -340,19 +354,17 @@ export function prepareMixedLineHeights(root: HTMLElement, checkpoint?: () => vo
         sides: [css.left, css.right], bottom: css.bottom, float: css.cssFloat };
     });
     const paragraphFont = owned ? undefined : measure(style, Number.parseFloat(style.fontSize));
-    // Converter line breaks stay inside their run, followed by the run's direction mark and, in an
-    // indented paragraph, an empty span that carries the following line's horizontal offset.
-    const contained = (child: Element) => child.matches('br[data-docx-break]')
-      || child.localName === 'span' && !child.childNodes.length && !!child.previousElementSibling?.matches('br[data-docx-break]')
-      || owned && child.hasAttribute('data-docx-line-metric');
+    // A run may hold a line break's pieces, and an owned paragraph its metrics.
+    const contained = (child: Element) => isBreakPiece(child) || owned && child.hasAttribute('data-docx-line-metric');
     if (!runs.length || paragraph.querySelector('*:not(span):not(br[data-docx-break])')
       || Array.from(paragraph.children).some(child => child.localName === 'br') || fonts.some(f =>
       !(f.size > 0) || f.transform !== 'none' || !['static', 'relative'].includes(f.position)
       || f.float !== 'none' || f.sides.some(side => !['auto', '0px'].includes(side))
       || !['auto', '0px'].includes(f.bottom) && !(f.position === 'relative'
         && Math.abs(Number.parseFloat(f.bottom) + Number.parseFloat(f.top)) < .02)
-      || f.position === 'relative' && !(multiple > 1
-        && Math.abs(Number.parseFloat(f.top) + Number.parseFloat(f.height) * (1 - 1 / multiple) / 2) < .02)
+      // The converter lifts a multiple's text by half its surplus, and a multiple below one by nothing.
+      || f.position === 'relative' && !(multiple !== 1 && Math.abs(Number.parseFloat(f.top)
+        - Math.min(0, Number.parseFloat(f.height) * (1 / multiple - 1) / 2)) < .02)
       || !owned && f.run.style.lineHeight && !['normal', 'calc(1lh*var(--docx-auto-line-spacing))']
         .includes(f.run.style.lineHeight.replace(/\s/g, ''))
       || !owned && f.height !== 'normal' && Math.abs(Number.parseFloat(f.height)

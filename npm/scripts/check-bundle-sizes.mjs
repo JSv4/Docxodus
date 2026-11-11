@@ -123,7 +123,10 @@ const budgetsKiB = {
   // Round only this exhausted gate up by 0.5 KiB (CI measures 47.1 KiB).
   // Collapsing running-story paragraph spacing in one block adds 59 bytes (57,388 -> 57,447 on
   // current main), one byte over the old gate; round it up by 0.1 KiB.
-  'pagination.bundle.js': 56.6,
+  // Grid lines split by w:br and mixed multiples below one on a grid (#1551) add 20–29 gzip bytes
+  // over 0dfb5eae: embed/IIFE/editor/pagination 163921/163970/142600/57960. Only this gate is
+  // exhausted (by 2 bytes); round it to the next 0.1 KiB.
+  'pagination.bundle.js': 56.7,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,

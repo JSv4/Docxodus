@@ -126,6 +126,8 @@ for (const [name, options] of [
   ['relative bottom offset', { multiple: 1.15, firstStyle: 'bottom:3px' }],
   ['unowned negative lift', { multiple: 1.15, firstStyle: 'top:-2px' }],
   ['dynamic field', { secondAttributes: 'data-field="PAGE"' }],
+  // Off a grid; on one, the multiple is whole grid lines (below).
+  ['multiple below one', { multiple: .8 }],
 ] as const) test(`mixed metrics preserve the ${name}`, async ({ page }) => {
   const result = await exercise(page, paragraph(options));
   expect(result.count).toBe(0);
@@ -221,8 +223,10 @@ test('changed-width preparation matches fresh source at both narrower and wider 
 
 // Word 2024 (#1551) gives each visual line of mixed text the whole grid lines its text needs, with its text
 // centred in them. On a 36pt grid, that puts a 10pt line's text lower than its own height below the baseline.
-for (const pitch of [18, 36]) test(`mixed visual lines take whole ${pitch}pt grid lines`, async ({ page }) => {
-  const result = await exercise(page, paragraph({ width: 42, text: Array(12).fill('word').join(' '),
+// A multiple below one changes nothing on a grid (a 24pt word at 0.8 lines on an 18pt grid: 36pt, as single).
+for (const [pitch, multiple] of [[18, 1], [36, 1], [18, .8]])
+test(`mixed visual lines take whole ${pitch}pt grid lines${multiple !== 1 ? ` at ${multiple} lines` : ''}`, async ({ page }) => {
+  const result = await exercise(page, paragraph({ width: 42, text: Array(12).fill('word').join(' '), multiple,
     paragraphStyle: `--docx-line-grid:${pitch}pt` }));
   expect(result.count).toBe(1);
   expect(result.after.struts.map(strut => strut.height / (pitch * 4 / 3))).toEqual([pitch === 18 ? 2 : 1, ...Array(12).fill(1)]);

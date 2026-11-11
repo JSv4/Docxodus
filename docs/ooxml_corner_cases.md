@@ -7618,17 +7618,84 @@ wrapping and the baseline pass. The baseline pass also moves a uniform line whos
 grid lines up by half their surplus. Tested by `npm/tests/pagination-line-grid.spec.ts`,
 `npm/tests/mixed-line-metrics.spec.ts` and `npm/tests/export-line-grid.spec.ts`.
 
+What this left different from Word is covered in the next subsection.
+
+### Lines split by `w:br`, multiples below one, and the editor's baselines
+
+Same setup. Unless the row says otherwise, 40 paragraphs of three lines split by `w:br`
+(`Para n first line`, `Para n middle Big line`, `Para n last line`, each break in a run of its own),
+on an 18pt grid. Columns are line step / lines on page 1 / pages, then page 1's first baseline;
+Docxodus is its PDF export, before (`main` at 0dfb5eae) and after this change.
+
+| Case | Word 2024 | Docxodus before | After |
+| --- | --- | --- | --- |
+| Single; no grid | 18 / 36 / 4, 85.34; 13.8 / 45 / 3, 83.18 | 13.8 / 45 / 3, 83.25; same | 18 / 36 / 4, 85.5; same |
+| Bold `Big`; break inside the text's run; hanging indent; two wrapped lines and a break | 18 / 36 / 4 | 13.8 / 45 / 3 | 18 / 36 / 4 |
+| 1.15 / 1.5 / 0.8 lines | 20.7 / 30 / 4, 86.66; 27 / 24 / 5, 89.78; 18 / 36 / 4 | 15.87 / 39 / 4; 20.7 / 30 / 4; 13.8 / 45 / 3 | as Word, 87.0; 90.0; 85.5 |
+| 12pt grid; 24pt text, and without a grid | 24 / 27 / 5, 88.34; 36 / 18 / 7, 98.66; 27.6 / 21 / 6 | 13.8 / 45 / 3; 27.6 / 21 / 6; same | as Word, 88.5; 98.25; same |
+| `atLeast` 15pt; no grid | 18 / 36 / 4, 85.34; 15 / 42 / 3, 84.38 | 15 / 42 / 3, 83.25; same, 83.25 | 18 / 36 / 4, 85.5; 15 / 42 / 3, 84.75 |
+| `atLeast` 20pt, also with bold `Big`; no grid | 20 / 30 / 4, 87.26; 20 / 30 / 4, 89.42 | 20 / 30 / 4, 85.5; 85.5 | 87.0; 89.25 |
+| Two breaks in a row (an empty middle line), single / `atLeast` 20pt; no grid | 18 / 20pt each line, 24 labels a page, 85.34 / 87.26; 13.8 | 13.8; 20, 85.5; same | as Word, 85.5 / 87.0; same |
+| A break at the end of the paragraph, single / 1.5 lines; no grid | 18 / 27pt each line, the break's line too; 13.8 | 13.8; 20.7; same | as Word; same |
+| A 24pt word at 0.8 lines, one line a paragraph (120); no grid | 36 / 18 / 7, 98.66; 22.08 / 29 / 5, 89.9 | 28.5 / 22 / 6, 94.5; same | 36 / 18 / 7, 98.61; unchanged |
+| A 24pt `Big` at 0.8 lines | 18, 36, 18; 27 / 5 | 28.5 each; 21 / 6 | 18, 36, 18; 27 / 5 |
+
+And with the text's own size, an at-least minimum the passes recover below 14pt or replace with the
+natural height, and paragraphs of five lines (24 paragraphs), all split by `w:br` the same way:
+
+| Case | Word 2024 | Docxodus before | After |
+| --- | --- | --- | --- |
+| 24pt text, `atLeast` 30pt / 40pt; 30pt without a grid | 36 / 18 / 7, 98.66; 40 / 15 / 8, 102.62; 30 / 21 / 6, 96.86 | 30 / 21 / 6; 40 / 15 / 8, 99.75; 30 / 21 / 6, 95.25 | as Word, 98.25; 102.75; 96.75 |
+| 10pt text, `atLeast` 13pt, on a 12pt grid or none | 13 / 48 / 3, 82.58; 82.82 | 11.5 / 54 / 3, 81.0 | 13 / 48 / 3, 82.5 |
+| 24pt text, `atLeast` 15pt, no grid | 27.6 / 21 / 6, 94.46 | 15 / 42 / 3, lines overlapping | 27.6 / 21 / 6, 94.5 |
+| Five lines a paragraph: 18pt grid; `w:widowControl w:val="0"`; no grid | 18 / 35 / 4; 18 / 36 / 4; 13.8 / 45 / 3 | 13.8 / 45 / 3; 13.8 / 46 / 3; same | as Word |
+
+So:
+
+- A line that a `w:br` ends is a grid line like a wrapped one, whatever spacing it has: whole grid
+  lines, centred text, and an at-least minimum's surplus above the grid lines. An empty line made
+  by two breaks, and the line after a break that ends a paragraph, take one grid line as well.
+- On a grid, a multiple below one is single spacing, for mixed sizes as for uniform text:
+  `max(ceil(N / pitch), multiple) × pitch` never takes the multiple when it is below one.
+- Word keeps widow and orphan control on for these documents, which declare none: three-line
+  paragraphs are never split, and five-line ones put 35 lines on a page of 36 grid lines
+  (`w:widowControl w:val="0"` gives 36). Docxodus agrees.
+
+`applyParagraphLineGrids` in `npm/src/line-metrics.ts` already sized every line of a uniform paragraph,
+wrapped or not, through each run's line height, which CSS applies to every line box the run spans.
+It skipped a paragraph with a break only because `uniformParagraphRuns` refused a run holding an
+element other than a condensed line, and the converter keeps a `w:br` inside its run: the `<br>`, a
+left-to-right mark that holds the next line's font, and in a paragraph with tabs an empty span with
+the next line's offset. `isBreakPiece`, which the mixed pass already used for the same pieces, now
+lets `uniformParagraphRuns` accept them, so the grid pass sizes these runs like any other. The mark
+also made two passes treat the paragraph as text beyond Latin, which they skip because a fallback
+font changes its metrics: the at-least minimum pass and the baseline pass's at-least branch. The mark
+is never drawn, so `BEYOND_LATIN` no longer counts it, and those passes now take a broken paragraph
+as they take a wrapped one, off the grid too (the second table). `prepareMixedLineHeights` skipped every
+multiple below one; it now skips one only off the grid, and accepts the converter's lift of such a
+multiple, which is none. Off the grid Word shortens a mixed line below one from above its text, which
+the strut model does not do, so that case stays with the converter. Tested by
+`npm/tests/pagination-line-grid.spec.ts`, `npm/tests/mixed-line-metrics.spec.ts` and
+`npm/tests/export-line-grid.spec.ts`.
+
+The editor's paginated view keeps Chromium's baselines, on purpose since #1151: it does not run
+`alignBaselinesToWord`, which moves each run's glyphs with relative positioning, because Chromium puts
+some edited content outside the moved runs. In a contenteditable paragraph whose runs are moved,
+selecting everything and typing replaces every run with a bare text node, and pasting over a run
+inserts bare text and elements in the paragraph itself (`document.execCommand` in Chromium); typing
+inside a run, at its end, or after deleting a run stays inside a moved run. Such content would sit on
+the unmoved baseline beside moved runs until the block commits and is re-rendered. What the editor
+shows is that pass's whole correction, not a grid case: its text is 0.5 to 0.7pt above Word's on
+ordinary lines (Chromium's pixel rounding, #942), 1.8pt above on a 20pt at-least line on an 18pt
+grid (13.50pt below the line's top, where the viewer puts it at 15.29pt and Word at 15.26pt), and
+3.9pt above on a 20pt at-least line without a grid. An earlier note here called the grid case about
+2pt low; it is high. The viewer and the PDF export place all of these as Word does.
+
 Still different from Word:
 
-- A paragraph broken by `w:br` whose runs share their metrics (uniform text, or a bold word) gets no
-  grid lines: three such lines per paragraph print 13.8pt / 45 / 3 where Word prints 18pt / 36 / 4.
-  The uniform pass does not size a run holding a break, and the mixed pass, which handles breaks,
-  leaves runs with equal metrics to it. Mixed sizes with a break are on the grid (the table above).
-- A paragraph of mixed sizes with an automatic multiple below one: a 24pt word with 0.8 lines on an
-  18pt grid prints 36pt / 18 / 7 in Word and about 28.5pt / 22 / 6 in Docxodus, because the mixed
-  pass leaves multiples below one to the converter.
-- The editor's paginated view does not run the baseline pass, so there a uniform line whose at-least
-  minimum beats its grid lines keeps its text where it would be without a grid, about 2pt low.
+- The editor's baselines, above, by design.
+- Off a grid, mixed sizes with an automatic multiple below one: a 24pt word at 0.8 lines prints
+  22.08pt / 29 / 5 in Word, its text raised into the shortened line, and 28.5pt / 22 / 6 in Docxodus.
 
 ## Word kerns and ligates only on request (#1562)
 
