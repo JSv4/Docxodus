@@ -52,6 +52,24 @@ internal static class TableGridModel
         return cells;
     }
 
+    /// <summary>The width a cell has after absorbing removed cells: Word adds their widths to
+    /// its own. <c>null</c> when a cell states no twip width, and the width then stays as written.
+    /// Without it, a column deleted from every row leaves cells whose stale widths, not the grid
+    /// columns they span, decide the layout.</summary>
+    internal static long? CombinedTwipWidth(IEnumerable<XElement> cells)
+    {
+        long total = 0;
+        foreach (var cell in cells)
+        {
+            var width = cell.Element(W.tcPr)?.Element(W.tcW);
+            if ((string?)width?.Attribute(W.type) != "dxa"
+                || !long.TryParse((string?)width.Attribute(W._w), out long twips))
+                return null;
+            total += twips;
+        }
+        return total;
+    }
+
     internal static TableGridCell? CellCovering(IEnumerable<TableGridCell> grid, int column)
     {
         foreach (var cell in grid)
