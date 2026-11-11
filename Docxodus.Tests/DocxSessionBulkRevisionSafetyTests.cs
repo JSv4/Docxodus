@@ -96,19 +96,19 @@ public class DocxSessionBulkRevisionSafetyTests
     [Fact]
     public void MetadataDefect_DoesNotMaskAResolutionSafetyCheck()
     {
-        // Every cell of the row is deleted: no surviving cell can absorb the grid columns. That
-        // refusal must win over the missing author, which alone would not block.
+        // The vertical-merge revision states a merge value the schema does not have, so neither
+        // direction has a defined result. That refusal must win over the missing author, which
+        // alone would not block.
         var body = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/></w:tblGrid>"
-            + "<w:tr><w:tc><w:tcPr><w:cellDel w:id=\"1\" w:date=\"2026-03-02T10:00:00Z\"/></w:tcPr>"
-            + Paragraph(Run("Left")) + "</w:tc><w:tc><w:tcPr><w:cellDel w:id=\"2\" w:date=\"2026-03-02T10:00:00Z\"/></w:tcPr>"
-            + Paragraph(Run("Right")) + "</w:tc></w:tr></w:tbl>"
+            + "<w:tr><w:tc><w:tcPr><w:cellMerge w:id=\"1\" w:date=\"2026-03-02T10:00:00Z\" w:vMerge=\"split\"/></w:tcPr>"
+            + Paragraph(Run("Left")) + "</w:tc><w:tc>" + Paragraph(Run("Right")) + "</w:tc></w:tr></w:tbl>"
             + Paragraph(Run("After"));
 
         using var session = new DocxSession(Build(body));
 
         var entry = Assert.Single(session.ListRevisions());
         Assert.Equal(RevisionResolutionStatus.Malformed, entry.ResolutionStatus);
-        Assert.Equal("unabsorbable_cell_deletion", entry.Diagnostic?.Code);
+        Assert.Equal("invalid_cell_merge_state", entry.Diagnostic?.Code);
         Assert.Equal(EditErrorCode.RevisionMalformed, session.AcceptAllRevisions().Error?.Code);
     }
 

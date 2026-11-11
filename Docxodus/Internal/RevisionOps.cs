@@ -421,34 +421,6 @@ internal static class RevisionOps
                     continue;
                 }
 
-                if (group.Family == RevisionFamily.CellDelete)
-                {
-                    // Another revision may delete the row's other cells, so only a cell that no
-                    // revision deletes is certain to be there to take the columns.
-                    if (cells.Select(u => RowOf(u.MarkedCell)).Any(row => RowCells(row)
-                            .All(cell => cell.Elements(W.tcPr).Elements(W.cellDel).Any())))
-                    {
-                        group.ResolutionStatus = RevisionResolutionStatus.Malformed;
-                        group.Diagnostic = new RevisionDiagnostic(
-                            "unabsorbable_cell_deletion",
-                            "Every cell of a row is deleted, so no surviving cell can absorb its grid columns.");
-                        continue;
-                    }
-                }
-
-                if (group.Family == RevisionFamily.CellInsert)
-                {
-                    var inserted = cells.Select(unit => unit.MarkedCell!).ToHashSet();
-                    if (inserted.Select(RowOf).Any(row => RowCells(row).All(inserted.Contains)))
-                    {
-                        group.ResolutionStatus = RevisionResolutionStatus.Malformed;
-                        group.Diagnostic = new RevisionDiagnostic(
-                            "unresolvable_cell_insertion",
-                            "Rejecting the inserted cells would leave a table row with no cells.");
-                        continue;
-                    }
-                }
-
                 if (group.Family == RevisionFamily.CellMerge && cells.Any(u =>
                     (string?)u.Element.Attribute(W.vMerge) is not ("rest" or "cont")
                     || (string?)u.Element.Attribute(W.vMergeOrig) is { } original
@@ -2553,32 +2525,12 @@ internal static class RevisionOps
         var cellUnits = group.Units.Where(u => u.Kind == UnitKind.CellMark).ToList();
         if (cellUnits.Count == 0) return;
 
-        if (group.Family == RevisionFamily.CellInsert)
+        if (group.Family != RevisionFamily.CellMerge)
         {
-            if (accept)
-            {
-                foreach (var unit in cellUnits)
-                    if (!Detached(unit.Element))
-                    {
-                        var markerParent = unit.Element.Parent;
-                        unit.Element.Remove();
-                        RemoveEmptyPropertyAncestors(
-                            markerParent, group.PartUri, protectedEmptyContainerKeys);
-                    }
-            }
-            else
-            {
-                foreach (var cell in cellUnits.Select(u => u.MarkedCell)
-                    .Where(c => c is not null).Select(c => c!).Distinct().ToList())
-                {
-                    if (!Detached(cell)) DetachCell(cell, removedElements);
-                }
-            }
-        }
-        else if (group.Family == RevisionFamily.CellDelete)
-        {
-            if (accept)
-                AcceptDeletedCells(cellUnits, removedElements);
+            // A rejected insertion and an accepted deletion are one operation: the cells leave.
+            // In the other two directions only the marks go.
+            if ((group.Family == RevisionFamily.CellInsert) != accept)
+                RemoveMarkedCells(cellUnits, removedElements);
             else
                 foreach (var unit in cellUnits)
                     if (!Detached(unit.Element))
@@ -2589,7 +2541,7 @@ internal static class RevisionOps
                             markerParent, group.PartUri, protectedEmptyContainerKeys);
                     }
         }
-        else if (group.Family == RevisionFamily.CellMerge)
+        else
         {
             foreach (var unit in cellUnits)
             {
@@ -2643,93 +2595,24 @@ internal static class RevisionOps
         }
     }
 
-    /// <summary>
-    /// Accept cell deletion using grid units, not physical-cell count. As in Word, a deleted
-    /// cell's grid columns go to the nearest surviving cell before it, and the deleted cells
-    /// that start a row go to the first surviving cell after them.
-    /// </summary>
-    private static void AcceptDeletedCells(
+    /// <summary>The marked cells leave their rows (<see cref="TableGridModel.RemoveCells"/>); a
+    /// row that keeps no cell goes whole, as a tracked row deletion does, and takes a table left
+    /// without rows with it.</summary>
+    private static void RemoveMarkedCells(
         IReadOnlyList<RevisionUnit> units, List<XElement> removedElements)
     {
-        var deleted = units.Select(u => u.MarkedCell).Where(c => c is not null)
-            .Select(c => c!).ToHashSet();
-        foreach (var row in deleted.Select(RowOf).OfType<XElement>().Distinct().ToList())
+        var leaving = units.Select(u => u.MarkedCell).OfType<XElement>().Where(c => !Detached(c)).ToHashSet();
+        foreach (var row in leaving.Select(RowOf).OfType<XElement>().Distinct().ToList())
         {
-            XElement? survivor = null;
-            var leading = new List<XElement>();
-            foreach (var cell in RowCells(row).ToList())
+            var gone = RowCells(row).Where(leaving.Contains).ToList();
+            if (TableGridModel.RemoveCells(row, leaving))
             {
-                if (!deleted.Contains(cell))
-                {
-                    foreach (var gone in leading) AbsorbCell(cell, gone);
-                    leading.Clear();
-                    survivor = cell;
-                    continue;
-                }
-
-                if (survivor is null) leading.Add(cell);
-                else AbsorbCell(survivor, cell);
-                DetachCell(cell, removedElements);
+                // The cells are what is reported removed: callers find the part through them.
+                removedElements.AddRange(gone);
+                continue;
             }
-            if (survivor is null)
-                throw new InvalidOperationException(
-                    "Resolving the cell deletion would remove every cell in a row.");
-        }
-    }
-
-    /// <summary>Gives a surviving cell a deleted cell's grid columns and, as Word does, its width.</summary>
-    private static void AbsorbCell(XElement survivor, XElement gone)
-    {
-        var width = TableGridModel.CombinedTwipWidth(new[] { survivor, gone });
-        SetCellGridSpan(survivor, CellGridSpan(survivor) + CellGridSpan(gone));
-        if (width is not null) survivor.Element(W.tcPr)!.Element(W.tcW)!.SetAttributeValue(W._w, width);
-    }
-
-    /// <summary>Removes a cell from its row, with any content control or custom-XML wrapper that
-    /// held no other cell: a wrapper left without a cell is not valid row content. The cell is
-    /// what is reported removed, since callers find its part through the revision's own cell.</summary>
-    private static void DetachCell(XElement cell, List<XElement> removedElements)
-    {
-        var outermost = cell;
-        while (outermost.Parent is { } parent && parent.Name != W.tr && RowCells(parent).All(other => other == cell))
-            outermost = parent;
-        outermost.Remove();
-        removedElements.Add(cell);
-    }
-
-    private static int CellGridSpan(XElement cell) =>
-        Math.Max(1, (int?)cell.Element(W.tcPr)?.Element(W.gridSpan)?.Attribute(W.val) ?? 1);
-
-    private static void SetCellGridSpan(XElement cell, int span)
-    {
-        var tcPr = cell.Element(W.tcPr);
-        if (tcPr is null)
-        {
-            tcPr = new XElement(W.tcPr);
-            cell.AddFirst(tcPr);
-        }
-        var gridSpan = tcPr.Element(W.gridSpan);
-        if (span <= 1)
-        {
-            gridSpan?.Remove();
-            return;
-        }
-        if (gridSpan is null)
-        {
-            gridSpan = new XElement(W.gridSpan, new XAttribute(W.val, span));
-            var before = tcPr.Elements().FirstOrDefault(e =>
-                e.Name == W.hMerge || e.Name == W.vMerge || e.Name == W.tcBorders
-                || e.Name == W.shd || e.Name == W.noWrap || e.Name == W.tcMar
-                || e.Name == W.textDirection || e.Name == W.tcFitText
-                || e.Name == W.vAlign || e.Name == W.hideMark
-                || e.Name == W.cellIns || e.Name == W.cellDel || e.Name == W.cellMerge
-                || e.Name == W.tcPrChange);
-            if (before is null) tcPr.Add(gridSpan);
-            else before.AddBeforeSelf(gridSpan);
-        }
-        else
-        {
-            gridSpan.SetAttributeValue(W.val, span);
+            CollapseCommentsFromRemovedRows(new[] { row });
+            RemoveRow(row, removedElements);
         }
     }
 
