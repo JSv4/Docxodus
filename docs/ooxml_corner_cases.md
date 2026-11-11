@@ -4154,16 +4154,105 @@ slot's existing rule for a frame's trailing space is the same function. The pagi
 wrapper's top margin as paragraph space-before (`hasParagraphSpacing` in `npm/src/pagination.ts`),
 so it drops it at the top of a later page.
 
-Measured with the same fixtures and not changed here:
-
-- `w:between` draws no line between the members of a box in Docxodus. Word draws it midway and
-  adds its width and twice its `w:space` to the step (32.5pt, where the table above has 30pt).
-- `w:contextualSpacing` does not reach across the edge of a box in Docxodus. In Word a bordered
-  paragraph with the flag drops its spacing next to an unbordered paragraph of the same style.
-- `w:pageBreakBefore` on a bordered paragraph does not start a page in the paginated view.
-- Shading on a bordered paragraph fills the lines of text only; Word fills the box to its border.
-
 Tests: `ParagraphBorderOuterSpacingTests` and `npm/tests/export-bordered-paragraph-spacing.spec.ts`.
+
+### The box around bordered paragraphs: `w:between`, contextual spacing, page starts, shading (#1692)
+
+Four more things Word 2024 (build 16.0.20326, November 2026) does with the box, measured with the
+fixtures of #1677: Times New Roman 12pt on exact 16pt lines, a 0.5pt box with `w:space="1"`, 14pt
+before and after unless noted, and an explicit `w:pPrDefault`. Positions are points from the page
+top in each renderer's PDF; Docxodus is its own PDF export.
+
+**`w:between`.** A paragraph's `w:between` is the rule Word draws *below* it when the next
+paragraph is in the same box. Paragraphs whose borders differ only in `w:between` still share one
+box, and each boundary is assembled from both neighbours:
+
+```xml
+<w:pBdr><w:top …/><w:left …/><w:bottom …/><w:right …/>
+  <w:between w:val="single" w:sz="4" w:space="1" w:color="000000"/></w:pBdr>
+```
+
+| Boundary between two members | Word: from one line's end to the next line's top |
+|---|---|
+| both have `w:between`, 14pt after / 14pt before | 14 (spacing), 1 (`w:space`), 0.5 (rule), 1 (`w:space`): step 32.5 |
+| both have it, no spacing | 1, 0.5, 1: step 18.5 |
+| only the upper has it | 14, 0.5 (rule), 1: step 31.5 |
+| only the lower has it | 14, 1, no rule: step 31 |
+| 20pt after above, 5pt before below | 20, 1, rule, 1 |
+| 5pt after above, 20pt before below | 5, 1, rule, 1, then the remaining 15 |
+| a 3pt rule with `w:space="4"` | 14, 4, 3, 4 |
+
+So the rule and the `w:space` below it belong to the upper paragraph, the `w:space` above it to the
+lower one, and the spacing collapses to the larger value with the upper paragraph's space after
+above the rule. The rule runs from side border to side border. When the box splits across pages
+between two members, Word draws nothing at the foot of the first page and the rule at the top of
+the next, with its `w:space` below it and no space before. A `w:pBdr` that has only `w:between`
+draws the rules and no box.
+
+`BorderGroupKey` no longer includes `w:between`, so such paragraphs share a box.
+`CreateBorderDivsCore` gives each member after the first the upper paragraph's rule as its own
+`border-top` with the rule's `w:space` as `padding-top`, and gives the upper paragraph the lower
+one's `w:space` as `padding-bottom`; negative side margins and equal padding run the rule through
+the box's own `w:space`. Being the lower paragraph's top border is what takes the rule to the next
+page with it. Docxodus matches every row above except the last-but-one: with a larger space before
+below than space after above, the step is right and the rule sits lower by the difference (it is
+drawn after the collapsed spacing). A box that has only `w:between` draws its rules across the text
+width; Word extends them 1.4pt past it on each side, as it does unbordered shading.
+
+**`w:contextualSpacing`.** The rule of #1553 holds across the edge of a box exactly as between
+unbordered paragraphs. With one style throughout and the flag on every paragraph, the top border
+sits directly below the line above (88.0) and the next paragraph directly below the bottom border;
+two different boxes touch. With the flag only on the boxed paragraph, the neighbour's 14pt after
+stays above the box and the next paragraph's 14pt before is absorbed below it. Another style beside
+the box removes nothing. `ApplyContextualSpacing` ran once per box and looked for neighbours inside
+it; it now takes the whole run of sibling blocks and the range to render, so the neighbour is the
+nearest block whichever box it is in.
+
+**Page start and keeps.** The paginator reads `data-page-break-before` and `data-keep-with-next`
+from the block it places, which for bordered paragraphs is the box, while the converter wrote them
+on the paragraphs.
+
+| Case | Word | Docxodus before | Docxodus after |
+|---|---|---|---|
+| `w:pageBreakBefore` on a bordered paragraph | box at the top of page 2 (border at 72.0) | one page | as Word |
+| `w:pageBreakBefore` on the second of three bordered paragraphs | box closed on page 1 (bottom border), a new box on page 2 | one page, one box | as Word |
+| `w:keepNext` on a bordered paragraph whose next paragraph does not fit | both on page 2 | box left on page 1 | as Word |
+| `w:keepNext` on the last of two paragraphs in a box | the first stays on page 1, the box open; the last moves | both left on page 1 | both move to page 2 |
+| `w:keepLines` on a four-line bordered paragraph | moves whole | as Word | unchanged |
+| three lines, widow control on / off | moves whole / splits 2 + 1 with the box open | as Word | unchanged |
+
+A bordered paragraph with `w:pageBreakBefore` now starts a box of its own, and the box carries its
+first paragraph's page start and its last paragraph's keep. The paginator can split a box that
+carries either (a box taller than a page must), and the part after the split keeps the keep. The
+fourth row is the remaining difference: the paginator moves a kept block whole, where Word splits
+the box before its last paragraph. `w:keepLines` and `w:widowControl` are read per paragraph inside
+the box and already matched.
+
+**Shading.** Word fills a box to the inner edge of its border, through the `w:space` band, and
+each paragraph's fill runs down to the next paragraph's first line, so the spacing between shaded
+members is filled too.
+
+| Case (fill, points) | Word | Docxodus before | Docxodus after |
+|---|---|---|---|
+| box, line at 103.5–119.5 | 102.5–120.5, border to border | 103.5–119.25, text width | 102.5–120.4, border to border |
+| box with `w:space="4"` at the sides | 66.6–545.5 across | 72–540 | 68.0–544.0 |
+| three shaded members, 14pt apart | one fill, gaps included | three bands, gaps white | one fill |
+| top border only | from the border through its `w:space` | lines only | as Word |
+| left and right borders only | to both borders | text width | as Word |
+| left border only (`w:space="4"`) | stops 4pt short of the border | 4pt short | unchanged |
+| left border with top or bottom, no right | vertical to the borders, 4pt short of the left one | lines only | unchanged |
+| one shaded member of three, or two fills in one box | that member's lines, the gap below it and the `w:space` beside it | its lines only | unchanged |
+| no border | lines only | lines only | unchanged |
+
+When every paragraph of a box has the same shading, the box carries it (`background` on the border
+wrapper, clipped at the inner edge of the border). Word does not fill the `w:space` band of a left border unless the box has a right border
+too, so such a box keeps its paragraphs' own fills. Members with different shading also keep their
+own fills, which cover their lines and not the gap below or the `w:space` beside them: that needs
+the spacing inside a box to be the paragraphs' padding rather than their margins, which is not done
+here. Word also fills the gap between consecutive shaded paragraphs that have no border (102.0 to
+132.0 for a 16pt line with 14pt after); Docxodus fills their lines only.
+
+Tests: `BorderedParagraphBoxTests` and `npm/tests/export-bordered-paragraph-spacing.spec.ts`.
 
 ## Footnotes: the note number is a run of the first paragraph, and spacing after stops at the margin (issue #1130)
 
