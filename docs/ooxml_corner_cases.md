@@ -5594,7 +5594,9 @@ neighbour whether or not the inserted cell's content and mark are tracked.
 The cell therefore has to leave while its paragraph mark is still tracked. The session already
 resolves a revision's cells before its paragraph marks; `RevisionProcessor` now removes deleted
 cells at the start of accepting rather than at the end, which it can do because accepting changes
-none of the properties (spans, grid) a deletion is measured by.
+none of the properties (spans, grid) a deletion is measured by. A session caller who accepts the
+paragraph-mark deletion by itself first and the cell deletion afterwards gets the widened row: the
+mark is no longer tracked when the cell leaves. Word has no measured equivalent of that order.
 
 Remaining differences, all in the tables above: Docxodus undoes its own and older Word's recorded
 insertions where Word merges cells; a rejected insertion is not widened when no row keeps every
