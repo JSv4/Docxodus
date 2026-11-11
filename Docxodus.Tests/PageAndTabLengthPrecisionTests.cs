@@ -96,17 +96,28 @@ public class PageAndTabLengthPrecisionTests
         Assert.Contains("width: 70.85pt", Style(tab));
     }
 
-    [Fact]
-    public void LineBreakInATabbedParagraph_KeepsTwipPrecision()
+    /// <summary>
+    /// Issue #1654: Word 2024 starts the text after a line break at the paragraph's left indent,
+    /// whatever the first line's indent. The paragraph's own margin already puts it there, so the
+    /// break adds nothing: in a paragraph whose tabs are laid out it used to add the first line's
+    /// start again as a leading margin (18pt in a list item hanging 360 twips from 720).
+    /// </summary>
+    [Theory]
+    [InlineData("<w:ind w:left=\"720\" w:hanging=\"360\"/>")]
+    [InlineData("<w:ind w:firstLine=\"1417\"/>")]
+    [InlineData("<w:ind w:left=\"720\"/>")]
+    public void TextAfterALineBreak_StartsAtTheLeftIndent(string indent)
     {
-        // In a paragraph whose tabs are laid out, a line break carries the first-line start (1417 twips)
-        // as its leading margin.
         var html = Html(
-            "<w:p><w:pPr><w:ind w:firstLine=\"1417\"/></w:pPr>" +
+            $"<w:p><w:pPr>{indent}</w:pPr>" +
             "<w:r><w:tab/><w:t>Larch</w:t><w:br/><w:t>ledger</w:t></w:r></w:p>");
 
-        Assert.Single(html.Descendants(), e => e.Name.LocalName == "br");
-        Assert.Contains(html.Descendants(), e => Style(e).Contains("margin: 0 0 0 70.85pt"));
+        var lineBreak = Assert.Single(html.Descendants(), e => e.Name.LocalName == "br");
+        Assert.Empty(lineBreak.ElementsAfterSelf());
+        var after = Assert.Single(html.Descendants(), e => !e.HasElements && e.Value == "ledger");
+        Assert.Contains("margin: 0;", Style(after));
+        // The tab before the break is still laid out.
+        Assert.Contains(html.Descendants(), e => e.Attribute("data-docx-tab") != null);
     }
 
     [Fact]
