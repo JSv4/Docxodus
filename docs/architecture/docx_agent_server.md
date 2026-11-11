@@ -949,7 +949,8 @@ never claiming a capability it doesn't have:
   `reject_all` were a whole-document `RevisionProcessor` transform that always succeeded, and
   there is deliberately no `force` mode. The refusing shapes are a missing or non-numeric
   `w:id`, one `w:id` shared by two live groups in one part, `w:customXmlMoveFromRange*`/
-  `w:customXmlMoveToRange*` ranges, `w:ins`/`w:del` under `m:ctrlPr`, `w:del` on a run's
+  `w:customXmlMoveToRange*` ranges, a mark under `m:ctrlPr` holding more than the control
+  character's properties and its later deletion, `w:del` on a run's
   `w:rPr` or a paragraph's `w:numPr`, a `w:sdt` envelope whose range topology is not Word's
   two-pair shape, an unattached `w:numberingChange`, and malformed cell markers — full table in
   `docx_mutation_api.md`.

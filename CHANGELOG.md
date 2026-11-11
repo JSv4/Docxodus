@@ -157,6 +157,8 @@ All notable changes to this project will be documented in this file.
 
 - Drawing canvases retain every textbox and nested group's text and placement in HTML and PDF export (#1561).
 
+- Tracked math objects now resolve as Word 2024 resolves them (#1189). A fraction, radical or other math object that was inserted and later deleted (`m:ctrlPr > w:ins > w:del`) made `DocxSession` refuse `AcceptAllRevisions` and `RejectAllRevisions` for the whole document (`unsupported_math_control_payload`), and `RevisionProcessor.AcceptRevisions` kept the deleted object. The session now lists the insertion and the deletion as two revisions of the object, each accepted or rejected on its own, and both engines remove the object on Accept All and on Reject All. A revised math object whose text is not marked the same way is no longer refused either (`unrevised_math_control_payload` is gone): as in Word, the object's own mark decides, so carrying out its deletion removes the text inside and keeping the object keeps it.
+
 ## [15.1.0] - 2026-11-05
 
 ### Added

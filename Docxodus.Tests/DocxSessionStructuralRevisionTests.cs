@@ -1336,6 +1336,13 @@ public class DocxSessionStructuralRevisionTests
     [InlineData("fraction_inserted", false, "fraction_absent")]
     [InlineData("nested_deleted", true, "fraction_absent")]
     [InlineData("nested_deleted", false, "nested_present")]
+    // Word resolves the object by its control mark whatever marks the text inside carries.
+    [InlineData("partial", true, "fraction_absent")]
+    [InlineData("partial", false, "fraction_present")]
+    [InlineData("control_deleted", true, "fraction_absent")]
+    [InlineData("control_deleted", false, "fraction_present")]
+    [InlineData("control_inserted", true, "fraction_present")]
+    [InlineData("control_inserted", false, "fraction_absent")]
     public void DS45533_MathControlRevision_ResolvesTheOwningObjectAndRoundTrips(
         string shape, bool accept, string expectedShape)
     {
@@ -1390,6 +1397,10 @@ public class DocxSessionStructuralRevisionTests
     [InlineData("fraction_inserted", false)]
     [InlineData("nested_deleted", true)]
     [InlineData("nested_deleted", false)]
+    [InlineData("partial", true)]
+    [InlineData("partial", false)]
+    [InlineData("inserted_then_deleted", true)]
+    [InlineData("inserted_then_deleted", false)]
     public void DS45534_MathControlRevision_MatchesProcessorOracle(
         string shape, bool accept)
     {
@@ -1407,13 +1418,85 @@ public class DocxSessionStructuralRevisionTests
         Assert.True(XNode.DeepEquals(oracle, actual), FirstDifference(oracle, actual));
     }
 
-    // Shapes with no safe semantics stay listed and fail closed: a mark whose object still
-    // shows unrevised text (removing the object would drop it), the nested CT_MathCtrlIns
-    // property-change form, and a m:ctrlPr outside any object's property set.
+    // A control character inserted and later deleted nests the deletion in the insertion
+    // (m:ctrlPr > w:ins > w:del, CT_MathCtrlIns). Word 2024 lists the two as separate revisions
+    // of the one object and resolves each on its own (issue #1189).
     [Theory]
-    [InlineData("partial", RevisionFamily.ContentDelete, RevisionResolutionStatus.Unsupported,
-        "unrevised_math_control_payload", EditErrorCode.RevisionUnsupported)]
-    [InlineData("nested_property_change", RevisionFamily.ContentInsert,
+    [InlineData(RevisionFamily.ContentDelete, true, "fraction_absent")]
+    [InlineData(RevisionFamily.ContentDelete, false, "fraction_inserted")]
+    [InlineData(RevisionFamily.ContentInsert, true, "control_deleted")]
+    [InlineData(RevisionFamily.ContentInsert, false, "fraction_absent")]
+    public void DS45547_MathControlInsertedThenDeleted_ResolvesEachRevisionAsWordDoes(
+        RevisionFamily family, bool accept, string expectedShape)
+    {
+        var expected = MainRoot(BuildMathControlDocument(expectedShape));
+        using var session = new DocxSession(BuildMathControlDocument("inserted_then_deleted"));
+        var revisions = session.ListRevisions();
+        Assert.Equal(new[] { RevisionFamily.ContentInsert, RevisionFamily.ContentDelete },
+            revisions.Select(revision => revision.Family));
+        Assert.All(revisions, revision =>
+        {
+            Assert.Equal(RevisionResolutionStatus.Supported, revision.ResolutionStatus);
+            Assert.Equal("12", revision.Text);
+        });
+
+        var selected = revisions.Single(revision => revision.Family == family);
+        var result = accept
+            ? session.AcceptRevision(selected.Id)
+            : session.RejectRevision(selected.Id);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var resolved = MainRoot(session.Save());
+        Assert.True(XNode.DeepEquals(expected, resolved), FirstDifference(expected, resolved));
+    }
+
+    // Accept All carries out the deletion and Reject All undoes the insertion, so both remove
+    // the object. RevisionProcessor.AcceptRevisions used to keep it: it looked for the deletion
+    // only directly under m:ctrlPr.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DS45548_MathControlInsertedThenDeleted_BulkAndProcessorRemoveTheObject(bool accept)
+    {
+        var input = BuildMathControlDocument("inserted_then_deleted");
+        var expected = MainRoot(BuildMathControlDocument("fraction_absent"));
+
+        using var session = new DocxSession(input);
+        var result = accept ? session.AcceptAllRevisions() : session.RejectAllRevisions();
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Empty(session.ListRevisions());
+        var resolved = MainRoot(session.Save());
+        Assert.True(XNode.DeepEquals(expected, resolved), FirstDifference(expected, resolved));
+
+        var processed = MainRoot((accept
+            ? RevisionProcessor.AcceptRevisions(new WmlDocument("oracle.docx", input))
+            : RevisionProcessor.RejectRevisions(new WmlDocument("oracle.docx", input)))
+            .DocumentByteArray);
+        Assert.True(XNode.DeepEquals(expected, processed), FirstDifference(expected, processed));
+    }
+
+    // Only a mark directly on the control character deletes the object. A w:del inside the
+    // character's own w:rPr is not one, so accepting leaves the object in place.
+    [Fact]
+    public void DS45549_DeletionMarkInsideControlRunProperties_DoesNotRemoveTheObject()
+    {
+        var input = MutateMain(BuildMathControlDocument("fraction_present"), root =>
+            root.Descendants(M.ctrlPr).Single().Element(W.rPr)!.Add(new XElement(W.del,
+                new XAttribute(W.id, "10"), new XAttribute(W.author, "Math Reviewer"),
+                new XAttribute(W.date, "2026-01-01T00:00:00Z"))));
+
+        var accepted = MainRoot(RevisionProcessor.AcceptRevisions(
+            new WmlDocument("oracle.docx", input)).DocumentByteArray);
+
+        Assert.Single(accepted.Descendants(M.f));
+        Assert.Equal("A=12+B", string.Concat(accepted.Descendants(M.t).Select(text => text.Value)));
+    }
+
+    // Shapes with no safe semantics stay listed and fail closed: a control mark holding
+    // anything but the character's properties or its later deletion, and a m:ctrlPr outside
+    // any object's property set.
+    [Theory]
+    [InlineData("nested_insertion", RevisionFamily.ContentInsert,
         RevisionResolutionStatus.Unsupported, "unsupported_math_control_payload",
         EditErrorCode.RevisionUnsupported)]
     [InlineData("orphan", RevisionFamily.ContentDelete, RevisionResolutionStatus.Malformed,
@@ -1448,7 +1531,7 @@ public class DocxSessionStructuralRevisionTests
     [Fact]
     public void DS45536_MathControlRevision_UnsafeEntryBlocksBulkButNotUnrelatedResolution()
     {
-        var input = MutateMain(BuildMathControlDocument("partial"), root =>
+        var input = MutateMain(BuildMathControlDocument("nested_insertion"), root =>
             root.Descendants(W.p).Skip(1).First().Elements(W.r).First().ReplaceWith(
                 RevisionWrapper(W.ins, "40", "Text Reviewer", "2026-01-01T00:00:00Z", "later")));
         using var session = new DocxSession(input);
@@ -1457,7 +1540,7 @@ public class DocxSessionStructuralRevisionTests
         Assert.Equal(2, revisions.Count);
         var blocked = Assert.Single(revisions, r => r.ResolutionStatus != RevisionResolutionStatus.Supported);
         var text = Assert.Single(revisions, r => r.ResolutionStatus == RevisionResolutionStatus.Supported);
-        Assert.Equal("unrevised_math_control_payload", blocked.Diagnostic!.Code);
+        Assert.Equal("unsupported_math_control_payload", blocked.Diagnostic!.Code);
 
         var bulk = session.AcceptAllRevisions();
         Assert.False(bulk.Success);
@@ -2390,10 +2473,12 @@ public class DocxSessionStructuralRevisionTests
             XElement Run(string text, XName? mark = null, string id = "") => mark is null
                 ? new XElement(M.r, new XElement(W.rPr), new XElement(M.t, text))
                 : new XElement(M.r, Mark(mark, id, new XElement(W.rPr), new XElement(M.t, text)));
-            XElement Control(XName? mark, string id) => new(M.ctrlPr,
-                mark is null ? new XElement(W.rPr) : Mark(mark, id, new XElement(W.rPr)));
-            XElement Fraction(XName? mark, XElement numerator, XElement denominator) => new(M.f,
-                new XElement(M.fPr, Control(mark, "10")),
+            XElement Control(XName? mark, string id, XName? later = null) => new(M.ctrlPr,
+                mark is null ? new XElement(W.rPr) : Mark(mark, id,
+                    later is null ? new XElement(W.rPr) : Mark(later, "16", new XElement(W.rPr))));
+            XElement Fraction(XName? mark, XElement numerator, XElement denominator,
+                string id = "10", XName? later = null) => new(M.f,
+                new XElement(M.fPr, Control(mark, id, later)),
                 new XElement(M.num, numerator),
                 new XElement(M.den, denominator));
             XElement Radical(XName? mark, XElement degree, XElement radicand) => new(M.rad,
@@ -2418,13 +2503,15 @@ public class DocxSessionStructuralRevisionTests
                 "nested_present" => new[]
                     { Fraction(null, Radical(null, Run("3"), Run("x")), Run("2")) },
                 "partial" => new[] { Fraction(W.del, Run("1"), Run("2", W.del, "12")) },
-                "nested_property_change" => new[]
+                "control_deleted" => new[] { Fraction(W.del, Run("1"), Run("2"), "16") },
+                "control_inserted" => new[] { Fraction(W.ins, Run("1"), Run("2")) },
+                "inserted_then_deleted" => new[]
                 {
-                    new XElement(M.f,
-                        new XElement(M.fPr, new XElement(M.ctrlPr,
-                            Mark(W.ins, "10", Mark(W.del, "16", new XElement(W.rPr))))),
-                        new XElement(M.num, Run("1", W.ins, "11")),
-                        new XElement(M.den, Run("2", W.ins, "12"))),
+                    Fraction(W.ins, Run("1", W.ins, "11"), Run("2", W.ins, "12"), later: W.del),
+                },
+                "nested_insertion" => new[]
+                {
+                    Fraction(W.ins, Run("1", W.ins, "11"), Run("2", W.ins, "12"), later: W.ins),
                 },
                 "orphan" => new[] { Control(W.del, "10") },
                 _ => throw new ArgumentOutOfRangeException(nameof(shape)),

@@ -310,32 +310,15 @@ internal static class RevisionOps
                     continue;
                 }
 
-                if (mathMarks.Any(unit => unit.Element.Elements().Any(child => child.Name != W.rPr)))
+                // The mark holds the control character's own w:rPr and, at most, its later
+                // deletion (MathControlMarks), which is a revision of its own.
+                if (mathMarks.Any(unit => unit.Element.Elements()
+                        .Any(child => child.Name != W.rPr && child.Name != W.del)))
                 {
                     group.ResolutionStatus = RevisionResolutionStatus.Unsupported;
                     group.Diagnostic = new RevisionDiagnostic(
                         "unsupported_math_control_payload",
-                        "A math control-character mark carries nested revision markup (a property change on the inserted control character) that cannot be selectively resolved.");
-                    continue;
-                }
-
-                // The object's existence follows its control character, so resolving the mark
-                // removes the whole object in one direction. Every piece of equation text inside
-                // must therefore be revised the same way; otherwise that direction would drop
-                // text the document still shows (or resurrect text it does not).
-                var wrapperName = group.Type == TypeInsert ? W.ins : W.del;
-                bool unrevisedText = mathMarks.Select(unit => unit.StructuredWrapper!)
-                    .Any(owner => owner.Descendants()
-                        .Where(text => text.Name == M.t || text.Name == W.t)
-                        .Any(text => !text.Ancestors()
-                            .TakeWhile(ancestor => !ReferenceEquals(ancestor, owner))
-                            .Any(ancestor => ancestor.Name == wrapperName)));
-                if (unrevisedText)
-                {
-                    group.ResolutionStatus = RevisionResolutionStatus.Unsupported;
-                    group.Diagnostic = new RevisionDiagnostic(
-                        "unrevised_math_control_payload",
-                        "A revised math control character owns equation text that is not revised the same way; resolving it would drop or resurrect that text.");
+                        "A math control-character mark holds markup other than the control character's properties or its later deletion, and cannot be selectively resolved.");
                     continue;
                 }
             }
@@ -884,10 +867,10 @@ internal static class RevisionOps
             }
             if ((n == W.ins || n == W.del) && child.Parent?.Name == M.ctrlPr)
             {
-                // The mark's payload is the control character's own w:rPr (or, in the
-                // nested CT_MathCtrlIns form, a property change on it) — never document
-                // content — so it is not walked. ValidateGroups fails the nested form closed.
-                sink.Add(MakeMathControlUnit(child, paragraph, markedRow, markedRowType));
+                // The mark's payload is the control character's own w:rPr — never document
+                // content — so it is not walked.
+                foreach (var mark in MathControlMarks(child))
+                    sink.Add(MakeMathControlUnit(mark, paragraph, markedRow, markedRowType));
                 continue;
             }
             if ((n == W.ins || n == W.del || n == W.moveFrom || n == W.moveTo) && IsContentWrapper(child))
@@ -1021,7 +1004,9 @@ internal static class RevisionOps
     /// property set holds it — the fraction bar, radical sign, delimiters — which is how Word
     /// tracks the insertion or deletion of the object itself (the runs inside carry their own
     /// marks). The unit carries that object as its wrapper; a <c>m:ctrlPr</c> that is not the
-    /// property set of a math object yields none and is reported as orphaned.
+    /// property set of a math object yields none and is reported as orphaned. Word resolves
+    /// the object by this mark alone, whatever marks the text inside carries: carrying out a
+    /// deletion removes unmarked text with the object, and keeping the object keeps it.
     /// </summary>
     private static RevisionUnit MakeMathControlUnit(
         XElement mark, XElement? paragraph, XElement? markedRow, string? markedRowType)
@@ -1046,11 +1031,21 @@ internal static class RevisionOps
         };
     }
 
+    /// <summary>
+    /// The control-character revisions a mark directly under <c>m:ctrlPr</c> stands for: itself
+    /// and, nested in it, the later deletion of the control character it inserted
+    /// (<c>m:ctrlPr > w:ins > w:del</c>, CT_MathCtrlIns). Each is a revision of the same
+    /// object, as in Word (issue #1189). The deletion comes first so that the insertion stays
+    /// next to the object's inserted content, which is one revision with it.
+    /// </summary>
+    internal static IEnumerable<XElement> MathControlMarks(XElement mark) =>
+        mark.Elements(W.del).Append(mark);
+
     /// <summary>The math object owning a <c>m:ctrlPr</c> mark: <c>m:ctrlPr</c> sits in the
     /// object's <c>m:*Pr</c> property set, never anywhere else in a conformant document.</summary>
     private static XElement? MathObjectOf(XElement mark)
     {
-        var properties = mark.Parent?.Parent;
+        var properties = mark.Ancestors(M.ctrlPr).FirstOrDefault()?.Parent;
         var owner = properties?.Parent;
         return properties is not null && owner is not null
             && properties.Name.Namespace == M.m
@@ -2435,9 +2430,8 @@ internal static class RevisionOps
             if (u.Paragraph is not null) touchedParagraphs.Add(u.Paragraph);
             if (u.Kind == UnitKind.MathControlMark)
             {
-                // The object's existence follows its control character. Its inner runs are
-                // units of this same group and detach with it; ValidateGroups proved none of
-                // their text would have survived on its own.
+                // The object's existence follows its control character, and its content goes
+                // or stays with it.
                 if (ContentSurvives(u.Element.Name, accept))
                     UnwrapWrapper(u.Element, restoreDeleted: false);
                 else
