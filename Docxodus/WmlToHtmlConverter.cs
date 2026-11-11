@@ -11390,20 +11390,9 @@ namespace Docxodus
                 {
                     { "position", "relative" }, { "height", inFlow ? "auto" : "0" }, { "margin", "0" }, { "padding", "0" },
                 };
-                if (inFlow)
-                {
-                    // The last paragraph's after-space belongs between the frame and the next
-                    // paragraph, where Word collapses it with that paragraph's before-space.
-                    var trailing = rendered.Elements().LastOrDefault();
-                    while (trailing != null && trailing.Name.LocalName is not ("p" or "h1" or "h2" or "h3" or "h4" or "h5" or "h6"))
-                        trailing = trailing.Elements().LastOrDefault();
-                    if (trailing?.Annotation<Dictionary<string, string>>() is { } trailingStyle &&
-                        trailingStyle.TryGetValue("margin-bottom", out var after))
-                    {
-                        placeholderStyle["margin-bottom"] = after;
-                        trailingStyle["margin-bottom"] = "0";
-                    }
-                }
+                // The last paragraph's after-space belongs between the frame and the next
+                // paragraph, where Word collapses it with that paragraph's before-space.
+                if (inFlow) MoveOuterSpacing(rendered, placeholderStyle, "margin-bottom");
                 placeholder.AddAnnotation(placeholderStyle);
                 return placeholder;
             }
@@ -11474,13 +11463,39 @@ namespace Docxodus
                         }
                     }
 
+                    // Word draws the box around the text and w:space only: the group's space before
+                    // and after lie outside it, where they meet the neighbours' spacing (issue #1677).
                     var div = new XElement(Xhtml.div, content);
+                    MoveOuterSpacing(div, style, "margin-top");
+                    MoveOuterSpacing(div, style, "margin-bottom");
                     if (RecordExactParagraphBorderWidths(pBdr, style))
                         div.Add(new XAttribute(ExactParagraphBorderAttribute, "true"));
                     div.AddAnnotation(style);
                     return div;
                 })
             .ToList();
+        }
+
+        /// <summary>
+        /// Moves the vertical margin at a box's outer edge (<paramref name="margin"/> is
+        /// <c>margin-top</c> or <c>margin-bottom</c>) from the block that begins or ends the box onto
+        /// <paramref name="boxStyle"/>. A margin left on that block stays inside the box's border or
+        /// formatting context, so it enlarges the box and never collapses with the spacing of the
+        /// block beside the box, as Word collapses a bordered or framed paragraph's spacing.
+        /// </summary>
+        private static void MoveOuterSpacing(XElement box, Dictionary<string, string> boxStyle, string margin)
+        {
+            XElement? Edge(XElement e) => margin == "margin-top" ? e.Elements().FirstOrDefault() : e.Elements().LastOrDefault();
+            for (var block = Edge(box); block != null; block = Edge(block))
+            {
+                if (block.Annotation<Dictionary<string, string>>() is { } blockStyle && blockStyle.TryGetValue(margin, out var space))
+                {
+                    boxStyle[margin] = space;
+                    blockStyle[margin] = "0";
+                    return;
+                }
+                if (block.Name.LocalName is "p" or "h1" or "h2" or "h3" or "h4" or "h5" or "h6") return;
+            }
         }
 
         /// <summary>Whether a block-level element takes part in paragraph spacing; a bookmark does not.</summary>
