@@ -2079,7 +2079,7 @@ reviewers' moves, so accepting "the move" by id would resolve both). Each refuse
 resolution; bulk resolution resolves every group by its own markup, so it proceeds. Delivery revision
 policies resolve requested revisions one by one by id, so they keep the selective gate. The metadata checks run
 after every safety check, so a metadata defect never hides a resolution-unsafe one (a missing author on
-an unabsorbable cell deletion still reports `unabsorbable_cell_deletion`). In files reported to be
+a vertical-merge revision with an undefined merge value still reports `invalid_cell_merge_state`). In files reported to be
 Word output, `w16du:dateUtc` is stamped on a move's content marks but not on its range starts, so a
 move compares only the `dateUtc` values present.
 
@@ -2116,14 +2116,21 @@ Three further shapes have a single safe resolution and resolve:
   range closes just after the other's opens, with no moved content in both) is an ordinary move.
   Moved content that lies inside a range of the other side still reports `overlapping_move_topology`.
 
-Cell revisions follow the geometry desktop Word 2024 writes (issue #1404). An accepted deleted cell
-gives its grid columns, and its `w:tcW` when both widths are in twips, to the nearest surviving cell
-before it; deleted cells that start a row give them to the first surviving cell after them. The row
-model reads a row's cells through content-control and custom-XML wrappers
-(`w:tr/w:sdt/w:sdtContent/w:tc`, as one online editor exports every cell), so wrapped cells group and
-resolve like bare ones, and a wrapper left without a cell is removed with it. One shape stays refused:
-a row whose every cell is deleted (`unabsorbable_cell_deletion`) or inserted
-(`unresolvable_cell_insertion`), where Word removes the row. See `docs/ooxml_corner_cases.md`.
+Cells that leave a row (an accepted `w:cellDel`, a rejected `w:cellIns`) are resolved by one rule,
+`TableGridModel.RemoveCells`, which the session and `RevisionProcessor` both call (issues #1404,
+#1688). A row left narrower than its table is made whole the way desktop Word 2024 does it: each
+leaving cell's columns go to the nearest staying cell before it, the cells that start a row give
+theirs to the first staying cell after them, and the widened cell's `w:tcW` becomes the width of the
+grid columns it spans. The stated grid describes the table without its deleted cells, so an accepted
+deletion is measured against it; it describes the table with its inserted cells, so a rejected
+insertion is measured against the rows that keep every cell, and is not widened when there is none.
+A row that is already whole is left alone, whoever wrote the mark, so a tracked `InsertTableColumn`
+whose rejection restores the old grid and a comparison that wrote the row in its final shape keep
+their geometry. A row that keeps no cell is removed, and a table that keeps no
+row with it. A row's cells are read through content-control and custom-XML wrappers
+(`w:tr/w:sdt/w:sdtContent/w:tc`, as one online editor exports every cell), and a wrapper left
+without a cell is removed with it. No cell insertion or deletion is refused for its shape any more.
+See `docs/ooxml_corner_cases.md`.
 
 `RevisionProcessor.AcceptRevisions`/`RejectRevisions` still handle all of them and remain
 public, so a caller that needs the old always-succeeding behaviour can run the transform over

@@ -68,7 +68,8 @@ namespace Docxodus
         private static void RejectRevisionsForPart(OpenXmlPart part)
         {
             var xDoc = part.GetXDocument();
-            var newRoot = RejectRevisionsForPartTransform(xDoc.Root);
+            var newRoot = (XElement)RejectRevisionsForPartTransform(xDoc.Root)!;
+            RemoveMarkedCells(newRoot, W.cellIns);
             xDoc.Root!.ReplaceWith(newRoot);
             part.PutXDocument();
         }
@@ -395,9 +396,17 @@ namespace Docxodus
                     element.Name == W.cellMerge)
                     return null;
 
+                // A rejected inserted cell leaves its row by the same rule as an accepted deleted
+                // cell (RemoveMarkedCells, once this pass has restored the row's properties). Until
+                // then keep its place, span, width and mark; its content goes with it.
                 if (element.Name == W.tc &&
                     element.Elements(W.tcPr).Elements(W.cellIns).Any())
-                    return null;
+                    return new XElement(W.tc,
+                        new XElement(W.tcPr,
+                            element.Elements(W.tcPr).Elements(W.tcW),
+                            element.Elements(W.tcPr).Elements(W.gridSpan),
+                            new XElement(W.cellIns)),
+                        new XElement(W.p));
 
                 return new XElement(element.Name,
                     element.Attributes(),
@@ -1404,7 +1413,7 @@ namespace Docxodus
             if (containsMoveFromMoveTo)
                 documentElement = (XElement)RemoveRowsLeftEmptyByMoveFrom(documentElement)!;
             documentElement = (XElement)AcceptAllOtherRevisionsTransform(documentElement)!;
-            documentElement = (XElement)AcceptDeletedCellsTransform(documentElement)!;
+            RemoveMarkedCells(documentElement, W.cellDel);
             RemoveTablesThatLostEveryRow(documentElement);
             documentElement = (XElement)MergeAdjacentTablesTransform(documentElement)!;
             documentElement = (XElement)AddEmptyParagraphToAnyEmptyCells(documentElement)!;
@@ -3190,109 +3199,20 @@ namespace Docxodus
             return node;
         }
 
-        private enum DeletedCellCollectionType
+        /// <summary>The cells carrying <paramref name="mark"/> leave their rows: deleted cells on
+        /// accepting, inserted cells on rejecting, by the rule the session shares
+        /// (<see cref="Internal.TableGridModel.RemoveCells"/>). A row that keeps no cell goes whole,
+        /// and a table that keeps no row with it.</summary>
+        private static void RemoveMarkedCells(XElement root, XName mark)
         {
-            DeletedCell,
-            Other
-        };
-
-        // For each table row, group deleted cells plus the cell before any deleted cell.
-        // Produce a new cell that has gridSpan set appropriately for group, and clone everything
-        // else.
-        private static object? AcceptDeletedCellsTransform(XNode? node)
-        {
-            XElement? element = node as XElement;
-            if (element != null)
+            var leaving = root.Descendants(W.tc).Where(cell => cell.Elements(W.tcPr).Elements(mark).Any()).ToHashSet();
+            foreach (var row in leaving.Select(cell => cell.Ancestors(W.tr).FirstOrDefault()).OfType<XElement>().Distinct().ToList())
             {
-                if (element.Name == W.tr)
-                {
-                    // Compare emits the revised spans/offsets alongside historical deleted cells.
-                    // If the surviving row already fills the accepted grid, removing those cells
-                    // must not widen a survivor a second time. Native merge markup whose live
-                    // cells still leave a grid gap retains the absorption behavior below.
-                    if (Internal.TableGridModel.RetainedCellsFillGrid(element) &&
-                        element.Elements(W.tc).Elements(W.tcPr).Elements(W.cellDel).Any())
-                        return new XElement(W.tr, element.Attributes(),
-                            element.Nodes().Where(n => n is not XElement tc || tc.Name != W.tc ||
-                                !tc.Elements(W.tcPr).Elements(W.cellDel).Any())
-                                .Select(AcceptDeletedCellsTransform));
-
-                    var groupedCells = element
-                        .Elements()
-                        .GroupAdjacent(e =>
-                        {
-                            XElement? cellAfter = e.ElementsAfterSelf(W.tc).FirstOrDefault();
-                            bool cellAfterIsDeleted = cellAfter != null &&
-                                cellAfter.Descendants(W.cellDel).Any();
-                            if (e.Name == W.tc &&
-                                (cellAfterIsDeleted || e.Descendants(W.cellDel).Any()))
-                            {
-                                var a = new
-                                {
-                                    CollectionType = DeletedCellCollectionType.DeletedCell,
-                                    Disambiguator = new[] { e }
-                                        .Concat(e.SiblingsBeforeSelfReverseDocumentOrder())
-                                        .Where(z => z.Name == W.tc &&
-                                            !z.Descendants(W.cellDel).Any())
-                                        .FirstOrDefault()
-                                };
-                                return a;
-                            }
-                            var a2 = new
-                            {
-                                CollectionType = DeletedCellCollectionType.Other,
-                                Disambiguator = (XElement?)e
-                            };
-                            return a2;
-                        });
-                    var tr = new XElement(W.tr,
-                        element.Attributes(),
-                        groupedCells.Select(g =>
-                        {
-                            if (g.Key.CollectionType == DeletedCellCollectionType.DeletedCell
-                                && g.First().Descendants(W.cellDel).Any())
-                                return null;
-                            if (g.Key.CollectionType == DeletedCellCollectionType.Other)
-                                return (object)g;
-                            // GridSpan counts logical grid columns, not physical cells.
-                            // A deleted cell can itself span several columns, so widening
-                            // by g.Count()-1 corrupts tables with pre-existing spans.
-                            int newGridSpan = g.Where(e => e.Name == W.tc).Sum(tc =>
-                                (int?)tc.Elements(W.tcPr).Elements(W.gridSpan)
-                                    .Attributes(W.val).FirstOrDefault() ?? 1);
-                            XElement? currentTcPr = g.First().Elements(W.tcPr).FirstOrDefault();
-                            // The absorbing cell may have NO tcPr at all (minimal cells) — synthesize one
-                            // carrying just the widened gridSpan instead of dereferencing null.
-                            XElement newTcPr = new XElement(W.tcPr,
-                                currentTcPr != null ? currentTcPr.Attributes() : null,
-                                new XElement(W.gridSpan,
-                                    new XAttribute(W.val, newGridSpan)),
-                                currentTcPr != null
-                                    ? currentTcPr.Elements().Where(e => e.Name != W.gridSpan)
-                                    : null);
-                            var orderedTcPr = new XElement(W.tcPr,
-                                newTcPr.Elements().OrderBy(e =>
-                                {
-                                    if (Order_tcPr.ContainsKey(e.Name))
-                                        return Order_tcPr[e.Name];
-                                    return 999;
-                                }));
-                            if (Internal.TableGridModel.CombinedTwipWidth(g.Where(e => e.Name == W.tc)) is { } width)
-                                orderedTcPr.Element(W.tcW)!.SetAttributeValue(W._w, width);
-                            XElement newTc = new XElement(W.tc,
-                                orderedTcPr,
-                                g.First().Elements().Where(e => e.Name != W.tcPr));
-                            return (object)newTc;
-                        }));
-                    return tr;
-                }
-
-                // Identity clone
-                return new XElement(element.Name,
-                    element.Attributes(),
-                    element.Nodes().Select(n => AcceptDeletedCellsTransform(n)));
+                if (Internal.TableGridModel.RemoveCells(row, leaving, inserted: mark == W.cellIns)) continue;
+                var table = row.Ancestors(W.tbl).FirstOrDefault();
+                row.Remove();
+                if (table?.Parent != null && !WordprocessingMLUtil.TableRows(table).Any()) table.Remove();
             }
-            return node;
         }
 
 #if false
@@ -3801,12 +3721,12 @@ namespace Docxodus
 ///     Replace trPr with the trPr in trPrChange
 /// 
 /// celDel
-///   Method: AcceptDeletedCellsTransform
+///   Method: RemoveMarkedCells (Internal.TableGridModel.RemoveCells)
 ///   Sample document: HorizontallyMergedCells.docx
 ///   Semantics:
-///     Group consecutive deleted cells, and remove them.
-///     Adjust the cell before deleted cells:
-///       Increase gridSpan by the number of deleted cells that are removed.
+///     Remove the deleted cells; a row that keeps no cell goes whole.
+///     When the remaining cells no longer fill the grid, widen the cell before them
+///       (after them, at the start of a row) by their grid columns and width.
 ///   Reject:
 ///     Remove this element
 /// 
@@ -3816,7 +3736,7 @@ namespace Docxodus
 ///   Semantics:
 ///     Remove these elements.
 ///   Reject:
-///     If a w:tc contains w:tcPr/w:cellIns, then remove the cell
+///     If a w:tc contains w:tcPr/w:cellIns, the cell leaves its row (RemoveMarkedCells)
 ///   
 /// cellMerge
 ///   Method: AcceptAllOtherRevisionsTransform

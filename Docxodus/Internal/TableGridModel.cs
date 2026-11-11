@@ -52,22 +52,80 @@ internal static class TableGridModel
         return cells;
     }
 
-    /// <summary>The width a cell has after absorbing removed cells: Word adds their widths to
-    /// its own. <c>null</c> when a cell states no twip width, and the width then stays as written.
-    /// Without it, a column deleted from every row leaves cells whose stale widths, not the grid
-    /// columns they span, decide the layout.</summary>
-    internal static long? CombinedTwipWidth(IEnumerable<XElement> cells)
+    /// <summary>
+    /// Takes cells out of their row: the one resolution of a cell that leaves, whether by an
+    /// accepted <c>w:cellDel</c> or a rejected <c>w:cellIns</c>. A row left narrower than its
+    /// table is made whole again, as Word 2024 does it: each leaving cell's columns go to the
+    /// nearest staying cell before it, those that start the row to the first staying cell after
+    /// them, and the widened cell is as wide as the grid columns it then spans. How wide the
+    /// table is depends on what the stated grid describes. It describes the table without its
+    /// deleted cells, so a row that loses a deleted cell must still fill it. It describes the
+    /// table with its inserted cells, so it says nothing about a row without them; there the
+    /// rows that keep every cell are the witness, and with none, nothing is widened. A row that
+    /// is already whole is left alone, whoever wrote the mark: the property changes resolved
+    /// with it (a restored grid, a restored span) already describe the row. A content-control or
+    /// custom-XML wrapper left without a cell goes with its cell. <paramref name="leaving"/>
+    /// names every cell leaving the table, in any row, and <paramref name="inserted"/> says they
+    /// are rejected insertions. Returns <c>false</c>, changing nothing,
+    /// when every cell of the row leaves: the row itself goes, which is the caller's to do.
+    /// </summary>
+    internal static bool RemoveCells(XElement row, IReadOnlySet<XElement> leaving, bool inserted)
     {
-        long total = 0;
-        foreach (var cell in cells)
+        var cells = WordprocessingMLUtil.RowCells(row).ToList();
+        var staying = cells.Where(cell => !leaving.Contains(cell)).ToList();
+        if (staying.Count == 0) return false;
+
+        int Span(XElement cell) => Math.Max(1, (int?)cell.Element(W.tcPr)?.Element(W.gridSpan)?.Attribute(W.val) ?? 1);
+        int Columns(XElement r) => GridBefore(r) + GridAfter(r)
+            + WordprocessingMLUtil.RowCells(r).Where(cell => !leaving.Contains(cell)).Sum(Span);
+        var table = row.Ancestors(W.tbl).FirstOrDefault();
+        int stated = table?.Element(W.tblGrid)?.Elements(W.gridCol).Count() ?? 0;
+        int tableColumns = inserted
+            ? (table is null ? Enumerable.Empty<XElement>() : WordprocessingMLUtil.TableRows(table))
+                .Where(r => !WordprocessingMLUtil.RowCells(r).Any(leaving.Contains)).Select(Columns).DefaultIfEmpty(0).Max()
+            : stated > 0 ? stated : GridBefore(row) + GridAfter(row) + cells.Sum(Span);
+        int missing = tableColumns - Columns(row);
+
+        var widened = new HashSet<XElement>();
+        foreach (var cell in cells.Where(leaving.Contains))
         {
-            var width = cell.Element(W.tcPr)?.Element(W.tcW);
-            if ((string?)width?.Attribute(W.type) != "dxa"
-                || !long.TryParse((string?)width.Attribute(W._w), out long twips))
-                return null;
-            total += twips;
+            int taken = Math.Min(Span(cell), missing);
+            if (taken > 0)
+            {
+                int position = cells.IndexOf(cell);
+                var taker = staying.LastOrDefault(other => cells.IndexOf(other) < position) ?? staying[0];
+                var properties = taker.Element(W.tcPr);
+                if (properties is null) taker.AddFirst(properties = new XElement(W.tcPr));
+                var gridSpan = properties.Element(W.gridSpan);
+                if (gridSpan is null)
+                {
+                    // CT_TcPr order: cnfStyle, tcW, gridSpan, then everything else.
+                    gridSpan = new XElement(W.gridSpan);
+                    var after = properties.Elements().LastOrDefault(e => e.Name == W.cnfStyle || e.Name == W.tcW);
+                    if (after is null) properties.AddFirst(gridSpan);
+                    else after.AddAfterSelf(gridSpan);
+                }
+                gridSpan.SetAttributeValue(W.val, Span(taker) + taken);
+                widened.Add(taker);
+                missing -= taken;
+            }
+
+            var emptied = cell;
+            while (emptied.Parent is { } parent && parent != row
+                && WordprocessingMLUtil.RowCells(parent).All(other => other == cell))
+                emptied = parent;
+            emptied.Remove();
         }
-        return total;
+
+        foreach (var shape in RowGrid(row).Where(shape => widened.Contains(shape.Cell)))
+        {
+            var width = shape.Cell.Element(W.tcPr)!.Element(W.tcW);
+            var spanned = table!.Elements(W.tblGrid).Elements(W.gridCol).Skip(shape.Start).Take(shape.Span)
+                .Select(column => long.TryParse((string?)column.Attribute(W._w), out long twips) ? twips : (long?)null).ToList();
+            if ((string?)width?.Attribute(W.type) == "dxa" && spanned.Count == shape.Span && !spanned.Contains(null))
+                width.SetAttributeValue(W._w, spanned.Sum());
+        }
+        return true;
     }
 
     internal static TableGridCell? CellCovering(IEnumerable<TableGridCell> grid, int column)

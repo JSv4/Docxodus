@@ -5410,58 +5410,103 @@ the two resolvers would disagree. Ranges of the two sides of a move matter only 
 them belongs to; the session resolves moved content by its own `w:moveFrom`/`w:moveTo` element, so
 markers interleaving with no content between them have one reading.
 
-### Cell insertions and deletions: who takes the grid columns (issue #1404)
+### Cell insertions and deletions: who takes the grid columns (issues #1404, #1688)
 
 ```xml
 <w:tr><w:tc><w:tcPr><w:tcW w:w="2400" w:type="dxa"/><w:cellDel w:id="1" …/></w:tcPr>…</w:tc>
       <w:tc>…</w:tc><w:tc>…</w:tc></w:tr>
 <w:tr><w:sdt><w:sdtPr>…</w:sdtPr><w:sdtContent>
-        <w:tc><w:tcPr><w:cellDel w:id="2" …/></w:tcPr>…</w:tc></w:sdtContent></w:sdt>…</w:tr>
+        <w:tc><w:tcPr><w:cellIns w:id="2" …/></w:tcPr>…</w:tc></w:sdtContent></w:sdt>…</w:tr>
 ```
 
 Measured in desktop Word 2024 (16.0.20326) with Accept All and Reject All on authored documents: a
-three- or four-column table, 2400-twip columns, one revised row above an unrevised one. No file drew a
-repair prompt. Cells are written `text×span`.
+three- or four-column table of 2400-twip columns, one revised row above an unrevised one unless
+noted. No file drew a repair prompt. Cells are written `text×span`; `-` is `w:cellDel`, `+` is
+`w:cellIns`. The cell leaves on accepting a deletion and on rejecting an insertion; Word resolves
+the two the same way, so one column serves both.
 
-| Row (`-` deleted, `+` inserted) | Word accept | Word reject | Docxodus session |
-| --- | --- | --- | --- |
-| `A -B C` | `A×2 C` | `A B C` | same |
-| `A B -C` | `A B×2` | `A B C` | same |
-| `-A B C` | `B×2 C` | `A B C` | same (was refused) |
-| `-A -B C` | `C×3` | `A B C` | same (was refused) |
-| `-A B -C` | `B×3` | `A B C` | same (was refused) |
-| `-A B×2 D` | `B×3 D` | `A B×2 D` | same (was refused) |
-| `gridBefore=1`, `-B C D` | `C×2 D`, `gridBefore` kept | `B C D` | same (was refused) |
-| `-A B C` in every row | grid rewritten to `4800 2400`, no spans | `A B C` | `B×2 C` on the three-column grid; Word lays it out at the same widths (was refused) |
-| `-A -B -C` | the row is removed | `A B C` | refused, `unabsorbable_cell_deletion` |
-| `A +B C` | `A B C` | `A×2 C` | reject removes `B` without widening `A` |
-| `+A B C` | `A B C` | `B×2 C` | reject removes `A` without widening `B` |
-| `+A +B +C`, each in its own `w:sdt` | `A B C` | the row is removed | refused, `unresolvable_cell_insertion` |
-| each cell in its own `w:sdt`, `A -B C` | `A×2 C`; `B`'s `w:sdt` is gone | `A B C` | same (was refused) |
-| each cell in its own `w:sdt`, `-A B C` | `B×2 C`; `A`'s `w:sdt` is gone | `A B C` | same (was refused) |
-| each cell in its own `w:sdt`, `A +B C` | `A B C` | `A×2 C`; `B`'s `w:sdt` is gone | accept same; reject removes `B` and its `w:sdt` without widening `A` |
-| `A`, then one `w:sdt` around `-B C` | `A×2 C`; Word drops that `w:sdt` in both directions | `A B C` | `A×2 C`; the `w:sdt` stays around `C` |
+| Row | Word, when the marked cells leave | Docxodus (session and `RevisionProcessor`) |
+| --- | --- | --- |
+| `A ±B C` | `A×2 C`, `tcW` 4800 | same |
+| `A B ±C` | `A B×2` | same |
+| `±A B C` | `B×2 C` | same |
+| `±A ±B C` | `C×3` | same |
+| `±A B ±C` | `B×3` | same |
+| `±A B×2 D` | `B×3 D` | same |
+| `gridBefore=1`, `-B C D` | `C×2 D`, `gridBefore` kept | same |
+| each cell in its own `w:sdt`, `A ±B C` | `A×2 C`; `B`'s `w:sdt` is gone | same |
+| each cell in its own `w:sdt`, `±A B C` | `B×2 C`; `A`'s `w:sdt` is gone | same |
+| `A`, then one `w:sdt` around `-B C` | `A×2 C`; Word drops that `w:sdt` in both directions | `A×2 C`; the `w:sdt` stays around `C` |
+| `±A ±B ±C`, one reviewer or two | the row is removed | same |
+| the same in each cell's own `w:sdt` | the row is removed | same |
+| a table whose only row is `±A ±B ±C` | the table is removed; the paragraphs around it stay | same |
+| that table as a cell's only content before its closing paragraph | the table is removed; the cell keeps the paragraph | same |
+| `-A B C` in every row (a whole deleted column) | every row `B×2 C`; saved as a `4800 2400` grid without spans | every row `B×2 C` on the three-column grid; Word lays it out at the same widths |
+| `+A B C` in every row (a whole inserted column) | every row `B×2 C`; saved the same way | every row `B C`: nothing is widened |
+| a table of one row, `A -B C` | `A×2 C` | same |
+| a table of one row, `A +B C` | `A×2 C` | `A C`: nothing is widened |
+| `A +B C` with a `w:tblGridChange` recording a two-column grid (inconsistent: the other row has three cells) | `A×2 C` on the three-column grid; the recorded grid is ignored | `A×2 C`; the recorded grid is restored |
 
-Word's rule: a cell that leaves the row gives its grid columns to the nearest surviving cell before
-it, and the cells that start a row give theirs to the first surviving cell after them. The absorbing
-cell's `w:tcW` grows by the removed cell's width (`2400` to `4800` above). The width is not
-cosmetic: with a column deleted from every row, spans alone leave every row `tcW 2400 + 2400` over
-three grid columns, and Word lays the two cells out equally wide (180 pt each) instead of 240 pt and
-120 pt. A content control around the removed cell alone goes with it. Word Online resolves none of
-these cell marks.
+Word's rule has no condition in it: a cell that leaves always gives its grid columns to the nearest
+staying cell before it, cells that start a row give theirs to the first staying cell after them, and
+the widened cell's `w:tcW` becomes the width of the grid columns it then spans (`2400` to `4800`
+above; `9016` over a `5296 1860 1860` grid in the Word-authored `RP034-Deleted-Cells.docx`, where the
+cell already stated `9016` and summing cell widths would give `15027`). A content control around the
+leaving cell alone goes with it. A row with no cell left is removed, and a table with no row left.
+Word Online resolves none of these marks.
 
-The session applies the rule on accepting a deletion (`AcceptDeletedCells` in
-`Docxodus/Internal/RevisionOps.cs`) and reads a row's cells through wrappers (`RowOf`, `RowCells`).
-Both it and `RevisionProcessor` add the removed cell's twip width to the absorbing cell
-(`TableGridModel.CombinedTwipWidth`). Opened in Word, the session's output for every deletion row
-above has the same cell widths as Word's own. Three differences remain:
+Word 2024 does not write these marks itself. With Track Changes on, inserting or deleting a column,
+inserting or deleting cells, and merging cells are all carried out untracked; only table, grid and
+cell *property* changes are recorded (and deleting a row marks the row). So the marks reach Docxodus
+from other producers, from older Word files, and from Docxodus itself (`InsertTableColumn` while
+recording, and `DocxDiff`), and Word's unconditional merge does not undo two of those:
 
-- Rejecting a bare `w:cellIns` removes the cell and leaves the row a column short, as
-  `RevisionProcessor` does, where Word widens the neighbour. Insertions written by Docxodus carry
-  the `w:tcPrChange` and `w:tblGridChange` that restore the row.
-- A row whose every cell is deleted, or inserted, is refused where Word removes the row.
-- `RevisionProcessor` is unchanged: it drops a deleted first cell without widening the next one,
-  and leaves `w:cellDel` on a cell inside a content control.
+| Input | Word, Reject All / Accept All | Docxodus |
+| --- | --- | --- |
+| a tracked `InsertTableColumn` on a 3×2 table of 2400-twip columns | Reject: three cells per row, the first twice as wide as the others (`3600 1800 1800`) | Reject: the original table |
+| a `DocxDiff` redline of a table that lost its first column | Accept: the revised table (Word does not merge here, see below) | Accept: the revised table |
+| `RP035-Inserted-Cells.docx` (older Word: one cell split into three, with the old span recorded) | Reject: one cell spanning four columns, wider than the table | Reject: one cell spanning three |
+
+Docxodus therefore asks one question before widening, in `TableGridModel.RemoveCells`: once its
+cells have left, is the row narrower than its table? If so the row is made whole by Word's rule. If
+not, nothing is widened: the property changes resolved with the mark (a restored grid, a restored
+span) already describe the row, whoever wrote it. How wide the table is depends on what the stated
+grid describes:
+
+- The grid describes the table *without* its deleted cells. A row that loses a deleted cell must
+  still fill it, so accepted deletions are measured against the stated grid. A comparison that
+  removed a column narrows the grid, the cells that stay fill it, and nothing is widened.
+- The grid describes the table *with* its inserted cells, so it says nothing about a row without
+  them, and a recorded old grid can fit no row (`RP035` records five columns for a three-column
+  table). Rejected insertions are measured against the rows that keep every cell. When no row does
+  (a whole inserted column, a different inserted cell in every row, a table of one row) nothing is
+  widened. That is also what makes rejection reversible for a comparison that inserted a cell into
+  a row already short of the grid: the original row comes back (the redline reversibility proof
+  checks it).
+
+The session resolves a revision's property changes before its cells, and `RevisionProcessor`
+restores properties before it removes cells, so both measure the restored row.
+
+One more Word behaviour is measured and not reproduced. When the leaving cell's own last paragraph
+mark is tracked as deleted (as `DocxDiff` writes a removed cell, content and mark struck), Word's
+Accept All removes the cell without widening anything and leaves the row short:
+
+| Row, deleted cell's content | Word Accept All | Docxodus |
+| --- | --- | --- |
+| `A -B C`, `B` plain, or only its run deleted, or empty | `A×2 C` | `A×2 C` |
+| `A -B C`, `B`'s run and paragraph mark deleted | `A C` | `A×2 C` |
+| `-A B C` or `A B -C`, the same | `B C`, `A B` | `B×2 C`, `A B×2` |
+
+The same paragraph-mark state on an inserted cell changes nothing: Word's Reject All widens the
+neighbour whether or not the inserted cell's content and mark are tracked.
+
+Remaining differences, all in the tables above: Docxodus undoes its own and older Word's recorded
+insertions where Word merges cells; a rejected insertion is not widened when no row keeps every
+cell (a whole inserted column, a table of one row), where Word merges; a content control around two
+cells stays around the cell that stays; and where the leaving cell's paragraph mark is deleted
+Docxodus widens while Word leaves the row short. The session measures a rejected insertion against
+the rows one revision leaves untouched, `RevisionProcessor` against the rows no mark touches; they
+give the same table for every row above.
 
 ---
 
