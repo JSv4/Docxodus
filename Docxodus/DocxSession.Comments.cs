@@ -744,29 +744,33 @@ public sealed partial class DocxSession
             if (pos == Position.Before) element.AddBeforeSelf(tbl);
             else element.AddAfterSelf(tbl);
 
-            // A table must be followed by a paragraph: Word's convention is to keep a w:p after
-            // every table, and an end-of-body table with no trailing paragraph leaves no editable
-            // block below it (S-1 smoke-test finding 2). If nothing — or only a sectPr / another
-            // table — follows, append an empty trailing paragraph.
-            var afterTbl = tbl.ElementsAfterSelf().FirstOrDefault();
-            XElement? trailing = null;
-            if (afterTbl is null || afterTbl.Name == W.sectPr || afterTbl.Name == W.tbl)
+            // A paragraph must stand between two tables and after a table that would otherwise end
+            // its cell or the body: tables that touch are read as one table, and an end-of-body
+            // table leaves no editable block below it (S-1 smoke-test finding 2). Range markers
+            // between the blocks are not that paragraph, so both neighbours are found past them.
+            var separators = new List<XElement>();
+            foreach (bool after in new[] { false, true })
             {
-                trailing = new XElement(W.p);
-                UnidHelper.AssignToSelfAndDescendants(trailing);
-                tbl.AddAfterSelf(trailing);
+                var neighbour = Internal.RevisionOps.SiblingBlock(tbl, forward: after);
+                if (neighbour?.Name != W.tbl && !(after && (neighbour is null || neighbour.Name == W.sectPr)))
+                    continue;
+                var separator = new XElement(W.p);
+                UnidHelper.AssignToSelfAndDescendants(separator);
+                if (after) tbl.AddAfterSelf(separator);
+                else tbl.AddBeforeSelf(separator);
+                separators.Add(separator);
             }
 
             // Tracked, the table is the rows Word writes for a table inserted with Track Changes
             // on: every row and its content inserted (the row encoding InsertTableRow and a
-            // tracked table move use), so rejecting its rows removes the table. A trailing
-            // paragraph this insert had to add is inserted with it.
+            // tracked table move use), so rejecting its rows removes the table. A paragraph this
+            // insert had to add is inserted with it.
             if (_trackedChanges == TrackedChangeMode.RenderInline)
             {
                 var author = _revisionAuthor ?? "docxodus";
                 var date = NextTrackedFormatRevisionDate();
                 MarkTableRowsAsTrackedRevision(tbl, inserted: true, author, date);
-                if (trailing is not null) MarkParagraphMark(trailing, W.ins, author, date);
+                foreach (var separator in separators) MarkParagraphMark(separator, W.ins, author, date);
             }
 
             foreach (var p in cellParagraphs) PromoteHyperlinkRelationships(p);

@@ -185,12 +185,10 @@ function sameLineFace(document: Document, run: CSSStyleDeclaration, paragraph: C
 }
 
 /**
- * The converter keeps a line break inside its run: the `<br>`, its direction mark (text) and, in a paragraph
- * with tabs, an empty span carrying the following line's offset. A run's line height applies to every line it spans.
+ * The converter keeps a line break inside its run: the `<br>` and its direction mark (text). A run's line height applies to every line it spans.
  */
 function isBreakPiece(child: Element): boolean {
-  return child.matches('br[data-docx-break]')
-    || child.localName === 'span' && !child.childNodes.length && !!child.previousElementSibling?.matches('br[data-docx-break]');
+  return child.matches('br[data-docx-break]');
 }
 
 /** Ordinary inline runs whose metrics can be represented by their paragraph's font. */
