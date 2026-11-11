@@ -79,19 +79,17 @@ public class HtmlLineGridTests
         Assert.Contains(expected + ";", StyleOf(grid, new XElement(W.spacing, new XAttribute(W.before, 60), new XAttribute(W.after, 60),
             attribute == null ? null : new XAttribute(W.w + attribute, hundredths)), where));
 
-    // Word 2024 (#1551): an at-least line is max(whole grid lines, minimum), so a minimum no taller
-    // than the 18pt pitch is sized as a grid line; a taller one keeps its minimum, and exact ignores the grid.
+    // Word 2024 (#1551): an at-least line is max(whole grid lines, minimum), below or above the 18pt
+    // pitch, and exact ignores the grid. Each keeps its line height, which flow output shows.
     [Theory]
     [InlineData("atLeast", 300, true)]
-    [InlineData("atLeast", 360, true)]
-    [InlineData("atLeast", 400, false)]
+    [InlineData("atLeast", 600, true)]
     [InlineData("exact", 300, false)]
-    public void AtLeastLinesNoTallerThanThePitchAreGridLines(string rule, int line, bool gridLine)
+    public void AtLeastLinesAreGridLinesThatKeepTheirMinimum(string rule, int line, bool gridLine)
     {
         var style = StyleOf("lines", new XElement(W.spacing, new XAttribute(W.line, line), new XAttribute(W.lineRule, rule)), "");
         Assert.Equal(gridLine, style.Contains("--docx-line-grid:18pt;", StringComparison.Ordinal));
-        // A grid line drops the fixed line height that would hold it at the minimum.
-        Assert.Equal(!gridLine, style.Contains($"line-height:{line / 20m:0.0}pt;", StringComparison.Ordinal));
+        Assert.Contains($"line-height:{line / 20m:0.0}pt;", style);
     }
 
     /// <summary>The style of a "Cedar" paragraph on an 18pt section grid: in the body, a table cell

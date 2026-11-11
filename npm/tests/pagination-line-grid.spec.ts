@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 
 for (const presentation of ['editor', 'viewer', 'export']) for (const entry of [
@@ -127,24 +127,76 @@ test('unmeasured mixed, raised, nested, and exact lines keep their existing geom
   for (const [control, grid] of controls) { expect(grid).toEqual(control); expect(grid.grid).toBe(''); }
 });
 
-// Word 2024 (#1551): 15pt at least on an 18pt grid is one 18pt grid line. The converter leaves the
-// minimum off such a line, and text the grid pass cannot measure falls back to that minimum.
-test('at-least lines below the pitch take the grid, or their minimum when unmeasured', async ({ page }) => {
+/** Each paragraph's height in points after the natural-height pass, and its last run's text offset from its top. */
+async function gridLines(page: Page, paragraphs: Array<{ html: string; style: string }>) {
   await page.goto('/test-harness.html');
   // Standards mode, as the harness and export pages render: quirks mode ignores the paragraph's own
-  // line height on a line that holds only inline elements.
-  await page.setContent(`<!doctype html><style>p {font:12pt/normal 'Liberation Serif';margin:0;--docx-line-grid:18pt}</style><main></main>`);
-  const heights = await page.evaluate(async () => {
+  // line height on a line that holds only inline elements. Direct children carry a multiple's lift.
+  await page.setContent(`<!doctype html><style>p {font:12pt/normal 'Liberation Serif';margin:0}
+    p[style*="auto-line-spacing"] > * {line-height:calc(1lh * var(--docx-auto-line-spacing)); position:relative;
+      top:min(0px, calc(1lh * (1 / var(--docx-auto-line-spacing) - 1) / 2))}</style><main></main>`);
+  return page.evaluate(async paragraphs => {
+    await document.fonts.ready;
     const moduleUrl = 'http://localhost:8083/line-metrics.js';
-    const { applyUnroundedNormalLineHeights } = await import(moduleUrl);
+    const { applyUnroundedNormalLineHeights, prepareMixedLineHeights } = await import(moduleUrl);
     const root = document.querySelector('main')!;
-    const paragraphs = ['<span>Plain</span>', '<span>Plain</span><b>Bold</b>'].flatMap(content => ['15pt', ''].map(minimum => {
-      const paragraph = document.createElement('p'); paragraph.innerHTML = content;
-      if (minimum) paragraph.style.setProperty('--docx-min-line-height', minimum);
+    const elements = paragraphs.map(({ html, style }) => {
+      const paragraph = document.createElement('p'); paragraph.innerHTML = html; paragraph.style.cssText = style;
       root.append(paragraph); return paragraph;
-    }));
+    });
+    // In the paginator's order.
+    prepareMixedLineHeights(root);
     applyUnroundedNormalLineHeights(root);
-    return paragraphs.map(p => p.getBoundingClientRect().height * .75);
-  });
-  expect(heights.map(height => Math.round(height * 10) / 10)).toEqual([18, 18, 15, 13.8]);
+    return elements.map(p => {
+      const range = document.createRange(); range.selectNodeContents(Array.from(p.querySelectorAll('span')).at(-1)!);
+      const box = p.getBoundingClientRect();
+      return [box.height, range.getBoundingClientRect().top - box.top].map(px => Math.round(px * .75 * 10) / 10);
+    });
+  }, paragraphs);
+}
+
+// Word 2024 (#1551): an at-least line is max(whole grid lines, minimum). The converter keeps the minimum's
+// line height, which a line the grid pass cannot measure (a bold word) and a taller minimum keep.
+test('at-least lines take whole grid lines or their minimum', async ({ page }) => {
+  const atLeast = (size: number, minimum: number, grid: number) =>
+    `font-size:${size}pt;line-height:${minimum}pt;--docx-min-line-height:${minimum}pt;--docx-line-grid:${grid}pt`;
+  const lines = await gridLines(page, [
+    { html: '<span>Plain</span>', style: atLeast(12, 15, 18) },
+    { html: '<span>Plain</span><b>Bold</b>', style: atLeast(12, 15, 18) },
+    { html: '<span>Plain</span>', style: atLeast(24, 30, 18) },
+    { html: '<span>Plain</span>', style: atLeast(24, 30, 0) },
+    { html: '<span>Plain</span>', style: atLeast(12, 20, 18) },
+    // Mixed sizes are measured line by line, as without a grid.
+    ...[18, 0].map(grid => ({ html: '<span>Plain</span><span style="font-size:30pt">Large</span>', style: atLeast(12, 20, grid) })),
+  ]);
+  expect(lines.slice(0, 5).map(([height]) => height)).toEqual([18, 15, 36, 30, 20]);
+  expect(lines[5][0]).toBeGreaterThan(30);
+  expect(lines[5][0]).toBe(lines[6][0]);
+  // A grid line's text sits where a single-spaced grid line's does.
+  const [[, single], [, larger]] = await gridLines(page, [{ html: '<span>Plain</span>', style: '--docx-line-grid:18pt' },
+    { html: '<span>Plain</span>', style: 'font-size:24pt;--docx-line-grid:18pt' }]);
+  expect([lines[0][1], lines[2][1]]).toEqual([single, larger]);
+});
+
+// Word 2024 (#1551) lays out a paragraph that shows a tracked insertion or deletion like one without it,
+// on a grid or off it. The converter's markup wraps those runs in <ins> or <del>.
+test('tracked-change wrappers keep their runs on the line rules', async ({ page }) => {
+  const inserted = '<span>Plain </span><ins><span>added</span></ins>';
+  const lines = await gridLines(page, [
+    { html: inserted, style: '--docx-line-grid:18pt' },
+    { html: '<span>Plain</span><del><span> gone</span></del>', style: '--docx-line-grid:18pt' },
+    { html: inserted, style: '' },
+    { html: inserted, style: '--docx-auto-line-spacing:1.5;--docx-line-grid:18pt' },
+    { html: inserted, style: 'font-size:24pt;line-height:30pt;--docx-min-line-height:30pt;--docx-line-grid:18pt' },
+    // Off the grid, an at-least line is max(natural, minimum), as without the markup.
+    { html: '<span>Plain</span><del><span> gone</span></del>', style: 'font-size:24pt;line-height:15pt;--docx-min-line-height:15pt' },
+    { html: inserted, style: 'font-size:10pt;--docx-min-line-height:13pt' },
+    // A wrapped run with a line height of its own stays off the grid, as an unwrapped one does.
+    ...[18, 0].map(grid => ({ html: '<ins><span style="line-height:12pt">Exact</span></ins>', style: `--docx-line-grid:${grid}pt` })),
+  ]);
+  expect(lines.map(([height]) => height)).toEqual([18, 18, 13.8, 27, 36, 27.6, 13, 13.8, 13.8]);
+  // The inserted text sits where an unrevised grid line's does: its wrapper moves it once.
+  const [[, single], [, larger]] = await gridLines(page, [{ html: '<span>Plain</span>', style: '--docx-line-grid:18pt' },
+    { html: '<span>Plain</span>', style: 'font-size:24pt;--docx-line-grid:18pt' }]);
+  expect([lines[0][1], lines[4][1]]).toEqual([single, larger]);
 });

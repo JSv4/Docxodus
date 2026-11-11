@@ -80,22 +80,17 @@ internal sealed class ParagraphLineGrid
 
     /// <summary>
     /// Word 2024 gives an <c>atLeast</c> line <c>max(whole grid lines, minimum)</c> and ignores the grid
-    /// for an <c>exact</c> one (#1551). A minimum no taller than the pitch never wins, so that line is
-    /// sized like a single-spaced grid line; a taller minimum keeps its own line.
+    /// for an <c>exact</c> one (#1551). An at-least line keeps the converter's line height for its
+    /// minimum: that is the line wherever the grid pass doesn't measure the text's grid lines.
     /// </summary>
     internal static void AddStyle(XElement paragraph, Dictionary<string, string> style)
     {
         var pitch = (string?)paragraph.Attribute(Pitch);
         var properties = paragraph.Element(W.pPr);
-        var spacing = properties?.Element(W.spacing);
-        var rule = (string?)spacing?.Attribute(W.lineRule) ?? "auto";
         if (pitch == null || pitch == "0" || properties?.Element(W.snapToGrid)?.Attribute(W.val).ToBoolean() == false
-            || !(rule == "auto" || rule == "atLeast"
-                && (WordprocessingMLUtil.AttributeToTwips(spacing?.Attribute(W.line)) ?? 0) <= Points(pitch) * 20)
+            || (string?)properties?.Element(W.spacing)?.Attribute(W.lineRule) is not (null or "auto" or "atLeast")
             || properties?.Elements().Any(e => e.Name == W.framePr || e.Name == W.pBdr) == true
             || paragraph.Descendants().Attributes(PtOpenXml.ListItemRun).Any()) return;
         style["--docx-line-grid"] = pitch;
-        // The grid line measures its text. The minimum stays for lines the grid cannot measure.
-        if (rule == "atLeast") style.Remove("line-height");
     }
 }

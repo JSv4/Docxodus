@@ -7504,21 +7504,65 @@ Word lays out the final and markup views of the tracked documents identically. S
 - An `atLeast` value no taller than the pitch never wins `max(whole grid lines, value)`: the line
   is a single-spaced grid line.
 
-`Docxodus/Internal/ParagraphLineGrid.cs` stamps the section's pitch on body paragraphs only, and now
-also when the document has tracked changes (the stamp survives revision acceptance). `AddStyle` puts
-an `atLeast` line no taller than the pitch on the grid and drops the fixed line height of its
-minimum, so `applyParagraphLineGrids` in `npm/src/line-metrics.ts` sizes it with the one grid rule;
-text that pass cannot measure (a bold word, mixed fonts) falls back to the minimum. Tested by
-`HtmlLineGridTests`, `npm/tests/export-line-grid.spec.ts` and `npm/tests/pagination-line-grid.spec.ts`.
+`Docxodus/Internal/ParagraphLineGrid.cs` stamps the section's pitch on body paragraphs only, also
+when the document has tracked changes (the stamp survives revision acceptance), and
+`applyParagraphLineGrids` in `npm/src/line-metrics.ts` sizes the lines. At-least lines and
+paragraphs that show a revision are covered in the next subsection.
+
+### At-least lines above the pitch, and paragraphs that show a revision
+
+Same setup and 120 one-line paragraphs. A revised paragraph shows an insertion (`Item n on the seed `
+followed by an inserted `order form.`) or a deletion (the whole line followed by a deleted
+` Removed.`), in every paragraph. "Markup" is Word's inline markup view and the export's markup
+review profile; each revised document printed identically in Word's final view. A baseline is page
+1's first one, from the PDF.
+
+| Case | Word 2024 | Docxodus before | After |
+| --- | --- | --- | --- |
+| 24pt text, `atLeast` 30pt, 18pt grid | 36pt / 18 / 7 | 30pt / 21 / 6 | 36pt / 18 / 7 |
+| 24pt text, single or `atLeast` 15pt, 18pt grid | 36pt / 18 / 7, baseline 98.66pt as for 30pt | 36pt / 18 / 7 | same |
+| 24pt text, `atLeast` 40pt, 18pt grid; `atLeast` 30pt, no grid | 40pt / 16 / 8; 30pt / 21 / 6 | same | same |
+| 12pt text, `atLeast` 20pt / 30pt, 18pt grid | 20pt / 32 / 4; 30pt / 21 / 6 | same | same |
+| A revision in every paragraph, single, 18pt grid (markup) | 18pt / 36 / 4 | 13.8pt / 46 / 3 | 18pt / 36 / 4 |
+| Same with `atLeast` 15pt / 1.5 lines (markup) | 18pt / 36 / 4; 27pt / 24 / 5 | 15pt / 43 / 3; 20.7pt / 31 / 4 | as Word |
+| 24pt text, `atLeast` 30pt, an insertion in every paragraph, 18pt grid (markup) | 36pt / 18 / 7 | 30pt / 21 / 6 | 36pt / 18 / 7 |
+| No grid, a deletion in every paragraph (markup): `atLeast` 20pt; 24pt text, `atLeast` 15pt | 20pt / 32 / 4, baseline 89.42pt; 27.6pt / 23 / 6 | 20pt, baseline 85.5pt (final view 89.25pt); 15pt / 42 / 3, lines overlapping | as the final view: 89.25pt; 27.6pt / 23 / 6 |
+| No grid, 10pt text, `atLeast` 13pt, an insertion in every paragraph (markup) | 13pt / 49 / 3 | 11.5pt / 56 / 3 | 13pt / 49 / 3 |
+| A bold word in every paragraph, single, 18pt grid; no grid | 18pt / 36 / 4; 13.8pt / 46 / 3 | 13.8pt / 46 / 3 | same |
+
+So:
+
+- An `atLeast` line is `max(ceil(natural / pitch) × pitch, value)` above the pitch too, and the value
+  is not rounded to grid lines: 20pt and 30pt for 12pt text, 40pt for 24pt text.
+- Where the grid lines win, the line is a single-spaced grid line: 24pt text with `atLeast` 30pt
+  has its first baseline where single spacing puts it.
+- Where the value wins, its surplus over the grid lines goes above them: 12pt text with `atLeast`
+  20pt has its first baseline at 87.26pt, 2pt below the single-spaced grid line's 85.34pt.
+- Showing an insertion or a deletion changes nothing in a line, on a grid or off it.
+
+The converter now puts every `atLeast` line on the grid and keeps the line height it already set for
+the minimum (14pt and up), so flow HTML, which never applies the grid, shows the minimum. #1681 had
+dropped that line height for minimums between 14pt and the pitch, which flow output then showed at
+the natural 13.8pt. In the paginated pass, `applyUnroundedNormalLineHeights` measures the natural
+height of the text under such a line too but leaves the minimum in place, and
+`applyParagraphLineGrids` replaces it with the grid lines when they are taller, setting the
+paragraph's strut back to its natural height. A line whose minimum is taller keeps it, and the
+mixed-line, minimum and baseline passes treat it as a line without a grid. So does a line the grid
+pass cannot measure (a bold word), which therefore keeps its minimum without a special case.
+`uniformParagraphRuns` admits a tracked change's `<ins>` or `<del>` as a structural wrapper, beside
+list markers and endnote wrappers. Its runs must share its line height, and the grid pass sizes and
+moves only the paragraph's own children, so a wrapper carries its runs once; the minimum and
+baseline passes see through it alike. Tested by `HtmlLineGridTests`,
+`npm/tests/export-line-grid.spec.ts` and `npm/tests/pagination-line-grid.spec.ts`.
 
 Still different from Word:
 
-- A minimum taller than the pitch keeps `max(natural, value)`, which differs from Word's rule only
-  when the text is taller than the pitch: 24pt text with `atLeast` 30pt on an 18pt grid is 36pt in
-  Word and 30pt in Docxodus.
-- In the markup view, a paragraph that itself shows an insertion or deletion keeps its natural line
-  height (13.8pt where Word gives 18pt): its runs sit inside the revision markup, which the grid
-  pass does not measure.
+- Text position inside a grid line. Word centres the text in its line; Docxodus puts it at the top
+  (see "Single-spaced body text on a line grid" above), 2.1pt higher for 12pt text on an 18pt grid
+  and 4.2pt for 24pt text on two lines. Where an `atLeast` value wins on a grid, Docxodus places the
+  text as it does without a grid, 2pt lower than Word.
+- A paragraph whose runs differ in font, size or weight (a bold word) gets no grid lines, because
+  the grid pass sizes only uniform runs: it keeps its natural height or its `atLeast` value.
 
 ## Word kerns and ligates only on request (#1562)
 
