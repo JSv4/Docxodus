@@ -14,13 +14,16 @@ export function storyMarginsDocx(story: 'header' | 'footer', side: 'left' | 'rig
       <Default Extension="xml" ContentType="application/xml"/>
       <Override PartName="/word/document.xml" ContentType="${type}document.main+xml"/>
       <Override PartName="/word/${part}" ContentType="${type}${story}+xml"/>
+      <Override PartName="/word/styles.xml" ContentType="${type}styles+xml"/>
     </Types>`,
     '_rels/.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
       <Relationship Id="document" Type="${R_NS}/officeDocument" Target="word/document.xml"/>
     </Relationships>`,
     'word/_rels/document.xml.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
       <Relationship Id="runningStory" Type="${R_NS}/${story}" Target="${part}"/>
+      <Relationship Id="styles" Type="${R_NS}/styles" Target="styles.xml"/>
     </Relationships>`,
+    'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:pPrDefault/></w:docDefaults></w:styles>`,
     'word/document.xml': `<w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"><w:body>
       ${paragraph('Orbital survey.')}
       <w:sectPr><w:${story}Reference w:type="default" r:id="runningStory"/>

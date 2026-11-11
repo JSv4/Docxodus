@@ -35,6 +35,10 @@ public class DocxSessionNoteRenderTests
         using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
         {
             var main = doc.AddMainDocumentPart();
+            // Single spacing, stated: Word gives a missing paragraph default 1.16 lines (#1652), and under a
+            // line multiple the citation carries a fabricated class beside "footnote-ref".
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new DocumentFormat.OpenXml.Wordprocessing.Styles(
+                new DocumentFormat.OpenXml.Wordprocessing.DocDefaults(new DocumentFormat.OpenXml.Wordprocessing.ParagraphPropertiesDefault()));
             main.Document = new DocumentFormat.OpenXml.Wordprocessing.Document(
                 new DocumentFormat.OpenXml.Wordprocessing.Body(
                     new DocumentFormat.OpenXml.Wordprocessing.Paragraph(

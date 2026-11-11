@@ -18,6 +18,7 @@ export function wordToleratedPackageDocx(text: string): Uint8Array {
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
 </Types>`),
     },
     {
@@ -37,6 +38,8 @@ export function wordToleratedPackageDocx(text: string): Uint8Array {
   </w:sectPr>
 </w:body></w:document>`),
     },
+    { name: 'word/_rels/document.xml.rels', data: xml('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>') },
+    { name: 'word/styles.xml', data: xml(`<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:pPrDefault/></w:docDefaults></w:styles>`) },
     {
       name: 'word/_rels/comments.xml.rels',
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

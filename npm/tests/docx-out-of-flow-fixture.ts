@@ -52,6 +52,7 @@ export function outOfFlowDocx(bodyXml: string): Uint8Array {
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
 </Types>`),
     },
     {
@@ -62,5 +63,7 @@ export function outOfFlowDocx(bodyXml: string): Uint8Array {
 </Relationships>`),
     },
     { name: 'word/document.xml', data: xml(documentXml) },
+    { name: 'word/_rels/document.xml.rels', data: xml('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>') },
+    { name: 'word/styles.xml', data: xml('<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:pPrDefault/></w:docDefaults></w:styles>') },
   ]);
 }

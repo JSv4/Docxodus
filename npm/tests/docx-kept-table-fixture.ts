@@ -26,7 +26,7 @@ function pageFittingDocx(body: string): Uint8Array {
     'word/_rels/document.xml.rels': relations(`<Relationship Id="styles" Type="${R_NS}/styles" Target="styles.xml"/>`),
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>
       <w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/><w:sz w:val="22"/>
-      </w:rPr></w:rPrDefault></w:docDefaults></w:styles>`,
+      </w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults></w:styles>`,
     'word/document.xml': `<w:document xmlns:w="${W_NS}"><w:body>${body}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>
       <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/>
       </w:sectPr></w:body></w:document>`,

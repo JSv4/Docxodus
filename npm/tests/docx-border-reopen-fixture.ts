@@ -21,7 +21,7 @@ export function generateBorderReopenDocx(style: 'single' | 'dashed', control = f
       Id="styles" Type="${R_NS}/styles" Target="styles.xml"/></Relationships>`,
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>
       <w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="22"/>
-      </w:rPr></w:rPrDefault></w:docDefaults></w:styles>`,
+      </w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults></w:styles>`,
     'word/document.xml': `<w:document xmlns:w="${W_NS}"><w:body>${cards}
       <w:p><w:r><w:t>Inventory complete.</w:t></w:r></w:p>
       <w:sectPr><w:pgSz w:w="12240" w:h="15840"/>

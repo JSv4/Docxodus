@@ -30,7 +30,7 @@ export function marginParagraphPlacementDocx(mode: PlacementCase): Uint8Array {
     'word/_rels/document.xml.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="styles" Type="${R_NS}/styles" Target="styles.xml"/></Relationships>`,
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>` +
       '<w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="18"/>' +
-      '</w:rPr></w:rPrDefault></w:docDefaults></w:styles>',
+      '</w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults></w:styles>',
     'word/document.xml': `<w:document xmlns:w="${W_NS}" xmlns:wps="${wps}" ` +
       'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
       '<w:body><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr>' +

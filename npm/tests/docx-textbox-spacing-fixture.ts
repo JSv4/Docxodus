@@ -33,7 +33,7 @@ export function textboxSpacingDocx(legacy: boolean, contextual = true, implicitD
       '<Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>') },
     { name: 'word/styles.xml', data: xml(`<w:styles xmlns:w="${w}">` +
       '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/>' +
-      '<w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>' +
+      '<w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>' +
       '<w:style w:type="paragraph" w:styleId="Swift"' + (implicitDefault ? ' w:default="1"' : '') + '><w:name w:val="Swift"/><w:pPr>' +
       '<w:spacing w:before="120" w:after="180" w:line="240" w:lineRule="exact"/>' +
       (contextual ? '<w:contextualSpacing/>' : '') + '</w:pPr></w:style></w:styles>') },
