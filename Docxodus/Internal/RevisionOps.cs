@@ -2530,7 +2530,7 @@ internal static class RevisionOps
             // A rejected insertion and an accepted deletion are one operation: the cells leave.
             // In the other two directions only the marks go.
             if ((group.Family == RevisionFamily.CellInsert) != accept)
-                RemoveMarkedCells(cellUnits, removedElements);
+                RemoveMarkedCells(cellUnits, group.Family == RevisionFamily.CellInsert, removedElements);
             else
                 foreach (var unit in cellUnits)
                     if (!Detached(unit.Element))
@@ -2599,13 +2599,13 @@ internal static class RevisionOps
     /// row that keeps no cell goes whole, as a tracked row deletion does, and takes a table left
     /// without rows with it.</summary>
     private static void RemoveMarkedCells(
-        IReadOnlyList<RevisionUnit> units, List<XElement> removedElements)
+        IReadOnlyList<RevisionUnit> units, bool inserted, List<XElement> removedElements)
     {
         var leaving = units.Select(u => u.MarkedCell).OfType<XElement>().Where(c => !Detached(c)).ToHashSet();
         foreach (var row in leaving.Select(RowOf).OfType<XElement>().Distinct().ToList())
         {
             var gone = RowCells(row).Where(leaving.Contains).ToList();
-            if (TableGridModel.RemoveCells(row, leaving))
+            if (TableGridModel.RemoveCells(row, leaving, inserted))
             {
                 // The cells are what is reported removed: callers find the part through them.
                 removedElements.AddRange(gone);

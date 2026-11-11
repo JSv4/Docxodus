@@ -132,22 +132,24 @@ public class DocxSessionCellRevisionShapeTests
         Assert.True(kept + untouched == Resolve(inserted, accept: true), shape + ": accepted insertion");
     }
 
-    [Theory]
-    [InlineData("cellDel")]
-    [InlineData("cellIns")]
-    public void RowNoOtherRowShowsToBeShort_IsNotWidened(string mark)
+    [Fact]
+    public void WhenEveryRowLosesACell_OnlyDeletionsCanBeMeasuredAgainstTheStatedGrid()
     {
-        // A row is widened only up to the widest of the table's rows once the cells have left. The
-        // stated grid is not asked: a comparison may mark a cell in a row that was already short of
-        // it, and rejecting must then give the original row back (RedlineReversibilityProofTests).
-        // Word 2024 merges the leaving cell into its neighbour in all three of these.
-        bool leaves = mark == "cellDel";
+        static byte[] Column(string mark) => Table(3,
+            Row(Cell("A", mark), Cell("B"), Cell("C")), Row(Cell("D", mark), Cell("E"), Cell("F")));
+        static byte[] OneRow(string mark) => Table(3, Row(Cell("A"), Cell("B", mark), Cell("C")));
 
-        // A whole column: the table is one column narrower.
-        Assert.Equal("B C / E F", Resolve(Table(3,
-            Row(Cell("A", mark), Cell("B"), Cell("C")), Row(Cell("D", mark), Cell("E"), Cell("F"))), accept: leaves));
-        // A table of one row.
-        Assert.Equal("A C", Resolve(Table(3, Row(Cell("A"), Cell("B", mark), Cell("C"))), accept: leaves));
+        // The grid describes the table without its deleted cells: three columns, which each row
+        // must still fill. Word 2024 gives the same cells.
+        Assert.Equal("B×2 C / E×2 F", Resolve(Column("cellDel"), accept: true));
+        Assert.Equal("A×2 C", Resolve(OneRow("cellDel"), accept: true));
+
+        // The grid describes the table with its inserted cells, so it cannot say how wide a row was
+        // without them, and no row that kept its cells is there to say it either: nothing is widened.
+        // A comparison may insert a cell into a row that was short of the grid, and rejecting must
+        // give that row back (RedlineReversibilityProofTests.RP040). Word 2024 widens here too.
+        Assert.Equal("B C / E F", Resolve(Column("cellIns"), accept: false));
+        Assert.Equal("A C", Resolve(OneRow("cellIns"), accept: false));
     }
 
     [Theory]
@@ -276,7 +278,7 @@ public class DocxSessionCellRevisionShapeTests
 
         Assert.Single(bare.ListRevisions());
         Assert.Single(wrapped.ListRevisions());
-        Assert.Equal("A C / D F", Resolve(Column(wrapped: true), accept: true));
+        Assert.Equal("A×2 C / D×2 F", Resolve(Column(wrapped: true), accept: true));
 
         // The cells that went are reported removed either way.
         var removed = bare.AcceptAllRevisions().Removed;

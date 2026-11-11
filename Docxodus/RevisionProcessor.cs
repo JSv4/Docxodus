@@ -68,7 +68,8 @@ namespace Docxodus
         private static void RejectRevisionsForPart(OpenXmlPart part)
         {
             var xDoc = part.GetXDocument();
-            var newRoot = RejectRevisionsForPartTransform(xDoc.Root);
+            var newRoot = (XElement)RejectRevisionsForPartTransform(xDoc.Root)!;
+            RemoveMarkedCells(newRoot, W.cellIns);
             xDoc.Root!.ReplaceWith(newRoot);
             part.PutXDocument();
         }
@@ -395,17 +396,16 @@ namespace Docxodus
                     element.Name == W.cellMerge)
                     return null;
 
-                // A rejected inserted cell leaves its row exactly as an accepted deleted cell does,
-                // so hand it to that one rule: keep its place, span and width, marked deleted. Its
-                // content goes with it, and the acceptance below decides whether a neighbour widens
-                // against the grid this pass restores.
+                // A rejected inserted cell leaves its row by the same rule as an accepted deleted
+                // cell (RemoveMarkedCells, once this pass has restored the row's properties). Until
+                // then keep its place, span, width and mark; its content goes with it.
                 if (element.Name == W.tc &&
                     element.Elements(W.tcPr).Elements(W.cellIns).Any())
                     return new XElement(W.tc,
                         new XElement(W.tcPr,
                             element.Elements(W.tcPr).Elements(W.tcW),
                             element.Elements(W.tcPr).Elements(W.gridSpan),
-                            new XElement(W.cellDel)),
+                            new XElement(W.cellIns)),
                         new XElement(W.p));
 
                 return new XElement(element.Name,
@@ -1413,7 +1413,7 @@ namespace Docxodus
             if (containsMoveFromMoveTo)
                 documentElement = (XElement)RemoveRowsLeftEmptyByMoveFrom(documentElement)!;
             documentElement = (XElement)AcceptAllOtherRevisionsTransform(documentElement)!;
-            AcceptDeletedCells(documentElement);
+            RemoveMarkedCells(documentElement, W.cellDel);
             RemoveTablesThatLostEveryRow(documentElement);
             documentElement = (XElement)MergeAdjacentTablesTransform(documentElement)!;
             documentElement = (XElement)AddEmptyParagraphToAnyEmptyCells(documentElement)!;
@@ -3199,16 +3199,20 @@ namespace Docxodus
             return node;
         }
 
-        /// <summary>Carry out every cell deletion: the cells leave their rows by the rule the session
-        /// shares (<see cref="Internal.TableGridModel.RemoveCells"/>), and a row that keeps no cell
-        /// goes whole. Rejecting reaches this too, with each inserted cell marked deleted.</summary>
-        private static void AcceptDeletedCells(XElement documentElement)
+        /// <summary>The cells carrying <paramref name="mark"/> leave their rows: deleted cells on
+        /// accepting, inserted cells on rejecting, by the rule the session shares
+        /// (<see cref="Internal.TableGridModel.RemoveCells"/>). A row that keeps no cell goes whole,
+        /// and a table that keeps no row with it.</summary>
+        private static void RemoveMarkedCells(XElement root, XName mark)
         {
-            var deleted = documentElement.Descendants(W.tc)
-                .Where(cell => cell.Elements(W.tcPr).Elements(W.cellDel).Any()).ToHashSet();
-            foreach (var row in deleted.Select(cell => cell.Ancestors(W.tr).FirstOrDefault()).OfType<XElement>().Distinct().ToList())
-                if (!Internal.TableGridModel.RemoveCells(row, deleted))
-                    row.Remove();
+            var leaving = root.Descendants(W.tc).Where(cell => cell.Elements(W.tcPr).Elements(mark).Any()).ToHashSet();
+            foreach (var row in leaving.Select(cell => cell.Ancestors(W.tr).FirstOrDefault()).OfType<XElement>().Distinct().ToList())
+            {
+                if (Internal.TableGridModel.RemoveCells(row, leaving, inserted: mark == W.cellIns)) continue;
+                var table = row.Ancestors(W.tbl).FirstOrDefault();
+                row.Remove();
+                if (table?.Parent != null && !WordprocessingMLUtil.TableRows(table).Any()) table.Remove();
+            }
         }
 
 #if false
@@ -3717,7 +3721,7 @@ namespace Docxodus
 ///     Replace trPr with the trPr in trPrChange
 /// 
 /// celDel
-///   Method: AcceptDeletedCells (Internal.TableGridModel.RemoveCells)
+///   Method: RemoveMarkedCells (Internal.TableGridModel.RemoveCells)
 ///   Sample document: HorizontallyMergedCells.docx
 ///   Semantics:
 ///     Remove the deleted cells; a row that keeps no cell goes whole.
@@ -3732,7 +3736,7 @@ namespace Docxodus
 ///   Semantics:
 ///     Remove these elements.
 ///   Reject:
-///     If a w:tc contains w:tcPr/w:cellIns, mark the cell deleted; accepting removes it
+///     If a w:tc contains w:tcPr/w:cellIns, the cell leaves its row (RemoveMarkedCells)
 ///   
 /// cellMerge
 ///   Method: AcceptAllOtherRevisionsTransform

@@ -5441,8 +5441,10 @@ the two the same way, so one column serves both.
 | the same in each cell's own `w:sdt` | the row is removed | same |
 | a table whose only row is `±A ±B ±C` | the table is removed; the paragraphs around it stay | same |
 | that table as a cell's only content before its closing paragraph | the table is removed; the cell keeps the paragraph | same |
-| `±A B C` in every row (a whole column) | every row `B×2 C`; saved as a `4800 2400` grid without spans | every row `B C`: nothing is widened |
-| a table of one row, `A ±B C` | `A×2 C` | `A C`: nothing is widened |
+| `-A B C` in every row (a whole deleted column) | every row `B×2 C`; saved as a `4800 2400` grid without spans | every row `B×2 C` on the three-column grid; Word lays it out at the same widths |
+| `+A B C` in every row (a whole inserted column) | every row `B×2 C`; saved the same way | every row `B C`: nothing is widened |
+| a table of one row, `A -B C` | `A×2 C` | same |
+| a table of one row, `A +B C` | `A×2 C` | `A C`: nothing is widened |
 | `A +B C` with a `w:tblGridChange` recording a two-column grid (inconsistent: the other row has three cells) | `A×2 C` on the three-column grid; the recorded grid is ignored | `A×2 C`; the recorded grid is restored |
 
 Word's rule has no condition in it: a cell that leaves always gives its grid columns to the nearest
@@ -5465,16 +5467,25 @@ recording, and `DocxDiff`), and Word's unconditional merge does not undo two of 
 | a `DocxDiff` redline of a table that lost its first column | Accept: the revised table (Word does not merge here, see below) | Accept: the revised table |
 | `RP035-Inserted-Cells.docx` (older Word: one cell split into three, with the old span recorded) | Reject: one cell spanning four columns, wider than the table | Reject: one cell spanning three |
 
-Docxodus therefore asks one question before widening, in `TableGridModel.RemoveCells`: is the row,
-once its cells have left, using fewer grid columns than the table's other rows? If so the row is
-made whole by Word's rule. If not, nothing is widened: the table lost a column from every row, or
-the property changes resolved with the mark (a restored grid, a restored span) already describe the
-row. The stated grid is not consulted: a comparison can mark a cell in a row that was already short
-of it, and rejecting must give that row back unchanged (the redline reversibility proof checks it),
-and a `w:tblGridChange` can record a grid that fits no
-row (`RP035` records five columns for a three-column table), and neither is the mark's author. The
-session resolves a revision's property changes before its cells, and `RevisionProcessor` restores
-properties before it removes cells, so both see the restored row.
+Docxodus therefore asks one question before widening, in `TableGridModel.RemoveCells`: once its
+cells have left, is the row narrower than its table? If so the row is made whole by Word's rule. If
+not, nothing is widened: the property changes resolved with the mark (a restored grid, a restored
+span) already describe the row, whoever wrote it. How wide the table is depends on what the stated
+grid describes:
+
+- The grid describes the table *without* its deleted cells. A row that loses a deleted cell must
+  still fill it, so accepted deletions are measured against the stated grid. A comparison that
+  removed a column narrows the grid, the cells that stay fill it, and nothing is widened.
+- The grid describes the table *with* its inserted cells, so it says nothing about a row without
+  them, and a recorded old grid can fit no row (`RP035` records five columns for a three-column
+  table). Rejected insertions are measured against the rows that keep every cell. When no row does
+  (a whole inserted column, a different inserted cell in every row, a table of one row) nothing is
+  widened. That is also what makes rejection reversible for a comparison that inserted a cell into
+  a row already short of the grid: the original row comes back (the redline reversibility proof
+  checks it).
+
+The session resolves a revision's property changes before its cells, and `RevisionProcessor`
+restores properties before it removes cells, so both measure the restored row.
 
 One more Word behaviour is measured and not reproduced. When the leaving cell's own last paragraph
 mark is tracked as deleted (as `DocxDiff` writes a removed cell, content and mark struck), Word's
@@ -5489,13 +5500,13 @@ Accept All removes the cell without widening anything and leaves the row short:
 The same paragraph-mark state on an inserted cell changes nothing: Word's Reject All widens the
 neighbour whether or not the inserted cell's content and mark are tracked.
 
-Remaining differences, all in the tables above: a whole column and a table of one row (no other row
-shows the row to be short, so Docxodus removes the cell without widening;
-Word leaves merged cells); a content control around two cells (Docxodus keeps it around the cell
-that stays); and the deleted-paragraph-mark case (Docxodus widens, Word leaves the row short). The
-session measures a row against the cells one revision removes, `RevisionProcessor` against every
-marked cell at once, so a column whose cells were marked by different reviewers is unwidened by
-`RevisionProcessor` and by the session only when the marks form one revision.
+Remaining differences, all in the tables above: Docxodus undoes its own and older Word's recorded
+insertions where Word merges cells; a rejected insertion is not widened when no row keeps every
+cell (a whole inserted column, a table of one row), where Word merges; a content control around two
+cells stays around the cell that stays; and where the leaving cell's paragraph mark is deleted
+Docxodus widens while Word leaves the row short. The session measures a rejected insertion against
+the rows one revision leaves untouched, `RevisionProcessor` against the rows no mark touches; they
+give the same table for every row above.
 
 ---
 

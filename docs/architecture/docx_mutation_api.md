@@ -2118,13 +2118,15 @@ Three further shapes have a single safe resolution and resolve:
 
 Cells that leave a row (an accepted `w:cellDel`, a rejected `w:cellIns`) are resolved by one rule,
 `TableGridModel.RemoveCells`, which the session and `RevisionProcessor` both call (issues #1404,
-#1688). A row left using fewer grid columns than the table's other rows is made whole the way
-desktop Word 2024 does it: each leaving cell's columns go to the nearest staying cell before it, the
-cells that start a row give theirs to the first staying cell after them, and the widened cell's
-`w:tcW` becomes the width of the grid columns it spans. The rows decide whether a row is short, not
-the stated grid and not who wrote the mark, so a column that leaves every row, a tracked
-`InsertTableColumn` whose rejection restores the old row, and a comparison that wrote the row in its
-final shape are all left unwidened. A row that keeps no cell is removed, and a table that keeps no
+#1688). A row left narrower than its table is made whole the way desktop Word 2024 does it: each
+leaving cell's columns go to the nearest staying cell before it, the cells that start a row give
+theirs to the first staying cell after them, and the widened cell's `w:tcW` becomes the width of the
+grid columns it spans. The stated grid describes the table without its deleted cells, so an accepted
+deletion is measured against it; it describes the table with its inserted cells, so a rejected
+insertion is measured against the rows that keep every cell, and is not widened when there is none.
+A row that is already whole is left alone, whoever wrote the mark, so a tracked `InsertTableColumn`
+whose rejection restores the old grid and a comparison that wrote the row in its final shape keep
+their geometry. A row that keeps no cell is removed, and a table that keeps no
 row with it. A row's cells are read through content-control and custom-XML wrappers
 (`w:tr/w:sdt/w:sdtContent/w:tc`, as one online editor exports every cell), and a wrapper left
 without a cell is removed with it. No cell insertion or deletion is refused for its shape any more.

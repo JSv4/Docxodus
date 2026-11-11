@@ -54,18 +54,22 @@ internal static class TableGridModel
 
     /// <summary>
     /// Takes cells out of their row: the one resolution of a cell that leaves, whether by an
-    /// accepted <c>w:cellDel</c> or a rejected <c>w:cellIns</c>. A row left using fewer grid
-    /// columns than the table's other rows is made whole again, as Word 2024 does it: each
-    /// leaving cell's columns go to the nearest staying cell before it, those that start the row
-    /// to the first staying cell after them, and the widened cell is as wide as the grid columns
-    /// it then spans. The rows decide, not the stated grid or who wrote the mark: when a whole
-    /// column leaves, or the resolved properties already describe the row, no row is short and
-    /// nothing is widened. A content-control or custom-XML wrapper left without a cell goes with
-    /// its cell. <paramref name="leaving"/> names every cell leaving the table, in any row.
-    /// Returns <c>false</c>, changing nothing, when every cell of the row leaves: the row itself
-    /// goes, which is the caller's to do.
+    /// accepted <c>w:cellDel</c> or a rejected <c>w:cellIns</c>. A row left narrower than its
+    /// table is made whole again, as Word 2024 does it: each leaving cell's columns go to the
+    /// nearest staying cell before it, those that start the row to the first staying cell after
+    /// them, and the widened cell is as wide as the grid columns it then spans. How wide the
+    /// table is depends on what the stated grid describes. It describes the table without its
+    /// deleted cells, so a row that loses a deleted cell must still fill it. It describes the
+    /// table with its inserted cells, so it says nothing about a row without them; there the
+    /// rows that keep every cell are the witness, and with none, nothing is widened. A row that
+    /// is already whole is left alone, whoever wrote the mark: the property changes resolved
+    /// with it (a restored grid, a restored span) already describe the row. A content-control or
+    /// custom-XML wrapper left without a cell goes with its cell. <paramref name="leaving"/>
+    /// names every cell leaving the table, in any row, and <paramref name="inserted"/> says they
+    /// are rejected insertions. Returns <c>false</c>, changing nothing,
+    /// when every cell of the row leaves: the row itself goes, which is the caller's to do.
     /// </summary>
-    internal static bool RemoveCells(XElement row, IReadOnlySet<XElement> leaving)
+    internal static bool RemoveCells(XElement row, IReadOnlySet<XElement> leaving, bool inserted)
     {
         var cells = WordprocessingMLUtil.RowCells(row).ToList();
         var staying = cells.Where(cell => !leaving.Contains(cell)).ToList();
@@ -75,7 +79,12 @@ internal static class TableGridModel
         int Columns(XElement r) => GridBefore(r) + GridAfter(r)
             + WordprocessingMLUtil.RowCells(r).Where(cell => !leaving.Contains(cell)).Sum(Span);
         var table = row.Ancestors(W.tbl).FirstOrDefault();
-        int missing = table is null ? 0 : WordprocessingMLUtil.TableRows(table).Max(Columns) - Columns(row);
+        int stated = table?.Element(W.tblGrid)?.Elements(W.gridCol).Count() ?? 0;
+        int tableColumns = inserted
+            ? (table is null ? Enumerable.Empty<XElement>() : WordprocessingMLUtil.TableRows(table))
+                .Where(r => !WordprocessingMLUtil.RowCells(r).Any(leaving.Contains)).Select(Columns).DefaultIfEmpty(0).Max()
+            : stated > 0 ? stated : GridBefore(row) + GridAfter(row) + cells.Sum(Span);
+        int missing = tableColumns - Columns(row);
 
         var widened = new HashSet<XElement>();
         foreach (var cell in cells.Where(leaving.Contains))
