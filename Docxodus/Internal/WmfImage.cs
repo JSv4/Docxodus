@@ -43,7 +43,7 @@ internal static class WmfImage
             if (words < 3 || words > maxRecord || (ulong)words * 2 > (uint)(bytes.Length - offset))
                 throw new InvalidDataException("Invalid WMF record length.");
             int length = checked((int)words * 2), function = U16(bytes, offset + 4), start = offset + 6, parameters = length - 6;
-            void Need(int count) { if (parameters < count * 2) throw new InvalidDataException($"Invalid WMF record 0x{function:X4} parameters."); }
+            void Need(int count) { if (parameters < count * 2) throw new InvalidDataException("Invalid WMF record parameters."); }
             int P(int index) => I16(bytes, start + index * 2);
             ushort W(int index) => U16(bytes, start + index * 2);
             switch (function)
@@ -93,11 +93,11 @@ internal static class WmfImage
                     Need(9);
                     int faceLength = Math.Min(32, parameters - 18);
                     var face = EmfImage.Windows1252(bytes.AsSpan(start + 18, Math.Max(0, faceLength)));
-                    Store(table, CreateFont(face, P(0), P(2), P(4), bytes[start + 10] != 0, bytes[start + 11] != 0, bytes[start + 12] != 0)
-                        with { Charset = bytes[start + 13] });
+                    Store(table, CreateFont(face, P(0), P(2), P(4), bytes[start + 10] != 0, bytes[start + 11] != 0, bytes[start + 12] != 0,
+                        bytes[start + 13]));
                     break;
                 }
-                case 0x01f9 or 0x0142: Store(table, new Brush("none", Pattern: true)); break; // CREATEPATTERNBRUSH, DIBCREATEPATTERNBRUSH
+                case 0x01f9 or 0x0142: Store(table, new Brush("none", pattern: true)); break; // CREATEPATTERNBRUSH, DIBCREATEPATTERNBRUSH
                 case 0x00f7 or 0x06ff: Store(table, new OtherObject()); break; // CREATEPALETTE, CREATEREGION
                 case 0x012d or 0x01f0: // SELECTOBJECT, DELETEOBJECT
                 {

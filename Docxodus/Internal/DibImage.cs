@@ -9,7 +9,11 @@ internal static class DibImage
     private const int MaxSide = 32768, MaxPixels = 16 * 1024 * 1024;
 
     /// <summary>A decoded source rectangle: its data URI and the pixel count it cost.</summary>
-    internal readonly record struct Result(string Href, long Pixels);
+    internal readonly struct Result(string href, long pixels)
+    {
+        internal string Href { get; } = href;
+        internal long Pixels { get; } = pixels;
+    }
 
     /// <summary>Bytes taken by the header, colour masks and colour table of a packed DIB.</summary>
     internal static int InfoSize(ReadOnlySpan<byte> packed)
@@ -105,8 +109,21 @@ internal static class DibImage
         return (uint)((ulong)raw * 255 / max);
     }
 
-    private readonly record struct Info(int HeaderSize, int Width, int Height, bool TopDown, int BitCount, uint Compression,
-        int ImageSize, int PaletteEntries, int EntrySize, int MaskBytes, (uint Red, uint Green, uint Blue) Masks);
+    private readonly struct Info(int headerSize, int width, int height, bool topDown, int bitCount, uint compression,
+        int imageSize, int paletteEntries, int entrySize, int maskBytes, (uint Red, uint Green, uint Blue) masks)
+    {
+        internal int HeaderSize { get; } = headerSize;
+        internal int Width { get; } = width;
+        internal int Height { get; } = height;
+        internal bool TopDown { get; } = topDown;
+        internal int BitCount { get; } = bitCount;
+        internal uint Compression { get; } = compression;
+        internal int ImageSize { get; } = imageSize;
+        internal int PaletteEntries { get; } = paletteEntries;
+        internal int EntrySize { get; } = entrySize;
+        internal int MaskBytes { get; } = maskBytes;
+        internal (uint Red, uint Green, uint Blue) Masks { get; } = masks;
+    }
 
     private static Info Header(ReadOnlySpan<byte> info)
     {
