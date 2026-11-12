@@ -7,10 +7,8 @@ namespace Docxodus.Internal;
 
 /// <summary>Bounded EMF playback to inline SVG through <see cref="MetafileCanvas"/>. Unsupported records
 /// reject the whole image. EMF+ records are skipped when the file also carries its GDI drawing.</summary>
-internal sealed class EmfImage(XElement drawing)
+internal sealed record EmfImage(XElement Drawing)
 {
-    internal XElement Drawing { get; } = drawing;
-
     internal static EmfImage Read(byte[] bytes)
     {
         if (bytes.Length < 88 || U32(bytes, 0) != 1 || U32(bytes, 40) != 0x464d4520 || U32(bytes, 44) != 0x10000)
@@ -42,7 +40,7 @@ internal sealed class EmfImage(XElement drawing)
             if (size < 8 || size % 4 != 0 || size > bytes.Length - offset)
                 throw new InvalidDataException("Invalid EMF record length.");
             int length = (int)size, at = offset;
-            void Need(long expected) { if (length < expected) throw new InvalidDataException("Invalid EMF record parameters."); }
+            void Need(long expected) { if (length < expected) throw new InvalidDataException($"Invalid EMF record {kind} parameters."); }
             int I(int field) => I32(bytes, at + field);
             uint U(int field) => U32(bytes, at + field);
             switch (kind)
@@ -173,7 +171,7 @@ internal sealed class EmfImage(XElement drawing)
                     Need(24);
                     Store(objects, U(8), CreateBrush(U(12), U(12) == 1 ? "none" : Color(U(16)), U(20)));
                     break;
-                case 93 or 94: Need(12); Store(objects, U(8), new Brush("none", pattern: true)); break; // CREATEMONOBRUSH, CREATEDIBPATTERNBRUSHPT
+                case 93 or 94: Need(12); Store(objects, U(8), new Brush("none", Pattern: true)); break; // CREATEMONOBRUSH, CREATEDIBPATTERNBRUSHPT
                 case 49 or 99 or 122: Need(12); Store(objects, U(8), new OtherObject()); break; // CREATEPALETTE, CREATECOLORSPACE(W)
                 case 101: // DELETECOLORSPACE
                     Need(12);
@@ -183,7 +181,7 @@ internal sealed class EmfImage(XElement drawing)
                 {
                     Need(104);
                     var face = Encoding.Unicode.GetString(bytes, at + 40, 64);
-                    Store(objects, U(8), CreateFont(face, I(12), I(20), I(28), bytes[at + 32] != 0, bytes[at + 33] != 0, bytes[at + 34] != 0, bytes[at + 35]));
+                    Store(objects, U(8), CreateFont(face, I(12), I(20), I(28), bytes[at + 32] != 0, bytes[at + 33] != 0, bytes[at + 34] != 0));
                     break;
                 }
                 case 83 or 84: // EXTTEXTOUTA, EXTTEXTOUTW

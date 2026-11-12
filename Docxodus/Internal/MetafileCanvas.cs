@@ -21,61 +21,25 @@ internal sealed class MetafileCanvas
     private const long MaxBitmapPixels = 32L * 1024 * 1024;
     private const double Huge = 1e9;
 
-    // Plain classes and structs rather than records: records generate equality, hashing and printing
-    // members that nothing here uses, and they all ship in the size-budgeted WASM payload.
-    internal abstract class GdiObject { }
-
+    internal abstract record GdiObject;
     /// <summary>A pen; <c>Color</c> is "none" for PS_NULL. Cosmetic pens draw one device pixel.</summary>
-    internal sealed class Pen(string color, double width, bool cosmetic, string? dashes, string cap, string join) : GdiObject
-    {
-        internal string Color { get; } = color;
-        internal double Width { get; } = width;
-        internal bool Cosmetic { get; } = cosmetic;
-        internal string? Dashes { get; } = dashes;
-        internal string Cap { get; } = cap;
-        internal string Join { get; } = join;
-    }
-
+    internal sealed record Pen(string Color, double Width, bool Cosmetic, string? Dashes, string Cap, string Join) : GdiObject;
     /// <summary>A brush; <c>Color</c> is "none" for BS_NULL. Pattern brushes are kept so that object
     /// slots stay aligned, but filling with one is unsupported.</summary>
-    internal sealed class Brush(string color, int hatch = -1, bool pattern = false) : GdiObject
-    {
-        internal string Color { get; } = color;
-        internal int Hatch { get; } = hatch;
-        internal bool Pattern { get; } = pattern;
-    }
-
-    internal sealed class Font(string family, double height, double escapement, int weight, bool italic, bool underline, bool strike, int charset) : GdiObject
-    {
-        internal string Family { get; } = family;
-        internal double Height { get; } = height;
-        internal double Escapement { get; } = escapement;
-        internal int Weight { get; } = weight;
-        internal bool Italic { get; } = italic;
-        internal bool Underline { get; } = underline;
-        internal bool Strike { get; } = strike;
-        internal int Charset { get; } = charset;
-    }
-
+    internal sealed record Brush(string Color, int Hatch = -1, bool Pattern = false) : GdiObject;
+    internal sealed record Font(string Family, double Height, double Escapement, int Weight, bool Italic, bool Underline, bool Strike, int Charset = 0) : GdiObject;
     /// <summary>A palette, region or colour space: occupies a slot, draws nothing.</summary>
-    internal sealed class OtherObject : GdiObject { }
+    internal sealed record OtherObject : GdiObject;
 
     internal static readonly Pen BlackPen = new("#000000", 1, true, null, "round", "round");
     internal static readonly Pen NullPen = new("none", 0, true, null, "round", "round");
     internal static readonly Brush WhiteBrush = new("#ffffff"), NullBrush = new("none");
-    internal static readonly Font DefaultFont = new("", 16, 0, 400, false, false, false, 0);
+    internal static readonly Font DefaultFont = new("", 16, 0, 400, false, false, false);
 
     /// <summary>x' = A·x + C·y + E, y' = B·x + D·y + F (SVG matrix order).</summary>
-    internal readonly struct Matrix(double a, double b, double c, double d, double e, double f)
+    internal readonly record struct Matrix(double A, double B, double C, double D, double E, double F)
     {
         internal static readonly Matrix Identity = new(1, 0, 0, 1, 0, 0);
-        internal double A { get; } = a;
-        internal double B { get; } = b;
-        internal double C { get; } = c;
-        internal double D { get; } = d;
-        internal double E { get; } = e;
-        internal double F { get; } = f;
-        internal bool Same(Matrix o) => A == o.A && B == o.B && C == o.C && D == o.D && E == o.E && F == o.F;
         internal (double X, double Y) Apply(double x, double y) => (A * x + C * y + E, B * x + D * y + F);
         /// <summary>This transform followed by <paramref name="next"/>.</summary>
         internal Matrix Then(Matrix next) => new(A * next.A + B * next.C, A * next.B + B * next.D,
@@ -118,7 +82,7 @@ internal sealed class MetafileCanvas
     private Path? bracket;
     private bool inBracket;
     private Matrix bracketMatrix;
-    private Path? stroke; private XElement? strokeElement, strokeContainer; private Pen? strokePen; private Matrix strokeMatrix;
+    private Path? stroke; private XElement? strokeElement; private (Pen, Matrix, XElement)? strokeKey;
     private double minX = double.PositiveInfinity, minY = double.PositiveInfinity, maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
 
     /// <param name="root">Element the drawing is appended to.</param>
@@ -142,12 +106,15 @@ internal sealed class MetafileCanvas
     internal (double MinX, double MinY, double MaxX, double MaxY)? Bounds
         => minX <= maxX ? (minX, minY, maxX, maxY) : null;
 
+    internal Pen CurrentPen => state.Pen;
+    internal Brush CurrentBrush => state.Brush;
     internal Font CurrentFont => state.Font;
+    internal (double X, double Y) Position => (state.X, state.Y);
 
     // ---- Objects -------------------------------------------------------------------------------
 
     /// <summary>Builds a pen from a GDI pen style (PS_*), with dash, cap and join bits.</summary>
-    internal Pen CreatePen(uint style, double width, string color, bool cosmetic, double[]? userDashes = null)
+    internal Pen CreatePen(uint style, double width, string color, bool cosmetic, IReadOnlyList<double>? userDashes = null)
     {
         int kind = (int)(style & 0xf);
         if (kind == 5) return NullPen;
@@ -161,23 +128,11 @@ internal sealed class MetafileCanvas
         double[]? pattern = kind switch {
             0 or 6 => null, 1 => new double[] { 18, 6 }, 2 => new double[] { 3, 3 }, 3 => new double[] { 9, 6, 3, 6 },
             4 => new double[] { 9, 3, 3, 3, 3, 3 }, 8 => new double[] { 1, 1 },
-            7 => userDashes is { Length: > 0 } ? userDashes : null,
+            7 => userDashes is { Count: > 0 } ? userDashes.Select(d => d / unit).ToArray() : null,
             _ => throw new NotSupportedException("Unsupported metafile pen style.") };
-        string? dashes = null;
-        if (pattern != null)
-        {
-            // User style entries are already in pen units; the stock patterns scale with the pen width.
-            double scale = kind == 7 ? 1 : unit, total = 0;
-            var text = new StringBuilder();
-            foreach (double length in pattern)
-            {
-                if (!(length >= 0 && length <= Huge)) throw new NotSupportedException("Unsupported metafile pen dash pattern.");
-                total += length;
-                text.Append(text.Length == 0 ? "" : " ").Append(N(length * scale));
-            }
-            if (pattern.Length > 64 || total == 0) throw new NotSupportedException("Unsupported metafile pen dash pattern.");
-            dashes = text.ToString();
-        }
+        if (pattern != null && (pattern.Length > 64 || pattern.Any(d => !double.IsFinite(d) || d < 0) || pattern.All(d => d == 0)))
+            throw new NotSupportedException("Unsupported metafile pen dash pattern.");
+        string? dashes = pattern == null ? null : string.Join(" ", pattern.Select(d => N(d * unit)));
         return new Pen(color, width, cosmetic, dashes, cap, join);
     }
 
@@ -186,10 +141,10 @@ internal sealed class MetafileCanvas
         0 => new Brush(color), 1 => NullBrush,
         2 when hatch <= 5 => new Brush(color, (int)hatch),
         2 => throw new NotSupportedException("Unsupported metafile hatch style."),
-        3 or 4 or 5 or 6 => new Brush("none", pattern: true),
+        3 or 4 or 5 or 6 => new Brush("none", Pattern: true),
         _ => throw new NotSupportedException("Unsupported metafile brush style.") };
 
-    internal static Font CreateFont(string face, int height, int escapement, int weight, bool italic, bool underline, bool strike, int charset)
+    internal static Font CreateFont(string face, int height, int escapement, int weight, bool italic, bool underline, bool strike)
     {
         var family = new StringBuilder();
         foreach (char c in face)
@@ -197,7 +152,7 @@ internal sealed class MetafileCanvas
             if (c == '\0') break;
             if (char.IsLetterOrDigit(c) || c is ' ' or '-' or '_' or '.') family.Append(c);
         }
-        return new Font(family.ToString().Trim(), Math.Abs((double)height), escapement / 10.0, weight, italic, underline, strike, charset);
+        return new Font(family.ToString().Trim(), Math.Abs((double)height), escapement / 10.0, weight, italic, underline, strike);
     }
 
     internal void Select(GdiObject value)
@@ -564,7 +519,7 @@ internal sealed class MetafileCanvas
 
     /// <summary>TEXTOUT/EXTTEXTOUT at a logical reference point. <paramref name="advances"/> are the
     /// optional logical character advances. <paramref name="opaque"/> is the ETO_OPAQUE rectangle.</summary>
-    internal void Text(double x, double y, string text, double[]? advances, (double L, double T, double R, double B)? opaque)
+    internal void Text(double x, double y, string text, IReadOnlyList<double>? advances, (double L, double T, double R, double B)? opaque)
     {
         if (inBracket) throw new NotSupportedException("Text in a metafile path bracket is not supported.");
         if (opaque is { } box)
@@ -584,8 +539,7 @@ internal sealed class MetafileCanvas
         if (clean.Length > MaxTextLength) throw new NotSupportedException("Metafile text run exceeds the supported length.");
         bool updateCp = (state.TextAlign & 1) != 0;
         if (updateCp) (x, y) = (state.X, state.Y);
-        double total = 0;
-        if (advances != null) foreach (double advance in advances) total += advance;
+        double total = advances?.Sum() ?? 0;
         if (updateCp && advances != null) state.X = x + total;
         if (clean.ToString().Trim().Length == 0) return;
         Count(clean.Length);
@@ -604,12 +558,12 @@ internal sealed class MetafileCanvas
             .Then(linear).Then(new Matrix(1, 0, 0, 1, ax, ay));
         var element = new XElement(Svg + "text", new XAttribute("x", "0"), new XAttribute("y", "0"));
         int horizontal = s.TextAlign & 6, vertical = s.TextAlign & 24;
-        if (advances is { Length: > 0 })
+        if (advances != null && advances.Count > 0)
         {
             double start = horizontal == 2 ? -total : horizontal == 6 ? -total / 2 : 0, at = start;
             var xs = new StringBuilder();
             // Advances are per UTF-16 code unit; SVG positions are per character.
-            for (int i = 0; i < clean.Length && i < advances.Length; i++)
+            for (int i = 0; i < clean.Length && i < advances.Count; i++)
             {
                 if (!char.IsLowSurrogate(clean[i])) xs.Append(xs.Length == 0 ? "" : " ").Append(N(at));
                 at += advances[i];
@@ -670,7 +624,7 @@ internal sealed class MetafileCanvas
 
     private void Into(Action<Path> build)
     {
-        if (!Transform.Same(bracketMatrix)) throw new NotSupportedException("A metafile path bracket changes its transform.");
+        if (Transform != bracketMatrix) throw new NotSupportedException("A metafile path bracket changes its transform.");
         int before = bracket!.Points.Count;
         build(bracket);
         Count(bracket.Points.Count - before);
@@ -684,13 +638,13 @@ internal sealed class MetafileCanvas
         if (pen.Color == "none") { var scratch = new Path(); build(scratch); return; }
         var m = Transform;
         var container = Container();
-        if (stroke == null || !ReferenceEquals(strokePen, pen) || !strokeMatrix.Same(m) || !ReferenceEquals(strokeContainer, container)
-            || container.LastNode != strokeElement)
+        var key = (pen, m, container);
+        if (stroke == null || strokeKey != key || container.LastNode != strokeElement)
         {
             Flush();
             stroke = new Path();
             strokeElement = new XElement(Svg + "path");
-            (strokePen, strokeMatrix, strokeContainer) = (pen, m, container);
+            strokeKey = key;
             Shape(strokeElement, false, true, Array.Empty<(double, double)>(), m, path: true, flush: false);
         }
         int before = stroke.Points.Count;
@@ -709,8 +663,7 @@ internal sealed class MetafileCanvas
         var path = new Path();
         build(path);
         if (path.Empty) return;
-        var points = path.Points;
-        if (extra != null) points.AddRange(extra);
+        var points = extra == null ? path.Points : path.Points.Concat(extra).ToList();
         Shape(new XElement(Svg + "path", new XAttribute("d", path.ToString())), true, true, points, path: true);
     }
 
@@ -766,7 +719,7 @@ internal sealed class MetafileCanvas
     private void Flush()
     {
         if (stroke != null && strokeElement != null) strokeElement.SetAttributeValue("d", stroke.Empty ? "M0 0" : stroke.ToString());
-        stroke = null; strokeElement = null; strokePen = null; strokeContainer = null;
+        stroke = null; strokeElement = null; strokeKey = null;
     }
 
     private void Add(XElement element)
@@ -814,7 +767,7 @@ internal sealed class MetafileCanvas
 
     private static void SetTransformAttribute(XElement element, Matrix m, string name = "transform", bool always = false)
     {
-        if (!always && m.Same(Matrix.Identity)) return;
+        if (!always && m == Matrix.Identity) return;
         element.SetAttributeValue(name, m.B == 0 && m.C == 0 && m.E == 0 && m.F == 0
             ? $"scale({N(m.A)} {N(m.D)})"
             : $"matrix({N(m.A)} {N(m.B)} {N(m.C)} {N(m.D)} {N(m.E)} {N(m.F)})");
