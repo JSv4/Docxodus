@@ -4264,16 +4264,18 @@ whose top is at 103.5 (text 14pt below "Open", a 0.5pt border, `w:space="1"`), f
 | only the middle one of three shaded | | 133.6 to 163.6: its line and the 14 below it |
 
 So a paragraph owns its space after, and of its space before only what exceeds the space after
-above it. That is CSS padding. `CreateBorderDivsCore` therefore leaves the box nothing but its
-border and makes everything inside it padding of the paragraphs: the box's `w:space` (top on the
-first paragraph, bottom on the last, the sides on all), each paragraph's space after as
-`padding-bottom`, and `max(0, before - after)` as the next one's `padding-top`, below the rule it
-may draw. Each paragraph's own `background` then fills exactly Word's slab, shared or not, and the
-earlier rule that moved a shared fill onto the box is gone. The `w:space` band of a left border
-stays the box's padding when the box has no right border, because Word does not fill it there
-(fill from 70.6 with the border at 66.1, with or without top and bottom borders); a `w:between`
-rule still crosses that band to the border (66.6 to 541.5), which the ruled paragraph does with a
-negative margin and equal padding.
+above it. That is CSS padding. `CreateBorderDivsCore` therefore writes the spacing between the
+paragraphs of a box as their padding: each paragraph's space after as `padding-bottom`, and
+`max(0, before - after)` as the next one's `padding-top`, below the rule it may draw. The box
+keeps its own `w:space` as its padding, one length beside its border, which keeps the text edge
+exact (#1126). A paragraph that paints at an edge of the box, with shading or a `w:between` rule,
+reaches through that band with a negative margin and as much padding: the first paragraph at the
+top, the last at the bottom, every shaded or ruled one at the sides. Each paragraph's own
+`background` then fills exactly Word's slab, shared or not, and the earlier rule that moved a
+shared fill onto the box is gone. An unshaded, unruled paragraph keeps the margins it had. Word
+does not fill the `w:space` band of a left border when the box has no right border (fill from 70.6
+with the border at 66.1, with or without top and bottom borders), so no fill reaches into that
+band; a `w:between` rule still crosses it to the border (66.6 to 541.5).
 
 At a page break the slab above keeps its space after on the first page (side borders run through
 it) and the next page starts with the paragraph's text at the top margin: its share of the space

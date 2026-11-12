@@ -11,8 +11,9 @@ namespace Docxodus.Tests;
 // Issue #1692: what Word 2024 does with the box around bordered paragraphs. It draws each
 // paragraph's w:between below it, applies contextual spacing across the edge of the box, honours a
 // page start or a keep on a bordered paragraph, and fills each paragraph's part of the box with that
-// paragraph's shading. The box itself is only a border: its w:space and the spacing between its
-// paragraphs are the paragraphs' padding, which is what their shading fills.
+// paragraph's shading. The spacing between the paragraphs of a box is their padding, and a
+// paragraph that paints at an edge of the box (a fill or a rule) reaches through the box's w:space
+// with a negative margin and as much padding.
 public class BorderedParagraphBoxTests
 {
     private const string W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -84,14 +85,13 @@ public class BorderedParagraphBoxTests
             Assert.Equal("solid #000000 0.75pt", Value(lower, "border-top"));
             Assert.Equal("0.5pt", Value(lower, "--docx-border-top-width"));
             Assert.Equal("true", (string?)lower.Attribute("data-docx-exact-border"));
-            // w:space below the rule. The rule runs to the side borders because the box's 4pt
-            // w:space is the paragraph's own padding.
-            Assert.Equal(("1.0pt", "4pt", "4pt"), (Value(lower, "padding-top"), Value(lower, "padding-left"), Value(lower, "padding-right")));
-            Assert.DoesNotContain("-", Value(lower, "margin-left") + Value(lower, "margin-right"));
+            // w:space below the rule, and the rule runs through the box's 4pt w:space to its side borders.
+            Assert.Equal(("1.0pt", "-4pt", "4pt", "-4pt", "4pt"), (Value(lower, "padding-top"),
+                Value(lower, "margin-left"), Value(lower, "padding-left"), Value(lower, "margin-right"), Value(lower, "padding-right")));
         }
         // Above each rule the space after (14pt) and the rule's w:space; below the last paragraph
-        // its space after is outside the box and only the box's own w:space remains.
-        Assert.Equal(("15pt", "15pt", "1pt"), (Value(one, "padding-bottom"), Value(two, "padding-bottom"), Value(three, "padding-bottom")));
+        // its space after is outside the box, where the box's own border follows.
+        Assert.Equal(("15pt", "15pt", "unset"), (Value(one, "padding-bottom"), Value(two, "padding-bottom"), Value(three, "padding-bottom")));
     }
 
     [Theory]
@@ -112,12 +112,10 @@ public class BorderedParagraphBoxTests
     [Fact]
     public void ARuleInABoxWithNoRightBorderStillReachesTheLeftBorder()
     {
-        // The left border's w:space band is not filled (see the shading tests), so it stays the
-        // box's padding and the ruled paragraph reaches through it.
-        var html = Convert(Paragraph("SedgeOne", "top left bottom between"), Paragraph("SedgeTwo", "top left bottom between"));
+        // The left border's w:space band is not filled (see the shading tests), but the rule crosses it.
+        var html = Convert(Paragraph("SedgeOne", "top left bottom between", shading: Fill), Paragraph("SedgeTwo", "top left bottom between", shading: Fill));
 
-        Assert.Equal("4.0pt", Value(BoxOf(html, "SedgeOne"), "padding-left"));
-        Assert.Equal(("-4.0pt", "4.0pt"), (Value(Block(html, "SedgeTwo"), "margin-left"), Value(Block(html, "SedgeTwo"), "padding-left")));
+        Assert.Equal(("-4pt", "4pt"), (Value(Block(html, "SedgeTwo"), "margin-left"), Value(Block(html, "SedgeTwo"), "padding-left")));
         Assert.Equal("unset", Value(Block(html, "SedgeOne"), "padding-left"));
     }
 
@@ -212,29 +210,37 @@ public class BorderedParagraphBoxTests
     // ---- shading -------------------------------------------------------------------------------
 
     // Each paragraph's shading fills its own part of the box: Word fills from the border (or the
-    // paragraph above) down to the next paragraph's first line, and across to the side borders. That
-    // region is the paragraph's padding, so the fill is the paragraph's own background and the box
-    // has none. `top`, `side` and `bottom` are the first paragraph's padding; w:space is 1pt above
-    // and below and 4pt at the sides, and the paragraphs are 14pt apart.
+    // paragraph above) down to the next paragraph's first line, and across to the side borders. The
+    // fill is the paragraph's own background and the box has none: the gap below a paragraph is its
+    // padding, and a shaded paragraph reaches through the box's w:space (1pt above and below, 4pt at
+    // the sides) with a negative margin and as much padding. An unshaded one does not.
     [Theory]
-    [InlineData(Box, true, true, "1pt", "4pt", "14pt")]
-    [InlineData(Box, true, false, "1pt", "4pt", "14pt")]          // mixed shading: the same slabs, one of them unfilled
-    [InlineData(Box, false, true, "1pt", "4pt", "14pt")]
-    [InlineData("top", true, true, "1pt", "unset", "14pt")]
-    [InlineData("left right", true, true, "unset", "4pt", "14pt")]
-    [InlineData("top right bottom", true, true, "1pt", "4pt", "14pt")]
-    public void ShadingFillsEachParagraphsPartOfTheBox(string sides, bool first, bool second, string top, string side, string bottom)
+    [InlineData(Box, true, true)]
+    [InlineData(Box, true, false)]          // mixed shading: the same slabs, one of them unfilled
+    [InlineData(Box, false, true)]
+    [InlineData("top", true, true)]
+    [InlineData("left right", true, true)]
+    [InlineData("top right bottom", true, true)]
+    public void ShadingFillsEachParagraphsPartOfTheBox(string sides, bool first, bool second)
     {
         var html = Convert(Paragraph("SedgeOne", sides, shading: first ? Fill : ""), Paragraph("SedgeTwo", sides, shading: second ? Fill : ""));
         var (box, one, two) = (BoxOf(html, "SedgeOne"), Block(html, "SedgeOne"), Block(html, "SedgeTwo"));
+        // Whether the paragraph's margin is negative, and its padding, on one side.
+        (bool, string) Reach(XElement paragraph, string side) =>
+            (Value(paragraph, "margin-" + side).StartsWith('-'), Value(paragraph, "padding-" + side));
+        (bool, string) Through(bool shaded, string side, string space) =>
+            shaded && sides.Split(' ').Contains(side) ? (true, space) : (false, "unset");
 
         Assert.Same(box, BoxOf(html, "SedgeTwo"));
-        Assert.DoesNotContain(Style(box).Keys, key => key.StartsWith("background") || key.StartsWith("padding"));
+        Assert.Equal("unset", Value(box, "background"));
         Assert.Equal((first ? "#CCCCCC" : "unset", second ? "#CCCCCC" : "unset"), (Value(one, "background"), Value(two, "background")));
-        Assert.Equal((top, side, bottom), (Value(one, "padding-top"), Value(one, "padding-right"), Value(one, "padding-bottom")));
-        // The second paragraph starts where the first one's space after ends and closes the box.
-        Assert.Equal(("unset", side, top == "unset" || sides == "top" ? "unset" : "1pt"),
-            (Value(two, "padding-top"), Value(two, "padding-right"), Value(two, "padding-bottom")));
+        // The gap between them is the first paragraph's, shaded or not.
+        Assert.Equal(("0", "14pt", "0"), (Value(one, "margin-bottom"), Value(one, "padding-bottom"), Value(two, "margin-top")));
+        Assert.Equal(Through(first, "top", "1pt"), Reach(one, "top"));
+        Assert.Equal(Through(second, "bottom", "1pt"), Reach(two, "bottom"));
+        Assert.Equal((false, "unset"), Reach(two, "top"));
+        foreach (var (paragraph, shaded) in new[] { (one, first), (two, second) })
+            Assert.Equal(Through(shaded, "right", "4pt"), Reach(paragraph, "right"));
     }
 
     [Theory]
@@ -245,8 +251,7 @@ public class BorderedParagraphBoxTests
         var html = Convert(Paragraph("SedgeOne", sides, shading: Fill), Paragraph("SedgeTwo", sides, shading: Fill));
         var box = BoxOf(html, "SedgeOne");
 
-        // The band stays the box's padding, outside the paragraphs' backgrounds; above and below, the
-        // fill still reaches the borders.
+        // No paragraph reaches into the band; above and below, the fill still reaches the borders.
         Assert.Equal(("4.0pt", "unset"), (Value(box, "padding-left"), Value(box, "background")));
         Assert.Equal(("unset", sides == "left" ? "unset" : "1pt"), (Value(Block(html, "SedgeOne"), "padding-left"), Value(Block(html, "SedgeOne"), "padding-top")));
     }

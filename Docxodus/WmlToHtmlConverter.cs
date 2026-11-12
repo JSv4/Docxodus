@@ -11492,25 +11492,13 @@ namespace Docxodus
                         div.Add(members[0].First!.Attribute("data-page-break-before"), members[^1].Last!.Attribute("data-keep-with-next"));
 
                     // Inside the box Word treats each paragraph as a slab that reaches from the slab
-                    // above it to the next paragraph's first line, and fills it with that paragraph's
-                    // shading. So the box keeps only its border, and all that lies within is padding
-                    // of the paragraphs: the box's own w:space, a paragraph's space after, and what
-                    // the next one's space before adds to that. Word leaves the w:space of a left
-                    // border unfilled unless the box has a right border too; that band stays the box's.
-                    foreach (var side in new[] { "top", "right", "bottom", "left" }.Take(members.Count * 4))
-                    {
-                        if (side == "left" && IsVisibleBorder(pBdr!.Element(W.left)) && !IsVisibleBorder(pBdr.Element(W.right))) continue;
-                        var space = Points(style, "padding-" + side);
-                        var padded = side == "top" ? members.Take(1).Select(member => member.First)
-                            : side == "bottom" ? members.TakeLast(1).Select(member => member.Last) : div.Elements();
-                        foreach (var html in padded) Pad(html, side, space);
-                        style.Remove("padding-" + side);
-                    }
-                    // Each paragraph's w:between is the rule below it. It is drawn as the top border
-                    // of the next paragraph, which takes it to the next page when the box splits
-                    // there, as Word does. The rule's w:space lies on both of its sides, the space
-                    // after above it and the rest of the space before below it, and the rule runs
-                    // to the side borders, through a w:space band that stayed the box's.
+                    // above it to the next paragraph's first line and from side border to side border,
+                    // and fills it with that paragraph's shading. So the spacing between the
+                    // paragraphs is their padding: a paragraph's space after, and what the next one's
+                    // space before adds to that. Each w:between is the rule below its paragraph, drawn
+                    // as the top border of the next one, which takes it to the next page when the box
+                    // splits there, as Word does; the rule's w:space lies on both of its sides.
+                    var ruled = new List<XElement>();
                     foreach (var (upper, lower) in members.Zip(members.Skip(1)))
                     {
                         var (upperStyle, lowerStyle) = (StyleOf(upper.Last)!, StyleOf(lower.First)!);
@@ -11521,14 +11509,31 @@ namespace Docxodus
                             GenerateBorderStyle(rule.Parent, W.between, lowerStyle, BorderType.Paragraph);
                             if (RecordExactParagraphBorderWidth(rule, "top", lowerStyle))
                                 lower.First!.SetAttributeValue(ExactParagraphBorderAttribute, "true");
-                            foreach (var side in new[] { "left", "right" })
-                                if (style.GetValueOrDefault("padding-" + side, "0") is var space && space != "0")
-                                    (lowerStyle["margin-" + side], lowerStyle["padding-" + side]) = ("-" + space, space);
+                            ruled.Add(lower.First!);
                         }
                         Pad(upper.Last, "bottom", after + ((decimal?)BetweenBorder(lower.Source)?.Attribute(W.space) ?? 0m));
                         // The paginator drops this much of the padding where a page starts with the paragraph.
                         if (before > after) lower.First!.SetAttributeValue("data-docx-space-before", PointsCss(before - after));
                         Pad(lower.First, "top", before - after);
+                    }
+                    // The box's own w:space stays its padding, one length beside its border, which
+                    // keeps the text edge exact (issue #1126). A paragraph that paints at an edge of
+                    // the box, a fill or a rule, reaches through that band with a negative margin
+                    // and as much padding. Word leaves the w:space of a left border unfilled unless
+                    // the box has a right border too; only a rule crosses that band.
+                    var leftOpen = IsVisibleBorder(pBdr!.Element(W.left)) && !IsVisibleBorder(pBdr.Element(W.right));
+                    foreach (var side in new[] { "top", "right", "bottom", "left" }.Take(members.Count * 4))
+                    {
+                        var space = Points(style, "padding-" + side);
+                        var edge = side == "top" ? new[] { members[0].First! } : side == "bottom" ? new[] { members[^1].Last! } : div.Elements();
+                        foreach (var html in edge.Where(_ => space > 0m))
+                        {
+                            if (StyleOf(html) is not { } css) continue;
+                            var fills = css.ContainsKey("background") && !(side == "left" && leftOpen);
+                            if (!fills && !(side is "left" or "right" && ruled.Contains(html))) continue;
+                            css["margin-" + side] = PointsCss(Points(css, "margin-" + side) - space);
+                            css["padding-" + side] = PointsCss(Points(css, "padding-" + side) + space);
+                        }
                     }
                     div.AddAnnotation(style);
                     return div;
