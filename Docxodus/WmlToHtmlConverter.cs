@@ -8547,6 +8547,40 @@ namespace Docxodus
             return box;
         }
 
+        /// <summary>
+        /// <paramref name="text"/>, set in the symbol font <paramref name="font"/>, mapped to Unicode. A list
+        /// marker is generated chrome, so it is plain text. In body text each character that maps to
+        /// something else is a non-editable span that keeps the stored character in
+        /// <c>data-docx-symbol-text</c>: the editor and the annotation projector count that, so offsets and
+        /// edits stay in the document's own text. One span per character, so a line or page break between
+        /// two glyphs never splits a span. <paramref name="glyphFont"/>, when given, is the family those
+        /// spans render in while the run itself keeps the symbol face.
+        /// </summary>
+        private static object SymbolFontText(string text, string font, bool atoms, string? glyphFont)
+        {
+            if (!atoms) return new XText(Internal.SymbolFontMapper.MapText(text, font));
+            var nodes = new List<object>();
+            var plain = new StringBuilder();
+            foreach (var ch in text)
+            {
+                var mapped = Internal.SymbolFontMapper.Map(ch, font);
+                if (mapped == null || mapped.Length == 1 && mapped[0] == ch)
+                {
+                    plain.Append(ch);
+                    continue;
+                }
+                if (plain.Length > 0) nodes.Add(new XText(plain.ToString()));
+                plain.Clear();
+                var glyph = new XElement(Xhtml.span, new XAttribute("data-docx-symbol-text", ch.ToString()),
+                    new XAttribute("contenteditable", "false"), mapped);
+                if (glyphFont != null)
+                    glyph.AddAnnotation(new Dictionary<string, string> { { "font-family", glyphFont } });
+                nodes.Add(glyph);
+            }
+            if (plain.Length > 0) nodes.Add(new XText(plain.ToString()));
+            return nodes;
+        }
+
         private static void DefineLineHeight(Dictionary<string, string> style, XElement paragraph)
         {
             // Don't set a default line-height. LibreOffice doesn't set explicit line-height,
@@ -8676,42 +8710,43 @@ namespace Docxodus
                 style["vertical-align"] = "top";
             }
 
-            // List-marker glyphs in a symbol font (e.g. Word's default bullet U+F0B7 in Symbol, or
-            // U+F0A7 in Wingdings) render as a blank box without the proprietary font installed. Map
-            // them to their Unicode equivalents and drop the symbol face, keeping the rest of its
-            // stack, so they render in the generic family the font declared. Scoped to markers
-            // (FormattingAssembler's ListItemRun) so body-text symbol runs are untouched; if nothing
-            // maps, the original text + font are left as-is.
-            object content;
-            if (isListMarker && style.TryGetValue("font-family", out var markerFont) &&
-                Internal.SymbolFontMapper.IsSymbolFont(markerFont))
+            // Text in a symbol font (Word's default bullet U+F0B7 in Symbol, a Wingdings check box
+            // U+F0FE, Greek typed in Symbol, a w:sym) renders as a blank box without the proprietary
+            // font installed. Map what has a faithful Unicode equivalent and render it in the generic
+            // family the font's stack falls back to (#1707). If nothing maps, the original text and
+            // font are left as-is; an unmapped character always keeps both.
+            object content = run.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
+            if (style.TryGetValue("font-family", out var symbolFont) && Internal.SymbolFontMapper.IsSymbolFont(symbolFont))
             {
-                var mappedAny = false;
-                content = run.Elements().Select(e =>
+                static string? SymbolSource(XElement e) =>
+                    e.Name == W.t ? e.Value : e.Name == W.sym ? Internal.XmlText.SymbolText(e) : null;
+                var sources = run.Elements().Select(SymbolSource).OfType<string>().ToList();
+                if (sources.Any(s => Internal.SymbolFontMapper.MapText(s, symbolFont) != s))
                 {
-                    if (e.Name != W.t) return ConvertToHtmlTransform(wordDoc, settings, e, false, 0m);
-                    var mapped = Internal.SymbolFontMapper.MapText(e.Value, markerFont);
-                    if (mapped != e.Value) mappedAny = true;
-                    return (object)new XText(mapped);
-                }).ToList();
-                if (mappedAny)
-                {
-                    // The paragraph no longer takes its font from this marker (#1565), so the glyph
-                    // keeps the generic family it fell back to before rather than the text's font.
-                    var fallback = Internal.SymbolFontMapper.FallbackFamilies(markerFont);
-                    if (fallback == null) style.Remove("font-family");
-                    else style["font-family"] = fallback;
-                    // Word still lifts the marker's line to the replaced font's ascent (#1567). An empty
-                    // box that tall, standing on the baseline, keeps it wherever the glyph renders. An
-                    // exact line never grows, so it gets none.
+                    // A run that maps entirely drops the symbol face, keeping the rest of its stack; the
+                    // paragraph no longer takes its font from a marker (#1565), so a mapped bullet keeps
+                    // the generic family it fell back to before rather than the text's font. A run that
+                    // still holds unmapped characters keeps the face for them and gives its mapped
+                    // glyphs the fallback.
+                    var fallback = Internal.SymbolFontMapper.FallbackFamilies(symbolFont);
+                    var dropFace = isListMarker || sources.All(s => s.All(ch => Internal.SymbolFontMapper.Map(ch, symbolFont) != null));
+                    var glyphFont = dropFace ? null : fallback ?? "initial";
+                    content = run.Elements().Select(e => SymbolSource(e) is { } source
+                            && (e.Name != W.sym || Internal.SymbolFontMapper.MapText(source, symbolFont) != source)
+                        ? SymbolFontText(source, symbolFont, !isListMarker, glyphFont)
+                        : ConvertToHtmlTransform(wordDoc, settings, e, false, 0m)).ToList();
+                    if (dropFace)
+                    {
+                        if (fallback == null) style.Remove("font-family");
+                        else style["font-family"] = fallback;
+                    }
+                    // Word still lifts the line to the replaced font's ascent (#1567). An empty box that
+                    // tall, standing on the baseline, keeps it wherever the glyph renders. An exact line
+                    // never grows, so it gets none.
                     if (!paragraphHasExactLineHeight)
-                        content = new object?[] { GlyphAscentBox(Internal.SymbolFontMapper.Ascent(markerFont)) }
+                        content = new object?[] { GlyphAscentBox(Internal.SymbolFontMapper.Ascent(symbolFont)) }
                             .Concat((List<object?>)content).ToList();
                 }
-            }
-            else
-            {
-                content = run.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
             }
 
             // Wrap content in h:sup or h:sub elements as necessary.
