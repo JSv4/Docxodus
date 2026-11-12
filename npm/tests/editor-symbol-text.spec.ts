@@ -54,7 +54,9 @@ async function savedRuns(page: Page): Promise<string[]> {
     try {
       const [id] = Object.entries(session.project().anchorIndex).find(([, a]: any) => a.kind === 'p')!;
       const doc = new DOMParser().parseFromString(session.raw.getXml(id), 'application/xml');
-      return Array.from(doc.getElementsByTagNameNS(ns, 'r')).map((r) => r.textContent ?? '');
+      // getXml is indented, so read each run's w:t children rather than its whole textContent.
+      return Array.from(doc.getElementsByTagNameNS(ns, 'r')).map((r) => Array.from(r.children)
+        .filter((c) => c.localName === 't').map((t) => t.textContent ?? '').join(''));
     } finally { session.close(); }
   }, W_NS);
 }
