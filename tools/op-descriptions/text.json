@@ -56,6 +56,23 @@
       }
     },
     {
+      "op": "deleteFieldAtSpan",
+      "facade": "DeleteFieldAtSpan",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "spanStart", "type": "int", "required": true },
+        { "name": "spanLength", "type": "int", "required": true }
+      ],
+      "transports": {
+        "wasm": { "absent": "not exposed by the browser bridge" },
+        "npm": { "absent": "not exposed by the browser editor" },
+        "python": { "method": "delete_field_at_span" },
+        "stdio": { "op": "delete_field_at_span" },
+        "mcp": { "absent": "not exposed by the MCP editor" }
+      }
+    },
+    {
       "op": "replaceTextAtSpanWithFormat",
       "facade": "ReplaceTextAtSpanWithFormat",
       "result": "EditResult",

@@ -248,7 +248,7 @@ checkpoint and, with the default initial capture, compares it with the exact ope
 | **Inspection** | `list_styles`, `get_formatting`, `list_inline_spans`, `get_block_metadata`, `get_block_metadatas`, `get_list_membership`, `get_section_info` |
 | **Native links/bookmarks** | `list_hyperlinks`, `add_hyperlink`, `update_hyperlink`, `remove_hyperlink`, `list_bookmarks`, `add_bookmark`, `move_bookmark`, `rename_bookmark`, `remove_bookmark` |
 | **Native images** | `get_image_capabilities`, `list_images`, `insert_image`, `replace_image`, `embed_linked_image`, `set_image_dimensions`, `set_image_metadata`, `set_image_floating_layout`, `remove_image` |
-| **A: text mutations** | `replace_text`, `replace_text_range`, `replace_text_at_span`, `replace_inner`, `replace_match`, `delete_block`, `move_block`, `delete_range`, `delete_section` |
+| **A: text mutations** | `replace_text`, `replace_text_range`, `replace_text_at_span`, `delete_field_at_span`, `replace_inner`, `replace_match`, `delete_block`, `move_block`, `delete_range`, `delete_section` |
 | **B: structural** | `insert_paragraph`, `split_paragraph`, `merge_paragraphs`, `insert_horizontal_rule` |
 | **B: headers/footers/page numbers** | `set_header_text`, `set_footer_text`, `ensure_header_footer_visible`, `set_header_footer_kind_enabled`, `insert_page_number_field`, `set_page_numbering`, `clear_page_numbering`, `set_page_setup` |
 | **B: footnotes/endnotes** | `insert_footnote`, `insert_endnote`, `list_notes` |

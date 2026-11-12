@@ -158,6 +158,8 @@ internal static partial class Dispatcher
         "replace_text_at_span" => DocxSessionOps.ReplaceTextAtSpan(
             Handle(args), Str(args, "anchorId"), Int(args, "spanStart"), Int(args, "spanLength"), Str(args, "replace"),
             deletedTextSide: DocxSessionJson.ParseDeletedTextSide(OptStr(args, "deletedTextSide"))),
+        "delete_field_at_span" => DocxSessionOps.DeleteFieldAtSpan(
+            Handle(args), Str(args, "anchorId"), Int(args, "spanStart"), Int(args, "spanLength")),
         "replace_text_at_span_with_format" => DocxSessionOps.ReplaceTextAtSpanWithFormat(
             Handle(args), Str(args, "anchorId"), Int(args, "spanStart"), Int(args, "spanLength"),
             Str(args, "replace"), ParseFormatOp(args, "format"),
@@ -1149,7 +1151,7 @@ internal static partial class Dispatcher
 
     private static bool IsMutation(string op) => op is
         "replace_text" or "delete_block" or "move_block" or "delete_range" or "delete_section"
-        or "replace_text_range" or "replace_text_at_span" or "replace_text_at_span_with_format" or "replace_inner"
+        or "replace_text_range" or "replace_text_at_span" or "replace_text_at_span_with_format" or "delete_field_at_span" or "replace_inner"
         or "insert_paragraph" or "split_paragraph" or "merge_paragraphs" or "insert_horizontal_rule"
         or "set_header_text" or "set_footer_text" or "insert_page_number_field"
         or "ensure_header_footer_visible" or "set_page_numbering" or "clear_page_numbering"

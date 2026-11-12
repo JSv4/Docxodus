@@ -781,6 +781,10 @@ internal static class DocxSessionOps
                 ? s.ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace, side)
                 : s.ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace));
 
+    public static string DeleteFieldAtSpan(int handle, string anchorId, int spanStart, int spanLength,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.DeleteFieldAtSpan(anchorId, spanStart, spanLength));
+
     public static string ReplaceTextAtSpanWithFormat(int handle, string anchorId, int spanStart, int spanLength,
         string replace, FormatOp? format, MutationPreconditions? preconditions = null, DeletedTextSide? deletedTextSide = null) =>
         Mutate(handle, preconditions, anchorId,

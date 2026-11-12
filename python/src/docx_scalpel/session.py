@@ -1605,6 +1605,12 @@ class DocxSession:
             self._call("replace_text", {"anchorId": anchor_id, "markdown": markdown})
         )
 
+    def delete_field_at_span(self, anchor_id: str, span_start: int, span_length: int) -> EditResult:
+        """Delete one complete complex field identified by its nonempty result span."""
+        return EditResult._from_wire(self._call("delete_field_at_span", {
+            "anchorId": anchor_id, "spanStart": span_start, "spanLength": span_length,
+        }))
+
     def replace_text_at_span(
         self, anchor_id: str, span_start: int, span_length: int, replace: str,
         *, format: FormatOp | None = None, deleted_text_side: DeletedTextSide | None = None,

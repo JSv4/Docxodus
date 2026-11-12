@@ -774,7 +774,10 @@ internal static class WordprocessingClosureInspector
                         VerificationFindingSeverity.Error,
                         "A simple field has no instruction.",
                         "Add a valid w:instr instruction or replace the field with ordinary content.", null);
-                if (IsElement(element, "instrText") && fieldStack.Count > 0
+                var deletedInstruction = IsElement(element, "delInstrText") && fieldStack.Count > 0
+                    && element.Ancestors().Where(e => IsElement(e, "del"))
+                        .Intersect(fieldStack.Peek().Begin.Ancestors().Where(e => IsElement(e, "del"))).Any();
+                if ((IsElement(element, "instrText") || deletedInstruction) && fieldStack.Count > 0
                     && !fieldStack.Peek().Separated && !string.IsNullOrWhiteSpace(element.Value))
                 {
                     var field = fieldStack.Pop();
