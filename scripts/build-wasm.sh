@@ -150,7 +150,11 @@ du -sh "$WASM_DIST"
 # Main at 351de4e2 (after the section line-grid work, #1551) measured 6,049,876 bytes on
 # CI runtime 10.0.15, 84 bytes over 5908 KiB; another 4 KiB covers it. Assembly roots,
 # dependencies and the AOT profile are unchanged.
-WIRE_BUDGET_BYTES=$((5912 * 1024))
+# The general EMF/WMF renderer (#1706) measured 6,063,274 bytes on CI, 9,386 bytes over
+# 5912 KiB: about 13 KB of Brotli for metafile playback that the browser renders without
+# SkiaSharp. 12 KiB more covers it; assembly roots, dependencies and the AOT profile are
+# unchanged.
+WIRE_BUDGET_BYTES=$((5924 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""
