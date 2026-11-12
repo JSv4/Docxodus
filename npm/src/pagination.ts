@@ -451,10 +451,7 @@ const MIN_FOOTNOTE_START_PT = 20;
 /** Internal provenance retained only while a note element waits between pages. */
 const FOOTNOTE_SOURCE_POSITION_ATTR = "data-pagination-footnote-source-position";
 /** The MathML vocabulary `WmlToHtmlConverter.Math.cs` emits; such an inline equation moves as one box. */
-const CONVERTER_MATHML_ELEMENTS = new Set([
-  "math", "mrow", "mi", "mn", "mo", "mspace", "mfrac", "msqrt", "mroot", "msup", "msub", "msubsup",
-  "mmultiscripts", "mprescripts", "munder", "mover", "munderover", "mtable", "mtr", "mtd",
-]);
+const CONVERTER_MATHML_ELEMENTS = /^m(ath|row|[ino]|space|frac|sqrt|root|sub|sup|subsup|multiscripts|prescripts|under|over|underover|table|tr|td)$/;
 
 /**
  * Pagination engine that converts HTML with pagination metadata
@@ -4352,7 +4349,7 @@ export class PaginationEngine {
           || this.view.getComputedStyle(marker).display !== "inline"
           || [math, ...Array.from(math.querySelectorAll("*"))].some(element =>
             element.namespaceURI !== "http://www.w3.org/1998/Math/MathML"
-            || !CONVERTER_MATHML_ELEMENTS.has(element.localName))) continue;
+            || !CONVERTER_MATHML_ELEMENTS.test(element.localName))) continue;
       } else if (marker.hasAttribute("data-docx-tab")) {
         if (marker.childNodes.length || this.view.getComputedStyle(marker).height !== "0px") continue;
         for (box = marker.parentElement; box && box !== paragraph; box = box.parentElement) {
