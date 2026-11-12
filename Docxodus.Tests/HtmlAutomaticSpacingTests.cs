@@ -34,7 +34,8 @@ public class HtmlAutomaticSpacingTests
     [InlineData("contextual-bookmark", "0", "0")]
     [InlineData("content-control", "14pt", "14pt")]
     [InlineData("section", "14pt", "14pt")]
-    [InlineData("inherited-border", "14pt", "14pt")]
+    // Inside a border box the gap is the upper paragraph's padding, which its shading fills (#1692).
+    [InlineData("inherited-border", "padding-bottom: 14pt;", "margin-top: 0;")]
     [InlineData("inherited-frame", "5pt", "5pt")]
     [InlineData("level-border", "0", "0")]
     public void FlagsAndOriginalBoundariesStayConsistent(string kind, string after, string before)
@@ -271,7 +272,8 @@ public class HtmlAutomaticSpacingTests
         for (int i = 0; i < paragraphs.Length; i++)
         {
             var side = i == 0 ? "bottom" : "top";
-            var expected = $"margin-{side}: {(i == 0 ? after : before)};";
+            var value = i == 0 ? after : before;
+            var expected = value.Contains(':') ? value : $"margin-{side}: {value};";
             Assert.Contains(expected, (string?)paragraphs[i].Attribute("style"));
             foreach (var html in new[] {
                 HtmlConversionOps.RenderBlockHtml(bytes, anchors[i], options),

@@ -9,7 +9,9 @@ import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
 // border with w:space="1", 14pt before and after), measured in November 2026.
 // Issue #1692 adds what else Word does with that box: the rule each paragraph's w:between draws
 // below it, contextual spacing across the box's edge, a page start or a keep on a bordered
-// paragraph, and shading that fills the box to its border.
+// paragraph, and shading that fills the box to its border. Inside the box each paragraph is a slab
+// from the one above it to the next paragraph's first line, filled with its own shading; a keep on
+// the box's last paragraph moves that paragraph alone.
 
 test.use({ launchOptions: { chromiumSandbox: true,
   ...(process.env.DOCXODUS_CHROMIUM_PATH ? { executablePath: process.env.DOCXODUS_CHROMIUM_PATH } : {}),
@@ -22,7 +24,11 @@ const box = '<w:pBdr>' + ['top', 'left', 'bottom', 'right'].map(side =>
 
 const ruled = box.replace('</w:pBdr>', '<w:between w:val="single" w:sz="4" w:space="1" w:color="000000"/></w:pBdr>');
 const contextual = '<w:contextualSpacing/>';
-const shading = '<w:shd w:val="clear" w:color="auto" w:fill="B0C4DE"/>';
+const shade = (fill: string) => `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>`;
+const shading = shade('B0C4DE');
+/** `paragraph` with its own space before and after, in points, in place of the 14pt pair. */
+const spaced = (text: string, before: number, after: number, properties = '') => paragraph(text, true, properties)
+  .replace(`w:before="${SPACE * 20}" w:after="${SPACE * 20}"`, `w:before="${before * 20}" w:after="${after * 20}"`);
 
 /** `properties` precede w:spacing in the schema's order (keeps, borders, shading); `after` follows it. */
 function paragraph(text: string, spaced = false, properties = '', after = ''): string {
@@ -204,6 +210,36 @@ test('bordered paragraph pagination: a box that starts a page and is taller than
   expect(Math.abs(found.get('Row41')!.y - found.get('Fill1')!.y)).toBeLessThanOrEqual(.4);
 });
 
+// A keep on the last paragraph of a box (#1692). 38 lines leave room for both boxed paragraphs but
+// not for the line after them. Word leaves the first on page 1 with the box open below it and starts
+// page 2 with the kept one: no top border above it, no space before, and only the rule and its
+// w:space when the box has w:between.
+for (const [name, first, kept, offset] of [
+  ['moves that paragraph alone', paragraph('RowanFirst', false, box), paragraph('RowanBoxed', false, keepNext + box), 0],
+  ['drops the space before it on the next page', spaced('RowanFirst', 0, 5, box), spaced('RowanBoxed', 20, 0, keepNext + box), 0],
+  ['takes the rule above it to the next page', spaced('RowanFirst', 0, 5, ruled), spaced('RowanBoxed', 20, 0, keepNext + ruled), EDGE],
+] as const) test(`bordered paragraph pagination: a keep on the last paragraph of a box ${name}`, async ({ browser }) => {
+  test.setTimeout(120_000);
+  const fill = Array.from({ length: 38 }, (_, index) => paragraph(`Fill${index + 1}`)).join('');
+  const result = await renderDocxArtifacts(document(fill + first + kept + paragraph('RowanNext')),
+    { browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'hidden', timeoutMs: 120_000 });
+  expect(result.pageCount).toBe(2);
+  const found = await baselines(result.pdf!);
+  expect([found.get('RowanFirst')!.page, found.get('RowanBoxed')!.page, found.get('RowanNext')!.page]).toEqual([1, 2, 2]);
+  expect(Math.abs(found.get('RowanBoxed')!.y - found.get('Fill1')!.y - offset)).toBeLessThanOrEqual(.75);
+  expect(Math.abs(found.get('RowanNext')!.y - found.get('RowanBoxed')!.y - (LINE + EDGE))).toBeLessThanOrEqual(.75);
+});
+
+test('bordered paragraph pagination: a box with no keep stays whole when only the next paragraph overflows (control)', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const fill = Array.from({ length: 38 }, (_, index) => paragraph(`Fill${index + 1}`)).join('');
+  const result = await renderDocxArtifacts(
+    document(fill + paragraph('RowanFirst', false, box) + paragraph('RowanBoxed', false, box) + paragraph('RowanNext')),
+    { browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'hidden', timeoutMs: 120_000 });
+  const found = await baselines(result.pdf!);
+  expect([found.get('RowanFirst')!.page, found.get('RowanBoxed')!.page, found.get('RowanNext')!.page]).toEqual([1, 1, 2]);
+});
+
 /** The bounds, in points from the page's top left, of everything page 1 fills with `colour` (`#rrggbb`). */
 async function filled(pdf: Uint8Array, colour: string): Promise<{ top: number; bottom: number; left: number; right: number }> {
   const task = getDocument({ data: new Uint8Array(pdf), verbosity: 0 });
@@ -241,4 +277,38 @@ for (const [name, properties, top, bottom, outset] of [
   expect(Math.abs(fill.bottom - bottom), 'bottom').toBeLessThanOrEqual(.75);
   expect(Math.abs(fill.left - (72 - outset)), 'left').toBeLessThanOrEqual(.75);
   expect(Math.abs(fill.right - (540 + outset)), 'right').toBeLessThanOrEqual(.75);
+});
+
+// Inside a box (#1692). Each paragraph's fill runs from the border, or the paragraph above, down to
+// the next paragraph's first line: its own space after, then whatever the next one's space before
+// adds. A w:between rule sits below the space after, with its w:space on both sides. The box's top
+// border is 14pt below the first line (72 + 16 + 14 = 102), so its first line starts at 103.5.
+const TOP = 72 + LINE + SPACE + EDGE;
+const red = shade('C00000'), blue = shade('0000C0');
+const redRule = ruled.replace(/(<w:between[^>]*w:color=")000000/, '$1C00000');
+for (const [name, body, colour, top, bottom] of [
+  // 5pt after above, 20pt before below: the upper fill ends 5pt below its line and the lower begins there.
+  ['a paragraph fills its space after', spaced('RowanOne', SPACE, 5, box + red) + spaced('RowanTwo', 20, SPACE, box + blue),
+    '#c00000', TOP - 1, TOP + LINE + 5],
+  ['the next paragraph fills what its space before adds', spaced('RowanOne', SPACE, 5, box + red) + spaced('RowanTwo', 20, SPACE, box + blue),
+    '#0000c0', TOP + LINE + 5, TOP + LINE + 20 + LINE + 1],
+  // 20pt after above, 5pt before below: the gap is all the upper paragraph's.
+  ['a larger space after is all the upper paragraph\'s', spaced('RowanOne', SPACE, 20, box + red) + spaced('RowanTwo', 5, SPACE, box + blue),
+    '#0000c0', TOP + LINE + 20, TOP + LINE + 20 + LINE + 1],
+  // One shaded paragraph of three: its line and the gap below it, not the gap above.
+  ['one shaded paragraph of three fills its own slab', paragraph('RowanOne', true, box) + paragraph('RowanTwo', true, box + red) + paragraph('RowanThree', true, box),
+    '#c00000', TOP + LINE + SPACE, TOP + 2 * (LINE + SPACE)],
+  // The rule: 5pt after and its 1pt w:space above it, drawn 0.5pt thick.
+  ['a w:between rule sits below the space after, not below the space before', spaced('RowanOne', SPACE, 5, redRule) + spaced('RowanTwo', 20, SPACE, redRule),
+    '#c00000', TOP + LINE + 5 + 1, TOP + LINE + 5 + 1 + .5],
+] as const) test(`bordered paragraph box: ${name}`, async ({ browser }) => {
+  test.setTimeout(120_000);
+  const result = await renderDocxArtifacts(document(paragraph('RowanOpen') + body + paragraph('RowanClose')),
+    { browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'hidden', timeoutMs: 120_000 });
+  const fill = await filled(result.pdf!, colour);
+  expect(Math.abs(fill.top - top), 'top').toBeLessThanOrEqual(.75);
+  expect(Math.abs(fill.bottom - bottom), 'bottom').toBeLessThanOrEqual(.75);
+  // From side border to side border, through the box's 1pt w:space.
+  expect(Math.abs(fill.left - 71), 'left').toBeLessThanOrEqual(.75);
+  expect(Math.abs(fill.right - 541), 'right').toBeLessThanOrEqual(.75);
 });

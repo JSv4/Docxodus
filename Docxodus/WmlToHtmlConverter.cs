@@ -11487,39 +11487,64 @@ namespace Docxodus
 
                     // The box stands for its paragraphs wherever a reader takes the block as a whole
                     // (issue #1692): the paginator reads a page start from the first one and a keep
-                    // from the last, and shading they all share fills the box to its border. Word
-                    // leaves the w:space band of a left border unshaded unless the box has a right
-                    // border too.
+                    // from the last.
                     if (members.Count > 0)
-                    {
                         div.Add(members[0].First!.Attribute("data-page-break-before"), members[^1].Last!.Attribute("data-keep-with-next"));
-                        var fills = div.Elements().Select(element => StyleOf(element)?.GetValueOrDefault("background")).Distinct().ToList();
-                        if (fills.Count == 1 && fills[0] is { } fill && (!IsVisibleBorder(pBdr!.Element(W.left)) || IsVisibleBorder(pBdr.Element(W.right))))
-                            (style["background"], style["background-clip"]) = (fill, "padding-box");
-                    }
-                    // Each paragraph's w:between is the rule below it. It is drawn as the top border
-                    // of the next paragraph, which takes it to the next page when the box splits
-                    // there, as Word does. The rule's w:space lies on both of its sides, and the
-                    // rule runs through the box's own w:space to its side borders.
+
+                    // Inside the box Word treats each paragraph as a slab that reaches from the slab
+                    // above it to the next paragraph's first line and from side border to side border,
+                    // and fills it with that paragraph's shading. So the spacing between the
+                    // paragraphs is their padding: a paragraph's space after, and what the next one's
+                    // space before adds to that. Each w:between is the rule below its paragraph, drawn
+                    // as the top border of the next one, which takes it to the next page when the box
+                    // splits there, as Word does; the rule's w:space lies on both of its sides.
+                    var ruled = new List<XElement>();
                     foreach (var (upper, lower) in members.Zip(members.Skip(1)))
                     {
-                        var lowerStyle = StyleOf(lower.First)!;
+                        var (upperStyle, lowerStyle) = (StyleOf(upper.Last)!, StyleOf(lower.First)!);
+                        var (after, before) = (Points(upperStyle, "margin-bottom"), Points(lowerStyle, "margin-top"));
+                        (upperStyle["margin-bottom"], lowerStyle["margin-top"]) = ("0", "0");
                         if (BetweenBorder(upper.Source) is { } rule)
                         {
                             GenerateBorderStyle(rule.Parent, W.between, lowerStyle, BorderType.Paragraph);
                             if (RecordExactParagraphBorderWidth(rule, "top", lowerStyle))
                                 lower.First!.SetAttributeValue(ExactParagraphBorderAttribute, "true");
-                            foreach (var side in new[] { "left", "right" })
-                                if (style.GetValueOrDefault("padding-" + side, "0") is var space && space != "0")
-                                    (lowerStyle["margin-" + side], lowerStyle["padding-" + side]) = ("-" + space, space);
+                            ruled.Add(lower.First!);
                         }
-                        if (BetweenBorder(lower.Source) is { } below)
-                            StyleOf(upper.Last)!["padding-bottom"] = PointsCss((decimal?)below.Attribute(W.space) ?? 0m);
+                        Pad(upper.Last, "bottom", after + ((decimal?)BetweenBorder(lower.Source)?.Attribute(W.space) ?? 0m));
+                        // The paginator drops this much of the padding where a page starts with the paragraph.
+                        if (before > after) lower.First!.SetAttributeValue("data-docx-space-before", PointsCss(before - after));
+                        Pad(lower.First, "top", before - after);
+                    }
+                    // The box's own w:space stays its padding, one length beside its border, which
+                    // keeps the text edge exact (issue #1126). A paragraph that paints at an edge of
+                    // the box, a fill or a rule, reaches through that band with a negative margin
+                    // and as much padding. Word leaves the w:space of a left border unfilled unless
+                    // the box has a right border too; only a rule crosses that band.
+                    var leftOpen = IsVisibleBorder(pBdr!.Element(W.left)) && !IsVisibleBorder(pBdr.Element(W.right));
+                    foreach (var side in new[] { "top", "right", "bottom", "left" }.Take(members.Count * 4))
+                    {
+                        var space = Points(style, "padding-" + side);
+                        var edge = side == "top" ? new[] { members[0].First! } : side == "bottom" ? new[] { members[^1].Last! } : div.Elements();
+                        foreach (var html in edge.Where(_ => space > 0m))
+                        {
+                            if (StyleOf(html) is not { } css) continue;
+                            var fills = css.ContainsKey("background") && !(side == "left" && leftOpen);
+                            if (!fills && !(side is "left" or "right" && ruled.Contains(html))) continue;
+                            css["margin-" + side] = PointsCss(Points(css, "margin-" + side) - space);
+                            css["padding-" + side] = PointsCss(Points(css, "padding-" + side) + space);
+                        }
                     }
                     div.AddAnnotation(style);
                     return div;
 
                     static Dictionary<string, string>? StyleOf(XElement? html) => html?.Annotation<Dictionary<string, string>>();
+                    static decimal Points(Dictionary<string, string> css, string property) => css.TryGetValue(property, out var value)
+                        && decimal.TryParse(value.Replace("pt", ""), NumberStyles.Number, CultureInfo.InvariantCulture, out var points) ? points : 0m;
+                    static void Pad(XElement? html, string side, decimal points)
+                    {
+                        if (points > 0m && StyleOf(html) is { } css) css["padding-" + side] = PointsCss(Points(css, "padding-" + side) + points);
+                    }
                 })
             .ToList();
         }
