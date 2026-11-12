@@ -802,8 +802,45 @@ and each radical's implicit U+221A glyph; resolved font aliases also cover MathM
 Projection succeeds only for the complete equation. Unknown operators, properties, styled runs,
 whitespace or combining-token forms, and nested display fractions retain the existing whole-equation
 diagnostic. The last restriction preserves OMML's default full-size nested display operands until
-their size rule is modeled; ordinary MathML fractions would shrink them. This is a bounded
-structural projection, not a claim of complete OMML or Word typography parity.
+their size rule is modeled; ordinary MathML fractions would shrink them. For the same reason a
+display equation with a fraction or n-ary operator inside a matrix keeps the diagnostic: MathML
+tables lay their cells out in compact style. This is a bounded structural projection, not a claim
+of complete OMML or Word typography parity.
+
+### Structure mapping (#1705)
+
+Every structure accepts only the properties listed for it, each at most once. Any other property,
+or a listed one with a value outside the list, keeps the whole-equation diagnostic. `m:ctrlPr`
+is accepted anywhere OMML allows it when its `w:rPr` holds only `w:rFonts` naming the document's
+`m:mathFont` and, on control characters, `w:i`. Word writes both on nearly every equation, and
+neither changes what is drawn: the equation already uses the math font, and OMML takes math
+italics from `m:sty`.
+
+| OMML | MathML | Accepted properties |
+|------|--------|---------------------|
+| `m:sSup`, `m:sSub`, `m:sSubSup` | `msup`, `msub`, `msubsup` | `alnScr` off |
+| `m:sPre` | `mmultiscripts` with `mprescripts` | — |
+| `m:nary` | large `mo` in `munderover`/`munder`/`mover` (`undOvr`) or `msubsup`/`msub`/`msup` (`subSup`), then the operand | `chr` (default ∫), `limLoc` (default from settings `m:intLim` for integrals, `m:naryLim` otherwise), `grow` → `stretchy`, `subHide`, `supHide` |
+| `m:d` | `mrow` of fence and separator `mo`s | `begChr`, `sepChr`, `endChr` (empty = none), `grow` → `stretchy`, `shp` → `symmetric` |
+| `m:m` | `mtable` | `mcs` column justification → cell `text-align`, `plcHide` |
+| `m:func` | name, a thin `mspace`, argument | — |
+| `m:acc` | `mover accent` | `chr` (default U+0302); combining marks map to their spacing forms |
+| `m:bar` | `mover`/`munder` with a stretchy line | `pos` (default `bot`) |
+| `m:limLow`, `m:limUpp` | `munder`, `mover` | — |
+| `m:eqArr` | `mtable`; `&` in a row's own runs splits right/left-aligned cells | — |
+| `m:groupChr` | `munder`/`mover` with a stretchy `chr` (default ⏟) | `pos`/`vertJc` only as bottom/top or top/bottom |
+| `m:box` | its operand | `noBreak` |
+| `m:borderBox` | `mrow` with a CSS border | `hide*`; every `strike*` off (MathML Core has no `menclose`) |
+| `m:f` | `mfrac`, `mfrac linethickness="0"`, or `num / den` | `type` `bar`, `noBar`, `lin` (`skw` has no MathML Core form) |
+| `m:r` | `mi`/`mn`/`mo` tokens | `m:sty`, `m:scr` → Unicode mathematical alphabets; `m:lit`; `w:color` |
+
+Run styles are drawn by mapping letters and digits to the Unicode Mathematical Alphanumeric
+Symbols block rather than by `mathvariant`, which MathML Core implements only for `normal`. Plain
+style (`m:sty="p"`) keeps letters upright through `mathvariant="normal"`, and a run's adjacent
+upright letters become one identifier such as `sin`. A style without a Unicode alphabet for a
+character (a script Greek letter, a bold operator) keeps the diagnostic. The paginator's atomic
+inline-equation check (`CONVERTER_MATHML_ELEMENTS` in `npm/src/pagination.ts`) lists the same
+element vocabulary.
 
 ## Limitations
 
@@ -843,7 +880,7 @@ The following are **discarded** and will not appear in output:
 - `w:w` - Character width scaling outside plain automatically spaced body text and resolved fixed-width cells in standalone export
 
 **Document features:**
-- Math equations beyond the fraction/root subset described above
+- Math equations with OMML structures or properties outside the mapping described above (for example skewed fractions, phantoms, `m:nor` ordinary text, spacing properties)
 - Chart families other than clustered column/horizontal bar charts
 - Diagrams (SmartArt)
 - Complex text boxes

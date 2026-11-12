@@ -6827,6 +6827,34 @@ inventory checks MathML's actual italic identifier code points and each radical'
 the paragraph fragmenter moves complete inline equations, and prose baseline correction skips
 MathML just as it skips other independently laid-out media.
 
+### OMML structure defaults that are easy to get wrong (#1705)
+
+These come from ECMA-376 Part 1 §22.1 and from Word-authored files in `TestFiles/`; no new Word
+render was captured for them.
+
+- **`m:vertJc` on `m:groupChr` has two different defaults.** An absent element means `top`, but an
+  element present without `m:val` means `bot` (§22.1.2.119). Word's overbrace writes
+  `<m:chr m:val="⏞"/><m:pos m:val="top"/><m:vertJc m:val="bot"/>`, and an underbrace takes the
+  element defaults (`⏟`, `pos` `bot`, `vertJc` absent = `top`). Both keep the operand on the
+  baseline, which is the only layout MathML `munder`/`mover` draws. The converter accepts exactly
+  those two combinations and keeps the diagnostic for the other two.
+- **Word writes formatting that changes nothing on almost every equation.** Each `m:r` carries
+  `<w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr>`, and each structure's
+  properties end in `m:ctrlPr` with the same fonts, often plus `<w:i/>`. A converter that refuses
+  every `w:rPr` never draws a Word equation. Docxodus accepts these when the fonts name the
+  document's `m:mathFont`.
+- **Some Word files theme the East Asian font slot**: `w:eastAsiaTheme="minorEastAsia"` on the same
+  `w:rFonts` (`TestFiles/WC/WC031-Two-Maths-Before.docx`). That slot only applies to East Asian
+  characters, but the converter does not yet reason about which slot a run's characters use, so
+  these equations keep the diagnostic.
+- **Word's default math settings keep every equation on the diagnostic path.** Word writes
+  `m:brkBin`, `m:brkBinSub`, `m:smallFrac`, `m:dispDef`, `m:lMargin`, `m:rMargin`, `m:defJc`,
+  `m:wrapIndent`, `m:intLim` and `m:naryLim` into `settings.xml`. The converter now reads
+  `m:intLim` and `m:naryLim`, which choose n-ary limit placement, but still refuses the others, so a
+  document saved by Word shows `[MATH]` until those settings are modeled.
+- **`m:acc` stores combining marks** (U+0302 by default, U+20D7 for a vector arrow). MathML needs
+  the spacing form (U+02C6, U+2192) in its accent `mo`; a combining mark alone has no glyph.
+
 ## Resizing text boxes beyond an explicit page offset
 
 A direct main-body WPS box on 612 × 792pt paper can author a horizontal page offset
