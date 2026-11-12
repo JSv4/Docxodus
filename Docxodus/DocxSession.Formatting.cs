@@ -90,6 +90,33 @@ public sealed partial class DocxSession
             return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
                 $"span [{actualSpan.Start},{actualSpan.Start + actualSpan.Length}) out of [0,{totalText.Length})", anchorId);
 
+        // Check on detached runs before splitting them. Splitting a run copies its
+        // pending rPrChange under a fresh id even when this format request is a
+        // no-op, needlessly changing an earlier reviewer's proposal.
+        try
+        {
+            int at = 0;
+            // Applying code can create a missing character style even when a
+            // run already names it, so keep the ordinary path for that op.
+            bool changes = op.Code is true;
+            foreach (var run in InlineRuns(element))
+            {
+                int end = at + RunText(run).Length;
+                if (end > actualSpan.Start && at < actualSpan.Start + actualSpan.Length)
+                {
+                    var before = SnapshotRunPropertiesForRevision(run.Element(W.rPr));
+                    var probe = new XElement(run);
+                    ApplyFormatToRun(probe, op);
+                    var after = SnapshotRunPropertiesForRevision(probe.Element(W.rPr));
+                    if (!RunPropertiesEquivalentForRevision(before, after)) { changes = true; break; }
+                }
+                at = end;
+            }
+            if (!changes)
+                return new EditResult { Success = true, Modified = new[] { target.Anchor }, Patch = PatchFor(target) };
+        }
+        catch (Exception ex) { return FailInternal(ex, anchorId); }
+
         _history.RecordPreOp(TakeSnapshot());
         try
         {
