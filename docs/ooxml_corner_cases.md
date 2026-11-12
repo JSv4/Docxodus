@@ -5617,26 +5617,34 @@ grid describes:
   checks it).
 
 The session resolves a revision's property changes before its cells, and `RevisionProcessor`
-restores properties before it removes cells, so both measure the restored row.
+restores properties before it removes rejected insertions, so both measure the restored row.
 
-One more Word behaviour is measured and not reproduced. When the leaving cell's own last paragraph
+One condition does sit in Word's rule (issue #1694). When the deleted cell's own last paragraph
 mark is tracked as deleted (as `DocxDiff` writes a removed cell, content and mark struck), Word's
 Accept All removes the cell without widening anything and leaves the row short:
 
 | Row, deleted cell's content | Word Accept All | Docxodus |
 | --- | --- | --- |
-| `A -B C`, `B` plain, or only its run deleted, or empty | `A×2 C` | `A×2 C` |
-| `A -B C`, `B`'s run and paragraph mark deleted | `A C` | `A×2 C` |
-| `-A B C` or `A B -C`, the same | `B C`, `A B` | `B×2 C`, `A B×2` |
+| `A -B C`, `B` plain, or only its run deleted, or empty | `A×2 C` | same |
+| `A -B C`, `B`'s run and paragraph mark deleted, or `B` empty with its mark deleted | `A C` | same (before #1694: `A×2 C`) |
+| `-A B C` or `A B -C`, the same | `B C`, `A B` | same (before #1694: `B×2 C`, `A B×2`) |
+| a `DocxDiff` redline of `A B C` / `D E F` against `B C` / `D E F` | `B C` / `D E F`, the revised table | same (before #1694: `B C×2` / `D E F`) |
 
 The same paragraph-mark state on an inserted cell changes nothing: Word's Reject All widens the
 neighbour whether or not the inserted cell's content and mark are tracked.
 
+`TableGridModel.RemoveCells` reads the mark from the leaving cell: such a cell hands on no columns.
+The cell therefore has to leave while its paragraph mark is still tracked. The session already
+resolves a revision's cells before its paragraph marks; `RevisionProcessor` now removes deleted
+cells at the start of accepting rather than at the end, which it can do because accepting changes
+none of the properties (spans, grid) a deletion is measured by. A session caller who accepts the
+paragraph-mark deletion by itself first and the cell deletion afterwards gets the widened row: the
+mark is no longer tracked when the cell leaves. Word has no measured equivalent of that order.
+
 Remaining differences, all in the tables above: Docxodus undoes its own and older Word's recorded
 insertions where Word merges cells; a rejected insertion is not widened when no row keeps every
-cell (a whole inserted column, a table of one row), where Word merges; a content control around two
-cells stays around the cell that stays; and where the leaving cell's paragraph mark is deleted
-Docxodus widens while Word leaves the row short. The session measures a rejected insertion against
+cell (a whole inserted column, a table of one row), where Word merges; and a content control around two
+cells stays around the cell that stays. The session measures a rejected insertion against
 the rows one revision leaves untouched, `RevisionProcessor` against the rows no mark touches; they
 give the same table for every row above.
 

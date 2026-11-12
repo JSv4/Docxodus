@@ -1402,6 +1402,9 @@ namespace Docxodus
             documentElement = (XElement)RemoveRsidTransform(documentElement)!;
             MarkTablesWithRows(documentElement);
             MarkTablesThatFollowATable(documentElement);
+            // Deleted cells go first: accepting changes none of the properties their rows are
+            // measured by, and whether a cell's own paragraph mark is deleted decides what it leaves.
+            RemoveMarkedCells(documentElement, W.cellDel);
             documentElement = (XElement)FixUpDeletedOrInsertedFieldCodesTransform(documentElement)!;
             var containsMoveFromMoveTo = documentElement.Descendants(W.moveFrom).Any();
             documentElement = AcceptMoveFromRanges(documentElement);
@@ -1413,7 +1416,6 @@ namespace Docxodus
             if (containsMoveFromMoveTo)
                 documentElement = (XElement)RemoveRowsLeftEmptyByMoveFrom(documentElement)!;
             documentElement = (XElement)AcceptAllOtherRevisionsTransform(documentElement)!;
-            RemoveMarkedCells(documentElement, W.cellDel);
             RemoveTablesThatLostEveryRow(documentElement);
             documentElement = (XElement)MergeAdjacentTablesTransform(documentElement)!;
             documentElement = (XElement)AddEmptyParagraphToAnyEmptyCells(documentElement)!;
@@ -3727,6 +3729,7 @@ namespace Docxodus
 ///     Remove the deleted cells; a row that keeps no cell goes whole.
 ///     When the remaining cells no longer fill the grid, widen the cell before them
 ///       (after them, at the start of a row) by their grid columns and width.
+///     A cell whose own last paragraph mark is deleted widens nothing: the row stays short.
 ///   Reject:
 ///     Remove this element
 /// 
