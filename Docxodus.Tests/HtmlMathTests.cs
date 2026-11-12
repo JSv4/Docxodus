@@ -121,6 +121,15 @@ public class HtmlMathTests
     }
 
     [Fact]
+    public void Paginated_source_identity_keeps_Word_formatted_structures_projectable()
+    {
+        const string fonts = "<w:rPr><w:rFonts w:ascii=\"Cambria Math\" w:hAnsi=\"Cambria Math\"/></w:rPr>";
+        var formula = "<m:sSup><m:sSupPr><m:ctrlPr>" + fonts + "</m:ctrlPr></m:sSupPr><m:e><m:r>" + fonts + "<m:t>x</m:t></m:r></m:e>"
+            + "<m:sup><m:r>" + fonts + "<m:t>2</m:t></m:r></m:sup></m:sSup>";
+        Assert.Single(Convert(formula, false, "<m:mathFont m:val=\"Cambria Math\"/>", paginated: true).Descendants(MathMl + "msup"));
+    }
+
+    [Fact]
     public void Supplementary_math_letters_keep_their_code_point()
     {
         var math = Assert.Single(Convert("<m:r><m:t>𝑥</m:t></m:r>", false).Descendants(MathMl + "math"));

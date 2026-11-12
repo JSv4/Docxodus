@@ -6846,12 +6846,12 @@ render was captured for them.
 - **Some Word files theme the East Asian font slot**: `w:eastAsiaTheme="minorEastAsia"` on the same
   `w:rFonts` (`TestFiles/WC/WC031-Two-Maths-Before.docx`). That slot only applies to East Asian
   characters, but the converter does not yet reason about which slot a run's characters use, so
-  these equations keep the diagnostic.
+  these equations keep the diagnostic (#1710).
 - **Word's default math settings keep every equation on the diagnostic path.** Word writes
   `m:brkBin`, `m:brkBinSub`, `m:smallFrac`, `m:dispDef`, `m:lMargin`, `m:rMargin`, `m:defJc`,
   `m:wrapIndent`, `m:intLim` and `m:naryLim` into `settings.xml`. The converter now reads
   `m:intLim` and `m:naryLim`, which choose n-ary limit placement, but still refuses the others, so a
-  document saved by Word shows `[MATH]` until those settings are modeled.
+  document saved by Word shows `[MATH]` until those settings are modeled (#1710).
 - **`m:acc` stores combining marks** (U+0302 by default, U+20D7 for a vector arrow). MathML needs
   the spacing form (U+02C6, U+2192) in its accent `mo`; a combining mark alone has no glyph.
 
