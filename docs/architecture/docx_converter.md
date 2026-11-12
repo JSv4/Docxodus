@@ -544,23 +544,42 @@ before invoking that callback, identically in native and WASM builds:
   either byte order, orientations 1–8 and associated/unassociated alpha. Output is RGBA PNG.
   LZW/Deflate, tiles, palette/grayscale, custom colorimetry/profiles and multi-page files retain
   an unsupported-content diagnostic.
-- Placeable WMF (`image/x-wmf` or `image/wmf`): positive anisotropic windows, rectangle/ellipse
-  records and positive-width solid/null pens and solid/null brushes. Output is static SVG with
-  a bounded object table and record count. Word's device-pixel endpoint exclusion is resolved
-  in logical coordinates; window mapping and later picture sizing stretch the complete painted
-  graphic, including its outline. Visible zero-width device pens, collapsed bounds and unknown
-  records reject the whole image; text, bitmaps, clipping and other map modes remain unsupported.
-- Base-header EMF (`image/x-emf`): MM_TEXT rectangle/ellipse records with stock or explicit
-  solid cosmetic/geometric pens and solid/null brushes. Playback maps reference-device pixels
-  through the physical Frame; Frame does not clip artwork. Generated inline SVG retains the
-  authored picture extent while allowing paint outside it. Cosmetic outlines use one CSS pixel
-  (96 dpi); geometric outlines scale with the picture. This is browser playback, not a claim
-  of matching a particular Word printer's hairline width. Null-pen shapes, extended headers,
-  transforms, clipping, text, bitmaps and other records retain whole-image diagnostics.
+- Placeable WMF (`image/x-wmf` or `image/wmf`) and EMF (`image/x-emf`) play through one GDI
+  device context, `Internal/MetafileCanvas.cs`, driven by `Internal/WmfImage.cs` and
+  `Internal/EmfImage.cs` (#1706). It keeps the DC state stack (SAVEDC/RESTOREDC), window and
+  viewport origin/extent, every map mode and EMF world transforms; draws lines, polylines,
+  polygons, poly-polygons, Béziers (32- and 16-bit record forms), arcs, chords, pies, rounded
+  rectangles and path brackets (fill, stroke, clip); applies pen dash styles, caps and joins,
+  hatched brushes and the poly-fill mode; clips with INTERSECTCLIPRECT, EXCLUDECLIPRECT,
+  SELECTCLIPPATH and rectangle regions as SVG `clipPath`; writes TEXTOUT/EXTTEXTOUT as
+  selectable SVG `text` with font, size, weight, colour, alignment, character advances and
+  escapement; and embeds STRETCHDIBITS, BITBLT, STRETCHBLT, ALPHABLEND and the WMF DIB records as
+  PNG (or the JPEG/PNG the DIB wraps) `image` data URIs, decoded in managed code
+  (`Internal/DibImage.cs`). Each element keeps logical coordinates and carries the
+  logical-to-device transform in effect, so pens scale with the mapping as in GDI.
+- An EMF with EMF+ comments plays its GDI records when the EMF+ header marks the file dual; an
+  EMF+-only file keeps the placeholder. Records that cannot change the drawing (ROP2, stretch
+  mode, ICM, palettes, mapper flags, other GDI comments) are ignored.
+- WMF: the placeable header fixes the device box, and the window always maps onto it whatever
+  the map mode (viewport records are ignored). Word's device-pixel endpoint exclusion for
+  rectangles, ellipses and rounded rectangles is resolved in logical coordinates; window mapping
+  and later picture sizing stretch the complete painted graphic, including its outline. Visible
+  zero-width device pens and collapsed bounds still reject the whole image.
+- EMF: playback maps reference-device pixels through the physical Frame; Frame does not clip
+  artwork. Generated inline SVG retains the authored picture extent while allowing paint outside
+  it. Cosmetic outlines use one CSS pixel (96 dpi); geometric outlines scale with the picture.
+  This is browser playback, not a claim of matching a particular Word printer's hairline width.
+- Still unsupported, each rejecting the whole picture: EMF+-only files, pattern brushes and
+  pattern pens, palette colours, non-rectangle clip regions and OR/XOR/DIFF clip combinations,
+  glyph-index text, raster operations that read the destination, RLE bitmaps, gradient fills,
+  WIDENPATH, mirrored layouts, and any record not listed above. Playback is bounded: 200,000
+  records, 2,000,000 points, 50,000 SVG elements, 1,024 saved states, and 32 megapixels of
+  embedded bitmaps per picture.
 
 Input is limited to 64 MiB; normalized dimensions are limited to 32,768 per axis and
 16 megapixels. Source SVG image parts retain their existing placeholders. Generated
-metafile SVG contains only numeric geometry and paint attributes, with no external resources.
+metafile SVG contains geometry, paint attributes, text and `data:` bitmaps only, with no external
+resources; font names are reduced to letters, digits, spaces and `-_.`.
 `ImageInfo.ContentType` names the output encoding and `ImageBytes` holds those encoded bytes;
 `Bitmap` can be null for vector output. Handlers should use `ImageInfo.CreateHtmlImage(source)`:
 it returns the usual `img` for raster/WMF resources, and inline SVG for EMF (ignoring `source`).
@@ -866,8 +885,8 @@ Only **HYPERLINK** fields are converted to `<a>` elements. All other field types
 
 ### Image Limitations
 
-- **TIFF/WMF subsets only** - Unsupported encodings or records produce explicit diagnostics
-- **EMF beyond the static subset** - Text, bitmap and transformation records remain unsupported
+- **TIFF/WMF/EMF subsets only** - Unsupported encodings or records produce explicit diagnostics;
+  see the metafile list under Images for what remains (#1706)
 - **SVG not supported** - Not in allowed content types
 - **Requires ImageHandler** - Returns `null` without callback
 

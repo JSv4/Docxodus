@@ -244,9 +244,9 @@ public class HtmlImageNormalizationTests
 
     [Theory]
     [InlineData(192, "33", "scale(0.5 1)")]
-    [InlineData(96, "34", "scale(1 1)")]
+    [InlineData(96, "34", null)]
     [InlineData(48, "35", "scale(2 1)")]
-    public void WmfWindowUsesWordDeviceBoundsAndScalesPaint(short windowWidth, string expectedWidth, string transform)
+    public void WmfWindowUsesWordDeviceBoundsAndScalesPaint(short windowWidth, string expectedWidth, string? transform)
     {
         var bytes = Wmf();
         Array.Copy(BitConverter.GetBytes(windowWidth), 0, bytes, 66, 2);
@@ -362,10 +362,10 @@ public class HtmlImageNormalizationTests
         finally { Directory.Delete(temp, recursive: true); }
     }
 
-    private static XElement Picture(XElement html) => Assert.Single(html.Descendants(), e => e.Name.LocalName == "img");
-    private static byte[] Bytes(XElement image) => Convert.FromBase64String(((string)image.Attribute("src")!).Split(',')[1]);
+    internal static XElement Picture(XElement html) => Assert.Single(html.Descendants(), e => e.Name.LocalName == "img");
+    internal static byte[] Bytes(XElement image) => Convert.FromBase64String(((string)image.Attribute("src")!).Split(',')[1]);
 
-    private static XElement Render(byte[] bytes, string contentType, bool header = false, bool vml = false,
+    internal static XElement Render(byte[] bytes, string contentType, bool header = false, bool vml = false,
         int widthEmus = 914400, int heightEmus = 609600)
         => XElement.Parse(HtmlConversionOps.ConvertToHtml(Package(bytes, contentType, header, vml, widthEmus, heightEmus), new HtmlConversionOptions {
             FabricateCssClasses = false, PaginationMode = 1, RenderHeadersAndFooters = true,

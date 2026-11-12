@@ -122,7 +122,7 @@ internal sealed class TiffImage(byte[] bytes)
         if (output != target.Length) throw new InvalidDataException("Incomplete TIFF PackBits strip.");
     }
 
-    private static byte[] Png(int width, int height, byte[] rgba)
+    internal static byte[] Png(int width, int height, byte[] rgba)
     {
         using var output = new MemoryStream();
         output.Write(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 });
