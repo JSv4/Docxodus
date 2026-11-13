@@ -7238,7 +7238,7 @@ looked the same. The converter mapped only eight list-marker glyphs (#1567).
 | Wingdings run | Wingdings glyphs (font installed with Office) | Linux Libertine G substituted; the three characters draw nothing | U+F0xx in `'Wingdings', serif`: missing-glyph boxes | ☐ ☑ ☒ in the fallback family |
 | `w:sym` Wingdings F0FE | ☑ | Drawn in OpenSymbol; the text layer keeps U+F0FE | U+F0FE in Wingdings: a box | ☑ |
 | Run in Symbol, text "abg" | αβγ | Drawn in OpenSymbol; the text layer keeps "abg" | "abg" in Symbol: Latin letters where Symbol is missing | αβγ |
-| Private-use characters, no symbol font (`w:rFonts` absent or Calibri) | Not verified: no Word print available | Drawn in the text font (Carlito), which has no glyph: nothing visible; `pdffonts` lists Carlito only | Left as stored | Left as stored |
+| Private-use characters, no symbol font (`w:rFonts` absent or Arial) | The text font's missing-glyph box (Arial) or a boxed question mark (no `w:rFonts`); never a Wingdings glyph | Drawn in the text font (Carlito), which has no glyph: nothing visible; `pdffonts` lists Carlito only | Left as stored | Left as stored |
 
 **Symbol-font runs and `w:sym`.** `SymbolFontMapper` now carries complete tables: Unicode's Adobe
 Symbol mapping (`MAPPINGS/VENDORS/ADOBE/symbol.txt`) and the source references of WG2 N4384 for
@@ -7261,8 +7261,24 @@ was lost when the text was pasted elsewhere. The spec's `w:rFonts` character-ran
 U+E000–U+F8FF to the `w:hAnsi` font (the East Asian font under `w:hint="eastAsia"`), with no rule
 that treats a private-use character as a symbol font, and LibreOffice draws it in the text font too.
 The same code means different things in different symbol fonts (U+F0B7 is Symbol's bullet and
-Wingdings' one o'clock face), so any guess would sometimes draw the wrong symbol. Until a Word print shows
-otherwise, Docxodus leaves the character and font as stored.
+Wingdings' one o'clock face), so any guess would sometimes draw the wrong symbol. Word 2024 does not
+guess either (table below), so Docxodus leaves the character and font as stored.
+
+**What Word 2024 draws (build 16.0.20326, exported to PDF and rasterised).** Each row is one run at 24pt:
+
+| Stored | Word draws | Docxodus |
+| --- | --- | --- |
+| Wingdings run, U+F0A8 U+F06F U+F0FD U+F0FE U+F0FC U+F0FB | ☐ ☐ ☒ ☑ ✓ ✗ | the same six |
+| Wingdings run, bare `o` U+00A8 U+00FD U+00FE | ☐ ☐ ☒ ☑: the bare byte is the same glyph as its U+F0xx form | the same |
+| Wingdings U+F036 | an hourglass with the sand settled, no stream | ⌛ U+231B HOURGLASS (U+23F3 is the hourglass *with flowing sand*, a different glyph) |
+| One Arial run: `<w:t>I agree </w:t><w:sym w:font="Wingdings" w:char="F0FE"/>` | "I agree" in Arial, then ☑ | the same: each child of a run is converted as a run of its own, so the symbol's font never reaches the text |
+| One run: `w:sym` Wingdings F0FE, then `w:sym` Symbol F061 | ☑ α, each in the font it names | ☑ α |
+| Wingdings run "ab", then `w:sym` Symbol F061 | ♋ ♌ α | ♋ ♌ α |
+| Wingdings run, U+00A0 and U+00AD between letters (bare or as U+F0A0/U+F0AD) | the font's glyphs for bytes 0xA0 and 0xAD (a small square and an eight-pointed star); neither acts as a no-break space or a soft hyphen | U+2B1D and U+1F7CF |
+| Symbol run, U+00AD or U+F0AD | ↑ | ↑ |
+| Symbol run, U+00A0 or U+F0A0 | the missing-glyph box: Windows' `symbol.ttf` has no glyph at 0xA0 in either cmap | left as stored in Symbol, so it is the same box where the font is installed. Adobe's table has EURO SIGN here, but a euro is not what the document showed |
+| U+F0A8 U+F0FE in an Arial run, and in a run with no `w:rFonts` | missing-glyph boxes / boxed question marks | left as stored |
+| Tracked-deleted Wingdings U+F0FE (`w:delText`), All Markup | a struck-through ☑ in the revision colour | ☑ inside the deletion markup when deleted content is shown; nothing when it is hidden |
 
 ## Character width was ignored inside fixed table cells (#1564)
 

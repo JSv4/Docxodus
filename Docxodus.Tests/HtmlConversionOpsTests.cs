@@ -2562,6 +2562,60 @@ public class HtmlConversionOpsTests
         Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-docx-glyph-ascent") != null);
     }
 
+    // Word draws a w:sym in the font it names and the text beside it in the run's font: "I agree" stays
+    // Arial, and only the check box is a Wingdings glyph (Word 2024, docs/ooxml_corner_cases.md). The
+    // converter gets there because each child of a run is converted as a run of its own. The ascent box
+    // that comes with the glyph must never take the caret.
+    [Fact]
+    public void HCO105_TextBesideASymbol_KeepsTheRunsFont()
+    {
+        var mixed = TextRun("I agree ", "Arial");
+        mixed.Append(new Wp.SymbolChar { Font = "Wingdings", Char = "F0FE" });
+        var paragraph = ConvertParagraph(new Wp.Paragraph(mixed));
+        var atom = paragraph.Descendants().Single(e => e.Attribute("data-docx-symbol-text") != null);
+        var text = paragraph.DescendantNodes().OfType<XText>().Single(t => t.Value == "I agree ");
+
+        Assert.Equal("☑", atom.Value);
+        Assert.Equal("\uF0FE", (string?)atom.Attribute("data-docx-symbol-text"));
+        Assert.Equal("Arial", FontFamily(text.Parent!));
+        Assert.NotEqual("Wingdings", FontFamily(atom));
+        Assert.All(paragraph.Descendants().Where(e => e.Attribute("data-docx-glyph-ascent") != null),
+            box => Assert.Equal("false", (string?)box.Attribute("contenteditable")));
+    }
+
+    // Two symbols in one run each map with their own font's table.
+    [Theory]
+    [InlineData("Wingdings", "F0FE", "Symbol", "F061", "☑|α")]
+    [InlineData("Symbol", "F061", "Wingdings", "F0FE", "α|☑")]
+    public void HCO105_SymbolsInOneRun_EachMapWithTheirOwnFont(string font1, string char1, string font2, string char2,
+        string glyphs)
+    {
+        var paragraph = ConvertParagraph(new Wp.Paragraph(new Wp.Run(
+            new Wp.SymbolChar { Font = font1, Char = char1 }, new Wp.SymbolChar { Font = font2, Char = char2 })));
+
+        Assert.Equal(glyphs, string.Join("|", paragraph.Descendants()
+            .Where(e => e.Attribute("data-docx-symbol-text") != null).Select(a => a.Value)));
+    }
+
+    // A deleted check box shown as tracked markup is still a check box (Word draws it struck through).
+    [Theory]
+    [InlineData(true, "☑")]
+    [InlineData(false, "")]
+    public void HCO105_DeletedSymbolText_MapsWhereItIsShown(bool showDeleted, string expected)
+    {
+        var deleted = new Wp.Run(
+            new Wp.RunProperties(new Wp.RunFonts { Ascii = "Wingdings", HighAnsi = "Wingdings" }),
+            new Wp.DeletedText("\uF0FE"));
+        var paragraph = ConvertParagraph(new Wp.Paragraph(TextRun("Kept ", "Arial"),
+                new Wp.DeletedRun(deleted) { Id = "1", Author = "Reviewer", Date = new DateTime(2026, 1, 1) }),
+            options: new HtmlConversionOptions
+                { FabricateCssClasses = false, RenderTrackedChanges = true, ShowDeletedContent = showDeleted });
+
+        Assert.Equal(expected, string.Concat(paragraph.Descendants()
+            .Where(e => e.Attribute("data-docx-symbol-text") != null).Select(a => a.Value)));
+        Assert.DoesNotContain("\uF0FE", paragraph.Value);
+    }
+
     private static Wp.Run TextRun(string text, string font) =>
         new(new Wp.RunProperties(new Wp.RunFonts { Ascii = font, HighAnsi = font }, new Wp.FontSize { Val = "24" }),
             new Wp.Text(text) { Space = DocumentFormat.OpenXml.SpaceProcessingModeValues.Preserve });
@@ -2610,7 +2664,8 @@ public class HtmlConversionOpsTests
         (string?)ConvertParagraph(paragraph).Attribute("style") ?? string.Empty;
 
     /// <summary>Converts one paragraph, with optional numbering definitions, and returns its &lt;p&gt;.</summary>
-    private static XElement ConvertParagraph(Wp.Paragraph paragraph, Wp.Numbering? numbering = null)
+    private static XElement ConvertParagraph(Wp.Paragraph paragraph, Wp.Numbering? numbering = null,
+        HtmlConversionOptions? options = null)
     {
         using var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -2629,7 +2684,8 @@ public class HtmlConversionOpsTests
             main.Document.Save();
         }
 
-        var html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions { FabricateCssClasses = false });
+        var html = HtmlConversionOps.ConvertToHtml(ms.ToArray(),
+            options ?? new HtmlConversionOptions { FabricateCssClasses = false });
         return XElement.Parse(html).Descendants().Single(e => e.Name.LocalName == "p");
     }
     // Issues #941 and #948: Word grows a line to make room for a raised run (w:position > 0), moving the line's

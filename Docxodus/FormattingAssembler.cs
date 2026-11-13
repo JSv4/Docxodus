@@ -3699,7 +3699,8 @@ namespace Docxodus
             if (rFonts == null)
                 return;
 
-            var firstTextNode = paraOrRun.Descendants(W.t).FirstOrDefault(t => t.Value.Length > 0);
+            // Deleted text is set in the run's font like live text (Word draws it struck through in that font).
+            var firstTextNode = paraOrRun.Descendants().FirstOrDefault(t => (t.Name == W.t || t.Name == W.delText) && t.Value.Length > 0);
             string str = " ";
 
             // if there is a run with no text in it, then no need to do any of the rest of this method.

@@ -8537,7 +8537,8 @@ namespace Docxodus
         {
             var box = new XElement(Xhtml.span,
                 new XAttribute("data-docx-glyph-ascent", ascent.ToString("0.####", NumberFormatInfo.InvariantInfo)),
-                new XAttribute("aria-hidden", "true"), new XText(string.Empty));
+                new XAttribute("aria-hidden", "true"), new XAttribute("contenteditable", "false"),
+                new XText(string.Empty));
             box.AddAnnotation(new Dictionary<string, string>
             {
                 { "display", "inline-block" }, { "width", "0" },
@@ -8714,12 +8715,14 @@ namespace Docxodus
             // U+F0FE, Greek typed in Symbol, a w:sym) renders as a blank box without the proprietary
             // font installed. Map what has a faithful Unicode equivalent and render it in the generic
             // family the font's stack falls back to (#1707). If nothing maps, the original text and
-            // font are left as-is; an unmapped character always keeps both.
+            // font are left as-is; an unmapped character always keeps both. Deleted text maps like live
+            // text wherever it is shown: Word draws a deleted check box as a struck-through check box.
             object content = run.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
             if (style.TryGetValue("font-family", out var symbolFont) && Internal.SymbolFontMapper.IsSymbolFont(symbolFont))
             {
-                static string? SymbolSource(XElement e) =>
-                    e.Name == W.t ? e.Value : e.Name == W.sym ? Internal.XmlText.SymbolText(e) : null;
+                string? SymbolSource(XElement e) =>
+                    e.Name == W.t || e.Name == W.delText && settings.ShowDeletedRevisionContent ? e.Value
+                    : e.Name == W.sym ? Internal.XmlText.SymbolText(e) : null;
                 var sources = run.Elements().Select(SymbolSource).OfType<string>().ToList();
                 if (sources.Any(s => Internal.SymbolFontMapper.MapText(s, symbolFont) != s))
                 {
