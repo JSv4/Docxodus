@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="4in" height="3in" viewBox="0 0 400 300">
+<rect x="10" y="10" width="380" height="280" fill="#eef4ff" stroke="#1f4e79" stroke-width="3"/>
+<polyline points="30,250 90,180 150,210 210,120 270,150 330,60" fill="none" stroke="#c00000" stroke-width="4"/>
+<polygon points="40,60 100,40 120,100 60,120" fill="#70ad47" stroke="#375623" stroke-width="2"/>
+<path d="M200 250 C 240 180, 300 300, 360 230" fill="none" stroke="#7030a0" stroke-width="3" stroke-dasharray="10 5"/>
+<ellipse cx="300" cy="200" rx="40" ry="25" fill="#ffc000"/>
+<text x="150" y="40" font-family="Liberation Sans" font-size="24" fill="#203864">Quarterly 42</text>
+<image x="330" y="20" width="40" height="40" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFElEQVR4nGP4z8DAAMIM////ZwAAHu8E/KPItPcAAAAASUVORK5CYII="/>
+</svg>

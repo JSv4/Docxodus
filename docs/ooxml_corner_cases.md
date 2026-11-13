@@ -7561,6 +7561,27 @@ uncropped, unrotated, nonwrapping page anchors and compares all other package by
 Unknown EMF records still reject the entire image and retain the existing
 placeholder/strict-refusal behavior.
 
+## Real metafiles bend the EMF header and blend rules (#1706)
+
+Three things real writers do that a strict reading of MS-EMF would reject:
+
+| Input | What the file says | Spec | Docxodus |
+| --- | --- | --- | --- |
+| LibreOffice 26.8 `--convert-to emf` | `nRecords` is one less than the records present (the header record is not counted) | `nRecords` counts every record, header included | Accepts a count equal to the records present or one fewer; a count claiming more records still rejects |
+| Word's OLE icon preview (`TestFiles/HC044-Embedded-Workbook.docx`, `word/media/image1.emf`) | `EMR_ALPHABLEND` with BLENDFUNCTION `0x01FF8000`: BlendFlags byte `0x80` | BlendFlags MUST be 0 | Ignores BlendFlags; honours BlendOperation (must be AC_SRC_OVER), SourceConstantAlpha and AC_SRC_ALPHA |
+| Word thumbnails and OLE previews, LibreOffice EMF export | EMF+ records in `EMR_COMMENT`, with the EmfPlusHeader dual flag set, followed by equivalent GDI records | Dual files carry a complete GDI rendering | Skips EMF+ comments and plays the GDI records; an EMF+-only header (no dual flag) keeps the placeholder |
+
+```text
+EMR_ALPHABLEND  xDest=35 yDest=1 cxDest=32 cyDest=32  BLENDFUNCTION=0x01FF8000
+                bitmap 32x32, 32 bpp, BI_BITFIELDS, premultiplied alpha
+```
+
+`Internal/EmfImage.cs` handles the header count and the blend function; `Internal/DibImage.cs`
+unpremultiplies the alpha before encoding PNG. GDI itself plays files by byte length, and
+LibreOffice reads its own exports, so neither notices the count. Visible zero-width WMF pens are
+still refused (see "TIFF and WMF need browser image normalization"); EMF cosmetic pens keep the
+one-CSS-pixel rule from #1554.
+
 ## Missing-font classes differ from native font selection (#1574)
 
 A missing face can declare a class without naming an installed replacement:

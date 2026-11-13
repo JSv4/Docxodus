@@ -13,7 +13,7 @@ function imageBytes(kind: StaticImage): Buffer {
     };
     const records = kind === 'geometric-emf' ? [record(38, 1, 0x10000, 2, 0, 0), record(37, 1)] : [];
     records.push(record(43, 10, 10, 90, 90));
-    if (kind === 'unsupported-emf') records.push(record(99));
+    if (kind === 'unsupported-emf') records.push(record(118)); // GRADIENTFILL
     records.push(record(14, 0, 20, 20));
     const h = Buffer.alloc(88);
     [1, 88, 0, 0, 100, 100, 0, 0, 2646, 2646, 0x464d4520, 0x10000, 88 + records.reduce((n, b) => n + b.length, 0), records.length + 1]

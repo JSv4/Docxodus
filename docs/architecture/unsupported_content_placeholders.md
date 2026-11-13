@@ -41,7 +41,7 @@ const html = await convertDocxToHtml(docxBytes, {
 
 | Content Type | XML Element(s) | Placeholder Text | CSS Class |
 |--------------|----------------|------------------|-----------|
-| WMF Image | `image/x-wmf` | `[WMF IMAGE]` | `unsupported-image` |
+| Unsupported WMF records | `image/x-wmf` outside the [supported records](docx_converter.md#images) | `[WMF IMAGE]` | `unsupported-image` |
 | Unsupported EMF records/embedding | `image/x-emf` outside the [static subset](docx_converter.md#images) | `[EMF IMAGE]` | `unsupported-image` |
 | SVG Image | `image/svg+xml` | `[SVG IMAGE]` | `unsupported-image` |
 | Math Equation | Unsupported `m:oMath`, `m:oMathPara` structures/properties | `[MATH]` | `unsupported-math` |
