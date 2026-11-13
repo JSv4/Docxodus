@@ -6847,13 +6847,80 @@ renders that check them are in the next section.
   `w:rFonts` (`TestFiles/WC/WC031-Two-Maths-Before.docx`). That slot only applies to East Asian
   characters, but the converter does not yet reason about which slot a run's characters use, so
   these equations keep the diagnostic (#1710).
-- **Word's default math settings keep every equation on the diagnostic path.** Word writes
-  `m:brkBin`, `m:brkBinSub`, `m:smallFrac`, `m:dispDef`, `m:lMargin`, `m:rMargin`, `m:defJc`,
-  `m:wrapIndent`, `m:intLim` and `m:naryLim` into `settings.xml`. The converter now reads
-  `m:intLim` and `m:naryLim`, which choose n-ary limit placement, but still refuses the others, so a
-  document saved by Word shows `[MATH]` until those settings are modeled (#1710).
+- **Word writes its math settings into every document it saves**, each at the value the setting has
+  when absent; see "Word's default math settings" below (#1710).
 - **`m:acc` stores combining marks** (U+0302 by default, U+20D7 for a vector arrow). MathML needs
   the spacing form (U+02C6, U+2192) in its accent `mo`; a combining mark alone has no glyph.
+
+### Word's default math settings (`m:mathPr`) and what each one changes (#1710)
+
+Word 2024 (16.0.20326) adds this block to `word/settings.xml` of every document it saves, including
+one that had no `m:mathPr` when it was opened:
+
+```xml
+<m:mathPr><m:mathFont m:val="Cambria Math"/><m:brkBin m:val="before"/><m:brkBinSub m:val="--"/>
+<m:smallFrac m:val="0"/><m:dispDef/><m:lMargin m:val="0"/><m:rMargin m:val="0"/>
+<m:defJc m:val="centerGroup"/><m:wrapIndent m:val="1440"/><m:intLim m:val="subSup"/><m:naryLim m:val="undOvr"/></m:mathPr>
+```
+
+The converter used to refuse a document's math whenever `m:mathPr` held anything but the font and
+the two limit settings, so every equation of a Word-saved document became `[MATH]`.
+
+Each setting was measured by writing one document per variant (an inline equation, a display equation
+with a fraction, a sum and an integral, and a display equation too long for one line), exporting each
+to PDF with Word, and comparing the equation regions with the default block's pixel for pixel at 150
+dpi. "Same" means zero differing pixels.
+
+| Variant | Inline equation | Display equation that fits | Display equation too long for the line |
+| --- | --- | --- | --- |
+| no `m:mathPr`; `m:mathFont` only | same | same | same |
+| `m:smallFrac` on | same | same (no visible effect on a top-level fraction) | same |
+| `m:dispDef` off | same | set at the left margin | set at the left margin, broken differently |
+| `m:lMargin` / `m:rMargin` 1440 | same | centred between the narrowed margins (shifts 0.5 in) | narrower lines |
+| `m:defJc` `left` / `right` | same | at the left / right margin | first line at that margin |
+| `m:defJc` `center` | same | same | each line centred on its own |
+| `m:brkBin` `after` / `repeat` | same | same | operator ends the line / is repeated on both lines |
+| `m:brkBinSub` `+-` (with `repeat`) | same | same | a repeated minus becomes a plus on the next line |
+| `m:wrapIndent` 0 / 2880, `m:wrapRight` | same | same | continuation lines at that indent / flush right |
+| `m:intLim` `undOvr`, `m:naryLim` `subSup` | same | limits move (drawn since #1705) | same |
+
+| | Word | LibreOffice | Docxodus |
+| --- | --- | --- | --- |
+| Default block | draws exactly as with no settings | not checked (not installed on the test machine) | was `[MATH]` for every equation; now draws as with no settings |
+
+What follows for the converter (`MathSettingsDrawn` in `WmlToHtmlConverter.Math.cs`, one table of
+setting to accepted values):
+
+- `m:smallFrac` off, `m:dispDef` on, `m:lMargin`/`m:rMargin` 0 and `m:defJc` `centerGroup` are the
+  values the MathML output already draws: display math, centred between the text margins. `center`
+  is accepted too, because a display paragraph is projected only when it holds one equation, and Word
+  draws one equation that fits the same under both. Any other value keeps the placeholder.
+  `m:smallFrac` on showed no difference here, but it was only measured on a top-level fraction, so it
+  stays refused.
+- `m:brkBin`, `m:brkBinSub`, `m:wrapIndent` and `m:wrapRight` change nothing unless Word has to break
+  the equation, so every valid value is accepted.
+- **Known difference, with or without these settings:** the MathML output never breaks an equation. A
+  display equation wider than its line is one line that runs past the right margin (the test
+  equation is 2235 px in an 800 px column), where Word breaks it before a binary operator and indents
+  the continuation lines 1 inch. Refusing such equations would need the converter to measure them,
+  which it cannot do. Inline equations are likewise one unbreakable box.
+- Settings Word does not write by default (`m:interSp`, `m:intraSp`, `m:preSp`, `m:postSp`) are not
+  modeled and keep the placeholder at any value.
+
+**Word 2024's run defaults had the same effect.** A document created in Word 2024 carries
+`<w:kern w:val="2"/>` and `<w14:ligatures w14:val="standardContextual"/>` in `w:rPrDefault`. The
+equation's font size is resolved from the paragraph's run properties, and any property other than
+fonts, size and language used to keep the placeholder, so a fresh Word 2024 document showed `[MATH]`
+even with its settings accepted. Removing both properties from such a document changes no pixel of its
+display equation in Word, so they are now passed over; other run formatting (bold, for one) still
+keeps the placeholder.
+
+The two corpus documents that carry the block now draw: `TestFiles/HC031-Complicated-Document.docx`
+(one binomial sum) and `TestFiles/WC/WC022-Image-Math-Para-Before.docx` (two). Against Word's PDF
+they are complete, centred and structurally the same. Two differences in spacing remain from the
+projection itself, not from the settings: brackets typed as ordinary characters get operator spacing
+(`( x + a )` for Word's `(x+a)`), and a hyphen-minus in a run is drawn as typed where Word draws a
+minus sign (`n - k` for `n−k`).
 
 ### What Word 2024 draws for those structures, against the MathML in Chromium (#1705)
 
