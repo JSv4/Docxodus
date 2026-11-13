@@ -849,14 +849,14 @@ public class IrBlockAlignerTests
     }
 
     [Fact]
-    public void In_gap_cross_positioned_edits_lower_to_reversible_moves()
+    public void In_gap_edited_swap_keeps_one_paragraph_in_place_and_moves_the_other()
     {
         // Two paragraphs are edited AND swapped WITHIN a single spine gap (between alpha and omega). Their
-        // true lexical correspondence crosses document order. Rendering crossed pairs as in-place Modified
-        // blocks accepts correctly but rejects to the right-side order, so the normalizer must release BOTH
-        // pairs. These long, near-identical paragraphs clear the default fuzzy-move threshold after release,
-        // so the global move pass restores their true correspondence as two MovedModified pairs rather than
-        // leaving them as conservative delete+insert pairs.
+        // true lexical correspondence crosses document order. Rendering both crossed pairs as in-place
+        // Modified blocks accepts correctly but rejects to the right-side order, so one pair must give way.
+        // Like an exact swap (Adjacent_swap_of_two_unique_paragraphs: one Moved, one Unchanged), one edited
+        // paragraph stays in place and the other is released; it is long and alike enough to clear the
+        // fuzzy-move threshold, so the global move pass brings it back as a MovedModified pair.
         var l = Doc(
             "alpha",
             "the quick brown fox jumps high",
@@ -870,10 +870,60 @@ public class IrBlockAlignerTests
         var a = Align(l, r);
 
         Assert.Equal(2, Count(a, IrAlignmentKind.Unchanged));
-        Assert.Equal(0, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Modified));
         Assert.Equal(0, Count(a, IrAlignmentKind.Deleted));
         Assert.Equal(0, Count(a, IrAlignmentKind.Inserted));
-        Assert.Equal(2, Count(a, IrAlignmentKind.MovedModified));
+        Assert.Equal(1, Count(a, IrAlignmentKind.MovedModified));
+        AssertInvariants(l, r, a);
+    }
+
+    private static readonly string[] RenumberedLeft =
+    {
+        "FIRST. Duration. The lease runs for one year from the day both parties sign it.",
+        "SECOND. Guarantee. The lessee hands over two months of rent as a guarantee before moving in.",
+        "THIRD. Upkeep. The lessee looks after the flat and covers small repairs from everyday wear.",
+        "FOURTH. Notice. Each side may end the lease by giving the other ninety days of warning.",
+        "FIFTH. Venue. Any disagreement goes before the tribunals of the town where the flat stands.",
+    };
+
+    private static readonly string[] RenumberedRight =
+    {
+        "FIRST. Arrears. The lessee owes a monthly surcharge on every overdue sum.",   // new clause
+        "SECOND. Duration. The lease runs for one year from the day both parties sign it.",
+        "THIRD. Notice. Each side may end the lease by giving the other ninety days of warning.",
+        "FOURTH. Venue. Any disagreement goes before the tribunals of the town where the flat stands.",
+        "FIFTH. Upkeep. The lessee looks after the flat and covers small repairs from everyday wear.", // moved
+    };
+
+    [Fact]
+    public void A_clause_moved_past_renumbered_clauses_is_the_only_move()
+    {
+        // Issue #1714: a clause is inserted at the top, one is deleted, one ("Upkeep") moves to the end,
+        // and every ordinal is renumbered, so no paragraph is content-equal and the whole body is one gap.
+        // Duration, Notice and Venue keep their relative order: they are edited in place. Only Upkeep,
+        // which crossed Notice and Venue, is a move. (Word's own Compare keeps the same three in place.)
+        var l = Doc(RenumberedLeft);
+        var r = Doc(RenumberedRight);
+        var a = Align(l, r);
+
+        var inPlace = a.Entries.Where(e => e.Kind == IrAlignmentKind.Modified).Select(e => Text(e.Right!));
+        Assert.Equal(new[] { RenumberedRight[1], RenumberedRight[2], RenumberedRight[3] }, inPlace);
+        Assert.Equal(RenumberedRight[4], Text(a.Entries.Single(e => e.Kind == IrAlignmentKind.MovedModified).Right!));
+        Assert.Equal(RenumberedLeft[1], Text(a.Entries.Single(e => e.Kind == IrAlignmentKind.Deleted).Left!));
+        Assert.Equal(RenumberedRight[0], Text(a.Entries.Single(e => e.Kind == IrAlignmentKind.Inserted).Right!));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Renumbered_clauses_that_all_keep_their_order_have_no_move()
+    {
+        // Control for #1714: the same inserted clause and renumbered "Duration", nothing relocated.
+        var l = Doc(RenumberedLeft);
+        var r = Doc(RenumberedRight[0], RenumberedRight[1],
+            RenumberedLeft[2], RenumberedLeft[3], RenumberedLeft[4]);
+        var a = Align(l, r);
+
+        Assert.Equal(0, Count(a, IrAlignmentKind.Moved) + Count(a, IrAlignmentKind.MovedModified));
         AssertInvariants(l, r, a);
     }
 
@@ -914,6 +964,84 @@ public class IrBlockAlignerTests
             "Cross-gap fuzzy move detection must be deterministic across Align calls.");
         Assert.Equal(1, Count(a1, IrAlignmentKind.MovedModified));
         AssertInvariants(l, r, a1);
+    }
+
+    /// <summary>The shape of issue #1703: marker paragraphs that stay put, with <paramref name="n"/> distinct
+    /// 14-word paragraphs between them. The revision reverses those paragraphs and changes one word in each,
+    /// so each is a relocated-and-edited block alone in its gap, which only the cross-gap pass can pair.</summary>
+    private static (IrDocument Left, IrDocument Right) ReversedAndEdited(int n)
+    {
+        static string Body(int i, string sixth) =>
+            string.Join(" ", Enumerable.Range(0, 14).Select(k => k == 5 ? sixth : $"p{i}w{k}"));
+
+        var left = new List<string> { "Section marker 0." };
+        var right = new List<string> { "Section marker 0." };
+        for (int i = 0; i < n; i++)
+        {
+            left.AddRange([Body(i, $"p{i}w5"), $"Section marker {i + 1}."]);
+            right.AddRange([Body(n - 1 - i, $"p{n - 1 - i}edited"), $"Section marker {i + 1}."]);
+        }
+        return (Doc([.. left]), Doc([.. right]));
+    }
+
+    [Fact]
+    public void Cross_gap_pairs_every_relocated_and_edited_paragraph_with_its_own_revision()
+    {
+        const int n = 40;
+        var (l, r) = ReversedAndEdited(n);
+        var a = Align(l, r);
+
+        var moves = a.Entries.Where(e => e.Kind == IrAlignmentKind.MovedModified).ToList();
+        Assert.Equal(n, moves.Count);
+        Assert.All(moves, m => Assert.Equal(Text(m.Left!).Split(' ')[0], Text(m.Right!).Split(' ')[0]));
+        Assert.Equal(n + 1, Count(a, IrAlignmentKind.Unchanged));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Cross_gap_scores_each_leftover_pair_once_however_many_moves_it_finds()
+    {
+        // Rescanning the leftover grid for every move found costs moves × D × I scores: n³ here, 8× for
+        // twice the paragraphs. Scoring each pair once costs n², 4×. Counting scores, not seconds, keeps
+        // this exact on any machine.
+        static long Scores(int n)
+        {
+            var (l, r) = ReversedAndEdited(n);
+            var similarity = new IrBlockSimilarity(Default);
+            IrBlockAligner.Align(l, r, Default, similarity);
+            return similarity.ScoreCalls;
+        }
+
+        long small = Scores(30), large = Scores(60);
+
+        Assert.InRange(large, 60 * 60, 5 * small);
+    }
+
+    [Fact]
+    public void Cross_gap_equal_scores_go_to_the_smallest_left_then_right_index()
+    {
+        // The deleted paragraph is one word away from BOTH inserted paragraphs, and both deleted paragraphs
+        // of the second document pair are one word away from the single inserted one: equal scores each
+        // time. The earlier block wins; the later one stays a plain insertion or deletion.
+        var l = Doc("alpha", "beta", "gamma", "the quick brown fox jumps over hounds");
+        var r = Doc(
+            "the quick brown fox jumps over dogs", "alpha",
+            "the quick brown fox jumps over cats", "beta", "gamma");
+        var a = Align(l, r);
+
+        Assert.Equal("the quick brown fox jumps over dogs",
+            Text(a.Entries.Single(e => e.Kind == IrAlignmentKind.MovedModified).Right!));
+        Assert.Equal("the quick brown fox jumps over cats",
+            Text(a.Entries.Single(e => e.Kind == IrAlignmentKind.Inserted).Right!));
+        AssertInvariants(l, r, a);
+
+        var mirrored = Align(r, l);
+
+        Assert.Equal("the quick brown fox jumps over dogs",
+            Text(mirrored.Entries.Single(e => e.Kind == IrAlignmentKind.MovedModified).Left!));
+        Assert.Equal("the quick brown fox jumps over cats",
+            Text(mirrored.Entries.Single(e => e.Kind == IrAlignmentKind.Deleted).Left!));
+        AssertInvariants(r, l, mirrored);
     }
 
     // ------------------------------------------------------------------ table as unit

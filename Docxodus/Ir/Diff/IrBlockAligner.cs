@@ -30,8 +30,11 @@ internal static class IrBlockAligner
     /// <summary>
     /// Align the body block lists of <paramref name="left"/> and <paramref name="right"/>.
     /// </summary>
-    public static IrBlockAlignment Align(IrDocument left, IrDocument right, IrDiffSettings settings)
-        => AlignBlocks(left.Body.Blocks, right.Body.Blocks, settings, markBodyFullRewriteGaps: true);
+    /// <param name="similarity">The scorer to use, for a caller that wants to read its
+    /// <see cref="IrBlockSimilarity.ScoreCalls"/> afterwards; a fresh one when omitted.</param>
+    public static IrBlockAlignment Align(
+        IrDocument left, IrDocument right, IrDiffSettings settings, IrBlockSimilarity? similarity = null)
+        => AlignBlocks(left.Body.Blocks, right.Body.Blocks, settings, markBodyFullRewriteGaps: true, similarity);
 
     /// <summary>
     /// Align two raw block lists (M2.2 Task 4 generalization). The public <see cref="Align"/> calls this
@@ -50,12 +53,12 @@ internal static class IrBlockAligner
     /// </summary>
     private static IrBlockAlignment AlignBlocks(
         IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks, IrDiffSettings settings,
-        bool markBodyFullRewriteGaps)
+        bool markBodyFullRewriteGaps, IrBlockSimilarity? similarity = null)
     {
         // M2.2 Task 3: settings now drive similarity-based in-gap pairing + cross-gap fuzzy moves.
         // One per-call similarity scorer carries the tokenization cache (each block tokenized at most
         // once across all the candidate-pair scorings below).
-        var similarity = new IrBlockSimilarity(settings);
+        similarity ??= new IrBlockSimilarity(settings);
 
         int nLeft = leftBlocks.Count;
         int nRight = rightBlocks.Count;
@@ -167,22 +170,15 @@ internal static class IrBlockAligner
             leftBodyFullRewriteGroups, rightBodyFullRewriteGroups, markBodyFullRewriteGaps,
             ref nextBodyFullRewriteGroupId);
 
-        // A renderer emits paired in-place blocks in RIGHT order.  Therefore every such pairing must be
-        // monotone: crossed Modified pairs accept to the right sequence, but reject leaves their LEFT content
-        // in that same right order. SimilarityPair intentionally considers correspondence by content rather
-        // than position, so normalize any crossed fuzzy pair back to Delete+Insert before move detection. The
-        // global move pass can then promote sufficiently strong correspondence to MovedModified; weaker cases
-        // stay conservative and, crucially, reversible.
-        ReleaseCrossingModifiedPairs(leftBlocks, rightBlocks, similarity, leftKind, rightKind, leftMatch, rightMatch);
-
-        // The pass above normalizes the ONE-TO-ONE in-place pairings against each other. Split and merge
-        // GROUPS take part in the same right-order emit, so they must join the same monotone discipline —
-        // this is the global backstop that makes `reject ≡ left` exact in ORDER, not just in content
-        // (issue #288). It runs BEFORE move detection on purpose: a released pairing that is genuinely a
-        // relocation is then re-formed as a Moved/MovedModified by the pass below, which reproduces left
-        // order by construction (the source op is emitted at the left position).
-        EnforceInPlaceOrderMonotonicity(leftBlocks, rightBlocks, leftKind, rightKind, leftMatch, rightMatch,
-            splitGroups, mergeGroups);
+        // A renderer emits paired in-place blocks in RIGHT order, so every in-place pairing — one-to-one
+        // pairs and split/merge groups alike — must be monotone: crossed pairs accept to the right sequence,
+        // but reject leaves their LEFT content in that same right order. SimilarityPair pairs by content
+        // rather than position, so this keeps the heaviest order-preserving set in place and lowers the rest
+        // to Delete+Insert (issues #288, #1714). It runs BEFORE move detection on purpose: a released pairing
+        // that is genuinely a relocation is then re-formed as a Moved/MovedModified by the pass below, which
+        // reproduces left order by construction (the source op is emitted at the left position).
+        EnforceInPlaceOrderMonotonicity(leftBlocks, rightBlocks, similarity, leftKind, rightKind, leftMatch,
+            rightMatch, splitGroups, mergeGroups);
 
         // The two halves of the blank-support rule, now that every content pairing is known AND
         // monotone (a blank's support must come from pairs that survive the crossing normalization
@@ -799,7 +795,7 @@ internal static class IrBlockAligner
     /// score ≥ <paramref name="threshold"/> (ties: smallest left index, then smallest right index),
     /// consume both, repeat until no qualifying pair remains. Leaves the unpaired blocks for the caller to
     /// classify Deleted/Inserted. Deterministic: the pick is a pure function of the score grid + index
-    /// tie-break, and scoring is cached so the grid is cheap to rescan each round.
+    /// tie-break (<see cref="BestFreePairs"/>).
     /// <para>A fuzzy paragraph pair needs a shared non-function content word. Articles and
     /// punctuation alone must not scatter complete replacement blocks across unrelated text.</para>
     /// </summary>
@@ -821,12 +817,8 @@ internal static class IrBlockAligner
         // own position. Ranking subtracts the same penalty so near pairs beat far pairs on ties.
         var positions = GapRelativePositions(freeLeft, leftMatch, freeRight, rightMatch);
 
-        // Scores, eligibility and the locality positions are all fixed for the pass; only which blocks are
-        // still free changes as pairs form. So "repeatedly take the best still-free pair" is the same as scoring
-        // every eligible pair once, stably sorting by effective score (scan order breaks ties: smallest left,
-        // then smallest right), and taking each pair whose two blocks are both still free. Rescanning the whole
-        // grid once per pair formed was quadratic in the pairs times the grid, minutes for two long unrelated
-        // documents (issue #863).
+        // Scores, eligibility and the locality positions are all fixed for the pass, so every eligible pair is
+        // scored once here and BestFreePairs does the picking.
         var candidates = new List<(double Effective, int Left, int Right)>();
         foreach (int li in freeLeft)
         {
@@ -865,17 +857,35 @@ internal static class IrBlockAligner
             }
         }
 
-        // OrderByDescending is stable, so equal scores keep scan order: the first seen wins a tie, exactly
-        // as the strictly-greater argmax did (freeLeft / freeRight are in ascending index order).
-        foreach (var (_, bestLeft, bestRight) in candidates.OrderByDescending(c => c.Effective))
+        foreach (var (_, bestLeft, bestRight) in BestFreePairs(candidates, leftMatch, rightMatch))
         {
-            if (leftMatch[bestLeft] != -1 || rightMatch[bestRight] != -1)
-                continue;
             leftKind[bestLeft] = IrAlignmentKind.Modified;
             rightKind[bestRight] = IrAlignmentKind.Modified;
             leftMatch[bestLeft] = bestRight;
             rightMatch[bestRight] = bestLeft;
         }
+    }
+
+    /// <summary>
+    /// The greedy one-to-one pick both similarity passes share: "repeatedly take the highest-scoring pair
+    /// whose two blocks are both still free (ties: smallest left index, then smallest right index)", over
+    /// <paramref name="candidates"/> that were each scored once and listed in ascending (left, right) order.
+    /// A pair's score never depends on which other pairs have formed; only which blocks are still free
+    /// changes. So one stable sort by score replaces rescanning the whole grid for every pair formed, which
+    /// cost pairs × grid: minutes for two long unrelated documents (issue #863) and for several hundred
+    /// relocated-and-edited paragraphs (issue #1703).
+    /// </summary>
+    /// <remarks>Lazy on purpose: the caller records each yielded pair in <paramref name="leftMatch"/> /
+    /// <paramref name="rightMatch"/> before asking for the next, and that is what retires the pair's two
+    /// blocks from the candidates still to come.</remarks>
+    private static IEnumerable<(double Score, int Left, int Right)> BestFreePairs(
+        List<(double Score, int Left, int Right)> candidates, int[] leftMatch, int[] rightMatch)
+    {
+        // OrderByDescending is stable, so equal scores keep their listed order: the first listed wins a tie,
+        // exactly as a strictly-greater argmax over the grid does.
+        foreach (var candidate in candidates.OrderByDescending(c => c.Score))
+            if (leftMatch[candidate.Left] == -1 && rightMatch[candidate.Right] == -1)
+                yield return candidate;
     }
 
     private static bool AnyWrapper(List<int> indexes, IReadOnlyList<IrBlock> blocks)
@@ -2505,8 +2515,9 @@ internal static class IrBlockAligner
     /// still needs <see cref="IrAlignmentKind.MovedModified"/> so its FormatChanged token spans are rendered.
     /// In practice exact moves are already caught by off-spine anchoring, but the guard keeps this fallback
     /// consistent.</para>
-    /// <para><b>Cost.</b> Bounded by the global leftover counts D × I, not the document size: the
-    /// dominant boilerplate / clean-edit cases leave few leftovers. Tokenization is cached (shared with
+    /// <para><b>Cost.</b> One similarity score per leftover Deleted × Inserted pair, then one sort of the
+    /// pairs that reach the threshold (<see cref="BestFreePairs"/>): D × I scores however many moves are
+    /// found, and nothing that grows with the rest of the document. Tokenization is cached (shared with
     /// in-gap pairing), so each leftover block is tokenized at most once across both passes.</para>
     /// </remarks>
     private static void DetectCrossGapMoves(
@@ -2531,44 +2542,28 @@ internal static class IrBlockAligner
         double threshold = settings.MoveSimilarityThreshold;
         int minTokens = settings.MoveMinimumTokenCount;
 
-        while (true)
+        // A block-level content control owns an OOXML envelope that cannot be expressed with native move
+        // markup. Even if a future similarity model assigns it text/word counts, keep it as the reversible
+        // delete+insert pair established above. A block under the minimum word count is too short to be a
+        // reliable move (mirrors MoveMinimumWordCount).
+        bool CanMove(IrBlock block) => block is not IrSdtBlock && similarity.WordCount(block) >= minTokens;
+        inserted.RemoveAll(rj => !CanMove(rightBlocks[rj]));
+
+        var candidates = new List<(double Score, int Left, int Right)>();
+        foreach (int li in deleted)
         {
-            double bestScore = threshold;
-            int bestLeft = -1, bestRight = -1;
-            bool found = false;
-            foreach (int li in deleted)
+            if (!CanMove(leftBlocks[li]))
+                continue;
+            foreach (int rj in inserted)
             {
-                if (leftMatch[li] != -1)
-                    continue;
-                // A block-level content control owns an OOXML envelope that cannot be expressed with
-                // native move markup. Even if a future similarity model assigns it text/word counts,
-                // keep it as the reversible delete+insert pair established above.
-                if (leftBlocks[li] is IrSdtBlock)
-                    continue;
-                if (similarity.WordCount(leftBlocks[li]) < minTokens)
-                    continue; // too short to be a reliable move (mirrors MoveMinimumWordCount)
-                foreach (int rj in inserted)
-                {
-                    if (rightMatch[rj] != -1)
-                        continue;
-                    if (rightBlocks[rj] is IrSdtBlock)
-                        continue;
-                    if (similarity.WordCount(rightBlocks[rj]) < minTokens)
-                        continue;
-                    double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
-                    if (score > bestScore || (!found && score >= threshold))
-                    {
-                        bestScore = score;
-                        bestLeft = li;
-                        bestRight = rj;
-                        found = true;
-                    }
-                }
+                double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
+                if (score >= threshold)
+                    candidates.Add((score, li, rj));
             }
+        }
 
-            if (!found)
-                return;
-
+        foreach (var (bestScore, bestLeft, bestRight) in BestFreePairs(candidates, leftMatch, rightMatch))
+        {
             // A paragraph plain move needs BOTH exact content and format equality. Exact paragraph text with a
             // formatting delta still needs a token diff (FormatChanged spans) so the markup can carry rPrChange
             // at the moved destination and restore the old formatting on reject. Structural blocks do not yet
@@ -2588,142 +2583,6 @@ internal static class IrBlockAligner
         }
     }
 
-    /// <summary>
-    /// Release every in-place <see cref="IrAlignmentKind.Modified"/> pair that participates in a crossing.
-    /// Exact anchors and the order-preserving refinement passes are already monotone; only greedy similarity
-    /// pairing can produce an inversion. Both endpoints of an inversion must be released — retaining just one
-    /// crossed edit would still put its old content at the wrong physical paragraph when revisions are rejected.
-    /// The prefix/suffix extrema identify every modified pair in an inversion in O(n), including permutations
-    /// larger than a simple adjacent swap.
-    /// <para>
-    /// <b>Weight-aware crossing (blank-spacer demotion).</b> A FUNGIBLE blank-spacer paragraph (empty or
-    /// whitespace-only — see <see cref="IrBlockSimilarity.IsBlankSpacer"/>) is interchangeable, so an
-    /// asymmetric leading/trailing count around a table pairs one blank ACROSS the table. Treating that
-    /// blank as an immovable landmark forced the heavier Modified table to release into a whole-deleted +
-    /// whole-inserted table pair (two <c>w:tbl</c> where Word emits ONE with native per-row markup). Instead we
-    /// compute the crossing bounds from NON-fungible landmarks only: a Modified pair releases solely when it
-    /// crosses genuine CONTENT (another Modified pair or a content-bearing anchor — a real reorder), never
-    /// merely because a blank sits on the wrong side. Any fungible blank pair that then crosses the retained
-    /// monotone set is itself demoted to Deleted+Inserted (it renders as a separate ins/del blank, exactly as
-    /// Word does), keeping the table on its already-round-tripping Modified path. Deliberately NARROW: only
-    /// true blank spacers are demotable; a light CONTENT paragraph legitimately crossing a Modified pair still
-    /// releases the Modified pair as before. When no blank-spacer pair is present the logic is byte-identical
-    /// to the original single-bound pass (fast path).
-    /// </para>
-    /// </summary>
-    private static void ReleaseCrossingModifiedPairs(
-        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks, IrBlockSimilarity similarity,
-        IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
-        int[] leftMatch, int[] rightMatch)
-    {
-        int n = leftMatch.Length;
-
-        // Classify each in-place LEFT pair as a fungible blank-spacer pair. Both sides of an
-        // Unchanged/FormatOnly pair are content-equal, so it suffices that the LEFT block is a blank spacer.
-        // Non-fungible landmarks = every in-place pair that is NOT a fungible blank (all Modified pairs,
-        // plus content-bearing Unchanged/FormatOnly anchors).
-        var isFungibleBlank = new bool[n];
-        bool anyFungibleBlank = false;
-        for (int li = 0; li < n; li++)
-        {
-            if (leftMatch[li] >= 0 &&
-                leftKind[li] is IrAlignmentKind.Unchanged or IrAlignmentKind.FormatOnly &&
-                similarity.IsBlankSpacer(leftBlocks[li]))
-            {
-                isFungibleBlank[li] = true;
-                anyFungibleBlank = true;
-            }
-        }
-
-        // Fast path: with no fungible blank pairs the non-fungible landmark set == the full in-place set,
-        // so this reproduces the original behavior exactly (byte-identical for every blank-free document).
-        bool NonFungibleLandmark(int li) =>
-            IsOneToOneInPlace(leftKind[li], leftMatch[li]) && !(anyFungibleBlank && isFungibleBlank[li]);
-
-        var (maxRightBefore, minRightAfter) = MonotoneBounds(n, leftMatch, NonFungibleLandmark);
-
-        // A Modified pair releases only when it crosses a NON-fungible landmark (genuine content reorder).
-        var release = new List<int>();
-        for (int li = 0; li < n; li++)
-        {
-            int rj = leftMatch[li];
-            if (leftKind[li] != IrAlignmentKind.Modified || rj < 0)
-                continue;
-            if (rj < maxRightBefore[li] || rj > minRightAfter[li])
-                release.Add(li);
-        }
-
-        foreach (int li in release)
-        {
-            int rj = leftMatch[li];
-            // A Modified pair is necessarily one-to-one. Be defensive in case a future alignment kind reuses
-            // this normalization path with a partially released counterpart.
-            if (rj < 0 || rightMatch[rj] != li || rightKind[rj] != IrAlignmentKind.Modified)
-                continue;
-            leftKind[li] = IrAlignmentKind.Deleted;
-            rightKind[rj] = IrAlignmentKind.Inserted;
-            leftMatch[li] = -1;
-            rightMatch[rj] = -1;
-        }
-
-        // Second pass — demote any fungible blank pair that crosses the RETAINED non-fungible monotone set
-        // (kept Modified pairs + content anchors). Blank spacers never cross each other (the in-order
-        // refinement pairs them monotonically), so checking each against the non-fungible landmarks alone
-        // is sufficient. Skipped entirely on the fast path.
-        if (!anyFungibleBlank)
-            return;
-
-        var (retainedMaxBefore, retainedMinAfter) = MonotoneBounds(n, leftMatch, NonFungibleLandmark);
-        for (int li = 0; li < n; li++)
-        {
-            if (!isFungibleBlank[li])
-                continue;
-            int rj = leftMatch[li];
-            if (rj < 0 || rightMatch[rj] != li)
-                continue;
-            if (rj < retainedMaxBefore[li] || rj > retainedMinAfter[li])
-            {
-                leftKind[li] = IrAlignmentKind.Deleted;
-                rightKind[rj] = IrAlignmentKind.Inserted;
-                leftMatch[li] = -1;
-                rightMatch[rj] = -1;
-            }
-        }
-
-        static bool IsOneToOneInPlace(IrAlignmentKind? kind, int rightIndex) =>
-            rightIndex >= 0 && kind is IrAlignmentKind.Unchanged or IrAlignmentKind.FormatOnly or IrAlignmentKind.Modified;
-    }
-
-    /// <summary>
-    /// Prefix-max / suffix-min of the right index over the LEFT pairs that <paramref name="isLandmark"/>
-    /// selects. <c>maxRightBefore[li]</c> = the greatest landmark right index strictly before <c>li</c>
-    /// (<see cref="int.MinValue"/> if none); <c>minRightAfter[li]</c> = the least landmark right index
-    /// strictly after (<see cref="int.MaxValue"/> if none). A pair at (li, rj) crosses the landmark set iff
-    /// <c>rj &lt; maxRightBefore[li]</c> or <c>rj &gt; minRightAfter[li]</c>.
-    /// </summary>
-    private static (int[] MaxRightBefore, int[] MinRightAfter) MonotoneBounds(
-        int n, int[] leftMatch, Func<int, bool> isLandmark)
-    {
-        var maxRightBefore = new int[n];
-        int maxRight = int.MinValue;
-        for (int li = 0; li < n; li++)
-        {
-            maxRightBefore[li] = maxRight;
-            if (isLandmark(li))
-                maxRight = Math.Max(maxRight, leftMatch[li]);
-        }
-
-        var minRightAfter = new int[n];
-        int minRight = int.MaxValue;
-        for (int li = n - 1; li >= 0; li--)
-        {
-            minRightAfter[li] = minRight;
-            if (isLandmark(li))
-                minRight = Math.Min(minRight, leftMatch[li]);
-        }
-        return (maxRightBefore, minRightAfter);
-    }
-
     // ------------------------------------------------------------------ in-place order invariant (#288)
 
     /// <summary>
@@ -2734,19 +2593,36 @@ internal static class IrBlockAligner
     /// </summary>
     /// <param name="LeftIndex">The unit's first left block — its position in the left document.</param>
     /// <param name="RightPosition">Where <see cref="EmitEntries"/> emits the unit's entry.</param>
-    /// <param name="Weight">Blocks the unit keeps paired (2 for a 1:1 pair, 1+N for a split/merge group) —
-    /// the currency of the max-weight pick when a crossing has to be cut.</param>
+    /// <param name="Weight">What keeping the unit in place is worth — the currency of the max-weight pick
+    /// when a crossing has to be cut.</param>
     /// <param name="Group">Index into <c>splitGroups</c>/<c>mergeGroups</c>, or -1 for a 1:1 pair.</param>
     private readonly record struct OrderUnit(
-        int LeftIndex, int RightPosition, int Weight, int Group, IrAlignmentKind Kind);
+        int LeftIndex, int RightPosition, OrderWeight Weight, int Group, IrAlignmentKind Kind);
+
+    /// <summary>
+    /// The worth of a set of in-place units, compared field by field: first the content
+    /// <paramref name="Blocks"/> kept paired (2 for a 1:1 pair, 1+N for a split/merge group), then how alike
+    /// the paired blocks are (1 per content-equal pair, the similarity score of a Modified pair), then the
+    /// blank spacers kept. A blank spacer is interchangeable with any other, so it counts for no blocks: a
+    /// blank on the wrong side of an edited table never costs the table its pairing, and the blank is the
+    /// one released.
+    /// </summary>
+    private readonly record struct OrderWeight(int Blocks, double Likeness, int Blanks) : IComparable<OrderWeight>
+    {
+        public static OrderWeight operator +(OrderWeight a, OrderWeight b) =>
+            new(a.Blocks + b.Blocks, a.Likeness + b.Likeness, a.Blanks + b.Blanks);
+
+        public int CompareTo(OrderWeight other) =>
+            (Blocks, Likeness, Blanks).CompareTo((other.Blocks, other.Likeness, other.Blanks));
+    }
 
     /// <summary>
     /// Global ORDER guarantee for the reject direction (issue #288).
-    /// <para>Every pass that forms an in-gap pairing enforces the order-preserving discipline against the
-    /// pairings that existed WHEN IT RAN (<see cref="InOrderRefine"/>'s crossing bounds,
-    /// <see cref="SameSlotPair"/>'s and <see cref="JunctionPair"/>'s <c>maxBelow</c>/<c>minAbove</c> sweeps,
-    /// <see cref="ReleaseCrossingModifiedPairs"/>' post-normalization). Nothing re-checked the pairings a
-    /// LATER pass adds: the split/merge containment scan runs after the refinement passes, so a group could
+    /// <para>Some passes that form an in-gap pairing enforce the order-preserving discipline against the
+    /// pairings that existed WHEN THEY RAN (<see cref="InOrderRefine"/>'s crossing bounds,
+    /// <see cref="SameSlotPair"/>'s and <see cref="JunctionPair"/>'s <c>maxBelow</c>/<c>minAbove</c> sweeps);
+    /// <see cref="SimilarityPair"/> pairs by content and enforces none, so a clause that moved past edited
+    /// neighbours crosses their pairs (issue #1714). And nothing re-checks the pairings a LATER pass adds: the split/merge containment scan runs after the refinement passes, so a group could
     /// straddle a pair those passes had already formed between two verbatim-DUPLICATE blocks (duplicates
     /// never anchor — <see cref="BuildUniqueIndex"/> keys on unique content — so which occurrence pairs with
     /// which is decided in-gap, and the loser is free to sit on the wrong side of a group). The straddled
@@ -2755,16 +2631,18 @@ internal static class IrBlockAligner
     /// matched); only the order drifts.</para>
     /// <para>Rather than teach each pass about the others, the invariant is enforced ONCE here over all
     /// left-owning units: keep a maximum-WEIGHT strictly-increasing subsequence of (left → right position)
-    /// and RELEASE the rest to plain Deleted/Inserted, which is always reversible. Weight = blocks kept
-    /// paired, so an ambiguous cut sacrifices the pairing that holds the least content (a 1:1 duplicate
-    /// pair rather than a 3-block merge group). Because this runs before cross-gap move detection, a
+    /// and RELEASE the rest to plain Deleted/Inserted, which is always reversible. The weight
+    /// (<see cref="OrderWeight"/>) is first the blocks kept paired, so an ambiguous cut sacrifices the pairing
+    /// that holds the least content (a 1:1 duplicate pair rather than a 3-block merge group), and between
+    /// equal block counts the set whose pairs are most alike, so the clauses that kept their order stay in
+    /// place and the one that moved past them is the one released. Because this runs before cross-gap move detection, a
     /// released pair that IS a relocation comes straight back as a Moved — often a strictly better reading
     /// than the in-place pairing it replaced.</para>
     /// <para>Fast path: an already-monotone alignment (every corpus document, and 1997 of 2000 fuzz seeds)
     /// returns after one linear scan with nothing touched, so the common path is byte-identical.</para>
     /// </summary>
     private static void EnforceInPlaceOrderMonotonicity(
-        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks, IrBlockSimilarity similarity,
         IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
         int[] leftMatch, int[] rightMatch,
         List<(int SingularIndex, List<int> PluralIndexes)> splitGroups,
@@ -2788,15 +2666,18 @@ internal static class IrBlockAligner
                 case IrAlignmentKind.Split when splitBySingularLeft.TryGetValue(li, out int sg):
                     // Emitted at the FIRST member's right position (see EmitEntries).
                     units.Add(new OrderUnit(li, splitGroups[sg].PluralIndexes[0],
-                        1 + splitGroups[sg].PluralIndexes.Count, sg, IrAlignmentKind.Split));
+                        new(1 + splitGroups[sg].PluralIndexes.Count, 0, 0), sg, IrAlignmentKind.Split));
                     break;
                 case IrAlignmentKind.Merge when mergeByFirstLeft.TryGetValue(li, out int mg):
                     units.Add(new OrderUnit(li, mergeGroups[mg].SingularIndex,
-                        1 + mergeGroups[mg].PluralIndexes.Count, mg, IrAlignmentKind.Merge));
+                        new(1 + mergeGroups[mg].PluralIndexes.Count, 0, 0), mg, IrAlignmentKind.Merge));
                     break;
-                case IrAlignmentKind.Unchanged or IrAlignmentKind.FormatOnly or IrAlignmentKind.Modified
-                    when leftMatch[li] >= 0:
-                    units.Add(new OrderUnit(li, leftMatch[li], 2, -1, kind.Value));
+                case IrAlignmentKind.Modified when leftMatch[li] >= 0:
+                    units.Add(new OrderUnit(li, leftMatch[li], new(2, 0, 0), -1, kind.Value));
+                    break;
+                case IrAlignmentKind.Unchanged or IrAlignmentKind.FormatOnly when leftMatch[li] >= 0:
+                    units.Add(new OrderUnit(li, leftMatch[li],
+                        similarity.IsBlankSpacer(leftBlocks[li]) ? new(0, 0, 1) : new(2, 1, 0), -1, kind.Value));
                     break;
                 // Deleted blocks are interleaved by EmitEntries' left-anchored buckets (which follow the
                 // units), and Moved/MovedModified emit a separate source op at their LEFT position — both
@@ -2809,6 +2690,14 @@ internal static class IrBlockAligner
             monotone = units[u].RightPosition > units[u - 1].RightPosition;
         if (monotone)
             return;
+
+        // Only a crossing needs the Modified pairs scored, so the common path never pays for it.
+        for (int u = 0; u < units.Count; u++)
+            if (units[u] is { Kind: IrAlignmentKind.Modified } unit)
+                units[u] = unit with
+                {
+                    Weight = new(2, similarity.Score(leftBlocks[unit.LeftIndex], rightBlocks[unit.RightPosition]), 0),
+                };
 
         var keep = MaxWeightIncreasingUnits(units, rightBlocks.Count);
         var releasedSplits = new HashSet<int>();
@@ -2887,26 +2776,26 @@ internal static class IrBlockAligner
         if (n == 0)
             return result;
 
-        var treeWeight = new long[nRight + 1];
+        var treeWeight = new OrderWeight[nRight + 1];
         var treeIndex = new int[nRight + 1];
         Array.Fill(treeIndex, -1);
 
-        void Update(int pos, long weight, int unitIndex)
+        void Update(int pos, OrderWeight weight, int unitIndex)
         {
             for (; pos <= nRight; pos += pos & -pos)
-                if (weight > treeWeight[pos])
+                if (weight.CompareTo(treeWeight[pos]) > 0)
                 {
                     treeWeight[pos] = weight;
                     treeIndex[pos] = unitIndex;
                 }
         }
 
-        (long Weight, int Index) Query(int pos)
+        (OrderWeight Weight, int Index) Query(int pos)
         {
-            long bestWeight = 0;
+            OrderWeight bestWeight = default;
             int bestIndex = -1;
             for (; pos > 0; pos -= pos & -pos)
-                if (treeWeight[pos] > bestWeight)
+                if (treeWeight[pos].CompareTo(bestWeight) > 0)
                 {
                     bestWeight = treeWeight[pos];
                     bestIndex = treeIndex[pos];
@@ -2914,7 +2803,7 @@ internal static class IrBlockAligner
             return (bestWeight, bestIndex);
         }
 
-        var dp = new long[n];
+        var dp = new OrderWeight[n];
         var parent = new int[n];
         for (int u = 0; u < n; u++)
         {
@@ -2925,10 +2814,10 @@ internal static class IrBlockAligner
             Update(r + 1, dp[u], u);
         }
 
-        long best = long.MinValue;
+        OrderWeight best = default;
         int end = -1;
         for (int u = 0; u < n; u++)
-            if (dp[u] > best)
+            if (end == -1 || dp[u].CompareTo(best) > 0)
             {
                 best = dp[u];
                 end = u;
