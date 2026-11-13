@@ -183,18 +183,27 @@ public static partial class WmlToHtmlConverter
             {
                 if (HasUnknownMathAttributes(property) || property.Elements().Any(e => e.Name != W.rPr)
                     || property.Elements().Count() > 1
-                    || (property.Element(W.rPr) is { } format && MathRunColor(format, scope, controlCharacter: true) == null)) return false;
+                    || (property.Element(W.rPr) is { } format
+                        && MathRunColor(format, MathControlCharacters(properties), scope, controlCharacter: true) == null)) return false;
             }
             else if (property.Name != M.mcs && (property.HasElements || HasUnknownMathAttributes(property, M.val))) return false;
         }
         return true;
     }
 
+    /// <summary>The characters a structure's control properties format: its explicit operator, fence
+    /// and separator characters plus every default one, so that each font slot they could use is checked.</summary>
+    private static string MathControlCharacters(XElement properties) =>
+        "()|/√∫ˆ⏟" + string.Concat(properties.Elements()
+            .Where(e => e.Name == M.chr || e.Name == M.begChr || e.Name == M.sepChr || e.Name == M.endChr)
+            .Select(e => (string?)e.Attribute(M.val)));
+
     /// <summary>The CSS color a math run's <c>w:rPr</c> paints, "" for none, or null when it carries
     /// formatting the projection does not draw. Fonts must name the document's math font, which the
-    /// equation already uses. A control character's properties may also carry <c>w:i</c>, which Word
-    /// writes on them by default; OMML takes math italics from <c>m:sty</c>, not from it.</summary>
-    private static string? MathRunColor(XElement properties, MathScope scope, bool controlCharacter)
+    /// equation already uses, for every font slot <paramref name="text"/> draws with. A control
+    /// character's properties may also carry <c>w:i</c>, which Word writes on them by default; OMML
+    /// takes math italics from <c>m:sty</c>, not from it.</summary>
+    private static string? MathRunColor(XElement properties, string text, MathScope scope, bool controlCharacter)
     {
         if (HasUnknownMathAttributes(properties)) return null;
         var color = "";
@@ -203,10 +212,7 @@ public static partial class WmlToHtmlConverter
             if (properties.Elements(property.Name).Count() > 1) return null;
             if (property.Name == W.rFonts)
             {
-                if (property.HasElements || scope.Context.FontName == null || property.Attributes().Any(a => !a.IsNamespaceDeclaration
-                    && a.Name != PtOpenXml.Unid && a.Name != W.hint
-                    && !((a.Name == W.ascii || a.Name == W.hAnsi || a.Name == W.eastAsia || a.Name == W.cs) && a.Value == scope.Context.FontName)))
-                    return null;
+                if (!MathFontsMatch(property, text, scope)) return null;
             }
             else if (property.Name == W.i && controlCharacter)
             {
@@ -223,6 +229,64 @@ public static partial class WmlToHtmlConverter
             else return null;
         }
         return color;
+    }
+
+    private static readonly (XName Font, XName Theme)[] MathFontSlots =
+    {
+        (W.ascii, W.asciiTheme), (W.hAnsi, W.hAnsiTheme), (W.eastAsia, W.eastAsiaTheme), (W.cs, W.cstheme),
+    };
+
+    /// <summary>Whether a math run's <c>w:rFonts</c> names the document math font in every slot its
+    /// characters use. Word gives each character one of four font slots (Latin, high ANSI, East Asian,
+    /// complex script; [MS-OI29500] §2.1.87), so a slot no character uses does not change the drawing,
+    /// as with the themed East Asian font Word writes on Latin math runs. A theme font resolves through
+    /// the theme's font scheme, and a slot the run leaves unset keeps the math font.</summary>
+    private static bool MathFontsMatch(XElement fonts, string text, MathScope scope)
+    {
+        var name = scope.Context.FontName;
+        if (name == null || fonts.HasElements || fonts.Attributes().Any(a => !a.IsNamespaceDeclaration && a.Name != PtOpenXml.Unid
+            && a.Name != W.hint && !MathFontSlots.Any(s => s.Font == a.Name || s.Theme == a.Name))) return false;
+        var resolved = new XElement(W.rFonts, fonts.Attribute(W.hint));
+        foreach (var (font, theme) in MathFontSlots)
+        {
+            // A theme font takes precedence over the slot's literal font (§17.3.2.26).
+            var value = fonts.Attribute(theme) is { } themed ? MathThemeFont(scope.Context.Document, themed.Value) ?? "" : (string?)fonts.Attribute(font);
+            if (value != null) resolved.SetAttributeValue(font, value);
+        }
+        var slots = new FormattingAssembler.CharStyleAttributes(fonts.Ancestors(W.p).FirstOrDefault()?.Element(W.pPr), new XElement(W.rPr, resolved));
+        foreach (var rune in text.EnumerateRunes())
+        {
+            // The slot table covers the Basic Multilingual Plane; supplementary ideographs are East Asian.
+            var slot = rune.Value is >= 0x20000 and <= 0x3FFFF ? FormattingAssembler.FontType.EastAsia
+                : rune.IsBmp ? FormattingAssembler.DetermineFontTypeFromCharacter((char)rune.Value, slots) : FormattingAssembler.FontType.HAnsi;
+            var font = slot switch
+            {
+                FormattingAssembler.FontType.Ascii => W.ascii,
+                FormattingAssembler.FontType.HAnsi => W.hAnsi,
+                FormattingAssembler.FontType.EastAsia => W.eastAsia,
+                _ => W.cs,
+            };
+            if ((string?)resolved.Attribute(font) is { } face && face != name) return false;
+        }
+        return true;
+    }
+
+    /// <summary>The typeface a theme font reference (ST_Theme, such as <c>minorEastAsia</c>) names in
+    /// the document theme, or null when the theme leaves it to a per-script font.</summary>
+    private static string? MathThemeFont(WordprocessingDocument document, string theme)
+    {
+        var scheme = document.MainDocumentPart?.ThemePart?.GetXDocument().Root?.Element(A.themeElements)?.Element(A.fontScheme);
+        var group = theme.StartsWith("major", System.StringComparison.Ordinal) ? scheme?.Element(A.majorFont)
+            : theme.StartsWith("minor", System.StringComparison.Ordinal) ? scheme?.Element(A.minorFont) : null;
+        var script = theme.Length > 5 ? theme[5..] switch
+        {
+            "Ascii" or "HAnsi" => A.latin,
+            "EastAsia" => A.ea,
+            "Bidi" => A.cs,
+            _ => null,
+        } : null;
+        var face = script == null ? null : (string?)group?.Element(script)?.Attribute("typeface");
+        return string.IsNullOrEmpty(face) ? null : face;
     }
 
     /// <summary>At most one properties element and exactly one of each named argument.</summary>
@@ -576,7 +640,8 @@ public static partial class WmlToHtmlConverter
         var mathProperties = source.Element(M.rPr);
         // m:nor (ordinary text), m:brk and m:aln are not drawn and keep the diagnostic.
         if (!MathPropertiesValid(mathProperties, scope, M.sty, M.scr, M.lit)) return null;
-        var color = source.Element(W.rPr) is { } format ? MathRunColor(format, scope, controlCharacter: false) : "";
+        var color = source.Element(W.rPr) is { } format
+            ? MathRunColor(format, string.Concat(source.Elements(M.t).Select(t => t.Value)), scope, controlCharacter: false) : "";
         var literal = MathOnOff(mathProperties?.Element(M.lit), false);
         var variant = MathVariant(MathValue(mathProperties, M.scr, "roman"), MathValue(mathProperties, M.sty, ""));
         if (color == null || literal == null || variant == null) return null;

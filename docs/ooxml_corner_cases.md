@@ -6844,9 +6844,13 @@ renders that check them are in the next section.
   every `w:rPr` never draws a Word equation. Docxodus accepts these when the fonts name the
   document's `m:mathFont`.
 - **Some Word files theme the East Asian font slot**: `w:eastAsiaTheme="minorEastAsia"` on the same
-  `w:rFonts` (`TestFiles/WC/WC031-Two-Maths-Before.docx`). That slot only applies to East Asian
-  characters, but the converter does not yet reason about which slot a run's characters use, so
-  these equations keep the diagnostic (#1710).
+  `w:rFonts` (`TestFiles/WC/WC031-Two-Maths-Before.docx`). Word picks one of four font slots per
+  character ([MS-OI29500] §2.1.87), and Latin math text never uses the East Asian one, so that
+  attribute does not change the drawing. The converter checks only the slots a run's characters
+  use, through the slot table `FormattingAssembler.DetermineFontTypeFromCharacter` implements, and
+  resolves theme fonts through the theme's font scheme (`*Ascii`/`*HAnsi` to `a:latin`, `*EastAsia`
+  to `a:ea`, `*Bidi` to `a:cs`). The same themed font on a CJK character still keeps the diagnostic
+  unless it names the math font (#1710).
 - **Word writes its math settings into every document it saves**, each at the value the setting has
   when absent; see "Word's default math settings" below (#1710).
 - **`m:acc` stores combining marks** (U+0302 by default, U+20D7 for a vector arrow). MathML needs

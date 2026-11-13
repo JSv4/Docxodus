@@ -849,7 +849,10 @@ or a listed one with a value outside the list, keeps the whole-equation diagnost
 is accepted anywhere OMML allows it when its `w:rPr` holds only `w:rFonts` naming the document's
 `m:mathFont` and, on control characters, `w:i`. Word writes both on nearly every equation, and
 neither changes what is drawn: the equation already uses the math font, and OMML takes math
-italics from `m:sty`.
+italics from `m:sty`. Fonts are checked per font slot (#1710): `w:rFonts` must name the math font,
+directly or through a theme font, only in the slots the run's characters use (for control
+properties, the structure's own characters and every default one). A themed East Asian font on a
+Latin run therefore passes, and the same font on a CJK character does not.
 
 | OMML | MathML | Accepted properties |
 |------|--------|---------------------|
