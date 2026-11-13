@@ -6847,13 +6847,80 @@ renders that check them are in the next section.
   `w:rFonts` (`TestFiles/WC/WC031-Two-Maths-Before.docx`). That slot only applies to East Asian
   characters, but the converter does not yet reason about which slot a run's characters use, so
   these equations keep the diagnostic (#1710).
-- **Word's default math settings keep every equation on the diagnostic path.** Word writes
-  `m:brkBin`, `m:brkBinSub`, `m:smallFrac`, `m:dispDef`, `m:lMargin`, `m:rMargin`, `m:defJc`,
-  `m:wrapIndent`, `m:intLim` and `m:naryLim` into `settings.xml`. The converter now reads
-  `m:intLim` and `m:naryLim`, which choose n-ary limit placement, but still refuses the others, so a
-  document saved by Word shows `[MATH]` until those settings are modeled (#1710).
+- **Word writes its math settings into every document it saves**, each at the value the setting has
+  when absent; see "Word's default math settings" below (#1710).
 - **`m:acc` stores combining marks** (U+0302 by default, U+20D7 for a vector arrow). MathML needs
   the spacing form (U+02C6, U+2192) in its accent `mo`; a combining mark alone has no glyph.
+
+### Word's default math settings (`m:mathPr`) and what each one changes (#1710)
+
+Word 2024 (16.0.20326) adds this block to `word/settings.xml` of every document it saves, including
+one that had no `m:mathPr` when it was opened:
+
+```xml
+<m:mathPr><m:mathFont m:val="Cambria Math"/><m:brkBin m:val="before"/><m:brkBinSub m:val="--"/>
+<m:smallFrac m:val="0"/><m:dispDef/><m:lMargin m:val="0"/><m:rMargin m:val="0"/>
+<m:defJc m:val="centerGroup"/><m:wrapIndent m:val="1440"/><m:intLim m:val="subSup"/><m:naryLim m:val="undOvr"/></m:mathPr>
+```
+
+The converter used to refuse a document's math whenever `m:mathPr` held anything but the font and
+the two limit settings, so every equation of a Word-saved document became `[MATH]`.
+
+Each setting was measured by writing one document per variant (an inline equation, a display equation
+with a fraction, a sum and an integral, and a display equation too long for one line), exporting each
+to PDF with Word, and comparing the equation regions with the default block's pixel for pixel at 150
+dpi. "Same" means zero differing pixels.
+
+| Variant | Inline equation | Display equation that fits | Display equation too long for the line |
+| --- | --- | --- | --- |
+| no `m:mathPr`; `m:mathFont` only | same | same | same |
+| `m:smallFrac` on | same | same (no visible effect on a top-level fraction) | same |
+| `m:dispDef` off | same | set at the left margin | set at the left margin, broken differently |
+| `m:lMargin` / `m:rMargin` 1440 | same | centred between the narrowed margins (shifts 0.5 in) | narrower lines |
+| `m:defJc` `left` / `right` | same | at the left / right margin | first line at that margin |
+| `m:defJc` `center` | same | same | each line centred on its own |
+| `m:brkBin` `after` / `repeat` | same | same | operator ends the line / is repeated on both lines |
+| `m:brkBinSub` `+-` (with `repeat`) | same | same | a repeated minus becomes a plus on the next line |
+| `m:wrapIndent` 0 / 2880, `m:wrapRight` | same | same | continuation lines at that indent / flush right |
+| `m:intLim` `undOvr`, `m:naryLim` `subSup` | same | limits move (drawn since #1705) | same |
+
+| | Word | LibreOffice | Docxodus |
+| --- | --- | --- | --- |
+| Default block | draws exactly as with no settings | not checked (not installed on the test machine) | was `[MATH]` for every equation; now draws as with no settings |
+
+What follows for the converter (`MathSettingsDrawn` in `WmlToHtmlConverter.Math.cs`, one table of
+setting to accepted values):
+
+- `m:smallFrac` off, `m:dispDef` on, `m:lMargin`/`m:rMargin` 0 and `m:defJc` `centerGroup` are the
+  values the MathML output already draws: display math, centred between the text margins. `center`
+  is accepted too, because a display paragraph is projected only when it holds one equation, and Word
+  draws one equation that fits the same under both. Any other value keeps the placeholder.
+  `m:smallFrac` on showed no difference here, but it was only measured on a top-level fraction, so it
+  stays refused.
+- `m:brkBin`, `m:brkBinSub`, `m:wrapIndent` and `m:wrapRight` change nothing unless Word has to break
+  the equation, so every valid value is accepted.
+- **Known difference, with or without these settings:** the MathML output never breaks an equation. A
+  display equation wider than its line is one line that runs past the right margin (the test
+  equation is 2235 px in an 800 px column), where Word breaks it before a binary operator and indents
+  the continuation lines 1 inch. Refusing such equations would need the converter to measure them,
+  which it cannot do. Inline equations are likewise one unbreakable box.
+- Settings Word does not write by default (`m:interSp`, `m:intraSp`, `m:preSp`, `m:postSp`) are not
+  modeled and keep the placeholder at any value.
+
+**Word 2024's run defaults had the same effect.** A document created in Word 2024 carries
+`<w:kern w:val="2"/>` and `<w14:ligatures w14:val="standardContextual"/>` in `w:rPrDefault`. The
+equation's font size is resolved from the paragraph's run properties, and any property other than
+fonts, size and language used to keep the placeholder, so a fresh Word 2024 document showed `[MATH]`
+even with its settings accepted. Removing both properties from such a document changes no pixel of its
+display equation in Word, so they are now passed over; other run formatting (bold, for one) still
+keeps the placeholder.
+
+The two corpus documents that carry the block now draw: `TestFiles/HC031-Complicated-Document.docx`
+(one binomial sum) and `TestFiles/WC/WC022-Image-Math-Para-Before.docx` (two). Against Word's PDF
+they are complete, centred and structurally the same. Two differences in spacing remain from the
+projection itself, not from the settings: brackets typed as ordinary characters get operator spacing
+(`( x + a )` for Word's `(x+a)`), and a hyphen-minus in a run is drawn as typed where Word draws a
+minus sign (`n - k` for `n−k`).
 
 ### What Word 2024 draws for those structures, against the MathML in Chromium (#1705)
 
@@ -8320,6 +8387,58 @@ left margin of an empty span after the `<br>`. Paragraphs without a tab never ha
 is why only list items and tabbed paragraphs were affected. Both halves are removed; nothing else
 read the value.
 
+## A picture bullet is three linked pieces, and Word refuses a list missing any (#1700)
+
+A list level can draw a picture instead of a character. The level names a bullet by id, the bullet
+is defined once in the same numbering part, and the bullet's shape names its image through the
+numbering part's own relationships:
+
+```xml
+<!-- word/numbering.xml -->
+<w:numPicBullet w:numPicBulletId="0"><w:pict>
+  <v:shape id="_x0000_i1025" style="width:9pt;height:9pt" o:bullet="t"><v:imagedata r:id="rIdBullet"/></v:shape>
+</w:pict></w:numPicBullet>
+<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0">
+  <w:numFmt w:val="bullet"/><w:lvlText w:val="&#xF0B7;"/><w:lvlPicBulletId w:val="0"/> ...
+</w:lvl></w:abstractNum>
+<!-- word/_rels/numbering.xml.rels -->
+<Relationship Id="rIdBullet" Type=".../image" Target="media/bullet.png"/>
+```
+
+Opened in Word 2024 (16.0.20326, Windows) through `Documents.Open` with repair off:
+
+| File | Word | Docxodus |
+| --- | --- | --- |
+| All three pieces present | Opens; the items draw the picture | Read as a bullet list |
+| `w:lvlPicBulletId` with no `w:numPicBullet` of that id (and no image) | "The file appears to be corrupted." (`0x800A16A0`) | Read as a bullet list |
+| Redline of a document without lists against one adding this list, before #1700 | "The file appears to be corrupted." | Wrote `w:lvlPicBulletId` only |
+| The same redline now | Opens; Accept All keeps two picture-bullet items, Reject All removes them | Writes all three pieces |
+| Redline of two unrelated lists that both call their (different) picture bullet `0`, before #1700 | Opens, and draws the original's picture beside the revision's items | Imported level kept `w:lvlPicBulletId` `0`, which is the original's bullet |
+| The same redline now | Opens; the revision's items draw the revision's picture, and Accept All and Reject All each leave one list with its own | Second bullet copied as id `1` |
+
+The Open XML SDK validator reports nothing for the dangling reference, so only opening in Word
+shows it. Word is strict here in a way it is not for a `w:numId` with no definition, which it
+repairs silently. LibreOffice was not available on the machine that made these captures.
+
+**Docxodus.** The comparison builds its output on the original's package and imports the list
+definitions the revision adds (`PackageMerge.CopyMissingNumberingFromOneDocToAnother`). It cloned
+`w:abstractNum` and `w:num` verbatim, so a level kept its `w:lvlPicBulletId` while the
+`w:numPicBullet` and the image stayed behind. Every clone now goes into the destination through
+`PackageMerge.NumberingChildImport`, which for each `w:lvlPicBulletId` in the clone (levels of a
+definition and levels inside a `w:lvlOverride` alike) copies the bullet once, imports its image
+with the same part copier the body's pictures use (`MoveRelatedPartsToDestination`), and rewrites
+the reference. A bullet keeps its id when the destination has none under it and otherwise takes
+the next free id, because the destination's bullet of that id may be another picture. Word names
+the first picture bullet's shape `_x0000_i1025` in every document, so two bullets from two
+documents usually share a shape id; Word opens that, but the SDK validator reports the duplicate,
+and the import gives the later shape a fresh id (`DrawingIds.RenumberVmlIds`). A level
+naming a bullet the source does not define is imported without the reference, so a redline never
+carries the shape Word refuses, even when the revised document had it. Tests:
+`DocxDiffPictureBulletImportTests`.
+
+Not covered: a list present in both documents whose definition is otherwise identical but whose
+bullet id points at a different picture on each side is treated as the same list, and the redline
+keeps the original's picture.
 ## A deleted text box keeps its text ordinary (#1699)
 
 A text box is a story of its own. When Word tracks the deletion of a text box it wraps the run
@@ -8420,3 +8539,69 @@ Tests: `IrDrawingGraphTests.Compare_InsertedChart_ArrivesWithItsEmbeddedWorkbook
 `Compare_ChartEmbeddedWorkbookChange_AcceptRejectUseLiveRightLeftBytes` and
 `Read_ChartEmbeddedWorkbookChange_FlipsDrawingIdentity`, each for a transitional and a Strict
 chart part.
+
+## A footnote or endnote is cited by exactly one reference (#1701)
+
+Word refuses to open a document in which two `w:footnoteReference` elements (or two
+`w:endnoteReference` elements) carry the same `w:id`, whether or not either is tracked. The schema
+allows it and the Open XML SDK validator reports nothing.
+
+```xml
+<!-- word/document.xml: both references name note 1 -->
+<w:p>
+  <w:del w:id="901" w:author="Reviewer" w:date="…"><w:r><w:footnoteReference w:id="1"/></w:r></w:del>
+  <w:ins w:id="902" w:author="Reviewer" w:date="…"><w:r><w:footnoteReference w:id="1"/></w:r></w:ins>
+</w:p>
+<!-- word/footnotes.xml -->
+<w:footnote w:id="1"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t> Records kept by the county office.</w:t></w:r></w:p></w:footnote>
+```
+
+Measured in desktop Word 2024 (16.0 build 20326, Windows 11) through `Documents.Open`, then
+`AcceptAllRevisions` / `RejectAllRevisions` on a fresh read-only open, reading `Content.Text` and
+each `Footnotes(i).Range.Text`. LibreOffice was not measured.
+
+| Document | Word 2024 | Docxodus |
+| --- | --- | --- |
+| Two untracked references to note 1 | "The file appears to be corrupted." | Reads it; a note cited twice corresponds once |
+| A deleted and an inserted reference to note 1, definition untouched (above) | "The file appears to be corrupted." | — |
+| Two deleted references to note 1 | "The file appears to be corrupted." | — |
+| A redline whose deleted citations reuse the inserted citations' ids, each pair sharing one definition that holds both notes' text (what `57f5d346` wrote for two replaced paragraphs) | "The file appears to be corrupted." | Wrote it before the fix; `AcceptRevisions` and `RejectRevisions` both resolved it correctly |
+| Four citations with four ids: inserted citations name wholly inserted notes, deleted citations wholly deleted notes | Opens; Accept All gives the revised paragraphs and notes, Reject All the original's | Writes this now |
+| A kept citation whose definition holds an inserted and a deleted `w:footnoteRef` run, one before each version of a rewritten note | Opens; each resolution leaves one mark | Writes this for a rewritten note whose citation is kept (unchanged) |
+| A moved paragraph: `w:moveFrom` citation naming a deleted note, `w:moveTo` citation naming an inserted copy | Opens; citations and notes resolve correctly | Writes this (unchanged) |
+
+So the constraint is on references, not on revisions: resolving the redline would have left one
+reference per note, but Word checks the file as stored. A comparison therefore has to decide, for
+every pair of notes, whether the redline writes one citation for both or one for each, and it can
+only merge the two notes into one definition in the first case.
+
+**Analysis.** `IrEditScriptBuilder.AlignNoteReferences` paired notes in three passes: the notes
+behind references the body diff keeps (#865), then leftover notes with equal content, then the
+remaining leftovers by text similarity, pairing a lone leftover on each side whatever its text. A
+note paired by the last two passes has, by construction, a citation the body does not keep: the
+original's sits in deleted or moved-from text and the revision's in inserted or moved-to text, and
+both are written. The renderer gives a paired note one definition under the revised id, and both
+documents usually number their notes from 1, so the two citations ended up with one id. The
+content passes could never produce a correct pairing; where they appeared to help, they were
+covering for kept references that `KeptNoteReferences` did not report (format-only blocks, split
+and merged paragraphs).
+
+**Fix.** A note pairs with the other document's note only through a reference the body diff
+keeps. `KeptNoteReferences` now reports every reference the renderer writes once: in equal and
+format-only blocks, and in the unchanged token runs of modified, split and merged paragraphs
+(through tables' cells and block wrappers, as before). It no longer reports the references of a
+paragraph the renderer replaces whole (`RequiresWholeParagraphReplace`, a paragraph holding a
+field with no visible text), which are written twice. The content passes and their helpers are
+removed. `Consolidate` had a second route to the same file: a base note a reviewer deleted is mapped to
+itself under its base id, and that entry overwrote the entry of the reviewer's own note with the
+same id (a new note, or a kept note the reviewer's document numbers differently), so that note's
+citation was written with the deleted note's id. `IrCompositeMarkupRenderer` now writes the
+identity entries first.
+
+**Not covered.** A note cited more than once in an input (which Word itself refuses) is still
+written with every citation naming one definition. Word does not allow a note reference inside a
+text box, so references in text boxes of a modified paragraph are not tracked as kept.
+
+**Code and tests.** `Docxodus/Ir/Diff/IrEditScriptBuilder.cs` (`KeptNoteReferences`,
+`AlignNoteReferences`), `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs`
+(`RenderCompositeNoteScopes`); `DocxDiffNoteReferenceTests`, `IrSdtDiffWalkerTests`.

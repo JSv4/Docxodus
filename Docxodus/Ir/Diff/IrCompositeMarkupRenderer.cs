@@ -192,7 +192,8 @@ internal static class IrCompositeMarkupRenderer
                     // The reviewer's numbering levels and comments, merged after its styles, may name a style
                     // copied under a fresh id (issue #1184).
                     var numberingBeforeCopy = StyleIdRemap.ChildrenSnapshot(main.NumberingDefinitionsPart);
-                    PackageMerge.CopyMissingNumberingFromOneDocToAnother(wDocRev, wDoc);
+                    PackageMerge.CopyMissingNumberingFromOneDocToAnother(
+                        wDocRev, wDoc, revStream.GetPackage(), streamDoc.GetPackage());
                     styleIdRemap.ApplyToChildrenAddedSince(main.NumberingDefinitionsPart, numberingBeforeCopy);
                     var commentsBeforeMerge = StyleIdRemap.ChildrenSnapshot(main.WordprocessingCommentsPart);
                     IrMarkupRenderer.MergeRightCommentDefinitions(main, wDocRev.MainDocumentPart, streamDoc, revStream);
@@ -292,7 +293,11 @@ internal static class IrCompositeMarkupRenderer
         long nextFresh = MaxPositiveNoteId(main) + 1;
         if (script.NoteIdMaps is { } maps)
         {
-            foreach (var m in maps)
+            // A base note the reviewer deleted is mapped to itself under its base id, an id the reviewer's
+            // document may use for another note: one it inserted, or one paired with a different base note.
+            // That note is the one the reviewer's references name, so identity entries are written first and
+            // cannot replace it (issue #1701).
+            foreach (var m in maps.OrderBy(m => m.BaseNoteId != m.ReviewerNoteId))
             {
                 if (m.BaseNoteId is { } baseId)
                 {

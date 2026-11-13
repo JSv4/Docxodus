@@ -819,6 +819,12 @@ font-family: 'Courier New', monospace
 square/indexed roots to native MathML. Inline and display forms retain their operand structure
 and selectable text. An explicit document `m:mathFont` becomes the math font family; absent
 that setting, CSS `math` leaves substitution visible to the shared export font policy.
+The other document math settings (`m:mathPr`) are gated by one table, `MathSettingsDrawn`: each
+setting with the values the MathML output already draws as Word does. Word writes the block into
+every document it saves, at the values the settings have when absent, so those draw; a setting
+outside the table, or a listed one at another value (left-justified display math, a math margin),
+keeps every equation of the document on the diagnostic. `docs/ooxml_corner_cases.md` has the
+per-setting measurements against Word 2024 (#1710).
 Equation size uses the shared run-style resolver, isolated from the paragraph mark and the
 largest surrounding prose run. Table-style contexts and richer inherited run formatting retain
 diagnostics because this resolver does not model those equation properties.

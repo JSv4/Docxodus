@@ -47,14 +47,89 @@ public class HtmlMathTests
         Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "MathEquation");
     }
 
+    // The block Word 2024 writes into word/settings.xml of every document it saves.
+    private const string WordDefaultMathSettings = "<m:mathFont m:val=\"Cambria Math\"/><m:brkBin m:val=\"before\"/>"
+        + "<m:brkBinSub m:val=\"--\"/><m:smallFrac m:val=\"0\"/><m:dispDef/><m:lMargin m:val=\"0\"/><m:rMargin m:val=\"0\"/>"
+        + "<m:defJc m:val=\"centerGroup\"/><m:wrapIndent m:val=\"1440\"/><m:intLim m:val=\"subSup\"/><m:naryLim m:val=\"undOvr\"/>";
+
     [Theory]
-    [InlineData("<m:smallFrac m:val=\"1\"/>")]
-    [InlineData("<m:defJc m:val=\"right\"/>")]
-    public void Unsupported_document_math_properties_keep_the_diagnostic(string property)
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Words_default_math_settings_draw_the_equation_as_no_settings_do(bool display)
+    {
+        // Issue #1710: Word draws a document with this block exactly as one with no m:mathPr at all.
+        var withBlock = Assert.Single(Convert(RunX, display, WordDefaultMathSettings).Descendants(MathMl + "math"));
+        var without = Assert.Single(Convert(RunX, display, "<m:mathFont m:val=\"Cambria Math\"/>").Descendants(MathMl + "math"));
+        Assert.Equal(without.ToString(), withBlock.ToString());
+    }
+
+    [Theory]
+    // The value each setting takes when it is absent.
+    [InlineData("<m:smallFrac m:val=\"0\"/>")]
+    [InlineData("<m:smallFrac m:val=\"off\"/>")]
+    [InlineData("<m:dispDef/>")]
+    [InlineData("<m:dispDef m:val=\"true\"/>")]
+    [InlineData("<m:lMargin m:val=\"0\"/>")]
+    [InlineData("<m:rMargin m:val=\"0\"/>")]
+    [InlineData("<m:defJc m:val=\"centerGroup\"/>")]
+    // One equation centred on its own is a group of one.
+    [InlineData("<m:defJc m:val=\"center\"/>")]
+    // These only shape the lines of an equation too long for one line.
+    [InlineData("<m:brkBin m:val=\"before\"/>")]
+    [InlineData("<m:brkBin m:val=\"after\"/>")]
+    [InlineData("<m:brkBin m:val=\"repeat\"/>")]
+    [InlineData("<m:brkBinSub m:val=\"--\"/>")]
+    [InlineData("<m:brkBinSub m:val=\"-+\"/>")]
+    [InlineData("<m:brkBinSub m:val=\"+-\"/>")]
+    [InlineData("<m:wrapIndent m:val=\"1440\"/>")]
+    [InlineData("<m:wrapIndent m:val=\"0\"/>")]
+    [InlineData("<m:wrapRight/>")]
+    public void Document_math_settings_the_output_already_reproduces_draw_the_equation(string property)
     {
         var html = Convert(RunX, true, property);
+        Assert.Single(html.Descendants(MathMl + "math"));
+        Assert.DoesNotContain(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "MathEquation");
+    }
+
+    [Theory]
+    [InlineData("<m:smallFrac m:val=\"1\"/>")]
+    [InlineData("<m:smallFrac/>")]
+    [InlineData("<m:dispDef m:val=\"0\"/>")]
+    [InlineData("<m:lMargin m:val=\"1440\"/>")]
+    [InlineData("<m:rMargin m:val=\"1440\"/>")]
+    [InlineData("<m:defJc m:val=\"left\"/>")]
+    [InlineData("<m:defJc m:val=\"right\"/>")]
+    [InlineData("<m:defJc/>")]
+    [InlineData("<m:brkBin m:val=\"never\"/>")]
+    [InlineData("<m:brkBinSub m:val=\"++\"/>")]
+    [InlineData("<m:wrapIndent m:val=\"wide\"/>")]
+    [InlineData("<m:wrapIndent/>")]
+    [InlineData("<m:mathFont m:val=\" \"/>")]
+    // Settings the output does not model at any value.
+    [InlineData("<m:interSp m:val=\"0\"/>")]
+    [InlineData("<m:preSp m:val=\"0\"/>")]
+    // A setting is read once and carries only its value.
+    [InlineData("<m:lMargin m:val=\"0\"/><m:lMargin m:val=\"0\"/>")]
+    [InlineData("<m:lMargin m:val=\"0\" m:other=\"1\"/>")]
+    [InlineData("<m:dispDef><m:x/></m:dispDef>")]
+    public void Unsupported_document_math_properties_keep_the_diagnostic(string property)
+    {
+        var html = Convert(RunX, true, property, validate: false);
         Assert.DoesNotContain(html.Descendants(), e => e.Name.Namespace == MathMl);
         Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "MathEquation");
+    }
+
+    [Theory]
+    [InlineData("HC031-Complicated-Document.docx", 1)]
+    [InlineData("WC/WC022-Image-Math-Para-Before.docx", 2)]
+    public void Documents_saved_by_Word_draw_their_equations(string file, int equations)
+    {
+        // Both carry Word's default math settings, which used to send every equation to the placeholder.
+        var path = Path.Combine("../../../../TestFiles", file);
+        var html = XElement.Parse(HtmlConversionOps.ConvertToHtml(File.ReadAllBytes(path),
+            new HtmlConversionOptions { RenderUnsupportedContentPlaceholders = true }));
+        Assert.Equal(equations, html.Descendants(MathMl + "math").Count());
+        Assert.DoesNotContain(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "MathEquation");
     }
 
     [Fact]
@@ -80,6 +155,24 @@ public class HtmlMathTests
             + (style ? "<w:style w:type=\"paragraph\" w:styleId=\"MathBody\"><w:name w:val=\"Math Body\"/><w:rPr><w:sz w:val=\"36\"/></w:rPr></w:style>" : "");
         var math = Assert.Single(Convert(RunX, false, paragraphStart: paragraphStart, styles: styles).Descendants(MathMl + "math"));
         Assert.Contains("font-size: " + expected + ";", (string?)math.Attribute("style"));
+    }
+
+    [Theory]
+    [InlineData("", "12pt")]
+    [InlineData("<w:b/>", null)]
+    public void Words_default_run_properties_leave_the_equation_drawn(string extra, string? expected)
+    {
+        // The run defaults of a document created in Word 2024. Kerning and ligatures do not reach a math
+        // zone; formatting that would (bold, here) still keeps the diagnostic.
+        var styles = "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme=\"minorHAnsi\" w:eastAsiaTheme=\"minorEastAsia\" "
+            + "w:hAnsiTheme=\"minorHAnsi\" w:cstheme=\"minorBidi\"/>" + extra + "<w:kern w:val=\"2\"/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/>"
+            + "<w:lang w:val=\"en-US\" w:eastAsia=\"en-US\" w:bidi=\"ar-SA\"/>"
+            + "<w14:ligatures xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:val=\"standardContextual\"/>"
+            + "</w:rPr></w:rPrDefault></w:docDefaults>";
+        var html = Convert(RunX, true, WordDefaultMathSettings, styles: styles, validate: false);
+        var math = html.Descendants(MathMl + "math").SingleOrDefault();
+        Assert.Equal(expected, math == null ? null : ((string)math.Attribute("style")!).Split("font-size: ")[1].Split(';')[0]);
+        Assert.Equal(expected == null ? 1 : 0, html.Descendants().Count(e => (string?)e.Attribute("data-content-type") == "MathEquation"));
     }
 
     [Fact]
