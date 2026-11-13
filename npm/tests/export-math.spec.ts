@@ -83,7 +83,7 @@ test('adjacent equations without spaces split only between whole formulas', asyn
   } finally { await task.destroy(); }
 });
 
-for (const kind of ['accent', 'styled'] as const) {
+for (const kind of ['phantom', 'normalText'] as const) {
   test(`${kind} keeps a whole-equation diagnostic and strict-policy refusal`, async ({ browser }) => {
     const source = mathDocx(kind, 'display');
     const options = { browser, outputs: ['html', 'pdf'] as const, reviewProfile: 'final' as const, commentProfile: 'hidden' as const };
@@ -94,6 +94,26 @@ for (const kind of ['accent', 'styled'] as const) {
       .rejects.toMatchObject({ code: 'resource_policy_failure' });
   });
 }
+
+test('scripts, n-ary limits and fences reach the public PDF as selectable math', async ({ browser, page }) => {
+  const result = await renderDocxArtifacts(mathDocx('structured', 'display'), {
+    browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'hidden', unsupportedContent: 'strict',
+  });
+  expect(result.renderReport.unsupportedContent).toEqual([]);
+  await page.setContent(result.html!);
+  const math = page.locator('.page-content math');
+  await expect(math.locator('munderover')).toHaveCount(1);
+  await expect(math.locator('msup')).toHaveCount(1);
+  await expect(math.locator('mo[fence="true"]')).toHaveCount(2);
+  const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
+  try {
+    const pdf = await task.promise;
+    const text = (await Promise.all(Array.from({ length: pdf.numPages }, async (_, i) =>
+      (await (await pdf.getPage(i + 1)).getTextContent()).items.flatMap(item => 'str' in item ? [item.str] : []).join('')))).join('');
+    expect(text.match(/𝑥/gu)).toHaveLength(1);
+    expect(text.match(/MathAfter/g)).toHaveLength(1);
+  } finally { await task.destroy(); }
+});
 
 for (const paragraphSize of [undefined, 36]) {
   test(`math size follows ${paragraphSize ? 'paragraph style' : 'document defaults'} beside large prose and mark`, async ({ browser, page }) => {

@@ -746,6 +746,29 @@ namespace Docxodus.Tests
             Assert.Contains("Beta", afterRemove);
         }
 
+        // Issue #1707: the HTML shows a Wingdings check box as U+2611, but the annotation names the stored
+        // U+F0FE. The projector finds it by the stored character and wraps the whole glyph.
+        [Fact]
+        public void EA061_ProjectAnnotationsOntoHtml_FindsMappedSymbolText()
+        {
+            var doc = CreateTestDocument(body => body.AppendChild(new Paragraph(
+                new Run(new Text("Agree ") { Space = SpaceProcessingModeValues.Preserve }),
+                new Run(new RunProperties(new RunFonts { Ascii = "Wingdings", HighAnsi = "Wingdings" }), new Text("\uF0FE")),
+                new Run(new Text(" Yes") { Space = SpaceProcessingModeValues.Preserve }))));
+            var set = ExternalAnnotationManager.CreateAnnotationSet(doc, "test");
+            var start = set.Content.IndexOf('\uF0FE');
+            var annotation = ExternalAnnotationManager.CreateAnnotation("ann-box", "BOX", set.Content, start, start + 5);
+            Assert.NotNull(annotation);
+            set.LabelledText.Add(annotation);
+            var baseHtml = WmlToHtmlConverter.ConvertToHtml(doc, new WmlToHtmlConverterSettings()).ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
+
+            var annotated = System.Xml.Linq.XElement.Parse(ExternalAnnotationProjector.ProjectAnnotationsOntoHtml(baseHtml, set));
+
+            var wrapped = annotated.Descendants().Where(e => (string?)e.Attribute("data-annotation-id") == "ann-box")
+                .Select(e => e.Value).ToList();
+            Assert.Equal("☑ Yes", string.Concat(wrapped));
+        }
+
         #endregion
 
         #region HTML Fragment Tests (Issue #110)

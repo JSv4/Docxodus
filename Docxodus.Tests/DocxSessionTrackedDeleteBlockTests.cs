@@ -788,6 +788,26 @@ public class DocxSessionTrackedDeleteBlockTests
             AssertXmlEqual(E("body", P("before"), P("after")), Body(Resolve(tracked, resolver, true)));
     }
 
+    /// <summary>A text box is a story the paragraph's deletion does not reach into: its text keeps the
+    /// ordinary spelling, as it does when Word tracks the deletion (issue #1699).</summary>
+    [Fact]
+    public void DeletingAParagraphWithATextBox_LeavesTheBoxTextOrdinary()
+    {
+        var input = Build(new[] { P("before"), E("p", Run("ordinary"), TextBox()), P("after") });
+        using var session = Open(input);
+        Assert.True(session.DeleteBlock(Anchor(session, "p", 1)).Success);
+        var tracked = session.Save();
+        AssertValid(tracked);
+
+        Assert.Equal("ordinary", Assert.Single(Body(tracked).Descendants(W.delText)).Value);
+        Assert.Equal("text box", Assert.Single(Body(tracked).Descendants(W.txbxContent)).Value);
+        foreach (var resolver in new[] { "session", "diff", "individual" })
+        {
+            AssertXmlEqual(Body(input), Body(Resolve(tracked, resolver, false)));
+            AssertXmlEqual(E("body", P("before"), P("after")), Body(Resolve(tracked, resolver, true)));
+        }
+    }
+
     [Theory]
     [InlineData("session")]
     [InlineData("diff")]

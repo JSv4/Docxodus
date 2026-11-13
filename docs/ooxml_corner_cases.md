@@ -6827,6 +6827,92 @@ inventory checks MathML's actual italic identifier code points and each radical'
 the paragraph fragmenter moves complete inline equations, and prose baseline correction skips
 MathML just as it skips other independently laid-out media.
 
+### OMML structure defaults that are easy to get wrong (#1705)
+
+These come from ECMA-376 Part 1 §22.1 and from Word-authored files in `TestFiles/`. The Word
+renders that check them are in the next section.
+
+- **`m:vertJc` on `m:groupChr` has two different defaults.** An absent element means `top`, but an
+  element present without `m:val` means `bot` (§22.1.2.119). Word's overbrace writes
+  `<m:chr m:val="⏞"/><m:pos m:val="top"/><m:vertJc m:val="bot"/>`, and an underbrace takes the
+  element defaults (`⏟`, `pos` `bot`, `vertJc` absent = `top`). Both keep the operand on the
+  baseline, which is the only layout MathML `munder`/`mover` draws. The converter accepts exactly
+  those two combinations and keeps the diagnostic for the other two.
+- **Word writes formatting that changes nothing on almost every equation.** Each `m:r` carries
+  `<w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr>`, and each structure's
+  properties end in `m:ctrlPr` with the same fonts, often plus `<w:i/>`. A converter that refuses
+  every `w:rPr` never draws a Word equation. Docxodus accepts these when the fonts name the
+  document's `m:mathFont`.
+- **Some Word files theme the East Asian font slot**: `w:eastAsiaTheme="minorEastAsia"` on the same
+  `w:rFonts` (`TestFiles/WC/WC031-Two-Maths-Before.docx`). That slot only applies to East Asian
+  characters, but the converter does not yet reason about which slot a run's characters use, so
+  these equations keep the diagnostic (#1710).
+- **Word's default math settings keep every equation on the diagnostic path.** Word writes
+  `m:brkBin`, `m:brkBinSub`, `m:smallFrac`, `m:dispDef`, `m:lMargin`, `m:rMargin`, `m:defJc`,
+  `m:wrapIndent`, `m:intLim` and `m:naryLim` into `settings.xml`. The converter now reads
+  `m:intLim` and `m:naryLim`, which choose n-ary limit placement, but still refuses the others, so a
+  document saved by Word shows `[MATH]` until those settings are modeled (#1710).
+- **`m:acc` stores combining marks** (U+0302 by default, U+20D7 for a vector arrow). MathML needs
+  the spacing form (U+02C6, U+2192) in its accent `mo`; a combining mark alone has no glyph.
+
+### What Word 2024 draws for those structures, against the MathML in Chromium (#1705)
+
+One hand-written document with 39 inline equations, one per structure and property above, plus two
+display equations, was exported to PDF by Word 16.0.20326 and converted to HTML and rendered in
+Chromium 143 with Cambria Math. All 41 project (no placeholder). Scripts, pre-scripts, n-ary
+operators, delimiters, matrices, functions, accents, limits, braces, boxes, no-bar fractions and the
+styled alphabets match Word's drawing. Four did not, and what Word does is the finding:
+
+| OMML | Word 2024 | MathML as first projected | Now |
+| --- | --- | --- | --- |
+| `m:bar` (top and bottom) over `x+y` | a rule as wide as the operand | `mover`/`munder` with a stretchy `‾` / `_`: one character wide, because Cambria Math has no stretch variants for either | the operand's `mrow` with a `border-top` / `border-bottom` |
+| `m:eqArr` rows `x&=1`, `y+z&=22` | rows meet at the `=`: `x` is set right, against it | `mtd` with `text-align: right`: Chromium leaves the cell's math at the left | `text-align: -webkit-right` / `-webkit-left` after the standard declaration |
+| `m:m` with `m:mcJc` `left`/`right` | column set to that side | same `text-align`, same result | same fix |
+| `m:f` type `lin` | `a/b`, slash tight | `a / b`, infix operator spacing | `lspace="0" rspace="0"` |
+
+Why `text-align` alone does nothing in Chromium: a cell's math is a block-level box, and
+`text-align: right` moves only inline content. Chromium's own stylesheet centres cells with
+`text-align: -webkit-center`, the keyword that also moves block children, so the matching
+`-webkit-right` / `-webkit-left` is what takes effect. An engine that does not know the keyword
+drops that declaration and keeps the standard one. Not checked in Firefox or Safari.
+
+Other things the render settled:
+
+- **`m:lit` changes nothing Word draws here.** `<m:r><m:rPr><m:lit/></m:rPr><m:t>a+b</m:t></m:r>`
+  is drawn exactly like the same run without it, with ordinary spacing around the `+`. Projecting a
+  literal run as an ordinary one is therefore faithful; only its `&` in an equation array keeps
+  the diagnostic.
+- **Word sets under/over limits beside an inline n-ary operator** (`∑` with `limLoc` `undOvr`
+  draws as `∑ᵢⁿ` in a line of text and stacked in a display equation), which is what
+  `movablelimits="true"` gives.
+- **Known remaining differences, not fixed here.** Word sets `k=0` in a limit or script tight;
+  Chromium keeps full operator spacing at script size. And a run that *starts* with an operator
+  (`<m:r>a</m:r><m:r>+c</m:r>`) loses the space before it: each run is its own `mrow`, so MathML
+  reads a leading `+` as a prefix operator. That is how runs were already projected before these
+  structures were added.
+
+Code: `WmlToHtmlConverter.Math.cs` (`MathExpression`, `MathCellAlignment`). Tests:
+`A_bar_is_a_rule_as_wide_as_its_operand`, `Matrix_columns_keep_their_justification`,
+`Display_equation_arrays_keep_display_style_and_align_rows_at_their_points`,
+`A_linear_fraction_slash_is_set_tight`.
+
+### Bounds on equation input (#1705)
+
+An equation is attacker-controlled input, and two shapes turned a small one into a large amount
+of work:
+
+- **Equation-array width.** Every row of an `m:eqArr` is padded to the widest row. One row of
+  10,000 `&` and 2,000 one-cell rows (about 120 KB of XML) would have produced 20 million cells.
+  A row may now hold at most 64 aligned cells, the same bound a matrix column group's `m:count`
+  has; a wider array keeps the placeholder.
+- **Plain-text identifiers.** Adjacent upright letters (`m:sty` `p`) form one `mi`. Appending to it
+  one letter at a time copied the whole identifier per letter; a 400,000-letter run (a few
+  kilobytes zipped) did not finish in twenty minutes. The identifier is now built once and the
+  same run converts in about three seconds.
+
+A styled digit outside 0-9 (bold `٣`) keeps the placeholder, since the styled alphabets have only
+ASCII digits and it would be drawn unstyled. A run colour must be exactly six hex digits.
+
 ## Resizing text boxes beyond an explicit page offset
 
 A direct main-body WPS box on 612 × 792pt paper can author a horizontal page offset
@@ -7214,6 +7300,71 @@ in every view, and `prepareMixedLineHeights` reads it as the marker's ascent in 
 fallback face the glyph renders in, even when every run shares one font. Exact spacing gets
 no box, since its lines never grow. The glyph itself still renders in the generic family the
 Symbol declaration names.
+
+## Symbol-font text in body runs and `w:sym`, and font-less private-use characters (#1707)
+
+Word stores a character in a symbol font as the font's own byte, usually moved into the private-use
+area: a Wingdings check box is U+F0FE, a Symbol alpha U+F061 (or a bare "a"). Without the font
+installed, which is every browser outside Windows and the export, that character draws as a
+missing-glyph box, so Wingdings' empty, crossed and checked boxes (U+F0A8, U+F0FD, U+F0FE) all
+looked the same. The converter mapped only eight list-marker glyphs (#1567).
+
+```xml
+<w:p>
+  <w:r><w:t xml:space="preserve">A </w:t></w:r>
+  <w:r><w:rPr><w:rFonts w:ascii="Wingdings" w:hAnsi="Wingdings"/></w:rPr>
+    <w:t>&#xF0A8; &#xF0FE; &#xF0FD;</w:t></w:r>              <!-- symbol-font run -->
+  <w:r><w:sym w:font="Wingdings" w:char="F0FE"/></w:r>  <!-- w:sym -->
+  <w:r><w:t>&#xF0A8; &#xF0FE; &#xF0FD;</w:t></w:r>      <!-- the same characters, no symbol font -->
+</w:p>
+```
+
+| Case | Word | LibreOffice 26.8 (`soffice --headless --convert-to pdf`, Wingdings not installed) | Docxodus before | Docxodus after |
+| --- | --- | --- | --- | --- |
+| Wingdings run | Wingdings glyphs (font installed with Office) | Linux Libertine G substituted; the three characters draw nothing | U+F0xx in `'Wingdings', serif`: missing-glyph boxes | ☐ ☑ ☒ in the fallback family |
+| `w:sym` Wingdings F0FE | ☑ | Drawn in OpenSymbol; the text layer keeps U+F0FE | U+F0FE in Wingdings: a box | ☑ |
+| Run in Symbol, text "abg" | αβγ | Drawn in OpenSymbol; the text layer keeps "abg" | "abg" in Symbol: Latin letters where Symbol is missing | αβγ |
+| Private-use characters, no symbol font (`w:rFonts` absent or Arial) | The text font's missing-glyph box (Arial) or a boxed question mark (no `w:rFonts`); never a Wingdings glyph | Drawn in the text font (Carlito), which has no glyph: nothing visible; `pdffonts` lists Carlito only | Left as stored | Left as stored |
+
+**Symbol-font runs and `w:sym`.** `SymbolFontMapper` now carries complete tables: Unicode's Adobe
+Symbol mapping (`MAPPINGS/VENDORS/ADOBE/symbol.txt`) and the source references of WG2 N4384 for
+Wingdings, Wingdings 2, Wingdings 3 and Webdings, which Unicode 7.0 encoded. Both the U+F020–U+F0FF
+and the bare U+0020–U+00FF form map. A handful of form-control glyphs map to the older ballot boxes
+and marks (U+2610–U+2612, U+2713, U+2717) rather than Unicode 7.0's styled forms, which most fonts
+lack. Symbol's bracket and integral pieces, which Adobe maps to its corporate private-use area, and
+Wingdings' Windows logo stay unmapped. `ConvertRun` maps a run whose resolved font is one of these,
+and a `w:sym` by its `w:font`; a run that maps entirely drops the symbol face, and the line keeps
+the replaced font's ascent with the same empty box #1567 gives list markers. Each mapped character is
+a non-editable `span[data-docx-symbol-text]` holding the stored character, which the editor counts
+and commits instead of the rendered glyph (`atomText` in `npm/src/editor.ts`): the document text is
+unchanged, and a glyph beyond the BMP, two UTF-16 units for one stored unit, does not shift offsets.
+`ExternalAnnotationProjector`, which finds an annotation in converted HTML by its raw text, reads
+the same attribute. The session text, markdown projection, IR and `DocxDiff` keep reading the stored
+characters.
+
+**Font-less private-use characters stay as stored.** These are usually a Wingdings box whose font
+was lost when the text was pasted elsewhere. The spec's `w:rFonts` character-range rules send
+U+E000–U+F8FF to the `w:hAnsi` font (the East Asian font under `w:hint="eastAsia"`), with no rule
+that treats a private-use character as a symbol font, and LibreOffice draws it in the text font too.
+The same code means different things in different symbol fonts (U+F0B7 is Symbol's bullet and
+Wingdings' one o'clock face), so any guess would sometimes draw the wrong symbol. Word 2024 does not
+guess either (table below), so Docxodus leaves the character and font as stored.
+
+**What Word 2024 draws (build 16.0.20326, exported to PDF and rasterised).** Each row is one run at 24pt:
+
+| Stored | Word draws | Docxodus |
+| --- | --- | --- |
+| Wingdings run, U+F0A8 U+F06F U+F0FD U+F0FE U+F0FC U+F0FB | ☐ ☐ ☒ ☑ ✓ ✗ | the same six |
+| Wingdings run, bare `o` U+00A8 U+00FD U+00FE | ☐ ☐ ☒ ☑: the bare byte is the same glyph as its U+F0xx form | the same |
+| Wingdings U+F036 | an hourglass with the sand settled, no stream | ⌛ U+231B HOURGLASS (U+23F3 is the hourglass *with flowing sand*, a different glyph) |
+| One Arial run: `<w:t>I agree </w:t><w:sym w:font="Wingdings" w:char="F0FE"/>` | "I agree" in Arial, then ☑ | the same: each child of a run is converted as a run of its own, so the symbol's font never reaches the text |
+| One run: `w:sym` Wingdings F0FE, then `w:sym` Symbol F061 | ☑ α, each in the font it names | ☑ α |
+| Wingdings run "ab", then `w:sym` Symbol F061 | ♋ ♌ α | ♋ ♌ α |
+| Wingdings run, U+00A0 and U+00AD between letters (bare or as U+F0A0/U+F0AD) | the font's glyphs for bytes 0xA0 and 0xAD (a small square and an eight-pointed star); neither acts as a no-break space or a soft hyphen | U+2B1D and U+1F7CF |
+| Symbol run, U+00AD or U+F0AD | ↑ | ↑ |
+| Symbol run, U+00A0 or U+F0A0 | the missing-glyph box: Windows' `symbol.ttf` has no glyph at 0xA0 in either cmap | left as stored in Symbol, so it is the same box where the font is installed. Adobe's table has EURO SIGN here, but a euro is not what the document showed |
+| U+F0A8 U+F0FE in an Arial run, and in a run with no `w:rFonts` | missing-glyph boxes / boxed question marks | left as stored |
+| Tracked-deleted Wingdings U+F0FE (`w:delText`), All Markup | a struck-through ☑ in the revision colour | ☑ inside the deletion markup when deleted content is shown; nothing when it is hidden |
 
 ## Character width was ignored inside fixed table cells (#1564)
 
@@ -8148,6 +8299,58 @@ left margin of an empty span after the `<br>`. Paragraphs without a tab never ha
 is why only list items and tabbed paragraphs were affected. Both halves are removed; nothing else
 read the value.
 
+## A deleted text box keeps its text ordinary (#1699)
+
+A text box is a story of its own. When Word tracks the deletion of a text box it wraps the run
+that anchors the box in `w:del` and leaves the box's content exactly as it was: the text inside
+`w:txbxContent` stays `w:t`, in both the DrawingML copy and the VML fallback.
+
+```xml
+<w:p>
+  <w:r><w:t xml:space="preserve">Maintenance plan for the pump house. </w:t></w:r>
+  <w:del w:id="0" w:author="A" w:date="…"><w:r><mc:AlternateContent>
+    <mc:Choice Requires="wps">… <wps:txbx><w:txbxContent>
+      <w:p><w:r><w:t>Rotate the north filters weekly</w:t></w:r></w:p>
+    </w:txbxContent></wps:txbx> …</mc:Choice>
+    <mc:Fallback>… <v:textbox><w:txbxContent>
+      <w:p><w:r><w:t>Rotate the north filters weekly</w:t></w:r></w:p>
+    </w:txbxContent></v:textbox> …</mc:Fallback>
+  </mc:AlternateContent></w:r></w:del>
+</w:p>
+```
+
+That is what desktop Word 2024 (16.0 build 20326, Windows 11) saved after `Shapes(1).Delete()`
+with `TrackRevisions` on. The same build was then given three spellings of the box's text inside
+the deleted run, each opened with `Documents.Open` and resolved with `Revisions.AcceptAll` and
+`Revisions.RejectAll`:
+
+| Text inside the deleted box | Open | Accept All | Reject All |
+| --- | --- | --- | --- |
+| `w:r > w:t` (Word's own) | opens | box removed | box and its text restored |
+| `w:r > w:delText`, no `w:del` in the box | "The file appears to be corrupted." (`0x800A16A0`) | – | – |
+| `w:del > w:r > w:delText` in the box | opens | box removed | box and its text restored |
+
+The `w:del` around the anchoring run does not reach into the box, so `w:delText` there is
+deleted text with no deletion, and Word refuses the whole file. The third row is what Word
+itself saves when the text is deleted inside the box with tracking on
+(`Shapes(1).TextFrame.TextRange.Delete()`): the deletion sits in the box's story and its text
+is `w:delText`. So the story a deletion sits in decides the spelling. The Open XML SDK validator
+reports nothing for it. LibreOffice was not available for this measurement.
+
+**Docxodus before #1699.** Marking a run as deleted renamed every `w:t` and `w:instrText` under
+it, text box content included. `DocxDiff`/`DocxCompare` did so for a deleted run and for a
+left-document insertion projected as a deletion, and `DocxSession` did so for a deleted paragraph,
+block or content-control fill (it already skipped text under a nested revision, but not a text
+box). Lowering a move source to a deletion was the only path that left a box alone, and it went
+too far the other way: a move source inside a box kept `w:t` when it became a `w:del` there.
+
+**Now.** `RevisionOps.SpellTextAsDeleted` is the one place that gives deleted text its deleted
+spelling, used by the comparison renderer and the session. It renames only the text the
+deletion owns: not text inside `w:txbxContent`, and not text under a revision nested in the
+deleted element. Docxodus writes Word's own shape (the first row) for a deleted box, and the
+third row's for a deletion made inside one. Tests:
+`DocxDiffDeletedTextBoxTests`, and `DeletingAParagraphWithATextBox_LeavesTheBoxTextOrdinary` in
+`DocxSessionTrackedDeleteBlockTests`.
 ## A Strict-namespace part inside a transitional package (#1702)
 
 A package's conformance class is not all-or-nothing in practice. Word 2024 opens a package whose

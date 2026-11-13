@@ -965,6 +965,10 @@ function atomText(node: Node): string | null {
     const el = node as HTMLElement;
     if (el.tagName === "BR") return isPlaceholderBreak(el) ? "" : "\n";
     if (el.hasAttribute("data-page-break") || el.hasAttribute("data-column-break")) return "\n";
+    // A symbol-font glyph the converter mapped to Unicode (#1707) stands for the characters the run
+    // stores, which the session counts and which an edit beside it must keep.
+    const symbol = el.getAttribute("data-docx-symbol-text");
+    if (symbol !== null) return symbol;
   }
   return null;
 }
