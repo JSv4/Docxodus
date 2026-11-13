@@ -192,7 +192,8 @@ internal static class IrCompositeMarkupRenderer
                     // The reviewer's numbering levels and comments, merged after its styles, may name a style
                     // copied under a fresh id (issue #1184).
                     var numberingBeforeCopy = StyleIdRemap.ChildrenSnapshot(main.NumberingDefinitionsPart);
-                    PackageMerge.CopyMissingNumberingFromOneDocToAnother(wDocRev, wDoc);
+                    PackageMerge.CopyMissingNumberingFromOneDocToAnother(
+                        wDocRev, wDoc, revStream.GetPackage(), streamDoc.GetPackage());
                     styleIdRemap.ApplyToChildrenAddedSince(main.NumberingDefinitionsPart, numberingBeforeCopy);
                     var commentsBeforeMerge = StyleIdRemap.ChildrenSnapshot(main.WordprocessingCommentsPart);
                     IrMarkupRenderer.MergeRightCommentDefinitions(main, wDocRev.MainDocumentPart, streamDoc, revStream);

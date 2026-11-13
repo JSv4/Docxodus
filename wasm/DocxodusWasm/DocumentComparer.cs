@@ -211,8 +211,7 @@ public partial class DocumentComparer
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Comparison error: {ex.GetType().Name}: {ex.Message}");
-            return Array.Empty<byte>();
+            return DocumentConverter.LogAndReturnEmpty("Comparison", ex);
         }
     }
 }

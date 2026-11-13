@@ -531,7 +531,8 @@ internal static partial class IrMarkupRenderer
                 // Definitions nothing in the output references keep the legacy dedup treatment.
                 var numberingBeforeCopy = StyleIdRemap.ChildrenSnapshot(main.NumberingDefinitionsPart);
                 var numIdMap = PackageMerge.CopyMissingNumberingFromOneDocToAnother(
-                    wDocRight, wDoc, CollectAlignedNumIdPairs(script, state),
+                    wDocRight, wDoc, rightStream.GetPackage(), streamDoc.GetPackage(),
+                    CollectAlignedNumIdPairs(script, state),
                     CollectRightNumberingUsage(wDocRight.MainDocumentPart, rightImportedStyles));
                 RebindRightNumberingReferences(main, numIdMap, state);
                 RebindRightImportedStyleNumberingReferences(

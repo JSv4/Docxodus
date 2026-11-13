@@ -38,6 +38,11 @@
         if (params.get('jiterpStats') === '1') {
             builder = builder.withRuntimeOptions(['--jiterpreter-stats-enabled']);
         }
+        //   ?gcParams=…   — MONO_GC_PARAMS for this boot, e.g. nursery-size=1m to make nursery
+        //                   collections frequent (wasm-gc-stress.spec.ts).
+        if (params.get('gcParams')) {
+            builder = builder.withEnvironmentVariable('MONO_GC_PARAMS', params.get('gcParams'));
+        }
         if (params.get('aotProfile') === '1') {
             builder = builder.withConfig({
                 aotProfilerOptions: {
