@@ -1554,7 +1554,7 @@ public class IrMarkupRendererTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Lower_move_source_inside_textbox_keeps_textbox_carriers(bool simplify)
+    public void Lower_move_source_inside_textbox_is_a_deletion_of_the_textbox_story(bool simplify)
     {
         var paragraph = new XElement(W.p,
             new XElement(W.moveFromRangeStart, new XAttribute(W.id, "1"), new XAttribute(W.name, "move1")),
@@ -1566,11 +1566,13 @@ public class IrMarkupRendererTests
         else
             IrMarkupRenderer.LowerUnpairedMoveRanges(new List<XElement> { paragraph }, new HashSet<string> { "move1" });
 
+        // The deletion lies inside the box, so it owns this text and spells it as deleted, as Word does for a
+        // deletion made in a text box (#1699). Only a deletion from outside the box leaves its text alone.
         var deletion = Assert.Single(textbox.Descendants(W.del));
-        Assert.Equal("inside", Assert.Single(deletion.Descendants(W.t)).Value);
-        Assert.Equal(" REF item ", Assert.Single(deletion.Descendants(W.instrText)).Value);
-        Assert.Empty(deletion.Descendants(W.delText));
-        Assert.Empty(deletion.Descendants(W.delInstrText));
+        Assert.Equal("inside", Assert.Single(deletion.Descendants(W.delText)).Value);
+        Assert.Equal(" REF item ", Assert.Single(deletion.Descendants(W.delInstrText)).Value);
+        Assert.Empty(deletion.Descendants(W.t));
+        Assert.Empty(deletion.Descendants(W.instrText));
     }
 
     /// <summary>

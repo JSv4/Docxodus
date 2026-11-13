@@ -2895,11 +2895,7 @@ internal static partial class IrMarkupRenderer
     /// <summary>Lower a move source to a deletion, preserving nested revisions and textbox text.</summary>
     private static void LowerMoveSource(XElement moveFrom)
     {
-        foreach (var text in moveFrom.Descendants().Where(e => e.Name == W.t || e.Name == W.instrText))
-            if (!text.Ancestors(W.txbxContent).Any() &&
-                !text.Ancestors().TakeWhile(e => !ReferenceEquals(e, moveFrom))
-                .Any(e => e.Name == W.ins || e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveTo))
-                text.Name = text.Name == W.t ? W.delText : W.delInstrText;
+        RevisionOps.SpellTextAsDeleted(moveFrom);
         moveFrom.Name = W.del;
     }
 
@@ -6015,7 +6011,7 @@ internal static partial class IrMarkupRenderer
         var clone = new XElement(runLevel);
         // A move source retains ordinary text and field instructions; only a deletion uses delText.
         if (kind == RevKind.Del)
-            ConvertTextToDelText(clone);
+            RevisionOps.SpellTextAsDeleted(clone);
         var rev = new XElement(RevElementName(kind), state.RevisionAttributes(), clone);
         if (insGrade)
             state.RegisterMediaReferences(clone);   // the cloned run is the live tree node media import remaps
@@ -7599,21 +7595,6 @@ internal static partial class IrMarkupRenderer
             return (at, at);
         }
         return (tokens[op.LeftStart].StartChar, tokens[op.LeftEnd - 1].EndChar);
-    }
-
-    // ----------------------------------------------------------------- text → delText
-
-    /// <summary>Convert every <c>w:t</c> descendant of a run-level element to <c>w:delText</c> in place,
-    /// preserving its text and any <c>xml:space</c>. Required for deletions: accept drops the whole
-    /// <c>w:del</c>; reject swaps to <c>w:ins</c> and <c>delText</c>→<c>t</c>.</summary>
-    private static void ConvertTextToDelText(XElement runLevel)
-    {
-        foreach (var t in runLevel.DescendantsAndSelf(W.t).ToList())
-            t.Name = W.delText;
-        // A deleted field instruction is w:delInstrText (mirrors Word; w:instrText alone in a w:del confuses
-        // a field re-parser). Only field runs carry instrText, so this is a no-op for ordinary text.
-        foreach (var it in runLevel.DescendantsAndSelf(W.instrText).ToList())
-            it.Name = W.delInstrText;
     }
 
     /// <summary>
@@ -10885,7 +10866,7 @@ internal static partial class IrMarkupRenderer
         foreach (var ins in clone.DescendantsAndSelf(W.ins).ToList())
         {
             ins.Name = W.del;
-            ConvertTextToDelText(ins);
+            RevisionOps.SpellTextAsDeleted(ins);
         }
     }
 
