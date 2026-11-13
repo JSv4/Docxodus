@@ -120,6 +120,11 @@ public static class ExternalAnnotationProjector
     private class TextMapEntry
     {
         public XText TextNode { get; set; } = null!;
+        // The text this node counts as: its own, or, for a symbol-font glyph the converter mapped to
+        // Unicode (#1707), the stored characters an annotation's raw text names. Such a glyph is
+        // atomic: an annotation that touches it wraps all of it.
+        public string Text { get; set; } = null!;
+        public bool Atomic { get; set; }
         public int StartOffset { get; set; }
         public int EndOffset { get; set; }
     }
@@ -141,10 +146,13 @@ public static class ExternalAnnotationProjector
         // Collect all text nodes with their offsets
         foreach (var textNode in GetTextNodes(body))
         {
-            var text = textNode.Value;
+            var stored = textNode.Parent?.Attribute("data-docx-symbol-text")?.Value;
+            var text = stored ?? textNode.Value;
             entries.Add(new TextMapEntry
             {
                 TextNode = textNode,
+                Text = text,
+                Atomic = stored != null,
                 StartOffset = offset,
                 EndOffset = offset + text.Length
             });
@@ -163,7 +171,7 @@ public static class ExternalAnnotationProjector
         var sb = new StringBuilder();
         foreach (var entry in textMap)
         {
-            sb.Append(entry.TextNode.Value);
+            sb.Append(entry.Text);
         }
         return sb.ToString();
     }
@@ -272,8 +280,8 @@ public static class ExternalAnnotationProjector
         if (parent == null) return;
 
         // Calculate the portion of text to wrap
-        var textStart = Math.Max(0, span.Start - entry.StartOffset);
-        var textEnd = Math.Min(text.Length, span.End - entry.StartOffset);
+        var textStart = entry.Atomic ? 0 : Math.Max(0, span.Start - entry.StartOffset);
+        var textEnd = entry.Atomic ? text.Length : Math.Min(text.Length, span.End - entry.StartOffset);
 
         if (textStart >= textEnd) return;
 

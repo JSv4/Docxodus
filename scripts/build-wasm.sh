@@ -95,6 +95,28 @@ if [[ -f "$BOOT_JS" ]] && grep -q '"integrity"' "$BOOT_JS"; then
     fi
 fi
 
+# Turn off the jiterpreter's interp-entry thunks (issue #1704). They are the WebAssembly stubs
+# the runtime generates, once a method is hot, for compiled (AOT) code calling an interpreted
+# method. With them on, a nursery collection that lands while AOT and interpreted frames
+# alternate over freshly allocated objects (deep-cloning a just-parsed styles tree was the
+# observed case) can leave a frame holding a stale reference, and the next cast through it throws
+# InvalidCastException: about 1 comparison in 100 after warm-up, none without the thunks. The
+# runtime's built-in entry path stays; traces and jit-call thunks stay on.
+# npm/tests/wasm-runtime-config.spec.ts pins the setting; wasm-packaging.md has the evidence.
+#
+# The boot config is the one place every loader reads, and the SDK has no input for its
+# runtimeOptions (WasmExtraConfig lands under extensions.extra, which the runtime ignores), so
+# the option is added to the generated file here.
+echo "Adding runtime options to dotnet.boot.js..."
+node -e '
+const fs = require("fs"), [file, ...options] = process.argv.slice(1);
+const parts = /^([\s\S]*\/\*json-start\*\/)([\s\S]*)(\/\*json-end\*\/[\s\S]*)$/.exec(fs.readFileSync(file, "utf8"));
+if (!parts) { console.error("ERROR: no json-start/json-end config block in " + file); process.exit(1); }
+const config = JSON.parse(parts[2]);
+config.runtimeOptions = [...new Set([...(config.runtimeOptions ?? []), ...options])];
+fs.writeFileSync(file, parts[1] + JSON.stringify(config, null, 2) + parts[3]);
+' "$BOOT_JS" --no-jiterpreter-interp-entry-enabled
+
 # Precompress every framework asset with Brotli (quality 11) so hosts that support
 # content negotiation (nginx brotli_static, Caddy precompressed, Netlify, Vercel,
 # Cloudflare Pages) can serve ~5.4 MiB over the wire instead of ~24.5 MiB. The .br
