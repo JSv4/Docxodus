@@ -7301,6 +7301,71 @@ fallback face the glyph renders in, even when every run shares one font. Exact s
 no box, since its lines never grow. The glyph itself still renders in the generic family the
 Symbol declaration names.
 
+## Symbol-font text in body runs and `w:sym`, and font-less private-use characters (#1707)
+
+Word stores a character in a symbol font as the font's own byte, usually moved into the private-use
+area: a Wingdings check box is U+F0FE, a Symbol alpha U+F061 (or a bare "a"). Without the font
+installed, which is every browser outside Windows and the export, that character draws as a
+missing-glyph box, so Wingdings' empty, crossed and checked boxes (U+F0A8, U+F0FD, U+F0FE) all
+looked the same. The converter mapped only eight list-marker glyphs (#1567).
+
+```xml
+<w:p>
+  <w:r><w:t xml:space="preserve">A </w:t></w:r>
+  <w:r><w:rPr><w:rFonts w:ascii="Wingdings" w:hAnsi="Wingdings"/></w:rPr>
+    <w:t>&#xF0A8; &#xF0FE; &#xF0FD;</w:t></w:r>              <!-- symbol-font run -->
+  <w:r><w:sym w:font="Wingdings" w:char="F0FE"/></w:r>  <!-- w:sym -->
+  <w:r><w:t>&#xF0A8; &#xF0FE; &#xF0FD;</w:t></w:r>      <!-- the same characters, no symbol font -->
+</w:p>
+```
+
+| Case | Word | LibreOffice 26.8 (`soffice --headless --convert-to pdf`, Wingdings not installed) | Docxodus before | Docxodus after |
+| --- | --- | --- | --- | --- |
+| Wingdings run | Wingdings glyphs (font installed with Office) | Linux Libertine G substituted; the three characters draw nothing | U+F0xx in `'Wingdings', serif`: missing-glyph boxes | ☐ ☑ ☒ in the fallback family |
+| `w:sym` Wingdings F0FE | ☑ | Drawn in OpenSymbol; the text layer keeps U+F0FE | U+F0FE in Wingdings: a box | ☑ |
+| Run in Symbol, text "abg" | αβγ | Drawn in OpenSymbol; the text layer keeps "abg" | "abg" in Symbol: Latin letters where Symbol is missing | αβγ |
+| Private-use characters, no symbol font (`w:rFonts` absent or Arial) | The text font's missing-glyph box (Arial) or a boxed question mark (no `w:rFonts`); never a Wingdings glyph | Drawn in the text font (Carlito), which has no glyph: nothing visible; `pdffonts` lists Carlito only | Left as stored | Left as stored |
+
+**Symbol-font runs and `w:sym`.** `SymbolFontMapper` now carries complete tables: Unicode's Adobe
+Symbol mapping (`MAPPINGS/VENDORS/ADOBE/symbol.txt`) and the source references of WG2 N4384 for
+Wingdings, Wingdings 2, Wingdings 3 and Webdings, which Unicode 7.0 encoded. Both the U+F020–U+F0FF
+and the bare U+0020–U+00FF form map. A handful of form-control glyphs map to the older ballot boxes
+and marks (U+2610–U+2612, U+2713, U+2717) rather than Unicode 7.0's styled forms, which most fonts
+lack. Symbol's bracket and integral pieces, which Adobe maps to its corporate private-use area, and
+Wingdings' Windows logo stay unmapped. `ConvertRun` maps a run whose resolved font is one of these,
+and a `w:sym` by its `w:font`; a run that maps entirely drops the symbol face, and the line keeps
+the replaced font's ascent with the same empty box #1567 gives list markers. Each mapped character is
+a non-editable `span[data-docx-symbol-text]` holding the stored character, which the editor counts
+and commits instead of the rendered glyph (`atomText` in `npm/src/editor.ts`): the document text is
+unchanged, and a glyph beyond the BMP, two UTF-16 units for one stored unit, does not shift offsets.
+`ExternalAnnotationProjector`, which finds an annotation in converted HTML by its raw text, reads
+the same attribute. The session text, markdown projection, IR and `DocxDiff` keep reading the stored
+characters.
+
+**Font-less private-use characters stay as stored.** These are usually a Wingdings box whose font
+was lost when the text was pasted elsewhere. The spec's `w:rFonts` character-range rules send
+U+E000–U+F8FF to the `w:hAnsi` font (the East Asian font under `w:hint="eastAsia"`), with no rule
+that treats a private-use character as a symbol font, and LibreOffice draws it in the text font too.
+The same code means different things in different symbol fonts (U+F0B7 is Symbol's bullet and
+Wingdings' one o'clock face), so any guess would sometimes draw the wrong symbol. Word 2024 does not
+guess either (table below), so Docxodus leaves the character and font as stored.
+
+**What Word 2024 draws (build 16.0.20326, exported to PDF and rasterised).** Each row is one run at 24pt:
+
+| Stored | Word draws | Docxodus |
+| --- | --- | --- |
+| Wingdings run, U+F0A8 U+F06F U+F0FD U+F0FE U+F0FC U+F0FB | ☐ ☐ ☒ ☑ ✓ ✗ | the same six |
+| Wingdings run, bare `o` U+00A8 U+00FD U+00FE | ☐ ☐ ☒ ☑: the bare byte is the same glyph as its U+F0xx form | the same |
+| Wingdings U+F036 | an hourglass with the sand settled, no stream | ⌛ U+231B HOURGLASS (U+23F3 is the hourglass *with flowing sand*, a different glyph) |
+| One Arial run: `<w:t>I agree </w:t><w:sym w:font="Wingdings" w:char="F0FE"/>` | "I agree" in Arial, then ☑ | the same: each child of a run is converted as a run of its own, so the symbol's font never reaches the text |
+| One run: `w:sym` Wingdings F0FE, then `w:sym` Symbol F061 | ☑ α, each in the font it names | ☑ α |
+| Wingdings run "ab", then `w:sym` Symbol F061 | ♋ ♌ α | ♋ ♌ α |
+| Wingdings run, U+00A0 and U+00AD between letters (bare or as U+F0A0/U+F0AD) | the font's glyphs for bytes 0xA0 and 0xAD (a small square and an eight-pointed star); neither acts as a no-break space or a soft hyphen | U+2B1D and U+1F7CF |
+| Symbol run, U+00AD or U+F0AD | ↑ | ↑ |
+| Symbol run, U+00A0 or U+F0A0 | the missing-glyph box: Windows' `symbol.ttf` has no glyph at 0xA0 in either cmap | left as stored in Symbol, so it is the same box where the font is installed. Adobe's table has EURO SIGN here, but a euro is not what the document showed |
+| U+F0A8 U+F0FE in an Arial run, and in a run with no `w:rFonts` | missing-glyph boxes / boxed question marks | left as stored |
+| Tracked-deleted Wingdings U+F0FE (`w:delText`), All Markup | a struck-through ☑ in the revision colour | ☑ inside the deletion markup when deleted content is shown; nothing when it is hidden |
+
 ## Character width was ignored inside fixed table cells (#1564)
 
 Wrapping the same uniform paragraph in a fixed 468pt table cell discarded its character
