@@ -8451,3 +8451,69 @@ Tests: `IrDrawingGraphTests.Compare_InsertedChart_ArrivesWithItsEmbeddedWorkbook
 `Compare_ChartEmbeddedWorkbookChange_AcceptRejectUseLiveRightLeftBytes` and
 `Read_ChartEmbeddedWorkbookChange_FlipsDrawingIdentity`, each for a transitional and a Strict
 chart part.
+
+## A footnote or endnote is cited by exactly one reference (#1701)
+
+Word refuses to open a document in which two `w:footnoteReference` elements (or two
+`w:endnoteReference` elements) carry the same `w:id`, whether or not either is tracked. The schema
+allows it and the Open XML SDK validator reports nothing.
+
+```xml
+<!-- word/document.xml: both references name note 1 -->
+<w:p>
+  <w:del w:id="901" w:author="Reviewer" w:date="…"><w:r><w:footnoteReference w:id="1"/></w:r></w:del>
+  <w:ins w:id="902" w:author="Reviewer" w:date="…"><w:r><w:footnoteReference w:id="1"/></w:r></w:ins>
+</w:p>
+<!-- word/footnotes.xml -->
+<w:footnote w:id="1"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t> Records kept by the county office.</w:t></w:r></w:p></w:footnote>
+```
+
+Measured in desktop Word 2024 (16.0 build 20326, Windows 11) through `Documents.Open`, then
+`AcceptAllRevisions` / `RejectAllRevisions` on a fresh read-only open, reading `Content.Text` and
+each `Footnotes(i).Range.Text`. LibreOffice was not measured.
+
+| Document | Word 2024 | Docxodus |
+| --- | --- | --- |
+| Two untracked references to note 1 | "The file appears to be corrupted." | Reads it; a note cited twice corresponds once |
+| A deleted and an inserted reference to note 1, definition untouched (above) | "The file appears to be corrupted." | — |
+| Two deleted references to note 1 | "The file appears to be corrupted." | — |
+| A redline whose deleted citations reuse the inserted citations' ids, each pair sharing one definition that holds both notes' text (what `57f5d346` wrote for two replaced paragraphs) | "The file appears to be corrupted." | Wrote it before the fix; `AcceptRevisions` and `RejectRevisions` both resolved it correctly |
+| Four citations with four ids: inserted citations name wholly inserted notes, deleted citations wholly deleted notes | Opens; Accept All gives the revised paragraphs and notes, Reject All the original's | Writes this now |
+| A kept citation whose definition holds an inserted and a deleted `w:footnoteRef` run, one before each version of a rewritten note | Opens; each resolution leaves one mark | Writes this for a rewritten note whose citation is kept (unchanged) |
+| A moved paragraph: `w:moveFrom` citation naming a deleted note, `w:moveTo` citation naming an inserted copy | Opens; citations and notes resolve correctly | Writes this (unchanged) |
+
+So the constraint is on references, not on revisions: resolving the redline would have left one
+reference per note, but Word checks the file as stored. A comparison therefore has to decide, for
+every pair of notes, whether the redline writes one citation for both or one for each, and it can
+only merge the two notes into one definition in the first case.
+
+**Analysis.** `IrEditScriptBuilder.AlignNoteReferences` paired notes in three passes: the notes
+behind references the body diff keeps (#865), then leftover notes with equal content, then the
+remaining leftovers by text similarity, pairing a lone leftover on each side whatever its text. A
+note paired by the last two passes has, by construction, a citation the body does not keep: the
+original's sits in deleted or moved-from text and the revision's in inserted or moved-to text, and
+both are written. The renderer gives a paired note one definition under the revised id, and both
+documents usually number their notes from 1, so the two citations ended up with one id. The
+content passes could never produce a correct pairing; where they appeared to help, they were
+covering for kept references that `KeptNoteReferences` did not report (format-only blocks, split
+and merged paragraphs).
+
+**Fix.** A note pairs with the other document's note only through a reference the body diff
+keeps. `KeptNoteReferences` now reports every reference the renderer writes once: in equal and
+format-only blocks, and in the unchanged token runs of modified, split and merged paragraphs
+(through tables' cells and block wrappers, as before). It no longer reports the references of a
+paragraph the renderer replaces whole (`RequiresWholeParagraphReplace`, a paragraph holding a
+field with no visible text), which are written twice. The content passes and their helpers are
+removed. `Consolidate` had a second route to the same file: a base note a reviewer deleted is mapped to
+itself under its base id, and that entry overwrote the entry of the reviewer's own note with the
+same id (a new note, or a kept note the reviewer's document numbers differently), so that note's
+citation was written with the deleted note's id. `IrCompositeMarkupRenderer` now writes the
+identity entries first.
+
+**Not covered.** A note cited more than once in an input (which Word itself refuses) is still
+written with every citation naming one definition. Word does not allow a note reference inside a
+text box, so references in text boxes of a modified paragraph are not tracked as kept.
+
+**Code and tests.** `Docxodus/Ir/Diff/IrEditScriptBuilder.cs` (`KeptNoteReferences`,
+`AlignNoteReferences`), `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs`
+(`RenderCompositeNoteScopes`); `DocxDiffNoteReferenceTests`, `IrSdtDiffWalkerTests`.
