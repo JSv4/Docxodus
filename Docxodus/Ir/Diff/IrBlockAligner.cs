@@ -30,8 +30,11 @@ internal static class IrBlockAligner
     /// <summary>
     /// Align the body block lists of <paramref name="left"/> and <paramref name="right"/>.
     /// </summary>
-    public static IrBlockAlignment Align(IrDocument left, IrDocument right, IrDiffSettings settings)
-        => AlignBlocks(left.Body.Blocks, right.Body.Blocks, settings, markBodyFullRewriteGaps: true);
+    /// <param name="similarity">The scorer to use, for a caller that wants to read its
+    /// <see cref="IrBlockSimilarity.ScoreCalls"/> afterwards; a fresh one when omitted.</param>
+    public static IrBlockAlignment Align(
+        IrDocument left, IrDocument right, IrDiffSettings settings, IrBlockSimilarity? similarity = null)
+        => AlignBlocks(left.Body.Blocks, right.Body.Blocks, settings, markBodyFullRewriteGaps: true, similarity);
 
     /// <summary>
     /// Align two raw block lists (M2.2 Task 4 generalization). The public <see cref="Align"/> calls this
@@ -50,12 +53,12 @@ internal static class IrBlockAligner
     /// </summary>
     private static IrBlockAlignment AlignBlocks(
         IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks, IrDiffSettings settings,
-        bool markBodyFullRewriteGaps)
+        bool markBodyFullRewriteGaps, IrBlockSimilarity? similarity = null)
     {
         // M2.2 Task 3: settings now drive similarity-based in-gap pairing + cross-gap fuzzy moves.
         // One per-call similarity scorer carries the tokenization cache (each block tokenized at most
         // once across all the candidate-pair scorings below).
-        var similarity = new IrBlockSimilarity(settings);
+        similarity ??= new IrBlockSimilarity(settings);
 
         int nLeft = leftBlocks.Count;
         int nRight = rightBlocks.Count;
@@ -799,7 +802,7 @@ internal static class IrBlockAligner
     /// score ≥ <paramref name="threshold"/> (ties: smallest left index, then smallest right index),
     /// consume both, repeat until no qualifying pair remains. Leaves the unpaired blocks for the caller to
     /// classify Deleted/Inserted. Deterministic: the pick is a pure function of the score grid + index
-    /// tie-break, and scoring is cached so the grid is cheap to rescan each round.
+    /// tie-break (<see cref="BestFreePairs"/>).
     /// <para>A fuzzy paragraph pair needs a shared non-function content word. Articles and
     /// punctuation alone must not scatter complete replacement blocks across unrelated text.</para>
     /// </summary>
@@ -821,12 +824,8 @@ internal static class IrBlockAligner
         // own position. Ranking subtracts the same penalty so near pairs beat far pairs on ties.
         var positions = GapRelativePositions(freeLeft, leftMatch, freeRight, rightMatch);
 
-        // Scores, eligibility and the locality positions are all fixed for the pass; only which blocks are
-        // still free changes as pairs form. So "repeatedly take the best still-free pair" is the same as scoring
-        // every eligible pair once, stably sorting by effective score (scan order breaks ties: smallest left,
-        // then smallest right), and taking each pair whose two blocks are both still free. Rescanning the whole
-        // grid once per pair formed was quadratic in the pairs times the grid, minutes for two long unrelated
-        // documents (issue #863).
+        // Scores, eligibility and the locality positions are all fixed for the pass, so every eligible pair is
+        // scored once here and BestFreePairs does the picking.
         var candidates = new List<(double Effective, int Left, int Right)>();
         foreach (int li in freeLeft)
         {
@@ -865,17 +864,35 @@ internal static class IrBlockAligner
             }
         }
 
-        // OrderByDescending is stable, so equal scores keep scan order: the first seen wins a tie, exactly
-        // as the strictly-greater argmax did (freeLeft / freeRight are in ascending index order).
-        foreach (var (_, bestLeft, bestRight) in candidates.OrderByDescending(c => c.Effective))
+        foreach (var (_, bestLeft, bestRight) in BestFreePairs(candidates, leftMatch, rightMatch))
         {
-            if (leftMatch[bestLeft] != -1 || rightMatch[bestRight] != -1)
-                continue;
             leftKind[bestLeft] = IrAlignmentKind.Modified;
             rightKind[bestRight] = IrAlignmentKind.Modified;
             leftMatch[bestLeft] = bestRight;
             rightMatch[bestRight] = bestLeft;
         }
+    }
+
+    /// <summary>
+    /// The greedy one-to-one pick both similarity passes share: "repeatedly take the highest-scoring pair
+    /// whose two blocks are both still free (ties: smallest left index, then smallest right index)", over
+    /// <paramref name="candidates"/> that were each scored once and listed in ascending (left, right) order.
+    /// A pair's score never depends on which other pairs have formed; only which blocks are still free
+    /// changes. So one stable sort by score replaces rescanning the whole grid for every pair formed, which
+    /// cost pairs × grid: minutes for two long unrelated documents (issue #863) and for several hundred
+    /// relocated-and-edited paragraphs (issue #1703).
+    /// </summary>
+    /// <remarks>Lazy on purpose: the caller records each yielded pair in <paramref name="leftMatch"/> /
+    /// <paramref name="rightMatch"/> before asking for the next, and that is what retires the pair's two
+    /// blocks from the candidates still to come.</remarks>
+    private static IEnumerable<(double Score, int Left, int Right)> BestFreePairs(
+        List<(double Score, int Left, int Right)> candidates, int[] leftMatch, int[] rightMatch)
+    {
+        // OrderByDescending is stable, so equal scores keep their listed order: the first listed wins a tie,
+        // exactly as a strictly-greater argmax over the grid does.
+        foreach (var candidate in candidates.OrderByDescending(c => c.Score))
+            if (leftMatch[candidate.Left] == -1 && rightMatch[candidate.Right] == -1)
+                yield return candidate;
     }
 
     private static bool AnyWrapper(List<int> indexes, IReadOnlyList<IrBlock> blocks)
@@ -2505,8 +2522,9 @@ internal static class IrBlockAligner
     /// still needs <see cref="IrAlignmentKind.MovedModified"/> so its FormatChanged token spans are rendered.
     /// In practice exact moves are already caught by off-spine anchoring, but the guard keeps this fallback
     /// consistent.</para>
-    /// <para><b>Cost.</b> Bounded by the global leftover counts D × I, not the document size: the
-    /// dominant boilerplate / clean-edit cases leave few leftovers. Tokenization is cached (shared with
+    /// <para><b>Cost.</b> One similarity score per leftover Deleted × Inserted pair, then one sort of the
+    /// pairs that reach the threshold (<see cref="BestFreePairs"/>): D × I scores however many moves are
+    /// found, and nothing that grows with the rest of the document. Tokenization is cached (shared with
     /// in-gap pairing), so each leftover block is tokenized at most once across both passes.</para>
     /// </remarks>
     private static void DetectCrossGapMoves(
@@ -2531,44 +2549,28 @@ internal static class IrBlockAligner
         double threshold = settings.MoveSimilarityThreshold;
         int minTokens = settings.MoveMinimumTokenCount;
 
-        while (true)
+        // A block-level content control owns an OOXML envelope that cannot be expressed with native move
+        // markup. Even if a future similarity model assigns it text/word counts, keep it as the reversible
+        // delete+insert pair established above. A block under the minimum word count is too short to be a
+        // reliable move (mirrors MoveMinimumWordCount).
+        bool CanMove(IrBlock block) => block is not IrSdtBlock && similarity.WordCount(block) >= minTokens;
+        inserted.RemoveAll(rj => !CanMove(rightBlocks[rj]));
+
+        var candidates = new List<(double Score, int Left, int Right)>();
+        foreach (int li in deleted)
         {
-            double bestScore = threshold;
-            int bestLeft = -1, bestRight = -1;
-            bool found = false;
-            foreach (int li in deleted)
+            if (!CanMove(leftBlocks[li]))
+                continue;
+            foreach (int rj in inserted)
             {
-                if (leftMatch[li] != -1)
-                    continue;
-                // A block-level content control owns an OOXML envelope that cannot be expressed with
-                // native move markup. Even if a future similarity model assigns it text/word counts,
-                // keep it as the reversible delete+insert pair established above.
-                if (leftBlocks[li] is IrSdtBlock)
-                    continue;
-                if (similarity.WordCount(leftBlocks[li]) < minTokens)
-                    continue; // too short to be a reliable move (mirrors MoveMinimumWordCount)
-                foreach (int rj in inserted)
-                {
-                    if (rightMatch[rj] != -1)
-                        continue;
-                    if (rightBlocks[rj] is IrSdtBlock)
-                        continue;
-                    if (similarity.WordCount(rightBlocks[rj]) < minTokens)
-                        continue;
-                    double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
-                    if (score > bestScore || (!found && score >= threshold))
-                    {
-                        bestScore = score;
-                        bestLeft = li;
-                        bestRight = rj;
-                        found = true;
-                    }
-                }
+                double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
+                if (score >= threshold)
+                    candidates.Add((score, li, rj));
             }
+        }
 
-            if (!found)
-                return;
-
+        foreach (var (bestScore, bestLeft, bestRight) in BestFreePairs(candidates, leftMatch, rightMatch))
+        {
             // A paragraph plain move needs BOTH exact content and format equality. Exact paragraph text with a
             // formatting delta still needs a token diff (FormatChanged spans) so the markup can carry rPrChange
             // at the moved destination and restore the old formatting on reject. Structural blocks do not yet

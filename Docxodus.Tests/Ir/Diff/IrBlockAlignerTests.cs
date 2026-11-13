@@ -916,6 +916,84 @@ public class IrBlockAlignerTests
         AssertInvariants(l, r, a1);
     }
 
+    /// <summary>The shape of issue #1703: marker paragraphs that stay put, with <paramref name="n"/> distinct
+    /// 14-word paragraphs between them. The revision reverses those paragraphs and changes one word in each,
+    /// so each is a relocated-and-edited block alone in its gap, which only the cross-gap pass can pair.</summary>
+    private static (IrDocument Left, IrDocument Right) ReversedAndEdited(int n)
+    {
+        static string Body(int i, string sixth) =>
+            string.Join(" ", Enumerable.Range(0, 14).Select(k => k == 5 ? sixth : $"p{i}w{k}"));
+
+        var left = new List<string> { "Section marker 0." };
+        var right = new List<string> { "Section marker 0." };
+        for (int i = 0; i < n; i++)
+        {
+            left.AddRange([Body(i, $"p{i}w5"), $"Section marker {i + 1}."]);
+            right.AddRange([Body(n - 1 - i, $"p{n - 1 - i}edited"), $"Section marker {i + 1}."]);
+        }
+        return (Doc([.. left]), Doc([.. right]));
+    }
+
+    [Fact]
+    public void Cross_gap_pairs_every_relocated_and_edited_paragraph_with_its_own_revision()
+    {
+        const int n = 40;
+        var (l, r) = ReversedAndEdited(n);
+        var a = Align(l, r);
+
+        var moves = a.Entries.Where(e => e.Kind == IrAlignmentKind.MovedModified).ToList();
+        Assert.Equal(n, moves.Count);
+        Assert.All(moves, m => Assert.Equal(Text(m.Left!).Split(' ')[0], Text(m.Right!).Split(' ')[0]));
+        Assert.Equal(n + 1, Count(a, IrAlignmentKind.Unchanged));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Cross_gap_scores_each_leftover_pair_once_however_many_moves_it_finds()
+    {
+        // Rescanning the leftover grid for every move found costs moves × D × I scores: n³ here, 8× for
+        // twice the paragraphs. Scoring each pair once costs n², 4×. Counting scores, not seconds, keeps
+        // this exact on any machine.
+        static long Scores(int n)
+        {
+            var (l, r) = ReversedAndEdited(n);
+            var similarity = new IrBlockSimilarity(Default);
+            IrBlockAligner.Align(l, r, Default, similarity);
+            return similarity.ScoreCalls;
+        }
+
+        long small = Scores(30), large = Scores(60);
+
+        Assert.InRange(large, 60 * 60, 5 * small);
+    }
+
+    [Fact]
+    public void Cross_gap_equal_scores_go_to_the_smallest_left_then_right_index()
+    {
+        // The deleted paragraph is one word away from BOTH inserted paragraphs, and both deleted paragraphs
+        // of the second document pair are one word away from the single inserted one: equal scores each
+        // time. The earlier block wins; the later one stays a plain insertion or deletion.
+        var l = Doc("alpha", "beta", "gamma", "the quick brown fox jumps over hounds");
+        var r = Doc(
+            "the quick brown fox jumps over dogs", "alpha",
+            "the quick brown fox jumps over cats", "beta", "gamma");
+        var a = Align(l, r);
+
+        Assert.Equal("the quick brown fox jumps over dogs",
+            Text(a.Entries.Single(e => e.Kind == IrAlignmentKind.MovedModified).Right!));
+        Assert.Equal("the quick brown fox jumps over cats",
+            Text(a.Entries.Single(e => e.Kind == IrAlignmentKind.Inserted).Right!));
+        AssertInvariants(l, r, a);
+
+        var mirrored = Align(r, l);
+
+        Assert.Equal("the quick brown fox jumps over dogs",
+            Text(mirrored.Entries.Single(e => e.Kind == IrAlignmentKind.MovedModified).Left!));
+        Assert.Equal("the quick brown fox jumps over cats",
+            Text(mirrored.Entries.Single(e => e.Kind == IrAlignmentKind.Deleted).Left!));
+        AssertInvariants(r, l, mirrored);
+    }
+
     // ------------------------------------------------------------------ table as unit
 
     [Fact]

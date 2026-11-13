@@ -49,6 +49,10 @@ internal sealed class IrBlockSimilarity
 
     public IrBlockSimilarity(IrDiffSettings settings) => _settings = settings;
 
+    /// <summary>How many times <see cref="Score"/> has run: the unit the aligner's pairing passes are costed
+    /// in, so a test can pin how that cost grows without timing anything.</summary>
+    public long ScoreCalls { get; private set; }
+
     /// <summary>
     /// Score the similarity of <paramref name="left"/> and <paramref name="right"/> in [0, 1].
     /// Paragraph pairs: Jaccard over token MatchKey multisets. Non-paragraph (or mixed) pairs: 1.0 iff
@@ -56,6 +60,7 @@ internal sealed class IrBlockSimilarity
     /// </summary>
     public double Score(IrBlock left, IrBlock right)
     {
+        ScoreCalls++;
         if (left is IrParagraph lp && right is IrParagraph rp)
             return Jaccard(Bag(lp), Bag(rp));
 
