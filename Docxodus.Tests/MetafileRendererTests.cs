@@ -317,10 +317,11 @@ public class MetafileRendererTests
     [Fact]
     public void APictureMayNotDrawMoreThanItsPointBudget()
     {
-        // The budget is for the whole picture: two polylines of 125,001 points are one too many.
+        // The budget of 250,000 is for the whole picture, and a stroked point is charged when it is read and
+        // again when it is drawn: two polylines of 62,500 points spend exactly all of it.
         byte[] Polyline(int count) => R(4, 0, 0, 0, 0, count, new int[2 * count]);
-        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(Polyline(125_001), Polyline(125_001))));
-        Assert.Single(Elements(Emf(Polyline(125_000), Polyline(125_000)), "path"));
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(Polyline(62_501), Polyline(62_501))));
+        Assert.Single(Elements(Emf(Polyline(62_500), Polyline(62_500)), "path"));
     }
 
     [Fact]

@@ -16,7 +16,8 @@ internal sealed class MetafileCanvas
 {
     internal static readonly XNamespace Svg = "http://www.w3.org/2000/svg";
     internal const int MaxRecords = 200_000;
-    /// <summary>Points and text characters a picture may draw in all.</summary>
+    /// <summary>Budget for a whole picture: one for each point read from a record, each point of a stroked
+    /// line or path bracket, and each text character.</summary>
     internal const int MaxPoints = 250_000;
     /// <summary>Clip regions that may intersect one another before a RESTOREDC or a replacing clip: each
     /// becomes a <c>clipPath</c> that refers to the one before, which a browser resolves recursively.</summary>

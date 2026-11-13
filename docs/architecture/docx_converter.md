@@ -579,7 +579,8 @@ before invoking that callback, identically in native and WASM builds:
   without a spacing array), ANSI text with bytes above ASCII in a font whose character set is
   not ANSI or DEFAULT, and text in a SYMBOL_CHARSET font or with private-use characters
   (Symbol and Wingdings glyphs).
-- Playback is bounded per picture: 200,000 records, 250,000 points and text characters,
+- Playback is bounded per picture: 200,000 records, a budget of 250,000 shared by points read,
+  points stroked and text characters,
   50,000 SVG elements, 1,024 saved states, 64 clip regions intersected in a row (each is a
   `clipPath` that refers to the one before), 16 megapixels of embedded bitmaps, and
   16 MiB characters of SVG output, bitmaps included. A WMF poly-polygon's point counts are

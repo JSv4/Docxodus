@@ -409,6 +409,8 @@ internal sealed record EmfImage(XElement Drawing)
     private static double F32(byte[] bytes, int offset)
     {
         float value = BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(offset, 4));
-        return float.IsFinite(value) ? value : throw new InvalidDataException("Invalid EMF floating-point value.");
+        if (!float.IsFinite(value)) throw new InvalidDataException("Invalid EMF floating-point value.");
+        // The double nearest the float's shortest decimal form: 1e-5f is 1E-05, not 9.999999747E-06.
+        return double.Parse(value.ToString(System.Globalization.CultureInfo.InvariantCulture), System.Globalization.CultureInfo.InvariantCulture);
     }
 }
