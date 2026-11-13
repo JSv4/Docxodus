@@ -1427,6 +1427,32 @@ public class IrMarkupRendererTests
     }
 
     [Fact]
+    public void Compare_issue_1714_reports_only_the_relocated_clause_as_moved()
+    {
+        // A clause is added at the top, one removed, one moved to the end, and every ordinal renumbered.
+        var left = MoveDoc(
+            "FIRST. Duration. The lease runs for one year from the day both parties sign it.",
+            "SECOND. Guarantee. The lessee hands over two months of rent as a guarantee before moving in.",
+            "THIRD. Upkeep. The lessee looks after the flat and covers small repairs from everyday wear.",
+            "FOURTH. Notice. Each side may end the lease by giving the other ninety days of warning.",
+            "FIFTH. Venue. Any disagreement goes before the tribunals of the town where the flat stands.");
+        var right = MoveDoc(
+            "FIRST. Arrears. The lessee owes a monthly surcharge on every overdue sum.",
+            "SECOND. Duration. The lease runs for one year from the day both parties sign it.",
+            "THIRD. Notice. Each side may end the lease by giving the other ninety days of warning.",
+            "FOURTH. Venue. Any disagreement goes before the tribunals of the town where the flat stands.",
+            "FIFTH. Upkeep. The lessee looks after the flat and covers small repairs from everyday wear.");
+
+        var moved = DocxDiff.GetRevisions(left, right)
+            .Where(revision => revision.Type == DocxDiffRevisionType.Moved).ToList();
+
+        // One move has two revisions, its source and its destination.
+        Assert.Equal(2, moved.Count);
+        Assert.All(moved, revision => Assert.Contains("Upkeep", revision.Text));
+        AssertRoundTrip(left, right, label: "issue-1714");
+    }
+
+    [Fact]
     public void Render_issue_359_move_and_edit_keeps_the_destination_atomic()
     {
         const string movedLeft =
@@ -1528,7 +1554,7 @@ public class IrMarkupRendererTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Lower_move_source_inside_textbox_keeps_textbox_carriers(bool simplify)
+    public void Lower_move_source_inside_textbox_is_a_deletion_of_the_textbox_story(bool simplify)
     {
         var paragraph = new XElement(W.p,
             new XElement(W.moveFromRangeStart, new XAttribute(W.id, "1"), new XAttribute(W.name, "move1")),
@@ -1540,11 +1566,13 @@ public class IrMarkupRendererTests
         else
             IrMarkupRenderer.LowerUnpairedMoveRanges(new List<XElement> { paragraph }, new HashSet<string> { "move1" });
 
+        // The deletion lies inside the box, so it owns this text and spells it as deleted, as Word does for a
+        // deletion made in a text box (#1699). Only a deletion from outside the box leaves its text alone.
         var deletion = Assert.Single(textbox.Descendants(W.del));
-        Assert.Equal("inside", Assert.Single(deletion.Descendants(W.t)).Value);
-        Assert.Equal(" REF item ", Assert.Single(deletion.Descendants(W.instrText)).Value);
-        Assert.Empty(deletion.Descendants(W.delText));
-        Assert.Empty(deletion.Descendants(W.delInstrText));
+        Assert.Equal("inside", Assert.Single(deletion.Descendants(W.delText)).Value);
+        Assert.Equal(" REF item ", Assert.Single(deletion.Descendants(W.delInstrText)).Value);
+        Assert.Empty(deletion.Descendants(W.t));
+        Assert.Empty(deletion.Descendants(W.instrText));
     }
 
     /// <summary>

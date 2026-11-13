@@ -2472,7 +2472,7 @@ public class HtmlConversionOpsTests
     [InlineData("\uF0B7", "Symbol", null, "1.0054")]
     [InlineData("\uF0A7", "Wingdings", null, "0.8989")]
     [InlineData("\uF0B7", "Symbol", "exact", null)]
-    [InlineData("\uF020", "Symbol", null, null)]
+    [InlineData("\uF0E6", "Symbol", null, null)] // a bracket piece Unicode leaves in private use (#1707)
     [InlineData("\u2022", "Arial", null, null)]
     public void HCO103_MappedSymbolMarker_KeepsTheReplacedFontsAscent(string text, string markerFont,
         string? rule, string? ascent)
@@ -2489,6 +2489,140 @@ public class HtmlConversionOpsTests
             Assert.Contains("width: 0", (string?)box.Attribute("style"));
         }
     }
+
+    // Issue #1707: body text and w:sym in a symbol font map to Unicode like a marker does. Each mapped
+    // character keeps the stored one for the editor; a run that maps entirely drops the symbol face,
+    // and the line keeps the replaced font's ascent.
+    [Theory]
+    [InlineData("Wingdings", "\uF0A8 \uF0FE", "☐|☑", "\uF0A8|\uF0FE", "0.8989")]
+    [InlineData("Symbol", "abg", "α|β|γ", "a|b|g", "1.0054")]
+    [InlineData("Wingdings 2", "\uF052", "☑", "\uF052", "0.8433")]
+    public void HCO104_SymbolFontBodyRun_MapsToUnicode(string font, string text, string glyphs, string stored, string ascent)
+    {
+        var run = SymbolRun(ConvertParagraph(new Wp.Paragraph(TextRun("Box ", "Arial"), TextRun(text, font))));
+        var atoms = run.Elements().Where(e => e.Attribute("data-docx-symbol-text") != null).ToList();
+
+        Assert.Equal(glyphs, string.Join("|", atoms.Select(a => a.Value)));
+        Assert.Equal(stored, string.Join("|", atoms.Select(a => (string?)a.Attribute("data-docx-symbol-text"))));
+        Assert.All(atoms, a => Assert.Equal("false", (string?)a.Attribute("contenteditable")));
+        Assert.NotEqual(font, FontFamily(run));
+        Assert.Equal(ascent, (string?)run.Elements().Single(e => e.Attribute("data-docx-glyph-ascent") != null)
+            .Attribute("data-docx-glyph-ascent"));
+    }
+
+    [Fact]
+    public void HCO104_SymbolFontSym_MapsWithItsOwnFont()
+    {
+        var run = SymbolRun(ConvertParagraph(new Wp.Paragraph(TextRun("Box ", "Arial"),
+            new Wp.Run(new Wp.SymbolChar { Font = "Wingdings", Char = "F0FD" }))));
+        var atom = run.Elements().Single(e => e.Attribute("data-docx-symbol-text") != null);
+
+        Assert.Equal("☒", atom.Value);
+        Assert.Equal("\uF0FD", (string?)atom.Attribute("data-docx-symbol-text"));
+        Assert.NotEqual("Wingdings", FontFamily(run));
+        Assert.NotNull(run.Elements().SingleOrDefault(e => e.Attribute("data-docx-glyph-ascent") != null));
+    }
+
+    // A run that still holds an unmapped character keeps the face for it; only its mapped glyphs fall back.
+    [Fact]
+    public void HCO104_PartlyMappedRun_KeepsTheFaceForUnmappedCharacters()
+    {
+        var run = SymbolRun(ConvertParagraph(new Wp.Paragraph(TextRun("\uF0FF\uF0FE", "Wingdings"))));
+        var atom = run.Elements().Single(e => e.Attribute("data-docx-symbol-text") != null);
+
+        Assert.Equal("Wingdings", FontFamily(run));
+        Assert.Equal("\uF0FF", run.Nodes().OfType<XText>().Single().Value);
+        Assert.Equal("☑", atom.Value);
+        Assert.NotEqual("Wingdings", FontFamily(atom));
+    }
+
+    // Controls: an unmapped glyph keeps its character and font and adds nothing, and so does a private-use
+    // character in a run with no symbol font (see docs/ooxml_corner_cases.md).
+    [Theory]
+    [InlineData("Wingdings", "\uF0FF")]
+    [InlineData("Calibri", "\uF0A8")]
+    public void HCO104_UnmappedSymbolText_IsLeftAsStored(string font, string text)
+    {
+        var paragraph = ConvertParagraph(new Wp.Paragraph(TextRun(text, font)));
+        var run = paragraph.Descendants().Single(e => e.Name.LocalName == "span" && e.Value == text);
+
+        Assert.False(run.HasElements);
+        Assert.Equal(font, FontFamily(run));
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-docx-glyph-ascent") != null);
+    }
+
+    // An exact line never grows, so a mapped body glyph there carries no ascent box.
+    [Fact]
+    public void HCO104_MappedSymbolOnExactLine_HasNoAscentBox()
+    {
+        var paragraph = ConvertParagraph(new Wp.Paragraph(new Wp.ParagraphProperties(
+            new Wp.SpacingBetweenLines { Line = "240", LineRule = Wp.LineSpacingRuleValues.Exact }), TextRun("abg", "Symbol")));
+
+        Assert.Equal("αβγ", SymbolRun(paragraph).Value);
+        Assert.DoesNotContain(paragraph.Descendants(), e => e.Attribute("data-docx-glyph-ascent") != null);
+    }
+
+    // Word draws a w:sym in the font it names and the text beside it in the run's font: "I agree" stays
+    // Arial, and only the check box is a Wingdings glyph (Word 2024, docs/ooxml_corner_cases.md). The
+    // converter gets there because each child of a run is converted as a run of its own. The ascent box
+    // that comes with the glyph must never take the caret.
+    [Fact]
+    public void HCO105_TextBesideASymbol_KeepsTheRunsFont()
+    {
+        var mixed = TextRun("I agree ", "Arial");
+        mixed.Append(new Wp.SymbolChar { Font = "Wingdings", Char = "F0FE" });
+        var paragraph = ConvertParagraph(new Wp.Paragraph(mixed));
+        var atom = paragraph.Descendants().Single(e => e.Attribute("data-docx-symbol-text") != null);
+        var text = paragraph.DescendantNodes().OfType<XText>().Single(t => t.Value == "I agree ");
+
+        Assert.Equal("☑", atom.Value);
+        Assert.Equal("\uF0FE", (string?)atom.Attribute("data-docx-symbol-text"));
+        Assert.Equal("Arial", FontFamily(text.Parent!));
+        Assert.NotEqual("Wingdings", FontFamily(atom));
+        Assert.All(paragraph.Descendants().Where(e => e.Attribute("data-docx-glyph-ascent") != null),
+            box => Assert.Equal("false", (string?)box.Attribute("contenteditable")));
+    }
+
+    // Two symbols in one run each map with their own font's table.
+    [Theory]
+    [InlineData("Wingdings", "F0FE", "Symbol", "F061", "☑|α")]
+    [InlineData("Symbol", "F061", "Wingdings", "F0FE", "α|☑")]
+    public void HCO105_SymbolsInOneRun_EachMapWithTheirOwnFont(string font1, string char1, string font2, string char2,
+        string glyphs)
+    {
+        var paragraph = ConvertParagraph(new Wp.Paragraph(new Wp.Run(
+            new Wp.SymbolChar { Font = font1, Char = char1 }, new Wp.SymbolChar { Font = font2, Char = char2 })));
+
+        Assert.Equal(glyphs, string.Join("|", paragraph.Descendants()
+            .Where(e => e.Attribute("data-docx-symbol-text") != null).Select(a => a.Value)));
+    }
+
+    // A deleted check box shown as tracked markup is still a check box (Word draws it struck through).
+    [Theory]
+    [InlineData(true, "☑")]
+    [InlineData(false, "")]
+    public void HCO105_DeletedSymbolText_MapsWhereItIsShown(bool showDeleted, string expected)
+    {
+        var deleted = new Wp.Run(
+            new Wp.RunProperties(new Wp.RunFonts { Ascii = "Wingdings", HighAnsi = "Wingdings" }),
+            new Wp.DeletedText("\uF0FE"));
+        var paragraph = ConvertParagraph(new Wp.Paragraph(TextRun("Kept ", "Arial"),
+                new Wp.DeletedRun(deleted) { Id = "1", Author = "Reviewer", Date = new DateTime(2026, 1, 1) }),
+            options: new HtmlConversionOptions
+                { FabricateCssClasses = false, RenderTrackedChanges = true, ShowDeletedContent = showDeleted });
+
+        Assert.Equal(expected, string.Concat(paragraph.Descendants()
+            .Where(e => e.Attribute("data-docx-symbol-text") != null).Select(a => a.Value)));
+        Assert.DoesNotContain("\uF0FE", paragraph.Value);
+    }
+
+    private static Wp.Run TextRun(string text, string font) =>
+        new(new Wp.RunProperties(new Wp.RunFonts { Ascii = font, HighAnsi = font }, new Wp.FontSize { Val = "24" }),
+            new Wp.Text(text) { Space = DocumentFormat.OpenXml.SpaceProcessingModeValues.Preserve });
+
+    /// <summary>The run span that holds a mapped symbol glyph.</summary>
+    private static XElement SymbolRun(XElement paragraph) =>
+        paragraph.Descendants().First(e => e.Attribute("data-docx-symbol-text") != null).Parent!;
 
     /// <summary>Converts one list item of 12pt Arial text whose level marker uses the given font and size.</summary>
     private static XElement ListItem(string format, string text, string? markerFont, string? markerSize,
@@ -2530,7 +2664,8 @@ public class HtmlConversionOpsTests
         (string?)ConvertParagraph(paragraph).Attribute("style") ?? string.Empty;
 
     /// <summary>Converts one paragraph, with optional numbering definitions, and returns its &lt;p&gt;.</summary>
-    private static XElement ConvertParagraph(Wp.Paragraph paragraph, Wp.Numbering? numbering = null)
+    private static XElement ConvertParagraph(Wp.Paragraph paragraph, Wp.Numbering? numbering = null,
+        HtmlConversionOptions? options = null)
     {
         using var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -2549,7 +2684,8 @@ public class HtmlConversionOpsTests
             main.Document.Save();
         }
 
-        var html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions { FabricateCssClasses = false });
+        var html = HtmlConversionOps.ConvertToHtml(ms.ToArray(),
+            options ?? new HtmlConversionOptions { FabricateCssClasses = false });
         return XElement.Parse(html).Descendants().Single(e => e.Name.LocalName == "p");
     }
     // Issues #941 and #948: Word grows a line to make room for a raised run (w:position > 0), moving the line's

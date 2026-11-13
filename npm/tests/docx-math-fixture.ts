@@ -8,8 +8,10 @@ export const MATH_FORMULAS = {
   fraction,
   root: `<m:rad><m:radPr><m:degHide m:val="1"/></m:radPr><m:deg/><m:e>${term('x')}</m:e></m:rad>`,
   indexed: `<m:rad><m:deg>${term('3')}</m:deg><m:e>${term('x')}</m:e></m:rad>`,
-  accent: `<m:acc><m:e>${term('x')}</m:e></m:acc>`,
-  styled: `<m:r><m:rPr><m:sty m:val="b"/></m:rPr><m:t>x</m:t></m:r>`,
+  structured: `<m:nary><m:naryPr><m:chr m:val="∑"/></m:naryPr><m:sub>${term('k=1')}</m:sub><m:sup>${term('n')}</m:sup>`
+    + `<m:e><m:d><m:e><m:sSup><m:e>${term('x')}</m:e><m:sup>${term('k')}</m:sup></m:sSup></m:e></m:d></m:e></m:nary>`,
+  phantom: `<m:phant><m:e>${term('x')}</m:e></m:phant>`,
+  normalText: `<m:r><m:rPr><m:nor/></m:rPr><m:t>x</m:t></m:r>`,
 };
 export type MathLayout = 'inline' | 'display' | 'mixed' | 'edge' | 'long';
 

@@ -132,6 +132,33 @@ internal static class RevisionOps
     internal static readonly XName[] RevWrapperNames = { W.ins, W.del, W.moveFrom, W.moveTo };
 
     /// <summary>
+    /// Give the text a deletion owns its deleted spelling in place: <c>w:t</c> → <c>w:delText</c> and
+    /// <c>w:instrText</c> → <c>w:delInstrText</c>, which is what Word writes and what a reject swaps back.
+    /// The one owner of that rename for the comparison renderer and the session.
+    /// </summary>
+    /// <remarks>
+    /// A deletion does not own everything under it. A text box (<c>w:txbxContent</c>, in either namespace
+    /// Word has used) is a story of its own that the <c>w:del</c> around its anchoring run does not reach
+    /// into, and Word leaves its text ordinary when it tracks the deletion of a text box; a revision nested
+    /// in <paramref name="deleted"/> owns the text under it. Renaming either leaves <c>w:delText</c> with no
+    /// deletion in its own story, which Word rejects as a corrupt file.
+    /// </remarks>
+    internal static void SpellTextAsDeleted(XElement deleted)
+    {
+        foreach (var text in deleted.DescendantsAndSelf())
+            if ((text.Name == W.t || text.Name == W.instrText) && Owns(text))
+                text.Name = text.Name == W.t ? W.delText : W.delInstrText;
+
+        bool Owns(XElement text)
+        {
+            for (var ancestor = text; !ReferenceEquals(ancestor, deleted); ancestor = ancestor.Parent!)
+                if (ancestor.Name.LocalName == "txbxContent" || Array.IndexOf(RevWrapperNames, ancestor.Name) >= 0)
+                    return false;
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Every element name whose <c>w:id</c> can end up in a group's constituent ids — the
     /// exact set the duplicate-id ambiguity check reads. A session minting new revision ids
     /// must not collide with any of them, so this is also the set

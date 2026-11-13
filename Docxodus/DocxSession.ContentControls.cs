@@ -622,7 +622,7 @@ public sealed partial class DocxSession
                     node.AddBeforeSelf(deletion);
                 }
                 node.Remove();
-                ConvertTextToDeletedText(node);
+                RevisionOps.SpellTextAsDeleted(node);
                 deletion.Add(node);
             }
             else
