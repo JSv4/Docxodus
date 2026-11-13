@@ -441,7 +441,7 @@ public sealed partial class DocxSession
     /// Shared by whole-block deletion, text replacement, paragraph/table moves and paragraph/row insertion.
     /// A deletion also converts
     /// <c>w:t</c>→<c>w:delText</c> (and <c>w:instrText</c>→<c>w:delInstrText</c>), which is what
-    /// Word writes, what <c>IrMarkupRenderer.ConvertTextToDelText</c> produces, and what
+    /// Word writes, what the comparison renderer produces, and what
     /// <see cref="RevisionProcessor"/>'s reject path swaps back. Move sources retain ordinary text.
     /// The paragraph mark belongs
     /// to the same operation unless the caller retains it (a replacement or a final retained paragraph).
@@ -525,7 +525,7 @@ public sealed partial class DocxSession
         var envelope = CreateRevisionEnvelope(W.del, stamp);
         element.ReplaceWith(envelope);
         envelope.Add(element);
-        ConvertTextToDeletedText(element);
+        RevisionOps.SpellTextAsDeleted(element);
     }
 
     /// <summary>Remove <paramref name="element"/> from the session author's own pending
@@ -564,23 +564,6 @@ public sealed partial class DocxSession
             parent.ReplaceWith(kept);
         }
     }
-
-    /// <summary>Convert a deleted run-level element's text to its deleted spelling in place,
-    /// mirroring <c>IrMarkupRenderer.ConvertTextToDelText</c>. Text under a revision nested
-    /// inside the element — a text box paragraph's own insertion, say — keeps its spelling: that
-    /// revision owns it, and renaming it would leave <c>w:delText</c> that no reject of THIS
-    /// deletion could ever restore.</summary>
-    private static void ConvertTextToDeletedText(XElement runLevel)
-    {
-        foreach (var t in runLevel.DescendantsAndSelf(W.t).ToList())
-            if (!UnderNestedRevision(t, runLevel)) t.Name = W.delText;
-        foreach (var instr in runLevel.DescendantsAndSelf(W.instrText).ToList())
-            if (!UnderNestedRevision(instr, runLevel)) instr.Name = W.delInstrText;
-    }
-
-    private static bool UnderNestedRevision(XElement text, XElement runLevel) =>
-        text.Ancestors().TakeWhile(a => !ReferenceEquals(a, runLevel))
-            .Any(a => RevisionWrapperNames.Contains(a.Name));
 
     private bool IsOwnInsertion(XElement? insertion, string author) =>
         insertion is not null

@@ -51,11 +51,15 @@ public class IrDrawingGraphTests
         Assert.Equal(Paragraph(first).ContentHash, Paragraph(second).ContentHash);
     }
 
-    [Fact]
-    public void Read_ChartEmbeddedWorkbookChange_FlipsDrawingIdentity()
+    // Word reads a chart part written in the ISO 29500 Strict namespaces inside an otherwise transitional
+    // package, so its r:id is an edge of the graph in either namespace (issue #1702).
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Read_ChartEmbeddedWorkbookChange_FlipsDrawingIdentity(bool strictChartPart)
     {
-        var left = ChartDocument("same", "rIdChart", "rIdWorkbook", new byte[] { 0x50, 0x4B, 1 });
-        var right = ChartDocument("same", "rIdChart", "rIdWorkbook", new byte[] { 0x50, 0x4B, 2 });
+        var left = ChartDocument("same", "rIdChart", "rIdWorkbook", new byte[] { 0x50, 0x4B, 1 }, strictChartPart: strictChartPart);
+        var right = ChartDocument("same", "rIdChart", "rIdWorkbook", new byte[] { 0x50, 0x4B, 2 }, strictChartPart: strictChartPart);
 
         Assert.NotEqual(Opaque(Paragraph(left)).CanonicalHash, Opaque(Paragraph(right)).CanonicalHash);
     }
@@ -120,17 +124,34 @@ public class IrDrawingGraphTests
         Assert.Equal("left", SmartArtMarker(RevisionProcessor.RejectRevisions(redline)));
     }
 
-    [Fact]
-    public void Compare_ChartEmbeddedWorkbookChange_AcceptRejectUseLiveRightLeftBytes()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Compare_ChartEmbeddedWorkbookChange_AcceptRejectUseLiveRightLeftBytes(bool strictChartPart)
     {
         var leftBytes = new byte[] { 0x50, 0x4B, 1 };
         var rightBytes = new byte[] { 0x50, 0x4B, 2 };
         var redline = DocxDiff.Compare(
-            ChartDocument("same", workbookRelationshipId: "rIdWorkbook", workbookBytes: leftBytes),
-            ChartDocument("same", workbookRelationshipId: "rIdWorkbook", workbookBytes: rightBytes));
+            ChartDocument("same", workbookRelationshipId: "rIdWorkbook", workbookBytes: leftBytes, strictChartPart: strictChartPart),
+            ChartDocument("same", workbookRelationshipId: "rIdWorkbook", workbookBytes: rightBytes, strictChartPart: strictChartPart));
 
         Assert.Equal(rightBytes, ChartWorkbookBytes(RevisionProcessor.AcceptRevisions(redline)));
         Assert.Equal(leftBytes, ChartWorkbookBytes(RevisionProcessor.RejectRevisions(redline)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Compare_InsertedChart_ArrivesWithItsEmbeddedWorkbook(bool strictChartPart)
+    {
+        var workbookBytes = new byte[] { 0x50, 0x4B, 7 };
+        var redline = DocxCompare.Compare(
+            TextDocument(),
+            ChartDocument("inserted", workbookRelationshipId: "rIdWorkbook", workbookBytes: workbookBytes,
+                strictChartPart: strictChartPart, leadingText: Intro));
+
+        Assert.Equal(workbookBytes, ChartWorkbookBytes(redline));
+        Assert.Equal(workbookBytes, ChartWorkbookBytes(RevisionProcessor.AcceptRevisions(redline)));
     }
 
     [Fact]
@@ -414,7 +435,9 @@ public class IrDrawingGraphTests
         string chartRelationshipId = "rIdChart",
         string? workbookRelationshipId = null,
         byte[]? workbookBytes = null,
-        string? leadingPadding = null)
+        string? leadingPadding = null,
+        bool strictChartPart = false,
+        string? leadingText = null)
     {
         if ((workbookRelationshipId is null) != (workbookBytes is null))
             throw new ArgumentException("Workbook relationship id and bytes must be supplied together.");
@@ -442,18 +465,39 @@ public class IrDrawingGraphTests
                 ? string.Empty
                 : $"<c:externalData r:id=\"{workbookRelationshipId}\"/>";
             var padding = leadingPadding is null ? string.Empty : $"<c:padding>{leadingPadding}</c:padding>";
+            var (chartNamespace, relationshipNamespace) = strictChartPart
+                ? ("http://purl.oclc.org/ooxml/drawingml/chart", "http://purl.oclc.org/ooxml/officeDocument/relationships")
+                : (C.NamespaceName, R.NamespaceName);
             WriteXml(chart,
-                $"<c:chartSpace xmlns:c=\"{C}\" xmlns:r=\"{R}\">" +
+                $"<c:chartSpace xmlns:c=\"{chartNamespace}\" xmlns:r=\"{relationshipNamespace}\">" +
                 $"<c:chart>{padding}<c:marker>{marker}</c:marker></c:chart>{externalData}</c:chartSpace>");
 
             WriteXml(main,
                 $"<w:document xmlns:w=\"{W}\" xmlns:r=\"{R}\" " +
                 "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
                 "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" " +
-                $"xmlns:c=\"{C}\"><w:body><w:p><w:r>{ChartDrawing(chartRelationshipId)}" +
+                $"xmlns:c=\"{C}\"><w:body>{TextParagraph(leadingText)}<w:p><w:r>{ChartDrawing(chartRelationshipId)}" +
                 "</w:r></w:p></w:body></w:document>");
         }
         return new WmlDocument("chart-graph.docx", stream.ToArray());
+    }
+
+    private const string Intro = "Weekly output of the three bottling lines.";
+
+    private static string TextParagraph(string? text) =>
+        text is null ? string.Empty : $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>";
+
+    private static WmlDocument TextDocument()
+    {
+        using var stream = new MemoryStream();
+        using (var document = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var main = document.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            WriteXml(main, $"<w:document xmlns:w=\"{W}\"><w:body>{TextParagraph(Intro)}</w:body></w:document>");
+        }
+        return new WmlDocument("text-only.docx", stream.ToArray());
     }
 
     private static WmlDocument ChartExternalDataDocument(string externalUri)
@@ -738,8 +782,10 @@ public class IrDrawingGraphTests
         var main = wordDocument.MainDocumentPart!;
         var chartId = (string?)main.GetXDocument().Descendants(C + "chart").Single().Attribute(R + "id");
         var chart = Assert.IsType<ChartPart>(main.GetPartById(chartId!));
-        var workbookId = (string?)chart.GetXDocument().Descendants(C + "externalData").Single().Attribute(R + "id");
-        return PartBytes(chart.GetPartById(workbookId!));
+        // By local name: the chart part may be written in the Strict namespaces.
+        var workbookId = chart.GetXDocument().Descendants().Single(e => e.Name.LocalName == "externalData")
+            .Attributes().Single(a => a.Name.LocalName == "id").Value;
+        return PartBytes(chart.GetPartById(workbookId));
     }
 
     private static string ChartExternalDataUri(WmlDocument document)
