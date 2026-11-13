@@ -2523,7 +2523,7 @@ namespace Docxodus.Tests
         [Fact]
         public void HC028_UnsupportedContentPlaceholders_MathEquation()
         {
-            // Unsupported accents retain the math placeholder when enabled
+            // Unsupported phantoms retain the math placeholder when enabled
             using (MemoryStream ms = new MemoryStream())
             {
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -2545,7 +2545,7 @@ namespace Docxodus.Tests
                     var body = new XElement(W.body,
                         new XElement(W.p,
                             new XElement(mathNs + "oMath",
-                                new XElement(mathNs + "acc",
+                                new XElement(mathNs + "phant",
                                     new XElement(mathNs + "e", new XElement(mathNs + "r",
                                         new XElement(mathNs + "t", "x + y = z"))))
                             )
