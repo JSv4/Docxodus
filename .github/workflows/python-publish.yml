@@ -98,7 +98,7 @@ jobs:
           # at a locally-built host.
           - rid: osx-arm64
             # Apple Silicon runner.
-            runner: macos-14
+            runner: macos-latest
             wheel-platform: macosx_11_0_arm64
             binary: docxodus-pyhost
           - rid: win-x64
