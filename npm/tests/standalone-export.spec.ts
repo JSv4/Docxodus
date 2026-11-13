@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { generateFootnoteDocx } from './docx-footnote-fixture.js';
+import { mathDocx } from './docx-math-fixture.js';
 import { generateTableCommentDocx } from './docx-page-map-fixture.js';
 import {
   generateCellRevisionDocx,
@@ -758,7 +759,8 @@ test.describe('standalone paginated HTML', () => {
   });
 
   test('preserves a structured failed report for strict unsupported content', async ({ page }, testInfo) => {
-    const source = new Uint8Array(readFileSync(join(testFiles, 'WC', 'WC012-Math-After.docx')));
+    // A phantom is one of the equation structures the converter still reports instead of drawing.
+    const source = mathDocx('phantom', 'inline');
     const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone.convertFailure(
       bytes,
       { reviewProfile: 'final', commentProfile: 'hidden', unsupportedContent: 'strict' },
