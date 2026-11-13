@@ -40,8 +40,7 @@ public static partial class DocxDiffBridge
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"DocxDiff.Compare error: {ex.GetType().Name}: {ex.Message}");
-            return Array.Empty<byte>();
+            return DocumentConverter.LogAndReturnEmpty("DocxDiff.Compare", ex);
         }
     }
 
@@ -155,8 +154,7 @@ public static partial class DocxDiffBridge
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"DocxDiff.AcceptRevisions error: {ex.GetType().Name}: {ex.Message}");
-            return Array.Empty<byte>();
+            return DocumentConverter.LogAndReturnEmpty("DocxDiff.AcceptRevisions", ex);
         }
     }
 
@@ -174,8 +172,7 @@ public static partial class DocxDiffBridge
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"DocxDiff.RejectRevisions error: {ex.GetType().Name}: {ex.Message}");
-            return Array.Empty<byte>();
+            return DocumentConverter.LogAndReturnEmpty("DocxDiff.RejectRevisions", ex);
         }
     }
 
@@ -196,8 +193,7 @@ public static partial class DocxDiffBridge
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"DocxDiff.Consolidate error: {ex.GetType().Name}: {ex.Message}");
-            return Array.Empty<byte>();
+            return DocumentConverter.LogAndReturnEmpty("DocxDiff.Consolidate", ex);
         }
     }
 

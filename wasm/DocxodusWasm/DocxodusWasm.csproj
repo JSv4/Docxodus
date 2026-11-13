@@ -80,6 +80,11 @@
     <WasmEnvironmentVariable Include="MONO_INTERPRETER_OPTIONS" Value="-precise" />
   </ItemGroup>
 
+  <!-- A second runtime switch, the jiterpreter's interp-entry thunks (issue #1704), is turned
+       off in scripts/build-wasm.sh: it is a runtime option, not an environment variable, and
+       the SDK has no input for the boot config's runtimeOptions (a WasmExtraConfig item lands
+       under extensions.extra, which the runtime does not read). -->
+
   <!-- Apply size optimization in the SDK's post-link Binaryen pass, before it
        generates asset hashes. Keep the default -O2 AOT compilation and link,
        the full recorded profile, and every exported API. -->

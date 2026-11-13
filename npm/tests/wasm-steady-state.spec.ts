@@ -64,7 +64,8 @@ test.describe('WASM steady-state (issue #652)', () => {
     console.log(`jiterpreter: ${JSON.stringify({ ...status, ...stats })}`);
 
     expect(status.enableTraces).toBeTruthy();
-    expect(status.enableInterpEntry).toBeTruthy();
+    // Off on purpose (issue #1704); wasm-runtime-config.spec.ts owns that pin.
+    expect(status.enableInterpEntry).toBeFalsy();
     expect(status.enableJitCall).toBeTruthy();
     expect(stats.traces).toBeGreaterThan(0);
     // Once jitted bytes reach the limit the jiterpreter stops compiling; a workload this

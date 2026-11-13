@@ -2215,6 +2215,18 @@ public partial class DocumentConverter
         };
     }
 
+    /// <summary>
+    /// The failure path of the exports that return a document as bytes. Their wire contract is an
+    /// empty array, which carries no reason, so the console line is the whole diagnostic: it logs
+    /// the full exception, stack included, because an intermittent runtime fault (issue #1704)
+    /// cannot be traced from a type name and a resource key.
+    /// </summary>
+    internal static byte[] LogAndReturnEmpty(string operation, Exception ex)
+    {
+        Console.WriteLine($"{operation} error: {ex}");
+        return Array.Empty<byte>();
+    }
+
     internal static string SerializeError(string error, string? type = null)
     {
         // No stack trace: the wire error is for callers, and a trace is server internals
