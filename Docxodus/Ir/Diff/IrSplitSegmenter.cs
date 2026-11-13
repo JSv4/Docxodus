@@ -19,8 +19,7 @@ namespace Docxodus.Ir.Diff;
 /// </summary>
 /// <remarks>
 /// <para><b>Determinism.</b> Standard O(n·m) LCS DP with a fixed back-walk tie-break (prefer the
-/// singular-side advance on equal subproblem values — the same discipline as
-/// <c>IrEditScriptBuilder.LongestCommonSubsequence</c>). Unmatched singular-side tokens attach to the
+/// singular-side advance on equal subproblem values). Unmatched singular-side tokens attach to the
 /// segment of the nearest PRECEDING matched token (leading unmatched → segment 0) — a total, documented
 /// rule. No dictionary enumeration feeds output.</para>
 /// <para><b>Content tokens.</b> Coverage and slack count only non-Separator, non-Textbox tokens
@@ -327,10 +326,7 @@ internal static class IrSplitSegmenter
     }
 
     /// <summary>Standard LCS DP over MatchKeys. Returns the per-singular-index partner flat index
-    /// (or -1); <paramref name="flatMatched"/> marks consumed flat indices. Same DP fill + back-walk
-    /// tie-break as <see cref="IrEditScriptBuilder"/>'s private <c>LongestCommonSubsequence</c> —
-    /// kept separate because the output shapes differ (partner array + matched bitmap here vs index
-    /// pairs there); keep the tie-break rules in sync if either changes.</summary>
+    /// (or -1); <paramref name="flatMatched"/> marks consumed flat indices.</summary>
     private static int[] LcsMatch(
         IReadOnlyList<IrDiffToken> a, IReadOnlyList<IrDiffToken> b, out bool[] flatMatched)
     {

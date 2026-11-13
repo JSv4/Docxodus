@@ -100,6 +100,119 @@ public class DocxDiffNoteReferenceTests
         AssertRoundTrip(repairedLeft, repairedRight, DocxDiff.Compare(left, right), endnotes);
     }
 
+    // Issue #1701. Both documents number their notes from 1, and the body diff deletes the original's
+    // paragraphs and inserts the revised ones, so the redline writes all four citations.
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void Notes_cited_only_from_deleted_and_inserted_text_are_not_paired(bool endnotes, bool consolidate)
+    {
+        var left = Build(endnotes, Orchard + Irrigation, Reserved + Note(1, "County records.") + Note(2, "Water board survey."));
+        var right = Build(endnotes, Ferry + Tickets, Reserved + Note(1, "Port schedule.") + Note(2, "October fare table."));
+        var rendered = consolidate ? Consolidate(left, right) : DocxDiff.Compare(left, right);
+
+        AssertCitations(rendered, endnotes, citations: 4, modifiedNotes: 0);
+        AssertRoundTrip(left, right, rendered, endnotes);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void A_rewritten_note_stays_one_note_when_its_citation_is_kept(bool endnotes, bool replaceOtherParagraph)
+    {
+        // The first paragraph changes one word, so its citation is kept and its rewritten note is one note
+        // with tracked edits. A replaced second paragraph brings two notes of its own.
+        var left = Build(endnotes, Orchard + Irrigation, Reserved + Note(1, "County records.") + Note(2, "Water board survey."));
+        var right = Build(endnotes, Orchard.Replace("spring", "winter") + (replaceOtherParagraph ? Tickets : Irrigation),
+            Reserved + Note(1, "Port schedule.") + Note(2, replaceOtherParagraph ? "October fare table." : "Water board survey."));
+        var rendered = DocxDiff.Compare(left, right);
+
+        AssertCitations(rendered, endnotes, citations: replaceOtherParagraph ? 3 : 2, modifiedNotes: 1);
+        AssertRoundTrip(left, right, rendered, endnotes);
+    }
+
+    [Theory]
+    [InlineData("<w:p>", "<w:p><w:pPr><w:jc w:val='center'/></w:pPr>", false)]                 // format-only paragraph
+    [InlineData("spring.</w:t></w:r><w:r>", "winter.</w:t></w:r><w:r><w:rPr><w:b/></w:rPr>", false)] // edited paragraph
+    [InlineData(" Irrigation", ParagraphBreak + "Irrigation", false)]                          // split in two
+    [InlineData(" Irrigation", ParagraphBreak + "Irrigation", true)]                           // two merged into one
+    public void A_citation_kept_through_a_format_change_edit_split_or_merge_keeps_its_note_paired(
+        string find, string replacement, bool reverse)
+    {
+        var changed = TwoCitations.Replace(find, replacement);
+        var left = Build(false, reverse ? changed : TwoCitations, Reserved + Note(1, "County records.") + Note(2, "Water board survey."));
+        var right = Build(false, reverse ? TwoCitations : changed, Reserved + Note(1, "County archive.") + Note(2, "Water board map."));
+        var rendered = DocxDiff.Compare(left, right);
+
+        AssertCitations(rendered, false, citations: 2, modifiedNotes: 2);
+        AssertRoundTrip(left, right, rendered, false);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Consolidating_a_kept_note_whose_id_a_deleted_base_note_shares_keeps_both_citations(bool endnotes)
+    {
+        // The reviewer edits the first paragraph and its note, which their document numbers 2, and deletes
+        // the second paragraph with the base's note 2.
+        var left = Build(endnotes, Orchard + Irrigation, Reserved + Note(1, "County records.") + Note(2, "Water board survey."));
+        var right = Build(endnotes, Orchard.Replace("spring", "winter").Replace("w:id='1'", "w:id='2'"),
+            Reserved + Note(2, "County archive."));
+        var rendered = Consolidate(left, right);
+
+        AssertCitations(rendered, endnotes, citations: 2, modifiedNotes: 1);
+        AssertRoundTrip(left, right, rendered, endnotes);
+    }
+
+    [Fact]
+    public void A_paragraph_rewritten_whole_keeps_none_of_its_citations()
+    {
+        // An index-entry field has no visible text, so the comparison replaces its edited paragraph whole:
+        // the original's citation is deleted with it and the revised one inserted.
+        const string indexEntry = "<w:r><w:fldChar w:fldCharType='begin'/></w:r><w:r><w:instrText> XE \"orchard\" </w:instrText></w:r>" +
+            "<w:r><w:fldChar w:fldCharType='end'/></w:r>";
+        var body = Orchard.Replace("<w:p>", "<w:p>" + indexEntry);
+        var left = Build(false, body, Reserved + Note(1, "County records."));
+        var right = Build(false, body.Replace("spring", "winter"), Reserved + Note(1, "County archive."));
+        var rendered = DocxDiff.Compare(left, right);
+
+        AssertCitations(rendered, false, citations: 2, modifiedNotes: 0);
+        AssertRoundTrip(left, right, rendered, false);
+    }
+
+    /// <summary>One paragraph, two sentences, each with its citation.</summary>
+    private const string TwoCitations =
+        "<w:p><w:r><w:t>The orchard was replanted after the frost of the previous spring.</w:t></w:r>" +
+        "<w:r><w:footnoteReference w:id='1'/></w:r><w:r><w:t xml:space='preserve'> Irrigation lines were " +
+        "rerouted along the eastern slope.</w:t></w:r><w:r><w:footnoteReference w:id='2'/></w:r></w:p>";
+    private const string ParagraphBreak = "</w:t></w:r></w:p><w:p><w:r><w:t>";
+    private static readonly string Orchard = Paragraph("The orchard was replanted after the frost of the previous spring.", 1);
+    private static readonly string Irrigation = Paragraph("Irrigation lines were rerouted along the eastern slope.", 2);
+    private static readonly string Ferry = Paragraph("Ferry service resumes once the harbour dredging is finished.", 1);
+    private static readonly string Tickets = Paragraph("Ticket prices stay unchanged through the winter season.", 2);
+
+    /// <summary>Every citation in the redline names a note of its own, and exactly
+    /// <paramref name="modifiedNotes"/> notes hold both inserted and deleted text: the rest belong to one
+    /// document. Word refuses a redline in which a deleted and an inserted citation share a note.</summary>
+    private static void AssertCitations(WmlDocument redline, bool endnotes, int citations, int modifiedNotes)
+    {
+        using var stream = new MemoryStream(redline.DocumentByteArray);
+        using var doc = WordprocessingDocument.Open(stream, false);
+        var main = doc.MainDocumentPart!;
+        var ids = main.GetXDocument().Descendants(W + (endnotes ? "endnoteReference" : "footnoteReference"))
+            .Select(r => (string)r.Attribute(W + "id")!).ToList();
+        Assert.Equal(citations, ids.Count);
+        Assert.Equal(ids.Count, ids.Distinct().Count());
+
+        var part = endnotes ? (OpenXmlPart)main.EndnotesPart! : main.FootnotesPart!;
+        Assert.Equal(modifiedNotes, part.GetXDocument().Root!.Elements()
+            .Count(n => n.Descendants(W + "ins").Any() && n.Descendants(W + "del").Any()));
+    }
+
     private static void AssertRoundTrip(WmlDocument left, WmlDocument right, WmlDocument rendered, bool endnotes)
     {
         Assert.Equal(Read(right, endnotes).Reserved, Read(rendered, endnotes).Reserved);
