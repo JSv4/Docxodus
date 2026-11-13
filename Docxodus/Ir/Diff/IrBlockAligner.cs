@@ -2671,8 +2671,7 @@ internal static class IrBlockAligner
                         new(1 + mergeGroups[mg].PluralIndexes.Count, 0, 0), mg, IrAlignmentKind.Merge));
                     break;
                 case IrAlignmentKind.Modified when leftMatch[li] >= 0:
-                    units.Add(new OrderUnit(li, leftMatch[li],
-                        new(2, similarity.Score(leftBlocks[li], rightBlocks[leftMatch[li]]), 0), -1, kind.Value));
+                    units.Add(new OrderUnit(li, leftMatch[li], new(2, 0, 0), -1, kind.Value));
                     break;
                 case IrAlignmentKind.Unchanged or IrAlignmentKind.FormatOnly when leftMatch[li] >= 0:
                     units.Add(new OrderUnit(li, leftMatch[li],
@@ -2689,6 +2688,14 @@ internal static class IrBlockAligner
             monotone = units[u].RightPosition > units[u - 1].RightPosition;
         if (monotone)
             return;
+
+        // Only a crossing needs the Modified pairs scored, so the common path never pays for it.
+        for (int u = 0; u < units.Count; u++)
+            if (units[u] is { Kind: IrAlignmentKind.Modified } unit)
+                units[u] = unit with
+                {
+                    Weight = new(2, similarity.Score(leftBlocks[unit.LeftIndex], rightBlocks[unit.RightPosition]), 0),
+                };
 
         var keep = MaxWeightIncreasingUnits(units, rightBlocks.Count);
         var releasedSplits = new HashSet<int>();
