@@ -8300,3 +8300,104 @@ stamped each `w:br` with the first line's start position, and `ProcessBreak` wro
 left margin of an empty span after the `<br>`. Paragraphs without a tab never had the span, which
 is why only list items and tabbed paragraphs were affected. Both halves are removed; nothing else
 read the value.
+
+## A deleted text box keeps its text ordinary (#1699)
+
+A text box is a story of its own. When Word tracks the deletion of a text box it wraps the run
+that anchors the box in `w:del` and leaves the box's content exactly as it was: the text inside
+`w:txbxContent` stays `w:t`, in both the DrawingML copy and the VML fallback.
+
+```xml
+<w:p>
+  <w:r><w:t xml:space="preserve">Maintenance plan for the pump house. </w:t></w:r>
+  <w:del w:id="0" w:author="A" w:date="…"><w:r><mc:AlternateContent>
+    <mc:Choice Requires="wps">… <wps:txbx><w:txbxContent>
+      <w:p><w:r><w:t>Rotate the north filters weekly</w:t></w:r></w:p>
+    </w:txbxContent></wps:txbx> …</mc:Choice>
+    <mc:Fallback>… <v:textbox><w:txbxContent>
+      <w:p><w:r><w:t>Rotate the north filters weekly</w:t></w:r></w:p>
+    </w:txbxContent></v:textbox> …</mc:Fallback>
+  </mc:AlternateContent></w:r></w:del>
+</w:p>
+```
+
+That is what desktop Word 2024 (16.0 build 20326, Windows 11) saved after `Shapes(1).Delete()`
+with `TrackRevisions` on. The same build was then given three spellings of the box's text inside
+the deleted run, each opened with `Documents.Open` and resolved with `Revisions.AcceptAll` and
+`Revisions.RejectAll`:
+
+| Text inside the deleted box | Open | Accept All | Reject All |
+| --- | --- | --- | --- |
+| `w:r > w:t` (Word's own) | opens | box removed | box and its text restored |
+| `w:r > w:delText`, no `w:del` in the box | "The file appears to be corrupted." (`0x800A16A0`) | – | – |
+| `w:del > w:r > w:delText` in the box | opens | box removed | box and its text restored |
+
+The `w:del` around the anchoring run does not reach into the box, so `w:delText` there is
+deleted text with no deletion, and Word refuses the whole file. The third row is what Word
+itself saves when the text is deleted inside the box with tracking on
+(`Shapes(1).TextFrame.TextRange.Delete()`): the deletion sits in the box's story and its text
+is `w:delText`. So the story a deletion sits in decides the spelling. The Open XML SDK validator
+reports nothing for it. LibreOffice was not available for this measurement.
+
+**Docxodus before #1699.** Marking a run as deleted renamed every `w:t` and `w:instrText` under
+it, text box content included. `DocxDiff`/`DocxCompare` did so for a deleted run and for a
+left-document insertion projected as a deletion, and `DocxSession` did so for a deleted paragraph,
+block or content-control fill (it already skipped text under a nested revision, but not a text
+box). Lowering a move source to a deletion was the only path that left a box alone, and it went
+too far the other way: a move source inside a box kept `w:t` when it became a `w:del` there.
+
+**Now.** `RevisionOps.SpellTextAsDeleted` is the one place that gives deleted text its deleted
+spelling, used by the comparison renderer and the session. It renames only the text the
+deletion owns: not text inside `w:txbxContent`, and not text under a revision nested in the
+deleted element. Docxodus writes Word's own shape (the first row) for a deleted box, and the
+third row's for a deletion made inside one. Tests:
+`DocxDiffDeletedTextBoxTests`, and `DeletingAParagraphWithATextBox_LeavesTheBoxTextOrdinary` in
+`DocxSessionTrackedDeleteBlockTests`.
+## A Strict-namespace part inside a transitional package (#1702)
+
+A package's conformance class is not all-or-nothing in practice. Word 2024 opens a package whose
+relationship types and main document are transitional but whose chart part is written in the
+ISO 29500 Strict namespaces, including the relationships namespace on the `r:id` that links the
+chart to its embedded workbook:
+
+```xml
+<!-- word/charts/chart1.xml, reached through a transitional .../relationships/chart relationship -->
+<c:chartSpace xmlns:c="http://purl.oclc.org/ooxml/drawingml/chart"
+              xmlns:r="http://purl.oclc.org/ooxml/officeDocument/relationships">
+  <c:chart>…</c:chart>
+  <c:externalData r:id="rIdData"><c:autoUpdate val="0"/></c:externalData>
+</c:chartSpace>
+```
+
+`StrictOoxmlNormalizer` translates a package only when its main document part is Strict, so this
+part reaches the comparison with its Strict names. Comparing a text-only document against one that
+adds this chart (Word 16.0.20326, Windows; LibreOffice was not available for this check):
+
+| File | Chart relationships and workbook | Word 2024 |
+| --- | --- | --- |
+| Revised input (Strict chart part) | present | Opens; the inline shape is a chart |
+| Docxodus redline before the fix | absent; `c:externalData/@r:id` names no relationship | "The file appears to be corrupted." on `Documents.Open`; Accept All and Reject All cannot run |
+| Docxodus redline now | present, namespaces unchanged | Opens; Accept All keeps the chart, Reject All removes it |
+| Redline of the same pair with a transitional chart part (control) | present | Opens; same Accept All and Reject All results |
+
+The Strict names are not what Word objects to. The dangling relationship id is: Word refuses a
+chart part whose `c:externalData/@r:id` resolves to nothing, and the Open XML SDK validator
+reports nothing for it.
+
+`PackageMerge.MoveRelatedPartsToDestination` imports the parts a cloned element depends on by
+following its relationship attributes, recursively through each imported XML part.
+`IrDrawingGraphHasher` hashes a drawing through the same edges, which is how a change in a chart
+or its workbook is detected. Each kept its own list of the nine attribute names, in the
+transitional namespace only, so the import stopped at the Strict chart part and the hash never
+saw its workbook: an inserted chart arrived without its relationships, and a changed workbook
+behind an unchanged chart was no change at all. `PackageMerge.RelationshipAttributeNames` now
+holds each name in both namespaces and the hasher reads it. The imported part keeps its Strict
+names; only its relationship ids are rewritten.
+
+`DocumentBuilder` finds relationships by transitional element name (`RelationshipMarkup`,
+`CopyChartObjects`) and is not covered by this.
+
+Tests: `IrDrawingGraphTests.Compare_InsertedChart_ArrivesWithItsEmbeddedWorkbook`,
+`Compare_ChartEmbeddedWorkbookChange_AcceptRejectUseLiveRightLeftBytes` and
+`Read_ChartEmbeddedWorkbookChange_FlipsDrawingIdentity`, each for a transitional and a Strict
+chart part.
