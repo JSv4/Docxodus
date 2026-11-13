@@ -89,8 +89,9 @@ against the trimmed artifacts; also `dotnet test` for the non-WASM side).
 The browser build executes IL on the Mono **interpreter**, tiered by the **jiterpreter**
 (hot interpreter traces compiled to WebAssembly at runtime). Both are on in the shipped
 configuration — verified, not assumed: `npm/tests/wasm-steady-state.spec.ts` boots the
-bundle with `--jiterpreter-stats-enabled` and asserts that traces, interp-entry and jit-call
-thunks are enabled, that traces were actually compiled, and that the generated code sits well
+bundle with `--jiterpreter-stats-enabled` and asserts that traces and jit-call thunks are
+enabled (interp-entry thunks are off on purpose, [see below](#interp-entry-thunks-are-off-issue-1704)),
+that traces were actually compiled, and that the generated code sits well
 inside the jiterpreter's 8 MB budget (a few compares use ~0.6 MB / 500 traces). Even so, the
 interpreter's steady state was **5–10× slower than warm native** on the same inputs: the
 jiterpreter compiles straight-line loops well but every trace ends at a call, and this code
@@ -294,6 +295,75 @@ exception thrown from AOT code inside a `GetAllParts` loop could still loop ther
 780 exceptions the full stress workload throws starts with a cycled or dead head. When the
 runtime is upgraded, re-check whether `emit_pop_lmf` at `ret` still depends on `in_count` before
 dropping the setting.
+
+### Interp-entry thunks are off (issue #1704)
+
+`scripts/build-wasm.sh` adds `"runtimeOptions": ["--no-jiterpreter-interp-entry-enabled"]` to
+`_framework/dotnet.boot.js`, so every loader gets it. (The option is written into the generated
+file because the SDK has no input for it: a `WasmExtraConfig` item named `runtimeOptions` lands
+under `extensions.extra`, which the runtime does not read.) `npm/tests/wasm-runtime-config.spec.ts`
+pins that the loaded runtime reports interp-entry off with traces and jit-call on, including when
+the page passes runtime options of its own, and `npm/tests/wasm-gc-stress.spec.ts` repeats the
+comparison below under a 1 MB nursery.
+
+**What the thunks are.** When compiled (AOT) code calls a method that is still interpreted, it
+goes through one of Mono's built-in entry functions, which packs the arguments into a structure
+on the native stack and enters the interpreter. Once a method has been entered that way often
+enough, the jiterpreter generates a WebAssembly thunk specialized for it and patches it in. The
+thunk copies the arguments straight onto the interpreter's stack and keeps nothing on the native
+stack.
+
+**The failure.** `compareDocuments` returned an empty result, about once in a hundred calls after
+warm-up, for a pair it otherwise compares correctly. The bridge had caught an
+`InvalidCastException` whose only visible frame was `IrMarkupRenderer.SameDefinitions`. A build
+that tagged each statement placed all 32 of 32 failures on one line: `new XElement(root)`, the
+deep clone of the styles part that `ProjectConsumerDocDefaults` has just parsed. That step only
+runs when the two documents' `w:docDefaults` differ, which is why other pairs never failed.
+Nothing in that clone can fail a cast on a well-formed tree, and CoreCLR never does.
+
+**Evidence that it is a collection landing during the clone.** Counts are failed calls out of
+repeated `DocumentComparer.CompareDocuments` calls on the #1704 pair in one Node 22 process, on
+the runtime built from `57f5d346` unless noted.
+
+| Configuration | Failed / calls |
+| --- | --- |
+| Shipped defaults | 32 / 3,400 (first failure at call 106 in five runs of six) |
+| Nursery 1 MB (`MONO_GC_PARAMS=nursery-size=1m`) | 20 / 1,200 (first failure at call 54 and 65) |
+| Nursery 64 MB | 0 / 1,200 |
+| Traces off only | 4 / 600 |
+| Jit-call thunks off only | 2 / 600 |
+| Precise interpreter stack marking back on | 1 / 600 |
+| Interp-entry thunks off only | 0 / 1,800 |
+| Interp-entry thunks off, nursery 1 MB | 0 / 3,600 |
+| This build | 0 / 3,000 |
+| This build, nursery 1 MB | 0 / 3,000 |
+
+The rate follows how often the nursery is collected, and the failure never starts before the
+thunks have had time to compile. The object being cast is therefore a reference some frame still
+held after a collection moved the object it pointed at, and the cloned tree is exactly the kind
+of object that moves: freshly parsed, still in the nursery, and walked by a recursion through
+`System.Xml.Linq` that allocates a copy of every node. Which frame holds the stale reference,
+and which of the clone's methods are interpreted, was not established.
+The likeliest reading is that an AOT caller relied on the copy of its argument that the built-in
+entry function keeps on the scanned native stack for the length of the call, a copy the thunk
+does not make; dotnet/runtime#130592 describes AOT frames on this target losing their own pin on
+a reference that is live across a call. No stand-alone reproduction outside Docxodus exists yet,
+so nothing has been reported upstream.
+
+**Cost.** None measured on comparison: six loops run side by side took 130–132 s per 600 calls
+with the thunks on and 124 s with them off, and 184–186 s against 179–180 s under the 1 MB
+nursery. The steady-state workload (`wasm-steady-state.spec.ts`) showed no difference outside its
+own run-to-run spread either, though it was measured on a busy machine where that spread was
+large (the heavy comparison's median ranged 2.3–3.9 s across two runs of this build, 3.1 s on
+the previous one). The thunks only shorten the hop from AOT code into interpreted code; the
+methods the profile selects are AOT-compiled either way.
+
+**What it does not fix.** The underlying defect is in the runtime. Turning the thunks off removes
+the path on which it was observed, 12,000 calls without a failure against 1 in 100; it does not
+prove that no other frame can hold an unpinned reference across a collection. If a failure of
+this kind returns, the byte-returning exports now log the full exception and stack, and the
+nursery-size sweep above tells within minutes whether collection timing is involved. Re-test with
+the thunks on when the runtime is upgraded before dropping the setting.
 
 ## Compression and serving
 
