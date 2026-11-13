@@ -56,21 +56,10 @@ internal sealed class IrDrawingGraphHasher
         "http://schemas.microsoft.com/office/drawing/2008/diagram";
     private static readonly XName DspDataModelExt = Dsp + "dataModelExt";
 
-    // Keep this aligned with ComparisonUnitWord.s_RelationshipAttributeNames, the relationship edge set the
-    // renderer imports. Hashing an edge the renderer cannot carry would make an edit detectable but not safely
-    // renderable, so unknown r:* attributes intentionally retain the legacy resolver behavior.
-    private static readonly HashSet<XName> ImportedRelationshipAttributes = new()
-    {
-        R + "embed",
-        R + "link",
-        R + "id",
-        R + "cs",
-        R + "dm",
-        R + "lo",
-        R + "qs",
-        R + "href",
-        R + "pict",
-    };
+    // The relationship edge set the renderer imports. Hashing an edge the renderer cannot carry would make an
+    // edit detectable but not safely renderable, so unknown r:* attributes intentionally retain the legacy
+    // resolver behavior.
+    private static readonly HashSet<XName> ImportedRelationshipAttributes = PackageMerge.RelationshipAttributeNames;
 
     private readonly OpenXmlPart _drawingOwner;
     // A cutoff cannot prove the remaining graph is equal. This lazy fingerprint binds an incomplete graph to
