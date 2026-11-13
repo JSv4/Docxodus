@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -32,21 +33,49 @@ public static partial class WmlToHtmlConverter
     private static bool HasUnknownMathAttributes(XElement element, XName? allowed = null) => element.Attributes()
         .Any(a => !a.IsNamespaceDeclaration && a.Name != PtOpenXml.Unid && a.Name != allowed);
 
+    /// <summary>
+    /// The document math settings (<c>m:mathPr</c>, ECMA-376 §22.1.2.62) the projection draws as Word does, each
+    /// with the values it does so for. A setting that is not listed, or a listed one at another value, keeps
+    /// every equation of the document on the placeholder. Word 2024 writes most of these into every document
+    /// it saves, at the value the setting has when absent (issue #1710).
+    /// </summary>
+    private static readonly Dictionary<XName, Func<XElement, bool>> MathSettingsDrawn = new()
+    {
+        [M.mathFont] = setting => !string.IsNullOrWhiteSpace((string?)setting.Attribute(M.val)),
+        // The limit placement an m:nary without m:limLoc takes; MathContext reads the value.
+        [M.intLim] = setting => MathSettingIs(setting, "subSup", "undOvr"),
+        [M.naryLim] = setting => MathSettingIs(setting, "subSup", "undOvr"),
+        // Display equations are laid out as display math, between the text margins.
+        [M.smallFrac] = setting => MathOnOff(setting, absent: false) == false,
+        [M.dispDef] = setting => MathOnOff(setting, absent: true) == true,
+        [M.lMargin] = setting => MathSettingIs(setting, "0"),
+        [M.rMargin] = setting => MathSettingIs(setting, "0"),
+        // Centred. A display paragraph is projected only when it holds one equation, and a group of one
+        // centred as a group is that equation centred.
+        [M.defJc] = setting => MathSettingIs(setting, "centerGroup", "center"),
+        // How Word breaks an equation too long for its line, and where it sets the lines after the first.
+        // The projection never breaks an equation, with these settings or without them, so none of their
+        // values changes what it draws.
+        [M.brkBin] = setting => MathSettingIs(setting, "before", "after", "repeat"),
+        [M.brkBinSub] = setting => MathSettingIs(setting, "--", "-+", "+-"),
+        [M.wrapIndent] = setting => uint.TryParse((string?)setting.Attribute(M.val), NumberStyles.None, CultureInfo.InvariantCulture, out _),
+        [M.wrapRight] = setting => MathOnOff(setting, absent: false) != null,
+    };
+
+    private static bool MathSettingIs(XElement setting, params string[] values) =>
+        values.Contains((string?)setting.Attribute(M.val));
+
     private static MathRenderingContext MathContext(WordprocessingDocument document)
     {
         var part = document.MainDocumentPart!;
         if (part.Annotation<MathRenderingContext>() is { } cached) return cached;
         var properties = part.DocumentSettingsPart?.GetXDocument().Root?.Element(M.mathPr);
-        var fontElement = properties?.Element(M.mathFont);
-        var font = (string?)fontElement?.Attribute(M.val);
-        var integralLimits = MathLimitLocation(properties?.Element(M.intLim), "subSup");
-        var naryLimits = MathLimitLocation(properties?.Element(M.naryLim), "undOvr");
+        var font = (string?)properties?.Element(M.mathFont)?.Attribute(M.val);
+        // Each setting once, carrying only its value, and drawn as Word draws it.
         var supported = properties == null || (!HasUnknownMathAttributes(properties)
-            && properties.Elements().All(e => e.Name == M.mathFont || e.Name == M.intLim || e.Name == M.naryLim)
-            && properties.Elements().GroupBy(e => e.Name).All(g => g.Count() == 1)
-            && integralLimits != null && naryLimits != null
-            && (fontElement == null || (!fontElement.HasElements && !string.IsNullOrWhiteSpace(font)
-                && !HasUnknownMathAttributes(fontElement, M.val))));
+            && properties.Elements().All(setting => properties.Elements(setting.Name).Count() == 1
+                && !setting.HasElements && !HasUnknownMathAttributes(setting, M.val)
+                && MathSettingsDrawn.TryGetValue(setting.Name, out var drawn) && drawn(setting)));
         // An absent OMML mathFont permits font substitution. Let the browser's math family and
         // the existing export font policy expose that choice; never silently use the body font.
         var family = font == null ? "math" : "'" + string.Concat(font.Select(c =>
@@ -54,16 +83,12 @@ public static partial class WmlToHtmlConverter
         var context = new MathRenderingContext(supported, family, document)
         {
             FontName = font,
-            IntegralLimits = integralLimits ?? "subSup",
-            NaryLimits = naryLimits ?? "undOvr",
+            IntegralLimits = (string?)properties?.Element(M.intLim)?.Attribute(M.val) ?? "subSup",
+            NaryLimits = (string?)properties?.Element(M.naryLim)?.Attribute(M.val) ?? "undOvr",
         };
         part.AddAnnotation(context);
         return context;
     }
-
-    private static string? MathLimitLocation(XElement? property, string absent) => property == null ? absent
-        : property.HasElements || HasUnknownMathAttributes(property, M.val) ? null
-        : (string?)property.Attribute(M.val) is "subSup" or "undOvr" ? (string?)property.Attribute(M.val) : null;
 
     private static decimal? MathFontSize(XElement source, MathRenderingContext context)
     {
@@ -79,8 +104,11 @@ public static partial class WmlToHtmlConverter
         // Resolve an ordinary unstyled run in the paragraph's style context. A paragraph
         // mark's direct rPr and a large neighboring run do not format the equation.
         var properties = FormattingAssembler.ResolveEffectiveRunProperties(context.Document, probe);
-        var size = properties.Elements().Any(e => e.Name != W.rFonts && e.Name != W.sz
-            && e.Name != W.szCs && e.Name != W.lang) ? null : (decimal?)properties.Element(W.sz)?.Attribute(W.val);
+        // Kerning and ligatures are text typography, which Word does not apply to a math zone; Word 2024
+        // writes both into the run defaults of every new document.
+        var size = properties.Elements().Any(e => e.Name != W.rFonts && e.Name != W.sz && e.Name != W.szCs
+            && e.Name != W.lang && e.Name != W.kern && e.Name != W14.ligatures)
+            ? null : (decimal?)properties.Element(W.sz)?.Attribute(W.val);
         return context.FontSizes[key] = size > 0 ? size / 2 : null;
     }
 
