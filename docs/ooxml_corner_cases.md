@@ -8147,3 +8147,56 @@ stamped each `w:br` with the first line's start position, and `ProcessBreak` wro
 left margin of an empty span after the `<br>`. Paragraphs without a tab never had the span, which
 is why only list items and tabbed paragraphs were affected. Both halves are removed; nothing else
 read the value.
+
+## A picture bullet is three linked pieces, and Word refuses a list missing any (#1700)
+
+A list level can draw a picture instead of a character. The level names a bullet by id, the bullet
+is defined once in the same numbering part, and the bullet's shape names its image through the
+numbering part's own relationships:
+
+```xml
+<!-- word/numbering.xml -->
+<w:numPicBullet w:numPicBulletId="0"><w:pict>
+  <v:shape id="_x0000_i1025" style="width:9pt;height:9pt" o:bullet="t"><v:imagedata r:id="rIdBullet"/></v:shape>
+</w:pict></w:numPicBullet>
+<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0">
+  <w:numFmt w:val="bullet"/><w:lvlText w:val="&#xF0B7;"/><w:lvlPicBulletId w:val="0"/> ...
+</w:lvl></w:abstractNum>
+<!-- word/_rels/numbering.xml.rels -->
+<Relationship Id="rIdBullet" Type=".../image" Target="media/bullet.png"/>
+```
+
+Opened in Word 2024 (16.0.20326, Windows) through `Documents.Open` with repair off:
+
+| File | Word | Docxodus |
+| --- | --- | --- |
+| All three pieces present | Opens; the items draw the picture | Read as a bullet list |
+| `w:lvlPicBulletId` with no `w:numPicBullet` of that id (and no image) | "The file appears to be corrupted." (`0x800A16A0`) | Read as a bullet list |
+| Redline of a document without lists against one adding this list, before #1700 | "The file appears to be corrupted." | Wrote `w:lvlPicBulletId` only |
+| The same redline now | Opens; Accept All keeps two picture-bullet items, Reject All removes them | Writes all three pieces |
+| Redline of two unrelated lists that both call their (different) picture bullet `0`, before #1700 | Opens, and draws the original's picture beside the revision's items | Imported level kept `w:lvlPicBulletId` `0`, which is the original's bullet |
+| The same redline now | Opens; the revision's items draw the revision's picture, and Accept All and Reject All each leave one list with its own | Second bullet copied as id `1` |
+
+The Open XML SDK validator reports nothing for the dangling reference, so only opening in Word
+shows it. Word is strict here in a way it is not for a `w:numId` with no definition, which it
+repairs silently. LibreOffice was not available on the machine that made these captures.
+
+**Docxodus.** The comparison builds its output on the original's package and imports the list
+definitions the revision adds (`PackageMerge.CopyMissingNumberingFromOneDocToAnother`). It cloned
+`w:abstractNum` and `w:num` verbatim, so a level kept its `w:lvlPicBulletId` while the
+`w:numPicBullet` and the image stayed behind. Every clone now goes into the destination through
+`PackageMerge.NumberingChildImport`, which for each `w:lvlPicBulletId` in the clone (levels of a
+definition and levels inside a `w:lvlOverride` alike) copies the bullet once, imports its image
+with the same part copier the body's pictures use (`MoveRelatedPartsToDestination`), and rewrites
+the reference. A bullet keeps its id when the destination has none under it and otherwise takes
+the next free id, because the destination's bullet of that id may be another picture. Word names
+the first picture bullet's shape `_x0000_i1025` in every document, so two bullets from two
+documents usually share a shape id; Word opens that, but the SDK validator reports the duplicate,
+and the import gives the later shape a fresh id (`DrawingIds.RenumberVmlIds`). A level
+naming a bullet the source does not define is imported without the reference, so a redline never
+carries the shape Word refuses, even when the revised document had it. Tests:
+`DocxDiffPictureBulletImportTests`.
+
+Not covered: a list present in both documents whose definition is otherwise identical but whose
+bullet id points at a different picture on each side is treated as the same list, and the redline
+keeps the original's picture.

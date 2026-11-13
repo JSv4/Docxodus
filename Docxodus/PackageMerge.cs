@@ -104,7 +104,11 @@ internal static class PackageMerge
         /// legacy content-dedup treatment, so they are not needlessly duplicated. Null
         /// <paramref name="alignedNumIdPairs"/> keeps the legacy content-dedup behavior for the
         /// WmlComparer and Consolidate call sites.</para></summary>
+        /// <remarks><paramref name="fromPackage"/> and <paramref name="toPackage"/> are the two documents' own
+        /// packages (their <see cref="OpenXmlMemoryStreamDocument"/>s'), which the picture bullets' images are
+        /// copied through.</remarks>
         internal static Dictionary<int, int> CopyMissingNumberingFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo,
+            Package fromPackage, Package toPackage,
             IReadOnlyCollection<(int FromNumId, int ToNumId)>? alignedNumIdPairs = null,
             IReadOnlySet<int>? usedFromNumIds = null)
         {
@@ -134,11 +138,12 @@ internal static class PackageMerge
             }
 
             var fromNumberingXDoc = fromNumberingPart.GetXDocument();
+            var import = new NumberingChildImport(fromNumberingPart, toNumberingPart, fromPackage, toPackage);
 
             if (alignedNumIdPairs != null)
             {
                 var identityNumIdMap = CopyNumberingPreservingListIdentity(
-                    fromNumberingXDoc, toNumberingXDoc, alignedNumIdPairs, usedFromNumIds);
+                    fromNumberingXDoc, toNumberingXDoc, import, alignedNumIdPairs, usedFromNumIds);
                 toNumberingPart.PutXDocument(toNumberingXDoc);
                 return identityNumIdMap;
             }
@@ -206,7 +211,7 @@ internal static class PackageMerge
                 cloned.SetAttributeValue(W.abstractNumId, targetId);
                 abstractNumIdMap[fromAbstractNumId.Value] = targetId;
 
-                WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root!, cloned);
+                import.Add(cloned);
             }
 
             // Copy num elements that don't exist in destination
@@ -243,7 +248,7 @@ internal static class PackageMerge
                     var abstractNumIdElement = cloned.Element(W.abstractNumId);
                     if (abstractNumIdElement != null)
                         abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
-                    WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root!, cloned);
+                    import.Add(cloned);
                     numIdMap[fromNumId.Value] = maxNumId;
                 }
                 else
@@ -256,7 +261,7 @@ internal static class PackageMerge
                         if (abstractNumIdElement != null)
                             abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
                     }
-                    WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root!, cloned);
+                    import.Add(cloned);
                 }
             }
 
@@ -287,7 +292,7 @@ internal static class PackageMerge
         /// carry) to no rendering effect.</para>
         /// </summary>
         private static Dictionary<int, int> CopyNumberingPreservingListIdentity(
-            XDocument fromNumberingXDoc, XDocument toNumberingXDoc,
+            XDocument fromNumberingXDoc, XDocument toNumberingXDoc, NumberingChildImport import,
             IReadOnlyCollection<(int FromNumId, int ToNumId)> alignedNumIdPairs,
             IReadOnlySet<int>? usedFromNumIds)
         {
@@ -351,7 +356,7 @@ internal static class PackageMerge
                     : ++maxAbstractNumId;
                 var clonedAbstract = new XElement(fromAbstract);
                 clonedAbstract.SetAttributeValue(W.abstractNumId, targetId);
-                WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root!, clonedAbstract);
+                import.Add(clonedAbstract);
                 cache[fromAbstractId] = targetId;
                 return targetId;
             }
@@ -430,10 +435,71 @@ internal static class PackageMerge
                 var abstractNumIdElement = clonedNum.Element(W.abstractNumId);
                 if (abstractNumIdElement != null)
                     abstractNumIdElement.SetAttributeValue(W.val, targetAbstractId);
-                WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root!, clonedNum);
+                import.Add(clonedNum);
             }
 
             return numIdMap;
+        }
+
+        /// <summary>
+        /// Adds cloned <c>w:abstractNum</c> and <c>w:num</c> definitions to the destination numbering part, each
+        /// with the picture bullets its levels name. A level points at its bullet by id
+        /// (<c>w:lvlPicBulletId</c> → <c>w:numPicBullet</c>), and the bullet points at its image through a
+        /// relationship of the numbering part, so a definition copied alone names a bullet the destination
+        /// does not have and Word refuses the package (issue #1700). One source bullet is copied once however
+        /// many levels use it.
+        /// </summary>
+        private sealed class NumberingChildImport(
+            NumberingDefinitionsPart fromNumberingPart, NumberingDefinitionsPart toNumberingPart,
+            Package fromPackage, Package toPackage)
+        {
+            private readonly XElement _from = fromNumberingPart.GetXDocument().Root!;
+            private readonly XElement _to = toNumberingPart.GetXDocument().Root!;
+            private readonly Dictionary<string, string> _pictureBulletIds = new(StringComparer.Ordinal);
+
+            /// <summary>Adds <paramref name="clone"/>, a copy of a source definition already carrying its
+            /// destination id.</summary>
+            public void Add(XElement clone)
+            {
+                foreach (var reference in clone.Descendants(W.lvlPicBulletId).ToList())
+                {
+                    // The source has no such bullet: the level keeps its w:lvlText marker instead.
+                    if (ImportPictureBullet((string?)reference.Attribute(W.val)) is { } id)
+                        reference.SetAttributeValue(W.val, id);
+                    else
+                        reference.Remove();
+                }
+                WordprocessingMLUtil.InsertNumberingChildInOrder(_to, clone);
+            }
+
+            private string? ImportPictureBullet(string? fromId)
+            {
+                if (fromId == null)
+                    return null;
+                if (_pictureBulletIds.TryGetValue(fromId, out var imported))
+                    return imported;
+                var fromBullet = _from.Elements(W.numPicBullet)
+                    .FirstOrDefault(b => (string?)b.Attribute(W.numPicBulletId) == fromId);
+                if (fromBullet == null)
+                    return null;
+
+                // The destination's own bullet under this id may be another picture, so the copy takes the
+                // next free id rather than sharing it.
+                var taken = _to.Elements(W.numPicBullet).ToList();
+                var id = taken.Any(b => (string?)b.Attribute(W.numPicBulletId) == fromId)
+                    ? (taken.Max(b => GetIntAttribute(b, W.numPicBulletId) ?? 0) + 1)
+                        .ToString(CultureInfo.InvariantCulture)
+                    : fromId;
+                var bullet = new XElement(fromBullet);
+                bullet.SetAttributeValue(W.numPicBulletId, id);
+                MoveRelatedPartsToDestination(
+                    fromPackage.GetPart(fromNumberingPart.Uri), toPackage.GetPart(toNumberingPart.Uri), bullet,
+                    skipDanglingRelationships: true);
+                WordprocessingMLUtil.InsertNumberingChildInOrder(_to, bullet);
+                // Word names the first picture bullet's shape _x0000_i1025 in every document.
+                DrawingIds.RenumberVmlIds(_to);
+                return _pictureBulletIds[fromId] = id;
+            }
         }
 
         /// <summary>
