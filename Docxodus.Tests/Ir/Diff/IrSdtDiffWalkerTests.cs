@@ -44,13 +44,11 @@ public sealed class IrSdtDiffWalkerTests
     }
 
     [Fact]
-    public void Note_token_bag_descends_block_sdt()
+    public void Notes_whose_references_the_body_drops_are_whole_note_deletes_and_inserts()
     {
-        // The content-based residue matcher must select 1 → 4. The reverse-order banana match then
-        // cannot cross it, so it remains a delete+insert. Without SDT descent every note bag is empty,
-        // ties are positional, and the incorrect 1 → 3 pairing wins instead. The body paragraphs share
-        // no words, so the diff deletes and inserts them and keeps none of the references: note pairing
-        // falls to the content matcher this test is about, not to the references the body keeps (#865).
+        // The body paragraphs share no words, so the diff deletes and inserts them and keeps none of the
+        // references. Notes 1 and 4 share most of their text, as do 2 and 3, but each is cited from one
+        // document only: pairing them would give a deleted and an inserted reference one definition (#1701).
         var left = Read(FootnoteDoc(
             Paragraph(Text("quartz") + FootnoteReference("1")) + Paragraph(Text("zephyr") + FootnoteReference("2")),
             ("1", Sdt(Paragraph(Text("orange apple pear")))),
@@ -63,10 +61,10 @@ public sealed class IrSdtDiffWalkerTests
         var script = IrEditScriptBuilder.Build(left, right, Default);
         var notes = script.NoteOps!.Where(n => n.Kind == IrNoteKind.Footnote).ToList();
 
-        Assert.Contains(notes, n => n.LeftNoteId == "1" && n.NoteId == "4");
-        Assert.DoesNotContain(notes, n => n.LeftNoteId == "1" && n.NoteId == "3");
-        Assert.Contains(notes, n => n.LeftNoteId is null && n.NoteId == "3");
-        Assert.Contains(notes, n => n.LeftNoteId == "2" && n.NoteId == "2");
+        Assert.Equal(new[] { "3", "4" }, notes.Where(n => n.LeftNoteId is null).Select(n => n.NoteId));
+        Assert.All(notes.Where(n => n.LeftNoteId is null), n => Assert.All(n.Ops, op => Assert.Equal(IrEditOpKind.InsertBlock, op.Kind)));
+        Assert.Equal(new[] { "1", "2" }, notes.Where(n => n.LeftNoteId is not null).Select(n => n.NoteId));
+        Assert.All(notes.Where(n => n.LeftNoteId is not null), n => Assert.All(n.Ops, op => Assert.Equal(IrEditOpKind.DeleteBlock, op.Kind)));
     }
 
     [Fact]
