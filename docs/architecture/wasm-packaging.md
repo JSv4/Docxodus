@@ -36,7 +36,7 @@ delivery/verification subsystems, and pagination. The AOT tier then moved
 `dotnet.native.wasm`: the compiled methods live there, while the assemblies keep their size
 (the IL bodies of AOT-compiled methods are zeroed in place, which is why they cost nothing
 after compression). The guardrail that matters is the brotli wire total, which
-`scripts/build-wasm.sh` prints and holds under a 5924 KiB budget. The general EMF/WMF renderer (#1706) measured 6,063,274 bytes
+`scripts/build-wasm.sh` prints and holds under a 5928 KiB budget (5924 KiB for the metafile renderer alone; together with the OMML structures of #1705 and the symbol-font tables of #1707 the payload measured 6,068,407 bytes on CI, 2,231 bytes over, covered by 4 KiB more). The general EMF/WMF renderer (#1706) measured 6,063,274 bytes
 on CI, 9,386 bytes over the prior 5912 KiB, covered by 12 KiB more; roots, dependencies and the
 AOT profile are unchanged. Main after the section
 line-grid work (#1551) measured 6,049,876 bytes on CI runtime 10.0.15, 84 bytes over the

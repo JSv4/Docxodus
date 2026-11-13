@@ -176,7 +176,11 @@ du -sh "$WASM_DIST"
 # 5912 KiB: about 13 KB of Brotli for metafile playback that the browser renders without
 # SkiaSharp. 12 KiB more covers it; assembly roots, dependencies and the AOT profile are
 # unchanged.
-WIRE_BUDGET_BYTES=$((5924 * 1024))
+# Merged with the OMML structures (#1705) and the symbol-font tables (#1707), which each fit
+# the budget of their own branch, the three together measured 6,068,407 bytes on CI, 2,231
+# bytes over 5924 KiB; another 4 KiB covers it. Assembly roots, dependencies and the AOT
+# profile are unchanged.
+WIRE_BUDGET_BYTES=$((5928 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""
