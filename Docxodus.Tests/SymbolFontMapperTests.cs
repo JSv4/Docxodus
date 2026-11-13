@@ -37,6 +37,12 @@ public class SymbolFontMapperTests
     [InlineData("Webdings", '\uF061', "✔")]
     // A code point browsers draw as a colour emoji asks for its text form.
     [InlineData("Wingdings", '\uF043', "\U0001F44D\uFE0E")]
+    // Wingdings 0x36 is the plain hourglass, not the one with flowing sand (U+23F3).
+    [InlineData("Wingdings", '\uF036', "\u231B\uFE0E")]
+    // A bare no-break space or soft hyphen in a symbol font is the font's glyph at that byte, as Word draws it.
+    [InlineData("Wingdings", '\u00A0', "\u2B1D")]
+    [InlineData("Wingdings", '\u00AD', "\U0001F7CF")]
+    [InlineData("Symbol", '\u00AD', "↑")]
     // A CSS stack and any case name the same font.
     [InlineData("'WINGDINGS', serif", '\uF0FE', "☑")]
     public void MapsFaithfulGlyphs(string font, char stored, string expected) =>
@@ -47,6 +53,9 @@ public class SymbolFontMapperTests
     [InlineData("Wingdings", '\uF0FF')]
     [InlineData("Symbol", '\uF0E6')]
     [InlineData("Symbol", '\uF060')]
+    // Adobe's table has the euro at Symbol 0xA0; the Symbol font Word draws with has no glyph there.
+    [InlineData("Symbol", '\uF0A0')]
+    [InlineData("Symbol", '\u00A0')]
     [InlineData("Wingdings 3", '\uF0F1')]
     [InlineData("Wingdings", '\uF07F')]
     // Outside the font's byte range, or in a font that is not a symbol font.
