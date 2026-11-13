@@ -6827,6 +6827,92 @@ inventory checks MathML's actual italic identifier code points and each radical'
 the paragraph fragmenter moves complete inline equations, and prose baseline correction skips
 MathML just as it skips other independently laid-out media.
 
+### OMML structure defaults that are easy to get wrong (#1705)
+
+These come from ECMA-376 Part 1 §22.1 and from Word-authored files in `TestFiles/`. The Word
+renders that check them are in the next section.
+
+- **`m:vertJc` on `m:groupChr` has two different defaults.** An absent element means `top`, but an
+  element present without `m:val` means `bot` (§22.1.2.119). Word's overbrace writes
+  `<m:chr m:val="⏞"/><m:pos m:val="top"/><m:vertJc m:val="bot"/>`, and an underbrace takes the
+  element defaults (`⏟`, `pos` `bot`, `vertJc` absent = `top`). Both keep the operand on the
+  baseline, which is the only layout MathML `munder`/`mover` draws. The converter accepts exactly
+  those two combinations and keeps the diagnostic for the other two.
+- **Word writes formatting that changes nothing on almost every equation.** Each `m:r` carries
+  `<w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr>`, and each structure's
+  properties end in `m:ctrlPr` with the same fonts, often plus `<w:i/>`. A converter that refuses
+  every `w:rPr` never draws a Word equation. Docxodus accepts these when the fonts name the
+  document's `m:mathFont`.
+- **Some Word files theme the East Asian font slot**: `w:eastAsiaTheme="minorEastAsia"` on the same
+  `w:rFonts` (`TestFiles/WC/WC031-Two-Maths-Before.docx`). That slot only applies to East Asian
+  characters, but the converter does not yet reason about which slot a run's characters use, so
+  these equations keep the diagnostic (#1710).
+- **Word's default math settings keep every equation on the diagnostic path.** Word writes
+  `m:brkBin`, `m:brkBinSub`, `m:smallFrac`, `m:dispDef`, `m:lMargin`, `m:rMargin`, `m:defJc`,
+  `m:wrapIndent`, `m:intLim` and `m:naryLim` into `settings.xml`. The converter now reads
+  `m:intLim` and `m:naryLim`, which choose n-ary limit placement, but still refuses the others, so a
+  document saved by Word shows `[MATH]` until those settings are modeled (#1710).
+- **`m:acc` stores combining marks** (U+0302 by default, U+20D7 for a vector arrow). MathML needs
+  the spacing form (U+02C6, U+2192) in its accent `mo`; a combining mark alone has no glyph.
+
+### What Word 2024 draws for those structures, against the MathML in Chromium (#1705)
+
+One hand-written document with 39 inline equations, one per structure and property above, plus two
+display equations, was exported to PDF by Word 16.0.20326 and converted to HTML and rendered in
+Chromium 143 with Cambria Math. All 41 project (no placeholder). Scripts, pre-scripts, n-ary
+operators, delimiters, matrices, functions, accents, limits, braces, boxes, no-bar fractions and the
+styled alphabets match Word's drawing. Four did not, and what Word does is the finding:
+
+| OMML | Word 2024 | MathML as first projected | Now |
+| --- | --- | --- | --- |
+| `m:bar` (top and bottom) over `x+y` | a rule as wide as the operand | `mover`/`munder` with a stretchy `‾` / `_`: one character wide, because Cambria Math has no stretch variants for either | the operand's `mrow` with a `border-top` / `border-bottom` |
+| `m:eqArr` rows `x&=1`, `y+z&=22` | rows meet at the `=`: `x` is set right, against it | `mtd` with `text-align: right`: Chromium leaves the cell's math at the left | `text-align: -webkit-right` / `-webkit-left` after the standard declaration |
+| `m:m` with `m:mcJc` `left`/`right` | column set to that side | same `text-align`, same result | same fix |
+| `m:f` type `lin` | `a/b`, slash tight | `a / b`, infix operator spacing | `lspace="0" rspace="0"` |
+
+Why `text-align` alone does nothing in Chromium: a cell's math is a block-level box, and
+`text-align: right` moves only inline content. Chromium's own stylesheet centres cells with
+`text-align: -webkit-center`, the keyword that also moves block children, so the matching
+`-webkit-right` / `-webkit-left` is what takes effect. An engine that does not know the keyword
+drops that declaration and keeps the standard one. Not checked in Firefox or Safari.
+
+Other things the render settled:
+
+- **`m:lit` changes nothing Word draws here.** `<m:r><m:rPr><m:lit/></m:rPr><m:t>a+b</m:t></m:r>`
+  is drawn exactly like the same run without it, with ordinary spacing around the `+`. Projecting a
+  literal run as an ordinary one is therefore faithful; only its `&` in an equation array keeps
+  the diagnostic.
+- **Word sets under/over limits beside an inline n-ary operator** (`∑` with `limLoc` `undOvr`
+  draws as `∑ᵢⁿ` in a line of text and stacked in a display equation), which is what
+  `movablelimits="true"` gives.
+- **Known remaining differences, not fixed here.** Word sets `k=0` in a limit or script tight;
+  Chromium keeps full operator spacing at script size. And a run that *starts* with an operator
+  (`<m:r>a</m:r><m:r>+c</m:r>`) loses the space before it: each run is its own `mrow`, so MathML
+  reads a leading `+` as a prefix operator. That is how runs were already projected before these
+  structures were added.
+
+Code: `WmlToHtmlConverter.Math.cs` (`MathExpression`, `MathCellAlignment`). Tests:
+`A_bar_is_a_rule_as_wide_as_its_operand`, `Matrix_columns_keep_their_justification`,
+`Display_equation_arrays_keep_display_style_and_align_rows_at_their_points`,
+`A_linear_fraction_slash_is_set_tight`.
+
+### Bounds on equation input (#1705)
+
+An equation is attacker-controlled input, and two shapes turned a small one into a large amount
+of work:
+
+- **Equation-array width.** Every row of an `m:eqArr` is padded to the widest row. One row of
+  10,000 `&` and 2,000 one-cell rows (about 120 KB of XML) would have produced 20 million cells.
+  A row may now hold at most 64 aligned cells, the same bound a matrix column group's `m:count`
+  has; a wider array keeps the placeholder.
+- **Plain-text identifiers.** Adjacent upright letters (`m:sty` `p`) form one `mi`. Appending to it
+  one letter at a time copied the whole identifier per letter; a 400,000-letter run (a few
+  kilobytes zipped) did not finish in twenty minutes. The identifier is now built once and the
+  same run converts in about three seconds.
+
+A styled digit outside 0-9 (bold `٣`) keeps the placeholder, since the styled alphabets have only
+ASCII digits and it would be drawn unstyled. A run colour must be exactly six hex digits.
+
 ## Resizing text boxes beyond an explicit page offset
 
 A direct main-body WPS box on 612 × 792pt paper can author a horizontal page offset
