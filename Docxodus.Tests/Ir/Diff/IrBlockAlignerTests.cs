@@ -849,14 +849,14 @@ public class IrBlockAlignerTests
     }
 
     [Fact]
-    public void In_gap_cross_positioned_edits_lower_to_reversible_moves()
+    public void In_gap_edited_swap_keeps_one_paragraph_in_place_and_moves_the_other()
     {
         // Two paragraphs are edited AND swapped WITHIN a single spine gap (between alpha and omega). Their
-        // true lexical correspondence crosses document order. Rendering crossed pairs as in-place Modified
-        // blocks accepts correctly but rejects to the right-side order, so the normalizer must release BOTH
-        // pairs. These long, near-identical paragraphs clear the default fuzzy-move threshold after release,
-        // so the global move pass restores their true correspondence as two MovedModified pairs rather than
-        // leaving them as conservative delete+insert pairs.
+        // true lexical correspondence crosses document order. Rendering both crossed pairs as in-place
+        // Modified blocks accepts correctly but rejects to the right-side order, so one pair must give way.
+        // Like an exact swap (Adjacent_swap_of_two_unique_paragraphs: one Moved, one Unchanged), one edited
+        // paragraph stays in place and the other is released; it is long and alike enough to clear the
+        // fuzzy-move threshold, so the global move pass brings it back as a MovedModified pair.
         var l = Doc(
             "alpha",
             "the quick brown fox jumps high",
@@ -870,10 +870,60 @@ public class IrBlockAlignerTests
         var a = Align(l, r);
 
         Assert.Equal(2, Count(a, IrAlignmentKind.Unchanged));
-        Assert.Equal(0, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Modified));
         Assert.Equal(0, Count(a, IrAlignmentKind.Deleted));
         Assert.Equal(0, Count(a, IrAlignmentKind.Inserted));
-        Assert.Equal(2, Count(a, IrAlignmentKind.MovedModified));
+        Assert.Equal(1, Count(a, IrAlignmentKind.MovedModified));
+        AssertInvariants(l, r, a);
+    }
+
+    private static readonly string[] RenumberedLeft =
+    {
+        "FIRST. Duration. The lease runs for one year from the day both parties sign it.",
+        "SECOND. Guarantee. The lessee hands over two months of rent as a guarantee before moving in.",
+        "THIRD. Upkeep. The lessee looks after the flat and covers small repairs from everyday wear.",
+        "FOURTH. Notice. Each side may end the lease by giving the other ninety days of warning.",
+        "FIFTH. Venue. Any disagreement goes before the tribunals of the town where the flat stands.",
+    };
+
+    private static readonly string[] RenumberedRight =
+    {
+        "FIRST. Arrears. The lessee owes a monthly surcharge on every overdue sum.",   // new clause
+        "SECOND. Duration. The lease runs for one year from the day both parties sign it.",
+        "THIRD. Notice. Each side may end the lease by giving the other ninety days of warning.",
+        "FOURTH. Venue. Any disagreement goes before the tribunals of the town where the flat stands.",
+        "FIFTH. Upkeep. The lessee looks after the flat and covers small repairs from everyday wear.", // moved
+    };
+
+    [Fact]
+    public void A_clause_moved_past_renumbered_clauses_is_the_only_move()
+    {
+        // Issue #1714: a clause is inserted at the top, one is deleted, one ("Upkeep") moves to the end,
+        // and every ordinal is renumbered, so no paragraph is content-equal and the whole body is one gap.
+        // Duration, Notice and Venue keep their relative order: they are edited in place. Only Upkeep,
+        // which crossed Notice and Venue, is a move. (Word's own Compare keeps the same three in place.)
+        var l = Doc(RenumberedLeft);
+        var r = Doc(RenumberedRight);
+        var a = Align(l, r);
+
+        var inPlace = a.Entries.Where(e => e.Kind == IrAlignmentKind.Modified).Select(e => Text(e.Right!));
+        Assert.Equal(new[] { RenumberedRight[1], RenumberedRight[2], RenumberedRight[3] }, inPlace);
+        Assert.Equal(RenumberedRight[4], Text(a.Entries.Single(e => e.Kind == IrAlignmentKind.MovedModified).Right!));
+        Assert.Equal(RenumberedLeft[1], Text(a.Entries.Single(e => e.Kind == IrAlignmentKind.Deleted).Left!));
+        Assert.Equal(RenumberedRight[0], Text(a.Entries.Single(e => e.Kind == IrAlignmentKind.Inserted).Right!));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Renumbered_clauses_that_all_keep_their_order_have_no_move()
+    {
+        // Control for #1714: the same inserted clause and renumbered "Duration", nothing relocated.
+        var l = Doc(RenumberedLeft);
+        var r = Doc(RenumberedRight[0], RenumberedRight[1],
+            RenumberedLeft[2], RenumberedLeft[3], RenumberedLeft[4]);
+        var a = Align(l, r);
+
+        Assert.Equal(0, Count(a, IrAlignmentKind.Moved) + Count(a, IrAlignmentKind.MovedModified));
         AssertInvariants(l, r, a);
     }
 

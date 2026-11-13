@@ -8200,3 +8200,51 @@ deleted element. Docxodus writes Word's own shape (the first row) for a deleted 
 third row's for a deletion made inside one. Tests:
 `DocxDiffDeletedTextBoxTests`, and `DeletingAParagraphWithATextBox_LeavesTheBoxTextOrdinary` in
 `DocxSessionTrackedDeleteBlockTests`.
+## A Strict-namespace part inside a transitional package (#1702)
+
+A package's conformance class is not all-or-nothing in practice. Word 2024 opens a package whose
+relationship types and main document are transitional but whose chart part is written in the
+ISO 29500 Strict namespaces, including the relationships namespace on the `r:id` that links the
+chart to its embedded workbook:
+
+```xml
+<!-- word/charts/chart1.xml, reached through a transitional .../relationships/chart relationship -->
+<c:chartSpace xmlns:c="http://purl.oclc.org/ooxml/drawingml/chart"
+              xmlns:r="http://purl.oclc.org/ooxml/officeDocument/relationships">
+  <c:chart>…</c:chart>
+  <c:externalData r:id="rIdData"><c:autoUpdate val="0"/></c:externalData>
+</c:chartSpace>
+```
+
+`StrictOoxmlNormalizer` translates a package only when its main document part is Strict, so this
+part reaches the comparison with its Strict names. Comparing a text-only document against one that
+adds this chart (Word 16.0.20326, Windows; LibreOffice was not available for this check):
+
+| File | Chart relationships and workbook | Word 2024 |
+| --- | --- | --- |
+| Revised input (Strict chart part) | present | Opens; the inline shape is a chart |
+| Docxodus redline before the fix | absent; `c:externalData/@r:id` names no relationship | "The file appears to be corrupted." on `Documents.Open`; Accept All and Reject All cannot run |
+| Docxodus redline now | present, namespaces unchanged | Opens; Accept All keeps the chart, Reject All removes it |
+| Redline of the same pair with a transitional chart part (control) | present | Opens; same Accept All and Reject All results |
+
+The Strict names are not what Word objects to. The dangling relationship id is: Word refuses a
+chart part whose `c:externalData/@r:id` resolves to nothing, and the Open XML SDK validator
+reports nothing for it.
+
+`PackageMerge.MoveRelatedPartsToDestination` imports the parts a cloned element depends on by
+following its relationship attributes, recursively through each imported XML part.
+`IrDrawingGraphHasher` hashes a drawing through the same edges, which is how a change in a chart
+or its workbook is detected. Each kept its own list of the nine attribute names, in the
+transitional namespace only, so the import stopped at the Strict chart part and the hash never
+saw its workbook: an inserted chart arrived without its relationships, and a changed workbook
+behind an unchanged chart was no change at all. `PackageMerge.RelationshipAttributeNames` now
+holds each name in both namespaces and the hasher reads it. The imported part keeps its Strict
+names; only its relationship ids are rewritten.
+
+`DocumentBuilder` finds relationships by transitional element name (`RelationshipMarkup`,
+`CopyChartObjects`) and is not covered by this.
+
+Tests: `IrDrawingGraphTests.Compare_InsertedChart_ArrivesWithItsEmbeddedWorkbook`,
+`Compare_ChartEmbeddedWorkbookChange_AcceptRejectUseLiveRightLeftBytes` and
+`Read_ChartEmbeddedWorkbookChange_FlipsDrawingIdentity`, each for a transitional and a Strict
+chart part.
