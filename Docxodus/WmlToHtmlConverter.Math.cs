@@ -189,7 +189,7 @@ public static partial class WmlToHtmlConverter
                 var value = (string?)property.Attribute(W.val);
                 if (property.HasElements || HasUnknownMathAttributes(property, W.val) || value == null) return null;
                 if (value == "auto") continue;
-                if (!Regex.IsMatch(value, "^[0-9A-Fa-f]{6}$", RegexOptions.CultureInvariant)) return null;
+                if (value.Length != 6 || !value.All(char.IsAsciiHexDigit)) return null;
                 color = "#" + value.ToUpperInvariant();
             }
             else return null;
@@ -236,7 +236,9 @@ public static partial class WmlToHtmlConverter
             {
                 "bar" => Mml("mfrac", numerator, denominator),
                 "noBar" => Mml("mfrac", new XAttribute("linethickness", "0"), numerator, denominator),
-                "lin" => Mml("mrow", numerator, MathOperator("/", ("stretchy", "false"), ("largeop", "false")), denominator),
+                // Word sets a linear fraction's slash tight against both operands.
+                "lin" => Mml("mrow", numerator, MathOperator("/", ("stretchy", "false"), ("largeop", "false"),
+                    ("lspace", "0"), ("rspace", "0")), denominator),
                 _ => null,
             };
         }
@@ -297,10 +299,13 @@ public static partial class WmlToHtmlConverter
             var properties = source.Element(M.barPr);
             if (!MathPropertiesValid(properties, scope, M.pos, M.ctrlPr)) return null;
             var operand = Arg(M.e);
+            // A rule along the operand's edge, like a border box's side. A stretchy overline or low line
+            // would need the math font to carry stretch variants for it; Cambria Math has none, and
+            // the bar then stays one character wide.
             return operand == null ? null : MathValue(properties, M.pos, "bot") switch
             {
-                "top" => Mml("mover", new XAttribute("accent", "true"), operand, MathOperator("\u203E", ("stretchy", "true"))),
-                "bot" => Mml("munder", new XAttribute("accentunder", "true"), operand, MathOperator("_", ("stretchy", "true"))),
+                "top" => Mml("mrow", new XAttribute("style", "padding-top: 0.1em;border-top: 0.06em solid currentColor;"), operand),
+                "bot" => Mml("mrow", new XAttribute("style", "padding-bottom: 0.1em;border-bottom: 0.06em solid currentColor;"), operand),
                 _ => null,
             };
         }
@@ -456,7 +461,7 @@ public static partial class WmlToHtmlConverter
                     || !MathPropertiesValid(pr, scope, M.count, M.mcJc)) return null;
                 var count = MathValue(pr, M.count, "1");
                 var justification = MathValue(pr, M.mcJc, "center");
-                if (!int.TryParse(count, NumberStyles.None, CultureInfo.InvariantCulture, out var n) || n is < 1 or > 64
+                if (!int.TryParse(count, NumberStyles.None, CultureInfo.InvariantCulture, out var n) || n is < 1 or > MaxMathColumns
                     || justification is not ("center" or "left" or "right")) return null;
                 alignments.AddRange(Enumerable.Repeat(justification, n));
             }
@@ -475,14 +480,23 @@ public static partial class WmlToHtmlConverter
                 if (projected == null) return null;
                 var alignment = column < alignments.Count ? alignments[column] : "center";
                 column++;
-                line.Add(Mml("mtd", alignment == "center" ? null : new XAttribute("style", "text-align: " + alignment + ";"), projected));
+                line.Add(Mml("mtd", alignment == "center" ? null : new XAttribute("style", MathCellAlignment(alignment)), projected));
             }
             table.Add(line);
         }
         return table;
     }
 
+    /// <summary>The CSS that sets a table cell's math to one side. Chromium moves a cell's math only for
+    /// the <c>-webkit-</c> keyword (its own centring uses <c>-webkit-center</c>); an engine without that
+    /// keyword drops the second declaration and keeps the standard one.</summary>
+    private static string MathCellAlignment(string side) => "text-align: " + side + ";text-align: -webkit-" + side + ";";
+
     private static readonly XName MathAlignmentPoint = "alignment-point";
+
+    /// <summary>The most columns a matrix column group or an equation-array row may span. Both tables
+    /// repeat a per-column cost on every row, so an unbounded count would square a small input.</summary>
+    private const int MaxMathColumns = 64;
 
     private static XElement? MathEquationArray(XElement source, MathScope scope)
     {
@@ -504,8 +518,9 @@ public static partial class WmlToHtmlConverter
                 if (parts == null) return null;
                 foreach (var part in parts)
                 {
-                    if (part.Name == MathAlignmentPoint) cells.Add(new List<XElement>());
-                    else cells[^1].Add(part);
+                    if (part.Name != MathAlignmentPoint) cells[^1].Add(part);
+                    else if (cells.Count == MaxMathColumns) return null;
+                    else cells.Add(new List<XElement>());
                 }
             }
             rows.Add(cells);
@@ -517,8 +532,8 @@ public static partial class WmlToHtmlConverter
         foreach (var row in rows)
         {
             table.Add(Mml("mtr", Enumerable.Range(0, width).Select(i => Mml("mtd",
-                width == 1 ? null : new XAttribute("style", "text-align: " + (i % 2 == 0 ? "right" : "left")
-                    + ";padding-left: 0;padding-right: 0;"),
+                width == 1 ? null : new XAttribute("style", MathCellAlignment(i % 2 == 0 ? "right" : "left")
+                    + "padding-left: 0;padding-right: 0;"),
                 Mml("mrow", i < row.Count ? row[i] : null)))));
         }
         return table;
@@ -538,7 +553,12 @@ public static partial class WmlToHtmlConverter
         var variant = MathVariant(MathValue(mathProperties, M.scr, "roman"), MathValue(mathProperties, M.sty, ""));
         if (color == null || literal == null || variant == null) return null;
         var tokens = new List<XElement>();
-        XElement? upright = null;
+        StringBuilder? upright = null;
+        void EndIdentifier()
+        {
+            if (upright != null) tokens.Add(Mml("mi", upright.ToString()));
+            upright = null;
+        }
         foreach (var text in source.Elements(M.t))
         {
             if (text.HasElements || HasUnknownMathAttributes(text, XNamespace.Xml + "space")) return null;
@@ -546,8 +566,8 @@ public static partial class WmlToHtmlConverter
             {
                 if (part.Length > 1 && char.IsDigit(part.Value[0]))
                 {
+                    EndIdentifier();
                     tokens.Add(Mml("mn", MathStyledDigits(part.Value, variant)));
-                    upright = null;
                     continue;
                 }
                 if (!Rune.TryGetRuneAt(part.Value, 0, out var rune)) return null;
@@ -558,18 +578,17 @@ public static partial class WmlToHtmlConverter
                 {
                     // A literal run's ampersand has no settled meaning in an equation array.
                     if (literal.Value) return null;
+                    EndIdentifier();
                     tokens.Add(new XElement(MathAlignmentPoint));
-                    upright = null;
                     continue;
                 }
                 if (Rune.IsLetter(rune) && variant == "upright")
                 {
                     // A run's adjacent upright letters read as one identifier, like a function name.
-                    if (upright != null) upright.Value += rune.ToString();
-                    else tokens.Add(upright = Mml("mi", rune.ToString()));
+                    (upright ??= new StringBuilder()).Append(rune.ToString());
                     continue;
                 }
-                upright = null;
+                EndIdentifier();
                 if (Rune.IsLetter(rune))
                 {
                     var styled = variant == "italic" ? rune.ToString() : MathStyledLetter(rune, variant);
@@ -577,12 +596,18 @@ public static partial class WmlToHtmlConverter
                     tokens.Add(Mml("mi", styled));
                 }
                 else if (Rune.IsDigit(rune))
-                    tokens.Add(Mml("mn", MathStyledDigits(rune.ToString(), variant)));
+                {
+                    // The styled alphabets hold only 0-9; another script's digit would lose the style.
+                    var digit = MathStyledDigits(rune.ToString(), variant);
+                    if (digit == null) return null;
+                    tokens.Add(Mml("mn", digit));
+                }
                 // OMML's bold styles have no drawable projection for operators and punctuation here.
                 else if (variant.Contains("bold", System.StringComparison.Ordinal)) return null;
                 else tokens.Add(MathOperator(rune.ToString(), ("stretchy", "false"), ("largeop", "false")));
             }
         }
+        EndIdentifier();
         foreach (var token in tokens.Where(t => t.Name.Namespace == MathMl))
         {
             // A one-letter identifier is italic by default in MathML; longer ones are already upright.
@@ -662,10 +687,14 @@ public static partial class WmlToHtmlConverter
         return point == null ? null : char.ConvertFromUtf32(point.Value);
     }
 
-    private static string MathStyledDigits(string digits, string variant)
+    /// <summary>The digits in the variant's alphabet, a decimal point kept as is; null when the
+    /// alphabet styles digits and one of them is outside 0-9.</summary>
+    private static string? MathStyledDigits(string digits, string variant)
     {
         var start = MathAlphabets.TryGetValue(variant, out var alphabet) ? alphabet.Digit : 0;
-        return start == 0 ? digits : string.Concat(digits.Select(c => c is >= '0' and <= '9' ? char.ConvertFromUtf32(start + c - '0') : c.ToString()));
+        if (start == 0) return digits;
+        return digits.All(c => c is '.' or (>= '0' and <= '9'))
+            ? string.Concat(digits.Select(c => c == '.' ? "." : char.ConvertFromUtf32(start + c - '0'))) : null;
     }
 
     /// <summary>The spacing form MathML draws over an operand for an OMML accent character. Word

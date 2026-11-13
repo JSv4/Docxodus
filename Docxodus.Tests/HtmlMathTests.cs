@@ -179,8 +179,6 @@ public class HtmlMathTests
     [InlineData("<m:func><m:fName><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>sin</m:t></m:r></m:fName><m:e>{x}</m:e></m:func>", "sin mspace() x")]
     [InlineData("<m:acc><m:e>{x}</m:e></m:acc>", "mover(x,ˆ)")]
     [InlineData("<m:acc><m:accPr><m:chr m:val=\"\u20D7\"/></m:accPr><m:e>{v}</m:e></m:acc>", "mover(v,→)")]
-    [InlineData("<m:bar><m:e>{x}</m:e></m:bar>", "munder(x,_)")]
-    [InlineData("<m:bar><m:barPr><m:pos m:val=\"top\"/></m:barPr><m:e>{x}</m:e></m:bar>", "mover(x,‾)")]
     [InlineData("<m:limLow><m:e><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>lim</m:t></m:r></m:e><m:lim>{n→∞}</m:lim></m:limLow>", "munder(lim,n → ∞)")]
     [InlineData("<m:limUpp><m:e>{x}</m:e><m:lim>{y}</m:lim></m:limUpp>", "mover(x,y)")]
     [InlineData("<m:groupChr><m:e>{x}</m:e></m:groupChr>", "munder(x,⏟)")]
@@ -268,7 +266,8 @@ public class HtmlMathTests
         var cells = ProjectExpression("<m:m><m:mPr><m:mcs><m:mc><m:mcPr><m:count m:val=\"1\"/><m:mcJc m:val=\"left\"/></m:mcPr></m:mc>"
             + "<m:mc><m:mcPr><m:count m:val=\"1\"/><m:mcJc m:val=\"center\"/></m:mcPr></m:mc></m:mcs></m:mPr>"
             + "<m:mr><m:e>{a}</m:e><m:e>{b}</m:e></m:mr></m:m>").Descendants(MathMl + "mtd").ToArray();
-        Assert.Equal(new[] { "text-align: left;", null }, cells.Select(c => (string?)c.Attribute("style")));
+        // The -webkit- keyword is the one Chromium applies to a cell's math (checked against Word's render).
+        Assert.Equal(new[] { "text-align: left;text-align: -webkit-left;", null }, cells.Select(c => (string?)c.Attribute("style")));
     }
 
     [Fact]
@@ -278,6 +277,60 @@ public class HtmlMathTests
         Assert.Equal("true", (string?)table.Attribute("displaystyle"));
         Assert.Equal(new[] { "right", "left" }, table.Elements().First().Elements()
             .Select(c => ((string?)c.Attribute("style"))!.Split(';')[0].Split(' ')[1]));
+        Assert.All(table.Descendants(MathMl + "mtd"), c => Assert.Matches("text-align: -webkit-(right|left);", (string?)c.Attribute("style")));
+    }
+
+    [Theory]
+    [InlineData("", "bottom")]
+    [InlineData("<m:barPr><m:pos m:val=\"top\"/></m:barPr>", "top")]
+    public void A_bar_is_a_rule_as_wide_as_its_operand(string properties, string side)
+    {
+        // Word draws the bar across the whole operand. A stretchy bar character stays one character
+        // wide in Cambria Math, so the bar is the operand box's own edge.
+        var bar = ProjectExpression("<m:bar>" + properties + "<m:e>{x+y}</m:e></m:bar>").Descendants(MathMl + "mrow")
+            .Single(e => e.Attribute("style") != null);
+        Assert.Contains("border-" + side + ": 0.06em solid currentColor;", (string?)bar.Attribute("style"));
+        Assert.Equal("x+y", bar.Value);
+    }
+
+    [Fact]
+    public void A_linear_fraction_slash_is_set_tight()
+    {
+        var slash = Assert.Single(ProjectExpression("<m:f><m:fPr><m:type m:val=\"lin\"/></m:fPr><m:num>{a}</m:num><m:den>{b}</m:den></m:f>")
+            .Descendants(MathMl + "mo"));
+        Assert.Equal(("0", "0"), ((string?)slash.Attribute("lspace"), (string?)slash.Attribute("rspace")));
+    }
+
+    [Theory]
+    [InlineData(64, true)]
+    [InlineData(65, false)]
+    public void An_equation_array_row_holds_at_most_64_aligned_cells(int cells, bool projected)
+    {
+        // Every row is padded to the widest one, so an unbounded row would multiply the whole array.
+        var wide = string.Concat(Enumerable.Repeat("&amp;", cells - 1));
+        var html = Convert(Expand("<m:eqArr><m:e>{x" + wide + "}</m:e><m:e>{y}</m:e><m:e>{z}</m:e></m:eqArr>"), false);
+        Assert.Equal(projected ? cells * 3 : 0, html.Descendants(MathMl + "mtd").Count());
+        Assert.Equal(projected ? 0 : 1, html.Descendants().Count(e => (string?)e.Attribute("data-content-type") == "MathEquation"));
+    }
+
+    [Fact]
+    public void A_long_plain_text_run_is_one_identifier_built_in_linear_time()
+    {
+        // Appending to the identifier letter by letter copied the whole string each time: this run
+        // did not finish in twenty minutes. Built once, it converts in a few seconds.
+        var name = new string('a', 400_000);
+        var identifier = Assert.Single(ProjectExpression("<m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>" + name + "</m:t></m:r>")
+            .Descendants(MathMl + "mi"));
+        Assert.Equal(name.Length, identifier.Value.Length);
+    }
+
+    [Fact]
+    public void A_run_colour_must_be_exactly_six_hex_digits()
+    {
+        // The schema rejects this value, so the document is built without validation.
+        var html = Convert("<m:r><w:rPr><w:color w:val=\"FF0000&#10;\"/></w:rPr><m:t>x</m:t></m:r>", false, validate: false);
+        Assert.DoesNotContain(html.Descendants(), e => e.Name.Namespace == MathMl);
+        Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "MathEquation");
     }
 
     [Fact]
@@ -307,6 +360,8 @@ public class HtmlMathTests
     [InlineData("<m:f><m:fPr><m:type m:val=\"skw\"/></m:fPr><m:num>{x}</m:num><m:den>{2}</m:den></m:f>")]
     [InlineData("<m:r><m:rPr><m:nor/></m:rPr><m:t>x</m:t></m:r>")]
     [InlineData("<m:r><m:rPr><m:sty m:val=\"b\"/></m:rPr><m:t>+</m:t></m:r>")]
+    // A bold alphabet has digits only for 0-9; any other digit would be drawn unbolded.
+    [InlineData("<m:r><m:rPr><m:sty m:val=\"b\"/></m:rPr><m:t>٣</m:t></m:r>")]
     [InlineData("<m:r><m:rPr><m:scr m:val=\"script\"/></m:rPr><m:t>α</m:t></m:r>")]
     [InlineData("<m:r><m:rPr><m:scr m:val=\"double-struck\"/><m:sty m:val=\"b\"/></m:rPr><m:t>R</m:t></m:r>")]
     [InlineData("<m:r><w:rPr><w:b/></w:rPr><m:t>x</m:t></m:r>")]
@@ -370,9 +425,9 @@ public class HtmlMathTests
     }
 
     private static XElement Convert(string formula, bool display, string mathProperties = "", bool paginated = false,
-        string paragraphStart = "", string styles = "")
+        string paragraphStart = "", string styles = "", bool validate = true)
     {
-        return XElement.Parse(HtmlConversionOps.ConvertToHtml(BuildDocument(formula, display, mathProperties, paragraphStart, styles), new HtmlConversionOptions
+        return XElement.Parse(HtmlConversionOps.ConvertToHtml(BuildDocument(formula, display, mathProperties, paragraphStart, styles, validate), new HtmlConversionOptions
         {
             RenderUnsupportedContentPlaceholders = true,
             FabricateCssClasses = false,
@@ -380,7 +435,8 @@ public class HtmlMathTests
         }));
     }
 
-    private static byte[] BuildDocument(string formula, bool display, string mathProperties, string paragraphStart, string styles)
+    private static byte[] BuildDocument(string formula, bool display, string mathProperties, string paragraphStart, string styles,
+        bool validate = true)
     {
         using var stream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -396,7 +452,7 @@ public class HtmlMathTests
                 + "xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\">"
                 + (mathProperties == "" ? "" : "<m:mathPr>" + mathProperties + "</m:mathPr>") + "</w:settings>"));
             document.Save();
-            Assert.Empty(new OpenXmlValidator().Validate(document).Select(e => e.Description));
+            if (validate) Assert.Empty(new OpenXmlValidator().Validate(document).Select(e => e.Description));
         }
         return stream.ToArray();
     }

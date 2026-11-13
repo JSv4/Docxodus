@@ -825,7 +825,7 @@ italics from `m:sty`.
 | `m:m` | `mtable` | `mcs` column justification → cell `text-align`, `plcHide` |
 | `m:func` | name, a thin `mspace`, argument | — |
 | `m:acc` | `mover accent` | `chr` (default U+0302); combining marks map to their spacing forms |
-| `m:bar` | `mover`/`munder` with a stretchy line | `pos` (default `bot`) |
+| `m:bar` | the operand's `mrow` with a top or bottom border (a stretchy line does not stretch in Cambria Math) | `pos` (default `bot`) |
 | `m:limLow`, `m:limUpp` | `munder`, `mover` | — |
 | `m:eqArr` | `mtable`; `&` in a row's own runs splits right/left-aligned cells | — |
 | `m:groupChr` | `munder`/`mover` with a stretchy `chr` (default ⏟) | `pos`/`vertJc` only as bottom/top or top/bottom |
