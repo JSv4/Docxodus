@@ -3,7 +3,8 @@ using System.Buffers.Binary;
 namespace Docxodus.Internal;
 
 /// <summary>Bounded decoding of the device-independent bitmaps that EMF and WMF records embed, to a PNG
-/// (or the JPEG/PNG the DIB already wraps) data URI. Unsupported encodings reject the whole picture.</summary>
+/// data URI. Unsupported encodings reject the whole picture: RLE, and the JPEG or PNG a DIB can wrap for a
+/// printer (BI_JPEG, BI_PNG), whose real size its header does not bound.</summary>
 internal static class DibImage
 {
     private const int MaxSide = 32768, MaxPixels = 16 * 1024 * 1024;
@@ -25,16 +26,6 @@ internal static class DibImage
         bool srcYFromBottom, byte constantAlpha = 255, bool sourceAlpha = false)
     {
         var h = Header(info);
-        if (h.Compression is 4 or 5)
-        {
-            if (constantAlpha != 255 || sourceAlpha) throw new NotSupportedException("Blended JPEG/PNG metafile bitmaps are not supported.");
-            if (srcX != 0 || srcY != 0 || srcWidth != h.Width || srcHeight != h.Height)
-                throw new NotSupportedException("Cropped JPEG/PNG metafile bitmaps are not supported.");
-            var length = h.ImageSize == 0 ? bits.Length : h.ImageSize;
-            if (length > bits.Length) throw new InvalidDataException("Truncated metafile bitmap.");
-            return new Result($"data:image/{(h.Compression == 4 ? "jpeg" : "png")};base64,{Convert.ToBase64String(bits[..length])}", (long)h.Width * h.Height);
-        }
-        if (h.Compression is not (0 or 3)) throw new NotSupportedException("Compressed metafile bitmaps are not supported.");
         if (info.Length < h.HeaderSize + h.MaskBytes + h.PaletteEntries * h.EntrySize)
             throw new InvalidDataException("Truncated metafile bitmap colour table.");
         long stride = ((long)h.Width * h.BitCount + 31) / 32 * 4;
@@ -145,8 +136,8 @@ internal static class DibImage
             else if (bitCount == 32) masks = (0xff0000, 0xff00, 0xff);
         }
         else throw new NotSupportedException("Unsupported metafile bitmap header.");
-        if (compression is not (4 or 5) && bitCount is not (1 or 4 or 8 or 16 or 24 or 32))
-            throw new NotSupportedException("Unsupported metafile bitmap depth.");
+        if (compression is not (0 or 3)) throw new NotSupportedException("Compressed metafile bitmaps are not supported.");
+        if (bitCount is not (1 or 4 or 8 or 16 or 24 or 32)) throw new NotSupportedException("Unsupported metafile bitmap depth.");
         if (bitCount is > 0 and <= 8 && palette == 0) palette = 1 << bitCount;
         if (bitCount > 8 && size == 12) palette = 0;
         if (width <= 0 || height <= 0 || width > MaxSide || height > MaxSide || (long)width * height > MaxPixels || imageSize < 0)

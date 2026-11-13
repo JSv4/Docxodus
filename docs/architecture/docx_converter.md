@@ -554,12 +554,12 @@ before invoking that callback, identically in native and WASM builds:
   SELECTCLIPPATH and rectangle regions as SVG `clipPath`; writes TEXTOUT/EXTTEXTOUT as
   selectable SVG `text` with font, size, weight, colour, alignment, character advances and
   escapement; and embeds STRETCHDIBITS, BITBLT, STRETCHBLT, ALPHABLEND and the WMF DIB records as
-  PNG (or the JPEG/PNG the DIB wraps) `image` data URIs, decoded in managed code
-  (`Internal/DibImage.cs`). Each element keeps logical coordinates and carries the
+  PNG `image` data URIs, decoded in managed code (`Internal/DibImage.cs`). Each element keeps logical coordinates and carries the
   logical-to-device transform in effect, so pens scale with the mapping as in GDI.
 - An EMF with EMF+ comments plays its GDI records when the EMF+ header marks the file dual; an
-  EMF+-only file keeps the placeholder. Records that cannot change the drawing (ROP2, stretch
-  mode, ICM, palettes, mapper flags, other GDI comments) are ignored.
+  EMF+-only file keeps the placeholder. Records that cannot change the drawing (stretch
+  mode, ICM, palettes, mapper flags, other GDI comments) are ignored, as are SETROP2 with
+  R2_COPYPEN and zero text spacing adjustments, which are the defaults.
 - WMF: the placeable header fixes the device box, and the window always maps onto it whatever
   the map mode (viewport records are ignored). Word's device-pixel endpoint exclusion for
   rectangles, ellipses and rounded rectangles is resolved in logical coordinates; window mapping
@@ -571,10 +571,19 @@ before invoking that callback, identically in native and WASM builds:
   This is browser playback, not a claim of matching a particular Word printer's hairline width.
 - Still unsupported, each rejecting the whole picture: EMF+-only files, pattern brushes and
   pattern pens, palette colours, non-rectangle clip regions and OR/XOR/DIFF clip combinations,
-  glyph-index text, raster operations that read the destination, RLE bitmaps, gradient fills,
-  WIDENPATH, mirrored layouts, and any record not listed above. Playback is bounded: 200,000
-  records, 2,000,000 points, 50,000 SVG elements, 1,024 saved states, and 32 megapixels of
-  embedded bitmaps per picture.
+  glyph-index text, raster operations that read the destination, RLE bitmaps and DIBs that wrap
+  a JPEG or PNG (BI_JPEG/BI_PNG, whose header does not bound the real image), gradient fills,
+  WIDENPATH, mirrored layouts, and any record not listed above. So do the states this player
+  would otherwise draw wrongly: a pen mode other than R2_COPYPEN (SETROP2), non-zero character
+  extra or justification, text that advances the current position by its own width (TA_UPDATECP
+  without a spacing array), ANSI text with bytes above ASCII in a font whose character set is
+  not ANSI or DEFAULT, and text in a SYMBOL_CHARSET font or with private-use characters
+  (Symbol and Wingdings glyphs).
+- Playback is bounded per picture: 200,000 records, 250,000 points and text characters,
+  50,000 SVG elements, 1,024 saved states, 64 clip regions intersected in a row (each is a
+  `clipPath` that refers to the one before), 16 megapixels of embedded bitmaps, and
+  16 MiB characters of SVG output, bitmaps included. A WMF poly-polygon's point counts are
+  summed in 64 bits before anything is allocated. Exceeding a bound rejects the picture.
 
 Input is limited to 64 MiB; normalized dimensions are limited to 32,768 per axis and
 16 megapixels. Source SVG image parts retain their existing placeholders. Generated

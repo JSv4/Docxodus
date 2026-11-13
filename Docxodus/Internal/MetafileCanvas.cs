@@ -16,9 +16,16 @@ internal sealed class MetafileCanvas
 {
     internal static readonly XNamespace Svg = "http://www.w3.org/2000/svg";
     internal const int MaxRecords = 200_000;
-    internal const int MaxPoints = 2_000_000;
+    /// <summary>Points and text characters a picture may draw in all.</summary>
+    internal const int MaxPoints = 250_000;
+    /// <summary>Clip regions that may intersect one another before a RESTOREDC or a replacing clip: each
+    /// becomes a <c>clipPath</c> that refers to the one before, which a browser resolves recursively.</summary>
+    internal const int MaxClipDepth = 64;
     private const int MaxElements = 50_000, MaxSavedStates = 1024, MaxTextLength = 32_768;
-    private const long MaxBitmapPixels = 32L * 1024 * 1024;
+    private const long MaxBitmapPixels = 16L * 1024 * 1024;
+    /// <summary>Characters of SVG a picture may write, bitmaps included. The converter holds the picture
+    /// several times over (elements, serialized SVG, the HTML that inlines it).</summary>
+    private const long MaxOutputCharacters = 16L * 1024 * 1024;
     private const double Huge = 1e9;
 
     internal abstract record GdiObject;
@@ -65,6 +72,7 @@ internal sealed class MetafileCanvas
         internal bool OpaqueBackground = true, EvenOdd = true, Clockwise;
         internal int TextAlign;
         internal string? Clip;
+        internal int ClipDepth;
         internal double X, Y;
         internal State Clone() => (State)MemberwiseClone();
     }
@@ -78,7 +86,7 @@ internal sealed class MetafileCanvas
     private readonly Stack<State> saved = new();
     private XElement? defs, clipGroup;
     private int elements, points, ids;
-    private long bitmapPixels;
+    private long bitmapPixels, output;
     private Path? bracket;
     private bool inBracket;
     private Matrix bracketMatrix;
@@ -478,7 +486,7 @@ internal sealed class MetafileCanvas
         => AddClip(new XElement(Svg + "path", new XAttribute("clip-rule", "evenodd"),
             new XAttribute("d", $"M{N(-Huge)} {N(-Huge)}H{N(Huge)}V{N(Huge)}H{N(-Huge)}Z" + DeviceRect(left, top, right, bottom))), true);
 
-    internal void ResetClip() => state.Clip = null;
+    internal void ResetClip() { state.Clip = null; state.ClipDepth = 0; }
 
     /// <summary>A region of device-space rectangles: RGN_AND (1) intersects, RGN_COPY (5) replaces.</summary>
     internal void ClipToDeviceRects(ReadOnlySpan<(double L, double T, double R, double B)> rects, int mode)
@@ -509,13 +517,28 @@ internal sealed class MetafileCanvas
     {
         string id = NextId();
         var clip = new XElement(Svg + "clipPath", new XAttribute("id", id), new XAttribute("clipPathUnits", "userSpaceOnUse"), shape);
-        if (intersect && state.Clip != null) clip.Add(new XAttribute("clip-path", $"url(#{state.Clip})"));
+        int depth = 1;
+        if (intersect && state.Clip != null)
+        {
+            if ((depth = state.ClipDepth + 1) > MaxClipDepth) throw new NotSupportedException("Metafile clip regions nest too deeply.");
+            clip.Add(new XAttribute("clip-path", $"url(#{state.Clip})"));
+        }
         Defs().Add(clip);
-        Count(1, element: true);
+        Count(clip);
         state.Clip = id;
+        state.ClipDepth = depth;
     }
 
     // ---- Text and bitmaps ----------------------------------------------------------------------
+
+    /// <summary>ANSI text in the selected font's character set. Western and default-charset fonts read as
+    /// Windows-1252; a byte above ASCII in any other set would be mis-decoded.</summary>
+    internal string Ansi(ReadOnlySpan<byte> text)
+    {
+        if (state.Font.Charset is not (0 or 1) && text.IndexOfAnyInRange((byte)0x80, (byte)0xff) >= 0)
+            throw new NotSupportedException("Metafile text outside the Western character set is not supported.");
+        return EmfImage.Windows1252(text);
+    }
 
     /// <summary>TEXTOUT/EXTTEXTOUT at a logical reference point. <paramref name="advances"/> are the
     /// optional logical character advances. <paramref name="opaque"/> is the ETO_OPAQUE rectangle.</summary>
@@ -538,10 +561,17 @@ internal sealed class MetafileCanvas
         }
         if (clean.Length > MaxTextLength) throw new NotSupportedException("Metafile text run exceeds the supported length.");
         bool updateCp = (state.TextAlign & 1) != 0;
+        // Without a spacing array the run advances by the width of its glyphs, which only a font knows.
+        if (updateCp && advances == null && clean.Length > 0)
+            throw new NotSupportedException("Metafile text that moves the current position by its own width is not supported.");
         if (updateCp) (x, y) = (state.X, state.Y);
         double total = advances?.Sum() ?? 0;
-        if (updateCp && advances != null) state.X = x + total;
+        if (updateCp) state.X = x + total;
         if (clean.ToString().Trim().Length == 0) return;
+        // A symbol font draws other glyphs for these characters (Symbol's "a" is an alpha), and private-use
+        // characters have no glyph outside the font they were written for.
+        if (state.Font.Charset == 2 || text.AsSpan().IndexOfAnyInRange('\uE000', '\uF8FF') >= 0)
+            throw new NotSupportedException("Metafile symbol-font text is not supported.");
         Count(clean.Length);
 
         var font = state.Font;
@@ -708,7 +738,7 @@ internal sealed class MetafileCanvas
             0 => "M0 4.5H8", 1 => "M4.5 0V8", 2 => "M0 0L8 8", 3 => "M0 8L8 0", 4 => "M0 4.5H8M4.5 0V8", _ => "M0 0L8 8M0 8L8 0" };
         pattern.Add(new XElement(Svg + "path", new XAttribute("d", d), new XAttribute("stroke", brush.Color), new XAttribute("stroke-width", "1")));
         Defs().Add(pattern);
-        Count(1, element: true);
+        Count(pattern);
         return $"url(#{id})";
     }
 
@@ -718,14 +748,19 @@ internal sealed class MetafileCanvas
 
     private void Flush()
     {
-        if (stroke != null && strokeElement != null) strokeElement.SetAttributeValue("d", stroke.Empty ? "M0 0" : stroke.ToString());
+        if (stroke != null && strokeElement != null)
+        {
+            string d = stroke.Empty ? "M0 0" : stroke.ToString();
+            Spend(d.Length);
+            strokeElement.SetAttributeValue("d", d);
+        }
         stroke = null; strokeElement = null; strokeKey = null;
     }
 
     private void Add(XElement element)
     {
         if (element != strokeElement) Flush();
-        Count(1, element: true);
+        Count(element);
         Container().Add(element);
     }
 
@@ -735,7 +770,7 @@ internal sealed class MetafileCanvas
         if (clipGroup != null && root.LastNode == clipGroup && (string?)clipGroup.Attribute("clip-path") == $"url(#{clip})") return clipGroup;
         Flush();
         clipGroup = new XElement(Svg + "g", new XAttribute("clip-path", $"url(#{clip})"));
-        Count(1, element: true);
+        Count(clipGroup);
         root.Add(clipGroup);
         return clipGroup;
     }
@@ -750,10 +785,27 @@ internal sealed class MetafileCanvas
 
     private string NextId() => idPrefix + (++ids).ToString(CultureInfo.InvariantCulture);
 
-    private void Count(int added, bool element = false)
+    private void Count(int added)
     {
-        if (element ? ++elements > MaxElements : (points += added) > MaxPoints)
-            throw new NotSupportedException("Metafile exceeds the supported drawing size.");
+        if ((points += added) > MaxPoints) throw new NotSupportedException("Metafile exceeds the supported drawing size.");
+    }
+
+    /// <summary>Counts an element about to join the drawing, and charges what it will serialize to.</summary>
+    private void Count(XElement element)
+    {
+        if (++elements > MaxElements) throw new NotSupportedException("Metafile exceeds the supported drawing size.");
+        foreach (var e in element.DescendantsAndSelf())
+        {
+            long size = 2 * e.Name.LocalName.Length + 5;
+            foreach (var a in e.Attributes()) size += a.Name.LocalName.Length + a.Value.Length + 4;
+            foreach (var n in e.Nodes()) if (n is XText t) size += t.Value.Length;
+            Spend(size);
+        }
+    }
+
+    private void Spend(long characters)
+    {
+        if ((output += characters) > MaxOutputCharacters) throw new NotSupportedException("Metafile exceeds the supported output size.");
     }
 
     private void Track(Matrix m, double x, double y, double pad)
@@ -786,10 +838,11 @@ internal sealed class MetafileCanvas
 
     private static void Order(ref double low, ref double high) { if (high < low) (low, high) = (high, low); }
 
-    /// <summary>Seven significant digits: precise at any scale, and short (SVG accepts the exponent form).
-    /// Trigonometric residue such as cos 90° = 6e-17 is zero.</summary>
+    /// <summary>Ten significant digits: every coordinate the canvas accepts (up to 1e9) keeps its integer
+    /// part, a small scale keeps its precision, and binary noise such as 0.30000000000000004 is dropped
+    /// (SVG accepts the exponent form). Trigonometric residue such as cos 90° = 6e-17 is zero.</summary>
     internal static string N(double value)
-        => Math.Abs(value) < 1e-9 ? "0" : value.ToString("G7", CultureInfo.InvariantCulture);
+        => Math.Abs(value) < 1e-9 ? "0" : value.ToString("G10", CultureInfo.InvariantCulture);
 
     /// <summary>SVG path data in logical coordinates, with GDI's notion of an open figure.</summary>
     private sealed class Path

@@ -181,7 +181,8 @@ internal sealed record EmfImage(XElement Drawing)
                 {
                     Need(104);
                     var face = Encoding.Unicode.GetString(bytes, at + 40, 64);
-                    Store(objects, U(8), CreateFont(face, I(12), I(20), I(28), bytes[at + 32] != 0, bytes[at + 33] != 0, bytes[at + 34] != 0));
+                    Store(objects, U(8), CreateFont(face, I(12), I(20), I(28), bytes[at + 32] != 0, bytes[at + 33] != 0, bytes[at + 34] != 0)
+                        with { Charset = bytes[at + 35] });
                     break;
                 }
                 case 83 or 84: // EXTTEXTOUTA, EXTTEXTOUTW
@@ -193,7 +194,7 @@ internal sealed record EmfImage(XElement Drawing)
                     if (chars > MaxRecords || stringAt > length || stringAt + chars * (wide ? 2L : 1L) > length)
                         throw new InvalidDataException("Invalid EMF text record.");
                     string text = wide ? Encoding.Unicode.GetString(bytes, at + (int)stringAt, (int)chars * 2)
-                        : Windows1252(bytes.AsSpan(at + (int)stringAt, (int)chars));
+                        : canvas.Ansi(bytes.AsSpan(at + (int)stringAt, (int)chars));
                     double[]? advances = null;
                     if (dxAt != 0 && chars > 0)
                     {
@@ -283,9 +284,17 @@ internal sealed record EmfImage(XElement Drawing)
                     Need(12);
                     if (U(8) != 0) throw new NotSupportedException("Mirrored EMF layout is not supported.");
                     break;
-                case 13 or 16 or 20 or 21 or 23 or 28 or 48 or 50 or 51 or 52 or 58 or 65 or 98 or 100 or 112 or 113 or 120 or 121:
-                    // Brush origin, mapper flags, ROP2, stretch mode, colour adjustment, meta region, palettes,
-                    // miter limit, FLATTENPATH, ICM and justification do not change the SVG we draw.
+                case 20: // SETROP2: only R2_COPYPEN draws the pen and brush as they are
+                    Need(12);
+                    if (U(8) != 13) throw new NotSupportedException("Unsupported EMF binary raster operation.");
+                    break;
+                case 120: // SETTEXTJUSTIFICATION: break extra, then break count
+                    Need(16);
+                    if (I(8) != 0) throw new NotSupportedException("EMF text spacing adjustments are not supported.");
+                    break;
+                case 13 or 16 or 21 or 23 or 28 or 48 or 50 or 51 or 52 or 58 or 65 or 98 or 100 or 112 or 113 or 121:
+                    // Brush origin, mapper flags, stretch mode, colour adjustment, meta region, palettes,
+                    // miter limit, FLATTENPATH and ICM do not change the SVG we draw.
                     break;
                 default:
                     throw new NotSupportedException($"Unsupported EMF record {kind}.");

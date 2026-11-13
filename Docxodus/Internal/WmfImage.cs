@@ -123,7 +123,7 @@ internal static class WmfImage
                     int polygons = W(0);
                     Need(1 + polygons);
                     var counts = new int[polygons];
-                    int total = 0;
+                    long total = 0; // 65,535 counts of 65,535 points do not fit an int
                     for (int i = 0; i < polygons; i++) total += counts[i] = W(1 + i);
                     var pts = Points(bytes, start + 2 + polygons * 2, total, parameters - 2 - polygons * 2);
                     canvas.PolyPolygonal(true, pts, counts);
@@ -159,7 +159,7 @@ internal static class WmfImage
                     Need(1);
                     int count = W(0), padded = (count + 1) & ~1;
                     Need(1 + padded / 2 + 2);
-                    canvas.Text(P(2 + padded / 2), P(1 + padded / 2), Decode(canvas, bytes.AsSpan(start + 2, count)), null, null);
+                    canvas.Text(P(2 + padded / 2), P(1 + padded / 2), canvas.Ansi(bytes.AsSpan(start + 2, count)), null, null);
                     break;
                 }
                 case 0x0a32: // EXTTEXTOUT
@@ -182,7 +182,7 @@ internal static class WmfImage
                         advances = new double[count];
                         for (int i = 0; i < count; i++) advances[i] = I16(bytes, start + at + padded + i * 2);
                     }
-                    canvas.Text(P(1), P(0), Decode(canvas, bytes.AsSpan(start + at, count)), advances, opaque);
+                    canvas.Text(P(1), P(0), canvas.Ansi(bytes.AsSpan(start + at, count)), advances, opaque);
                     break;
                 }
                 case 0x061d: // PATBLT
@@ -217,11 +217,18 @@ internal static class WmfImage
                     Need(1);
                     if (W(0) != 0) throw new NotSupportedException("Mirrored WMF layout is not supported.");
                     break;
+                case 0x0104: // SETROP2: only R2_COPYPEN draws the pen and brush as they are
+                    Need(1);
+                    if (W(0) != 13) throw new NotSupportedException("Unsupported WMF binary raster operation.");
+                    break;
+                case 0x0108 or 0x020a: // SETTEXTCHAREXTRA; SETTEXTJUSTIFICATION (break count, then break extra)
+                    Need(function == 0x0108 ? 1 : 2);
+                    if (P(function == 0x0108 ? 0 : 1) != 0) throw new NotSupportedException("WMF text spacing adjustments are not supported.");
+                    break;
                 case 0x020d or 0x020e or 0x0211 or 0x0412:
                     // Viewport records: the placeable header already fixes the device box.
-                case 0x0104 or 0x0105 or 0x0107 or 0x0108 or 0x020a or 0x0231 or 0x0234 or 0x0035 or 0x0037 or 0x0139 or 0x0436 or 0x0626:
-                    // ROP2, relabs, stretch mode, character extra, justification, mapper flags, palettes and escapes
-                    // do not change the SVG we draw.
+                case 0x0105 or 0x0107 or 0x0231 or 0x0234 or 0x0035 or 0x0037 or 0x0139 or 0x0436 or 0x0626:
+                    // Relabs, stretch mode, mapper flags, palettes and escapes do not change the SVG we draw.
                     break;
                 default:
                     throw new NotSupportedException($"Unsupported WMF record 0x{function:X4}.");
@@ -249,17 +256,9 @@ internal static class WmfImage
             canvas.Image(x, y, width, height, image.Href, image.Pixels);
     }
 
-    /// <summary>ANSI text in the selected font's character set: Windows-1252 for Western fonts.</summary>
-    private static string Decode(MetafileCanvas canvas, ReadOnlySpan<byte> text)
+    private static (double X, double Y)[] Points(byte[] bytes, int at, long count, int available)
     {
-        if (canvas.CurrentFont.Charset is not (0 or 1 or 2) && text.IndexOfAnyInRange((byte)0x80, (byte)0xff) >= 0)
-            throw new NotSupportedException("WMF text outside the Western character set is not supported.");
-        return EmfImage.Windows1252(text);
-    }
-
-    private static (double X, double Y)[] Points(byte[] bytes, int at, int count, int available)
-    {
-        if (count < 0 || count * 4 > available) throw new InvalidDataException("WMF point list exceeds its record.");
+        if (count > MaxPoints || count * 4 > available) throw new InvalidDataException("WMF point list exceeds its record.");
         var points = new (double, double)[count];
         for (int i = 0; i < count; i++) points[i] = (I16(bytes, at + i * 4), I16(bytes, at + i * 4 + 2));
         return points;
