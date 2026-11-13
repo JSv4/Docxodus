@@ -1040,11 +1040,6 @@ public sealed partial class DocxSession : IDisposable
         (W.moveToRangeStart, W.moveToRangeEnd, "move-destination"),
     };
 
-    private static readonly HashSet<XName> RevisionWrapperNames = new()
-    {
-        W.ins, W.del, W.moveFrom, W.moveTo,
-    };
-
     private static readonly HashSet<string> AllowedXmlNamespaces = new()
     {
         "http://schemas.openxmlformats.org/wordprocessingml/2006/main",        // w:

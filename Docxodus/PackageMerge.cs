@@ -25,13 +25,17 @@ internal static class PackageMerge
 {
     /// <summary>
     /// Attribute names that carry a relationship id. A cloned element bearing any of these depends on a
-    /// package part that must travel with it. Lifted from the removed comparison engine's
-    /// <c>ComparisonUnitWord</c>, whose only role here was to own this list.
+    /// package part that must travel with it, and <see cref="Ir.IrDrawingGraphHasher"/> hashes the same
+    /// edges, so a change it detects is one the renderer can carry. Each name is listed in the transitional
+    /// and the ISO 29500 Strict relationships namespace: only a package whose main part is Strict is
+    /// normalized on read, and Word also opens a transitional package holding a Strict-namespace part
+    /// (issue #1702).
     /// </summary>
-    private static readonly XName[] RelationshipAttributeNames =
-    {
-        R.embed, R.link, R.id, R.cs, R.dm, R.lo, R.qs, R.href, R.pict,
-    };
+    internal static readonly HashSet<XName> RelationshipAttributeNames =
+        new[] { R.r, XNamespace.Get(Verification.OpenXmlRelationshipVocabulary.StrictOfficeNamespace) }
+            .SelectMany(ns => new[] { R.embed, R.link, R.id, R.cs, R.dm, R.lo, R.qs, R.href, R.pict }
+                .Select(name => ns + name.LocalName))
+            .ToHashSet();
 
         /// <summary>Copies the styles of <paramref name="wDocFrom"/> that <paramref name="wDocTo"/> lacks into it.
         /// A style whose id <paramref name="wDocTo"/> already uses for a style of another type is left out unless
