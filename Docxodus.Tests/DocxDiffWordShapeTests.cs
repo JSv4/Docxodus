@@ -800,8 +800,8 @@ public class DocxDiffWordShapeTests
         // The story-final word-matched pair retains only the lone short word "Red" — at most one
         // matched word of <= 5 chars that is also a sliver of the pair (< 0.15 of its chars) is the
         // decoded flush condition. The reference output drops EVERY retention — the shared "Red" AND
-        // the end-anchored period — and renders one whole ins+del rewrite (ins first). Interior
-        // pairs never flush (see the interior pin below).
+        // the end-anchored period — and renders one whole ins+del rewrite (ins first). The same pair
+        // mid-story is replaced too (see the interior pin below).
         var left = Doc("Shared head paragraph.",
             "Red headings create strong visual hierarchy in documents.");
         var right = Doc("Shared head paragraph.",
@@ -864,10 +864,10 @@ public class DocxDiffWordShapeTests
     }
 
     [Fact]
-    public void InteriorWeakPair_NeverFlushes()
+    public void InteriorWeakPair_IsReplacedWhole()
     {
-        // The same weak pair mid-story: the reference retains even a lone shared word there (it
-        // flushes only the story-final tail-fusion construct), so the flush must NOT fire.
+        // The same weak pair mid-story: "Red " and the period are under an eighth of the text, so Word
+        // 2024's Compare deletes the old paragraph and inserts the new one here too (issue #1739).
         var left = Doc("Shared head paragraph.",
             "Red headings create strong visual hierarchy in documents.",
             "Shared tail paragraph.");
@@ -878,9 +878,10 @@ public class DocxDiffWordShapeTests
         var result = DocxDiff.Compare(left, right);
         using var stream = new MemoryStream(result.DocumentByteArray);
         using var wdoc = WordprocessingDocument.Open(stream, false);
-        var mid = wdoc.MainDocumentPart!.Document.Body!.Elements<Paragraph>()
-            .Single(p => p.InnerText.Contains("strikethrough"));
-        Assert.Contains("Red", RetainedText(mid));
+        var rewritten = wdoc.MainDocumentPart!.Document!.Body!.Elements<Paragraph>()
+            .Where(p => p.InnerText.Contains("Red")).ToList();
+        Assert.Equal(2, rewritten.Count);
+        Assert.All(rewritten, p => Assert.Equal("", RetainedText(p)));
 
         Assert.Equal(BodyTexts(right), BodyTexts(RevisionProcessor.AcceptRevisions(result)));
         Assert.Equal(BodyTexts(left), BodyTexts(RevisionProcessor.RejectRevisions(result)));

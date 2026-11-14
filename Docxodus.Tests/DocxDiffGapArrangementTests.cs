@@ -52,6 +52,55 @@ public class DocxDiffGapArrangementTests
         AssertRoundTrip(result, left, right);
     }
 
+    [Theory]
+    // Issue #1739: a clause rewritten in other words keeps its label and a few articles, in other places, and
+    // a reference compare replaces it rather than diffing it word by word around the shared words.
+    [InlineData("(a) For courier by with for warehouse on supplier voucher for by ledger supplier manifest courier with.",
+        "(a) Lease garden tenant of for utilities and utilities on fixtures notice repair fixtures by notice tenant.",
+        false)]
+    // Control: twenty words of which three are kept in place. The reference edits it in place.
+    [InlineData("oaword obword ocword odword keword ofword ogword ohword oiword kjword okword olword omword knword ooword opword oqword orword osword otword.",
+        "naword nbword ncword ndword keword nfword ngword nhword niword kjword nkword nlword nmword knword noword npword nqword nrword nsword ntword.",
+        true)]
+    public void InteriorRewrite_IsReplacedWhole_UnlessItKeepsAnEighthOfItsText(string oldText, string newText, bool inPlace)
+    {
+        var left = Doc("Clause 1", oldText, "Clause 2");
+        var right = Doc("Clause 1", newText, "Clause 2");
+        var result = DocxCompare.Compare(left, right);
+
+        var expected = inPlace ? new[] { "RET", "MIXED:-", "RET" } : new[] { "RET", "INS:INS", "DEL:DEL", "RET" };
+        Assert.Equal(expected, BodyShape(result));
+        AssertRoundTrip(result, left, right);
+    }
+
+    [Theory]
+    // Issue #1739: rewritten clauses stay whole rather than streaming as one token flow that matches their
+    // labels and articles across paragraph boundaries again: on their own, where the shared "(b)" and "(c)"
+    // are only ordinals, and before an edited clause that stays paired.
+    [InlineData(false, new[] { "RET", "INS:INS", "INS:INS", "DEL:DEL", "DEL:DEL", "RET" })]
+    [InlineData(true, new[] { "RET", "INS:INS", "INS:INS", "DEL:DEL", "DEL:DEL", "MIXED:-", "RET" })]
+    public void RewrittenClauses_StayWhole_BesideAnEditedClauseOrNone(bool withEditedClause, string[] shape)
+    {
+        var left = new List<string> { "Clause 1",
+            "(b) For courier by with for warehouse on supplier voucher for by ledger supplier manifest courier with.",
+            "(c) For courier and voucher courier shipment by with a and by manifest a for and manifest." };
+        var right = new List<string> { "Clause 1",
+            "(b) Lease garden tenant of for utilities and utilities on fixtures notice repair fixtures by notice tenant.",
+            "(c) Inspection with keys landlord notice deposit rent notice keys utilities to by deposit on premises utilities." };
+        if (withEditedClause)
+        {
+            left.Add("(d) The supplier shall deliver the goods to the warehouse before the end of each month.");
+            right.Add("(d) The supplier must deliver the goods to the warehouse before the end of each quarter.");
+        }
+        left.Add("Clause 2");
+        right.Add("Clause 2");
+        var (leftDoc, rightDoc) = (Doc(left.ToArray()), Doc(right.ToArray()));
+        var result = DocxCompare.Compare(leftDoc, rightDoc);
+
+        Assert.Equal(shape, BodyShape(result));
+        AssertRoundTrip(result, leftDoc, rightDoc);
+    }
+
     [Fact]
     public void InteriorReplace_TwoByTwo_AllSeparate()
     {

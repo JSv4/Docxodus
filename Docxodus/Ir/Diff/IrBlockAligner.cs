@@ -165,10 +165,14 @@ internal static class IrBlockAligner
         int?[]? rightBodyFullRewriteGroups = markBodyFullRewriteGaps ? new int?[nRight] : null;
         int nextBodyFullRewriteGroupId = 1;
 
+        // The blocks of pairs released as rewrites (issue #1739), so that no token stream re-matches them.
+        var leftRewrites = new bool[nLeft];
+        var rightRewrites = new bool[nRight];
+
         FillGaps(leftBlocks, rightBlocks, spinePairs, leftKind, rightKind, leftMatch, rightMatch,
             similarity, settings, splitGroups, mergeGroups,
             leftBodyFullRewriteGroups, rightBodyFullRewriteGroups, markBodyFullRewriteGaps,
-            ref nextBodyFullRewriteGroupId);
+            ref nextBodyFullRewriteGroupId, leftRewrites, rightRewrites);
 
         // A renderer emits paired in-place blocks in RIGHT order, so every in-place pairing — one-to-one
         // pairs and split/merge groups alike — must be monotone: crossed pairs accept to the right sequence,
@@ -201,7 +205,7 @@ internal static class IrBlockAligner
 
         // --- Emit in right order with left-anchored deletion interleave.
         var entries = EmitEntries(leftBlocks, rightBlocks, leftKind, rightKind, leftMatch, rightMatch,
-            splitGroups, mergeGroups, leftBodyFullRewriteGroups, rightBodyFullRewriteGroups);
+            splitGroups, mergeGroups, leftBodyFullRewriteGroups, rightBodyFullRewriteGroups, leftRewrites, rightRewrites);
         return new IrBlockAlignment(IrNodeList.From(entries));
     }
 
@@ -471,7 +475,7 @@ internal static class IrBlockAligner
         List<(int SingularIndex, List<int> PluralIndexes)> splitGroups,
         List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups,
         int?[]? leftBodyFullRewriteGroups, int?[]? rightBodyFullRewriteGroups,
-        bool markBodyFullRewriteGaps, ref int nextBodyFullRewriteGroupId)
+        bool markBodyFullRewriteGaps, ref int nextBodyFullRewriteGroupId, bool[] leftRewrites, bool[] rightRewrites)
     {
         int prevLeft = -1, prevRight = -1;
         foreach (var (sl, sr) in spinePairs)
@@ -479,7 +483,7 @@ internal static class IrBlockAligner
             FillOneGap(leftBlocks, rightBlocks, prevLeft + 1, sl, prevRight + 1, sr,
                 leftKind, rightKind, leftMatch, rightMatch, similarity, settings, splitGroups, mergeGroups,
                 leftBodyFullRewriteGroups, rightBodyFullRewriteGroups, markBodyFullRewriteGaps,
-                ref nextBodyFullRewriteGroupId);
+                ref nextBodyFullRewriteGroupId, leftRewrites, rightRewrites);
             prevLeft = sl;
             prevRight = sr;
         }
@@ -487,7 +491,7 @@ internal static class IrBlockAligner
         FillOneGap(leftBlocks, rightBlocks, prevLeft + 1, leftBlocks.Count, prevRight + 1, rightBlocks.Count,
             leftKind, rightKind, leftMatch, rightMatch, similarity, settings, splitGroups, mergeGroups,
             leftBodyFullRewriteGroups, rightBodyFullRewriteGroups, markBodyFullRewriteGaps,
-            ref nextBodyFullRewriteGroupId);
+            ref nextBodyFullRewriteGroupId, leftRewrites, rightRewrites);
     }
 
     /// <summary>
@@ -509,7 +513,7 @@ internal static class IrBlockAligner
         List<(int SingularIndex, List<int> PluralIndexes)> splitGroups,
         List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups,
         int?[]? leftBodyFullRewriteGroups, int?[]? rightBodyFullRewriteGroups,
-        bool markBodyFullRewriteGaps, ref int nextBodyFullRewriteGroupId)
+        bool markBodyFullRewriteGaps, ref int nextBodyFullRewriteGroupId, bool[] leftRewrites, bool[] rightRewrites)
     {
         var freeLeft = new List<int>();
         for (int i = leftFrom; i < leftTo; i++)
@@ -668,6 +672,11 @@ internal static class IrBlockAligner
                 splitGroups, mergeGroups, settings);
         }
 
+        // The passes above pair on shared words; a pair whose in-place diff would keep less than an eighth of
+        // its text is nonetheless a rewrite, drawn as a deleted and an inserted paragraph (issue #1739).
+        ReleaseRewrites(leftBlocks, rightBlocks, leftFrom, leftTo, leftKind, rightKind, leftMatch, rightMatch,
+            leftoverLeft, leftoverRight, similarity, leftRewrites, rightRewrites);
+
         // Short complete body rewrites have positional review value even without lexical evidence
         // (#1556). Keep each replacement whole; streaming shared articles would split sentences.
         // This is an explicit review policy: at most 12 words per paragraph and 64 per side,
@@ -787,6 +796,27 @@ internal static class IrBlockAligner
             leftKind[li] = IrAlignmentKind.Deleted;
         foreach (int rj in leftoverRight)
             rightKind[rj] = IrAlignmentKind.Inserted;
+    }
+
+    /// <summary>Return this gap's one-to-one paragraph pairs that are rewrites (<see cref="IrBlockSimilarity.IsRewrite"/>)
+    /// to the gap's leftovers, in index order, and flag their blocks.</summary>
+    private static void ReleaseRewrites(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks, int leftFrom, int leftTo,
+        IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind, int[] leftMatch, int[] rightMatch,
+        List<int> leftoverLeft, List<int> leftoverRight, IrBlockSimilarity similarity,
+        bool[] leftRewrites, bool[] rightRewrites)
+    {
+        for (int li = leftFrom; li < leftTo; li++)
+        {
+            int rj = leftMatch[li];
+            if (rj < 0 || leftKind[li] != IrAlignmentKind.Modified || !similarity.IsRewrite(leftBlocks[li], rightBlocks[rj]))
+                continue;
+            leftKind[li] = rightKind[rj] = null;
+            leftMatch[li] = rightMatch[rj] = -1;
+            leftRewrites[li] = rightRewrites[rj] = true;
+            leftoverLeft.Insert(~leftoverLeft.BinarySearch(li), li);
+            leftoverRight.Insert(~leftoverRight.BinarySearch(rj), rj);
+        }
     }
 
     /// <summary>
@@ -2556,8 +2586,9 @@ internal static class IrBlockAligner
                 continue;
             foreach (int rj in inserted)
             {
+                // A rewrite is no more a moved paragraph than an edited one (issue #1739).
                 double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
-                if (score >= threshold)
+                if (score >= threshold && !similarity.IsRewrite(leftBlocks[li], rightBlocks[rj]))
                     candidates.Add((score, li, rj));
             }
         }
@@ -2843,7 +2874,8 @@ internal static class IrBlockAligner
         int[] leftMatch, int[] rightMatch,
         List<(int SingularIndex, List<int> PluralIndexes)> splitGroups,
         List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups,
-        int?[]? leftBodyFullRewriteGroups, int?[]? rightBodyFullRewriteGroups)
+        int?[]? leftBodyFullRewriteGroups, int?[]? rightBodyFullRewriteGroups,
+        bool[] leftRewrites, bool[] rightRewrites)
     {
         // O(1) lookups for the right-walk below (lookup only — never enumerated, so determinism
         // rests purely on the index-ascending walk).
@@ -2886,7 +2918,7 @@ internal static class IrBlockAligner
         var entries = new List<IrAlignedBlock>();
 
         // Front deletions (those preceding every paired left block).
-        EmitDeletions(deletionsAfterLeft, -1, leftBlocks, entries, leftBodyFullRewriteGroups);
+        EmitDeletions(deletionsAfterLeft, -1, leftBlocks, entries, leftBodyFullRewriteGroups, leftRewrites);
 
         for (int j = 0; j < rightBlocks.Count; j++)
         {
@@ -2901,7 +2933,7 @@ internal static class IrBlockAligner
                     entries.Add(new IrAlignedBlock(IrAlignmentKind.Split, leftBlocks[sg.SingularIndex], null,
                         IrNodeList.From(sg.PluralIndexes.Select(rj => rightBlocks[rj]).ToList())));
                     EmitDeletions(deletionsAfterLeft, sg.SingularIndex, leftBlocks, entries,
-                        leftBodyFullRewriteGroups);
+                        leftBodyFullRewriteGroups, leftRewrites);
                 }
 
                 continue;
@@ -2921,7 +2953,7 @@ internal static class IrBlockAligner
                 // Flush the deletion bucket of EVERY left member, in ascending left order — a
                 // deletion anchored to a non-final member must still flush exactly once.
                 foreach (int mi in mg.PluralIndexes)
-                    EmitDeletions(deletionsAfterLeft, mi, leftBlocks, entries, leftBodyFullRewriteGroups);
+                    EmitDeletions(deletionsAfterLeft, mi, leftBlocks, entries, leftBodyFullRewriteGroups, leftRewrites);
                 continue;
             }
 
@@ -2930,11 +2962,12 @@ internal static class IrBlockAligner
             IrBlock? leftBlock = li != -1 ? leftBlocks[li] : null;
             entries.Add(new IrAlignedBlock(kind, leftBlock, rightBlocks[j],
                 BodyFullRewriteGroupId: rightBodyFullRewriteGroups is { } rightGroups
-                    ? rightGroups[j] : null));
+                    ? rightGroups[j] : null,
+                Rewrite: kind == IrAlignmentKind.Inserted && rightRewrites[j]));
 
             // After emitting a paired right block, flush deletions anchored to its left partner.
             if (li != -1)
-                EmitDeletions(deletionsAfterLeft, li, leftBlocks, entries, leftBodyFullRewriteGroups);
+                EmitDeletions(deletionsAfterLeft, li, leftBlocks, entries, leftBodyFullRewriteGroups, leftRewrites);
         }
 
         return entries;
@@ -2943,12 +2976,13 @@ internal static class IrBlockAligner
     private static void EmitDeletions(
         Dictionary<int, List<int>> deletionsAfterLeft, int anchorLeftIndex,
         IrNodeList<IrBlock> leftBlocks, List<IrAlignedBlock> entries,
-        int?[]? leftBodyFullRewriteGroups)
+        int?[]? leftBodyFullRewriteGroups, bool[] leftRewrites)
     {
         if (!deletionsAfterLeft.TryGetValue(anchorLeftIndex, out var list))
             return;
         foreach (int li in list) // already in ascending left order
             entries.Add(new IrAlignedBlock(IrAlignmentKind.Deleted, leftBlocks[li], null,
-                BodyFullRewriteGroupId: leftBodyFullRewriteGroups is { } leftGroups ? leftGroups[li] : null));
+                BodyFullRewriteGroupId: leftBodyFullRewriteGroups is { } leftGroups ? leftGroups[li] : null,
+                Rewrite: leftRewrites[li]));
     }
 }
