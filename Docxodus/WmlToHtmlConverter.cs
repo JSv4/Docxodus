@@ -13688,10 +13688,11 @@ namespace Docxodus
             }
 
             var wrapper = new XElement(Xhtml.span, imageHtml);
+            // Every wrapping float rests against a column edge, an offset one behind its clearance
+            // margin. One anchored at its paragraph's top keeps that place at the top of whichever
+            // page fragment holds it, so pagination can split the paragraph around it (#1736).
             var positionV = drawingContainer.Element(WP.positionV);
-            if (relativeFrom == "column" &&
-                ((side == "left" && (alignment == "left" || offset == 0)) || (side == "right" && alignment == "right")) &&
-                (string?)positionV?.Attribute(NoNamespace.relativeFrom) == "paragraph" &&
+            if ((string?)positionV?.Attribute(NoNamespace.relativeFrom) == "paragraph" &&
                 (long?)positionV?.Element(WP.posOffset) == 0)
                 wrapper.SetAttributeValue("data-docx-edge-picture", "true");
             if (style.ContainsKey("shape-outside"))

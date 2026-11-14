@@ -56,6 +56,37 @@ for (const [wrap, after, prefix] of [['none', 0, 0], ['none', 1, 0], ['none', 39
   });
 }
 
+// A picture placed by a column offset, 6pt short of the right edge, splits like the aligned control (#1736).
+for (const horizontal of [4_950_000, 'right'] as const) {
+  test(`a long paragraph splits around a late square picture placed by ${horizontal === 'right' ? 'right alignment' : 'a column offset'}`, async ({ browser, page }) => {
+    test.setTimeout(120_000);
+    const result = await renderDocxArtifacts(floatingParagraphDocx('square', 3, 82, 0, false, horizontal), {
+      browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'hidden', timeoutMs: 120_000,
+    });
+    const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
+    try {
+      const pdf = await task.promise, pages: string[][] = [], imagePages: number[] = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const pdfPage = await pdf.getPage(i), content = await pdfPage.getTextContent();
+        pages.push(content.items.flatMap(item => 'str' in item ? item.str.match(/Willow\d+/g) ?? [] : []));
+        for (const op of (await pdfPage.getOperatorList()).fnArray)
+          if (op === OPS.paintImageXObject || op === OPS.paintInlineImageXObject) imagePages.push(i);
+      }
+      expect(pages.flat()).toEqual(Array.from({ length: 82 }, (_, i) => `Willow${String(i + 1).padStart(3, '0')}`));
+      expect(pages.map(labels => labels.length)).toEqual([40, 40, 2]);
+      expect(imagePages).toEqual([1]);
+    } finally { await task.destroy(); }
+    await page.setContent(result.html!);
+    const image = await page.locator('.page-box img').evaluate(image => {
+      const box = image.closest('.page-box')!.getBoundingClientRect(), rect = image.getBoundingClientRect();
+      return { x: (rect.x - box.x) * 0.75, y: (rect.y - box.y) * 0.75 };
+    });
+    // At the top of its paragraph, right of the text: the offset keeps its 9pt clearance from the edge.
+    expect(image.y).toBeCloseTo(72, 1);
+    expect(image.x).toBeCloseTo(horizontal === 'right' ? 468 : 459, 1);
+  });
+}
+
 test('a late picture in a short paragraph retains its full height at the page boundary', async ({ browser, page }) => {
   test.setTimeout(120_000);
   const result = await renderDocxArtifacts(floatingParagraphDocx('square', 1, 2, 38), {

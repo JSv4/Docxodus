@@ -7185,6 +7185,66 @@ would invalidate source line measurements and wrapping. That requires destinatio
 reflow, beyond this fix. The partial-page difference above also remains an explicit policy
 limitation; neither it nor minimum-height-row clipping is resolved by this change.
 
+## A picture anchored at its paragraph's top sits at the top of its page fragment (#1736)
+
+A square-wrapped picture anchored with a zero vertical offset from its paragraph prints at the
+top of the paragraph, however its horizontal position is given. When the paragraph runs over
+several pages, Word prints the picture at the top of the part of the paragraph that holds the
+picture's run, not at the top of the whole paragraph.
+
+```xml
+<w:p>
+  <w:r><w:t xml:space="preserve">Item 1 … Item 3 of the field log … </w:t></w:r>
+  <w:r><w:drawing><wp:anchor distT="0" distB="0" distL="114300" distR="114300" …>
+    <wp:simplePos x="0" y="0"/>
+    <wp:positionH relativeFrom="column"><wp:posOffset>3800000</wp:posOffset></wp:positionH>
+    <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+    <wp:extent cx="1828800" cy="1280160"/><wp:wrapSquare wrapText="bothSides"/>
+    <!-- docPr and an ordinary picture graphic follow -->
+  </wp:anchor></w:drawing></w:r>
+  <w:r><w:t xml:space="preserve">Item 4 … Item 120 of the field log …</w:t></w:r>
+</w:p>
+```
+
+Measured in desktop Word 2024 (16.0.20326, Windows 11) by saving PDF through `SaveAs2`: A4 with 1 in
+margins, a styles part setting Times New Roman 12 pt so both renderers use metric-compatible faces,
+and a 2 × 1.4 in picture. x is the picture's left edge on the page, top its top edge.
+
+| Placement | Word 2024 | Docxodus before | Docxodus after |
+| --- | --- | --- | --- |
+| `posOffset` 3,800,000 from the column (above) | 3 pages; x 371.2, top 96 (the paragraph's top) on page 1 | export fails: page 2 body content clipped | 3 pages, the same page breaks; x 370.5, top 96 on page 1 |
+| `wp:align right` (control) | 3 pages; x 379.3, top 96 on page 1 | 3 pages, the same page breaks; x 379.5, top 96 | unchanged |
+| the same offset from the margin | as from the column | export fails | as from the column |
+| `posOffset` 1,500,000, text on both sides | x 190.1, text left and right of it | export fails | 3 pages; x 81, top 96, text on its right only |
+| the first placement, anchored before "Item 100" | top 72 on page 3, the top of that page's part of the paragraph | export fails | top 72 on page 3; page 1 ends one line short (below) |
+| the first placement 254,000 lower (`positionV` offset) | top 116 on page 1 | export fails | still fails (not changed) |
+
+**Analysis.** The converter renders a square, tight or through picture as a CSS float, which
+always rests against a column edge: an aligned picture flush with it, an offset one behind its
+clearance margin on the far side (`distR` here, 9 pt), which is where the reference puts it to
+within about 1 pt here (the 8 pt gap the offset leaves, against 9 pt of clearance). It marked the float `data-docx-edge-picture` only
+when it was aligned to a column edge, or at a zero left offset, and anchored at its paragraph's top.
+The paginator may split a paragraph only around a marked float: it keeps the picture at the top of
+whichever fragment holds its run and rebuilds the wrapping exclusion there, which is the
+placement measured above. That needs only the vertical anchor; the paginator copies the float's
+side and margins as the converter wrote them.
+
+**Fix.** `ApplyAnchorTextWrap` marks every wrapping float anchored at its paragraph's top with a
+zero offset, whatever its horizontal placement. The horizontal approximation is unchanged: a
+picture with text on both sides in Word still has text on one side only.
+
+**Not changed.** A picture placed below its paragraph's top (a nonzero vertical offset), or vertically
+relative to the page, margin or line, is not marked, so a paragraph longer than a page holding one still
+fails to export. When the picture's run lies past the paragraph's first page, the paginator chooses
+the earlier pages' break points from a layout with the picture's exclusion at the paragraph's top,
+so the last line before the first break can end a few words short ("Item 42 … the north" here,
+where Word fills the line). An aligned picture does the same on `main`.
+
+**Code and tests.** `Docxodus/WmlToHtmlConverter.cs` (`ApplyAnchorTextWrap`);
+`RenderingFidelityImageWrapTests` (`OffsetPictureAtItsParagraphTopKeepsItsFloatFallbackAsAnEdgePicture`,
+`PictureAwayFromItsParagraphTopIsNotAnEdgePicture`); `export-floating-paragraph.spec.ts`
+(column-offset picture, with a right-aligned control).
+
 ## Empty runs enlarged every line of a nonempty paragraph (#1565)
 
 An empty text run with a larger size was selected by `DefineStrutFont`, raising the base height

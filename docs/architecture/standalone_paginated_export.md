@@ -1615,7 +1615,10 @@ with the line that holds it (#1735): no fragment boundary enters it, so its stor
 layout. One with positioned, floating or transformed content, a picture or a line break still
 keeps its paragraph whole. Fixed-base `wrapNone` drawings stay whole with their source
 Range, including drawings after body text; their textbox text does not participate in body line
-or widow measurements. Existing anchor placement resolves coordinates after pagination. Leading
+or widow measurements. Existing anchor placement resolves coordinates after pagination. The
+converter marks as an edge picture every square, tight or through picture float anchored at its
+paragraph's top with a zero offset, whatever its horizontal position (#1736); an offset one keeps
+its float to the nearer edge behind its clearance margin. Leading
 converter-owned edge pictures preserve their float and clearance on the head, using the existing
 float-height measurement and page-prefix exclusion paths. The shared layout gate receives the
 same admitted carriers as the structural gate; notes, cells and textbox stories retain the prior
