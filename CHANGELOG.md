@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- EMF and WMF pictures that Office writes now draw where they printed `[EMF IMAGE]`/`[WMF IMAGE]` (#1706, second stage). A corpus of 74 metafiles written by Word, Excel and PowerPoint 2024 (charts, shapes, SmartArt, WordArt, tables, symbol text and embedded-object previews, as EMF and WMF) went from 37 placeholders to 7; of the 31 it already drew, 30 are unchanged and one now plays the EMF it embeds. The player now: evaluates a bitmap's raster operation per pixel, so the mask-then-image pairs GDI uses for transparent bitmaps (SRCAND then SRCINVERT, SRCPAINT then SRCAND) merge into one transparent PNG; fills with DIB pattern brushes; maps Symbol, Wingdings and Webdings text to Unicode through the same tables as document text; treats `R2_NOP` as drawing nothing; resets the clip on WMF `SELECTCLIPREGION` 0; cuts consecutive `EXCLUDECLIPRECT`s as holes in one clip path; lets a path bracket take its first figure's transform; skips glyph-index text that has no glyphs; and plays the EMF that GDI's EMF-to-WMF conversion embeds in a WMF, as GDI itself does. Hatches and pattern tiles are now sized in CSS pixels, as GDI sizes them in the pixels of the device it plays onto. A visible zero-width WMF pen now draws one CSS pixel wide, as an EMF cosmetic pen does, instead of rejecting the picture. Still placeholders, by decision: EMF+-only files (no Office or Windows writer in the corpus produces one; every EMF+ file was dual), the XOR-based dithering Office uses for semi-transparent fills, glyph-index text, palette colours and monochrome pattern brushes.
+
 ## [16.0.0] - 2026-11-13
 
 ### Added
