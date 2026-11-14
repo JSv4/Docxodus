@@ -269,7 +269,9 @@ door:
     range sits inside each table. This is Word's own shape; `EmitTableMove` produces it;
   - a relocated table whose text was also edited, above the same 0.8 similarity threshold
     (issue #887). The table's word count is the sum of its cells', so it clears the minimum-words gate
-    the fuzzy move pass applies. It is drawn with complete halves, like a moved-and-edited paragraph;
+    the fuzzy move pass applies. It is drawn with complete halves, the old table at the source and the
+    new one at the destination (a moved-and-edited paragraph moves only its shared text; see
+    "Edited-move markup" below);
     the edit script's destination op carries the row/cell `tableDiff`, and `GetRevisions` lists the
     in-move edits after the destination (a row that moved inside the table is listed as the row deletion
     and insertion the redline draws). The aligner is shared, so this applies to `Consolidate` too;
@@ -340,10 +342,10 @@ each stretch of it between two edits is `w:moveFrom`/`w:moveTo` in a move range 
 under the move's one `w:name`. The edit is ordinary revisions outside every range: removed text is
 `w:del` at the source, added text `w:ins` at the destination, and a format change the destination's
 `w:rPrChange`. Text in a hyperlink that holds an edit is part of the edit, so no range sits inside a link.
-The rules come from Word's reject (see `docs/ooxml_corner_cases.md`, "Rejecting a moved and edited
-paragraph"): it carries each destination range's moved text back to the source range it pairs with in
-order, ignoring what `w:moveFrom` holds, so the two halves must hold the same text in the same number of
-ranges. The destination never holds deleted text, which a consumer that rejects a nested deletion on its
+The rules come from Word's reject (see `docs/ooxml_corner_cases.md`, "Compare: rejecting a moved and
+edited paragraph (#1716)"): it carries each destination range's moved text back to the source range it
+pairs with in order, ignoring what `w:moveFrom` holds, so the two halves must hold the same text in the
+same number of ranges. The destination never holds deleted text, which a consumer that rejects a nested deletion on its
 own leaves behind (issue #359). Each block list indexes its move halves before it renders
 (`RenderState.IndexEditedMoves`), so either half can find the other; a pair that cannot be resolved, a
 moved table and an exact move are drawn whole, under one range per half.

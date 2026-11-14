@@ -1383,8 +1383,9 @@ public class IrMarkupRendererTests
     [Fact]
     public void Render_moved_and_edited_hyperlink_keeps_its_move_ranges_at_paragraph_level()
     {
-        // Word loses an edit inside a hyperlink when the move ranges sit inside the link, so the link is split
-        // at the ranges instead (issue #1716).
+        // Word loses an edit inside a hyperlink when a move range sits inside the link, and a link split at the
+        // ranges accepts as several links. So the link holding the edit is deleted and inserted whole, and the
+        // text around it moves (issue #1716).
         static string Moved(string state) =>
             "<w:p><w:r><w:t xml:space=\"preserve\">The governing law is described in </w:t></w:r>" +
             $"<w:hyperlink w:anchor=\"target\"><w:r><w:t>the {state} section of the schedule</w:t></w:r></w:hyperlink>" +
@@ -1397,8 +1398,10 @@ public class IrMarkupRendererTests
 
         var body = RedlineBody(RenderMarkup(left, right));
 
-        Assert.Equal(2, MoveRangeTexts(body, source: true).Count);
-        Assert.Equal(MoveRangeTexts(body, source: false), MoveRangeTexts(body, source: true));
+        var moved = new[] { "The governing law is described in ", " without regard to conflicts principles." };
+        Assert.Equal(moved, MoveRangeTexts(body, source: true));
+        Assert.Equal(moved, MoveRangeTexts(body, source: false));
+        Assert.Equal(2, body.Descendants(W.hyperlink).Count());
         Assert.All(body.Descendants().Where(e => e.Name.LocalName.StartsWith("move") && e.Name.LocalName.Contains("Range")),
             marker => Assert.Equal(W.p, marker.Parent!.Name));
         AssertRoundTrip(left, right, label: "move-modify-hyperlink");
