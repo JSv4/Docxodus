@@ -1408,6 +1408,37 @@ public class IrMarkupRendererTests
     }
 
     [Fact]
+    public void Render_long_moved_and_edited_paragraph_costs_about_what_the_same_edit_in_place_does()
+    {
+        // The moved halves look up the hyperlink holding each token. In a paragraph of thousands of runs that must
+        // not scan every run per token, which made this move four times slower than the in-place edit (#1716).
+        const int words = 16000;
+        static string Runs(int from, int count) => string.Concat(Enumerable.Range(from, count)
+            .Select(i => $"<w:r><w:t xml:space=\"preserve\">word{i} </w:t></w:r>"));
+        static string Edited(string state) => "<w:p>" + Runs(0, words / 2) +
+            $"<w:hyperlink w:anchor=\"target\"><w:r><w:t xml:space=\"preserve\">the {state} section </w:t></w:r></w:hyperlink>" +
+            Runs(words / 2, words / 2) + "</w:p>";
+        const string other = "<w:p><w:bookmarkStart w:id=\"9\" w:name=\"target\"/><w:r><w:t>Closing paragraph.</w:t></w:r>" +
+            "<w:bookmarkEnd w:id=\"9\"/></w:p>";
+        var left = IrTestDocuments.FromBodyXml(Edited("Delaware") + other);
+        static TimeSpan Time(Action render)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            render();
+            return clock.Elapsed;
+        }
+
+        XElement? body = null;
+        var inPlace = Time(() => RenderMarkup(left, IrTestDocuments.FromBodyXml(Edited("California") + other)));
+        var moved = Time(() => body = RedlineBody(RenderMarkup(left, IrTestDocuments.FromBodyXml(other + Edited("California")))));
+
+        _out.WriteLine($"moved {moved}, in place {inPlace}");
+        Assert.Equal(2, MoveRangeTexts(body!, source: true).Count);
+        Assert.Equal(MoveRangeTexts(body!, source: false), MoveRangeTexts(body!, source: true));
+        Assert.True(moved < inPlace * 2 + TimeSpan.FromSeconds(2), $"moved {moved}, in place {inPlace}");
+    }
+
+    [Fact]
     public void Session_resolves_a_moved_and_edited_paragraph_as_one_move_beside_its_edit()
     {
         var left = MoveDoc("Alpha opens the document.",

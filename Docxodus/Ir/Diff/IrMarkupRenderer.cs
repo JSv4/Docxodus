@@ -11780,10 +11780,26 @@ internal static partial class IrMarkupRenderer
         /// Source runs and hyperlink shells are reconstructed around the selected children.</summary>
         public List<XElement> Slice(int start, int end) => Scan(start, end, claimOnlyKeys: null);
 
-        /// <summary>The source hyperlinks holding content in the rendering span [start, end), one per segment.</summary>
-        public IEnumerable<XElement> HyperlinksIn(int start, int end) =>
-            _segments.Where(s => s.Start < end && s.End > start && s.Chain.Count > 0 && s.Chain[0].Name == W.hyperlink)
-                .Select(s => s.Chain[0]);
+        private List<Segment>? _linkSegments;
+
+        /// <summary>The source hyperlinks holding content in the rendering span [start, end), one per segment.
+        /// Content segments tile the paragraph in document order, so the linked ones overlapping the span are
+        /// the run that ends with the last one starting before <paramref name="end"/>: a binary search, not a
+        /// scan, because a moved-and-edited paragraph asks once per token.</summary>
+        public IEnumerable<XElement> HyperlinksIn(int start, int end)
+        {
+            _linkSegments ??= _segments
+                .Where(s => s.End > s.Start && s.Chain.Count > 0 && s.Chain[0].Name == W.hyperlink).ToList();
+            int lo = 0, hi = _linkSegments.Count;
+            while (lo < hi)
+            {
+                int mid = (lo + hi) / 2;
+                if (_linkSegments[mid].Start < end) lo = mid + 1;
+                else hi = mid;
+            }
+            for (int i = lo - 1; i >= 0 && _linkSegments[i].End > start; i--)
+                yield return _linkSegments[i].Chain[0];
+        }
 
         /// <summary>
         /// Mark as emitted, without emitting them, the always-kept markers of this side's span that the other side's
