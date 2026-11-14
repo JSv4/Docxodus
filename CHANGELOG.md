@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Paginated export no longer fails with "A footnote continuation is clipped" when a double-spaced (or otherwise multiple-spaced) paragraph that cites a note runs across the foot of a page (#1738). The fit test let the notes take the leading below the paragraph's last line, but the note band's cap still counted that leading as body text, so the band clipped its last note. A paragraph under widow control is now measured with its leading beside the notes it brings, as Word lays it out, so its citing line moves to the next page with the note. A paragraph that ends the page at its text height gives the leading it drops to the band.
+
 ## [16.0.0] - 2026-11-13
 
 ### Added
