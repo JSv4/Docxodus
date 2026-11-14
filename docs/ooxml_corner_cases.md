@@ -7924,9 +7924,10 @@ file, so those keep the placeholder rather than getting an EMF+ player.
 | A zero-width pen outlining an arrowhead | PowerPoint WMF | One device pixel | One pixel | One CSS pixel, as EMF cosmetic pens (it was refused) |
 | The source EMF split across `META_ESCAPE_ENHANCED_METAFILE` comments ("WMFC") | `GetWinMetaFileBits`, LibreOffice WMF export | Plays the embedded EMF instead of the WMF records | αβ ≤ ± → (the EMF's text) | Plays the embedded EMF; when it cannot, plays the WMF records |
 | ANSI text records that lose characters ("αβ ≤ →" becomes "aß = ?"), and one-bit DIBs written without their colour table | `GetWinMetaFileBits` | Unused: the embedded EMF is played | The EMF's text | Unused for the same reason |
-| A gradient as abutting strips of solid polygons | Every Office gradient | Aliased, so the strips meet without a seam | The EMF+ gradient | Anti-aliased SVG shows faint lighter lines where strips meet (not fixed; already so for gradients drawn before) |
-| A semi-transparent fill as PATINVERT, a fill with `R2_MASKPEN` and a one-bit pattern, then PATINVERT again; or `R2_XORPEN` | SmartArt with transparency; PowerPoint WMF of a gradient area chart | A dithered approximation | The EMF+ alpha | Keeps the placeholder |
-| Equation text as glyph indices (Cambria Math) | Word EMF of an equation | The font's glyphs | Drawn | Keeps the placeholder: glyph indices need the font's own tables |
+| A gradient as abutting strips of solid polygons | Every Office gradient | Aliased, so the strips meet without a seam | The EMF+ gradient | Draws fills that share an edge with the fill before them crisp, so the strips meet without a seam (#1748; before, faint lighter lines showed where strips met) |
+| A semi-transparent fill as PATINVERT, a fill with `R2_MASKPEN` and a one-bit pattern, then PATINVERT again | SmartArt with transparency | A dither: the brush where the pattern is black, the destination elsewhere | The alpha, also for a WMF without EMF+ (see below) | The brush through an SVG mask at the pattern's black share (#1748; kept the placeholder) |
+| A gradient clipped to an area: its strips under `R2_XORPEN`, the area filled black, the strips again | PowerPoint WMF of a gradient area chart | The strips inside the area, the destination outside | The clipped gradient | The strips through an SVG mask of the area (#1748; kept the placeholder) |
+| Equation text as glyph indices (Cambria Math) | Word EMF of an equation | The font's glyphs | Drawn | Keeps the placeholder (see below) |
 
 ```text
 EMR_STRETCHDIBITS  dest (4925,92) 1151×817  src 576×409  BI_RGB 1 bpp   rop 0x00EE0086 (SRCPAINT)
@@ -7942,6 +7943,45 @@ pixel whose result does not read the destination is drawn or left transparent, a
 does is exact only where the bitmap drawn just before, to the same rectangle, left the destination
 known. The fixtures under `TestFiles/Metafiles/office-*` are corpus files; their README records how
 each was written.
+
+### Inversions, palette brushes and glyph indices (#1748)
+
+The semi-transparent fill and the clipped gradient are one GDI idiom: content XORed onto the
+destination (`R2_XORPEN`, or a PATINVERT blit with a solid brush), a mask painted black, and the
+same content XORed again. Where the mask is black the result is the content; elsewhere the passes
+cancel, whatever lay beneath:
+
+```text
+EMR_BITBLT              (167,167) 3334×938  rop 0x005A0049 (PATINVERT), solid brush #ccd2d8
+EMR_SETROP2             R2_MASKPEN
+EMR_CREATEDIBPATTERNBRUSHPT  8×8, 1 bpp, colour table black, white   (58 of 64 pixels black)
+EMR_FILLPATH            the rounded rectangle
+EMR_SETROP2             R2_COPYPEN
+EMR_BITBLT              (167,167) 3334×938  rop 0x005A0049 (PATINVERT)
+```
+
+The pattern's black share is the alpha the dither stands for. Across the corpus it matched the EMF+
+fill of the same shape: 58/64 = 0.906 against EMF+ alpha 0xE6 (0.902), and 32/64 against 0x80.
+Word 2024's PDF export of the corpus document shows it renders the idiom the same way: it fills
+the EMF version with `ca 0.90196` (the EMF+ alpha) and the WMF version, which has no EMF+, with
+`ca 0.90588`, which is 231/255, the dither's 58/64. Its filtered-HTML PNGs looked greyer only
+because they blend translucent pixels with a grey matte before storing their alpha. Docxodus draws
+the content once through an SVG `mask` whose coverage is that share. Chromium draws nothing through
+a mask whose region is ±10⁹ units, so the region is the drawing's bounds.
+
+Pattern brushes that are not in RGB colours, checked by having GDI record and play its own
+metafiles: a monochrome brush (`CreatePatternBrush` with a one-bit bitmap, recorded as
+`EMR_CREATEMONOBRUSH` with `DIB_PAL_INDICES` and no colour table, or in a WMF as
+`META_DIBCREATEPATTERNBRUSH` with `BS_PATTERN` and a black and white table) paints 0 bits in the
+text colour and 1 bits in the background colour. A `DIB_PAL_COLORS` brush keeps its WORD palette
+indexes, packed in an EMF and in four-byte slots in a WMF, and plays through the default palette
+(index 1 #800000, 4 #000080). Docxodus does the same, and refuses palette indexes once the
+metafile selects its own palette.
+
+The equation preview's only glyph-index run is one glyph, 958 in Cambria Math, which that font's
+`cmap` on the test machine maps to U+221A (√). The file does not carry the character, the
+glyph-to-character map is in the font build alone, and a browser cannot draw a glyph by its index,
+so the picture keeps its placeholder.
 
 ## Missing-font classes differ from native font selection (#1574)
 

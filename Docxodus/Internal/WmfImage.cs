@@ -104,15 +104,19 @@ internal static class WmfImage
                     break;
                 }
                 case 0x01f9: Store(table, new Brush("none", Pattern: true)); break; // CREATEPATTERNBRUSH
-                case 0x0142: // DIBCREATEPATTERNBRUSH: only a BS_DIBPATTERN in RGB colours can be drawn
-                {
+                case 0x0142: // DIBCREATEPATTERNBRUSH: BS_DIBPATTERNPT in RGB colours or palette indexes, or BS_PATTERN
+                {            // (monochrome, whatever its colour table says)
                     Need(2);
                     var dib = bytes.AsSpan(start + 4, parameters - 4);
-                    int info = W(0) == 5 && W(1) == 0 ? DibImage.InfoSize(dib) : -1;
+                    DibImage.Colours? colours = (W(0), W(1)) switch { (5, 0) => DibImage.Colours.Rgb,
+                        (5, 1) => DibImage.Colours.PaletteIndexes, (3, _) => DibImage.Colours.Monochrome, _ => null };
+                    // GDI writes palette indexes in four-byte slots, as it would RGB colours.
+                    int info = colours != null ? DibImage.InfoSize(dib) : -1;
                     if (info > dib.Length) throw new InvalidDataException("Truncated WMF pattern brush.");
-                    Store(table, info < 0 ? new Brush("none", Pattern: true) : canvas.PatternBrush(dib[..info], dib[info..]));
+                    Store(table, colours is not { } source ? new Brush("none", Pattern: true) : canvas.PatternBrush(dib[..info], dib[info..], source));
                     break;
                 }
+                case 0x0234: canvas.SelectPalette(stock: false); break; // SELECTPALETTE
                 case 0x00f7 or 0x06ff: Store(table, new OtherObject()); break; // CREATEPALETTE, CREATEREGION
                 case 0x012d or 0x01f0: // SELECTOBJECT, DELETEOBJECT
                 {
@@ -202,7 +206,7 @@ internal static class WmfImage
                 }
                 case 0x061d: // PATBLT
                     Need(6);
-                    Fill(canvas, U32(bytes, start), P(5), P(4), P(3), P(2));
+                    canvas.PatternBlit(U32(bytes, start), P(5), P(4), (double)P(5) + P(3), (double)P(4) + P(2));
                     break;
                 case 0x0f43: // STRETCHDIB
                     Need(11);
@@ -216,7 +220,7 @@ internal static class WmfImage
                     {
                         Need(stretch ? 11 : 9);
                         int o = stretch ? 7 : 5;
-                        Fill(canvas, U32(bytes, start), P(o + 3), P(o + 2), P(o + 1), P(o));
+                        canvas.PatternBlit(U32(bytes, start), P(o + 3), P(o + 2), (double)P(o + 3) + P(o + 1), (double)P(o + 2) + P(o));
                         break;
                     }
                     int d = stretch ? 10 : 8;
@@ -244,7 +248,7 @@ internal static class WmfImage
                     break;
                 case 0x020d or 0x020e or 0x0211 or 0x0412:
                     // Viewport records: the placeable header already fixes the device box.
-                case 0x0105 or 0x0107 or 0x0231 or 0x0234 or 0x0035 or 0x0037 or 0x0139 or 0x0436 or 0x0626:
+                case 0x0105 or 0x0107 or 0x0231 or 0x0035 or 0x0037 or 0x0139 or 0x0436 or 0x0626:
                     // Relabs, stretch mode, mapper flags, palettes and escapes do not change the SVG we draw.
                     break;
                 default:
@@ -280,13 +284,6 @@ internal static class WmfImage
             offset += length;
         }
         return emf != null && filled == emf.Length ? emf : null;
-    }
-
-    private static void Fill(MetafileCanvas canvas, uint rop, int x, int y, int width, int height)
-    {
-        string? color = rop switch { 0x00F00021 => null, 0x00000042 => "#000000", 0x00FF0062 => "#ffffff",
-            0x00AA0029 => "", _ => throw new NotSupportedException("Unsupported WMF raster operation.") };
-        if (color != "") canvas.FillRectangle(x, y, (double)x + width, (double)y + height, color);
     }
 
     private static void Blit(MetafileCanvas canvas, uint rop, int usage, int x, int y, int width, int height,
