@@ -561,8 +561,27 @@ before invoking that callback, identically in native and WASM builds:
   destination as it was. A pixel whose result reads the destination is exact only where the bitmap
   drawn just before, to the same rectangle, left it known, and the two merge into one PNG; that is
   how GDI draws a transparent bitmap (a monochrome mask, then the image). Hatches and DIB pattern
-  brushes (in RGB colours) tile from the device origin in CSS pixels, as GDI tiles them in the
-  pixels of the device it plays onto. Symbol, Wingdings and Webdings text is mapped to Unicode
+  brushes tile from the device origin in CSS pixels, as GDI tiles them in the pixels of the device
+  it plays onto. A DIB brush takes its colours from its RGB colour table, or from the default
+  palette when they are palette indexes (DIB_PAL_COLORS); a monochrome brush (CREATEMONOBRUSH, WMF
+  BS_PATTERN) paints its 0 bits in the text colour and its 1 bits in the background colour current
+  at the fill. A metafile that selects its own palette cannot fill with palette indexes.
+- Inversions, GDI's way to paint through a mask without reading the destination, which Office's
+  GDI fallback uses for semi-transparent fills and to clip a gradient to a shape: content XORed on
+  (R2_XORPEN, or a PATINVERT blit), the mask painted black (R2_MASKPEN with a black and white brush,
+  or black itself), and the same content XORed again. The canvas collects the two passes and the
+  mask apart from the drawing and, when the second pass repeats the first exactly, draws the content
+  once through an SVG `mask` whose coverage is the black share of what painted it. That share is
+  the alpha a dithered semi-transparent fill stands for (58 black pixels of 64 for Office's 90%
+  opacity), and the reference rendering uses the same alpha for a WMF that has no EMF+. Text or
+  bitmaps inside an inversion, a mask painted in another colour, R2_MASKPEN outside one, or an
+  inversion left unfinished still reject the picture.
+- GDI fills without antialiasing, so fills that share an edge tile exactly. A straight-edged fill
+  without an outline that shares an edge with the fill drawn just before it is drawn with
+  `shape-rendering="crispEdges"`, as is that one: Office draws a gradient as dozens of abutting
+  strips, and antialiased each lets the background through along its edges. Other fills keep
+  their smooth edges, as the reference rendering draws them.
+- Symbol, Wingdings and Webdings text is mapped to Unicode
   through `SymbolFontMapper`. Consecutive EXCLUDECLIPRECTs made before anything is drawn under them
   cut holes in one `clipPath`. A path bracket takes the transform of its first figure, since GDI
   converts each point to device space as it is added; a geometric pen strokes it only at that scale.
@@ -570,7 +589,8 @@ before invoking that callback, identically in native and WASM builds:
   EMF+-only file keeps the placeholder (no Office or Windows writer in the #1706 corpus produces
   one). Records that cannot change the drawing (stretch mode, ICM, palettes, mapper flags, other GDI
   comments, glyph-index text with no glyphs) are ignored, as are zero text spacing adjustments.
-  SETROP2 accepts R2_COPYPEN and R2_NOP, which draws nothing with the pen or brush.
+  SETROP2 accepts R2_COPYPEN, R2_NOP (which draws nothing with the pen or brush), and the R2_XORPEN
+  and R2_MASKPEN of an inversion.
 - WMF: the placeable header fixes the device box, and the window always maps onto it whatever
   the map mode (viewport records are ignored). Word's device-pixel endpoint exclusion for
   rectangles, ellipses and rounded rectangles is resolved in logical coordinates; window mapping
@@ -584,14 +604,14 @@ before invoking that callback, identically in native and WASM builds:
   artwork. Generated inline SVG retains the authored picture extent while allowing paint outside
   it. Cosmetic outlines use one CSS pixel (96 dpi); geometric outlines scale with the picture.
   This is browser playback, not a claim of matching a particular Word printer's hairline width.
-- Still unsupported, each rejecting the whole picture: EMF+-only files, monochrome and
-  palette-colour pattern brushes and pattern pens, palette colours, non-rectangle clip regions,
-  WMF clip regions other than the null one, OR/XOR/DIFF clip combinations, glyph-index text,
-  raster operations that read a destination not known from the bitmap before (including the
-  PATINVERT/R2_MASKPEN dithering Office uses for semi-transparent fills), RLE bitmaps and DIBs that
+- Still unsupported, each rejecting the whole picture: EMF+-only files, pattern pens, palette
+  colours, non-rectangle clip regions, WMF clip regions other than the null one, OR/XOR/DIFF clip
+  combinations, glyph-index text (a browser cannot draw a glyph by its index, and the file does not
+  carry the character), raster operations that read a destination not known from the bitmap or the
+  inversion before, RLE bitmaps and DIBs that
   wrap a JPEG or PNG (BI_JPEG/BI_PNG, whose header does not bound the real image), gradient fills,
   WIDENPATH, mirrored layouts, and any record not listed above. So do the states this player
-  would otherwise draw wrongly: a pen mode other than R2_COPYPEN or R2_NOP (SETROP2), non-zero
+  would otherwise draw wrongly: a pen mode other than those above (SETROP2), non-zero
   character extra or justification, text that advances the current position by its own width
   (TA_UPDATECP without a spacing array), ANSI text with bytes above ASCII in a font whose character
   set is not ANSI, DEFAULT or SYMBOL, symbol-font characters with no Unicode equivalent, text in

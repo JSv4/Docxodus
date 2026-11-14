@@ -103,6 +103,8 @@ internal sealed class MetafileCanvas
     private XElement target;
     private Inversion? inversion;
     private bool ownPalette;
+    /// <summary>The last outline-free straight-edged fill, its transform and its edges (see <see cref="Abut"/>).</summary>
+    private (XElement Element, Matrix M, HashSet<((double, double), (double, double))> Edges)? abutting;
     private readonly Dictionary<(DibImage.Bitmap, string, string), DibImage.Bitmap> monochrome = new();
     private readonly string idPrefix;
     private readonly double fixedDeviceWidth, fixedDeviceHeight, pixelsPerMmX, pixelsPerMmY, cssPixelX, cssPixelY;
@@ -461,7 +463,7 @@ internal sealed class MetafileCanvas
         var rect = new XElement(Svg + "rect", new XAttribute("x", N(left)), new XAttribute("y", N(top)),
             new XAttribute("width", N(right - left)), new XAttribute("height", N(bottom - top)));
         if (rx > 0 && ry > 0) rect.Add(new XAttribute("rx", N(rx)), new XAttribute("ry", N(ry)));
-        Shape(rect, true, true, Corners(left, top, right, bottom));
+        Shape(rect, true, true, Corners(left, top, right, bottom), polygon: rx <= 0 || ry <= 0);
     }
 
     internal void Ellipse(double left, double top, double right, double bottom)
@@ -556,7 +558,7 @@ internal sealed class MetafileCanvas
             throw new NotSupportedException("A metafile path is stroked at another scale than it was drawn.");
         if (fill) path.CloseOpenFigure();
         var element = new XElement(Svg + "path", new XAttribute("d", path.ToString()));
-        Shape(element, fill, outline, path.Points, bracketMatrix, path: true);
+        Shape(element, fill, outline, path.Points, bracketMatrix, path: true, polygon: path.Polygon);
     }
 
     /// <summary>SELECTCLIPPATH: RGN_AND (1) intersects, RGN_COPY (5) replaces.</summary>
@@ -913,11 +915,12 @@ internal sealed class MetafileCanvas
         build(path);
         if (path.Empty) return;
         var points = extra == null ? path.Points : path.Points.Concat(extra).ToList();
-        Shape(new XElement(Svg + "path", new XAttribute("d", path.ToString())), true, true, points, path: true);
+        Shape(new XElement(Svg + "path", new XAttribute("d", path.ToString())), true, true, points, path: true, polygon: path.Polygon);
     }
 
+    /// <param name="polygon"><paramref name="logical"/> lists the vertices of one straight-edged figure, in order.</param>
     private void Shape(XElement element, bool fill, bool outline, IReadOnlyList<(double X, double Y)> logical,
-        Matrix? transform = null, bool path = false, bool flush = true)
+        Matrix? transform = null, bool path = false, bool flush = true, bool polygon = false)
     {
         if (state.Mix == Mix.Nop) return;
         // Between an inversion's passes the pen and brush paint its mask, in white for the black they paint.
@@ -939,11 +942,33 @@ internal sealed class MetafileCanvas
             if (pen.Dashes != null) element.Add(new XAttribute("stroke-dasharray", pen.Dashes));
             if (pen.Cosmetic) element.Add(new XAttribute("vector-effect", "non-scaling-stroke"));
         }
-        else element.Add(new XAttribute("stroke", "none"));
+        else
+        {
+            element.Add(new XAttribute("stroke", "none"));
+            if (polygon && ((string?)element.Attribute("fill"))?.StartsWith('#') == true) Abut(element, logical, m);
+        }
         SetTransformAttribute(element, m);
         double pad = outline ? PenPad(m) : 0;
         foreach (var (x, y) in logical) Track(m, x, y, pad);
         Add(element);
+    }
+
+    /// <summary>GDI fills without antialiasing, so fills that share an edge tile exactly; antialiased, each lets the
+    /// background through along that edge, and Office draws a gradient as dozens of abutting strips. A fill that
+    /// shares an edge with the fill drawn just before it is drawn crisp, as is that one. A fill alone keeps its
+    /// smooth edges, as the reference rendering draws them.</summary>
+    private void Abut(XElement element, IReadOnlyList<(double X, double Y)> vertices, Matrix m)
+    {
+        var edges = new HashSet<((double, double), (double, double))>();
+        for (int i = 0; i < vertices.Count; i++)
+        {
+            var (a, b) = (vertices[i], vertices[(i + 1) % vertices.Count]);
+            if (a != b) edges.Add(a.CompareTo(b) < 0 ? (a, b) : (b, a));
+        }
+        if (abutting is { } last && last.M == m && Container().LastNode == last.Element && edges.Overlaps(last.Edges))
+            foreach (var shape in new[] { last.Element, element })
+                if (shape.Attribute("shape-rendering") == null) { Spend(30); shape.Add(new XAttribute("shape-rendering", "crispEdges")); }
+        abutting = (element, m, edges);
     }
 
     private string Fill(Brush brush, Matrix m)
@@ -1112,8 +1137,9 @@ internal sealed class MetafileCanvas
     /// <summary>How much the transform scales lengths (exactly, for a uniform scale and rotation).</summary>
     private static double Scale(Matrix m) => Math.Sqrt(Math.Abs(m.Determinant));
 
+    /// <summary>A box's corners in order around it.</summary>
     private static (double X, double Y)[] Corners(double left, double top, double right, double bottom)
-        => new[] { (left, top), (right, bottom), (left, bottom), (right, top) };
+        => new[] { (left, top), (right, top), (right, bottom), (left, bottom) };
 
     private static void Order(ref double low, ref double high) { if (high < low) (low, high) = (high, low); }
 
@@ -1130,7 +1156,11 @@ internal sealed class MetafileCanvas
         internal readonly List<(double X, double Y)> Points = new();
         internal bool Open;
         internal (double X, double Y) Start;
+        private int figures;
+        private bool curved;
         internal bool Empty => data.Length == 0;
+        /// <summary>One figure of straight lines, whose points are its vertices in order.</summary>
+        internal bool Polygon => figures == 1 && !curved;
 
         /// <summary>Starts a figure at the current position unless one is already open.</summary>
         internal void Continue(double x, double y) { if (!Open) Op('M', x, y); }
@@ -1144,11 +1174,13 @@ internal sealed class MetafileCanvas
                 data.Append(N(xy[i])).Append(' ').Append(N(xy[i + 1]));
                 Points.Add((xy[i], xy[i + 1]));
             }
-            if (op == 'M') { Open = true; Start = (xy[0], xy[1]); }
+            if (op == 'M') { Open = true; Start = (xy[0], xy[1]); figures++; }
+            curved |= op == 'C';
         }
 
         internal void Arc(double rx, double ry, bool large, bool positive, double x, double y)
         {
+            curved = true;
             data.Append('A').Append(N(rx)).Append(' ').Append(N(ry)).Append(" 0 ").Append(large ? '1' : '0')
                 .Append(' ').Append(positive ? '1' : '0').Append(' ').Append(N(x)).Append(' ').Append(N(y));
             Points.Add((x, y));

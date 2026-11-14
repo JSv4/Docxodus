@@ -235,6 +235,22 @@ public class MetafileRendererTests
         Assert.Equal(2, svg.Descendants(Svg + "rect").Count());
     }
 
+    [Fact]
+    public void FillsThatShareAnEdgeWithTheFillBeforeThemAreDrawnCrisp()
+    {
+        // Office draws a gradient as abutting strips, which GDI fills without antialiasing; antialiased, the
+        // background shows along each shared edge.
+        byte[] Strip(short top) => R(86, 0, 0, 0, 0, 4, Pack16(0, top, 10, top, 10, (short)(top + 5), 0, (short)(top + 5)));
+        var noPen = R(37, unchecked((int)0x80000008));
+        Assert.Equal(new[] { "crispEdges", "crispEdges", "crispEdges" },
+            Elements(Emf(noPen, Strip(0), Strip(5), Strip(10)), "path").Select(e => (string?)e.Attribute("shape-rendering")));
+        // Controls: a fill alone, fills apart, outlined fills and curved ones sharing a radius keep smooth edges.
+        Assert.Null(Single(Emf(noPen, Strip(0)), "path").Attribute("shape-rendering"));
+        foreach (var emf in new[] { Emf(noPen, Strip(0), Strip(6)), Emf(Strip(0), Strip(5)),
+            Emf(noPen, R(47, 0, 0, 10, 10, 10, 5, 5, 0), R(47, 0, 0, 10, 10, 5, 0, 0, 5)) })
+            Assert.All(Elements(emf, "path"), e => Assert.Null(e.Attribute("shape-rendering")));
+    }
+
     // ---- Inversions ----------------------------------------------------------------------------
 
     /// <summary>Office's semi-transparent fill: PATINVERT a solid brush, fill the shape with a black and white
@@ -255,6 +271,9 @@ public class MetafileRendererTests
         var shape = Assert.Single(mask.Elements(Svg + "path"));
         Assert.Equal(("M0 0L10 0L10 10Z", "#ffffff", "0.75"),
             ((string?)shape.Attribute("d"), (string?)shape.Attribute("fill"), (string?)shape.Attribute("fill-opacity")));
+        // The region is the drawing's bounds and two CSS pixels: Chromium draws nothing through a far larger one.
+        Assert.Equal(new[] { -1.693, -1.693, 23.387, 13.387 }, new[] { "x", "y", "width", "height" }
+            .Select(name => Math.Round(double.Parse((string)mask.Attribute(name)!, System.Globalization.CultureInfo.InvariantCulture), 3)));
         var content = Assert.Single(svg.Descendants(Svg + "g"), g => g.Attribute("mask") != null);
         Assert.Equal($"url(#{(string?)mask.Attribute("id")})", (string?)content.Attribute("mask"));
         var rect = Assert.Single(content.Elements());
