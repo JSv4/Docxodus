@@ -333,14 +333,20 @@ door:
 body's ids. A move's `w:name` and its `MoveGroupId` therefore identify one move in the whole document;
 relocation ids continue above them.
 
-**Edited-move markup boundary.** A `MoveModifyBlock` remains rich in the edit-script and revisions
-surfaces: its destination carries the token diff describing the edit within the relocation. Produced
-OOXML deliberately does not nest that token diff inside the move range. It emits the complete left
-paragraph as `w:moveFrom` and the complete right paragraph as `w:moveTo`, paired by `w:name`. Word-class
-consumers process ordinary `w:ins`/`w:del` nested among destination `w:moveTo` fragments as independent
-revisions; Reject All can therefore restore a nested deletion after rejecting the destination move and
-leave an orphaned old word. Complete move halves make accept/reject atomic while preserving the detailed
-change in the non-markup APIs (issue #359).
+**Edited-move markup.** A `MoveModifyBlock`'s destination carries the token diff describing the edit
+within the relocation, and both halves of a moved-and-edited paragraph are drawn from it
+(`IrMarkupRenderer.EditedMoveContent`, issue #1716). The text the two versions share is the moved text:
+each stretch of it between two edits is `w:moveFrom`/`w:moveTo` in a move range of its own, every range
+under the move's one `w:name`. The edit is ordinary revisions outside every range: removed text is
+`w:del` at the source, added text `w:ins` at the destination, and a format change the destination's
+`w:rPrChange`. Text in a hyperlink that holds an edit is part of the edit, so no range sits inside a link.
+The rules come from Word's reject (see `docs/ooxml_corner_cases.md`, "Rejecting a moved and edited
+paragraph"): it carries each destination range's moved text back to the source range it pairs with in
+order, ignoring what `w:moveFrom` holds, so the two halves must hold the same text in the same number of
+ranges. The destination never holds deleted text, which a consumer that rejects a nested deletion on its
+own leaves behind (issue #359). Each block list indexes its move halves before it renders
+(`RenderState.IndexEditedMoves`), so either half can find the other; a pair that cannot be resolved, a
+moved table and an exact move are drawn whole, under one range per half.
 
 **Footnote/endnote structural fidelity.** The `noteOps` carry per-note block diffs that the markup renderer applies *inside* the produced footnotes/endnotes part, after which `IrMarkupRenderer.RenumberNoteIds` re-sequences every reference + definition into body-reference document order (mirroring `WmlComparer`'s `ChangeFootnoteEndnoteReferencesToUniqueRange`). The invariants this path guarantees — verified by `DocxDiffScenarioTests.Scenario_PreservesFootnoteStructure` (every edit×feature scenario) and `DocxDiffFootnoteRobustnessTests`, with a headless-LibreOffice load backstop:
 - **Definition ids are unique** and every body reference resolves to exactly one definition. A `continuationNotice` (or any typed) reserved note at a *positive* id keeps its id and leads the part; real notes renumber to a range disjoint from the kept reserved ids (the counter seeds above the highest positive reserved id), so a reserved note never collides with a renumbered real note.

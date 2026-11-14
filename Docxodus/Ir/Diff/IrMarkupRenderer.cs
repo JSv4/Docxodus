@@ -889,6 +889,7 @@ internal static partial class IrMarkupRenderer
         IEnumerable<IrEditOp> ops, RenderState state, List<XElement> sink)
     {
         var opList = ops as IReadOnlyList<IrEditOp> ?? ops.ToList();
+        state.IndexEditedMoves(opList);
         var pendingInserts = new List<IrEditOp>();
         var pendingDeletes = new List<IrEditOp>();
 
@@ -1533,11 +1534,11 @@ internal static partial class IrMarkupRenderer
                 // delete-here + insert-there pair: the SOURCE op (left anchor) emits a whole-block del, the
                 // DESTINATION op (right anchor) a whole-block ins. With move rendering ON, emit NATIVE move
                 // markup: source → moveFromRange + w:moveFrom; destination → moveToRange + w:moveTo.
-                // A MoveModify uses the COMPLETE left and right paragraphs for those halves. Its token diff
-                // remains available through the edit-script and revisions surfaces, but fragmenting the moveTo
-                // around nested ins/del is not interoperable: office consumers reject those nested revisions
-                // independently and can leave deleted destination text behind (issue #359). Both halves share
-                // a deterministic w:name keyed by MoveGroupId.
+                // A MoveModify paragraph moves only the text its two sides share; its edit is a deletion at the
+                // source and an insertion at the destination, outside the move ranges (MarkMoveHalf, issue
+                // #1716). The destination never holds deleted text, which a consumer rejecting a nested deletion
+                // separately would leave behind (issue #359). Both halves share a deterministic w:name keyed by
+                // MoveGroupId.
                 if (!state.Settings.RenderMoves)
                 {
                     if (op.IsMoveSource == true)
@@ -2732,6 +2733,7 @@ internal static partial class IrMarkupRenderer
                         (b.LeftAnchor, Marker: new IrEqualReviewerMarkers(c.Reviewer, b.RightAnchor!, c.Author))))
                         .ToLookup(c => c.LeftAnchor, c => c.Marker) : null;
                 var cellSink = new List<XElement>();
+                state.IndexEditedMoves(blockOps.Select(block => block.Op));
                 for (int b = 0; b < blockOps.Count; b++)
                 {
                     if (cellMarkers?.GetValueOrDefault(b) is { } before)
@@ -5473,10 +5475,9 @@ internal static partial class IrMarkupRenderer
             : null;
 
     /// <summary>
-    /// Emit the SOURCE half of a move: the LEFT paragraph bracketed by <c>w:moveFromRangeStart</c>/
-    /// <c>w:moveFromRangeEnd</c> (sharing one range id + the group's <c>w:name</c>) with every run wrapped in
-    /// <c>w:moveFrom</c> and the paragraph mark marked deleted. Accept removes the moved-from content (it
-    /// relocated); reject restores it. Mirrors <c>WmlComparer</c>'s emission.
+    /// Emit the SOURCE half of a move: the LEFT paragraph with its moved text wrapped in <c>w:moveFrom</c> inside
+    /// move ranges named for the group (<see cref="MarkMoveHalf"/>) and the paragraph mark marked deleted. Accept
+    /// removes the moved-from content (it relocated); reject restores it.
     /// </summary>
     private static void EmitMoveSource(IrEditOp op, RenderState state, List<XElement> sink)
     {
@@ -5500,18 +5501,14 @@ internal static partial class IrMarkupRenderer
             StampOriginalNumberingMarker(
                 para, movedParagraph.List, movedParagraph.ResolvedListMarker, state);
         }
-        MarkWholeParagraphAs(para, RevKind.MoveFrom, state);
-        BracketParagraphWithMoveRange(para, isFrom: true, state.MoveName(gid), state);
+        MarkMoveHalf(para, gid, isFrom: true, state);
         sink.Add(para);
     }
 
     /// <summary>
-    /// Emit the DESTINATION half of a move: the complete RIGHT paragraph bracketed by
-    /// <c>w:moveToRangeStart</c>/<c>w:moveToRangeEnd</c>, with every run wrapped in <c>w:moveTo</c> and the
-    /// paragraph mark marked moved-to. This atomic shape is required for both <see cref="IrEditOpKind.MoveBlock"/>
-    /// and <see cref="IrEditOpKind.MoveModifyBlock"/>. The latter's token diff remains part of the edit-script and
-    /// revisions surfaces; nesting ordinary <c>w:ins</c>/<c>w:del</c> inside the destination move range makes
-    /// office consumers reject the nested changes separately and can strand old text at the destination.
+    /// Emit the DESTINATION half of a move: the RIGHT paragraph with its moved text wrapped in <c>w:moveTo</c>
+    /// inside move ranges named for the group (<see cref="MarkMoveHalf"/>) and the paragraph mark marked
+    /// inserted.
     /// </summary>
     private static void EmitMoveDestination(IrEditOp op, RenderState state, List<XElement> sink)
     {
@@ -5526,14 +5523,116 @@ internal static partial class IrMarkupRenderer
             EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
             return;
         }
-        string moveName = state.MoveName(gid);
-
         var dest = StripUnids(new XElement(src));
         state.RegisterMediaReferences(dest);
         BindChangedDefaultParagraphStyle(dest, state);
-        MarkWholeParagraphAs(dest, RevKind.MoveTo, state);
-        BracketParagraphWithMoveRange(dest, isFrom: false, moveName, state);
+        MarkMoveHalf(dest, gid, isFrom: false, state);
         sink.Add(dest);
+    }
+
+    /// <summary>
+    /// Mark the run content of one half of a moved paragraph. A moved-and-edited paragraph is redrawn from its
+    /// pair's token diff (<see cref="EditedMoveContent"/>); any other moved paragraph is moved whole, under one
+    /// range.
+    /// </summary>
+    private static void MarkMoveHalf(XElement para, int gid, bool isFrom, RenderState state)
+    {
+        var kind = isFrom ? RevKind.MoveFrom : RevKind.MoveTo;
+        if (EditedMoveContent(gid, isFrom, state) is { } content)
+        {
+            para.Elements().Where(e => e.Name != W.pPr).Remove();
+            para.Add(content);
+            MarkParagraphMark(para, kind, state);
+            return;
+        }
+        MarkWholeParagraphAs(para, kind, state);
+        BracketParagraphWithMoveRange(para, isFrom, state.MoveName(gid), state);
+    }
+
+    /// <summary>
+    /// The run content of one half of a moved-and-edited paragraph (issue #1716), or null when the move is not
+    /// one or a half cannot be resolved, which moves the paragraph whole. Both halves walk the pair's token diff
+    /// as an in-place edit is drawn. The text the two sides share is the moved text: each stretch of it between
+    /// two edits is wrapped <c>w:moveFrom</c>/<c>w:moveTo</c> in a move range of its own, all under the group's
+    /// one <c>w:name</c>. The edits are ordinary revisions outside every range: the removed text is deleted at
+    /// the source and the added text inserted at the destination. A format change is the destination run's
+    /// <c>w:rPrChange</c>.
+    /// <para>The two halves therefore hold the same moved text, in the same ranges. Word rejects a move by
+    /// carrying each destination range's moved text back to the source range it pairs with in order, and
+    /// ignores what <c>w:moveFrom</c> holds: halves holding the complete old and new paragraphs rejected to the
+    /// revised wording and formatting.</para>
+    /// </summary>
+    private static List<XElement>? EditedMoveContent(int gid, bool isFrom, RenderState state)
+    {
+        if (state.EditedMoveHalf(gid, source: true)?.LeftAnchor is not { } leftAnchor ||
+            state.EditedMoveHalf(gid, source: false) is not { RightAnchor: { } rightAnchor, TokenDiff: { } diff } ||
+            SourceElement(leftAnchor, state.Left) is not { } leftPara || leftPara.Name != W.p ||
+            SourceElement(rightAnchor, state.RightSource) is not { } rightPara || rightPara.Name != W.p)
+            return null;
+
+        var leftRuns = new SourceRunModel(leftPara);
+        var rightRuns = new SourceRunModel(rightPara);
+        var leftTokens = ParagraphRenderTokens(leftAnchor, state.Left, state.Settings);
+        var rightTokens = ParagraphRenderTokens(rightAnchor, state.RightSource, state.Settings);
+        // An equal span whose raw text differs (an NBSP against a space) is a deletion plus an insertion.
+        bool Shares(IrTokenOp op) => op.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged &&
+            RawSpanText(leftTokens, op.LeftStart, op.LeftEnd) == RawSpanText(rightTokens, op.RightStart, op.RightEnd);
+        // Move ranges are paragraph-level: Word loses an edit beside a range inside a hyperlink, and a link split at
+        // the ranges would not accept or reject to one link. So shared text is cut at hyperlink edges, and the text
+        // of a hyperlink that holds an edit, on either side, is part of the edit.
+        XElement? LinkAt(int token) =>
+            leftRuns.HyperlinksIn(leftTokens[token].StartChar, leftTokens[token].EndChar).FirstOrDefault();
+        IEnumerable<IrTokenOp> CutAtLinks(IrTokenOp op)
+        {
+            for (int start = op.LeftStart, end; start < op.LeftEnd; start = end)
+            {
+                var link = LinkAt(start);
+                for (end = start + 1; end < op.LeftEnd && LinkAt(end) == link; end++) { }
+                int shift = op.RightStart - op.LeftStart;
+                yield return op with { LeftStart = start, LeftEnd = end, RightStart = start + shift, RightEnd = end + shift };
+            }
+        }
+        var ops = CoalesceTokenOpsWordShaped(
+                diff.Ops, leftTokens, rightTokens, state.Settings.FormatComparison, leftRuns, rightRuns)
+            .SelectMany(op => Shares(op) ? CutAtLinks(op) : new[] { op }).ToList();
+        var spans = ops.Select(op => (Left: LeftSpanPositions(leftTokens, op), Right: RightSpanPositions(rightTokens, op)))
+            .ToList();
+        IEnumerable<XElement> Links(int i) => leftRuns.HyperlinksIn(spans[i].Left.Start, spans[i].Left.End)
+            .Concat(rightRuns.HyperlinksIn(spans[i].Right.Start, spans[i].Right.End));
+        var edited = Enumerable.Range(0, ops.Count).Where(i => !Shares(ops[i])).SelectMany(Links).ToHashSet();
+        var shared = Enumerable.Range(0, ops.Count).Select(i => Shares(ops[i]) && !Links(i).Any(edited.Contains)).ToArray();
+
+        var moved = isFrom ? RevKind.MoveFrom : RevKind.MoveTo;
+        var content = new List<XElement>();
+        XElement? rangeEnd = null;
+        for (int i = 0; i < ops.Count; i++)
+        {
+            var op = ops[i];
+            var ((ls, le), (rs, re)) = spans[i];
+            if (!shared[i])
+            {
+                if (rangeEnd is not null)
+                    content.Add(rangeEnd);
+                rangeEnd = null;
+                if (isFrom && op.LeftEnd > op.LeftStart)
+                    content.AddRange(leftRuns.Slice(ls, le).SelectMany(r => WrapFieldAware(r, RevKind.Del, state)));
+                else if (!isFrom && op.RightEnd > op.RightStart)
+                    content.AddRange(rightRuns.Slice(rs, re).SelectMany(r => WrapFieldAware(r, RevKind.Ins, state)));
+                continue;
+            }
+            if (rangeEnd is null)
+            {
+                (var rangeStart, rangeEnd) = CreateMoveRange(isFrom, state.MoveName(gid), state);
+                content.Add(rangeStart);
+            }
+            var runs = isFrom ? leftRuns.Slice(ls, le)
+                : op.Kind == IrTokenOpKind.FormatChanged ? FormatChangedRuns(leftRuns, ls, le, rs, re, rightRuns.Slice, state)
+                : rightRuns.Slice(rs, re);
+            content.AddRange(runs.SelectMany(r => WrapFieldAware(r, moved, state)));
+        }
+        if (rangeEnd is not null)
+            content.Add(rangeEnd);
+        return CoalesceAdjacentHyperlinks(content);
     }
 
     /// <summary>Wrap every run-level child of a paragraph in the given move/revision kind (like
@@ -6881,41 +6980,14 @@ internal static partial class IrMarkupRenderer
                     }
                     else if (tokenOp.Kind == IrTokenOpKind.FormatChanged)
                     {
-                        // Text-equal, FORMAT-differing: emit the RIGHT runs (accepted-state formatting) and stamp
-                        // each with a w:rPrChange carrying the LEFT (old) modeled rPr. Accept drops the rPrChange
-                        // (keeps right format); reject swaps the run's rPr to the rPrChange's inner rPr (restores
-                        // the left format). The old rPr is rebuilt from the LEFT run's rPr at the aligned position,
-                        // preserving modeled AND unmodeled left rPr. rawLeft == rawRight here, so the left/right
-                        // char spans carry identical text and left char lc aligns to right char rs + (lc - ls).
-                        //
-                        // The LEFT span may cross SOURCE-RUN boundaries whose formatting DIFFERS (e.g. a bold run
-                        // then an italic run) while the RIGHT is a single run. Stamping ONE rPrChange over the whole
-                        // span would restore only the FIRST left format on reject, silently losing the rest. So
-                        // split the right span at the LEFT-format boundaries: each sub-span carries one uniform old
-                        // rPr, so reject restores EVERY left region's original formatting. A left boundary at left
-                        // char lc maps to the right cut rs + (lc - ls). An empty boundary set (single left run, or
-                        // several runs with identical rPr) yields exactly one Slice(rs,re) call stamped with
-                        // the constant left rPr — byte-identical to the pre-split renderer.
-                        var boundaries = leftRuns.FormatBoundaries(ls, le);
-                        int subStart = rs;
-                        for (int bi = 0; bi <= boundaries.Count; bi++)
+                        var stamped = FormatChangedRuns(leftRuns, ls, le, rs, re, (start, end) =>
                         {
-                            int subEnd = bi < boundaries.Count ? rs + (boundaries[bi] - ls) : re;
-                            // Left format is uniform across the sub-span, so one RPrAtPosition at its start suffices.
-                            var oldRPr = leftRuns.RPrAtPosition(ls + (subStart - rs));
-                            var subSpan = StableSlice(subStart, subEnd);
+                            var subSpan = StableSlice(start, end);
                             representedMarkers.UnionWith(rightRuns.LastEmittedMarkerKeys);
-                            foreach (var r in subSpan)
-                            {
-                                // Only a w:r carries run formatting — bookmarks/zero-width markers pass through
-                                // untouched (stamping an rPr onto them is schema-invalid). A w:hyperlink wrapper
-                                // holds its w:r(s) one level down; stamp each contained run.
-                                foreach (var innerRun in RunsForFormatStamp(r))
-                                    ApplyRPrChange(innerRun, oldRPr, state);
-                                AddStableSpan(r);
-                            }
-                            subStart = subEnd;
-                        }
+                            return subSpan;
+                        }, state);
+                        foreach (var r in stamped)
+                            AddStableSpan(r);
                     }
                     else
                     {
@@ -7672,6 +7744,44 @@ internal static partial class IrMarkupRenderer
         runLevel.Name == W.r
             ? new[] { runLevel }
             : runLevel.Descendants(W.r);
+
+    /// <summary>
+    /// The RIGHT runs of a text-equal, FORMAT-differing span (accepted-state formatting), each stamped with a
+    /// <c>w:rPrChange</c> carrying the LEFT (old) rPr. Accept drops the rPrChange (keeps the right format); reject
+    /// swaps the run's rPr to the rPrChange's inner rPr (restores the left format). The old rPr is rebuilt from the
+    /// LEFT run's rPr at the aligned position, preserving modeled AND unmodeled left rPr. The span's raw text is
+    /// equal on both sides, so left char lc aligns to right char rs + (lc - ls).
+    /// <para>The LEFT span may cross SOURCE-RUN boundaries whose formatting DIFFERS (e.g. a bold run then an italic
+    /// run) while the RIGHT is a single run. Stamping ONE rPrChange over the whole span would restore only the FIRST
+    /// left format on reject, silently losing the rest. So the right span is split at the LEFT-format boundaries,
+    /// each sub-span sliced by <paramref name="slice"/> and stamped with its one uniform old rPr. An empty boundary
+    /// set (single left run, or several runs with identical rPr) yields exactly one slice of the whole span.</para>
+    /// </summary>
+    private static List<XElement> FormatChangedRuns(
+        SourceRunModel leftRuns, int ls, int le, int rs, int re, Func<int, int, List<XElement>> slice,
+        RenderState state)
+    {
+        var runs = new List<XElement>();
+        var boundaries = leftRuns.FormatBoundaries(ls, le);
+        int subStart = rs;
+        for (int bi = 0; bi <= boundaries.Count; bi++)
+        {
+            int subEnd = bi < boundaries.Count ? rs + (boundaries[bi] - ls) : re;
+            // Left format is uniform across the sub-span, so one RPrAtPosition at its start suffices.
+            var oldRPr = leftRuns.RPrAtPosition(ls + (subStart - rs));
+            foreach (var r in slice(subStart, subEnd))
+            {
+                // Only a w:r carries run formatting — bookmarks/zero-width markers pass through untouched
+                // (stamping an rPr onto them is schema-invalid). A w:hyperlink wrapper holds its w:r(s) one level
+                // down; stamp each contained run.
+                foreach (var innerRun in RunsForFormatStamp(r))
+                    ApplyRPrChange(innerRun, oldRPr, state);
+                runs.Add(r);
+            }
+            subStart = subEnd;
+        }
+        return runs;
+    }
 
     /// <summary>
     /// Stamp <paramref name="run"/> (a RIGHT-side run rebuilt over a FormatChanged span) with a
@@ -11248,6 +11358,23 @@ internal static partial class IrMarkupRenderer
         /// <summary>Every move-range name this render has generated through <see cref="MoveName"/>.</summary>
         public IReadOnlySet<string> GeneratedMoveNames => _generatedMoveNames;
 
+        private readonly Dictionary<(int Group, bool Source), IrEditOp> _editedMoveHalves = new();
+
+        /// <summary>Remember the two halves of each moved-and-edited paragraph of a block list, so that either half
+        /// can be drawn from the pair (<see cref="EditedMoveContent"/>). A move never leaves its block list, and
+        /// move group ids are unique across a render, so each list is indexed before it renders.</summary>
+        public void IndexEditedMoves(IEnumerable<IrEditOp> ops)
+        {
+            foreach (var op in ops)
+                if (op.Kind == IrEditOpKind.MoveModifyBlock && op.MoveGroupId is { } group &&
+                    op.IsMoveSource is { } source)
+                    _editedMoveHalves[(group, source)] = op;
+        }
+
+        /// <summary>The indexed source or destination op of a moved-and-edited paragraph, or null.</summary>
+        public IrEditOp? EditedMoveHalf(int group, bool source) =>
+            _editedMoveHalves.GetValueOrDefault((group, source));
+
         /// <summary>RIGHT-sourced clone roots that carry a footnote/endnote REFERENCE, bucketed by
         /// <see cref="RightSourceId"/> — the composite renderer's note-id rewrite pass walks these to remap
         /// each reviewer-sourced reference from that reviewer's id space to the base-anchored output space.
@@ -11652,6 +11779,11 @@ internal static partial class IrMarkupRenderer
         /// scheduled across both views before slicing; claimed source elements are emitted exactly once.
         /// Source runs and hyperlink shells are reconstructed around the selected children.</summary>
         public List<XElement> Slice(int start, int end) => Scan(start, end, claimOnlyKeys: null);
+
+        /// <summary>The source hyperlinks holding content in the rendering span [start, end), one per segment.</summary>
+        public IEnumerable<XElement> HyperlinksIn(int start, int end) =>
+            _segments.Where(s => s.Start < end && s.End > start && s.Chain.Count > 0 && s.Chain[0].Name == W.hyperlink)
+                .Select(s => s.Chain[0]);
 
         /// <summary>
         /// Mark as emitted, without emitting them, the always-kept markers of this side's span that the other side's

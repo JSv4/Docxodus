@@ -56,11 +56,11 @@ public class DocxDiffMoveDetectionTests
         Assert.Equal(Text(original.DocumentByteArray), Text(DocxDiffOps.RejectRevisions(redline.DocumentByteArray)));
     }
 
-    private static void AssertMoved(WmlDocument redline, string text, string? arrivedAs = null)
+    private static void AssertMoved(WmlDocument redline, string text)
     {
         var body = Body(redline.DocumentByteArray);
         Assert.Contains(body.Descendants(W.moveFrom), m => string.Concat(m.Descendants(W.t).Select(t => t.Value)) == text);
-        Assert.Contains(body.Descendants(W.moveTo), m => string.Concat(m.Descendants(W.t).Select(t => t.Value)) == (arrivedAs ?? text));
+        Assert.Contains(body.Descendants(W.moveTo), m => string.Concat(m.Descendants(W.t).Select(t => t.Value)) == text);
     }
 
     // ---- paragraphs ------------------------------------------------------------------------------
@@ -148,8 +148,15 @@ public class DocxDiffMoveDetectionTests
 
         var redline = DocxCompare.Compare(left, right);
 
-        // A moved-and-edited paragraph moves as complete halves: the original text leaves, the edited arrives.
-        AssertMoved(redline, A, arrivedAs: edited);
+        // A moved-and-edited paragraph moves the text both versions share, the same in both halves; the edited
+        // words are deleted at the source and inserted at the destination (issue #1716).
+        var body = Body(redline.DocumentByteArray);
+        string Moved(XName kind) => string.Concat(body.Descendants(kind).Descendants(W.t).Select(t => t.Value));
+        string Revised(XName kind) => string.Concat(body.Descendants(kind).Where(e => !e.Ancestors(W.pPr).Any())
+            .Descendants().Where(e => e.Name == W.t || e.Name == W.delText).Select(e => e.Value));
+        Assert.Equal(Moved(W.moveFrom), Moved(W.moveTo));
+        Assert.Contains("parties", Revised(W.del));
+        Assert.Contains("signatories", Revised(W.ins));
         AssertRoundTrip(left, right, redline);
     }
 

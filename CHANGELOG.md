@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Rejecting every change in a comparison of a paragraph that was both moved and edited now restores the original wording and formatting in Word (#1716). The redline put the paragraph's complete original text in its `w:moveFrom` and its complete revised text in its `w:moveTo`, and Word 2024 rejects a move by carrying the destination's moved text back to the source, so the rejected document read the revised paragraph in the original's place. A moved-and-edited paragraph now moves only the text both versions share, in one move range per stretch between edits, and its edit is an ordinary deletion at the source and insertion at the destination, outside the ranges; a format change is the destination's `w:rPrChange`. Text inside a hyperlink that holds an edit is part of that edit. This applies to `DocxDiff`, `DocxCompare` and `Consolidate`; Docxodus's own accept and reject give the same documents as before.
+
 ## [16.0.0] - 2026-11-13
 
 ### Added
