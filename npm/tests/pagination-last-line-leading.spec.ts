@@ -15,6 +15,8 @@ const bundle = fileURLToPath(new URL('../dist/pagination.bundle.js', import.meta
 const cases = [
   { name: 'a double-spaced line whose text does not fit stays off the page', multiple: 2, whole: 23, sparePt: 13, lines: 23 },
   { name: 'a double-spaced line needs only its text height', multiple: 2, whole: 23, sparePt: 15, lines: 24 },
+  // Compatibility mode 15 keeps a line's leading above a note band (#1751), not at the page foot.
+  { name: 'in mode 15 a double-spaced line at the page foot still needs only its text height', multiple: 2, whole: 23, sparePt: 15, lines: 24, mode: 15 },
   { name: 'a 1.5-spaced line needs only its text height', multiple: 1.5, whole: 31, sparePt: 15, lines: 32 },
   { name: 'a double-spaced paragraph fragment needs only its last text height', multiple: 2, whole: 23, sparePt: 15, lines: 24, long: true },
   { name: 'a long double-spaced paragraph keeps a line whose text does not fit off the page', multiple: 2, whole: 23, sparePt: 13, lines: 23, long: true },
@@ -26,7 +28,7 @@ const cases = [
 for (const entry of cases) test(`last line on a page: ${entry.name}`, async ({ page }) => {
   await page.setContent('<style>body{font:12pt/13.8pt "Liberation Serif","Times New Roman",serif}</style>');
   await page.addScriptTag({ path: bundle });
-  const lines = await page.evaluate(({ multiple, whole, sparePt, afterPt, long, centred }) => {
+  const lines = await page.evaluate(({ multiple, whole, sparePt, afterPt, long, centred, mode }) => {
     const natural = 13.8;
     const pitch = natural * multiple + (afterPt ?? 0);
     const height = whole * pitch + sparePt;
@@ -38,7 +40,7 @@ for (const entry of cases) test(`last line on a page: ${entry.name}`, async ({ p
     const body = long
       ? paragraph(Array.from({ length: 1400 }, (_, index) => `word${index + 1}`).join(' '))
       : Array.from({ length: whole * 2 + 5 }, (_, index) => paragraph(`Line ${index + 1} of the harbor log.`)).join('');
-    document.body.insertAdjacentHTML('beforeend', `<div id="staging"><section data-section-index="0"
+    document.body.insertAdjacentHTML('beforeend', `<div id="staging" data-docx-compatibility-mode="${mode ?? ''}"><section data-section-index="0"
       data-page-width="612" data-page-height="${height + 144}" data-content-width="468" data-content-height="${height}"
       data-margin-top="72" data-margin-bottom="72" data-margin-left="72" data-margin-right="72">${body}</section></div>
       <div id="container"></div>`);

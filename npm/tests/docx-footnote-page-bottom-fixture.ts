@@ -9,6 +9,8 @@ export interface FootnotePageBottomOptions {
   widowControl?: boolean;
   /** The note that runs to four lines instead of one. */
   longNote?: number;
+  /** `w:compatSetting w:name="compatibilityMode"`; unstated by default, which reads as mode 14 or earlier. */
+  compatibilityMode?: number;
 }
 
 /**
@@ -59,7 +61,10 @@ export function footnotePageBottomDocx(options: FootnotePageBottomOptions = {}):
     'word/styles.xml': `<w:styles xmlns:w="${W_NS}"><w:docDefaults><w:rPrDefault><w:rPr>
       <w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="20"/></w:rPr></w:rPrDefault>
       <w:pPrDefault><w:pPr><w:spacing w:after="0" w:line="278" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>`,
-    'word/settings.xml': `<w:settings xmlns:w="${W_NS}"><w:footnotePr><w:footnote w:id="-1"/><w:footnote w:id="0"/></w:footnotePr></w:settings>`,
+    'word/settings.xml': `<w:settings xmlns:w="${W_NS}"><w:footnotePr><w:footnote w:id="-1"/><w:footnote w:id="0"/></w:footnotePr>`
+      + (options.compatibilityMode === undefined ? '' : '<w:compat><w:compatSetting w:name="compatibilityMode"'
+        + ` w:uri="http://schemas.microsoft.com/office/word" w:val="${options.compatibilityMode}"/></w:compat>`)
+      + '</w:settings>',
     'word/footnotes.xml': `<w:footnotes xmlns:w="${W_NS}">${separator('separator', -1, '<w:separator/>')}`
       + `${separator('continuationSeparator', 0, '<w:continuationSeparator/>')}${notes.join('')}</w:footnotes>`,
     'word/document.xml': `<w:document xmlns:w="${W_NS}"><w:body>${body.join('')}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>
