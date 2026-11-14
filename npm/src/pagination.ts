@@ -1003,6 +1003,8 @@ export class PaginationEngine {
     tabIndex: string | null;
   }> = [];
   private footnoteLayoutLikeWord8 = false;
+  /** The document's `compatibilityMode` (`data-docx-compatibility-mode`); NaN when unstated. */
+  private compatibilityMode = NaN;
   private pendingFootnoteContinuation: FootnoteContinuation | null = null;
   /** Per-section `w:pgNumType` (start / format), read off the section wrappers. */
   private pageNumbering: Map<number, SectionPageNumbering> = new Map();
@@ -1275,6 +1277,7 @@ export class PaginationEngine {
     }
     this.footnoteLayoutLikeWord8 =
       this.stagingElement.dataset.footnoteLayoutLikeWord8 === "true";
+    this.compatibilityMode = Number(this.stagingElement.dataset.docxCompatibilityMode);
 
     // Find all section containers
     const sections = this.stagingElement.querySelectorAll<HTMLElement>(
@@ -3226,9 +3229,14 @@ export class PaginationEngine {
     return Number.isFinite(leading) ? pxToPt(leading) : 0;
   }
 
-  /** The height a block needs above the bottom of the page; see `MeasuredBlock.trailingLeadingPt`. */
-  private fitHeightPt(block: MeasuredBlock): number {
-    return Math.max(0, block.heightPt - (block.trailingLeadingPt ?? 0));
+  /**
+   * The height a block needs above the bottom of the page; see `MeasuredBlock.trailingLeadingPt`.
+   * Before compatibility mode 15 the leading may also run under a note band; from mode 15 the band
+   * clears the full line box, and only the page foot lets the leading run past (#1751).
+   */
+  private fitHeightPt(block: MeasuredBlock, aboveNotes = false): number {
+    const leading = aboveNotes && this.compatibilityMode >= 15 ? 0 : block.trailingLeadingPt ?? 0;
+    return Math.max(0, block.heightPt - leading);
   }
 
   /** The leading a block placed in `availablePt` lets run past: its last line fits only by its text height. */
@@ -4962,6 +4970,7 @@ export class PaginationEngine {
     preceding: readonly HTMLElement[] = [],
     relaxKeepLines = false,
     freshPage = false,
+    aboveNotes = false,
   ): MeasuredBlock[] | null {
     if (availableHeightPt <= effectiveMarginTopPt) return null;
     if (block.element.localName === "div" || block.element.dataset.paginationCommentGroup === "true") {
@@ -5021,7 +5030,7 @@ export class PaginationEngine {
       // note-aware split breaks only where a line starts: the citing line moves whole.
       const fits = (head: HTMLElement) => {
         const measured = this.measureElement(head, dims, block.sectionIndex, prefix);
-        return effectiveMarginTopPt + this.fitHeightPt(measured) <= headLimitPt
+        return effectiveMarginTopPt + this.fitHeightPt(measured, aboveNotes) <= headLimitPt
           && (!notesStart || notesStart(this.extractFootnoteRefs(head), measured.heightPt));
       };
       split = this.splitParagraphAtLargestFit(paragraph, fits, {
@@ -7353,12 +7362,13 @@ export class PaginationEngine {
       // bottom margin extends beyond the content area and is clipped by overflow:hidden.
       // It is still tracked in remainingHeight for correct margin collapsing with the next block.
       // A page's last line needs only its text height: its leading may run past the page foot
-      // (issue #1571) and, as Word lays pages out before compatibility mode 15, under the note band.
+      // (issue #1571) and, before compatibility mode 15, under the note band (#1751).
       // Under widow control Word lays a paragraph out whole beside the notes it brings, leading
       // included, as a citing head is measured (tryFragmentParagraph), so a paragraph whose notes do
       // not fit beside it breaks before the citing line (#1738).
+      const aboveNotes = currentFootnoteHeight > 0 || newFootnoteIds.length > 0;
       const ownHeight = newFootnoteIds.length > 0 && block.element.dataset.widowControl !== "false"
-        ? block.heightPt : this.fitHeightPt(block);
+        ? block.heightPt : this.fitHeightPt(block, aboveNotes);
       const requiredHeight = Math.max(ownHeight, block.frameExtentPt ?? 0);
       const blockSpace = effectiveMarginTop + requiredHeight + additionalFootnoteHeight;
 
@@ -7409,6 +7419,7 @@ export class PaginationEngine {
             && allBlockFootnoteIds.every(id => this.footnoteRegistry.has(id)),
           isFirstOnPage && currentFootnoteHeight === 0 && !currentContinuation
             && block.heightPt > freshBlockPageBodyHeight,
+          currentFootnoteHeight > 0,
         ) ?? this.tryFragmentTable(block, blockDimensions, effectiveRemainingHeight,
           effectiveMarginTop, headNotesStart);
         if (fragments) {
@@ -7475,6 +7486,8 @@ export class PaginationEngine {
               headNotesStart,
               pagePrefix(currentContent),
               block.keepLines && isFirstOnPage && currentFootnoteHeight === 0 && !currentContinuation,
+              false,
+              currentFootnoteHeight > 0,
             ) ?? this.tryFragmentTable(block, blockDimensions, effectiveRemainingHeight,
               effectiveMarginTop, headNotesStart);
             if (fragments) {
@@ -7560,7 +7573,7 @@ export class PaginationEngine {
                 const deferKeptEditorNote = !this.fragmentParagraphs
                   && firstPart instanceof this.view.HTMLElement && firstPart.dataset.keepLines === "true";
                 if (!deferKeptEditorNote
-                  && !(keptParagraph && Number(this.stagingElement.dataset.docxCompatibilityMode) >= 15)
+                  && !(keptParagraph && this.compatibilityMode >= 15)
                   && fits.length === 0 && !deferralCannotHelp
                   && this.splitFootnoteToFit(footnote, keptParagraph
                     ? nextPageMaxFootnoteArea - freshBlockHeight
