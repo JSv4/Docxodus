@@ -243,6 +243,48 @@ public class TableHorizontalPlacementTests
             .Where(e => e.Name.LocalName == "col").Select(e => Style(e)["width"]));
     }
 
+    // Issue #1750: Word drops grid columns that no row reaches and spreads the table's preferred
+    // width over the rest in proportion, which CSS's table layout does once they leave the colgroup.
+    [Theory]
+    [InlineData("<w:gridAfter w:val=\"2\"/>")]
+    [InlineData("<w:gridAfter w:val=\"2\"/><w:wAfter w:w=\"4000\" w:type=\"dxa\"/>")]
+    [InlineData("")] // the cells simply stop
+    public void Columns_no_own_row_reaches_leave_the_grid(string rowProps)
+    {
+        var html = Convert(ThreeOfFiveColumns(rowProps, rowProps), mode: "15");
+        Assert.Equal(new[] { "50pt", "125pt", "75pt" }, ColumnWidths(html));
+        Assert.Equal("450pt", Table(html)["width"]);
+    }
+
+    [Theory]
+    [InlineData("<w:gridAfter w:val=\"1\"/>", new[] { "50pt", "125pt", "75pt", "100pt" })]
+    [InlineData("", new[] { "50pt", "125pt", "75pt", "100pt", "100pt" })]
+    public void A_trailing_column_another_own_row_reaches_stays_in_the_grid(string lastRowProps, string[] widths)
+    {
+        var extra = lastRowProps == "" ? 2 : 1;
+        var html = Convert(ThreeOfFiveColumns("<w:gridAfter w:val=\"2\"/>", lastRowProps, extra), mode: "15");
+        Assert.Equal(widths, ColumnWidths(html));
+    }
+
+    // A fixed 450pt table on a 1000/2500/1500/2000/2000-twip grid whose two rows cover its first
+    // three columns; the second row has `secondRowExtraCells` more 2000-twip cells.
+    private static string ThreeOfFiveColumns(string rowProps, string secondRowProps, int secondRowExtraCells = 0)
+    {
+        static string Cell(int twips, string text) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"{twips}\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        static string Row(string props, string cells) =>
+            "<w:tr>" + (props == "" ? "" : $"<w:trPr>{props}</w:trPr>") + cells + "</w:tr>";
+        var cells = Cell(1000, "Quince") + Cell(2500, "Medlar") + Cell(1500, "Sloe");
+        return "<w:tbl><w:tblPr><w:tblW w:w=\"9000\" w:type=\"dxa\"/><w:tblLayout w:type=\"fixed\"/></w:tblPr><w:tblGrid>"
+            + string.Concat(new[] { 1000, 2500, 1500, 2000, 2000 }.Select(w => $"<w:gridCol w:w=\"{w}\"/>")) + "</w:tblGrid>"
+            + Row(rowProps, cells)
+            + Row(secondRowProps, cells + string.Concat(Enumerable.Repeat(Cell(2000, "Rowan"), secondRowExtraCells)))
+            + "</w:tbl>";
+    }
+
+    private static IEnumerable<string> ColumnWidths(XElement html) =>
+        html.Descendants().Where(e => e.Name.LocalName == "col").Select(e => Style(e)["width"]);
+
     [Fact]
     public void Floating_table_is_not_pulled_out()
     {

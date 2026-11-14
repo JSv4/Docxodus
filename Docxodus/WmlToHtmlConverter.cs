@@ -6521,13 +6521,20 @@ namespace Docxodus
             return null;
         }
 
-        private sealed record TableRenderingGrid(Dictionary<XElement, int> RowSpans, int LeadingColumns);
+        /// <summary>
+        /// The grid columns some row of the table reaches, <c>[LeadingColumns, ReachedColumns)</c>:
+        /// every row omits the ones before (<c>w:gridBefore</c>), and no row's cells reach the ones
+        /// after (<c>w:gridAfter</c>, or cells that simply stop).
+        /// </summary>
+        private sealed record TableRenderingGrid(Dictionary<XElement, int> RowSpans, int LeadingColumns, int ReachedColumns);
 
         private static object ProcessTable(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
         {
             element.RemoveAnnotations<TableRenderingGrid>();
+            var rows = WordprocessingMLUtil.TableRows(element).ToList();
             element.AddAnnotation(new TableRenderingGrid(Internal.TableGridModel.VerticalMergeSpans(element),
-                WordprocessingMLUtil.TableRows(element).Select(Internal.TableGridModel.GridBefore).DefaultIfEmpty(0).Min()));
+                rows.Select(Internal.TableGridModel.GridBefore).DefaultIfEmpty(0).Min(),
+                rows.Select(row => Internal.TableGridModel.RowGrid(row).LastOrDefault().End).DefaultIfEmpty(0).Max()));
             var style = new Dictionary<string, string>();
             style.AddIfMissing("border-collapse", "collapse");
             style.AddIfMissing("border", "none");
@@ -6820,15 +6827,19 @@ namespace Docxodus
             if (cols.Count == 0 || cols.Any(w => w == null || w <= 0m))
                 return null;
 
-            // HTML rows contain only the actual cells. A grid prefix omitted by every row
-            // must therefore be omitted here too, or CSS assigns its width to the first cell.
-            // Nested rows belong to their own grid; rows inside content controls still count.
-            var leadingColumns = tableElement.Annotation<TableRenderingGrid>()!.LeadingColumns;
-            if (leadingColumns >= cols.Count)
+            // HTML rows contain only the actual cells, so only the columns some row reaches stay.
+            // A prefix omitted by every row would otherwise give its width to the first cell. A
+            // suffix no row's cells reach is not part of the table: Word drops it and widens the
+            // remaining columns in proportion until the table spans its width (issue #1750), as
+            // CSS spreads a table's width over its columns. Nested rows belong to their own grid;
+            // rows inside content controls still count.
+            var grid = tableElement.Annotation<TableRenderingGrid>()!;
+            var used = Math.Min(grid.ReachedColumns, cols.Count) - grid.LeadingColumns;
+            if (used <= 0)
                 return null;
 
             return new XElement(Xhtml.colgroup,
-                cols.Skip(leadingColumns).Select(w => new XElement(Xhtml.col,
+                cols.Skip(grid.LeadingColumns).Take(used).Select(w => new XElement(Xhtml.col,
                     new XAttribute("style", string.Format(
                         NumberFormatInfo.InvariantInfo, "width: {0}pt;", w!.Value / 20m)))));
         }
