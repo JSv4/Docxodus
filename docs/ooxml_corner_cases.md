@@ -8104,8 +8104,8 @@ mode 14 lays out every row below the same way. LibreOffice was not available on 
 | --- | --- | --- | --- | --- |
 | five paragraphs (the issue) | p1: 23 lines, notes 1–4; p2: the citing line, the last line, note 5 | same | export fails: "A footnote continuation is clipped" | as Word |
 | six paragraphs | p1: 23 lines, notes 1–4; p2: 7 lines, notes 5–6 | not run | fails | as Word |
-| paragraph 1 cites two notes, paragraph 5 none | 1 page: 25 lines, notes 1–5 | p1: 23 lines, notes 1–5; p2: 2 lines | fails | as mode 14 |
-| widow control off | 1 page: 25 lines, notes 1–5 | p1: 24 lines, notes 1–5; p2: 1 line | fails | as mode 14 |
+| paragraph 1 cites two notes, paragraph 5 none | 1 page: 25 lines, notes 1–5 | p1: 23 lines, notes 1–5; p2: 2 lines | fails | as mode 14 (as Word in mode 15 since #1751) |
+| widow control off | 1 page: 25 lines, notes 1–5 | p1: 24 lines, notes 1–5; p2: 1 line | fails | as mode 14 (as Word in mode 15 since #1751) |
 | widow control off, note 5 four lines long | p1: 24 lines, notes 1–4, two lines of note 5; p2: 1 line, the rest of note 5 | not run | fails | p1 holds three lines of note 5 |
 | widow control on, note 5 four lines long | p1: 23 lines, notes 1–4; p2: 2 lines, note 5 | not run | as Word | as Word |
 | four paragraphs (control) | 1 page | not run | 1 page | 1 page |
@@ -8143,10 +8143,41 @@ at its text height (`droppedLeadingPt`), the cap gives that leading to the band.
 expands beside is cloned after its notes are packed, so it too ends at its text height when they
 take its leading.
 
-Not modelled: the mode 15 rule, in which the last line above a band keeps its leading whether or
-not it cites (Docxodus lays such pages out as mode 14 does, one line more than Word); the band's own
-last-line leading before mode 15; and a paragraph without widow control whose last line on the page
-is its citing line (the four-line note above). Test: `export-footnote-page-bottom.spec.ts`.
+Not modelled: the band's own last-line leading before mode 15; and a paragraph without widow control
+whose last line on the page is its citing line (the four-line note above). Test:
+`export-footnote-page-bottom.spec.ts`.
+
+### Compatibility mode 15 (#1751)
+
+Until #1751 Docxodus laid out mode 15 pages as mode 14 does, so a page with notes held one more line
+than Word. The fit height (`PaginationEngine.fitHeightPt`) now takes whether notes sit below the
+block: the page's band already holds some, or the block brings some. From mode 15 such a block needs
+its full line box, so the last line above a band keeps its leading, while on a page without notes it
+still runs past the foot. A paragraph head is held to the same rule against the notes already on its
+page; a head that cites a note was already measured at full height beside it. The converter already
+stated the mode on the staging element (`data-docx-compatibility-mode`); an unstated mode reads as
+before mode 15.
+
+The export's text fitter needed one more change. When it split a paragraph, `createParagraphFragment`
+trimmed the head's last line to its text height on the assumption that a head always ends its page
+with its leading past the edge (#1375). In mode 15 that let the head of the uncited fifth paragraph
+end 11.5pt early, the 2-line tail then fitted on page 1 after it, 11.5pt too close to the head's last
+line, and the page held all 25 lines. The trimmed head also still reported that leading through
+`lastLineTrailingLeadingPt`, so before mode 15 its fit height subtracted it twice. The splitter now
+leaves the leading the paginator measures to `fitHeightPt` and `droppedLeadingPt`, and trims
+only the leading the paginator does not measure, as before.
+
+The test fixtures, re-measured in Word 2024 (16.0.20326) through `Range.Information` (page and
+vertical position of every word, and each note's first character). They state Liberation Serif,
+which Word substitutes with Times New Roman, the same metrics; without `w:compat` Word opens them in
+mode 12.
+
+| Fixture | Word 2024, mode 12 | Word 2024, mode 15 | Docxodus before #1751, mode 15 | Fixed |
+| --- | --- | --- | --- | --- |
+| paragraph 1 cites two notes, paragraph 5 none | 1 page: 25 lines, notes 1–5 | p1: 23 lines, notes 1–5; p2: 2 lines | as mode 12 | as Word |
+| widow control off | 1 page: 25 lines, notes 1–5 | p1: 24 lines, notes 1–5; p2: 1 line | as mode 12 | as Word |
+| the issue's five paragraphs (control) | p1: 23 lines, notes 1–4; p2: 2 lines, note 5 | same | as Word | as Word |
+| one double-spaced test line at the page foot, no notes (control, `pagination-last-line-leading.spec.ts`) | its text height fits (the sweep above) | the same | as Word | as Word |
 
 ## Fractional whole-number measures truncate in Word (#1622)
 
