@@ -834,8 +834,8 @@ line strut; the prose-only baseline correction leaves MathML layout alone.
 Font coverage includes the [MathML Core `math-auto` character mapping](https://www.w3.org/TR/mathml-core/#math-auto-transform)
 and each radical's implicit U+221A glyph; resolved font aliases also cover MathML layout containers.
 
-Projection succeeds only for the complete equation. Unknown operators, properties, styled runs,
-whitespace or combining-token forms, and nested display fractions retain the existing whole-equation
+Projection succeeds only for the complete equation. Unknown operators and properties, control
+characters, combining-token forms and nested display fractions retain the existing whole-equation
 diagnostic. The last restriction preserves OMML's default full-size nested display operands until
 their size rule is modeled; ordinary MathML fractions would shrink them. For the same reason a
 display equation with a fraction or n-ary operator inside a matrix keeps the diagnostic: MathML
@@ -847,9 +847,12 @@ of complete OMML or Word typography parity.
 Every structure accepts only the properties listed for it, each at most once. Any other property,
 or a listed one with a value outside the list, keeps the whole-equation diagnostic. `m:ctrlPr`
 is accepted anywhere OMML allows it when its `w:rPr` holds only `w:rFonts` naming the document's
-`m:mathFont` and, on control characters, `w:i`. Word writes both on nearly every equation, and
-neither changes what is drawn: the equation already uses the math font, and OMML takes math
-italics from `m:sty`.
+`m:mathFont`, `w:b`, `w:i` and `w:color`. Word writes the fonts and `w:i` on nearly every equation,
+and neither changes what is drawn: the equation already uses the math font, and OMML takes math
+bold and italics from `m:sty`. A control colour paints the structure's own glyphs (fraction bar,
+radical, fences, large operator, accent, border) as CSS `color` on the structure. MathML operands
+inherit it, so the structure draws only when each run inside carries a colour of its own; Word's
+whole-equation colour writes the same colour on every run and control.
 
 | OMML | MathML | Accepted properties |
 |------|--------|---------------------|
@@ -865,15 +868,37 @@ italics from `m:sty`.
 | `m:eqArr` | `mtable`; `&` in a row's own runs splits right/left-aligned cells | — |
 | `m:groupChr` | `munder`/`mover` with a stretchy `chr` (default ⏟) | `pos`/`vertJc` only as bottom/top or top/bottom |
 | `m:box` | its operand | `noBreak` |
-| `m:borderBox` | `mrow` with a CSS border | `hide*`; every `strike*` off (MathML Core has no `menclose`) |
-| `m:f` | `mfrac`, `mfrac linethickness="0"`, or `num / den` | `type` `bar`, `noBar`, `lin` (`skw` has no MathML Core form) |
-| `m:r` | `mi`/`mn`/`mo` tokens | `m:sty`, `m:scr` → Unicode mathematical alphabets; `m:lit`; `w:color` |
+| `m:borderBox` | `mrow` with a CSS border; each `strike*` a `linear-gradient` background layer (MathML Core has no `menclose`) | `hide*`, `strike*` |
+| `m:f` | `mfrac`, `mfrac linethickness="0"`, `num / den`, or for `skw` the numerator raised 0.33em and the denominator lowered 0.42em (`mpadded voffset`) beside U+2044 | `type` `bar`, `noBar`, `lin`, `skw` |
+| `m:phant` | its operand, in `mpadded width/height/depth="0"` for each zeroed dimension, inside `mphantom` unless shown | `show` (default on), `zeroWid`, `zeroAsc`, `zeroDesc`, `transp` (draws the same) |
+| `m:r` | `mi`/`mn`/`mo` tokens; spaces and `m:nor` text as `mtext` | `m:sty`, `m:scr` → Unicode mathematical alphabets; `m:lit`; `m:nor`; `m:brk` (no effect on one line); `m:aln` (display lines only); `w:color`; `w:b`/`w:i` (drawn only on `m:nor` text); `w:br` (display lines only) |
 
 Run styles are drawn by mapping letters and digits to the Unicode Mathematical Alphanumeric
 Symbols block rather than by `mathvariant`, which MathML Core implements only for `normal`. Plain
 style (`m:sty="p"`) keeps letters upright through `mathvariant="normal"`, and a run's adjacent
-upright letters become one identifier such as `sin`. A style without a Unicode alphabet for a
-character (a script Greek letter, a bold operator) keeps the diagnostic. The paginator's atomic
+upright letters become one identifier such as `sin`. `∂`, `∇` and the Greek symbol variants
+(`ϵϑϰϕϱϖϴ`) are letters of each Greek alphabet. Operators and punctuation are drawn plain in every
+style, as Word draws them. A letter with no form in the run's alphabet (a script Greek letter)
+keeps the diagnostic.
+
+Spaces (Unicode space separators) are kept as written in an `mtext` with `white-space: pre`, so
+each draws at the font's width, and `m:nor` ordinary text is one `mtext` with the run's `w:b`,
+`w:i` and colour; it must name the math font in `w:rFonts`, as Word writes it, since text without
+fonts takes the paragraph's font. Each run is its own `mrow`, except that a run starting with an
+operator after an operand (a structure, or a run ending in an identifier, number or text) joins its
+argument's row: MathML infers an operator's form from its place in its `mrow`, and would read it as a
+prefix first in the run's own, where Word spaces it as binary. An explicit `form="infix"` would not
+do: Chromium then gives an operator with no infix entry, such as `!`, default spacing.
+
+A display equation (`m:oMathPara`) may hold several `m:oMath`: they run on as one line until a
+`w:br` in a run, which Shift+Enter writes. Its lines become a `displaystyle` `mtable`, one row per
+line, through the same row builder as `m:eqArr`. With `m:defJc` `centerGroup` (the default) the
+lines are left-aligned as a group, or lined up at their `m:aln` points when every line has one; one
+point changes nothing, and points on only some of several lines keep the diagnostic, since Word
+then leaves the other lines at the first line's left edge, which a MathML table cannot place. With
+`center` each line is centred and points change nothing. A manual break (`m:brk`) draws nothing:
+Word breaks there only when the equation is too long for its line, and the projection never breaks
+one. `docs/ooxml_corner_cases.md` has the measurements. The paginator's atomic
 inline-equation check (`CONVERTER_MATHML_ELEMENTS` in `npm/src/pagination.ts`) lists the same
 element vocabulary.
 
@@ -915,7 +940,7 @@ The following are **discarded** and will not appear in output:
 - `w:w` - Character width scaling outside plain automatically spaced body text and resolved fixed-width cells in standalone export
 
 **Document features:**
-- Math equations with OMML structures or properties outside the mapping described above (for example skewed fractions, phantoms, `m:nor` ordinary text, spacing properties)
+- Math equations with OMML properties outside the mapping described above (for example spacing properties, aligned scripts, display lines aligned at only some of their points)
 - Chart families other than clustered column/horizontal bar charts
 - Diagrams (SmartArt)
 - Complex text boxes

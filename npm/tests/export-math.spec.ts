@@ -83,7 +83,7 @@ test('adjacent equations without spaces split only between whole formulas', asyn
   } finally { await task.destroy(); }
 });
 
-for (const kind of ['phantom', 'normalText'] as const) {
+for (const kind of ['alignedScripts', 'normalText'] as const) {
   test(`${kind} keeps a whole-equation diagnostic and strict-policy refusal`, async ({ browser }) => {
     const source = mathDocx(kind, 'display');
     const options = { browser, outputs: ['html', 'pdf'] as const, reviewProfile: 'final' as const, commentProfile: 'hidden' as const };
@@ -113,6 +113,23 @@ test('scripts, n-ary limits and fences reach the public PDF as selectable math',
     expect(text.match(/𝑥/gu)).toHaveLength(1);
     expect(text.match(/MathAfter/g)).toHaveLength(1);
   } finally { await task.destroy(); }
+});
+
+test('phantoms, skewed fractions, spaces, struck boxes and bold runs reach the public PDF as math', async ({ browser, page }) => {
+  const result = await renderDocxArtifacts(mathDocx('remaining', 'inline'), {
+    browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'hidden', unsupportedContent: 'strict',
+  });
+  expect(result.renderReport.unsupportedContent).toEqual([]);
+  expect(result.pdf!.byteLength).toBeGreaterThan(0);
+  await page.setContent(result.html!);
+  const math = page.locator('.page-content math');
+  await expect(math.locator('mphantom')).toHaveCount(1);
+  await expect(math.locator('mpadded')).toHaveCount(2);
+  expect(await math.locator('mtext').allTextContents()).toEqual(['  ']);
+  // The strike is a background layer the PDF export prints.
+  expect(await math.locator('mrow[style*="border"]').evaluate(box => getComputedStyle(box).backgroundImage)).toContain('linear-gradient');
+  // A bold run's operator is drawn plain, as Word draws it.
+  expect(await math.locator('mo', { hasText: '+' }).evaluate(op => getComputedStyle(op).fontWeight)).toBe('400');
 });
 
 for (const paragraphSize of [undefined, 36]) {

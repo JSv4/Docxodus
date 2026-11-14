@@ -6952,16 +6952,63 @@ Other things the render settled:
 - **Word sets under/over limits beside an inline n-ary operator** (`∑` with `limLoc` `undOvr`
   draws as `∑ᵢⁿ` in a line of text and stacked in a display equation), which is what
   `movablelimits="true"` gives.
-- **Known remaining differences, not fixed here.** Word sets `k=0` in a limit or script tight;
-  Chromium keeps full operator spacing at script size. And a run that *starts* with an operator
-  (`<m:r>a</m:r><m:r>+c</m:r>`) loses the space before it: each run is its own `mrow`, so MathML
-  reads a leading `+` as a prefix operator. That is how runs were already projected before these
-  structures were added.
+- **Known remaining difference, not fixed here.** Word sets `k=0` in a limit or script tight;
+  Chromium keeps full operator spacing at script size. (A run that *starts* with an operator after
+  an operand, `<m:r>a</m:r><m:r>+c</m:r>`, used to lose the space before it; see the next section.)
 
 Code: `WmlToHtmlConverter.Math.cs` (`MathExpression`, `MathCellAlignment`). Tests:
 `A_bar_is_a_rule_as_wide_as_its_operand`, `Matrix_columns_keep_their_justification`,
 `Display_equation_arrays_keep_display_style_and_align_rows_at_their_points`,
 `A_linear_fraction_slash_is_set_tight`.
+
+### What Word 2024 draws for the rest of OMML: spaces, ordinary text, styles, phantoms, skewed fractions, strikes, lines (#1705)
+
+Two kinds of document, both exported to PDF by Word 16.0.20326 and measured from the PDF's glyph
+positions (12 pt Cambria Math): documents written by hand with one equation per variant, and a
+document Word built itself through its object model, with its equation gallery and typed equations
+made bold, italic or coloured, phantoms, struck border boxes, a skewed fraction, Shift+Enter lines
+and "Align at this character". Word wrote `w:eastAsiaTheme="minorEastAsia"` into that document's
+run fonts, which still keeps every equation on the placeholder (#1726 handles it), so it was counted
+with that attribute removed: on `main` 28 of its 37 equations were placeholders; with this change all
+37 draw. The MathML was rendered in Chromium with Cambria Math and compared by
+eye.
+
+| OMML | Word 2024 | Docxodus |
+| --- | --- | --- |
+| spaces in `m:t` (`a b`, `a  b`, `a    b`, no-break space) | each at the font's space width (about 0.22 em), added to any operator spacing; an em space is 1 em | an `mtext` keeping the characters (`white-space: pre`): the font's own widths |
+| one space after a comma | absorbed: `a, b` is exactly as wide as `a,b` | drawn, so 0.2 em wider |
+| exactly two spaces after a comma, display math | a 2 em gap, which the gallery's Taylor expansion (`+⋯,  −∞<x<∞`) relies on; three or more are drawn at their width, and inline two are | drawn at their width: the Taylor expansion's gap is about 0.5 em where Word's is 2 em |
+| `m:nor` | text in the run's font (Cambria Math from the `w:rFonts` Word writes on it; the paragraph's Calibri without them), no math italics, no operator spacing (`speed+2`); `w:b`/`w:i` make it bold or italic; an `m:sty` on it changes nothing | one `mtext` in the run's weight, slope and colour; without `w:rFonts` it keeps the placeholder |
+| `m:sty` `b`/`bi` | letters and digits bold; `+ = , ( ) ∞` plain; `∂ ∇` bold | the same |
+| `w:b`, `w:i` on a math run | change nothing | change nothing |
+| letters with no form in the run's alphabet | Cyrillic plain in every style; script, fraktur and sans-serif Greek plain; Hebrew bold under `b`/`bi` | placeholder, as before |
+| `m:phant` | shown unless `m:show` is off; `zeroWid` draws the operand from its start over what follows (`x` over the next `+`); `zeroAsc`/`zeroDesc` let it overflow a radical around it; a shown phantom of `+` between `a` and `b` is set tight, like an ordinary atom; `m:transp` changed nothing in four cases | `mphantom` and `mpadded`; a phantom made of one operator has the operator's spacing removed |
+| `m:f` `skw` | operands full size beside U+2044, the numerator raised about 0.33 em and the denominator lowered until its top is about 0.25 em above the baseline (0.44 em for `b`, 0.41 em for `2`, 0.21 em for `y`); the slash overlaps each operand by about 0.07 em and grows around a stacked fraction | fixed offsets of 0.33 em and −0.42 em, slash at its own size: an x-height denominator sits 0.2 em lower than Word's, the fraction is about 0.15 em wider, and a tall operand gets a smaller slash. MathML Core has no bevelled fraction, and Chromium clamps a negative `lspace` |
+| `m:borderBox` `strikeH`/`strikeV`/`strikeBLTR`/`strikeTLBR` | a line through the box's middle, or from corner to corner | one `linear-gradient` background layer each, with `print-color-adjust: exact` so printing keeps it |
+| `m:brk`, with or without `m:alnAt` | ignored while the equation fits its line; in a longer one the line breaks there and the rest wraps | drawn as one line (the projection never breaks an equation) |
+| `w:br` in a run, as Shift+Enter writes it | starts a new line; several `m:oMath` without one run on as one line | the same, as `mtable` rows |
+| `m:aln` under `m:defJc` `centerGroup` | the lines sit at the first line's left edge; a line with a point moves so the point lines up with the first such line's; one point changes nothing | every line or one line with a point: aligned columns or one left-aligned column; points on only some lines: placeholder |
+| `m:aln` under `m:defJc` `center` | each line centred on its own; points change nothing | one centred column |
+| `w:color` in a structure's `m:ctrlPr` | paints only the structure's own glyphs (fraction bar, radical, fences, ∑, accent, border); the operands keep theirs | CSS `color` on the structure; since MathML operands inherit it, drawn only when every run inside carries a colour of its own |
+| an operator starting a run after an operand (`x²` then `+1`) | binary: `x² + 1` | the run joins its argument's row, so MathML reads the operator as binary; before, first in the run's own `mrow`, it was a tight prefix (`x²+1`). An explicit `form="infix"` would give `!` or a typed `)` default spacing in Chromium |
+
+Line breaks are why `m:oMathPara` can hold several `m:oMath`: Word writes Shift+Enter as
+`<m:r><w:rPr>…</w:rPr><w:br/></m:r>` closing one `m:oMath` and starts the next, and "Align at this
+character" as `<m:rPr><m:aln/></m:rPr>` on the run that begins with the chosen operator. The
+object model's `OMathBreaks.Add` writes `<m:rPr><m:brk/></m:rPr>` on the run starting at the operator,
+which, as the table says, Word then ignores while the equation fits.
+
+Not modelled, and recorded here: Word's comma-and-space rule above, the skewed fraction's
+content-dependent offsets and growing slash, and lines where only some carry an alignment point.
+
+Code: `WmlToHtmlConverter.Math.cs` (`MathRunTokens`, `MathLines`, `MathAddRows`, `MathExpression`).
+Tests: `HtmlMathTests` (`A_display_equation_with_a_run_of_spaces_draws_through_the_public_converter`,
+`Ordinary_text_is_one_text_token_in_its_own_weight_and_slope`,
+`Math_run_styles_change_letters_and_digits_and_leave_operators_plain`,
+`Display_lines_are_table_rows_lined_up_at_their_alignment_points`, `A_manual_break_changes_nothing_on_one_line`,
+`A_structure_is_drawn_in_its_control_colour_when_its_operands_carry_their_own`,
+`An_operator_that_starts_a_run_after_an_operand_is_not_first_in_its_row` and the phantom, skewed-fraction and
+strike tests).
 
 ### Bounds on equation input (#1705)
 

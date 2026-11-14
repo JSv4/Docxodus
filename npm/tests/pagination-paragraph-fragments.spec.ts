@@ -41,10 +41,11 @@ async function addPaginationBundle(page: Page): Promise<void> {
 test.describe('Pagination paragraph fragments', () => {
   for (const kind of ['owned-math', 'owned-structured-math', 'plain-marker', 'raw-math', 'ruby-math', 'frame-math', 'display-math', 'floating-math']) {
     test(`equation fragmentation preserves the ${kind} boundary`, async ({ page }) => {
-      // Scripts, n-ary limits, fences and tables (#1705) are also whole converter-owned equations.
+      // Scripts, n-ary limits, fences, tables, text, phantoms and padding (#1705) are also whole converter-owned equations.
       const formula = kind === 'owned-structured-math'
         ? '<mrow><munderover><mo largeop="true">∑</mo><mi>k</mi><mi>n</mi></munderover><msup><mi>x</mi><mn>2</mn></msup>'
-          + '<mrow><mo fence="true" form="prefix">(</mo><mtable><mtr><mtd><mi>a</mi></mtd></mtr></mtable><mo fence="true" form="postfix">)</mo></mrow></mrow>'
+          + '<mrow><mo fence="true" form="prefix">(</mo><mtable><mtr><mtd><mi>a</mi></mtd></mtr></mtable><mo fence="true" form="postfix">)</mo></mrow>'
+          + '<mtext style="white-space: pre">  </mtext><mphantom><mi>y</mi></mphantom><mpadded voffset="0.33em"><mi>z</mi></mpadded></mrow>'
         : '<mfrac><mn>17</mn><mn>5</mn></mfrac>';
       const math = `<math xmlns="http://www.w3.org/1998/Math/MathML" display="${kind === 'display-math' ? 'block' : 'inline'}"
         ${kind === 'floating-math' ? 'style="float:left"' : ''}>${formula}</math>`;
