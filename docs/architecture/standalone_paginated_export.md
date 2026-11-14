@@ -578,7 +578,7 @@ last frame (clipped there) and marks the frame `data-docx-textbox-overflow`. A p
 outside that frame is admitted like the fixed-box case above and warned as `source_text_clipped`.
 Because the first hidden paragraph is usually still partly visible, and so mapped, each such story
 also produces one `linked_textbox_overflow` warning naming it. `unsupportedContent: "strict"`
-rejects both.
+rejects both. Frames placed off the paper are covered by the paper rule below.
 
 A separate source-position marker admits a paragraph whose original ink is wholly off paper,
 even when part of its fixed box intersects the paper. DrawingML fit resolves from the selected
@@ -630,8 +630,23 @@ does not itself indicate missing text. Nonwhitespace text or a source visual cut
 `source_table_content_clipped` warning with its source paragraph anchor; `unsupportedContent: "strict"`
 rejects it at `output_verification`. Hidden runs and content already hidden by authored clips do not
 produce this warning. Promoted pictures and textbox text retain their original table ownership;
-the diagnostic follows their final placement while applying their authored clips. This diagnostic does not exempt wholly missing source anchors from PageMap
-completeness checks, so a table with an entirely off-paper cell still fails export.
+the diagnostic follows their final placement while applying their authored clips. This diagnostic
+by itself does not exempt a wholly missing source anchor from PageMap completeness; a cell entirely
+off the paper is admitted by the rule below.
+
+### Content the paper alone hides (issues #1733, #1734)
+
+The paper clips every page, and Word prints a document whose content runs past it, leaving that
+content out. PageMap completeness admits a source anchor with no visible fragment of this kind when
+its layout box has area and lies wholly outside the paper, it is visible under every other clip
+(measured with the paper's own bound lifted, so a body band that cuts content off still counts), and
+an authored box carries it there: a fixed-width table, or a frame of a linked text-box story placed
+from its source offsets on a page, margin, column or paragraph basis. The linked frame needs this
+frame-level rule because its story is distributed over the frames after they are placed, so the
+per-paragraph placement proof above cannot apply. Each admitted paragraph produces a
+`source_text_clipped` warning naming the paragraph that holds the text (not the cell or table around
+it); `unsupportedContent: "strict"` rejects it. Content the layout itself placed off the paper, an
+ordinary flow box, a table whose width the layout chose, and an element with no box still fail.
 
 ### Text clipped by exact-height rows (issue #1140)
 

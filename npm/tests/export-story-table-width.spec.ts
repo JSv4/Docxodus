@@ -61,10 +61,20 @@ for (const fragmentParagraphs of [false, true]) {
   });
 }
 
-// The source 540pt fixed header/footer grid puts its third cell beyond 360pt paper.
-// Preserve that authored geometry and keep the whole-cell completeness guard.
-test('fixed running-story tables with off-paper cells fail completeness', async ({ browser }) => {
-  await expect(renderDocxArtifacts(storyTableWidthDocx('wide'), { browser, outputs: ['pdf'],
-    reviewProfile: 'final', commentProfile: 'hidden',
-  })).rejects.toThrow(/has no measurable fragment/);
+// The source 540pt fixed header/footer grid puts its third cell beyond 360pt paper. Word 2024
+// prints the other two cells on both pages and drops the third (issue #1733); so does the export.
+test('the paper clips fixed running-story table cells that lie beyond it', async ({ browser }) => {
+  const result = await renderDocxArtifacts(storyTableWidthDocx('wide'), { browser, outputs: ['pdf'],
+    reviewProfile: 'final', commentProfile: 'hidden' });
+  const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
+  try {
+    const pdf = await task.promise;
+    expect(pdf.numPages).toBe(2);
+    for (let index = 1; index <= pdf.numPages; index++) {
+      const text = (await (await pdf.getPage(index)).getTextContent()).items.filter(item => 'str' in item).map(item => item.str).join(' ');
+      expect(text.match(/Moss (?:top|base) \w+/g)).toEqual(['top', 'base'].flatMap(story => ['amber', 'blue'].map(label => `Moss ${story} ${label}`)));
+    }
+  } finally { await task.destroy(); }
+  expect(result.renderReport.warnings.filter(w => w.code === 'source_text_clipped').map(w => w.anchorId!.split(':')[1]).sort())
+    .toEqual(['ftr1', 'hdr1']);
 });

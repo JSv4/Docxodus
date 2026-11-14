@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- PDF export no longer refuses a document because some of its content lies wholly outside the paper: a fixed-layout table wider than its page with a cell past the paper's edge (#1733), or linked text boxes offset below the paper (#1734). Word 2024 prints such a document and leaves out what is off the paper, cutting a cell that crosses the edge there; the export now does the same. Each paragraph left out gets a `source_text_clipped` warning, and `unsupportedContent: "strict"` still rejects it. Only content in a fixed-width table, or in a linked frame placed from its source offsets, is admitted this way, and only when the paper is all that hides it: content the layout pushed off the paper, or cut off at the edge of the body, still fails PageMap completeness. `source_text_clipped` now names only the paragraph that holds the text, not also the table or cell around it.
+
 ## [16.0.0] - 2026-11-13
 
 ### Added
