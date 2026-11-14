@@ -2,11 +2,14 @@ import { expect, test } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 const bundle = fileURLToPath(new URL('../dist/pagination.bundle.js', import.meta.url));
 
-for (const kind of ['tab', 'shape', 'unmarked', 'positioned', 'nonempty-tab'] as const) {
+for (const kind of ['tab', 'shape', 'unmarked', 'positioned', 'nonempty-tab', 'textbox', 'rotated-textbox'] as const) {
   test(`known ${kind} boxes preserve complete content at paragraph boundaries`, async ({ page }) => {
     const content = Array.from({ length: 29 }, (_, i) => {
       const shape = kind === 'shape';
-      const box = shape ? `<span data-docx-shape="unrendered" style="display:inline-block;width:40pt;height:12pt">shape${i}</span>`
+      // The converter's inline text box: an inline block holding block-level story paragraphs.
+      const box = kind.endsWith('textbox') ? `<span data-atom="${i}" data-docx-textbox="true" style="display:inline-block;vertical-align:top;
+          width:60pt;height:24pt;overflow:hidden${kind === 'rotated-textbox' ? ';transform:rotate(90deg)' : ''}"><span style="display:block">note${i}</span></span>`
+        : shape ? `<span data-docx-shape="unrendered" style="display:inline-block;width:40pt;height:12pt">shape${i}</span>`
         : `<span data-atom="${i}" style="display:inline-flex;${kind === 'positioned' ? 'position:relative;left:1pt' : ''}"><span style="display:block;white-space:nowrap">tag${i}</span>
           <span ${kind === 'unmarked' ? '' : 'data-docx-tab="left"'} style="display:block;height:0;width:24pt;border-bottom:1px dotted">${kind === 'nonempty-tab' ? 'filled' : ''}</span></span>`;
       return `${box} Alder${i} recorded e\u0301 and \u{1f332}`;
@@ -25,7 +28,7 @@ for (const kind of ['tab', 'shape', 'unmarked', 'positioned', 'nonempty-tab'] as
     expect(result.text?.match(/Alder\d+/g)).toEqual(Array.from({ length: 29 }, (_, i) => `Alder${i}`));
     expect(result.text?.match(/e\u0301 and \u{1f332}/gu)).toHaveLength(29);
     expect(result.atoms).toHaveLength(29);
-    if (kind === 'tab' || kind === 'shape') expect(result.paragraphs).toBeGreaterThan(1);
+    if (kind === 'tab' || kind === 'shape' || kind === 'textbox') expect(result.paragraphs).toBeGreaterThan(1);
     else expect(result.paragraphs).toBe(1);
     if (kind === 'shape') expect(result.atoms.every(atom => Math.abs(atom.width - 40 * 4 / 3) < 0.1)).toBe(true);
     else expect(result.atoms.map(atom => atom.id)).toEqual(Array.from({ length: 29 }, (_, i) => String(i)));

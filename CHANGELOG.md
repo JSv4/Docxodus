@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- A paragraph longer than a page that holds an inline text box now breaks across pages in paginated output and the export, keeping the box whole on the line that holds it, instead of failing with clipped content (#1735). The paginator moved only marked converter boxes (shapes, tabs, math, ruby) whole; it now does the same for any inline block, since no page break can fall inside one. An inline block with positioned, floating or transformed content, a picture or a line break still keeps its paragraph whole.
+
 ## [16.0.0] - 2026-11-13
 
 ### Added
