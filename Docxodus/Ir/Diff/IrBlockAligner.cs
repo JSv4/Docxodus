@@ -2586,15 +2586,26 @@ internal static class IrBlockAligner
                 continue;
             foreach (int rj in inserted)
             {
-                // A rewrite is no more a moved paragraph than an edited one (issue #1739).
                 double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
-                if (score >= threshold && !similarity.IsRewrite(leftBlocks[li], rightBlocks[rj]))
+                if (score >= threshold)
                     candidates.Add((score, li, rj));
             }
         }
 
+        // A rewrite is no more a moved paragraph than an edited one (issue #1739). The test runs only on the pair about
+        // to be taken, and a deleted block whose best free partner is a rewrite of it is no move at all, so it runs at
+        // most once per deleted block however many candidates clear the score.
+        bool[]? noMove = null;
         foreach (var (bestScore, bestLeft, bestRight) in BestFreePairs(candidates, leftMatch, rightMatch))
         {
+            if (noMove?[bestLeft] == true)
+                continue;
+            if (similarity.IsRewrite(leftBlocks[bestLeft], rightBlocks[bestRight]))
+            {
+                (noMove ??= new bool[leftBlocks.Count])[bestLeft] = true;
+                continue;
+            }
+
             // A paragraph plain move needs BOTH exact content and format equality. Exact paragraph text with a
             // formatting delta still needs a token diff (FormatChanged spans) so the markup can carry rPrChange
             // at the moved destination and restore the old formatting on reject. Structural blocks do not yet
