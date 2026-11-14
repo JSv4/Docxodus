@@ -8605,3 +8605,50 @@ text box, so references in text boxes of a modified paragraph are not tracked as
 **Code and tests.** `Docxodus/Ir/Diff/IrEditScriptBuilder.cs` (`KeptNoteReferences`,
 `AlignNoteReferences`), `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs`
 (`RenderCompositeNoteScopes`); `DocxDiffNoteReferenceTests`, `IrSdtDiffWalkerTests`.
+
+## A range boundary between the cells or rows of a table (#1737)
+
+A row and a table admit range markup among their cells and rows (`CT_Row` and `CT_Tbl` include
+`EG_RunLevelElements`), so a bookmark or a tracked custom XML range can sit there:
+
+```xml
+<w:tr>
+  <w:tc>…<w:t>Step 1</w:t>…</w:tc>
+  <w:customXmlInsRangeStart w:id="1" w:author="Reviewer" w:date="2026-01-05T09:00:00Z"/>
+  <w:customXmlInsRangeEnd w:id="1"/>
+  <w:tc>…<w:t>Load tray 1 and record the batch weight.</w:t>…</w:tc>
+  <w:tc>…<w:t>3 minutes</w:t>…</w:tc>
+</w:tr>
+```
+
+Measured with a 40-row, three-column table taller than an A4 page, one such pair in every row and
+no other revisions, beside the same table without the pairs. Word 2024 (16.0 build 20326) opened each
+read-only, set to All Markup, and saved it as PDF (`SaveAs2`, format 17):
+
+| | Word 2024, All Markup | Docxodus before #1737, markup | Docxodus after, markup | Docxodus, final |
+| --- | --- | --- | --- | --- |
+| a pair between cells 1 and 2 of every row | 4 pages (13, 11, 11, 5 rows), no mark at all; `Revisions.Count` is 0 | export fails: `pagination_failure`, page 2 body clipped | 4 pages (12, 12, 12, 4 rows), split between rows; the bracket marks open cell 2 on a line of their own | 3 pages (16, 16, 8 rows) |
+| no pairs (control) | 4 pages, the same rows per page | 3 pages (16, 16, 8 rows) | the same | the same |
+
+**Analysis.** Word strips custom XML markup and its range markers on open (see the #1189 entry
+above), so it draws nothing for these ranges and lays the table out as if they were absent.
+Docxodus draws each custom XML revision boundary as a bracket mark under markup (#538). The
+converter wrote whatever a row's or a table's non-cell children rendered straight into the `<tr>`
+or `<table>`. HTML allows only cells in a row and only rows in a table, so the browser's parser
+moved the marks out in front of the table, and the paginator, which splits a table only when its
+wrapper holds nothing but the table and empty bookmark targets (#1456), kept the 40 rows as one
+block taller than the page. A bookmark between rows went the same way: its `<a id>` landed at the
+top of the table instead of at its row.
+
+The page count that still differs is not about the ranges. The fixture has no styles part, which
+Word sets in 12 pt text and Docxodus in 10 pt (the missing `w:rPrDefault` note in the #1652 entry).
+
+**Fix.** `WmlToHtmlConverter.KeepContentInCells`, applied to a row's children (`ProcessTableRow`)
+and to a table's (`ProcessTable`), moves what renders among the cells or rows into the adjacent
+cell, where the same boundary inside that cell already rendered: at the start of the cell that
+follows it (between rows, the next row's first cell), or at the end of the last cell when none
+follows. A boundary between two cells marks where the next cell begins, and one after a row's last
+cell marks where the row ends. The filler cell for an omitted `w:gridBefore` is not a cell of the
+row, and an exact-height row's cell takes the content inside its clip box. Nothing is dropped: a
+row or table with no cell of its own keeps the content beside its cells or rows. The bracket marks
+stay, now inside the cell: Word offers no placement to follow. Tests: `TableRangeBoundaryTests`, `npm/tests/export-bookmarked-table.spec.ts`.
