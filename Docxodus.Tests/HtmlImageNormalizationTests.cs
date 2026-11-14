@@ -296,11 +296,12 @@ public class HtmlImageNormalizationTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void VisibleDeviceHairlineRejectsTheWholeWmf(bool afterSupportedShapes)
+    public void VisibleDeviceHairlineDrawsOneCssPixel(bool afterSupportedShapes)
     {
+        // A zero-width pen is one device pixel; it draws one CSS pixel wide, as an EMF cosmetic pen does.
         var html = Render(Wmf(penWidth: afterSupportedShapes ? (short)2 : (short)0, lateHairline: afterSupportedShapes), "image/x-wmf");
-        Assert.DoesNotContain(html.Descendants(), e => e.Name.LocalName == "img");
-        Assert.Contains(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "WmfImage");
+        var svg = XElement.Parse(Encoding.UTF8.GetString(Bytes(Picture(html))));
+        Assert.Contains(svg.Descendants(), e => (string?)e.Attribute("stroke-width") == "1" && (string?)e.Attribute("vector-effect") == "non-scaling-stroke");
     }
 
     [Fact]

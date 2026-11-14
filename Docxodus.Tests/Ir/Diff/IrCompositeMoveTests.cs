@@ -100,6 +100,24 @@ public class IrCompositeMoveTests
         Assert.Equal(1, CountOccurrences(accepted, "foxtrot"));
     }
 
+    [Fact]
+    public void Single_reviewer_moved_and_edited_paragraph_moves_the_same_text_in_both_halves()
+    {
+        // Issue #1716 through the consolidate renderer: the edited word is deleted at the source and inserted at
+        // the destination, outside the move, so the source and destination move the same text.
+        const string moved = "The governing law of this Agreement is the law of Delaware without regard to conflicts principles.";
+        var b = Docs.Para(P1, moved, P3, P4);
+        var alice = Docs.Para(P1, P3, P4, moved.Replace("Delaware", "California"));
+        var merged = DocxDiff.Consolidate(b, new[] { new DocxDiffReviewer { Document = alice, Author = "Alice" } });
+
+        var body = XDocument.Parse(Docs.MainPartXml(merged)).Root!;
+        string Moved(XName kind) => string.Concat(body.Descendants(kind).Descendants(W.t).Select(t => t.Value));
+        Assert.Equal(moved.Replace("Delaware", ""), Moved(W.moveFrom));
+        Assert.Equal(Moved(W.moveFrom), Moved(W.moveTo));
+        Assert.Equal(Docs.PlainText(b), Docs.PlainText(RevisionProcessor.RejectRevisions(merged)));
+        Assert.Equal(Docs.PlainText(alice), Docs.PlainText(RevisionAccepter.AcceptRevisions(merged)));
+    }
+
     // ---- 2. Two reviewers each move a DIFFERENT block → two move groups with DISTINCT global gids ----
 
     [Fact]

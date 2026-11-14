@@ -1,10 +1,15 @@
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
-/** Independent inventory table carrying a bookmark directly inside the table. */
-export function bookmarkedTableDocx(): Uint8Array {
+/**
+ * Independent inventory table carrying a bookmark directly inside the table and, optionally, a
+ * tracked custom XML range between the two cells of every row (issue #1737).
+ */
+export function bookmarkedTableDocx(rangesBetweenCells = false): Uint8Array {
+  const range = (row: number) => rangesBetweenCells ? `<w:customXmlInsRangeStart w:id="${100 + row}"
+    w:author="Reviewer" w:date="2026-01-05T09:00:00Z"/><w:customXmlInsRangeEnd w:id="${100 + row}"/>` : '';
   const rows = Array.from({ length: 61 }, (_, row) => `<w:tr>${['A', 'B'].map(column => `<w:tc>
     <w:tcPr><w:tcW w:w="4320" w:type="dxa"/></w:tcPr><w:p><w:r>
-    <w:t>Birch${String(row + 1).padStart(2, '0')}${column} confirmed</w:t></w:r></w:p></w:tc>`).join('')}</w:tr>`).join('');
+    <w:t>Birch${String(row + 1).padStart(2, '0')}${column} confirmed</w:t></w:r></w:p></w:tc>`).join(range(row))}</w:tr>`).join('');
   const rels = `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="main" Type="${R_NS}/officeDocument" Target="word/document.xml"/></Relationships>`;
   const parts = {
     '[Content_Types].xml': `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">

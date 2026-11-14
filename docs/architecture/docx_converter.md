@@ -556,33 +556,52 @@ before invoking that callback, identically in native and WASM builds:
   escapement; and embeds STRETCHDIBITS, BITBLT, STRETCHBLT, ALPHABLEND and the WMF DIB records as
   PNG `image` data URIs, decoded in managed code (`Internal/DibImage.cs`). Each element keeps logical coordinates and carries the
   logical-to-device transform in effect, so pens scale with the mapping as in GDI.
+- Bitmaps are drawn with their raster operation evaluated per pixel from its truth table: a pixel
+  whose result does not read the destination is drawn, or left transparent when it leaves the
+  destination as it was. A pixel whose result reads the destination is exact only where the bitmap
+  drawn just before, to the same rectangle, left it known, and the two merge into one PNG; that is
+  how GDI draws a transparent bitmap (a monochrome mask, then the image). Hatches and DIB pattern
+  brushes (in RGB colours) tile from the device origin in CSS pixels, as GDI tiles them in the
+  pixels of the device it plays onto. Symbol, Wingdings and Webdings text is mapped to Unicode
+  through `SymbolFontMapper`. Consecutive EXCLUDECLIPRECTs made before anything is drawn under them
+  cut holes in one `clipPath`. A path bracket takes the transform of its first figure, since GDI
+  converts each point to device space as it is added; a geometric pen strokes it only at that scale.
 - An EMF with EMF+ comments plays its GDI records when the EMF+ header marks the file dual; an
-  EMF+-only file keeps the placeholder. Records that cannot change the drawing (stretch
-  mode, ICM, palettes, mapper flags, other GDI comments) are ignored, as are SETROP2 with
-  R2_COPYPEN and zero text spacing adjustments, which are the defaults.
+  EMF+-only file keeps the placeholder (no Office or Windows writer in the #1706 corpus produces
+  one). Records that cannot change the drawing (stretch mode, ICM, palettes, mapper flags, other GDI
+  comments, glyph-index text with no glyphs) are ignored, as are zero text spacing adjustments.
+  SETROP2 accepts R2_COPYPEN and R2_NOP, which draws nothing with the pen or brush.
 - WMF: the placeable header fixes the device box, and the window always maps onto it whatever
   the map mode (viewport records are ignored). Word's device-pixel endpoint exclusion for
   rectangles, ellipses and rounded rectangles is resolved in logical coordinates; window mapping
-  and later picture sizing stretch the complete painted graphic, including its outline. Visible
-  zero-width device pens and collapsed bounds still reject the whole image.
+  and later picture sizing stretch the complete painted graphic, including its outline. A visible
+  zero-width pen draws one CSS pixel wide, as an EMF cosmetic pen; collapsed bounds still reject
+  the whole image. SELECTCLIPREGION with index 0 (the null region) resets the clip. A WMF that
+  carries an EMF in META_ESCAPE_ENHANCED_METAFILE comments, as GDI's EMF-to-WMF conversion and
+  LibreOffice write it, plays that EMF, as GDI does; when the EMF cannot be played, the WMF records
+  draw instead.
 - EMF: playback maps reference-device pixels through the physical Frame; Frame does not clip
   artwork. Generated inline SVG retains the authored picture extent while allowing paint outside
   it. Cosmetic outlines use one CSS pixel (96 dpi); geometric outlines scale with the picture.
   This is browser playback, not a claim of matching a particular Word printer's hairline width.
-- Still unsupported, each rejecting the whole picture: EMF+-only files, pattern brushes and
-  pattern pens, palette colours, non-rectangle clip regions and OR/XOR/DIFF clip combinations,
-  glyph-index text, raster operations that read the destination, RLE bitmaps and DIBs that wrap
-  a JPEG or PNG (BI_JPEG/BI_PNG, whose header does not bound the real image), gradient fills,
+- Still unsupported, each rejecting the whole picture: EMF+-only files, monochrome and
+  palette-colour pattern brushes and pattern pens, palette colours, non-rectangle clip regions,
+  WMF clip regions other than the null one, OR/XOR/DIFF clip combinations, glyph-index text,
+  raster operations that read a destination not known from the bitmap before (including the
+  PATINVERT/R2_MASKPEN dithering Office uses for semi-transparent fills), RLE bitmaps and DIBs that
+  wrap a JPEG or PNG (BI_JPEG/BI_PNG, whose header does not bound the real image), gradient fills,
   WIDENPATH, mirrored layouts, and any record not listed above. So do the states this player
-  would otherwise draw wrongly: a pen mode other than R2_COPYPEN (SETROP2), non-zero character
-  extra or justification, text that advances the current position by its own width (TA_UPDATECP
-  without a spacing array), ANSI text with bytes above ASCII in a font whose character set is
-  not ANSI or DEFAULT, and text in a SYMBOL_CHARSET font or with private-use characters
-  (Symbol and Wingdings glyphs).
+  would otherwise draw wrongly: a pen mode other than R2_COPYPEN or R2_NOP (SETROP2), non-zero
+  character extra or justification, text that advances the current position by its own width
+  (TA_UPDATECP without a spacing array), ANSI text with bytes above ASCII in a font whose character
+  set is not ANSI, DEFAULT or SYMBOL, symbol-font characters with no Unicode equivalent, text in
+  another SYMBOL_CHARSET font, private-use characters in an ordinary font, and a path stroked with a
+  geometric pen at another scale than its figures were drawn.
 - Playback is bounded per picture: 200,000 records, a budget of 250,000 shared by points read,
   points stroked and text characters,
   50,000 SVG elements, 1,024 saved states, 64 clip regions intersected in a row (each is a
-  `clipPath` that refers to the one before), 16 megapixels of embedded bitmaps, and
+  `clipPath` that refers to the one before), 1,024 holes cut in one exclusion clip (each checked
+  against the others), 16 megapixels of embedded bitmaps and pattern tiles, and
   16 MiB characters of SVG output, bitmaps included. A WMF poly-polygon's point counts are
   summed in 64 bits before anything is allocated. Exceeding a bound rejects the picture.
 
