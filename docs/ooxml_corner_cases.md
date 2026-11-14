@@ -8158,6 +8158,15 @@ page; a head that cites a note was already measured at full height beside it. Th
 stated the mode on the staging element (`data-docx-compatibility-mode`); an unstated mode reads as
 before mode 15.
 
+The export's text fitter needed one more change. When it split a paragraph, `createParagraphFragment`
+trimmed the head's last line to its text height on the assumption that a head always ends its page
+with its leading past the edge (#1375). In mode 15 that let the head of the uncited fifth paragraph
+end 11.5pt early, the 2-line tail then fitted on page 1 after it, 11.5pt too close to the head's last
+line, and the page held all 25 lines. The trimmed head also still reported that leading through
+`lastLineTrailingLeadingPt`, so before mode 15 its fit height subtracted it twice. The splitter now
+leaves the leading the paginator measures to `fitHeightPt` and `droppedLeadingPt`, and trims
+only the leading the paginator does not measure, as before.
+
 The test fixtures, re-measured in Word 2024 (16.0.20326) through `Range.Information` (page and
 vertical position of every word, and each note's first character). They state Liberation Serif,
 which Word substitutes with Times New Roman, the same metrics; without `w:compat` Word opens them in

@@ -119,8 +119,8 @@ const budgetsKiB = {
   // main 6fccf0e9 measures embed/IIFE/editor/pagination 164440/164500/143093/58401. Embed still
   // fits by 14 bytes; round only the three exhausted gates (IIFE, editor, pagination) to the next
   // 0.1 KiB.
-  // Mode 15's leading above a note band (#1751) adds 66-72 gzip bytes over 0af51ef5:
-  // embed/IIFE/editor/pagination 164507/164566/143160/58474. Round the four exhausted gates to the
+  // Mode 15's leading above a note band (#1751) adds 74-82 gzip bytes over 0af51ef5:
+  // embed/IIFE/editor/pagination 164517/164575/143168/58484. Round the four exhausted gates to the
   // next 0.1 KiB.
   'embed.bundle.js': 160.7,
   // Floating-picture height measurement brings this bundle just above 138 KiB.

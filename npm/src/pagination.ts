@@ -4617,7 +4617,10 @@ export class PaginationEngine {
       }
       // Word can place the final natural line box against the page edge;
       // inter-line leading belongs before a following line, not after this head.
-      const fitted = fragment.querySelector<HTMLElement>('[data-docx-word-fit]');
+      // Leading the paginator measures (lastLineTrailingLeadingPt) stays: fitHeightPt and
+      // droppedLeadingPt drop it only where it may run past, never above a mode 15 note band.
+      const fitted = this.lastLineTrailingLeadingPt(paragraph) > 0 ? null
+        : fragment.querySelector<HTMLElement>('[data-docx-word-fit]');
       // Grid slots belong to the line itself; they are not optional trailing leading.
       const run = fitted?.style.getPropertyValue("--docx-word-grid-height") ? null : fitted;
       const last = run?.lastElementChild as HTMLElement | null;
