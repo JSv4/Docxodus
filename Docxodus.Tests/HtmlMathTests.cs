@@ -122,6 +122,7 @@ public class HtmlMathTests
     [Theory]
     [InlineData("HC031-Complicated-Document.docx", 1)]
     [InlineData("WC/WC022-Image-Math-Para-Before.docx", 2)]
+    [InlineData("WC/WC031-Two-Maths-Before.docx", 2)] // its runs also theme the East Asian font slot
     public void Documents_saved_by_Word_draw_their_equations(string file, int equations)
     {
         // Both carry Word's default math settings, which used to send every equation to the placeholder.
@@ -683,6 +684,39 @@ public class HtmlMathTests
         Assert.Null(op.Attribute("form"));
     }
 
+    private const string ThemeFonts = "<a:majorFont><a:latin typeface=\"Cambria Math\"/><a:ea typeface=\"\"/><a:cs typeface=\"\"/></a:majorFont>"
+        + "<a:minorFont><a:latin typeface=\"Calibri\"/><a:ea typeface=\"SimSun\"/><a:cs typeface=\"\"/></a:minorFont>";
+
+    // A run's fonts only matter in the font slots its characters use: Latin text never uses the East
+    // Asian slot, and a CJK character does. Theme fonts resolve through the theme's font scheme.
+    [Theory]
+    [InlineData("w:ascii=\"Cambria Math\" w:eastAsiaTheme=\"minorEastAsia\" w:hAnsi=\"Cambria Math\"", "x", true)]
+    [InlineData("w:ascii=\"Cambria Math\" w:eastAsia=\"SimSun\" w:hAnsi=\"Cambria Math\"", "x+1", true)]
+    [InlineData("w:ascii=\"Cambria Math\" w:eastAsiaTheme=\"minorEastAsia\" w:hAnsi=\"Cambria Math\"", "中", false)]
+    [InlineData("w:ascii=\"Cambria Math\" w:eastAsia=\"Cambria Math\" w:hAnsi=\"Cambria Math\"", "中", true)]
+    [InlineData("w:asciiTheme=\"majorHAnsi\" w:hAnsiTheme=\"majorHAnsi\"", "x", true)]
+    [InlineData("w:asciiTheme=\"minorHAnsi\" w:hAnsiTheme=\"minorHAnsi\"", "x", false)]
+    [InlineData("w:ascii=\"Cambria Math\" w:cs=\"Arial\" w:hAnsi=\"Cambria Math\"", "x", true)]
+    [InlineData("w:ascii=\"Cambria Math\" w:hAnsi=\"Arial\"", "α", false)]
+    [InlineData("w:ascii=\"Cambria Math\" w:hAnsi=\"Cambria Math\" w:hint=\"eastAsia\" w:eastAsia=\"SimSun\"", "α", false)]
+    public void Run_fonts_must_name_the_math_font_only_in_the_slots_their_characters_use(string fonts, string text, bool projects)
+    {
+        var html = Convert("<m:r><w:rPr><w:rFonts " + fonts + "/></w:rPr><m:t>" + text + "</m:t></m:r>", false,
+            "<m:mathFont m:val=\"Cambria Math\"/>", themeFonts: ThemeFonts);
+        Assert.Equal(projects ? 1 : 0, html.Descendants(MathMl + "math").Count());
+    }
+
+    [Fact]
+    public void A_control_characters_fonts_are_checked_against_the_structures_own_characters()
+    {
+        const string fonts = "<m:ctrlPr><w:rPr><w:rFonts w:ascii=\"Cambria Math\" w:eastAsia=\"SimSun\" w:hAnsi=\"Cambria Math\"/></w:rPr></m:ctrlPr>";
+        var latin = Convert(Expand("<m:d><m:dPr>" + fonts + "</m:dPr><m:e>{x}</m:e></m:d>"), false, "<m:mathFont m:val=\"Cambria Math\"/>");
+        Assert.Single(latin.Descendants(MathMl + "math"));
+        var cjk = Convert(Expand("<m:d><m:dPr><m:begChr m:val=\"【\"/><m:endChr m:val=\"】\"/>" + fonts + "</m:dPr><m:e>{x}</m:e></m:d>"), false,
+            "<m:mathFont m:val=\"Cambria Math\"/>");
+        Assert.Empty(cjk.Descendants(MathMl + "math"));
+    }
+
     private static XElement ProjectExpression(string formula, string mathProperties = "")
     {
         var math = Assert.Single(Convert(Expand(formula), false, mathProperties).Descendants(MathMl + "math"));
@@ -705,10 +739,10 @@ public class HtmlMathTests
     }
 
     private static XElement Convert(string formula, bool display, string mathProperties = "", bool paginated = false,
-        string paragraphStart = "", string styles = "", bool validate = true)
+        string paragraphStart = "", string styles = "", bool validate = true, string themeFonts = "")
     {
         // Kept as a browser keeps it: a token of spaces is text made only of whitespace.
-        return XElement.Parse(HtmlConversionOps.ConvertToHtml(BuildDocument(formula, display, mathProperties, paragraphStart, styles, validate), new HtmlConversionOptions
+        return XElement.Parse(HtmlConversionOps.ConvertToHtml(BuildDocument(formula, display, mathProperties, paragraphStart, styles, validate, themeFonts), new HtmlConversionOptions
         {
             RenderUnsupportedContentPlaceholders = true,
             FabricateCssClasses = false,
@@ -717,7 +751,7 @@ public class HtmlMathTests
     }
 
     private static byte[] BuildDocument(string formula, bool display, string mathProperties, string paragraphStart, string styles,
-        bool validate = true)
+        bool validate = true, string themeFonts = "")
     {
         using var stream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -732,9 +766,24 @@ public class HtmlMathTests
             settings.PutXDocument(XDocument.Parse("<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" "
                 + "xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\">"
                 + (mathProperties == "" ? "" : "<m:mathPr>" + mathProperties + "</m:mathPr>") + "</w:settings>"));
+            if (themeFonts != "") main.AddNewPart<ThemePart>().PutXDocument(XDocument.Parse(Theme(themeFonts)));
             document.Save();
             if (validate) Assert.Empty(new OpenXmlValidator().Validate(document).Select(e => e.Description));
         }
         return stream.ToArray();
+    }
+
+    /// <summary>A minimal valid theme whose font scheme holds <paramref name="fonts"/> (majorFont, minorFont).</summary>
+    private static string Theme(string fonts)
+    {
+        const string fill = "<a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill>";
+        var colors = string.Concat(new[] { "dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink" }
+            .Select(c => "<a:" + c + "><a:srgbClr val=\"000000\"/></a:" + c + ">"));
+        static string Three(string item) => item + item + item;
+        return "<a:theme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" name=\"T\"><a:themeElements>"
+            + "<a:clrScheme name=\"T\">" + colors + "</a:clrScheme><a:fontScheme name=\"T\">" + fonts + "</a:fontScheme>"
+            + "<a:fmtScheme name=\"T\"><a:fillStyleLst>" + Three(fill) + "</a:fillStyleLst><a:lnStyleLst>" + Three("<a:ln>" + fill + "</a:ln>")
+            + "</a:lnStyleLst><a:effectStyleLst>" + Three("<a:effectStyle><a:effectLst/></a:effectStyle>") + "</a:effectStyleLst>"
+            + "<a:bgFillStyleLst>" + Three(fill) + "</a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>";
     }
 }

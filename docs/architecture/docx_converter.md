@@ -872,6 +872,10 @@ bold and italics from `m:sty`. A control colour paints the structure's own glyph
 radical, fences, large operator, accent, border) as CSS `color` on the structure. MathML operands
 inherit it, so the structure draws only when each run inside carries a colour of its own; Word's
 whole-equation colour writes the same colour on every run and control.
+Fonts are checked per font slot (#1710): `w:rFonts` must name the math font, directly or through a
+theme font, only in the slots the run's characters use (for control properties, the structure's own
+characters and every default one). A themed East Asian font on a Latin run therefore passes, and
+the same font on a CJK character does not.
 
 | OMML | MathML | Accepted properties |
 |------|--------|---------------------|
